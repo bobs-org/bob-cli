@@ -24,7 +24,7 @@ Vault:
   articles     Format and inspect article notes with bob-owned section numbers
   attachments  Copy files into the vault and show where copies came from
   nightly      Run nightly maintenance: vault-sync, task archive, articles,
-               period notes, notebooks, albums, vault-sync
+               period notes, projects, notebooks, albums, vault-sync
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault

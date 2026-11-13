@@ -67,7 +67,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
 | [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image and file paths into the vault |
 | [`bob attachments origin`](attachments.md#bob-attachments-origin) | Show where a vault attachment came from |
-| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, notebooks, albums, vault-sync |
+| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, projects, notebooks, albums, vault-sync |
 | [`bob notebooks`](notebooks.md) | Inspect or maintain notebook notes |
 | [`bob notebooks check`](notebooks.md#bob-notebooks-check) | Check notebooks against the contract |
 | [`bob notebooks create`](notebooks.md#bob-notebooks-create) | Create a notebook and its catalog rows |
@@ -168,7 +168,7 @@ Vault:
   articles     Format and inspect article notes with bob-owned section numbers
   attachments  Copy files into the vault and show where copies came from
   nightly      Run nightly maintenance: vault-sync, task archive, articles,
-               period notes, notebooks, albums, vault-sync
+               period notes, projects, notebooks, albums, vault-sync
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault

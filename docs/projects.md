@@ -9,7 +9,7 @@ anchored with `^prj`. Typical CLI order:
 4. `bob task reconcile` (formerly `bob task-status-hooks`, still accepted)
    — derive `[?]` Blocked markers for any schedules just written
 
-`sync` writes `#hide`, Sub-projects lines, and inline `[scheduled::]`
+`sync` writes `#hide`, `## Projects` catalogs, and inline `[scheduled::]`
 fields, and hoists leftover frontmatter `scheduled` onto `^prj`. It does
 not change checkboxes. The Bob Navigation
 Hotkeys Task Card in Obsidian can write schedules or priorities and reconcile
@@ -45,7 +45,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 
 ```bash
 bob projects list [-b|--bob-dir DIR] [-f|--format human|json]
-bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
+bob projects sync [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
 `list` is read-only. It scans project notes, validates project scheduling,
@@ -54,10 +54,15 @@ and the current `^prj` state. Human output adds one repair footer when a
 generated Projects catalog is missing or stale. Damaged catalogs make the
 command exit 1. See [JSON report](#json-report).
 
-`sync` mutates only the exact lines it needs to change. It prints one line for
-each action or warning, then a summary. Per-file errors are reported without
-stopping the rest of the scan, and the command exits 1 when any file error
-occurred.
+`sync` composes lifecycle edits with the generated `## Projects` catalog and
+installs one combined postimage per changed note through the shared
+host-catalog transaction. It prints lifecycle and catalog events, one colored
+unified diff per changed path on dry runs, then a summary. `-f json` prints one
+JSON document (`schema_version: 1`, `ok`, `command: "sync"`, `dry_run`,
+`changed`, `changes` with dry-run diffs, `events`, `catalogs`, `findings`,
+`commit`, `sync`, `warnings`, plus `error` on failure). Per-file errors are
+reported without stopping healthy hosts, and the command exits 1 on scan
+errors, damaged catalogs, or transaction failures.
 
 ## JSON report
 
@@ -268,42 +273,46 @@ For a valid project date `P`, the ordinary-task contract is:
 | Done, canceled, or unknown/custom | Remove `#hide` only |
 | `^prj`, `P` in the future | Force exactly one `#hide`; keep or write `[scheduled:: P]` |
 | `^prj`, `P` due/past | Normal surfacing rule (rows above): remove `#hide` when there are no unhidden open tasks and no open sub-projects, add it back otherwise; keep the inline date |
-- Active projects with open `^prj` tasks get one generated Sub-projects line
-  nested under `^prj` after the whole Depends-On subtree and a following
-  BLOCKS subtree (or, when there is no direct Depends-On or BLOCKS child,
-  after a Cancel Log occupying the first slot, including its nested
-  entries), such as
-  `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`. Only a direct
-  child of `^prj` that starts with the Depends-On or BLOCKS marker counts;
-  nested tasks' own lines do not. A new marker inserts after those
-  subtrees; an existing marker sitting before a direct Depends-On or
-  BLOCKS child is moved after them; otherwise the marker is rewritten in
-  place. See [task-dependencies.md §14.5](task-dependencies.md#145-order-and-position)
-  and MC8.
-- A child with a valid future date on `^prj` — or leftover frontmatter
-  `scheduled` that this run will hoist onto a non-terminal child — is
-  prefixed with `🗓️`, such as
-  `- 🧩 **Sub-projects:** 🗓️ [[future_child]] • [[ordinary_child]]`.
-  Terminal children read only the inline date. Today, past, absent, and
-  invalid schedules do not receive the marker. `BOB_NOW` controls this date
-  boundary as it does for task schedules.
-- The marker-prefixed Sub-projects line is fully machine-owned and rewritten
-  into canonical form. Duplicate marker lines are removed. The line is deleted
-  only when there are no open sub-projects and no tracked closed sub-projects
-  left to show. Sync adds or removes `🗓️` as schedules change and removes it
-  automatically on the scheduled date.
-- Closed sub-projects already present on the generated line are retained as a
-  ledger: done children render as `~~[[child]]~~ ✅`, and canceled children
-  render as `~~[[child]]~~ ❌`. Schedule and lifecycle decorations are
-  independent, so a retained future-scheduled done child renders as
-  `🗓️ ~~[[child]]~~ ✅`.
-- Every other sub-bullet under `^prj` is user-owned, including bare wikilinks
-  like `- [[scratch_note]]`; `sync` never removes or uses them to suppress the
-  generated line.
+- Hosts and membership: a host is any area or project note with at least one
+  direct child project. A child scalar `parent:` resolves by exact
+  vault-relative path, then unique case-insensitive basename; list-form,
+  ambiguous, unresolved, and self parents produce no row. Depth is direct
+  children only with no rollup, and `root: true` children still list. Area
+  notes and terminal hosts maintain catalogs; empty hosts remove generated
+  content while preserving authored heading prose.
+- Row grammar: each row is `> - [glyph ]**[[link]]**[ — criterion]`, with closed
+  rows indented under `> - **Closed**`. The leading glyph is the row state:
+  none (open ready), 🗓️ (open scheduled later), ⛓️ (open blocked), ⚠️ (open
+  unreadable lifecycle, text `no valid \`^prj\` task`), ✅ (done), ❌
+  (canceled). Readers key on the glyph, never group membership. Links use the
+  child stem, or `path-without-md|stem` when the stem alone is ambiguous.
+  The criterion is the cleaned `^prj` description with tags, fields, dates,
+  block IDs, Keep links, and Markdown openers stripped; the tail is omitted
+  when empty, placeholder, or equal to the stem.
+- Order: open rows first A–Z by stem (path tie-break); then `**Closed**` newest
+  first by closure date, undated last A–Z. A state change never moves a row.
+- Closed history is derived: every closed direct child appears. A hand-deleted
+  closed row returns on the next sync.
+- Warning children count as open: an otherwise empty parent with a warning row
+  keeps its `^prj` hidden.
+- Ownership and damage: bob owns exactly the `> [!projects]` callout lines;
+  Bryan owns the `## Projects` heading and every other byte. A malformed
+  `> [!projects` opener refuses that host with `projects_catalog_damaged`,
+  preserves the legacy subtree and damaged region exactly, and never rewrites
+  by guessing. Legacy `🧩 **Sub-projects:**` marker lines retire into the
+  catalog in the same combined postimage.
+- Dry runs and install: `--dry-run` plans from one snapshot and prints
+  lifecycle/catalog events plus one colored unified diff per changed path, then
+  `dry run: N notes would change; nothing was written`. A real run takes the
+  shared vault lock, pre-syncs, installs one combined postimage per note,
+  verifies healthy catalogs are current and lifecycle edits settled, and makes
+  one scoped commit `projects: sync lifecycles and catalogs (N notes)`.
+  Damaged catalogs and scan errors make `ok: false` and exit 1 even when safe
+  edits commit.
 - Terminal projects, `status: done` or `status: canceled`, get no `^prj` line
   edits while their `^prj` task stays closed or missing. Reopening the `^prj`
-  task makes the project active again in the same run, so the surfacing,
-  `#hide`, and Sub-projects rules above apply from the reopened `wip` status.
+  task makes the project active again in the same run, so the surfacing and
+  `#hide` rules above apply from the reopened `wip` status.
 
 `bob projects sync` writes task schedules but does not write checkbox markers.
 `bob task reconcile` remains the single CLI owner of derived `[?]` Blocked
@@ -313,26 +322,16 @@ already excludes future schedules and Blocked tasks, so `dash.md` needs no
 query change. These tasks now appear in `blocked.md`; that query also needs no
 change. Derived Blocked status outranks Pomodoro promotion.
 
-An open sub-project is another project note whose `parent` wikilink resolves to
-this note's file stem and whose own `^prj` task is open. Blocking
-cascades to sub-projects: while a project's `^prj` is blocked, every
-open task in its descendant project notes is Blocked and tagged
-(`docs/task-dependencies.md` §13). A child with terminal
-frontmatter but an open `^prj` task counts as open in the same run, because the
-open task reopens it to `wip`. Checked or canceled child projects do not keep the
-parent hidden; missing, malformed, or multiple non-terminal `^prj` child tasks
-are excluded from the generated line.
-
-Generated sub-project links use the child note's file stem with its original
-casing and no path or alias. Open children are always shown first, sorted
-case-insensitively. Closed children that were already listed are shown after
-open children, also sorted case-insensitively. Links are separated with `•` on
-the single marker-prefixed line.
-
-Closed children are preserve-and-mark only: `sync` marks a terminal child if it
-is already on the generated line, but it does not resurrect older closed
-children that are not listed. Deleting a closed entry by hand prunes it
-permanently unless that child is reopened.
+An open sub-project is another project note whose `parent` wikilink resolves by
+the host-membership rule above and whose effective post-sync child state is
+open (ready, scheduled, blocked, or warning). Blocking cascades to
+sub-projects: while a project's `^prj` is blocked, every open task in its
+descendant project notes is Blocked and tagged
+(`docs/task-dependencies.md` §13). A child with terminal frontmatter but an
+open `^prj` task counts as open in the same run, because the open task reopens
+it to `wip`. Checked or canceled children do not keep the parent hidden;
+warning children do. The catalog and `#hide` surfacing agree on the same
+membership and open counts, so the writer and readers never disagree.
 
 In `bob projects list`, the `SHOWN` column counts open, non-`^prj`, non-hidden
 `#task` lines that are neither `[?]` nor validly scheduled later than the local

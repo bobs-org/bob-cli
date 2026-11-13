@@ -163,7 +163,7 @@ parentheses (`[[note#^id]] (<label>)`). An empty list deletes the line.
 Relations never block, count as Pomodoro Task Links, or change status.
 
 Other machine-owned direct children (closed registry): `❌ **CANCEL LOG**`,
-`🧱 **BLOCKS:**`, `🧩 **Sub-projects:**` on `^prj`,
+`🧱 **BLOCKS:**`, legacy `🧩 **Sub-projects:**` on `^prj` (retired into the `## Projects` catalog),
 `🪢 **LINKS:**`, `🪢 **LINKED FROM:**`, `🗓️ **SCHEDULE LOG**`,
 `🛠️ **WORK LOG**`, `🥀 **ROTTEN LOG**` with newest-first rung events.
 A counted keep entry reads `*YYYY-MM-DD* — <reason> · kept N× in <Rung>`

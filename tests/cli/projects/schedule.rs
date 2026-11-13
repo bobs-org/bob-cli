@@ -2,19 +2,30 @@
 
 use crate::support::*;
 use std::fs;
+use std::path::Path;
 use std::process::Output;
+
+fn commit_all(vault: &Path, message: &str) {
+    git_in(vault, ["add", "-A"]);
+    git_in(vault, ["commit", "-q", "-m", message]);
+    git_in(vault, ["push", "-q"]);
+}
 
 #[test]
 fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     let temp = TempDir::new("bob-cli-projects-scheduled-properties");
-    let vault = temp.path().join("vault");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     let project = vault.join("Future.md");
     let original = "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-06-01] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed #hide\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
     write_file(&project, original);
+    commit_all(&vault, "fixture");
 
     let preview = bob_command()
         .args(["projects", "sync", "--dry-run", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-10 12:00:00")
         .output()
         .expect("preview future scheduled project");
@@ -30,9 +41,8 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
             && stdout(&preview).contains(
                 "would hoist scheduled 2026-07-11 onto ^prj  leftover frontmatter"
             )
-            && stdout(&preview).contains("1 task schedules updated")
-            && stdout(&preview).contains("1 schedules hoisted")
-            && stdout(&preview).contains("bob task reconcile"),
+            && stdout(&preview).contains("dry run:")
+            && stdout(&preview).contains("@@"),
         "unexpected preview:\n{}",
         format_output(&preview)
     );
@@ -40,6 +50,9 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     let applied = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-10 12:00:00")
         .output()
         .expect("apply future scheduled project");
@@ -59,6 +72,9 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     let due = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-11")
         .output()
         .expect("advance to scheduled day");
@@ -74,6 +90,9 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     let second = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-12")
         .output()
         .expect("rerun due scheduled project");
@@ -88,7 +107,7 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
 #[test]
 fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
     let temp = TempDir::new("bob-cli-projects-scheduled-status-e2e");
-    let vault = temp.path().join("vault");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     let project = vault.join("Roadmap.md");
     let before_daily = vault.join("2026/20260716.md");
     let due_daily = vault.join("2026/20260717.md");
@@ -99,10 +118,14 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
     write_file(&before_daily, "## Pomodoros\n");
     write_file(&due_daily, "## Pomodoros\n");
     write_blocked_tasks_settings(&vault);
+    commit_all(&vault, "fixture");
 
     let synced = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-16")
         .output()
         .expect("propagate project schedule");
@@ -123,6 +146,9 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
     let blocked = bob_command()
         .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_DAY_FILE", &before_daily)
         .env("BOB_NOW", "2026-07-16")
         .output()
@@ -139,6 +165,9 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
     let mature_sync = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-17")
         .output()
         .expect("reconcile due project");
@@ -147,6 +176,9 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
     let recovered = bob_command()
         .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_DAY_FILE", &due_daily)
         .env("BOB_NOW", "2026-07-17")
         .output()
@@ -165,7 +197,7 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
 #[test]
 fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
     let temp = TempDir::new("bob-cli-project-schedule-query-transition");
-    let vault = temp.path().join("vault");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     let project = vault.join("Roadmap.md");
     let before_daily = vault.join("2026/20260716.md");
     let due_daily = vault.join("2026/20260717.md");
@@ -184,10 +216,14 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
         include_str!("../../fixtures/tasks_parity/vault/blocked.md"),
     );
     write_blocked_tasks_settings(&vault);
+    commit_all(&vault, "fixture");
 
     let sync = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-16")
         .output()
         .expect("propagate project schedule before query verification");
@@ -195,6 +231,9 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
     let hooks = bob_command()
         .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_DAY_FILE", &before_daily)
         .env("BOB_NOW", "2026-07-16")
         .output()
@@ -250,6 +289,9 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
     let mature_sync = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-17")
         .output()
         .expect("reconcile due project before query verification");
@@ -257,6 +299,9 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
     let mature_hooks = bob_command()
         .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_DAY_FILE", &due_daily)
         .env("BOB_NOW", "2026-07-17")
         .output()
@@ -288,16 +333,20 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
 #[test]
 fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
     let temp = TempDir::new("bob-cli-projects-scheduled-sole-prj");
-    let vault = temp.path().join("vault");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     let project = vault.join("Sole.md");
     write_file(
         &project,
         "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n",
     );
+    commit_all(&vault, "fixture");
 
     let output = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-11")
         .output()
         .expect("sync due project whose only task is ^prj");
@@ -321,6 +370,9 @@ fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
     let again = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-11")
         .output()
         .expect("rerun sync is a no-op");
@@ -338,14 +390,18 @@ fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
     // Inline-only source: past ^prj date, hidden `^prj`, only closed
     // tasks besides it. No leftover YAML to hoist.
     let temp = TempDir::new("bob-cli-projects-scheduled-sites");
-    let vault = temp.path().join("vault");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     let project = vault.join("Sites.md");
     let original = "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide [scheduled:: 2026-08-08] ^prj\n- [x] #task Done\n";
     write_file(&project, original);
+    commit_all(&vault, "fixture");
 
     let preview = bob_command()
         .args(["projects", "sync", "--dry-run", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-10-03")
         .output()
         .expect("preview due scheduled project");
@@ -361,6 +417,9 @@ fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
     let applied = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-10-03")
         .output()
         .expect("apply due scheduled surfacing");
@@ -373,6 +432,9 @@ fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
     let again = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-10-03")
         .output()
         .expect("rerun sync is a no-op");
@@ -387,7 +449,7 @@ fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
 #[test]
 fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
     let temp = TempDir::new("bob-cli-projects-scheduled-errors");
-    let vault = temp.path().join("vault");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     let invalid = vault.join("Invalid.md");
     let invalid_contents =
         "---\ntype: [[project]]\nscheduled: 2026-02-30\n---\n- [ ] #task Invalid ^prj\n";
@@ -398,10 +460,14 @@ fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
     );
     let terminal_contents = "---\ntype: [[project]]\nstatus: done\nscheduled: 2026-07-11\n---\n- [x] #task Closed #hide ^prj\n";
     write_file(&vault.join("Closed.md"), terminal_contents);
+    commit_all(&vault, "fixture");
 
     let listed = bob_command()
         .args(["projects", "list", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-10")
         .output()
         .expect("list scheduled projects with one error");
@@ -422,6 +488,9 @@ fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
     let synced = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .env("BOB_NOW", "2026-07-10")
         .output()
         .expect("sync scheduled projects with one error");

@@ -507,15 +507,30 @@ fn projects_sync_ignores_cascade_tags_and_keeps_marker_state() {
     let before = ["parent.md", "child.md"]
         .map(|name| fs::read_to_string(vault.join(name)).unwrap());
 
-    // PDS14: project sync sees the same open marker and does not rewrite
-    // descriptions or project visibility because the machine tag is present.
+    // PDS14: project sync sees the same open child through the catalog and
+    // does not rewrite descriptions or project visibility because the
+    // machine tag is present. The legacy marker retires into the generated
+    // catalog, so the dry run reports only catalog work.
     let output = bob_command()
         .args(["projects", "sync", "--dry-run", "--bob-dir"])
         .arg(&vault)
         .output()
         .expect("run projects sync dry-run");
     assert_success(&output);
-    assert!(!stdout(&output).contains("would "), "{}", stdout(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("would write projects catalog")
+            || out.contains("would update projects catalog"),
+        "dry run must report the catalog migration, not a lifecycle rewrite:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !out.contains("would set status")
+            && !out.contains("would add #hide")
+            && !out.contains("would remove #hide"),
+        "no lifecycle rewrite is expected:\n{}",
+        format_output(&output)
+    );
     for (name, original) in ["parent.md", "child.md"].into_iter().zip(before) {
         assert_eq!(fs::read_to_string(vault.join(name)).unwrap(), original);
     }

@@ -27,7 +27,6 @@ use crate::native::vault_links::NoteIndex;
 
 /// Whether a catalog host is an area note or a project note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum HostKind {
     Area,
     Project,
@@ -45,7 +44,6 @@ impl HostKind {
 
 /// How a host's generated `## Projects` catalog compares with the plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum CatalogState {
     Current,
     Missing,
@@ -67,7 +65,6 @@ impl CatalogState {
 
 /// One finding on a host's catalog: a stale or damaged region.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct CatalogIssue {
     pub(crate) code: &'static str,
     pub(crate) line: Option<usize>,
@@ -76,7 +73,6 @@ pub(crate) struct CatalogIssue {
 
 /// One direct child project listed in its parent's catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct CatalogChild {
     pub(crate) path: PathBuf,
     pub(crate) stem: String,
@@ -110,7 +106,6 @@ impl CatalogChild {
 
 /// One host's planned catalog: record, row counts, and the installing edit.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct HostCatalogPlan {
     pub(crate) host: PathBuf,
     pub(crate) stem: String,
@@ -127,7 +122,6 @@ pub(crate) struct HostCatalogPlan {
 
 /// Every host with expected rows or an existing managed region.
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct CatalogPlan {
     pub(crate) hosts: Vec<HostCatalogPlan>,
 }
@@ -167,7 +161,6 @@ impl CatalogPlan {
 /// and only project notes outside them can be children. Membership
 /// resolves each child's scalar `parent:` through `index` with the same
 /// exact-path/unique-basename rules the blocking cascade uses.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plan_catalogs(
     notes: &BTreeMap<PathBuf, String>,
     index: &NoteIndex,
@@ -257,7 +250,6 @@ pub(crate) fn plan_catalogs(
 /// Legacy marker removal composes with the region write in one postimage;
 /// a damaged host returns its text untouched with no edit so readers keep
 /// the legacy line as their fallback.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plan_host_catalog(
     host: &Path,
     stem: &str,
@@ -362,7 +354,6 @@ pub(crate) fn plan_host_catalog(
 /// Delete every direct-child Sub-projects marker line under the single
 /// `^prj`, with each marker's subtree, as byte spans. With zero or
 /// several `^prj` lines the text is returned unchanged.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn remove_legacy_subprojects_lines(text: &str) -> String {
     let frontmatter = parse_frontmatter(text);
     let body_start = frontmatter.map_or(0, |front| front.body_start_line);

@@ -157,273 +157,6 @@ fn project_changes_preserve_crlf_when_appending_status() {
 }
 
 #[test]
-fn project_changes_insert_subproject_links_after_prj_with_tab_indent() {
-    let desired = [open_subproject("Child")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n## Tasks\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n## Tasks\n"
-    );
-}
-
-#[test]
-fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
-    let desired = [open_subproject("Child")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n  - 🧱 **BLOCKS:** [[#^dependent]]\n  - user notes\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n  - 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
-    );
-}
-
-#[test]
-fn project_changes_insert_subprojects_after_crlf_dependency_subtree_at_eof() {
-    let desired = [open_subproject("Child")];
-    let contents = concat!(
-        "---\r\n",
-        "type: [[project]]\r\n",
-        "---\r\n",
-        "- [ ] #task Ship ^prj\r\n",
-        "  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\r\n",
-        "    - Dependency note\r\n",
-        "      - Nested detail",
-    );
-    let output = apply_subproject_changes(
-        contents,
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        concat!(
-            "---\r\n",
-            "type: [[project]]\r\n",
-            "---\r\n",
-            "- [ ] #task Ship ^prj\r\n",
-            "  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\r\n",
-            "    - Dependency note\r\n",
-            "      - Nested detail\r\n",
-            "\t- 🧩 **Sub-projects:** [[Child]]",
-        )
-    );
-}
-
-#[test]
-fn project_changes_insert_subproject_line_after_cancel_log_subtree() {
-    let desired = [open_subproject("Child")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - user notes\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
-    );
-}
-
-#[test]
-fn project_changes_ignore_nested_depends_on_when_inserting_subprojects() {
-    let desired = [open_subproject("Child")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - user notes\n    - ⛓️ **DEPENDS ON:** [[nested#^dep]]\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n    - ⛓️ **DEPENDS ON:** [[nested#^dep]]\n"
-    );
-}
-
-#[test]
-fn project_changes_move_subproject_marker_after_depends_on() {
-    let desired = [open_subproject("Child")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n",
-        &[ProjectChange::NormalizeSubprojects],
-        &desired,
-    );
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n"
-    );
-}
-
-#[test]
-fn project_changes_do_not_anchor_or_move_relation_lines() {
-    let desired = [open_subproject("Child")];
-    let inserted = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - 🧱 **BLOCKS:** [[#^dependent]]\n  - 🪢 **LINKS:** [[#^related]]\n  - 🪢 **LINKED FROM:** [[other#^src]]\n  - user notes\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-    assert_eq!(
-        inserted,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - 🪢 **LINKS:** [[#^related]]\n  - 🪢 **LINKED FROM:** [[other#^src]]\n  - user notes\n"
-    );
-
-    let moved = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🪢 **LINKS:** [[#^related]]\n",
-        &[ProjectChange::NormalizeSubprojects],
-        &desired,
-    );
-    assert_eq!(
-        moved,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- 🪢 **LINKS:** [[#^related]]\n"
-    );
-}
-
-#[test]
-fn project_changes_insert_subproject_line_above_user_bullets() {
-    let desired = [open_subproject("Beta")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - [[Alpha]]\n  - prose notes\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Beta".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Beta]]\n  - [[Alpha]]\n  - prose notes\n"
-    );
-}
-
-#[test]
-fn project_changes_rewrite_subproject_line_in_place() {
-    let desired = [open_subproject("Alpha"), open_subproject("Beta")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- user notes\n  - 🧩 **Sub-projects:** [[Alpha]]\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Beta".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- user notes\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n"
-    );
-}
-
-#[test]
-fn project_changes_mark_last_child_closed_and_keep_subproject_line() {
-    let desired = [done_subproject("OldChild")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
-        &[ProjectChange::MarkSubproject {
-            stem: "OldChild".to_string(),
-            state: SubprojectState::Done,
-        }],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** ~~[[OldChild]]~~ ✅\n\t- user notes\n"
-    );
-}
-
-#[test]
-fn project_changes_delete_subproject_line_for_stale_child() {
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
-        &[ProjectChange::RemoveSubprojectLink {
-            stem: "OldChild".to_string(),
-        }],
-        &[],
-    );
-
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- user notes\n"
-    );
-}
-
-#[test]
-fn project_changes_clean_duplicate_subproject_marker_lines() {
-    let desired = [open_subproject("Alpha"), open_subproject("Beta")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Beta]] • [[Alpha]] extra\n\t- keep me\n\t- 🧩 **Sub-projects:** [[Alpha]]\n",
-        &[ProjectChange::NormalizeSubprojects],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n\t- keep me\n"
-    );
-}
-
-#[test]
-fn project_changes_preserve_crlf_for_subproject_link_insertions() {
-    let desired = [open_subproject("Child")];
-    let output = apply_subproject_changes(
-        "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship #hide ^prj\r\n## Tasks\r\n",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship #hide ^prj\r\n\t- 🧩 **Sub-projects:** [[Child]]\r\n## Tasks\r\n"
-    );
-}
-
-#[test]
-fn project_changes_insert_subproject_links_after_final_prj_line() {
-    let desired = [open_subproject("Child")];
-    let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj",
-        &[ProjectChange::AddSubprojectLink {
-            stem: "Child".to_string(),
-            state: SubprojectState::Open,
-        }],
-        &desired,
-    );
-
-    assert_eq!(
-        output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]"
-    );
-}
-
-#[test]
 fn project_schedule_accepts_quoted_dates_and_rejects_bad_dates() {
     for scalar in ["2026-07-11", "\"2026-07-11\"", "'2026-07-11'"] {
         let contents = format!(
@@ -481,42 +214,13 @@ fn terminal_projects_do_not_reconcile_task_schedules() {
     );
     let plan = plan_project_sync_at(
         &project,
-        &[],
+        false,
         NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
     );
     assert!(!plan.changes.iter().any(|change| matches!(
         change,
         ProjectChange::ReconcileTaskSchedules { .. }
     )));
-}
-
-#[test]
-fn schedule_only_issues_still_allow_subproject_aggregation() {
-    assert!(issues_allow_subproject(&[ScanIssue::line(
-        "Child.md",
-        4,
-        "scheduled must be a calendar date in YYYY-MM-DD format",
-    )]));
-    assert!(issues_allow_subproject(&[ScanIssue::line(
-        "Child.md",
-        6,
-        "^prj scheduled is not a valid calendar date: 2026-02-30",
-    )]));
-    assert!(issues_allow_subproject(&[ScanIssue::line(
-        "Child.md",
-        6,
-        "multiple ^prj scheduled fields found; keep exactly one",
-    )]));
-    assert!(issues_allow_subproject(&[ScanIssue::line(
-        "Child.md",
-        6,
-        "^prj scheduled must be a calendar date in YYYY-MM-DD format",
-    )]));
-    assert!(!issues_allow_subproject(&[ScanIssue::line(
-        "Child.md",
-        5,
-        "multiple ^prj tasks found",
-    )]));
 }
 
 #[test]
@@ -527,7 +231,7 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
     );
     let today = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
     assert_eq!(
-        plan_project_sync_at(&future, &[], today).changes,
+        plan_project_sync_at(&future, false, today).changes,
         vec![
             ProjectChange::HoistScheduled {
                 scheduled: "2026-07-11".to_string(),
@@ -557,7 +261,7 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
             "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n- [x] #task Done #hide\n",
         );
         assert_eq!(
-            plan_project_sync_at(&due, &[], due_today).changes,
+            plan_project_sync_at(&due, false, due_today).changes,
             vec![
                 ProjectChange::HoistScheduled {
                     scheduled: "2026-07-11".to_string(),
@@ -585,7 +289,7 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
     assert_eq!(
         plan_project_sync_at(
             &sole_prj,
-            &[],
+            false,
             NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
         )
         .changes,
@@ -611,7 +315,7 @@ fn due_scheduled_projects_follow_the_normal_surfacing_rule() {
             "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n- [x] #task Done\n",
         );
         assert!(
-            plan_project_sync_at(&sites, &[], today)
+            plan_project_sync_at(&sites, false, today)
                 .changes
                 .contains(&ProjectChange::RemoveHideTag),
             "past/today schedule with only closed tasks must surface"
@@ -625,7 +329,7 @@ fn due_scheduled_projects_follow_the_normal_surfacing_rule() {
     );
     let plan = plan_project_sync_at(
         &future,
-        &[],
+        false,
         NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
     );
     assert!(
@@ -655,7 +359,7 @@ fn due_scheduled_projects_follow_the_normal_surfacing_rule() {
     assert_eq!(
         plan_project_sync_at(
             &busy_visible,
-            &[],
+            false,
             NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
         )
         .changes
@@ -678,7 +382,7 @@ fn due_scheduled_projects_follow_the_normal_surfacing_rule() {
     );
     let recovering_plan = plan_project_sync_at(
         &recovering,
-        &[],
+        false,
         NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
     );
     assert!(
@@ -697,7 +401,7 @@ fn due_scheduled_projects_follow_the_normal_surfacing_rule() {
     assert!(
         plan_project_sync_at(
             &parent,
-            &[open_subproject("Child")],
+            true,
             NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
         )
         .changes
@@ -715,10 +419,12 @@ fn scheduled_tasks_keep_subproject_ledger_planning() {
     );
     let plan = plan_project_sync_at(
         &project,
-        &[open_subproject("Child")],
+        true,
         NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
     );
 
+    // A future schedule normalizes #hide through reconciliation, not through
+    // the surfacing AddHideTag path, while open sub-projects still count.
     assert!(plan.changes.iter().any(|change| matches!(
         change,
         ProjectChange::ReconcileTaskSchedules {
@@ -727,14 +433,10 @@ fn scheduled_tasks_keep_subproject_ledger_planning() {
             ..
         }
     )));
-    assert!(plan.changes.iter().any(|change| matches!(
+    assert!(!plan.changes.iter().any(|change| matches!(
         change,
-        ProjectChange::AddSubprojectLink { stem, .. } if stem == "Child"
+        ProjectChange::AddHideTag { .. } | ProjectChange::RemoveHideTag
     )));
-    assert_eq!(
-        plan.desired_subprojects,
-        Some(vec![open_subproject("Child")])
-    );
 }
 
 #[test]

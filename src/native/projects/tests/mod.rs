@@ -4,11 +4,11 @@ use super::*;
 // Test-only sync wrapper moved from sync planning code.
 fn plan_project_sync(
     project: &Project,
-    subproject_children: &[SubprojectEntry],
+    has_open_subprojects: bool,
 ) -> ProjectPlan {
     plan_project_sync_at(
         project,
-        subproject_children,
+        has_open_subprojects,
         bob_env::current_datetime().date(),
     )
 }
@@ -21,45 +21,8 @@ fn parse_clean_project(path: &str, contents: &str) -> Project {
     project
 }
 
-fn subproject(stem: &str, state: SubprojectState) -> SubprojectEntry {
-    SubprojectEntry {
-        link_name: stem.to_ascii_lowercase(),
-        stem: stem.to_string(),
-        state,
-        future_scheduled: false,
-    }
-}
-
-fn future_subproject(stem: &str, state: SubprojectState) -> SubprojectEntry {
-    SubprojectEntry {
-        future_scheduled: true,
-        ..subproject(stem, state)
-    }
-}
-
-fn open_subproject(stem: &str) -> SubprojectEntry {
-    subproject(stem, SubprojectState::Open)
-}
-
-fn done_subproject(stem: &str) -> SubprojectEntry {
-    subproject(stem, SubprojectState::Done)
-}
-
-fn canceled_subproject(stem: &str) -> SubprojectEntry {
-    subproject(stem, SubprojectState::Canceled)
-}
-
 fn apply_changes(contents: &str, changes: &[ProjectChange]) -> String {
-    apply_project_changes(contents, changes, None).expect("apply edits")
-}
-
-fn apply_subproject_changes(
-    contents: &str,
-    changes: &[ProjectChange],
-    desired_subprojects: &[SubprojectEntry],
-) -> String {
-    apply_project_changes(contents, changes, Some(desired_subprojects))
-        .expect("apply edits")
+    apply_project_changes(contents, changes).expect("apply edits")
 }
 
 mod edits;

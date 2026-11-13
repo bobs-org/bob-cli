@@ -464,13 +464,15 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        fixed: JSON,
+        preview: Some(DRY_RUN),
         invalidates: &["tasks"],
-        ..writes(
+        ..syncs(
             "projects-sync",
             &["projects", "sync"],
             "Sync projects",
-            &["projects", "sync", "prj", "subprojects"],
-            Policy::Run,
+            &["projects", "sync", "prj", "subprojects", "catalog"],
+            Policy::PreviewFirst,
             Some(DRY_RUN),
             180,
         )

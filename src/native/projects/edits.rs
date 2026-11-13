@@ -4,10 +4,8 @@ use super::*;
 pub(super) fn apply_project_changes(
     contents: &str,
     changes: &[ProjectChange],
-    desired_subprojects: Option<&[SubprojectEntry]>,
 ) -> Result<String, String> {
     let mut edits = Vec::new();
-    let mut sync_subprojects = false;
     let hoist_scheduled = changes.iter().find_map(|change| match change {
         ProjectChange::HoistScheduled { scheduled } => Some(scheduled.as_str()),
         _ => None,
@@ -42,27 +40,10 @@ pub(super) fn apply_project_changes(
             ProjectChange::HoistScheduled { .. } => {
                 edits.push(remove_frontmatter_scheduled_key(contents)?);
             }
-            ProjectChange::AddSubprojectLink { .. }
-            | ProjectChange::RemoveSubprojectLink { .. }
-            | ProjectChange::MarkSubproject { .. }
-            | ProjectChange::AddSubprojectScheduleMarker { .. }
-            | ProjectChange::RemoveSubprojectScheduleMarker { .. }
-            | ProjectChange::NormalizeSubprojects => {
-                sync_subprojects = true;
-            }
         }
     }
     if hoist_scheduled.is_some() || prj_hide.is_some() {
         edits.push(prj_line_edit(contents, hoist_scheduled, prj_hide)?);
-    }
-    if sync_subprojects {
-        let desired_subprojects = desired_subprojects.ok_or_else(|| {
-            "failed to resolve sub-project line state".to_string()
-        })?;
-        edits.extend(sync_subprojects_line_edits(
-            contents,
-            desired_subprojects,
-        )?);
     }
 
     edits.sort_by(|left, right| {
@@ -424,95 +405,6 @@ pub(super) fn remove_frontmatter_scheduled_key(
     Err("failed to locate scheduled frontmatter key".to_string())
 }
 
-pub(super) fn sync_subprojects_line_edits(
-    contents: &str,
-    desired_entries: &[SubprojectEntry],
-) -> Result<Vec<TextEdit>, String> {
-    let layout = prj_sub_block_layout(contents)?;
-    let first_marker = layout.sub_block.first_marker_line();
-
-    let marker_line_numbers = layout
-        .sub_block
-        .lines
-        .iter()
-        .filter(|line| line.is_marker)
-        .map(|line| line.line_number)
-        .collect::<Vec<_>>();
-    let mut edits = Vec::new();
-
-    if desired_entries.is_empty() {
-        for line_number in marker_line_numbers {
-            let line = line_by_number(&layout.lines, line_number)?;
-            edits.push(TextEdit {
-                start: line.start,
-                end: line.next_start,
-                replacement: String::new(),
-            });
-        }
-        return Ok(edits);
-    }
-
-    let rendered = render_subprojects_line(&layout.prj_indent, desired_entries);
-    let anchor = subprojects_insert_anchor(&layout);
-    let marker_needs_move = first_marker.is_some_and(|marker_line| {
-        subprojects_marker_precedes_depends_on(&layout.sub_block, marker_line)
-    });
-    let marker_correctly_placed = first_marker.is_some() && !marker_needs_move;
-
-    if let Some(marker_line) = first_marker.filter(|_| marker_correctly_placed)
-    {
-        let line = line_by_number(&layout.lines, marker_line.line_number)?;
-        edits.push(TextEdit {
-            start: line.start,
-            end: line_content_end(contents, line),
-            replacement: rendered,
-        });
-        for line_number in marker_line_numbers
-            .into_iter()
-            .filter(|line_number| *line_number != marker_line.line_number)
-        {
-            let line = line_by_number(&layout.lines, line_number)?;
-            edits.push(TextEdit {
-                start: line.start,
-                end: line.next_start,
-                replacement: String::new(),
-            });
-        }
-    } else {
-        for line_number in marker_line_numbers {
-            let line = line_by_number(&layout.lines, line_number)?;
-            edits.push(TextEdit {
-                start: line.start,
-                end: line.next_start,
-                replacement: String::new(),
-            });
-        }
-        let ending = line_ending(contents, anchor);
-        let anchor_has_ending = anchor.next_start > anchor.end;
-        let replacement = if anchor_has_ending {
-            format!("{rendered}{ending}")
-        } else {
-            format!("{ending}{rendered}")
-        };
-        edits.push(TextEdit {
-            start: anchor.next_start,
-            end: anchor.next_start,
-            replacement,
-        });
-    }
-
-    Ok(edits)
-}
-
-fn subprojects_insert_anchor(layout: &PrjSubBlockLayout) -> LineSpan {
-    subprojects_anchor_child(&layout.sub_block)
-        .and_then(|child| {
-            let end = subprojects_subtree_end(&layout.sub_block, child);
-            line_by_number(&layout.lines, end.line_number).ok()
-        })
-        .unwrap_or(layout.prj_line)
-}
-
 pub(super) fn line_by_number(
     lines: &[LineSpan],
     line_number: usize,
@@ -522,98 +414,6 @@ pub(super) fn line_by_number(
         .find(|line| line.line_number == line_number)
         .copied()
         .ok_or_else(|| "failed to locate sub-project marker line".to_string())
-}
-
-pub(super) fn line_content_end(contents: &str, line: LineSpan) -> usize {
-    if line.end > line.start && contents.as_bytes()[line.end - 1] == b'\r' {
-        line.end - 1
-    } else {
-        line.end
-    }
-}
-
-pub(super) fn render_subprojects_line(
-    indent: &str,
-    entries: &[SubprojectEntry],
-) -> String {
-    format!("{}\t{}", indent, render_subprojects_line_text(entries))
-}
-
-pub(super) fn render_subprojects_line_text(
-    entries: &[SubprojectEntry],
-) -> String {
-    let links = sorted_subproject_entries(entries)
-        .into_iter()
-        .map(render_subproject_entry)
-        .collect::<Vec<_>>()
-        .join(&format!(" {SUBPROJECTS_SEPARATOR} "));
-    format!("- {SUBPROJECTS_MARKER_PREFIX} {links}")
-}
-
-pub(super) fn sorted_subproject_entries(
-    entries: &[SubprojectEntry],
-) -> Vec<&SubprojectEntry> {
-    let mut open_entries = entries
-        .iter()
-        .filter(|entry| entry.state.is_open())
-        .collect::<Vec<_>>();
-    let mut closed_entries = entries
-        .iter()
-        .filter(|entry| entry.state.is_terminal())
-        .collect::<Vec<_>>();
-    open_entries.sort_by(|left, right| left.link_name.cmp(&right.link_name));
-    closed_entries.sort_by(|left, right| left.link_name.cmp(&right.link_name));
-    open_entries.extend(closed_entries);
-    open_entries
-}
-
-pub(super) fn render_subproject_entry(entry: &SubprojectEntry) -> String {
-    let link = match entry.state.closed_marker() {
-        Some(marker) => format!("~~[[{}]]~~ {marker}", entry.stem),
-        None => format!("[[{}]]", entry.stem),
-    };
-    if entry.future_scheduled {
-        format!("{SUBPROJECT_FUTURE_SCHEDULE_MARKER} {link}")
-    } else {
-        link
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PrjSubBlockLayout {
-    pub(super) lines: Vec<LineSpan>,
-    pub(super) prj_line: LineSpan,
-    pub(super) prj_indent: String,
-    pub(super) sub_block: PrjSubBlock,
-}
-
-pub(super) fn prj_sub_block_layout(
-    contents: &str,
-) -> Result<PrjSubBlockLayout, String> {
-    let frontmatter = parse_frontmatter(contents)
-        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
-    let lines = line_spans(contents);
-    let mut fence = None;
-    for (index, line) in lines.iter().enumerate() {
-        if line.line_number <= frontmatter.body_start_line {
-            continue;
-        }
-        let line_text = trim_cr(&contents[line.start..line.end]);
-        if markdown_fence_line(line_text, &mut fence) {
-            continue;
-        }
-        if !has_trailing_prj_anchor(line_text) {
-            continue;
-        }
-        return Ok(PrjSubBlockLayout {
-            lines: lines.clone(),
-            prj_line: *line,
-            prj_indent: leading_whitespace(line_text).to_string(),
-            sub_block: parse_prj_sub_block(contents, &lines, index),
-        });
-    }
-
-    Err("failed to locate ^prj task".to_string())
 }
 
 fn inline_field_removal_range(

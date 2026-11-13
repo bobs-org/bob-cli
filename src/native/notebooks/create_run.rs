@@ -10,13 +10,17 @@ use super::{
     },
     model::CatalogRecord,
     sync::{
-        color_diff, commit_json, failure_json, findings_json, load_complete,
-        short, sync_json, unified_diff, SCHEMA_VERSION,
+        commit_json, failure_json, findings_json, load_complete, short,
+        sync_json, SCHEMA_VERSION,
     },
     txn::{self, verify_hosts_current, CommitInfo, PlannedTxn},
 };
 use crate::native::{
-    capture::StagedTextFile, ob, style::Styler, vault_rewrite::TxnFailure,
+    capture::StagedTextFile,
+    host_catalog::{color_diff, unified_diff},
+    ob,
+    style::Styler,
+    vault_rewrite::TxnFailure,
 };
 
 /// What a create run planned and (unless a dry run) did.

@@ -8,7 +8,7 @@ pub(super) struct ScanReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ScanIssue {
+pub(crate) struct ScanIssue {
     pub(super) relative_path: PathBuf,
     pub(super) line_number: Option<usize>,
     pub(super) message: String,
@@ -303,10 +303,6 @@ impl PrjSubBlock {
     pub(super) fn first_marker_line(&self) -> Option<&PrjSubBlockLine> {
         self.lines.iter().find(|line| line.is_marker)
     }
-
-    pub(super) fn marker_line_count(&self) -> usize {
-        self.lines.iter().filter(|line| line.is_marker).count()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,34 +366,6 @@ impl SubprojectState {
     pub(super) fn is_open(self) -> bool {
         matches!(self, Self::Open)
     }
-
-    pub(super) fn is_terminal(self) -> bool {
-        !self.is_open()
-    }
-
-    pub(super) fn reason(self) -> &'static str {
-        match self {
-            Self::Open => "open sub-project",
-            Self::Done => "sub-project completed",
-            Self::Canceled => "sub-project canceled",
-        }
-    }
-
-    pub(super) fn closed_marker(self) -> Option<&'static str> {
-        match self {
-            Self::Open => None,
-            Self::Done => Some(SUBPROJECT_DONE_MARKER),
-            Self::Canceled => Some(SUBPROJECT_CANCELED_MARKER),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SubprojectEntry {
-    pub(super) link_name: String,
-    pub(super) stem: String,
-    pub(super) state: SubprojectState,
-    pub(super) future_scheduled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -27,7 +27,7 @@ fn surface_of(path: &str, contents: &str) -> Option<ProjectSurface> {
 }
 
 fn sync_changes(project: &Project) -> Vec<ProjectChange> {
-    plan_project_sync_at(project, &[], today()).changes
+    plan_project_sync_at(project, false, today()).changes
 }
 
 fn has_remove_hide(changes: &[ProjectChange]) -> bool {

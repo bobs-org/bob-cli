@@ -638,8 +638,16 @@ fn subproject_close_pulls_in_parent_and_sync_agrees() {
     assert_success(&sync);
     let out = stdout(&sync);
     assert!(
-        out.contains("update [[k]] on ^prj"),
-        "sync flips only K's marker entry:\n{out}"
+        out.contains("would set status: wip -> done"),
+        "sync flips K's lifecycle:\n{out}"
+    );
+    assert!(
+        out.contains("would write projects catalog"),
+        "sync writes N's catalog:\n{out}"
+    );
+    assert!(
+        out.contains("would retire Sub-projects line"),
+        "sync retires the legacy line:\n{out}"
     );
     assert!(
         !out.contains("#hide"),

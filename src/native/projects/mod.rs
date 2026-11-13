@@ -25,7 +25,6 @@ const HIDE_TAG: &str = "#hide";
 const PROJECT_TASK_TAG: &str = "#prj";
 const PROJECT_BLOCKED_TAG: &str = "#prj_is_blocked";
 pub(crate) const SUBPROJECTS_MARKER_PREFIX: &str = "🧩 **Sub-projects:**";
-const SUBPROJECTS_SEPARATOR: &str = "•";
 pub(crate) const SUBPROJECT_FUTURE_SCHEDULE_MARKER: &str = "🗓️";
 pub(crate) const SUBPROJECT_DONE_MARKER: &str = "✅";
 pub(crate) const SUBPROJECT_CANCELED_MARKER: &str = "❌";
@@ -74,9 +73,9 @@ anchored with ^prj.\n\n\
 The list subcommand is read-only: it scans project notes, validates leftover \
 scheduled: YYYY-MM-DD frontmatter and inline [scheduled:: YYYY-MM-DD] on \
 ^prj, counts open #task items, counts open non-hidden tasks, and shows the \
-current ^prj state. The sync subcommand updates project status, hoists leftover \
+current ^prj state. The sync subcommand updates project lifecycles, hoists leftover \
 frontmatter scheduled onto ^prj, propagates that date onto ordinary tasks, \
-and manages the single Sub-projects line from the ^prj task.",
+and repairs the generated ## Projects catalog in one guarded transaction.",
         )
         .after_help(
             "Examples:\n  bob projects list\n  bob projects sync --dry-run\n  bob projects sync -b ~/bob",
@@ -107,35 +106,43 @@ fn list_command() -> ClapCommand {
 
 fn sync_command() -> ClapCommand {
     ClapCommand::new("sync")
-        .about("Sync project status, task schedules, and sub-projects")
+        .about("Sync project lifecycles and sub-project catalogs")
         .long_about(
             "Sync Bob project notes from the completion-criteria task anchored \
-with ^prj.\n\n\
+with ^prj and repair the generated ## Projects catalog in every area or \
+project with direct child projects.\n\n\
 A checked ^prj task sets frontmatter status to done. A canceled ^prj task sets \
 status to canceled. Active projects with no non-hidden open tasks and no \
 open sub-projects have the #hide tag removed from their open ^prj task so \
 it surfaces in dash.md's Tasks section; projects with non-hidden open tasks \
-or open sub-projects get #hide added back. Sync also maintains a single \
-Sub-projects line nested under open ^prj tasks after the whole Depends-On or \
-Cancel Log subtree. Leftover scheduled: YYYY-MM-DD frontmatter is hoisted onto \
-^prj as [scheduled:: YYYY-MM-DD] and the key is deleted when ^prj is open \
-(frontmatter wins when both exist). Terminal projects are skipped silently. \
-A missing ^prj leaves the key in place with the 'cannot hoist leftover \
-scheduled onto ^prj' warning; malformed or duplicate ^prj tasks are project \
-issues and make sync exit 1. \
-When ^prj has a valid inline date, it overrides the normal surfacing rule: \
-every open ordinary task receives a matching [scheduled:: YYYY-MM-DD] field \
-unless it already has a valid equal or later schedule, and ordinary-task \
-#hide tags are removed. Future dates keep exactly one #hide on ^prj; today \
-and past dates preserve ^prj visibility unless it is the note's only task. \
-Run `bob task reconcile` afterward to reconcile derived [?] Blocked markers. \
-Invalid dates are reported and that file is left untouched.",
+or open sub-projects get #hide added back. Leftover scheduled: YYYY-MM-DD \
+frontmatter is hoisted onto ^prj as [scheduled:: YYYY-MM-DD] and the key is \
+deleted when ^prj is open (frontmatter wins when both exist). Terminal projects \
+are skipped silently. A missing ^prj leaves the key in place with the 'cannot \
+hoist leftover scheduled onto ^prj' warning; malformed or duplicate ^prj tasks \
+are project issues and make sync exit 1. When ^prj has a valid inline date, it \
+overrides the normal surfacing rule: every open ordinary task receives a matching \
+[scheduled:: YYYY-MM-DD] field unless it already has a valid equal or later \
+schedule, and ordinary-task #hide tags are removed. Future dates keep exactly \
+one #hide on ^prj; today and past dates preserve ^prj visibility unless it is the \
+note's only task. Run `bob task reconcile` afterward to reconcile derived [?] \
+Blocked markers. Invalid dates are reported and that file is left untouched.\n\n\
+Hosts and membership: a host is any area or project note with at least one \
+direct child project; the child scalar parent: resolves by exact path, then \
+unique basename. Rows are open A-Z, then newest-first Closed. Warning children \
+keep an otherwise empty parent hidden. A damaged [!projects] region refuses \
+that host with projects_catalog_damaged and is never rewritten. A real run \
+takes the shared vault lock, pre-syncs, installs one combined postimage per \
+changed note, and makes one scoped commit `projects: sync lifecycles and \
+catalogs (N notes)`; `--dry-run` prints lifecycle and catalog events plus one \
+colored unified diff per changed path and changes nothing.",
         )
         .after_help(
-            "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync --bob-dir /tmp/bob-vault",
+            "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync -f json\n\nSee docs/projects.md for the catalog contract.",
         )
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
+        .arg(format_arg())
 }
 
 fn bob_dir_arg() -> Arg {
@@ -323,20 +330,38 @@ fn display_slash(path: &Path) -> String {
 fn run_sync(matches: &ArgMatches) -> i32 {
     let bob_dir = bob_dir_from_matches(matches);
     let dry_run = matches.get_flag("dry-run");
+    let json_mode =
+        matches.get_one::<String>("format").map(String::as_str) == Some("json");
 
-    let report = sync_projects(&bob_dir, dry_run);
-    let styler = Styler::detect();
-    print_sync_report(&report, dry_run, &styler);
+    if dry_run {
+        let report = sync_engine::dry_run(&bob_dir);
+        if json_mode {
+            println!("{}", report.to_json());
+            for issue in &report.issues {
+                eprintln!("{COMMAND_NAME}: {}", issue.display());
+            }
+        } else {
+            sync_engine::print_human(&report);
+            for issue in &report.issues {
+                eprintln!("{COMMAND_NAME}: {}", issue.display());
+            }
+        }
+        return report.exit_code();
+    }
 
+    let report = sync_engine::run_standalone(&bob_dir, json_mode);
+    if json_mode {
+        println!("{}", report.to_json());
+        for issue in &report.issues {
+            eprintln!("{COMMAND_NAME}: {}", issue.display());
+        }
+        return report.exit_code();
+    }
+    sync_engine::print_human(&report);
     for issue in &report.issues {
         eprintln!("{COMMAND_NAME}: {}", issue.display());
     }
-
-    if report.issues.is_empty() {
-        0
-    } else {
-        1
-    }
+    report.exit_code()
 }
 
 fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
@@ -359,6 +384,7 @@ mod output;
 mod scan;
 mod surface;
 mod sync;
+pub(crate) mod sync_engine;
 mod tags;
 #[cfg(test)]
 mod tests;

@@ -163,6 +163,7 @@ sets `one_off: true`.
 | `bob albums list` | `-f json` | Albums, groups, counts, issues, and owner `catalogs` | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums sync` | `-f json` | Index entries, owner `catalogs`, and transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
+| `bob projects sync` | `-f json` | Lifecycle and catalog sync result | `schema_version: 1` | [Project Task Sync](../projects.md#sync-rules) |
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
 | `bob albums update` | `-f json` | `stem`, fingerprints, `inverse_ops` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
 
@@ -512,6 +513,9 @@ capture unversioned).
 | `bob articles format` | `-f json` | Article plans | `schema_version: 1` | [Articles](../articles.md) |
 | `bob articles list` | `-f json` | Article notes needing work | `schema_version: 1` | [Articles](../articles.md) |
 | `bob articles outline` | `-f json` | Section outline of one note | `schema_version: 1` | [Articles](../articles.md) |
+
+`bob nightly` is human-only in this checkout: it exposes
+no `--format json` or `--json` flag.
 
 ## References, jobs, Keep, plugins, and status
 

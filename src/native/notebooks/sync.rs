@@ -9,7 +9,6 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
-use similar::TextDiff;
 
 use super::{
     model::{CatalogRecord, CatalogState},
@@ -21,6 +20,7 @@ use super::{
     },
 };
 use crate::native::{
+    host_catalog::{color_diff, unified_diff},
     ob::{self, ChildEnv},
     style::Styler,
     vault_rewrite::TxnFailure,
@@ -152,14 +152,6 @@ pub(super) fn failure_json(failure: &TxnFailure) -> Value {
         "message": failure.message,
         "hint": failure.hint,
     })
-}
-
-pub(super) fn unified_diff(path: &str, before: &str, after: &str) -> String {
-    TextDiff::from_lines(before, after)
-        .unified_diff()
-        .context_radius(3)
-        .header(&format!("a/{path}"), &format!("b/{path}"))
-        .to_string()
 }
 
 /// Load the vault and refuse a partial view: an unreadable file must never
@@ -399,26 +391,6 @@ pub(crate) fn print_human(report: &SyncReport) {
 
 pub(super) fn short(sha: &str) -> &str {
     &sha[..sha.len().min(9)]
-}
-
-pub(super) fn color_diff(diff: &str, styler: &Styler) -> String {
-    let mut out = String::new();
-    for line in diff.lines() {
-        let painted = if line.starts_with("+++") || line.starts_with("---") {
-            styler.bold(line)
-        } else if line.starts_with('+') {
-            styler.green(line)
-        } else if line.starts_with('-') {
-            styler.red(line)
-        } else if line.starts_with("@@") {
-            styler.cyan(line)
-        } else {
-            line.to_string()
-        };
-        out.push_str(&painted);
-        out.push('\n');
-    }
-    out
 }
 
 /// Nightly step adapter: run the lock-free core once and print the

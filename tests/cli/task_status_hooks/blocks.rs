@@ -380,7 +380,7 @@ fn br7_inserts_second_after_cancel_log() {
 }
 
 #[test]
-fn br8_prj_order_then_projects_sync_is_noop() {
+fn br8_prj_order_then_projects_sync_migrates_catalog() {
     let temp = TempDir::new("bob-cli-blocks-br8");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
@@ -434,7 +434,21 @@ fn br8_prj_order_then_projects_sync_is_noop() {
         .output()
         .expect("projects sync dry-run");
     assert_success(&output);
-    assert!(!stdout(&output).contains("would "), "{}", stdout(&output));
+    // Reconcile settles blocking lines; projects sync migrates the legacy
+    // marker into the generated catalog without touching lifecycle state.
+    let out = stdout(&output);
+    assert!(
+        out.contains("would write projects catalog"),
+        "sync plans the catalog:\n{out}"
+    );
+    assert!(
+        out.contains("would retire Sub-projects line"),
+        "sync plans the legacy retirement:\n{out}"
+    );
+    assert!(
+        !out.contains("would set status"),
+        "no lifecycle change remains:\n{out}"
+    );
     assert_eq!(
         fs::read_to_string(vault.join("parent.md")).unwrap(),
         before_parent

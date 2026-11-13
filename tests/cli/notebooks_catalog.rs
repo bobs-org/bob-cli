@@ -1088,7 +1088,7 @@ fn capture_cannot_target_the_generated_catalog_section() {
 #[test]
 fn projects_sync_never_lists_a_notebook_as_a_sub_project() {
     let temp = TempDir::new("nb-projects-sync");
-    let vault = temp.path().join("vault");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     write_file(
         &vault.join("Parent.md"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n- [ ] #task Needs priority\n",
@@ -1101,9 +1101,17 @@ fn projects_sync_never_lists_a_notebook_as_a_sub_project() {
         &vault.join("Parent_log.md"),
         &notebook_note("Parent", "A notebook, not a project.", "Log"),
     );
+    commit_all(&vault, "projects exclusion fixture");
     let output = bob_command()
-        .args(["projects", "sync", "--bob-dir"])
+        .args(["projects", "sync"])
+        .arg("-b")
         .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .env("TZ", "UTC")
+        .env("NO_COLOR", "1")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
         .output()
         .expect("projects sync");
     assert_success(&output);
@@ -1130,7 +1138,7 @@ fn nightly(vault: &Path, temp: &TempDir) -> Output {
 }
 
 #[test]
-fn nightly_has_seven_ordered_steps_and_syncs_catalogs_once() {
+fn nightly_has_eight_ordered_steps_and_syncs_catalogs_once() {
     let temp = TempDir::new("nb-nightly");
     let vault = online_vault(&temp);
     let base = head(&vault);
@@ -1141,13 +1149,14 @@ fn nightly_has_seven_ordered_steps_and_syncs_catalogs_once() {
     assert_text_order(
         &out,
         &[
-            "step 1/7 · vault-sync",
-            "step 2/7 · task archive",
-            "step 3/7 · articles",
-            "step 4/7 · period notes",
-            "step 5/7 · notebooks — Repair generated notebook catalogs",
-            "step 6/7 · albums — Repair generated records indexes and album catalogs",
-            "step 7/7 · vault-sync",
+            "step 1/8 · vault-sync",
+            "step 2/8 · task archive",
+            "step 3/8 · articles",
+            "step 4/8 · period notes",
+            "step 5/8 · projects — Sync project lifecycles and sub-project catalogs",
+            "step 6/8 · notebooks — Repair generated notebook catalogs",
+            "step 7/8 · albums — Repair generated records indexes and album catalogs",
+            "step 8/8 · vault-sync",
             "All steps passed",
         ],
     );
@@ -1198,7 +1207,7 @@ fn nightly_still_publishes_after_a_notebooks_step_failure() {
     let out = stdout(&output);
     assert!(out.contains("\u{2717} notebooks"), "{out}");
     assert!(
-        out.contains("step 7/7") && out.contains("1 step failed"),
+        out.contains("step 8/8") && out.contains("1 step failed"),
         "{out}"
     );
     assert_eq!(

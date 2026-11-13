@@ -1,1051 +1,502 @@
-//! Projects sync tests except schedule tail.
+//! Guarded projects sync: lifecycle plus `## Projects` catalogs.
 
 use crate::support::*;
+use serde_json::Value;
 use std::fs;
+use std::path::Path;
 
-#[test]
-fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
-    let temp = TempDir::new("bob-cli-projects-sync");
-    let vault = temp.path().join("vault");
+const NOW: &str = "2026-07-10 12:00:00";
 
-    write_file(
-        &vault.join("DoneFlip.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship done #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("CancelFlip.md"),
-        "---\ntype: [[project]]\nstatus: waiting\n---\n- [-] #task Stop work #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("MissingStatus.md"),
-        "---\ntype: [[project]]\n---\n- [X] #task Ship missing status #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("Stalled.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled #hide ^prj\n- [/] #task Secondary work #hide\n",
-    );
-    write_file(
-        &vault.join("ZeroOpen.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open #hide ^prj\n- [x] #task Already done\n",
-    );
-    write_file(
-        &vault.join("HasUnprioritized.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("MissingPriority.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish missing priority ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("ExistingScheduled.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled #hide [scheduled::2026-06-01] ^prj\n",
-    );
-    write_file(
-        &vault.join("TerminalOpen.md"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Finish drift #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("MissingPrj.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Needs completion task\n",
-    );
-    write_file(
-        &vault.join("Placeholder.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task <short_project_completion_criteria_goes_here> #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-
-    let dry_run_snapshot =
-        fs::read_to_string(vault.join("Stalled.md")).expect("read stalled");
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("-d")
-        .arg("-b")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync dry-run");
-
-    assert_success(&output);
-    assert!(
-        stderr(&output).is_empty(),
-        "unexpected dry-run stderr:\n{}",
-        format_output(&output)
-    );
-    let out = stdout(&output);
-    assert!(
-        out.contains("[dry-run] ok")
-            && out.contains("would set status: waiting -> canceled")
-            && out.contains("would set status: done -> wip")
-            && out.contains("^prj task opened")
-            && out.contains("would remove #hide from ^prj")
-            && out.contains("would add #hide to ^prj")
-            && !out.contains("would remove [scheduled::2026-06-01]")
-            && out.contains("active project has no ^prj task")
-            && out.contains("template placeholder")
-            && out.contains(
-                "11 projects - 4 status updated - 5 ^prj edited - 0 task schedules updated - 2 warnings"
-            ),
-        "unexpected dry-run output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Stalled.md")).expect("read stalled"),
-        dry_run_snapshot,
-        "dry-run must not edit files"
-    );
-    assert_stdout_has_no_ansi(&output);
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    assert!(
-        stderr(&output).is_empty(),
-        "unexpected sync stderr:\n{}",
-        format_output(&output)
-    );
-    let out = stdout(&output);
-    assert!(
-        out.contains("status: wip -> done")
-            && out.contains("status: done -> wip")
-            && out.contains("removed #hide from ^prj")
-            && out.contains("added #hide to ^prj")
-            && !out.contains("removed [scheduled::2026-06-01]")
-            && out.contains(
-                "11 projects - 4 status updated - 5 ^prj edited - 0 task schedules updated - 2 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-
-    assert_eq!(
-        fs::read_to_string(vault.join("DoneFlip.md")).expect("read done"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship done #hide ^prj\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("CancelFlip.md")).expect("read cancel"),
-        "---\ntype: [[project]]\nstatus: canceled\n---\n- [-] #task Stop work #hide ^prj\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("MissingStatus.md")).expect("read missing status"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [X] #task Ship missing status #hide ^prj\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Stalled.md")).expect("read stalled"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled ^prj\n- [/] #task Secondary work #hide\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("ZeroOpen.md")).expect("read zero"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open ^prj\n- [x] #task Already done\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("HasUnprioritized.md")).expect("read has unprioritized"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized #hide ^prj\n- [ ] #task Needs priority\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("MissingPriority.md")).expect("read missing priority"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish missing priority #hide ^prj\n- [ ] #task Needs priority\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("ExistingScheduled.md")).expect("read scheduled"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled [scheduled::2026-06-01] ^prj\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("TerminalOpen.md")).expect("read terminal open"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish drift ^prj\n"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("-b")
-        .arg(&vault)
-        .output()
-        .expect("rerun bob projects sync");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains(
-            "11 projects - 0 status updated - 0 ^prj edited - 0 task schedules updated - 2 warnings"
-        ),
-        "second run should have zero actions:\n{}",
-        format_output(&output)
-    );
+fn online_vault(temp: &TempDir) -> std::path::PathBuf {
+    let (vault, _remote, _peer) = init_vault_sync_pair(temp);
+    vault
 }
 
-#[test]
-fn projects_sync_hides_parent_projects_with_open_subprojects() {
-    let temp = TempDir::new("bob-cli-projects-sync-subprojects");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("ParentKeep.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent keep #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("ParentAdd.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent add ^prj\n",
-    );
-    write_file(
-        &vault.join("ChildKeep.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentKeep]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("ChildAdd.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[projects/ParentAdd#Now|parent]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("ChildAlpha.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentAdd]]\n---\n- [ ] #task Finish alpha #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-
-    let parent_add_snapshot =
-        fs::read_to_string(vault.join("ParentAdd.md")).expect("read parent");
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--dry-run")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync dry-run");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("would add #hide to ^prj  project has open sub-projects")
-            && out
-                .contains("would add [[ChildKeep]] to ^prj  open sub-project")
-            && out.contains("would add [[ChildAdd]] to ^prj  open sub-project")
-            && out
-                .contains("would add [[ChildAlpha]] to ^prj  open sub-project")
-            && out.contains(
-                "5 projects - 0 status updated - 4 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected dry-run output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("ParentAdd.md")).expect("read parent"),
-        parent_add_snapshot,
-        "dry-run must not edit parent"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("added #hide to ^prj  project has open sub-projects")
-            && out.contains("added [[ChildKeep]] to ^prj  open sub-project")
-            && out.contains("added [[ChildAdd]] to ^prj  open sub-project")
-            && out.contains("added [[ChildAlpha]] to ^prj  open sub-project")
-            && out.contains(
-                "5 projects - 0 status updated - 4 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("ParentKeep.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent keep #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildKeep]]\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("ParentAdd.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent add #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildAdd]] • [[ChildAlpha]]\n"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("rerun bob projects sync");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains(
-            "5 projects - 0 status updated - 0 ^prj edited - 0 task schedules updated - 0 warnings"
-        ),
-        "second run should have zero actions:\n{}",
-        format_output(&output)
-    );
+fn commit_all(vault: &Path, message: &str) {
+    git_in(vault, ["add", "-A"]);
+    git_in(vault, ["commit", "-q", "-m", message]);
+    git_in(vault, ["push", "-q"]);
 }
 
-#[test]
-fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
-    let temp = TempDir::new("bob-cli-projects-sync-future-subprojects");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[FutureOpen]] • [[Today]] • [[Unscheduled]] • ~~[[FutureClosed]]~~ ✅\n\t- user-owned context\n",
-    );
-    write_file(
-        &vault.join("Unscheduled.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish unscheduled ^prj\n",
-    );
-    write_file(
-        &vault.join("Today.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\nscheduled: 2026-07-10\n---\n- [ ] #task Finish today ^prj\n",
-    );
-    write_file(
-        &vault.join("FutureOpen.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\nscheduled: 2026-07-11\n---\n- [ ] #task Finish future #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("FutureClosed.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish closed #hide [scheduled:: 2026-07-11] ^prj\n",
-    );
-
-    let parent_before =
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent");
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--dry-run")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .env("BOB_NOW", "2026-07-10")
-        .output()
-        .expect("preview future sub-project marker sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains(
-            "would add 🗓️ [[FutureOpen]] to ^prj  sub-project scheduled in future"
-        ) && out.contains(
-            "would add 🗓️ [[FutureClosed]] to ^prj  sub-project scheduled in future"
-        ) && out.contains(
-            "5 projects - 0 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings - 2 schedules hoisted"
-        ),
-        "unexpected dry-run output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        parent_before,
-        "dry-run must not edit the parent ledger"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .env("BOB_NOW", "2026-07-10")
-        .output()
-        .expect("apply future sub-project markers");
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("added 🗓️ [[FutureOpen]] to ^prj  sub-project scheduled in future")
-            && out.contains("added 🗓️ [[FutureClosed]] to ^prj  sub-project scheduled in future"),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** 🗓️ [[FutureOpen]] • [[Today]] • [[Unscheduled]] • 🗓️ ~~[[FutureClosed]]~~ ✅\n\t- user-owned context\n"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .env("BOB_NOW", "2026-07-10")
-        .output()
-        .expect("rerun future sub-project marker sync");
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains(
-            "5 projects - 0 status updated - 0 ^prj edited - 0 task schedules updated - 0 warnings"
-        ),
-        "second run should be a no-op:\n{}",
-        format_output(&output)
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .env("BOB_NOW", "2026-07-11")
-        .output()
-        .expect("sync at scheduled date boundary");
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains(
-            "removed 🗓️ [[FutureOpen]] from ^prj  sub-project no longer scheduled in future"
-        ) && out.contains(
-            "removed 🗓️ [[FutureClosed]] from ^prj  sub-project no longer scheduled in future"
-        ) && out.contains(
-            "FutureOpen  removed #hide from ^prj  no non-hidden open tasks or open sub-projects"
-        ) && out.contains(
-            "5 projects - 0 status updated - 3 ^prj edited - 0 task schedules updated - 0 warnings"
-        ),
-        "unexpected boundary output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[FutureOpen]] • [[Today]] • [[Unscheduled]] • ~~[[FutureClosed]]~~ ✅\n\t- user-owned context\n"
-    );
-    // A today-scheduled empty project surfaces through the normal rule.
-    assert_eq!(
-        fs::read_to_string(vault.join("FutureOpen.md")).expect("read child"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish future [scheduled:: 2026-07-11] ^prj\n"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .env("BOB_NOW", "2026-07-11")
-        .output()
-        .expect("rerun scheduled date boundary sync");
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains(
-            "5 projects - 0 status updated - 0 ^prj edited - 0 task schedules updated - 0 warnings"
-        ),
-        "boundary rerun should be a no-op:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
-    let temp = TempDir::new("bob-cli-projects-sync-checked-subproject");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
-    );
-    write_file(
-        &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [x] #task Finish child #hide ^prj\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("status: wip -> done")
-            && out.contains(
-                "removed #hide from ^prj  no non-hidden open tasks or open sub-projects"
-            )
-            && out.contains(
-                "updated [[Child]] on ^prj  sub-project completed"
-            )
-            && out.contains(
-                "2 projects - 1 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** ~~[[Child]]~~ ✅\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Child.md")).expect("read child"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish child #hide ^prj\n"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("rerun bob projects sync");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains(
-            "2 projects - 0 status updated - 0 ^prj edited - 0 task schedules updated - 0 warnings"
-        ),
-        "second run should have zero actions:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn projects_sync_reopens_parent_ledger_when_child_prj_is_reopened_same_run() {
-    let temp = TempDir::new("bob-cli-projects-sync-reopened-subproject");
-    let vault = temp.path().join("vault");
-
-    // The parent ledger shows the child as completed, but the child's
-    // frontmatter is terminal while its ^prj task is open again. One sync run
-    // should reopen the child to wip and flip the parent ledger back to open.
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** ~~[[Child]]~~ ✅\n",
-    );
-    write_file(
-        &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [ ] #task Finish child #hide ^prj\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("status: done -> wip  ^prj task opened")
-            && out.contains(
-                "removed #hide from ^prj  no non-hidden open tasks or open sub-projects"
-            )
-            && out.contains("updated [[Child]] on ^prj  open sub-project")
-            && out.contains(
-                "2 projects - 1 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Child.md")).expect("read child"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish child ^prj\n"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("rerun bob projects sync");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains(
-            "2 projects - 0 status updated - 0 ^prj edited - 0 task schedules updated - 0 warnings"
-        ),
-        "second run should have zero actions:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn projects_sync_marks_canceled_subproject_same_run() {
-    let temp = TempDir::new("bob-cli-projects-sync-canceled-subproject");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
-    );
-    write_file(
-        &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop child #hide ^prj\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("status: wip -> canceled")
-            && out.contains(
-                "removed #hide from ^prj  no non-hidden open tasks or open sub-projects"
-            )
-            && out
-                .contains("updated [[Child]] on ^prj  sub-project canceled")
-            && out.contains(
-                "2 projects - 1 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** ~~[[Child]]~~ ❌\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Child.md")).expect("read child"),
-        "---\ntype: [[project]]\nstatus: canceled\nparent: [[Parent]]\n---\n- [-] #task Stop child #hide ^prj\n"
-    );
-}
-
-#[test]
-fn projects_sync_orders_open_then_closed_subprojects_in_one_run() {
-    let temp = TempDir::new("bob-cli-projects-sync-mixed-subprojects");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[DoneChild]] • [[CanceledChild]] • [[ExistingOpen]]\n",
-    );
-    write_file(
-        &vault.join("ExistingOpen.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish existing #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("AddedOpen.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish added #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("DoneChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [x] #task Finish done #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("CanceledChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop canceled #hide ^prj\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("added [[AddedOpen]] to ^prj  open sub-project")
-            && out.contains(
-                "updated [[DoneChild]] on ^prj  sub-project completed"
-            )
-            && out.contains(
-                "updated [[CanceledChild]] on ^prj  sub-project canceled"
-            )
-            && out.contains(
-                "5 projects - 2 status updated - 3 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[AddedOpen]] • [[ExistingOpen]] • ~~[[CanceledChild]]~~ ❌ • ~~[[DoneChild]]~~ ✅\n"
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("rerun bob projects sync");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains(
-            "5 projects - 0 status updated - 0 ^prj edited - 0 task schedules updated - 0 warnings"
-        ),
-        "second run should have zero actions:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn projects_sync_keeps_pruned_closed_entries_gone() {
-    let temp = TempDir::new("bob-cli-projects-sync-curated-subprojects");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** [[DeletedChild]] • [[ReparentedChild]] • ~~[[KeptDone]]~~ ✅\n",
-    );
-    write_file(
-        &vault.join("KeptDone.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish kept #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("PrunedDone.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish pruned #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("ReparentedChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[OtherParent]]\n---\n- [ ] #task Finish reparented #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains(
-            "removed [[DeletedChild]] from ^prj  no longer a sub-project"
-        ) && out.contains(
-            "removed [[ReparentedChild]] from ^prj  no longer a sub-project"
-        ) && !out.contains("PrunedDone]]")
-            && out.contains(
-                "4 projects - 0 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** ~~[[KeptDone]]~~ ✅\n"
-    );
-}
-
-#[test]
-fn projects_sync_treats_children_without_open_prj_as_childless() {
-    let temp = TempDir::new("bob-cli-projects-sync-no-open-subprojects");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("ParentMissingChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("MissingPrjChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentMissingChild]]\n---\n- [ ] #task Needs completion task\n",
-    );
-    write_file(
-        &vault.join("ParentCheckedChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("CheckedChild.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[ParentCheckedChild]]\n---\n- [x] #task Finish child #hide ^prj\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("active project has no ^prj task")
-            && out.contains(
-                "4 projects - 0 status updated - 2 ^prj edited - 0 task schedules updated - 1 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("ParentMissingChild.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("ParentCheckedChild.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n"
-    );
-}
-
-#[test]
-fn projects_sync_preserves_user_sub_bullets_and_inserts_subprojects_line() {
-    let temp = TempDir::new("bob-cli-projects-sync-user-sub-bullets");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- Remember to check notes\n\t- [[non_project_note]]\n",
-    );
-    write_file(
-        &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("added [[Child]] to ^prj  open sub-project")
-            && out.contains(
-                "2 projects - 0 status updated - 1 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- Remember to check notes\n\t- [[non_project_note]]\n"
-    );
-}
-
-#[test]
-fn projects_sync_normalizes_mangled_subprojects_line() {
-    let temp = TempDir::new("bob-cli-projects-sync-subproject-line-update");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n  - 🧩 **Sub-projects:** [[ChildBeta]] plus [[ChildAlpha]]\n",
-    );
-    write_file(
-        &vault.join("ChildAlpha.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish alpha #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("ChildBeta.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish beta #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("updated sub-projects on ^prj  canonical format")
-            && out.contains(
-                "3 projects - 0 status updated - 1 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected sync output:\n{out}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildAlpha]] • [[ChildBeta]]\n"
-    );
-}
-
-#[test]
-fn projects_sync_subproject_line_dry_run_reports_without_writing() {
-    let temp = TempDir::new("bob-cli-projects-sync-subproject-line-dry-run");
-    let vault = temp.path().join("vault");
-
-    write_file(
-        &vault.join("ParentAdd.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish add #hide ^prj\n",
-    );
-    write_file(
-        &vault.join("ChildAdd.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentAdd]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("ParentRemove.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish remove #hide ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n- [ ] #task Needs priority\n",
-    );
-    write_file(
-        &vault.join("ParentUpdate.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish update #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildUpdate]] plus notes\n",
-    );
-    write_file(
-        &vault.join("ChildUpdate.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentUpdate]]\n---\n- [ ] #task Finish update child #hide ^prj\n- [ ] #task Needs priority\n",
-    );
-    let snapshots = [
-        (
-            "ParentAdd.md",
-            fs::read_to_string(vault.join("ParentAdd.md"))
-                .expect("read parent add"),
-        ),
-        (
-            "ParentRemove.md",
-            fs::read_to_string(vault.join("ParentRemove.md"))
-                .expect("read parent remove"),
-        ),
-        (
-            "ParentUpdate.md",
-            fs::read_to_string(vault.join("ParentUpdate.md"))
-                .expect("read parent update"),
-        ),
-    ];
-
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("--dry-run")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync dry-run");
-
-    assert_success(&output);
-    let out = stdout(&output);
-    assert!(
-        out.contains("would add [[ChildAdd]] to ^prj  open sub-project")
-            && out.contains(
-                "would remove [[OldChild]] from ^prj  no longer a sub-project"
-            )
-            && out.contains(
-                "would update sub-projects on ^prj  canonical format"
-            )
-            && out.contains(
-                "5 projects - 0 status updated - 3 ^prj edited - 0 task schedules updated - 0 warnings"
-            ),
-        "unexpected dry-run output:\n{out}"
-    );
-    for (name, snapshot) in snapshots {
-        assert_eq!(
-            fs::read_to_string(vault.join(name)).expect("read parent"),
-            snapshot,
-            "dry-run must not edit {name}"
-        );
+fn sync_cmd(
+    vault: &Path,
+    temp: &TempDir,
+    args: &[&str],
+    now: &str,
+) -> std::process::Command {
+    let mut cmd = bob_command();
+    cmd.arg("projects").arg("sync");
+    for arg in args {
+        cmd.arg(arg);
     }
+    cmd.arg("-b").arg(vault);
+    cmd.env("BOB_DIR", vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(temp))
+        .env("BOB_NOW", now)
+        .env("TZ", "UTC")
+        .env("NO_COLOR", "1");
+    cmd
+}
+
+fn run_sync(
+    vault: &Path,
+    temp: &TempDir,
+    args: &[&str],
+    now: &str,
+) -> std::process::Output {
+    sync_cmd(vault, temp, args, now)
+        .output()
+        .expect("run bob projects sync")
+}
+
+fn json_output(output: &std::process::Output) -> Value {
+    serde_json::from_str(stdout(output).trim()).unwrap_or_else(|error| {
+        panic!(
+            "one JSON envelope expected ({error}):\n{}",
+            format_output(output)
+        )
+    })
+}
+
+fn head(vault: &Path) -> String {
+    stdout(&git_in(vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string()
+}
+
+fn commits_since(vault: &Path, base: &str) -> usize {
+    stdout(&git_in(
+        vault,
+        ["rev-list", "--count", &format!("{base}..HEAD")],
+    ))
+    .trim()
+    .parse()
+    .expect("count")
+}
+
+fn project_note(status: &str, parent: Option<&str>, prj: &str) -> String {
+    let parent_line = parent
+        .map(|target| format!("parent: \"[[{target}]]\"\n"))
+        .unwrap_or_default();
+    format!(
+        "---\ntype: [[project]]\nstatus: {status}\n{parent_line}---\n{prj}\n"
+    )
 }
 
 #[test]
-fn projects_sync_reports_prj_errors_without_aborting_scan() {
-    let temp = TempDir::new("bob-cli-projects-sync-errors");
-    let vault = temp.path().join("vault");
+fn projects_sync_combines_lifecycle_catalog_and_legacy_removal_in_one_write() {
+    let temp = TempDir::new("bob-cli-projects-combined");
+    let vault = online_vault(&temp);
+    // Parent has lifecycle work (status flip + surfacing) plus a legacy
+    // marker that must retire into the generated catalog in the same write.
+    write_file(
+        &vault.join("Parent.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Kid]]\n\nUnrelated prose.\n\n- [x] #task Log entry\n",
+    );
+    write_file(
+        &vault.join("Kid.md"),
+        &project_note("wip", Some("Parent"), "- [ ] #task Kid work ^prj\n"),
+    );
+    commit_all(&vault, "combined fixture");
 
+    let base = head(&vault);
+    let dry = run_sync(&vault, &temp, &["-d"], NOW);
+    assert_success(&dry);
+    let dry_out = stdout(&dry);
+    assert!(
+        dry_out.contains("Parent") && dry_out.contains("dry run:"),
+        "dry run must name the host and report the count:\n{}",
+        format_output(&dry)
+    );
+    assert!(
+        dry_out.contains("@@") && dry_out.contains("## Projects"),
+        "dry run must show the unified catalog diff:\n{}",
+        format_output(&dry)
+    );
+
+    let applied = run_sync(&vault, &temp, &[], NOW);
+    assert_success(&applied);
+    assert_eq!(commits_since(&vault, &base), 1, "one scoped commit");
+    let parent = fs::read_to_string(vault.join("Parent.md")).unwrap();
+    assert!(parent.contains("status: done"), "{parent}");
+    assert!(!parent.contains("Sub-projects:"), "{parent}");
+    assert!(parent.contains("## Projects"), "{parent}");
+    assert!(parent.contains("[[Kid]]"), "{parent}");
+    assert!(parent.contains("Unrelated prose."), "{parent}");
+    assert!(parent.contains("- [x] #task Log entry"), "{parent}");
+
+    // Dry-run diffs equal the actual migration: rerunning the dry run after
+    // the write is a no-op.
+    let rerun_dry = run_sync(&vault, &temp, &["-d"], NOW);
+    assert_success(&rerun_dry);
+    assert!(
+        !stdout(&rerun_dry).contains("@@"),
+        "no-op dry run shows no diff:\n{}",
+        format_output(&rerun_dry)
+    );
+    let rerun = run_sync(&vault, &temp, &[], NOW);
+    assert_success(&rerun);
+    assert_eq!(commits_since(&vault, &head(&vault)), 0);
+}
+
+#[test]
+fn projects_sync_child_close_reopen_and_schedule_appear_in_parent_catalog() {
+    let temp = TempDir::new("bob-cli-projects-child-states");
+    let vault = online_vault(&temp);
+    write_file(
+        &vault.join("Parent.md"),
+        &project_note("wip", None, "- [ ] #task Parent ^prj\n"),
+    );
+    write_file(
+        &vault.join("Kid.md"),
+        &project_note("wip", Some("Parent"), "- [ ] #task Kid ^prj\n"),
+    );
+    commit_all(&vault, "child states fixture");
+
+    let first = run_sync(&vault, &temp, &[], NOW);
+    assert_success(&first);
+    let parent = fs::read_to_string(vault.join("Parent.md")).unwrap();
+    assert!(
+        parent.contains("[[Kid]]") && !parent.contains("**Closed**"),
+        "{parent}"
+    );
+
+    // Close the child: the same run must flip its row into Closed.
+    write_file(
+        &vault.join("Kid.md"),
+        &project_note("wip", Some("Parent"), "- [x] #task Kid ^prj\n"),
+    );
+    commit_all(&vault, "close kid");
+    let closed = run_sync(&vault, &temp, &[], NOW);
+    assert_success(&closed);
+    let parent = fs::read_to_string(vault.join("Parent.md")).unwrap();
+    assert!(
+        parent.contains("**Closed**") && parent.contains("[[Kid]]"),
+        "{parent}"
+    );
+
+    // A hand-deleted closed row returns on the next sync (derived ledger).
+    // Re-read and delete the Kid row by hand.
+    let parent = fs::read_to_string(vault.join("Parent.md")).unwrap();
+    let hand_deleted = parent
+        .lines()
+        .filter(|line| !line.contains("[[Kid]]"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(vault.join("Parent.md"), hand_deleted).unwrap();
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "hand prune closed row"]);
+    git_in(&vault, ["push", "-q"]);
+    let restored = run_sync(&vault, &temp, &[], NOW);
+    assert_success(&restored);
+    let parent = fs::read_to_string(vault.join("Parent.md")).unwrap();
+    assert!(
+        parent.contains("[[Kid]]"),
+        "closed row must return:\n{parent}"
+    );
+}
+
+#[test]
+fn projects_sync_maintains_area_and_terminal_hosts_and_warns_safely() {
+    let temp = TempDir::new("bob-cli-projects-hosts");
+    let vault = online_vault(&temp);
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n# Area\n");
+    write_file(
+        &vault.join("Kid.md"),
+        &project_note("wip", Some("Area"), "- [ ] #task Kid ^prj\n"),
+    );
+    write_file(
+        &vault.join("Old.md"),
+        &project_note(
+            "done",
+            None,
+            "- [x] #task Old work [completion:: 2026-07-09] ^prj\n",
+        ),
+    );
+    write_file(
+        &vault.join("Grandkid.md"),
+        &project_note(
+            "done",
+            Some("Old"),
+            "- [x] #task Grand work [completion:: 2026-07-10] ^prj\n",
+        ),
+    );
+    // A valid parent with only a warning child keeps its ^prj hidden, and
+    // an invalid lifecycle host still gets safe catalog maintenance.
+    write_file(
+        &vault.join("Broken.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Broken parent #hide ^prj\n",
+    );
+    write_file(
+        &vault.join("WarnKid.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: \"[[Broken]]\"\n---\n- [ ] #task No prj here\n",
+    );
+    write_file(
+        &vault.join("Invalid.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task A ^prj\n- [ ] #task B ^prj\n",
+    );
+    write_file(
+        &vault.join("InvalidKid.md"),
+        &project_note("wip", Some("Invalid"), "- [ ] #task Kid ^prj\n"),
+    );
+    commit_all(&vault, "hosts fixture");
+
+    let output = run_sync(&vault, &temp, &[], NOW);
+    // Invalid lifecycle is a scan error, so the run exits 1 even though
+    // healthy catalogs commit.
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let area = fs::read_to_string(vault.join("Area.md")).unwrap();
+    assert!(
+        area.contains("## Projects") && area.contains("[[Kid]]"),
+        "{area}"
+    );
+    let old = fs::read_to_string(vault.join("Old.md")).unwrap();
+    assert!(old.contains("[[Grandkid]]"), "{old}");
+    let broken = fs::read_to_string(vault.join("Broken.md")).unwrap();
+    assert!(broken.contains("## Projects"), "{broken}");
+    // The parent of a warning child keeps its ^prj hidden.
+    assert!(broken.contains("#hide"), "{broken}");
+    let invalid = fs::read_to_string(vault.join("Invalid.md")).unwrap();
+    assert!(
+        invalid.contains("## Projects") && invalid.contains("[[InvalidKid]]"),
+        "invalid lifecycle hosts still get catalogs:\n{invalid}"
+    );
+}
+
+#[test]
+fn projects_sync_exact_and_ambiguous_membership_drive_catalog_and_hide() {
+    let temp = TempDir::new("bob-cli-projects-membership");
+    let vault = online_vault(&temp);
+    write_file(
+        &vault.join("Parent.md"),
+        &project_note("wip", None, "- [ ] #task Parent ^prj\n"),
+    );
+    write_file(
+        &vault.join("docs").join("Other.md"),
+        &project_note("wip", None, "- [ ] #task Other ^prj\n"),
+    );
+    write_file(
+        &vault.join("sub").join("Kid.md"),
+        &project_note("wip", Some("docs/Other"), "- [ ] #task Kid ^prj\n"),
+    );
+    // Ambiguous basenames never become rows.
+    write_file(
+        &vault.join("a").join("Dup.md"),
+        &project_note("wip", None, "- [ ] #task A ^prj\n"),
+    );
+    write_file(
+        &vault.join("b").join("Dup.md"),
+        &project_note("wip", None, "- [ ] #task B ^prj\n"),
+    );
+    write_file(
+        &vault.join("Twin.md"),
+        &project_note("wip", Some("Dup"), "- [ ] #task Twin ^prj\n"),
+    );
+    // Albums, notebooks, and archives never become project rows.
+    write_file(
+        &vault.join("Album.md"),
+        "---\ntype: [[album]]\n---\n# Album\n",
+    );
+    commit_all(&vault, "membership fixture");
+
+    let output = run_sync(&vault, &temp, &[], NOW);
+    assert_success(&output);
+    let other =
+        fs::read_to_string(vault.join("docs").join("Other.md")).unwrap();
+    assert!(
+        other.contains("sub/Kid|Kid") || other.contains("[[Kid]]"),
+        "{other}"
+    );
+    let parent = fs::read_to_string(vault.join("Parent.md")).unwrap();
+    assert!(!parent.contains("## Projects"), "{parent}");
+    // Ambiguous parents resolve to nothing: no catalog, no hide flip.
+    let twin = fs::read_to_string(vault.join("Twin.md")).unwrap();
+    assert!(!twin.contains("## Projects"), "{twin}");
+}
+
+#[test]
+fn projects_sync_damaged_host_keeps_bytes_while_healthy_hosts_commit() {
+    let temp = TempDir::new("bob-cli-projects-damaged");
+    let vault = online_vault(&temp);
     write_file(
         &vault.join("Good.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Good project #hide ^prj\n",
+        &project_note("wip", None, "- [ ] #task Good ^prj\n"),
     );
     write_file(
-        &vault.join("Malformed.md"),
-        "---\ntype: [[project]]\n---\nComplete malformed project ^prj\n",
+        &vault.join("GoodKid.md"),
+        &project_note("wip", Some("Good"), "- [ ] #task Kid ^prj\n"),
     );
     write_file(
-        &vault.join("Multiple.md"),
-        "---\ntype: [[project]]\n---\n- [ ] #task One #hide ^prj\n- [ ] #task Two #hide ^prj\n",
+        &vault.join("Bad.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Bad ^prj\n\n## Projects\n\n> [!projects\n>\n> - **[[Kid]]** — Old.\n",
     );
+    commit_all(&vault, "damaged fixture");
+    let base = head(&vault);
 
-    let output = bob_command()
-        .arg("projects")
-        .arg("sync")
-        .arg("-b")
-        .arg(&vault)
-        .output()
-        .expect("run bob projects sync with errors");
-
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "project sync errors should exit 1:\n{}",
+    let output = run_sync(&vault, &temp, &[], NOW);
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("Bad.md") && out.contains("projects_catalog_damaged"),
+        "damage line must survive:\n{}",
         format_output(&output)
     );
-    assert!(
-        stdout(&output)
-            .contains("3 projects - 1 status updated - 0 ^prj edited - 0 task schedules updated - 0 warnings - 2 errors"),
-        "unexpected sync summary:\n{}",
-        format_output(&output)
-    );
-    let err = stderr(&output);
-    assert!(
-        err.contains("Malformed.md:4: malformed ^prj task")
-            && err.contains("Multiple.md:5: multiple ^prj tasks"),
-        "expected per-file project errors:\n{err}"
-    );
-    assert_eq!(
-        fs::read_to_string(vault.join("Good.md")).expect("read good"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Good project #hide ^prj\n"
-    );
+    // Healthy hosts still commit exactly once.
+    assert_eq!(commits_since(&vault, &base), 1);
+    let good = fs::read_to_string(vault.join("Good.md")).unwrap();
+    assert!(good.contains("[[GoodKid]]"), "{good}");
+    // Damaged bytes are preserved exactly.
+    let bad = fs::read_to_string(vault.join("Bad.md")).unwrap();
+    assert!(bad.contains("> [!projects"), "{bad}");
 }
 
 #[test]
-fn projects_sync_does_not_hoist_without_open_prj() {
-    let temp = TempDir::new("bob-cli-projects-sync-hoist-gate");
-    let vault = temp.path().join("vault");
-    let missing = vault.join("Missing.md");
-    let contents = "---\ntype: [[project]]\nstatus: wip\nscheduled: 2026-07-11\n---\n- [ ] #task Needs completion task\n";
-    write_file(&missing, contents);
-
-    let dry_run = bob_command()
-        .args(["projects", "sync", "-d", "-b"])
-        .arg(&vault)
-        .env("BOB_NOW", "2026-07-10")
-        .output()
-        .expect("dry-run hoist without ^prj");
-    assert_success(&dry_run);
-    let dry_out = stdout(&dry_run);
-    assert!(
-        dry_out.contains("cannot hoist leftover scheduled onto ^prj")
-            && !dry_out.contains("would hoist scheduled"),
-        "dry-run must warn instead of planning a hoist:\n{dry_out}"
-    );
-    assert_eq!(
-        fs::read_to_string(&missing).expect("read missing"),
-        contents,
-        "dry-run must leave leftover scheduled in place"
-    );
-
-    let synced = bob_command()
-        .args(["projects", "sync", "-b"])
-        .arg(&vault)
-        .env("BOB_NOW", "2026-07-10")
-        .output()
-        .expect("sync hoist without ^prj");
-    assert_success(&synced);
-    assert_eq!(synced.status.code(), Some(0), "{}", format_output(&synced));
-    let synced_out = stdout(&synced);
-    assert!(
-        synced_out.contains("cannot hoist leftover scheduled onto ^prj")
-            && !synced_out.contains("hoisted scheduled"),
-        "sync must warn instead of hoisting:\n{}",
-        format_output(&synced)
-    );
-    let after = fs::read_to_string(&missing).expect("read missing after sync");
-    assert_eq!(
-        after, contents,
-        "live sync must leave the missing-^prj note unchanged"
-    );
-}
-
-#[test]
-fn projects_sync_never_lists_an_album_as_a_sub_project() {
-    let temp = TempDir::new("bob-cli-projects-sync-album");
-    let vault = temp.path().join("vault");
-
+fn projects_sync_json_envelope_reports_events_and_noop_reruns() {
+    let temp = TempDir::new("bob-cli-projects-json");
+    let vault = online_vault(&temp);
     write_file(
         &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n- [ ] #task Needs priority\n",
+        &project_note("wip", None, "- [ ] #task Parent #hide ^prj\n"),
     );
     write_file(
-        &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
+        &vault.join("Kid.md"),
+        &project_note("wip", Some("Parent"), "- [ ] #task Kid ^prj\n"),
     );
-    write_file(
-        &vault.join("eat.md"),
-        "---\ntype: [[album]]\nparent: \"[[Parent]]\"\nsummary: Places.\nrecord:\n  noun: restaurant\n---\n\n# Restaurants\n",
-    );
+    commit_all(&vault, "json fixture");
 
-    let output = bob_command()
-        .args(["projects", "sync", "--bob-dir"])
+    let dry = run_sync(&vault, &temp, &["-f", "json", "-d"], NOW);
+    assert_success(&dry);
+    let payload = json_output(&dry);
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["command"], "sync");
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["ok"], true);
+    assert!(payload["commit"].is_null());
+    assert!(payload["sync"].is_null());
+    let changes = payload["changes"].as_array().unwrap();
+    assert!(!changes.is_empty());
+    assert!(changes.iter().all(|change| change.get("diff").is_some()));
+    let events = payload["events"].as_array().unwrap();
+    assert!(events.iter().any(|event| event["kind"] == "catalog_written"
+        || event["kind"] == "catalog_updated"));
+
+    let applied = run_sync(&vault, &temp, &["-f", "json"], NOW);
+    assert_success(&applied);
+    let payload = json_output(&applied);
+    assert_eq!(payload["dry_run"], false);
+    assert!(payload["commit"].is_object());
+    assert!(payload["sync"].is_object());
+    assert!(payload["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|change| change.get("diff").is_none()));
+
+    // No-op reruns produce no edits and no commit.
+    let rerun = run_sync(&vault, &temp, &["-f", "json"], NOW);
+    assert_success(&rerun);
+    let payload = json_output(&rerun);
+    assert!(payload["changes"].as_array().unwrap().is_empty());
+    assert!(payload["commit"].is_null());
+}
+
+#[test]
+fn projects_sync_dry_run_needs_no_git_and_refusals_write_nothing() {
+    // Dry runs work without a Git worktree.
+    let temp = TempDir::new("bob-cli-projects-dry-nogit");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("Parent.md"),
+        &project_note("wip", None, "- [ ] #task Parent ^prj\n"),
+    );
+    write_file(
+        &vault.join("Kid.md"),
+        &project_note("wip", Some("Parent"), "- [ ] #task Kid ^prj\n"),
+    );
+    let before = fs::read_to_string(vault.join("Parent.md")).unwrap();
+    let dry = bob_command()
+        .args(["projects", "sync", "-d", "-b"])
         .arg(&vault)
+        .env("BOB_NOW", NOW)
+        .env("NO_COLOR", "1")
         .output()
-        .expect("projects sync");
-    assert_success(&output);
-    let parent = fs::read_to_string(vault.join("Parent.md")).expect("parent");
-    assert!(parent.contains("[[Child]]"), "{parent}");
-    assert!(!parent.contains("eat"), "{parent}");
-    assert!(!parent.contains("Restaurants"), "{parent}");
+        .expect("dry run without git");
+    assert_success(&dry);
+    assert_eq!(fs::read_to_string(vault.join("Parent.md")).unwrap(), before);
+
+    // A real run without a Git worktree is a structured refusal.
+    let real = bob_command()
+        .args(["projects", "sync", "-b"])
+        .arg(&vault)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("worktree refusal");
+    assert_eq!(real.status.code(), Some(1));
+    let payload: Value = serde_json::from_str(stdout(&real).trim())
+        .unwrap_or_else(|_| {
+            // Human mode still refuses with a structured stderr line.
+            assert!(
+                stderr(&real)
+                    .contains("project sync writes require a Git worktree")
+                    || stdout(&real)
+                        .contains("project sync writes require a Git worktree"),
+                "refusal must name the worktree:\n{}",
+                format_output(&real)
+            );
+            serde_json::json!({"error": {"code": "not_a_worktree"}})
+        });
+    let code = payload
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+        .unwrap_or("not_a_worktree");
+    assert_eq!(code, "not_a_worktree");
+    assert_eq!(fs::read_to_string(vault.join("Parent.md")).unwrap(), before);
+}
+
+#[test]
+fn projects_sync_vault_mismatch_and_lock_contention_fail_closed() {
+    let temp = TempDir::new("bob-cli-projects-failures");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(
+        &vault.join("Parent.md"),
+        &project_note("wip", None, "- [ ] #task Parent ^prj\n"),
+    );
+    write_file(
+        &vault.join("Kid.md"),
+        &project_note("wip", Some("Parent"), "- [ ] #task Kid ^prj\n"),
+    );
+    commit_all(&vault, "failure fixture");
+    let before = fs::read_to_string(vault.join("Parent.md")).unwrap();
+
+    // Wrong-vault writes refuse before locks, sync state, or Git changes.
+    let mut wrong = bob_command();
+    wrong.arg("projects").arg("sync");
+    assert_vault_override_refused(&mut wrong, &vault);
+
+    // Lock contention is a structured failure with no writes.
+    use fs2::FileExt;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(vault_sync_lock_file(&temp))
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+    let output = sync_cmd(&vault, &temp, &[], NOW)
+        .output()
+        .expect("lock contention");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let payload = json_output(&{
+        let mut cmd = sync_cmd(&vault, &temp, &["-f", "json"], NOW);
+        cmd.output().expect("lock contention json")
+    });
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["code"], "lock_busy");
+    drop(lock);
+    assert_eq!(fs::read_to_string(vault.join("Parent.md")).unwrap(), before);
 }

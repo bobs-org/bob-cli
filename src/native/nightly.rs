@@ -49,6 +49,11 @@ const STEPS: &[Step] = &[
         run: run_period_notes_step,
     },
     Step {
+        name: "projects",
+        blurb: "Sync project lifecycles and sub-project catalogs",
+        run: run_projects_step,
+    },
+    Step {
         name: "notebooks",
         blurb: "Repair generated notebook catalogs",
         run: run_notebooks_step,
@@ -152,7 +157,7 @@ pub(crate) fn help_text() -> String {
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
-runs `vault-sync`, `task archive`, `articles`, `period notes`, `notebooks`, `albums`, and `vault-sync` in order.
+runs `vault-sync`, `task archive`, `articles`, `period notes`, `projects`, `notebooks`, `albums`, and `vault-sync` in order.
 
 workflow:
   1. acquire the shared Bob maintenance lock
@@ -160,9 +165,10 @@ workflow:
   3. run task archive against the vault
   4. report article notes that need formatting (write nothing)
   5. report period-note problems (write nothing)
-  6. repair generated notebook catalogs (one scoped commit when any changed)
-  7. repair generated album records indexes and owner catalogs (one scoped commit when any changed)
-  8. run vault-sync against the vault
+  6. sync project lifecycles and sub-project catalogs (one scoped commit when any changed)
+  7. repair generated notebook catalogs (one scoped commit when any changed)
+  8. repair generated album records indexes and owner catalogs (one scoped commit when any changed)
+  9. run vault-sync against the vault
 
 environment:
   BOB_DIR                        Bob vault root; defaults to ~/bob
@@ -194,6 +200,10 @@ fn run_articles_step(_child_env: &ChildEnv) -> i32 {
 
 fn run_period_notes_step(_child_env: &ChildEnv) -> i32 {
     super::periods::problems::nightly_check(&bob_env::bob_dir())
+}
+
+fn run_projects_step(child_env: &ChildEnv) -> i32 {
+    super::projects::sync_engine::nightly_step(&bob_env::bob_dir(), child_env)
 }
 
 fn run_notebooks_step(child_env: &ChildEnv) -> i32 {

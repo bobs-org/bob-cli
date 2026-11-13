@@ -7,11 +7,13 @@
 //! surrounding byte. The guarded install lives in [`txn`]: lock-free
 //! [`txn::apply_and_commit`] plus standalone [`txn::run_locked`].
 
+pub(crate) mod diff;
 pub(crate) mod region;
 pub(crate) mod txn;
 
 use std::path::PathBuf;
 
+pub(crate) use diff::{color_diff, unified_diff};
 #[allow(unused_imports)]
 pub(crate) use region::{
     bare_text, canonical_callout, canonical_head, owned_regions, plan_host,

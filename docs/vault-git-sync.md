@@ -29,7 +29,7 @@ default):
 
 The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, live
 `bob task reconcile` runs, `bob task reroll`, `bob task move`, writing `bob ref scan`, `bob ref rename`, and
-`bob notebooks sync` / `bob notebooks create`, so background sync, nightly maintenance, task-status writes,
+`bob projects sync`, `bob notebooks sync` / `bob notebooks create`, so background sync, nightly maintenance, task-status writes,
 reroll re-rolls, writing scans, and reference renames do not mutate the vault
 concurrently. Writing `bob ref scan` takes `bob_sync.lock` then `scan.lock` and
 holds both through intake and note writes; it never syncs. `bob ref rename`
@@ -433,14 +433,18 @@ athena's `bob-nightly` job, in the same chezmoi `cron:` data, runs `bob nightly`
 2. `bob task archive`
 3. `bob articles format --all --check` (report-only; pass unless bob fails)
 4. period-note problem report (write nothing)
-5. `bob notebooks sync` (the lock-free core: it repairs generated `## Notebooks`
+5. `bob projects sync` (the lock-free core: it syncs lifecycles and repairs
+   generated `## Projects` catalogs and makes one
+   `projects: sync lifecycles and catalogs (N notes)` commit only when a note
+   changed; a failure here never stops the final sync)
+6. `bob notebooks sync` (the lock-free core: it repairs generated `## Notebooks`
    catalogs and makes one `notebooks: sync catalogs (N notes)` commit only when a
    catalog changed; a failure here never stops the final sync)
-6. `bob albums sync` (the lock-free core: it repairs generated `[!records]`
+7. `bob albums sync` (the lock-free core: it repairs generated `[!records]`
    indexes and owner `## Albums` catalogs and makes one
    `albums: sync (N notes)` commit only when an index or catalog changed; a
    failure here never stops the final sync)
-7. `bob vault-sync`
+8. `bob vault-sync`
 
 That ordering pulls the MacBook's latest notes before maintenance rewrites task blocks
 and pushes the maintenance commit afterwards.
