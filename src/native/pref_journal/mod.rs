@@ -124,8 +124,9 @@ pub(crate) fn append_line(
     Ok(())
 }
 
-/// Read every `*.jsonl` file in the namespace directory, in sorted
-/// path order, skipping malformed lines with a bounded warning.
+/// Read every `*.jsonl` path in the namespace directory, in sorted path
+/// order. Malformed lines get a bounded warning; an unreadable journal path
+/// fails the read so writers cannot treat missing evidence as an empty book.
 pub(crate) fn read_raw(
     vault: &Path,
     namespace: Namespace,
@@ -137,12 +138,10 @@ pub(crate) fn read_raw(
 
     let mut paths = match fs::read_dir(&directory) {
         Ok(entries) => entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension().is_some_and(|ext| ext == "jsonl")
-                    && path.is_file()
-            })
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<io::Result<Vec<PathBuf>>>()?
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
             .collect::<Vec<PathBuf>>(),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok((Vec::new(), Vec::new()));
@@ -155,10 +154,17 @@ pub(crate) fn read_raw(
     let mut malformed = 0usize;
     let mut warnings = Vec::new();
     for path in paths {
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
-        };
+        let metadata = fs::metadata(&path)?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "journal path is not a regular file: {}",
+                    path.display()
+                ),
+            ));
+        }
+        let bytes = fs::read(&path)?;
         let relative = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())

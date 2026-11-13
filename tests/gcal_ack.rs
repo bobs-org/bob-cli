@@ -61,6 +61,66 @@ fn ack_record(event_id: &str, start: &str, end: &str) -> Value {
     })
 }
 
+fn series_ack_record(series: &str, acked: bool) -> Value {
+    json!({
+        "v": 1,
+        "ts": "2026-10-30T12:00:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.ack",
+        "account": ACCOUNT,
+        "key": {"calendar_id": "primary", "series": series},
+        "scope": "series",
+        "acked": acked,
+        "via": "ack",
+        "seen": {
+            "title": "PRIVATE_SEEN_TITLE",
+            "start": "2026-10-30T13:00:00-04:00",
+            "end": "2026-10-30T13:30:00-04:00",
+            "original_start": null,
+        },
+    })
+}
+
+fn series_note_record(series: &str, text: &str) -> Value {
+    json!({
+        "v": 1,
+        "ts": "2026-10-30T12:00:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.note",
+        "account": ACCOUNT,
+        "key": {"calendar_id": "primary", "series": series},
+        "scope": "series",
+        "text": text,
+    })
+}
+
+fn row_record(event_id: &str, day: &str) -> Value {
+    json!({
+        "v": 1,
+        "ts": "2026-10-30T11:00:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.row",
+        "key": {"calendar_id": "primary", "event_id": event_id},
+        "day": day,
+        "path": format!("2026/{}.md", day.replace('-', "")),
+        "block_id": event_id,
+        "url": format!("https://calendar.google.com/event?eid={event_id}"),
+        "row": "task",
+    })
+}
+
+fn gone_record(event_id: &str, day: &str, reason: &str) -> Value {
+    json!({
+        "v": 1,
+        "ts": "2026-10-30T11:05:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.gone",
+        "key": {"calendar_id": "primary", "event_id": event_id},
+        "day": day,
+        "reason": reason,
+    })
+}
+
 #[test]
 fn ack_help_sorts_options_and_documents_mode_boundaries() {
     let env = GcalEnv::new("bob-cli-gcal-ack-help");
@@ -153,6 +213,80 @@ fn list_json_has_task_and_waiting_lanes_without_writing() {
     assert_eq!(value["counts"]["queue"], 3);
     assert_eq!(value["complete"].as_bool(), Some(false));
     assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn persisted_line_removed_tombstone_stays_out_of_queue_and_waiting_lane() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-removed-tombstone");
+    prepare(&env);
+    let mut removed = timed_event(
+        "removed-1",
+        "Removed task",
+        "2026-10-31T13:00:00-04:00",
+        "2026-10-31T13:30:00-04:00",
+    );
+    removed["attendees"][0]["responseStatus"] = json!("needsAction");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": [removed], "nextPageToken": null}).to_string(),
+    );
+    append_record(&env, &row_record("removed-1", "2026-10-31"));
+    append_record(
+        &env,
+        &gone_record("removed-1", "2026-10-31", "line_removed"),
+    );
+
+    let human = run_gcal(&env, &fake, &["ack", "-l"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    assert!(stdout(&human).contains("0 unacked external events"));
+    let json_list = run_gcal(&env, &fake, &["ack", "-l", "-f", "json"]);
+    assert!(json_list.status.success(), "{}", stderr(&json_list));
+    assert_eq!(json_stdout(&json_list)["counts"]["queue"], 0);
+    assert_eq!(json_stdout(&json_list)["counts"]["waiting"], 0);
+    let all = run_gcal(&env, &fake, &["ack", "-l", "-a", "-f", "json"]);
+    assert!(all.status.success(), "{}", stderr(&all));
+    assert_eq!(json_stdout(&all)["counts"]["queue"], 0);
+    assert_eq!(json_stdout(&all)["counts"]["waiting"], 0);
+    assert!(
+        !env.vault().join("2026/20261031.md").exists(),
+        "queue reads must not create a daily note"
+    );
+}
+
+#[test]
+fn live_removed_row_is_suppressed_but_a_revived_row_returns() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-removed-live");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [timed_event("removed-1", "Removed task", "2026-10-31T13:00:00-04:00", "2026-10-31T13:30:00-04:00")],
+            "nextPageToken": null
+        })
+        .to_string(),
+    );
+    append_record(&env, &row_record("removed-1", "2026-10-31"));
+    let daily = env.vault().join("2026/20261031.md");
+    fs::create_dir_all(daily.parent().unwrap()).expect("daily directory");
+    fs::write(&daily, "## Events\n\nAn unrelated row.\n")
+        .expect("write daily note without the event row");
+    let removed = run_gcal(&env, &fake, &["ack", "-l", "-f", "json"]);
+    assert!(removed.status.success(), "{}", stderr(&removed));
+    assert_eq!(json_stdout(&removed)["counts"]["queue"], 0);
+
+    append_record(
+        &env,
+        &gone_record("removed-1", "2026-10-31", "line_removed"),
+    );
+    let mut revived_row = row_record("removed-1", "2026-10-31");
+    revived_row["ts"] = json!("2026-10-30T11:10:00-04:00");
+    append_record(&env, &revived_row);
+    fs::write(&daily, "## Events\n\n- [ ] #task Removed task ^removed-1\n")
+        .expect("write revived Event Task");
+    let revived = run_gcal(&env, &fake, &["ack", "-l", "-f", "json"]);
+    assert!(revived.status.success(), "{}", stderr(&revived));
+    let revived_json = json_stdout(&revived);
+    assert_eq!(revived_json["counts"]["queue"], 1, "{revived_json}");
 }
 
 #[test]
@@ -340,9 +474,71 @@ fn non_tty_walk_refuses_but_bare_ack_lists_with_hint() {
     let walk = run_gcal(&env, &fake, &["ack", "-n", "14"]);
     assert_eq!(walk.status.code(), Some(2));
     assert!(stderr(&walk).contains("explicit ack walk needs a TTY"));
+    let day_walk = run_gcal(&env, &fake, &["ack", "-D", "tomorrow"]);
+    assert_eq!(day_walk.status.code(), Some(2));
+    assert!(stderr(&day_walk).contains("explicit ack walk needs a TTY"));
     let bare = run_gcal(&env, &fake, &["ack"]);
     assert!(bare.status.success(), "{}", stderr(&bare));
     assert!(stdout(&bare).contains("read-only"));
+}
+
+#[test]
+fn day_anchor_is_allowed_with_one_shot_query_and_id_selectors() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-day-selector-query");
+    prepare(&env);
+    let event = timed_event(
+        "day-query-1",
+        "Budget review",
+        "2026-10-31T13:00:00-04:00",
+        "2026-10-31T13:30:00-04:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": [event.clone()], "nextPageToken": null}).to_string(),
+    );
+    fake.event_lookup("day-query-1", &json!({"event": event}).to_string());
+
+    let query = run_gcal(&env, &fake, &["ack", "-D", "tomorrow", "Budget"]);
+    assert!(query.status.success(), "{}", stderr(&query));
+    assert!(stdout(&query).contains("Acked Budget review"));
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), 1);
+
+    let env = GcalEnv::new("bob-cli-gcal-ack-day-selector-id");
+    prepare(&env);
+    let event = timed_event(
+        "day-id-1",
+        "Budget review",
+        "2026-10-31T13:00:00-04:00",
+        "2026-10-31T13:30:00-04:00",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup("day-id-1", &json!({"event": event}).to_string());
+    let id =
+        run_gcal(&env, &fake, &["ack", "-i", "day-id-1", "-D", "tomorrow"]);
+    assert!(id.status.success(), "{}", stderr(&id));
+    assert!(stdout(&id).contains("Acked Budget review"));
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), 1);
+}
+
+#[test]
+fn day_anchor_keeps_ambiguous_one_shot_queries_explicit() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-day-selector-ambiguous");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [
+                timed_event("budget-1", "Budget review", "2026-10-31T13:00:00-04:00", "2026-10-31T13:30:00-04:00"),
+                timed_event("budget-2", "Budget review", "2026-10-31T14:00:00-04:00", "2026-10-31T14:30:00-04:00")
+            ],
+            "nextPageToken": null
+        })
+        .to_string(),
+    );
+    let ambiguous = run_gcal(&env, &fake, &["ack", "-D", "tomorrow", "Budget"]);
+    assert_eq!(ambiguous.status.code(), Some(2), "{}", stderr(&ambiguous));
+    assert!(stderr(&ambiguous).contains("several events match"));
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
 }
 
 #[test]
@@ -378,6 +574,307 @@ fn ack_selector_keeps_literal_note_query_and_scope_format_are_choices() {
     assert_eq!(contradictory.status.code(), Some(2));
     assert!(stderr(&contradictory)
         .contains("cannot be combined with a title query"));
+}
+
+#[test]
+fn doctor_ack_clear_fixes_run_for_missing_cancelled_and_series_receipts() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-doctor-clear");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "missing-1",
+        r#"{"_fail":{"stderr":"404 Not Found","code":1}}"#,
+    );
+    fake.event_lookup(
+        "cancelled-1",
+        &json!({"event": {
+            "id": "cancelled-1",
+            "summary": "Cancelled event",
+            "status": "cancelled",
+            "start": {"dateTime": "2026-10-30T13:00:00-04:00"},
+            "end": {"dateTime": "2026-10-30T13:30:00-04:00"},
+        }})
+        .to_string(),
+    );
+    fake.event_lookup(
+        "series-master",
+        r#"{"_fail":{"stderr":"404 Not Found","code":1}}"#,
+    );
+    append_record(
+        &env,
+        &ack_record(
+            "missing-1",
+            "2026-10-30T13:00:00-04:00",
+            "2026-10-30T13:30:00-04:00",
+        ),
+    );
+    let doctor = run_gcal(&env, &fake, &["doctor", "-f", "json"]);
+    assert!(doctor.status.success(), "{}", stderr(&doctor));
+    let doctor_json = json_stdout(&doctor);
+    let fix = doctor_json["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "acks")
+        .unwrap()["fix"]
+        .as_str()
+        .unwrap();
+    assert_eq!(fix, "bob gcal ack -c -i missing-1 -C primary -s event");
+    run_doctor_ack_fix(&env, &fake, fix);
+    assert_eq!(
+        ack_receipts(&journal_text(&env)).last().unwrap()["acked"],
+        false
+    );
+
+    append_record(
+        &env,
+        &ack_record(
+            "cancelled-1",
+            "2026-10-30T13:00:00-04:00",
+            "2026-10-30T13:30:00-04:00",
+        ),
+    );
+    let doctor = run_gcal(&env, &fake, &["doctor", "-f", "json"]);
+    let doctor_json = json_stdout(&doctor);
+    let fix = doctor_json["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "acks")
+        .unwrap()["fix"]
+        .as_str()
+        .unwrap();
+    assert_eq!(fix, "bob gcal ack -c -i cancelled-1 -C primary -s event");
+    run_doctor_ack_fix(&env, &fake, fix);
+
+    append_record(&env, &series_ack_record("series-master", true));
+    let doctor = run_gcal(&env, &fake, &["doctor", "-f", "json"]);
+    let doctor_json = json_stdout(&doctor);
+    let fix = doctor_json["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "acks")
+        .unwrap()["fix"]
+        .as_str()
+        .unwrap();
+    assert_eq!(fix, "bob gcal ack -c -i series-master -C primary -s series");
+    // The matching event id is a series master without recurringEventId;
+    // the exact journal key still identifies the receipt to clear.
+    fake.event_lookup(
+        "series-master",
+        &json!({"event": {
+            "id": "series-master",
+            "summary": "Series master",
+            "status": "confirmed",
+            "start": {"dateTime": "2026-10-30T13:00:00-04:00"},
+            "end": {"dateTime": "2026-10-30T13:30:00-04:00"},
+        }})
+        .to_string(),
+    );
+    run_doctor_ack_fix(&env, &fake, fix);
+    let receipts = ack_receipts(&journal_text(&env));
+    assert!(
+        receipts.iter().any(|receipt| {
+            receipt["scope"] == "series"
+                && receipt["key"]["series"] == "series-master"
+                && receipt["acked"] == false
+        }),
+        "series receipt clear appended: {receipts:?}"
+    );
+}
+
+fn run_doctor_ack_fix(env: &GcalEnv, fake: &FakeGog, fix: &str) {
+    let words = shlex::split(fix).expect("doctor command shell words");
+    assert_eq!(&words[..2], &["bob", "gcal"]);
+    let args: Vec<&str> = words[2..].iter().map(String::as_str).collect();
+    let output = run_gcal(env, fake, &args);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Cleared"), "{}", stdout(&output));
+}
+
+#[test]
+fn orphan_clear_preview_is_read_only_and_reports_same_scope_history() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-clear-preview");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    append_record(&env, &series_ack_record("gym-series", true));
+    append_record(&env, &series_note_record("gym-series", "Bring snacks"));
+    append_record(
+        &env,
+        &ack_record(
+            "gym-1",
+            "2026-10-30T13:00:00-04:00",
+            "2026-10-30T13:30:00-04:00",
+        ),
+    );
+    let before = journal_text(&env);
+    let dry = run_gcal(
+        &env,
+        &fake,
+        &[
+            "ack",
+            "-c",
+            "-d",
+            "-i",
+            "gym-series",
+            "-C",
+            "primary",
+            "-s",
+            "series",
+        ],
+    );
+    assert!(dry.status.success(), "{}", stderr(&dry));
+    assert!(stdout(&dry).contains("same-scope evidence: acked"));
+    assert_eq!(journal_text(&env), before);
+    let json_preview = run_gcal(
+        &env,
+        &fake,
+        &[
+            "ack",
+            "-c",
+            "-f",
+            "json",
+            "-i",
+            "gym-series",
+            "-C",
+            "primary",
+            "-s",
+            "series",
+        ],
+    );
+    assert!(json_preview.status.success(), "{}", stderr(&json_preview));
+    let value = json_stdout(&json_preview);
+    assert_eq!(value["action"], "preview");
+    assert_eq!(value["proposed_action"]["scope"], "series");
+    assert_eq!(value["selected"]["scope_evidence"], "acked");
+    assert!(!value.to_string().contains("Bring snacks"));
+    assert!(!value.to_string().contains("PRIVATE_SEEN_TITLE"));
+    assert_eq!(journal_text(&env), before);
+
+    let clear = run_gcal(
+        &env,
+        &fake,
+        &[
+            "ack",
+            "-c",
+            "-i",
+            "gym-series",
+            "-C",
+            "primary",
+            "-s",
+            "series",
+        ],
+    );
+    assert!(clear.status.success(), "{}", stderr(&clear));
+    let message = stdout(&clear);
+    assert!(
+        message.contains("same-scope note history remains"),
+        "{message}"
+    );
+    assert!(
+        message.contains("other-scope evidence was left unchanged"),
+        "{message}"
+    );
+    let after = journal_text(&env);
+    assert_eq!(after.matches("\"kind\":\"gcal.note\"").count(), 1);
+    assert!(
+        ack_receipts(&after).iter().any(|receipt| {
+            receipt["scope"] == "event"
+                && receipt["key"]["event_id"] == "gym-1"
+                && receipt["acked"] == true
+        }),
+        "other-scope receipt remains unchanged"
+    );
+}
+
+#[test]
+fn orphan_clear_requires_an_exact_account_calendar_scope_key() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-clear-boundaries");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    for id in ["unknown", "foreign", "wrong-calendar", "transport"] {
+        fake.event_lookup(
+            id,
+            if id == "transport" {
+                r#"{"_fail":{"stderr":"connection reset","code":1}}"#
+            } else {
+                r#"{"_fail":{"stderr":"404 Not Found","code":1}}"#
+            },
+        );
+    }
+    let mut foreign = ack_record(
+        "foreign",
+        "2026-10-30T13:00:00-04:00",
+        "2026-10-30T13:30:00-04:00",
+    );
+    foreign["account"] = json!("other@example.com");
+    append_record(&env, &foreign);
+    append_record(
+        &env,
+        &ack_record(
+            "wrong-calendar",
+            "2026-10-30T13:00:00-04:00",
+            "2026-10-30T13:30:00-04:00",
+        ),
+    );
+    let initial = ack_receipts(&journal_text(&env)).len();
+
+    let wrong_account = run_gcal(
+        &env,
+        &fake,
+        &["ack", "-c", "-i", "foreign", "-C", "primary", "-s", "event"],
+    );
+    assert_eq!(wrong_account.status.code(), Some(2));
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), initial);
+
+    let unknown = run_gcal(
+        &env,
+        &fake,
+        &["ack", "-c", "-i", "unknown", "-C", "primary", "-s", "event"],
+    );
+    assert_eq!(unknown.status.code(), Some(2));
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), initial);
+    let wrong_calendar = run_gcal(
+        &env,
+        &fake,
+        &[
+            "ack",
+            "-c",
+            "-i",
+            "wrong-calendar",
+            "-C",
+            "secondary",
+            "-s",
+            "event",
+        ],
+    );
+    assert_ne!(wrong_calendar.status.code(), Some(0));
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), initial);
+    let transport = run_gcal(
+        &env,
+        &fake,
+        &[
+            "ack",
+            "-c",
+            "-i",
+            "transport",
+            "-C",
+            "primary",
+            "-s",
+            "event",
+        ],
+    );
+    assert_eq!(transport.status.code(), Some(1), "{}", stderr(&transport));
+    assert!(stderr(&transport).contains("connection reset"));
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), initial);
+    assert!(
+        ack_receipts(&journal_text(&env))
+            .iter()
+            .any(|receipt| receipt["account"] == "other@example.com"
+                && receipt["acked"] == true),
+        "foreign account receipt stays live"
+    );
 }
 
 // ---------- terminal review session ----------
@@ -634,6 +1131,109 @@ fn session_recurring_ack_defaults_to_all_events() {
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0]["scope"], "series");
     assert_eq!(receipts[0]["key"]["series"], "gym-series");
+}
+
+#[test]
+fn session_reports_waiting_replies_that_are_not_in_the_walk() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-waiting-footer");
+    prepare(&env);
+    let mut waiting = timed_event(
+        "wait-1",
+        "Unanswered invite",
+        "2026-11-01T13:00:00-05:00",
+        "2026-11-01T13:30:00-05:00",
+    );
+    waiting["attendees"][0]["responseStatus"] = json!("needsAction");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [
+                timed_event("task-1", "Budget review", "2026-10-31T13:00:00-04:00", "2026-10-31T13:30:00-04:00"),
+                waiting,
+            ],
+            "nextPageToken": null
+        })
+        .to_string(),
+    );
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "q");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(
+            "1 awaiting your reply in Google Calendar · include with -a"
+        ),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn series_answer_refolds_waiting_replies_and_skipped_instances() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-series-waiting");
+    prepare(&env);
+    let mut series = recurring_pair();
+    series[1]["attendees"][0]["responseStatus"] = json!("needsAction");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": series, "nextPageToken": null}).to_string(),
+    );
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "a\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains(
+            "1 awaiting your reply in Google Calendar · include with -a"
+        ),
+        "{errors}"
+    );
+    assert!(
+        errors.contains(
+            "0 awaiting your reply in Google Calendar · include with -a"
+        ),
+        "{errors}"
+    );
+
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-series-skip-ack");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": recurring_pair(), "nextPageToken": null}).to_string(),
+    );
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "sa\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ 1 acked · 0 noted · 0 skipped · 1 series-covered"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ queue complete for this window"),
+        "{errors}"
+    );
+    assert!(!errors.contains("remaining"), "{errors}");
+}
+
+#[test]
+fn series_note_covers_a_previously_skipped_instance() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-series-skip-note");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": recurring_pair(), "nextPageToken": null}).to_string(),
+    );
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "snBring snacks\n2\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ 0 acked · 1 noted · 0 skipped · 1 series-covered"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ queue complete for this window"),
+        "{errors}"
+    );
+    let notes = note_records(&journal_text(&env));
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["scope"], "series");
 }
 
 #[test]
@@ -995,17 +1595,26 @@ fn session_write_failure_keeps_earlier_answers() {
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .find(|path| path.is_file())
         .expect("one journal file after the first answer");
+    let first_answer = fs::read(&journal_file).expect("retain first answer");
     fs::remove_file(&journal_file).expect("remove journal file");
-    fs::create_dir(&journal_file).expect("block the journal path");
-    stdin.write_all(b"a").expect("answer second card");
+    fs::create_dir(&journal_file).expect("make journal unreadable");
+    stdin
+        .write_all(b"nBring snacks\n")
+        .expect("submit second card note");
     drop(stdin);
     let output = child.wait_with_output().expect("wait for bob gcal");
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     let errors = stderr(&output);
-    assert!(errors.contains("append gcal ack receipt"), "{errors}");
+    assert!(errors.contains("read private-note evidence"), "{errors}");
     assert!(
         errors.contains("✓ 1 acked · 0 noted · 0 skipped"),
         "{errors}"
     );
-    fs::remove_dir(&journal_file).expect("unblock the journal path");
+    assert!(!errors.contains("✓ Noted Hiring sync"), "{errors}");
+    fs::remove_dir(&journal_file).expect("remove unreadable journal fixture");
+    fs::write(&journal_file, first_answer).expect("restore first answer");
+    let receipts = ack_receipts(&journal_text(&env));
+    assert_eq!(receipts.len(), 1, "the failed answer was not appended");
+    assert_eq!(receipts[0]["key"]["event_id"], "task-1");
+    assert!(note_records(&journal_text(&env)).is_empty());
 }

@@ -229,6 +229,25 @@ fn spawn_pty(
     args: &[&str],
     extra: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> PtyChild {
+    spawn_pty_mode(env, fake, args, extra, false)
+}
+
+fn spawn_pty_colored(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+    extra: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> PtyChild {
+    spawn_pty_mode(env, fake, args, extra, true)
+}
+
+fn spawn_pty_mode(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+    extra: &[(std::ffi::OsString, std::ffi::OsString)],
+    colored: bool,
+) -> PtyChild {
     let (master, slave_path) = open_master();
     let before = attrs_of(master.as_raw_fd());
     let slave_c = CString::new(slave_path).expect("slave path");
@@ -247,11 +266,22 @@ fn spawn_pty(
     let mut pairs = env.env_pairs();
     pairs.extend(fake.env_pairs());
     pairs.extend(extra.iter().cloned());
+    if colored {
+        pairs.retain(|(key, _)| key != "NO_COLOR");
+        pairs.push(("CLICOLOR_FORCE".into(), "1".into()));
+    }
     let _spawn = SPAWN_LOCK.lock().expect("pty spawn lock");
     let saved: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = pairs
         .iter()
         .map(|(key, _)| (key.clone(), std::env::var_os(key)))
         .collect();
+    let mut saved = saved;
+    if colored {
+        saved.push(("NO_COLOR".into(), std::env::var_os("NO_COLOR")));
+        unsafe {
+            std::env::remove_var("NO_COLOR");
+        }
+    }
     for (key, value) in &pairs {
         // SAFETY: scoped to the fork below; the harness isolates children
         // with env_clear, so sibling tests never observe these values.
@@ -318,6 +348,22 @@ fn spawn_ack_session(
     fake.events_json(&session_events());
     let mut child = spawn_pty(env, &fake, &["ack"], extra);
     child.wait_for("─ 1 of 2 ─");
+    (child, fake)
+}
+
+fn spawn_ack_session_events(
+    env: &GcalEnv,
+    events: &str,
+    colored: bool,
+) -> (PtyChild, FakeGog) {
+    let fake = FakeGog::new(env, "fake-gog");
+    fake.events_json(events);
+    let mut child = if colored {
+        spawn_pty_colored(env, &fake, &["ack"], &[])
+    } else {
+        spawn_pty(env, &fake, &["ack"], &[])
+    };
+    child.wait_for("a ack");
     (child, fake)
 }
 
@@ -398,13 +444,149 @@ fn pty_persistence_failure_restores_terminal() {
     let env = GcalEnv::new("bob-cli-gcal-ack-pty-error");
     prepare(&env);
     let journal_dir = env.vault().join(".bob/gcal");
-    fs::create_dir_all(&journal_dir).expect("journal dir");
-    fs::create_dir(journal_dir.join("test-host.jsonl"))
-        .expect("block the journal path");
     let (mut child, _fake) = spawn_ack_session(&env, &[]);
     child.write_bytes(b"a");
-    child.wait_for("append gcal ack receipt");
+    child.wait_for("✓ Acked Budget review · event scope");
+    let journal_file = journal_dir.join("test-host.jsonl");
+    let first_answer = fs::read(&journal_file).expect("retain first answer");
+    fs::remove_file(&journal_file).expect("remove journal file");
+    fs::create_dir(&journal_file).expect("make journal unreadable");
+    std::thread::sleep(Duration::from_millis(400));
+    child.write_bytes(b"a");
+    child.wait_for("read private-note evidence");
     assert_eq!(child.wait_exit(), Some(1));
     assert_eq!(child.attrs(), child.before, "failure restores termios");
-    fs::remove_dir(journal_dir.join("test-host.jsonl")).expect("unblock");
+    assert!(
+        !child.text().contains("✓ Acked Hiring sync"),
+        "failed answer must not be reported as successful"
+    );
+    fs::remove_dir(&journal_file).expect("remove unreadable journal fixture");
+    fs::write(&journal_file, first_answer).expect("restore first answer");
+    let journal =
+        fs::read_to_string(journal_file).expect("read retained answer");
+    assert_eq!(journal.lines().count(), 1, "only the first answer persists");
+}
+
+#[test]
+fn pty_editor_and_adopt_stop_when_note_evidence_becomes_unreadable() {
+    for key in ["e", "A"] {
+        let env =
+            GcalEnv::new(&format!("bob-cli-gcal-ack-pty-{key}-read-error"));
+        prepare(&env);
+        let mut event = json!({
+            "id": "task-1",
+            "summary": "Budget review",
+            "status": "confirmed",
+            "start": {"dateTime": "2026-10-31T13:00:00-04:00"},
+            "end": {"dateTime": "2026-10-31T13:30:00-04:00"},
+            "htmlLink": "https://calendar.google.com/event?eid=task-1",
+            "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+        });
+        if key == "A" {
+            event["description"] = json!("-30 Drive to the airport");
+        }
+        let (mut child, _fake) = spawn_ack_session_events(
+            &env,
+            &json!({"events": [event], "nextPageToken": null}).to_string(),
+            false,
+        );
+        let journal_file = env.vault().join(".bob/gcal/test-host.jsonl");
+        fs::create_dir_all(journal_file.parent().unwrap())
+            .expect("journal directory");
+        fs::create_dir(&journal_file).expect("make journal unreadable");
+        child.write_bytes(key.as_bytes());
+        child.wait_for("read private-note evidence");
+        assert_eq!(child.wait_exit(), Some(1), "key {key}");
+        assert_eq!(child.attrs(), child.before, "key {key} restores termios");
+        assert!(
+            !child.text().contains("✓ Noted Budget review"),
+            "key {key} must not report a note save"
+        );
+        fs::remove_dir(&journal_file).expect("remove failure fixture");
+    }
+}
+
+#[test]
+fn pty_card_wraps_unicode_rows_and_preserves_newlines_with_and_without_color() {
+    let long_title = format!(
+        "Interview 東京 {} https://calendar.google.com/event?eid={} root/{}",
+        "Quarterly review with wide glyphs 界界界界界界界界界界".repeat(3),
+        "event-id-with-a-long-url-fragment-".repeat(3),
+        "long-root-name-".repeat(5),
+    );
+    let event = json!({
+        "id": "wide-title",
+        "summary": long_title,
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-31T13:00:00-04:00"},
+        "end": {"dateTime": "2026-10-31T13:30:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=wide-title",
+        "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+        "attendees": [{"self": true, "responseStatus": "accepted"}],
+    });
+    for colored in [false, true] {
+        let env = GcalEnv::new(if colored {
+            "bob-cli-gcal-ack-pty-card-color"
+        } else {
+            "bob-cli-gcal-ack-pty-card-no-color"
+        });
+        prepare(&env);
+        let (mut child, _fake) = spawn_ack_session_events(
+            &env,
+            &json!({"events": [event.clone()], "nextPageToken": null})
+                .to_string(),
+            colored,
+        );
+        child.write_bytes(b"q");
+        assert_eq!(child.wait_exit(), Some(0));
+        assert!(child.output.windows(2).any(|pair| pair == b"\r\n"));
+        for (index, byte) in child.output.iter().enumerate() {
+            if *byte == b'\n' {
+                assert_eq!(
+                    index.checked_sub(1).map(|previous| child.output[previous]),
+                    Some(b'\r'),
+                    "PTY must process LF as CRLF in raw mode"
+                );
+            }
+        }
+        let plain = strip_ansi(&child.text());
+        assert!(plain.contains("Interview 東京"), "{plain}");
+        assert!(plain.contains("wide-title"), "{plain}");
+        assert!(plain.contains("long-root-name-"), "{plain}");
+        for line in plain.lines() {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(line) <= 80,
+                "card line exceeds 80 display columns ({}): {line:?}",
+                unicode_width::UnicodeWidthStr::width(line)
+            );
+        }
+        if colored {
+            assert!(child.output.contains(&0x1b), "color styles should render");
+        } else {
+            assert!(
+                !child.output.contains(&0x1b),
+                "NO_COLOR suppresses escapes"
+            );
+        }
+        assert_eq!(child.attrs(), child.before, "quit restores terminal");
+    }
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut output = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+        } else {
+            output.push(character);
+        }
+    }
+    output
 }

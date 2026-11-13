@@ -188,6 +188,7 @@ dependencies = [
  "tempfile",
  "ttf-parser",
  "unicode-normalization",
+ "unicode-width",
  "url",
 ]
 

@@ -261,9 +261,12 @@ pub(super) fn write_one<S: HomeSource>(
     // Capture the ack transition before the append: a successful nonempty
     // save that newly answers an external event claims `· acked`. Failed
     // validation, dry-run, clear, and an already-reviewed save never do.
-    let pending_acked = !args.dry_run
-        && !unchanged
-        && was_unacked(config, vault, account, &candidate);
+    let (pending_acked, review_warnings) = if !args.dry_run && !unchanged {
+        was_unacked(config, vault, account, &candidate)?
+    } else {
+        (false, Vec::new())
+    };
+    warnings.extend(review_warnings);
     let action = if args.dry_run {
         "preview"
     } else if unchanged {
@@ -365,7 +368,12 @@ pub(crate) fn save_session_note<S: HomeSource>(
     resolver: &mut HomeResolver<S>,
     related_days: &[chrono::NaiveDate],
 ) -> Result<SessionNoteSave, GcalError> {
-    let (book, mut warnings) = journal::load_notes(vault).unwrap_or_default();
+    let (book, mut warnings) = journal::load_notes(vault).map_err(|error| {
+        GcalError::runtime(
+            "journal",
+            format!("read private-note evidence: {error}"),
+        )
+    })?;
     let current = note_text_for(candidate, &book, account, scope);
     let mut note = normalize(text);
     validate(&mut note, vault, candidate.day);
@@ -405,7 +413,9 @@ pub(crate) fn save_session_note<S: HomeSource>(
         scope,
         Some(&note.canonical),
     )?;
-    let newly_acked = was_unacked(config, vault, account, &rebuilt);
+    let (newly_acked, review_warnings) =
+        was_unacked(config, vault, account, &rebuilt)?;
+    warnings.extend(review_warnings);
     append(&rebuilt, vault, account, scope, note.canonical)?;
     let mut affected = related_days.to_vec();
     affected.push(candidate.day);
@@ -927,25 +937,38 @@ fn was_unacked(
     vault: &std::path::Path,
     account: &str,
     candidate: &NoteCandidate,
-) -> bool {
+) -> Result<(bool, Vec<String>), GcalError> {
     if config.ack_mode() != crate::native::config::GcalAckMode::External {
-        return false;
+        return Ok((false, Vec::new()));
     }
     if !candidate.event.is_external() {
-        return false;
+        return Ok((false, Vec::new()));
     }
     if candidate.inclusion != Inclusion::Task {
-        return false;
+        return Ok((false, Vec::new()));
     }
-    let (ack_book, _) = journal::load_acks(vault).unwrap_or_default();
-    let (note_book, _) = journal::load_notes(vault).unwrap_or_default();
-    !ack_book.acked(
-        &note_book,
-        account,
-        &candidate.event.key.calendar_id,
-        &candidate.event.key.event_id,
-        candidate.event.series_id.as_deref(),
-    )
+    let (ack_book, mut warnings) =
+        journal::load_acks(vault).map_err(|error| {
+            GcalError::runtime("journal", format!("read ack receipts: {error}"))
+        })?;
+    let (note_book, note_warnings) =
+        journal::load_notes(vault).map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("read private-note evidence: {error}"),
+            )
+        })?;
+    warnings.extend(note_warnings);
+    Ok((
+        !ack_book.acked(
+            &note_book,
+            account,
+            &candidate.event.key.calendar_id,
+            &candidate.event.key.event_id,
+            candidate.event.series_id.as_deref(),
+        ),
+        warnings,
+    ))
 }
 
 fn normalize(input: &str) -> NormalizedNote {

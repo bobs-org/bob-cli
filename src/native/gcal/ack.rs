@@ -9,6 +9,7 @@ use std::{
 
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate};
 use serde_json::{json, Value};
+use unicode_width::UnicodeWidthChar;
 
 use super::{
     account,
@@ -138,8 +139,8 @@ fn validate_args(args: &AckArgs) -> Result<(), GcalError> {
             ));
         }
     }
-    let explicit_walk =
-        args.all || args.next_n_days.is_some() || args.day.is_some();
+    let explicit_walk = !has_target
+        && (args.all || args.next_n_days.is_some() || args.day.is_some());
     if explicit_walk
         && !args.list
         && !args.dry_run
@@ -204,7 +205,7 @@ fn run_queue(args: &AckArgs, config: &GcalConfig) -> Result<i32, GcalError> {
         return Ok(0);
     }
     if !args.list && !args.dry_run && note::is_tty() && !queue.rows.is_empty() {
-        return Ok(run_session(config, &vault, queue, &account));
+        return Ok(run_session(config, &vault, queue, &account, args.all));
     }
     print_queue_human(args, window, &queue)?;
     Ok(0)
@@ -342,20 +343,13 @@ fn fetch_queue(
                 && (event.my_answer == MyAnswer::NoReply
                     || (event.my_answer == MyAnswer::Maybe
                         && item.inclusion != Inclusion::Task));
+            if removed_by_user(&evidence.state, daily.as_deref(), &item, day) {
+                continue;
+            }
             if item.inclusion != Inclusion::Task && !included_by_all {
                 if event.my_answer == MyAnswer::NoReply {
                     waiting.push(row_from_snapshot(item, status, day, false));
                 }
-                continue;
-            }
-            if item.inclusion == Inclusion::Task
-                && removed_by_user(
-                    &evidence.state,
-                    daily.as_deref(),
-                    &item,
-                    day,
-                )
-            {
                 continue;
             }
             let row = row_from_snapshot(item, status, day, false);
@@ -446,11 +440,19 @@ fn removed_by_user(
         &item.event.key.calendar_id,
         &item.event.key.event_id,
     );
-    let Some(row) = state
-        .get(&(key, day.to_string()))
-        .filter(|state| state.row.is_some() && !state.gone)
-        .and_then(|state| state.row.as_ref())
-    else {
+    let Some(state) = state.get(&(key, day.to_string())) else {
+        return false;
+    };
+    if state.gone {
+        // `line_removed` is lifecycle's persisted form of the same
+        // removed-by-you state detected below before sync writes a tombstone.
+        // Other gone reasons describe Google-side lifecycle changes.
+        return matches!(
+            state.gone_reason.as_deref(),
+            None | Some("line_removed")
+        );
+    }
+    let Some(row) = state.row.as_ref() else {
         return false;
     };
     let lines: Vec<&str> = contents.unwrap_or_default().lines().collect();
@@ -777,6 +779,28 @@ fn run_selected(args: &AckArgs, config: &GcalConfig) -> Result<(), GcalError> {
     )?;
     let _ = gog.require_version()?;
     let account = account::resolve_command(&gog, config.account())?;
+    if args.clear
+        && let (Some(event_id), Some(calendar_id), Some(scope)) = (
+            args.event_id.as_deref(),
+            args.calendar.as_deref(),
+            args.scope.as_deref().and_then(parse_ack_scope),
+        )
+    {
+        let receipt = match scope {
+            AckScope::Event => {
+                before.acks.event(&account, calendar_id, event_id)
+            }
+            AckScope::Series => {
+                before.acks.series(&account, calendar_id, event_id)
+            }
+        }
+        .cloned();
+        if let Some(receipt) = receipt {
+            return clear_receipt_by_key(
+                args, config, &vault, &account, &before, receipt,
+            );
+        }
+    }
     let calendars = gog.calendars(&account)?;
     let mut resolver = HomeResolver::new(DiskHomeSource::new(&vault));
     let mut warnings = before.warnings.clone();
@@ -873,6 +897,173 @@ fn run_selected(args: &AckArgs, config: &GcalConfig) -> Result<(), GcalError> {
         after_stale,
         &warnings,
     )
+}
+
+fn parse_ack_scope(value: &str) -> Option<AckScope> {
+    match value {
+        "event" => Some(AckScope::Event),
+        "series" => Some(AckScope::Series),
+        _ => None,
+    }
+}
+
+/// Clear a receipt whose exact account/calendar/scope key is already in the
+/// journal. Orphan remediation must not invent an event or series identity
+/// from a failed Google lookup.
+fn clear_receipt_by_key(
+    args: &AckArgs,
+    config: &GcalConfig,
+    vault: &Path,
+    account: &str,
+    before: &Evidence,
+    receipt: journal::FoldedAck,
+) -> Result<(), GcalError> {
+    let scope = receipt.scope;
+    let event_id = (scope == AckScope::Event).then_some(receipt.key.as_str());
+    let series_id = (scope == AckScope::Series).then_some(receipt.key.as_str());
+    let current = before.acks.status_for(
+        &before.notes,
+        account,
+        &receipt.calendar_id,
+        event_id.unwrap_or(""),
+        series_id,
+    );
+    let preview = args.dry_run || args.format.is_json();
+    if preview {
+        return print_receipt_clear_preview(args, &receipt, current);
+    }
+
+    let record = NewAck {
+        account: account.to_string(),
+        calendar_id: receipt.calendar_id.clone(),
+        event_id: event_id.map(str::to_string),
+        series: series_id.map(str::to_string),
+        scope,
+        acked: false,
+        via: AckVia::Ack,
+        seen: receipt.seen.clone(),
+    };
+    journal::append_ack(vault, &journal::host_label(), &record).map_err(
+        |error| {
+            GcalError::runtime(
+                "journal",
+                format!("append gcal ack receipt: {error}"),
+            )
+        },
+    )?;
+    let (acks, ack_warnings) = journal::load_acks(vault).map_err(|error| {
+        GcalError::runtime(
+            "journal",
+            format!("verify appended ack receipt: {error}"),
+        )
+    })?;
+    let (notes, note_warnings) =
+        journal::load_notes(vault).map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("verify private-note evidence: {error}"),
+            )
+        })?;
+    let after = acks.status_for(
+        &notes,
+        account,
+        &receipt.calendar_id,
+        event_id.unwrap_or(""),
+        series_id,
+    );
+    let mut warnings = before.warnings.clone();
+    warnings.extend(ack_warnings);
+    warnings.extend(note_warnings);
+    print_receipt_clear_result(args, config, &receipt, after, &warnings)
+}
+
+fn print_receipt_clear_preview(
+    args: &AckArgs,
+    receipt: &journal::FoldedAck,
+    current: AckStatus,
+) -> Result<(), GcalError> {
+    if args.format.is_json() {
+        let key = match receipt.scope {
+            AckScope::Event => json!({"event_id": receipt.key}),
+            AckScope::Series => json!({"series": receipt.key}),
+        };
+        return write_json(&json!({
+            "schema_version": 1,
+            "ok": true,
+            "action": "preview",
+            "proposed_action": {"action": "clear", "scope": receipt.scope.as_str()},
+            "selected": {
+                "calendar_id": receipt.calendar_id,
+                "key": key,
+                "scope_evidence": current.state.as_str(),
+                "ack_stale": false,
+                "current_event_available": false,
+            },
+            "queue": [],
+            "waiting": {"count": 0, "events": []},
+            "stale": [],
+            "counts": {"queue": 0, "waiting": 0, "stale": 0},
+            "complete": false,
+            "warnings": [],
+        }));
+    }
+    let key = &receipt.key;
+    let mut output = format!(
+        "Preview · would clear the existing {} receipt for {key} ({})\n  same-scope evidence: {}\n",
+        receipt.scope.as_str(),
+        receipt.calendar_id,
+        current.state.as_str(),
+    );
+    output.push_str(
+        "The current Google event is unavailable · no receipt or note was written.\n",
+    );
+    write_stdout_text(&output)
+}
+
+fn print_receipt_clear_result(
+    args: &AckArgs,
+    config: &GcalConfig,
+    receipt: &journal::FoldedAck,
+    status: AckStatus,
+    warnings: &[String],
+) -> Result<(), GcalError> {
+    if args.quiet {
+        for warning in warnings {
+            ui::warn(warning);
+        }
+        return Ok(());
+    }
+    let mut output = format!(
+        "✓ Cleared the {} receipt for {} ({})\n",
+        receipt.scope.as_str(),
+        receipt.key,
+        receipt.calendar_id,
+    );
+    if status.state == journal::AckState::Noted {
+        output.push_str(
+            "  same-scope note history remains · review remains noted\n",
+        );
+    } else if status.state == journal::AckState::Acked {
+        output.push_str("  another same-scope receipt remains live\n");
+    } else {
+        output.push_str("  no same-scope receipt or note history remains\n");
+    }
+    output.push_str(
+        "  the current Google event was unavailable; other-scope evidence was left unchanged\n",
+    );
+    let writer = config.writer().unwrap_or("this host");
+    let host = journal::host_label();
+    if writer == host {
+        output.push_str("  run `bob gcal sync` to apply the row change\n");
+    } else {
+        output.push_str(&format!(
+            "  the row change will land on the next sync on {writer}\n"
+        ));
+    }
+    for warning in warnings {
+        ui::warn(warning);
+    }
+    write_stdout_text(&output)
 }
 
 fn select_candidate(
@@ -1352,7 +1543,6 @@ impl RawGuard {
             | libc::INPCK
             | libc::ISTRIP
             | libc::IXON);
-        raw.c_oflag &= !libc::OPOST;
         raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
         raw.c_cflag |= libc::CS8;
         raw.c_lflag &= !(libc::ECHO
@@ -1687,15 +1877,72 @@ fn session_fragile(candidate: &NoteCandidate) -> bool {
         && session_google_carries_bob_lines(&candidate.event)
 }
 
-/// Shorten chrome lines to the session width. The rendered row and its
-/// semantic directives are never cropped; only surrounding chrome is.
-fn session_fit(line: &str) -> String {
-    crate::native::style::truncate(line, SESSION_WIDTH)
+/// Wrap human-readable card text by terminal columns, retaining every
+/// character and hard-wrapping long roots, URLs, and titles as needed.
+fn session_wrap(
+    text: &str,
+    first_prefix: &str,
+    continuation: &str,
+) -> Vec<String> {
+    let mut output = Vec::new();
+    let mut line = String::new();
+    let mut prefix = first_prefix;
+    let mut capacity = SESSION_WIDTH
+        .saturating_sub(session_display_width(prefix))
+        .max(1);
+    let mut used = 0;
+    for word in text.split_whitespace() {
+        let word_width = session_display_width(word);
+        if used > 0 && used + 1 + word_width <= capacity {
+            line.push(' ');
+            line.push_str(word);
+            used += 1 + word_width;
+            continue;
+        }
+        if used > 0 {
+            output.push(format!("{prefix}{line}"));
+            line.clear();
+            used = 0;
+            prefix = continuation;
+            capacity = SESSION_WIDTH
+                .saturating_sub(session_display_width(prefix))
+                .max(1);
+        }
+        if word_width <= capacity {
+            line.push_str(word);
+            used = word_width;
+            continue;
+        }
+        for character in word.chars() {
+            let character_width = character.width().unwrap_or(0);
+            if used > 0 && used + character_width > capacity {
+                output.push(format!("{prefix}{line}"));
+                line.clear();
+                used = 0;
+                prefix = continuation;
+                capacity = SESSION_WIDTH
+                    .saturating_sub(session_display_width(prefix))
+                    .max(1);
+            }
+            line.push(character);
+            used += character_width;
+        }
+    }
+    if !line.is_empty() || output.is_empty() {
+        output.push(format!("{prefix}{line}"));
+    }
+    output
+}
+
+fn session_display_width(text: &str) -> usize {
+    text.chars()
+        .map(|character| character.width().unwrap_or(0))
+        .sum()
 }
 
 fn session_progress(current: usize, total: usize) -> String {
     let label = format!("─ {current} of {total} ─");
-    let width = crate::native::style::display_width(&label);
+    let width = session_display_width(&label);
     if width >= SESSION_WIDTH {
         return label;
     }
@@ -1710,8 +1957,10 @@ fn render_card(
     vault: &Path,
 ) -> Result<(), GcalError> {
     let preview = note::write::preview(candidate, vault, false)?;
-    eprintln!("{}", session_fit(&session_progress(position, total)));
-    eprintln!("{}", session_fit(&candidate.event.title));
+    eprintln!("{}", session_progress(position, total));
+    for line in session_wrap(&candidate.event.title, "", "  ") {
+        eprintln!("{}", styler.bold(&line));
+    }
     let mut meta = format!(
         "{} {} · from {} · {}",
         candidate.day.format("%a %b %d"),
@@ -1722,11 +1971,13 @@ fn render_card(
     if candidate.lands() != "task" {
         meta.push_str(&format!(" · lands as {}", candidate.lands()));
     }
-    eprintln!("{}", session_fit(&meta));
+    for line in session_wrap(&meta, "", "  ") {
+        eprintln!("{line}");
+    }
     eprintln!();
     if let Some(rail) = preview.rail {
         for line in rail.lines() {
-            eprintln!("{}", session_fit(line));
+            eprintln!("{line}");
         }
     }
     let root = candidate
@@ -1740,8 +1991,17 @@ fn render_card(
         .and_then(|root| root.kind.json_label())
         .unwrap_or("none");
     let buffer = candidate.event.buffer.label().unwrap_or_default();
+    let root_fact = format!("root {root} ({root_source})");
+    for line in session_wrap(&root_fact, "  ", "  ") {
+        let rendered = candidate
+            .root
+            .as_ref()
+            .and_then(|root| root.hue)
+            .map(|hue| styler.xterm256(hue.xterm(), &line))
+            .unwrap_or(line);
+        eprintln!("{rendered}");
+    }
     let mut facts = vec![
-        format!("root {root} ({root_source})"),
         if buffer.is_empty() {
             "no buffer".to_string()
         } else {
@@ -1764,23 +2024,35 @@ fn render_card(
             },
         ));
     }
-    eprintln!("{}", session_fit(&facts.join(" · ")));
+    for line in session_wrap(&facts.join(" · "), "  ", "  ") {
+        eprintln!("{line}");
+    }
     if session_fragile(candidate) {
-        eprintln!(
-            "{}",
-            session_fit(
-                "⚑ Google description carries Bob lines · press A to adopt"
-            )
-        );
+        for line in session_wrap(
+            "⚑ Google description carries Bob lines · press A to adopt",
+            "  ",
+            "  ",
+        ) {
+            eprintln!("{line}");
+        }
     }
     eprintln!();
-    eprintln!("{}", session_fit("lands as"));
+    eprintln!("{}", styler.dim("lands as"));
     match preview.row {
-        Some(row) => eprintln!("{row}"),
-        None => eprintln!("  (no Event Task row would be written)"),
+        Some(row) => {
+            for line in session_wrap(&row, "  ", "  ") {
+                eprintln!("{}", styler.dim(&line));
+            }
+        }
+        None => {
+            for line in
+                session_wrap("(no Event Task row would be written)", "  ", "  ")
+            {
+                eprintln!("{line}");
+            }
+        }
     }
     eprintln!();
-    let _ = styler;
     Ok(())
 }
 
@@ -1828,6 +2100,8 @@ struct Session<'a> {
     guard: RawGuard,
     input: SessionInput,
     cards: Vec<SessionCard>,
+    waiting: Vec<AckRow>,
+    include_waiting: bool,
     totals: SessionTotals,
     warned: HashSet<String>,
 }
@@ -1846,6 +2120,18 @@ impl<'a> Session<'a> {
             .count()
     }
 
+    fn print_waiting_footer(&self) {
+        eprintln!(
+            "· {} awaiting your reply in Google Calendar{}",
+            self.waiting.len(),
+            if self.include_waiting {
+                " (included with -a)"
+            } else {
+                " · include with -a"
+            },
+        );
+    }
+
     fn position(&self) -> usize {
         self.cards
             .iter()
@@ -1862,10 +2148,18 @@ impl<'a> Session<'a> {
         );
         let remaining = self.remaining();
         if remaining > 0 {
-            eprintln!("→ {remaining} remaining · rerun `bob gcal ack`");
+            if self.totals.skipped > 0 {
+                eprintln!(
+                    "→ {remaining} remaining · rerun `bob gcal ack` · {} skipped return next run",
+                    self.totals.skipped
+                );
+            } else {
+                eprintln!("→ {remaining} remaining · rerun `bob gcal ack`");
+            }
         } else {
             eprintln!("✓ queue complete for this window");
         }
+        self.print_waiting_footer();
     }
 
     /// A checked failure: the failed card stays unanswered, earlier answers
@@ -2030,7 +2324,7 @@ impl<'a> Session<'a> {
         }
         let mut covered = 0;
         for card in &mut self.cards {
-            if card.state != CardState::Pending {
+            if card.state == CardState::Done {
                 continue;
             }
             let event = &card.candidate.event;
@@ -2042,11 +2336,29 @@ impl<'a> Session<'a> {
                 event.series_id.as_deref(),
             );
             if status.state != journal::AckState::Unacked {
+                if card.state == CardState::Skipped {
+                    self.totals.skipped = self.totals.skipped.saturating_sub(1);
+                }
                 card.state = CardState::Done;
                 covered += 1;
             }
         }
         self.totals.covered += covered;
+        let waiting = std::mem::take(&mut self.waiting);
+        for mut row in waiting {
+            let event = &row.candidate.event;
+            let status = acks.status_for(
+                &notes,
+                &self.account,
+                &event.key.calendar_id,
+                &event.key.event_id,
+                event.series_id.as_deref(),
+            );
+            if status.state == journal::AckState::Unacked {
+                row.status = status;
+                self.waiting.push(row);
+            }
+        }
         Ok(())
     }
 
@@ -2055,6 +2367,11 @@ impl<'a> Session<'a> {
         index: usize,
         scope: AckScope,
     ) -> Result<(), GcalError> {
+        self.refold()?;
+        if self.cards[index].state != CardState::Pending {
+            eprintln!("this event was already answered during the session");
+            return Ok(());
+        }
         let candidate = note::clone_candidate(&self.cards[index].candidate);
         let event = &candidate.event;
         let record = NewAck {
@@ -2275,7 +2592,18 @@ impl<'a> Session<'a> {
                 return CardOutcome::Abort(code);
             }
         };
-        let (book, _) = journal::load_notes(&self.vault).unwrap_or_default();
+        let (book, warnings) = match journal::load_notes(&self.vault) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                return self.fail(GcalError::runtime(
+                    "journal",
+                    format!("read private-note evidence: {error}"),
+                ));
+            }
+        };
+        for warning in &warnings {
+            self.warn_once(warning);
+        }
         let seed =
             note::write::note_text_for(&candidate, &book, &self.account, scope);
         self.save_after_editor(index, scope, seed)
@@ -2302,7 +2630,18 @@ impl<'a> Session<'a> {
                 return CardOutcome::Abort(code);
             }
         };
-        let (book, _) = journal::load_notes(&self.vault).unwrap_or_default();
+        let (book, warnings) = match journal::load_notes(&self.vault) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                return self.fail(GcalError::runtime(
+                    "journal",
+                    format!("read private-note evidence: {error}"),
+                ));
+            }
+        };
+        for warning in &warnings {
+            self.warn_once(warning);
+        }
         if !note::write::note_text_for(&candidate, &book, &self.account, scope)
             .trim()
             .is_empty()
@@ -2374,6 +2713,7 @@ fn run_session(
     vault: &Path,
     queue: Queue,
     account: &str,
+    include_waiting: bool,
 ) -> i32 {
     let _interrupts = InterruptGuard::install();
     let styler = crate::native::style::Styler::detect_stderr();
@@ -2392,6 +2732,8 @@ fn run_session(
                 state: CardState::Pending,
             })
             .collect(),
+        waiting: queue.waiting,
+        include_waiting,
         totals: SessionTotals::default(),
         warned: HashSet::new(),
     };
@@ -2437,6 +2779,7 @@ fn run_session(
             return ui::report_error("ack", &error, "human");
         }
         render_keys(fragile);
+        session.print_waiting_footer();
         match session.input.read_byte() {
             KeyRead::Interrupted => {
                 session.print_summary();
@@ -2545,6 +2888,29 @@ mod session_tests {
             && left.c_cflag == right.c_cflag
             && left.c_lflag == right.c_lflag
             && left.c_cc == right.c_cc
+    }
+
+    #[test]
+    fn card_wrap_preserves_long_words_and_uses_unicode_display_columns() {
+        let text = format!(
+            "root /projects/{} URL https://example.com/{} wide 界界界界界界 end",
+            "root-name-".repeat(10),
+            "long-path-segment-".repeat(8),
+        );
+        let lines = session_wrap(&text, "  ", "  ");
+        assert!(lines.len() > 2, "long text should wrap: {lines:?}");
+        let wrapped: String = lines
+            .iter()
+            .map(|line| line.strip_prefix("  ").unwrap_or(line))
+            .flat_map(str::chars)
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let expected: String = text
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert_eq!(wrapped, expected);
+        assert!(lines.iter().all(|line| session_display_width(line) <= 80));
     }
 
     #[test]

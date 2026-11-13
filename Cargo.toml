@@ -74,6 +74,7 @@ similar = "2"
 tempfile = "3"
 ttf-parser = { version = "0.25.1", default-features = false }
 unicode-normalization = "0.1"
+unicode-width = "0.2"
 url = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
