@@ -304,6 +304,8 @@ fn dry_run_pauses_backlog_and_confirms_with_the_digest() {
     assert_eq!(archive[0]["action"], "paused");
     assert_eq!(archive[0]["reason"], "backlog_unconfirmed");
     assert_eq!(archive[0]["messages"], json!([MESSAGE_ID]));
+    assert_eq!(value["recent_archive"]["count"], 0);
+    assert_eq!(value["recent_archive"]["items"], json!([]));
     assert_eq!(archive[0]["tasks"][0]["path"], "gmail_inbox.md");
     assert!(archive[0]["tasks"][0]["line"].is_number());
     let digest = value["archive_digest"]
@@ -436,6 +438,8 @@ fn first_enablement_dry_run_previews_the_same_confirmable_backlog() {
     assert_eq!(value["archive"][0]["note"], note);
     assert_eq!(value["archive"][0]["action"], "paused");
     assert_eq!(value["archive"][0]["reason"], "backlog_unconfirmed");
+    assert_eq!(value["recent_archive"]["count"], 0);
+    assert_eq!(value["recent_archive"]["items"], json!([]));
     let digest = value["archive_digest"]
         .as_str()
         .expect("first-enable preview digest")

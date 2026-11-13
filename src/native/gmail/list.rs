@@ -33,7 +33,12 @@ use super::{
     gog::Gog,
     ids,
     note::index::{MailIndex, MailIndexEntry},
-    resolve, search_peek, ui, GmailError,
+    resolve, search_peek,
+    sync::{
+        archive_projection::{self, ArchiveReceiptView, ListReceiptProjection},
+        archive_state::ArchiveJournal,
+    },
+    ui, GmailError,
 };
 use crate::native::{
     is_always_excluded_note_directory_name, style, style::Styler,
@@ -47,6 +52,7 @@ struct ListRow {
     updated: Option<DateTime<FixedOffset>>,
     backlinks: usize,
     new_messages: Option<usize>,
+    archive_receipts: Option<Vec<ArchiveReceiptView>>,
 }
 
 struct ListReport {
@@ -57,6 +63,12 @@ struct ListReport {
     skipped_malformed: usize,
     /// Waiting/gone footer folded by the `gmail-link` phase.
     footer: Option<String>,
+    receipt_diagnostics: Vec<ListDiagnostic>,
+}
+
+struct ListDiagnostic {
+    kind: &'static str,
+    message: &'static str,
 }
 
 /// Run the offline list. Never invokes gog, creates directories, changes
@@ -65,7 +77,11 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
     match report(args) {
         Ok(report) => {
             print_report(args, &report);
-            0
+            if report.receipt_diagnostics.is_empty() {
+                0
+            } else {
+                1
+            }
         }
         Err(error) => ui::report_error(
             "list",
@@ -91,7 +107,43 @@ fn report(args: &ListArgs) -> Result<ListReport, GmailError> {
     let folder = Path::new(config.folder());
     let index = resolve::scan_index(&vault, folder, config.link_label())?;
     let backlinks = count_backlinks(&vault, &index);
-    let rows = sorted_rows(&index, config.account(), &backlinks);
+    let mut rows = sorted_rows(&index, config.account(), &backlinks);
+    let mut receipt_diagnostics = Vec::new();
+    if args.format.is_json() {
+        let projection: Option<ListReceiptProjection> =
+            match ArchiveJournal::load(&vault) {
+                Ok(journal) => {
+                    archive_projection::list_receipts(
+                        &journal,
+                        &index,
+                        config.account(),
+                    )
+                    .or_else(|| {
+                        receipt_diagnostics.push(ListDiagnostic {
+                            kind: "archive_receipts_unavailable",
+                            message: "Gmail archive receipt data is unsafe for this account scope.",
+                        });
+                        None
+                    })
+                }
+                Err(_) => {
+                    receipt_diagnostics.push(ListDiagnostic {
+                        kind: "archive_receipts_unavailable",
+                        message: "Gmail archive receipt journal could not be read.",
+                    });
+                    None
+                }
+            };
+        for row in &mut rows {
+            let identity = (
+                row.entry.account.to_ascii_lowercase(),
+                row.entry.thread_id.to_ascii_lowercase(),
+            );
+            row.archive_receipts = projection.as_ref().map(|receipts| {
+                receipts.get(&identity).cloned().unwrap_or_default()
+            });
+        }
+    }
     let total = rows.len();
     let (mut rows, truncated) = if args.all {
         (rows, false)
@@ -124,6 +176,7 @@ fn report(args: &ListArgs) -> Result<ListReport, GmailError> {
         duplicates: index.duplicates.clone(),
         skipped_malformed: index.skipped_malformed,
         footer: super::link::waiting_gone_footer(&vault, folder),
+        receipt_diagnostics,
     })
 }
 
@@ -148,6 +201,7 @@ fn sorted_rows(
                 updated,
                 backlinks: count,
                 new_messages: None,
+                archive_receipts: None,
             }
         })
         .collect();
@@ -431,7 +485,7 @@ fn print_report(args: &ListArgs, report: &ListReport) {
     if args.format.is_json() {
         let mut document = json!({
             "schema_version": 1,
-            "ok": true,
+            "ok": report.receipt_diagnostics.is_empty(),
             "total": report.total,
             "shown": report.rows.len(),
             "truncated": report.truncated,
@@ -450,6 +504,9 @@ fn print_report(args: &ListArgs, report: &ListReport) {
                     "turn": row.entry.turn,
                     "turn_since": row.entry.turn_since,
                     "backlinks": row.backlinks,
+                    "archive_receipts": row.archive_receipts.as_ref().map(|receipts| {
+                        receipts.iter().map(archive_receipt_json).collect::<Vec<_>>()
+                    }),
                 });
                 if args.remote {
                     thread["new_messages"] = json!(row.new_messages.unwrap_or_default());
@@ -462,6 +519,10 @@ fn print_report(args: &ListArgs, report: &ListReport) {
                 "paths": paths,
             })).collect::<Vec<_>>(),
             "skipped_malformed": report.skipped_malformed,
+            "diagnostics": report.receipt_diagnostics.iter().map(|diagnostic| json!({
+                "kind": diagnostic.kind,
+                "message": diagnostic.message,
+            })).collect::<Vec<_>>(),
         });
         if let Some(footer) = &report.footer {
             document["footer"] = json!(footer);
@@ -563,6 +624,18 @@ fn print_report(args: &ListArgs, report: &ListReport) {
         println!("{}", styler.dim(footer));
     }
     ui::flush_stdout();
+}
+
+fn archive_receipt_json(receipt: &ArchiveReceiptView) -> serde_json::Value {
+    json!({
+        "archive_event_id": receipt.archive_event_id,
+        "archived_at": receipt.archived_at,
+        "message_count": receipt.message_count,
+        "label": {
+            "name": receipt.label.name,
+            "id": receipt.label.id,
+        },
+    })
 }
 
 /// Decoder health for `bob gmail doctor`: a census of Gmail URLs across

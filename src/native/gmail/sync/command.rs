@@ -10,6 +10,7 @@ use std::{collections::BTreeSet, path::Path, time::Duration};
 use super::{
     archive_apply,
     archive_preview::{self, PreviewInput},
+    archive_projection,
     archive_scan::{scan_archive_evidence, SavedIdSnapshot},
     archive_state::{ArchiveJournal, ArchiveLabelIdentity},
     discover::{self, select_candidates, validate_limit},
@@ -86,6 +87,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     )?;
     gog.require_version()?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
+    let timezone = bob_env::configured_timezone().unwrap_or(chrono_tz::UTC);
     let budget =
         SharedBudget::new(Duration::from_secs(u64::from(args.retry_timeout)));
     let sleeper = SystemSleeper;
@@ -117,7 +119,9 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 {
                     return Err(GmailError::runtime("stale", message));
                 }
-                return Ok(SyncReport::busy(args.dry_run));
+                let mut report = SyncReport::busy(args.dry_run);
+                attach_recent_archive(&mut report, &vault, &account, timezone);
+                return Ok(report);
             }
         }
     };
@@ -336,7 +340,6 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         }
     }
 
-    let timezone = bob_env::configured_timezone().unwrap_or(chrono_tz::UTC);
     let saved_at = save::current_utc();
     let additional: Vec<ThreadKey> = filing_candidates
         .iter()
@@ -564,7 +567,38 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     if let Some(error) = archive_error {
         report.attach_archive_error(error);
     }
+    attach_recent_archive(&mut report, &vault, &account, timezone);
     Ok(report)
+}
+
+/// Add a body-free history snapshot after archive application has settled.
+/// A failed or unsafe fold remains unavailable (null in JSON), never an
+/// empty-history claim.
+fn attach_recent_archive(
+    report: &mut SyncReport,
+    vault: &Path,
+    account: &str,
+    timezone: chrono_tz::Tz,
+) {
+    let projection = ArchiveJournal::load(vault)
+        .map_err(|_| "could not read the Gmail archive journal")
+        .and_then(|journal| {
+            archive_projection::recent_archive(
+                &journal,
+                account,
+                timezone,
+                save::current_utc(),
+            )
+        });
+    match projection {
+        Ok(snapshot) => report.recent_archive = Some(snapshot),
+        Err(reason) => {
+            report.ok = false;
+            report.warnings.push(format!(
+                "Gmail recent archive data is unavailable: {reason}."
+            ));
+        }
+    }
 }
 
 /// Archive authentication failures use the sync contract's setup/auth exit

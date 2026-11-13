@@ -645,6 +645,15 @@ plus the account/thread identity, note path, labelled wikilink, `started`,
 `truncated` for paging. `turn` and `turn_since` are `null` when the note
 records no turn.
 
+Each JSON thread also carries `archive_receipts`: currently owned,
+body-free receipts for that exact account/thread identity. Entries include
+the archive event id, original archive timestamp, saved message count, and
+frozen receipt label name and id. An empty array confirms no owned receipts.
+`bob gmail list -a -f json` is the complete offline snapshot for cache
+consumers; it makes no Gmail calls or vault writes. If the receipt journal is
+unreadable or unsafe, receipt values are `null`, `diagnostics` explains why,
+and the JSON report sets `ok: false`.
+
 `backlinks` counts the distinct vault notes whose `[[target]]` wikilink
 resolves to the saved note. Aliases (`[[target|label]]`) and heading/block
 targets (`[[target#heading]]`, `[[target#^block]]`) resolve through their
@@ -796,9 +805,10 @@ Bob then lets go (removing the receipt label) and never archives that close
 again. Reopening a task does not move mail: the report gives a typed restore
 hint, and restore stays manual: Move to Inbox in Gmail. There is no
 `bob gmail unarchive` command and no automatic restore; `restored` is a
-reserved JSON action that is never emitted. Present no deferred surface as
-shipped: no `unarchive`, no `gmail_archived` field, no `recent_archive`
-listing, no chips, and no notifications.
+reserved action in `archive[]` and is never emitted there. Present no deferred surface as
+shipped: no `unarchive`, no `gmail_archived` field, no chips, and no
+notifications. Sync JSON includes a body-free `recent_archive` snapshot;
+there is no separate archive-history listing command.
 
 Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
 historical backlog or a batch above `archive_max`, and `-n` to skip archive
@@ -1116,7 +1126,15 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 `archive_label`, `archive_max`, and `archive_skipped`. Archive rows carry
 `thread_id`, `note`, `action`, `reason`, `decision`, exact sorted message IDs,
 and task path/line/block-ID locators, never task text. Only dry-run and paused
-runs add `archive_digest`. Reopen advice is a typed hint, not a watch action.
+runs add `archive_digest`. `recent_archive` carries `since` (RFC3339 start
+of the previous local calendar day in the configured timezone), a distinct
+thread `count`, and one latest `items[]` row per thread. Each row has
+`thread_id`, the frozen mail-note path, `archived_at`, exact saved
+`message_count`, receipt `label: {name, id}`, `archive_event_id`, and
+current `state: archived | let_go | restored`. This is archive history,
+including actions later undone, not the active-ownership list. Unavailable or
+unsafe journal history is `null` with a warning, never an empty snapshot.
+Reopen advice is a typed hint, not a watch action.
 `restored` is reserved and never emitted. `watch[]` and
 `summary.{watching,awaiting,archived}` are specified under [Watch](#watch).
 See [JSON outputs](reference/json-outputs.md) for the field list and status

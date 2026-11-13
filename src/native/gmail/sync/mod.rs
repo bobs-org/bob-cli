@@ -40,6 +40,7 @@
 
 pub(crate) mod archive_apply;
 pub(crate) mod archive_preview;
+pub(crate) mod archive_projection;
 /// Wired by the preview/apply phases; covered by unit tests until then.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod archive_scan;

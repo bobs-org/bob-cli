@@ -274,6 +274,20 @@ fn live_archives_a_fresh_close_and_repeats_as_noop() {
     assert_eq!(archive[0]["thread_id"], THREAD_A);
     assert_eq!(archive[0]["action"], "archived");
     assert_eq!(archive[0]["messages"], json!([MESSAGE_A]));
+    let recent = &value["recent_archive"];
+    assert!(recent["since"].as_str().is_some_and(|since| {
+        chrono::DateTime::parse_from_rfc3339(since).is_ok()
+    }));
+    assert_eq!(recent["count"], 1);
+    assert_eq!(recent["items"][0]["thread_id"], THREAD_A);
+    assert_eq!(recent["items"][0]["note"], note);
+    assert_eq!(recent["items"][0]["message_count"], 1);
+    assert_eq!(recent["items"][0]["label"]["name"], "bob/closed");
+    assert_eq!(recent["items"][0]["label"]["id"], RECEIPT_ID);
+    assert_eq!(recent["items"][0]["state"], "archived");
+    assert!(recent["items"][0]["archive_event_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
     assert!(
         journal_has(&env, "gmail.archived"),
         "journal records the archive"
@@ -296,6 +310,46 @@ fn live_archives_a_fresh_close_and_repeats_as_noop() {
             .any(|call| call.contains(&"gmail.labels.create".to_string())),
         "existing receipt needs no label creation"
     );
+    fake.clear_calls();
+    let listed = run_gmail(&env, &fake, &["list", "-a", "-f", "json"]);
+    assert_exit(&listed, 0, "offline list exposes active receipts");
+    assert!(
+        fake.calls().is_empty(),
+        "list receipt projection stays offline"
+    );
+    let list_value = json_stdout(&listed);
+    let listed_thread = list_value["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["account"] == ACCOUNT && row["thread_id"] == THREAD_A)
+        .expect("exact indexed thread");
+    assert_eq!(
+        listed_thread["archive_receipts"].as_array().unwrap().len(),
+        1
+    );
+    let listed_receipt = &listed_thread["archive_receipts"][0];
+    assert_eq!(listed_receipt["message_count"], 1);
+    assert_eq!(listed_receipt["label"]["name"], "bob/closed");
+    assert_eq!(listed_receipt["label"]["id"], RECEIPT_ID);
+    assert!(listed_receipt["archive_event_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+    assert!(list_value["diagnostics"].as_array().unwrap().is_empty());
+    let dry_run = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-d", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&dry_run, 0, "dry-run can read prior archive history");
+    let dry_value = json_stdout(&dry_run);
+    assert_eq!(dry_value["recent_archive"]["count"], 1);
+    assert_eq!(dry_value["recent_archive"]["items"][0]["state"], "archived");
+    assert!(
+        dry_value["archive"].as_array().unwrap().is_empty(),
+        "existing history is separate from projected archive actions"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
     let doctor = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
     assert_exit(&doctor, 0, "doctor after archive");
     let doctor_json = json_stdout(&doctor);

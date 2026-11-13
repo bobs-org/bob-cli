@@ -157,6 +157,25 @@ pub(crate) struct ArchiveReceipt {
     pub(crate) archive_event_id: String,
 }
 
+/// The accepted state of one archived generation, including generations
+/// whose ownership has since ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArchiveHistoryState {
+    Archived,
+    LetGo,
+    Restored,
+}
+
+/// Body-free historical archive receipt paired with its frozen note locator.
+/// This is deliberately distinct from `ArchiveReceipt`, which means current
+/// ownership and is the only receipt suitable for restore actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchiveHistoryRecord {
+    pub(crate) receipt: ArchiveReceipt,
+    pub(crate) note: String,
+    pub(crate) state: ArchiveHistoryState,
+}
+
 /// Distinct accepted terminal outcomes in the requested interval.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ArchiveCounts {
@@ -347,6 +366,27 @@ impl ArchiveJournal {
             && !self.unsafe_threads.contains(key)
     }
 
+    /// Whether a complete receipt snapshot is safe for the selected account
+    /// scope. A single unsafe thread makes that account's snapshot
+    /// unavailable rather than looking like an empty receipt list.
+    pub(crate) fn scope_is_safe(&self, account: Option<&str>) -> bool {
+        match account {
+            Some(account) => {
+                let account = normalize_account(account);
+                self.account_is_safe(&account)
+                    && !self
+                        .unsafe_threads
+                        .iter()
+                        .any(|key| key.account() == account)
+            }
+            None => {
+                !self.unsafe_all
+                    && self.unsafe_accounts.is_empty()
+                    && self.unsafe_threads.is_empty()
+            }
+        }
+    }
+
     /// Whether archive-on-close is enabled for an account in the latest
     /// observed epoch.
     pub(crate) fn is_enabled(&self, account: &str) -> bool {
@@ -426,6 +466,44 @@ impl ArchiveJournal {
                 }
             })
         })
+    }
+
+    /// Accepted archive history, including released receipts, in stable
+    /// thread/generation order. Unsafe thread histories are omitted; callers
+    /// must check `scope_is_safe` before treating the result as complete.
+    pub(crate) fn archive_history(&self) -> Vec<ArchiveHistoryRecord> {
+        let mut records = Vec::new();
+        for (key, thread) in &self.threads {
+            if !self.thread_is_safe(key) {
+                continue;
+            }
+            for generation in thread.generations.values() {
+                let (Some(receipt), Some(close)) =
+                    (generation.receipt.as_ref(), generation.close.as_ref())
+                else {
+                    continue;
+                };
+                let state = match generation
+                    .release
+                    .as_ref()
+                    .map(|record| &record.kind)
+                {
+                    Some(ArchiveTerminalKind::LetGo { .. }) => {
+                        ArchiveHistoryState::LetGo
+                    }
+                    Some(ArchiveTerminalKind::Restored { .. }) => {
+                        ArchiveHistoryState::Restored
+                    }
+                    _ => ArchiveHistoryState::Archived,
+                };
+                records.push(ArchiveHistoryRecord {
+                    receipt: receipt.clone(),
+                    note: close.note.clone(),
+                    state,
+                });
+            }
+        }
+        records
     }
 
     /// Every accepted terminal transition, in deterministic thread and
@@ -1833,6 +1911,7 @@ fn ensure_gmail_journals_readable(vault: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::gmail::note::index::{MailIndex, MailIndexEntry};
     use crate::native::gmail::sync::{
         archive_scan::{classify_archive_status, ArchiveIssue},
         scan::LinkPlacement,
@@ -2207,6 +2286,10 @@ mod tests {
         };
         let receipt = archived_state.owned_receipts().next().unwrap();
         assert_eq!(receipt.label.id.as_deref(), Some("label-1"));
+        let history = archived_state.archive_history();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].note, "mail/thread.md");
+        assert_eq!(history[0].state, ArchiveHistoryState::Archived);
 
         // Simulate clock skew: the release sorts before the archive event.
         // Its explicit archive_event_id still releases exactly that receipt.
@@ -2223,6 +2306,10 @@ mod tests {
         reordered.push(archived.stored("apollo", 1, 20));
         let released = ArchiveJournal::from_events(reordered, Vec::new());
         assert_eq!(released.owned_receipts().count(), 0);
+        assert_eq!(
+            released.archive_history()[0].state,
+            ArchiveHistoryState::Restored
+        );
         let counts = released.counts_since(
             Some(ACCOUNT),
             Utc.timestamp_opt(0, 0).unwrap().fixed_offset(),
@@ -2267,6 +2354,11 @@ mod tests {
         events.push(archived.stored("apollo", 1, 20));
         let folded = ArchiveJournal::from_events(events, Vec::new());
         assert_eq!(folded.owned_receipts().count(), 0);
+        assert_eq!(folded.archive_history().len(), 1);
+        assert_eq!(
+            folded.archive_history()[0].state,
+            ArchiveHistoryState::LetGo
+        );
         let counts = folded.counts_since(
             Some(ACCOUNT),
             Utc.timestamp_opt(0, 0).unwrap().fixed_offset(),
@@ -2348,6 +2440,137 @@ mod tests {
                 .close
                 .generation
         );
+    }
+
+    #[test]
+    fn recent_projection_keeps_each_generation_but_counts_one_thread_once() {
+        let (mut state, mut events, _closed, first_close) = closed_after_open();
+        let first_archive = terminal_event(
+            &state,
+            &first_close,
+            ArchiveTerminalKind::Archived {
+                message_ids: vec!["aa01".to_string()],
+                label: label("bob/closed", Some("old-label")),
+                recovered: true,
+            },
+        );
+        push(&mut events, &first_archive, "athena", 100_000);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+
+        let open = evidence(key(), ' ');
+        let open_scan = scan(open.clone());
+        let open_event = state.event_for_open(&open_scan, &open).unwrap();
+        push(&mut events, &open_event, "athena", 100_001);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+
+        let closed = evidence(key(), 'x');
+        let closed_scan = scan(closed.clone());
+        let second_close_event = state
+            .event_for_close(&closed_scan, &closed, label("bob/closed", None))
+            .unwrap();
+        let second_close = parse_close_value(&second_close_event.value, None)
+            .unwrap()
+            .close;
+        push(&mut events, &second_close_event, "athena", 100_002);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+
+        let second_archive = terminal_event(
+            &state,
+            &second_close,
+            ArchiveTerminalKind::Archived {
+                message_ids: vec!["bb02".to_string()],
+                label: label("bob/closed", Some("new-label")),
+                recovered: false,
+            },
+        );
+        push(&mut events, &second_archive, "athena", 100_003);
+        let folded = ArchiveJournal::from_events(events, Vec::new());
+        let owned: Vec<_> = folded.owned_receipts().collect();
+        assert_eq!(owned.len(), 2);
+        assert!(owned.iter().any(|receipt| {
+            receipt.label.id.as_deref() == Some("old-label")
+        }));
+        assert!(owned.iter().any(|receipt| {
+            receipt.label.id.as_deref() == Some("new-label")
+        }));
+
+        let mut index = MailIndex::default();
+        for account in [ACCOUNT, "other@example.com"] {
+            index.by_identity.insert(
+                (account.to_ascii_lowercase(), THREAD.to_string()),
+                MailIndexEntry {
+                    account: account.to_string(),
+                    thread_id: THREAD.to_string(),
+                    path: format!("mail/{account}.md"),
+                    title: String::new(),
+                    who: String::new(),
+                    label: String::new(),
+                    started: String::new(),
+                    updated: String::new(),
+                    messages: 0,
+                    turn: None,
+                    turn_since: None,
+                },
+            );
+        }
+        let listed = super::super::archive_projection::list_receipts(
+            &folded, &index, None,
+        )
+        .unwrap();
+        let primary = listed
+            .get(&(ACCOUNT.to_string(), THREAD.to_string()))
+            .unwrap();
+        assert_eq!(primary.len(), 2);
+        assert_eq!(primary[0].label.id.as_deref(), Some("new-label"));
+        assert!(
+            listed
+                .get(&("other@example.com".to_string(), THREAD.to_string()))
+                .is_none(),
+            "thread IDs from another account never inherit this receipt"
+        );
+
+        let recovered_only = super::super::archive_projection::recent_archive(
+            &folded,
+            ACCOUNT,
+            chrono_tz::UTC,
+            Utc.timestamp_opt(100_001, 0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(recovered_only.count, 1);
+        assert_eq!(
+            recovered_only.items[0].archive_event_id,
+            first_archive.value["event_id"].as_str().unwrap()
+        );
+        assert_eq!(recovered_only.items[0].state, "archived");
+        assert_eq!(
+            recovered_only.items[0].label.id.as_deref(),
+            Some("old-label")
+        );
+
+        let recent = super::super::archive_projection::recent_archive(
+            &folded,
+            ACCOUNT,
+            chrono_tz::UTC,
+            Utc.timestamp_opt(200_000, 0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(recent.count, 1);
+        assert_eq!(recent.items.len(), 1);
+        assert_eq!(
+            recent.items[0].archive_event_id,
+            second_archive.value["event_id"].as_str().unwrap()
+        );
+        assert_eq!(recent.items[0].state, "archived");
+        assert_eq!(recent.items[0].message_count, 1);
+        assert_eq!(recent.items[0].label.id.as_deref(), Some("new-label"));
+        let other_account = super::super::archive_projection::recent_archive(
+            &folded,
+            "other@example.com",
+            chrono_tz::UTC,
+            Utc.timestamp_opt(200_000, 0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(other_account.count, 0);
     }
 
     #[test]

@@ -12,6 +12,7 @@ use super::archive_preview::{
     ACTION_PAUSED, ACTION_WOULD_ARCHIVE, KEPT_CONSENT_REMOVED, KEPT_MANUAL,
     REASON_BACKLOG, REASON_ELIGIBLE,
 };
+use super::archive_projection::RecentArchiveSnapshot;
 use super::archive_scan::ArchiveScan;
 use super::archive_state::ArchiveJournal;
 use super::file::{FilingFailure, FilingOutcome, FilingResult};
@@ -200,6 +201,9 @@ pub(crate) struct SyncReport {
     /// Keeping it on the report preserves those rows and the error's exit
     /// code instead of replacing the whole sync report.
     pub(crate) archive_error: Option<GmailError>,
+    /// Historical archive activity in the previous configured local day.
+    /// `None` is unavailable data, never an empty-history assertion.
+    pub(crate) recent_archive: Option<RecentArchiveSnapshot>,
 }
 
 impl SyncReport {
@@ -224,6 +228,7 @@ impl SyncReport {
             archive_hints: Vec::new(),
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         }
     }
 
@@ -413,6 +418,7 @@ pub(crate) fn from_outcome(
         archive_hints: Vec::new(),
         archive_skipped: false,
         archive_error: None,
+        recent_archive: None,
     }
 }
 
@@ -664,6 +670,24 @@ fn json_document(report: &SyncReport) -> Value {
                 .filter(|row| row.action == "archived")
                 .count(),
         },
+        "recent_archive": report.recent_archive.as_ref().map(|recent| {
+            json!({
+                "since": recent.since,
+                "count": recent.count,
+                "items": recent.items.iter().map(|item| json!({
+                    "thread_id": item.thread_id,
+                    "note": item.note,
+                    "archived_at": item.archived_at,
+                    "message_count": item.message_count,
+                    "label": {
+                        "name": item.label.name,
+                        "id": item.label.id,
+                    },
+                    "archive_event_id": item.archive_event_id,
+                    "state": item.state,
+                })).collect::<Vec<_>>(),
+            })
+        }),
         "warnings": report.warnings,
     });
     // The digest is only meaningful for dry-run and paused runs. A quiet
@@ -1044,6 +1068,7 @@ mod tests {
             archive_hints: Vec::new(),
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         };
         let value = json_document(&report);
         assert_eq!(value["schema_version"], 1);
@@ -1099,6 +1124,7 @@ mod tests {
             }],
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         };
         let value = json_document(&report);
         assert_eq!(value["schema_version"], 1);
@@ -1165,6 +1191,7 @@ mod tests {
             archive_hints: Vec::new(),
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         };
         assert!(!with_nothing(&quiet_report, "header".into())
             .contains("nothing new"));
@@ -1293,6 +1320,7 @@ mod tests {
             archive_hints: Vec::new(),
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         };
         let one = header(&report);
         assert!(one.contains("watching 1 thread ·"), "{one}");
@@ -1332,6 +1360,7 @@ mod tests {
             archive_hints: Vec::new(),
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         };
         let text = with_nothing(&report, "header".into());
         assert!(text.ends_with("nothing new"), "{text}");
@@ -1369,6 +1398,7 @@ mod tests {
             archive_hints: Vec::new(),
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         };
         let text = with_nothing(&report, "header".into());
         assert!(!text.contains("nothing new"), "{text}");
@@ -1757,6 +1787,7 @@ mod tests {
             archive_hints: Vec::new(),
             archive_skipped: false,
             archive_error: None,
+            recent_archive: None,
         }
     }
 

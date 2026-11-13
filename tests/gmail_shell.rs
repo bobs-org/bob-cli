@@ -13,7 +13,7 @@ use gmail_support::{
     json_stdout, run_gmail, run_gmail_paste, run_gmail_stdin, stderr, stdout,
     FakeGog, GmailEnv, ACCOUNT,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 fn check<'a>(doc: &'a Value, id: &str) -> &'a Value {
@@ -1251,10 +1251,12 @@ fn list_after_save_shows_thread_json_and_human() {
     );
     assert_eq!(thread["messages"], 1);
     assert_eq!(thread["backlinks"], 0);
+    assert_eq!(thread["archive_receipts"], json!([]));
     assert!(!thread["updated"].as_str().unwrap_or_default().is_empty());
     assert!(!thread["started"].as_str().unwrap_or_default().is_empty());
     assert_eq!(doc["duplicates"].as_array().unwrap().len(), 0);
     assert_eq!(doc["skipped_malformed"], 0);
+    assert_eq!(doc["diagnostics"], json!([]));
     assert!(
         doc.get("footer").is_none(),
         "footer stays absent until gmail-link populates it: {doc}"
@@ -1276,6 +1278,39 @@ fn list_after_save_shows_thread_json_and_human() {
     assert!(text.contains("updated"), "{text}");
     assert!(text.contains("backlinks"), "{text}");
     assert!(!text.contains("Hello"), "list table must stay body-free");
+}
+
+#[test]
+fn list_marks_archive_receipts_unavailable_for_an_unsafe_journal() {
+    let env = GmailEnv::new("bob-cli-gmail-list-unsafe-receipts");
+    write_mail_note(
+        &env,
+        "mail/thread.md",
+        ACCOUNT,
+        "0123456789abcdef",
+        "Synthetic subject",
+        "Dana",
+        "2026-09-12T12:00:00+00:00",
+    );
+    let journal = env.vault().join(".bob/gmail/other-host.jsonl");
+    fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    fs::write(&journal, "not a journal event\n").unwrap();
+    let fake = FakeGog::new(&env, "gog");
+
+    let output = run_gmail(&env, &fake, &["list", "-a", "-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unavailable receipt data fails the snapshot visibly"
+    );
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], false);
+    assert_eq!(doc["threads"][0]["archive_receipts"], Value::Null);
+    assert_eq!(
+        doc["diagnostics"][0]["kind"],
+        "archive_receipts_unavailable"
+    );
+    assert!(!fake.called_with(&["gmail", "search"]));
 }
 
 #[test]
@@ -1321,6 +1356,9 @@ fn list_paginates_twenty_and_all() {
     let threads = doc["threads"].as_array().expect("threads");
     assert_eq!(threads[0]["subject"], "Subject 21");
     assert_eq!(threads[19]["subject"], "Subject 02");
+    assert!(threads
+        .iter()
+        .all(|row| row["archive_receipts"] == json!([])));
 
     let all = run_gmail(&env, &fake, &["list", "-a", "-f", "json"]);
     assert_success(&all, "unpaged list");
@@ -1328,6 +1366,11 @@ fn list_paginates_twenty_and_all() {
     assert_eq!(doc["total"], 21);
     assert_eq!(doc["shown"], 21);
     assert_eq!(doc["truncated"], false);
+    assert!(doc["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["archive_receipts"] == json!([])));
 
     let bare = run_gmail(&env, &fake, &["-a", "-f", "json"]);
     assert_success(&bare, "bare unpaged list");

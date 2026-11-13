@@ -65,6 +65,39 @@ fn threads_list_page_tokens(fake: &FakeGog) -> Vec<Option<String>> {
         .collect()
 }
 
+#[test]
+fn sync_reports_unsafe_recent_archive_history_as_unavailable() {
+    let env = GmailEnv::new("bob-cli-gmail-sync-unsafe-recent-archive");
+    env.write_journal_rules();
+    let journal = env.vault().join(".bob/gmail/other-host.jsonl");
+    fs::create_dir_all(journal.parent().unwrap())
+        .expect("create Gmail journal");
+    fs::write(&journal, "not a journal event\n")
+        .expect("write malformed event");
+    let fake = FakeGog::new(&env, "gog");
+
+    let output =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unsafe history fails visibly"
+    );
+    let value = json_stdout(&output);
+    assert_eq!(value["recent_archive"], Value::Null);
+    assert!(
+        value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap_or_default()
+                .contains("recent archive data is unavailable")),
+        "sync explains unavailable history: {value}"
+    );
+}
+
 fn seed_unenrolled_task(
     env: &GmailEnv,
     fake: &FakeGog,
