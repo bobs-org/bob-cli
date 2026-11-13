@@ -349,6 +349,11 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
     assert_eq!(json["project_note"]["basename"], "cash_goog_exit.md");
     assert_eq!(json["project_note"]["parent_route"], "cash");
     assert_eq!(json["project_note"]["parent_link"], "[[cash]]");
+    assert_eq!(
+        json["project_note"]["parent_catalog"],
+        serde_json::json!({"path": "cash.md", "action": "written"}),
+        "{json}"
+    );
     assert_eq!(json["project_note"]["tasks"], 1);
     assert!(json["project_note"].get("move_hint").is_none(), "{json}");
     assert!(json["project_note"]["sections"]
@@ -402,7 +407,7 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
     );
     assert!(out.contains("[[cash]]"), "{out}");
     assert!(out.contains("^prj"), "{out}");
-    assert!(out.contains("projects sync"), "{out}");
+    assert!(out.contains("Projects catalog"), "{out}");
     assert!(out.contains("task reconcile"), "{out}");
 }
 
@@ -1050,7 +1055,8 @@ fn capture_project_note_task_links_write_the_worked_example() {
     assert!(out.contains("linked") && out.contains("day.md"), "{out}");
     assert!(out.contains("under ADMIN (created)"), "{out}");
     assert!(out.contains("[[cash_human1#^draft-memo]]"), "{out}");
-    assert!(out.contains("projects sync"), "{out}");
+    assert!(out.contains("Projects catalog"), "{out}");
+    assert!(out.contains("parent's Projects catalog"), "{out}");
 }
 
 #[test]
@@ -1699,7 +1705,12 @@ fn capture_project_note_move_human_output_reports_moves_and_repairs() {
         dry_text.contains("would repair  1 link in 1 note"),
         "{dry_text}"
     );
-    assert!(dry_text.contains("bob projects sync"), "{dry_text}");
+    assert!(
+        dry_text.contains("would write  cash.md  Projects catalog")
+            || dry_text.contains("would update  cash.md  Projects catalog"),
+        "{dry_text}"
+    );
+    assert!(dry_text.contains("parent's Projects catalog"), "{dry_text}");
     assert!(!vault.join("cash_x.md").exists());
     assert_eq!(fs::read_to_string(&source).unwrap(), source_before);
 
@@ -3935,4 +3946,250 @@ fn capture_project_note_choice_prediction_matches_each_execution_guard() {
             );
         }
     }
+}
+
+fn assert_parent_catalog_lists(parent: &str, child_stem: &str) {
+    assert!(
+        parent.contains("## Projects") && parent.contains("[!projects]"),
+        "{parent}"
+    );
+    assert!(parent.contains(&format!("[[{child_stem}]]")), "{parent}");
+    assert!(!parent.contains("Sub-projects:"), "{parent}");
+}
+
+#[test]
+fn capture_project_note_writes_parent_catalog_on_create_and_offer() {
+    let temp = TempDir::new("bob-cli-project-note-catalog-at-birth");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+
+    let create = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("@cash^catalog-create@")
+            .arg("Ship the catalog")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "",
+    );
+    assert_success(&create);
+    let create_json: serde_json::Value =
+        serde_json::from_str(stdout(&create).trim()).expect("create JSON");
+    assert_eq!(
+        create_json["project_note"]["parent_catalog"],
+        serde_json::json!({"path": "cash.md", "action": "written"}),
+        "{create_json}"
+    );
+    let parent = fs::read_to_string(vault.join("cash.md")).expect("parent");
+    assert_parent_catalog_lists(&parent, "cash_catalog_create");
+    assert!(parent.contains("Ship the catalog"), "{parent}");
+    let note = fs::read_to_string(vault.join("cash_catalog_create.md"))
+        .expect("new note");
+    assert!(note.contains("parent: \"[[cash]]\""), "{note}");
+
+    let offer_temp = TempDir::new("bob-cli-project-note-catalog-offer");
+    let offer_vault = offer_temp.path().join("vault");
+    let offer_day = offer_vault.join("day.md");
+    write_file(
+        &offer_vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n",
+    );
+    write_file(&offer_day, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+    let offer = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&offer_vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &offer_day)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Offer the catalog @cash:catalog-offer@\n- Draft a plan\n",
+    );
+    assert_success(&offer);
+    let offer_json: serde_json::Value =
+        serde_json::from_str(stdout(&offer).trim()).expect("offer JSON");
+    assert_eq!(offer_json["project_note"]["form"], "offer", "{offer_json}");
+    assert_eq!(
+        offer_json["project_note"]["parent_catalog"]["path"], "cash.md",
+        "{offer_json}"
+    );
+    let offer_parent =
+        fs::read_to_string(offer_vault.join("cash.md")).expect("offer parent");
+    assert_parent_catalog_lists(&offer_parent, "cash_catalog_offer");
+}
+
+#[test]
+fn capture_project_note_dry_run_lists_parent_catalog_and_writes_nothing() {
+    let temp = TempDir::new("bob-cli-project-note-catalog-dry-run");
+    let vault = temp.path().join("vault");
+    let parent_before = "---\ntype: \"[[area]]\"\n---\n";
+    write_file(&vault.join("cash.md"), parent_before);
+    let dry = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-d")
+            .arg("-f")
+            .arg("json")
+            .arg("@cash^catalog-dry@")
+            .arg("Preview catalog")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "",
+    );
+    assert_success(&dry);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("dry JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(
+        json["project_note"]["parent_catalog"],
+        serde_json::json!({"path": "cash.md", "action": "written"}),
+        "{json}"
+    );
+    assert!(!vault.join("cash_catalog_dry.md").exists());
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("unchanged parent"),
+        parent_before
+    );
+
+    let human = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-d")
+            .arg("@cash^catalog-dry@")
+            .arg("Preview catalog")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0")
+            .env("NO_COLOR", "1"),
+        "",
+    );
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("would capture"), "{out}");
+    assert!(
+        out.contains("would write  cash.md  Projects catalog"),
+        "{out}"
+    );
+    assert!(!vault.join("cash_catalog_dry.md").exists());
+}
+
+#[test]
+fn capture_project_note_migrates_legacy_parent_line_into_catalog() {
+    let temp = TempDir::new("bob-cli-project-note-catalog-legacy");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("parent.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+            "- [ ] #task Ship parent #hide ^prj\n",
+            "\t- 🧩 **Sub-projects:** [[kid]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("kid.md"),
+        concat!(
+            "---\nparent: \"[[parent]]\"\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+            "- [ ] #task Kid work #hide ^prj\n",
+        ),
+    );
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("@parent^new-kid@")
+            .arg("New sibling")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "",
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("legacy JSON");
+    assert_eq!(
+        json["project_note"]["parent_catalog"]["path"], "parent.md",
+        "{json}"
+    );
+    let parent = fs::read_to_string(vault.join("parent.md")).expect("parent");
+    assert_parent_catalog_lists(&parent, "parent_new_kid");
+    assert!(parent.contains("[[kid]]"), "{parent}");
+    assert!(vault.join("parent_new_kid.md").exists());
+}
+
+#[test]
+fn capture_project_note_damaged_parent_catalog_writes_nothing() {
+    let temp = TempDir::new("bob-cli-project-note-catalog-damaged");
+    let vault = temp.path().join("vault");
+    let parent_before = concat!(
+        "---\ntype: \"[[area]]\"\n---\n",
+        "## Projects\n\n",
+        "> [!projects\n",
+        "> - partial\n",
+    );
+    write_file(&vault.join("cash.md"), parent_before);
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("@cash^damaged@")
+            .arg("Should refuse")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("refusal JSON");
+    assert_eq!(json["code"], "projects_catalog_damaged", "{json}");
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(error.contains("cash.md"), "{json}");
+    assert!(error.contains("line"), "{json}");
+    assert!(!vault.join("cash_damaged.md").exists());
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("unchanged parent"),
+        parent_before
+    );
+}
+
+#[test]
+fn capture_project_note_move_composes_with_parent_catalog() {
+    let temp = TempDir::new("bob-cli-project-note-catalog-move");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Move me ^a\n- [ ] #task Stay ^b\n",
+    );
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^moved@\n- ^a\n",
+        false,
+        None,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    assert_eq!(
+        json["project_note"]["parent_catalog"]["path"], "cash.md",
+        "{json}"
+    );
+    let parent = fs::read_to_string(vault.join("cash.md")).expect("parent");
+    assert_parent_catalog_lists(&parent, "cash_moved");
+    assert!(!parent.contains("^a"), "{parent}");
+    assert!(parent.contains("^b"), "{parent}");
+    let note = fs::read_to_string(vault.join("cash_moved.md")).expect("note");
+    assert!(note.contains("#task Move me"), "{note}");
 }

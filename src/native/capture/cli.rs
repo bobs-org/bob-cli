@@ -482,8 +482,9 @@ command. The '^prj' task is never linked and never starts as '[*]'. The route \
 is lower-cased and the block ID keeps its authored case. \
 The parent '<route>.md' must already exist as an area or non-terminal project \
 note; the new note must not exist yet. Moving a task removes its complete block \
-from the parent and repairs links; the parent is replaced last, while 'bob \
-projects sync' owns its Sub-projects line. Authored child bullets become \
+from the parent and repairs links; the parent is replaced last, and this \
+capture lists the new note in the parent's Projects catalog (or refuses if \
+that catalog is damaged). Authored child bullets become \
 '## Tasks' entries or '## Title Case' sections from ALL-CAPS titles in the new \
 note. In that item's first-level bullets, '- ^<id>' moves an open top-level \
 task from the parent into that slot; '- :<id>' also makes it Next and links \

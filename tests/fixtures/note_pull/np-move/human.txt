@@ -14,7 +14,8 @@
   1 task · 1 moved from work.md · sections —
   would move  [*] Beta  work.md:6 → ^beta · FIX link follows
   would repair  1 link in 1 note
-  hint: 'bob projects sync' adds the parent's Sub-projects line; 'bob task reconcile' reconciles Blocked state
+  would write  work.md  Projects catalog
+  hint: this capture lists the new note in the parent's Projects catalog; 'bob task reconcile' reconciles Blocked state
 Pull from work · 3 of 3 pulled in
   offer 1  would link Pending Alpha  work.md ^alpha → FIX
   offer 2  would link Next Beta  work_docs_push.md ^beta → FIX

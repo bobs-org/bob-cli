@@ -79,7 +79,9 @@ One posted transaction or deposit as a top-level checkbox line under a day
 heading in a [Bank Month Note](#bank-month-note) (`- [x] $13.71 Smashburger [cat:: dining]`).
 `[ ]` means waiting and `[x]` means acknowledged. Typed rows start ticked;
 `bob bank import` writes the rest unchecked, once. Bob later only ticks a
-waiting row (`ack`) or appends `^bank-<hex>` to a typed row it matched. It
+waiting row (`ack`) or appends `^bank-<hex>` to a typed row it matched.
+Ctrl+Enter on a waiting row opens the Category card, which ticks it and files
+`[cat:: key]` in one gesture, then lands on the next waiting row. It
 never carries `#task`, so it is never a task, and it is never a record
 note. `bob bank check` lints every row. See `docs/bank.md`.
 
@@ -541,8 +543,8 @@ note from task** command, which instead promotes an existing task. The item's pa
 text becomes the [Project Task](#project-task) line `- [ ] #task #prj <text> #hide ^prj` (`[?]`
 once the item resolves a schedule), which is never linked. `<route>.md` must already
 be an area or non-terminal project note, a target note that already exists or is staged
-refuses the capture, and `bob projects sync` later adds the note to the parent's
-Sub-projects line.
+refuses the capture, and the same batch lists it in the parent's `## Projects`
+catalog.
 
 The sigil before the ID picks the form. The `^` (create) form links only the item's
 explicit `:` bullets. The `:` (offer) form creates the same note, then offers its open,

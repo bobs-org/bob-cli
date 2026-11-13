@@ -749,6 +749,17 @@ pub(super) struct ProjectNoteMoveHint {
     pub(super) open_count: usize,
 }
 
+/// Parent `## Projects` catalog edit staged with the new project note.
+/// Additive: omitted when the parent already matches, so Mac Capture
+/// decoders stay valid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectNoteParentCatalogJson {
+    pub(super) path: String,
+    /// `"written"` on first placement, `"updated"` when an existing
+    /// catalog or legacy line changes.
+    pub(super) action: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ProjectNoteSummary {
     pub(super) basename: String,
@@ -765,6 +776,8 @@ pub(super) struct ProjectNoteSummary {
     pub(super) repaired_files: Option<Vec<ProjectNoteRepairedFile>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) move_hint: Option<ProjectNoteMoveHint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent_catalog: Option<ProjectNoteParentCatalogJson>,
     /// `"offer"` for `@route:id@`; omitted on Create.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) form: Option<&'static str>,
@@ -4319,11 +4332,27 @@ pub(super) fn print_human_item_success(
             &styler,
         );
     }
+    if let Some(note) = result.project_note.as_ref()
+        && let Some(catalog) = note.parent_catalog.as_ref()
+    {
+        let verb = if result.dry_run {
+            if catalog.action == "written" {
+                "would write"
+            } else {
+                "would update"
+            }
+        } else if catalog.action == "written" {
+            "wrote"
+        } else {
+            "updated"
+        };
+        println!("  {verb}  {}  Projects catalog", styler.cyan(&catalog.path));
+    }
     if result.project_note.is_some() {
         println!(
             "  {}",
             styler.dim(
-                "hint: 'bob projects sync' adds the parent's Sub-projects line; 'bob task reconcile' reconciles Blocked state"
+                "hint: this capture lists the new note in the parent's Projects catalog; 'bob task reconcile' reconciles Blocked state"
             )
         );
     }
@@ -8495,6 +8524,7 @@ mod tests {
             move_summary: None,
             repaired_files: None,
             move_hint: None,
+            parent_catalog: None,
             form: Some("offer"),
             successors: Some(vec![unblocked_row(
                 "Draft the memo",
@@ -8535,6 +8565,7 @@ mod tests {
             move_summary: None,
             repaired_files: None,
             move_hint: None,
+            parent_catalog: None,
             form: None,
             successors: None,
             project_folds: Vec::new(),

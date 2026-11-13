@@ -372,8 +372,9 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
         .unwrap_or_else(bob_env::bob_dir)
 }
 
-mod catalog;
+pub(crate) mod catalog;
 mod catalog_rows;
+pub(crate) use catalog::{plan_catalogs, CatalogState};
 pub(crate) use catalog_rows::{
     glyph_prefix_len, parse_row, CatalogRowState, BLOCKED_GLYPH,
     CANCELED_GLYPH, DONE_GLYPH, SCHEDULED_GLYPH, WARNING_GLYPH,

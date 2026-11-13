@@ -2,10 +2,12 @@
 use super::batch_move::{apply_batch_move, BatchMoveError};
 use super::output::{
     ProjectNoteMoveHint, ProjectNoteMoveSummary, ProjectNoteMovedTask,
-    ProjectNotePlannedLink, ProjectNoteRepairedFile,
+    ProjectNoteParentCatalogJson, ProjectNotePlannedLink,
+    ProjectNoteRepairedFile,
 };
 use super::*;
 use crate::native::capture_active_tasks;
+use crate::native::projects::CatalogState;
 use crate::native::task_fields;
 use crate::native::task_move::{
     movable_roots, resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot,
@@ -62,6 +64,65 @@ pub(super) fn validate_project_note_parent(
         )));
     }
     Ok(())
+}
+
+/// Plan the parent's `## Projects` catalog over the batch overlay and
+/// stage that postimage with the new note. Only the parent preimage is
+/// guarded; sibling notes are read unguarded from the vault snapshot.
+fn stage_parent_projects_catalog(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    parent_abs: &Path,
+    parent_route: &str,
+    today: NaiveDate,
+) -> Result<Option<ProjectNoteParentCatalogJson>, CaptureError> {
+    let overlay = planner.overlay_notebook_snapshot(bob_dir)?;
+    let mut notes = BTreeMap::new();
+    for (path, file) in &overlay.files {
+        if let Some(contents) = &file.contents {
+            notes.insert(path.clone(), contents.clone());
+        }
+    }
+    let index = overlay.index();
+    let plan = crate::native::projects::plan_catalogs(&notes, &index, today);
+    let parent_relative = PathBuf::from(format!("{parent_route}.md"));
+    let Some(host) = plan.host(&parent_relative) else {
+        return Err(CaptureError::io(format!(
+            "cannot create a project note under {parent_route}.md: the parent Projects catalog could not be planned"
+        )));
+    };
+    if host.state == CatalogState::Damaged {
+        let issue = host
+            .issues
+            .iter()
+            .find(|issue| issue.code == "projects_catalog_damaged");
+        let line_bit = issue
+            .and_then(|issue| issue.line)
+            .map(|line| format!(" at line {line}"))
+            .unwrap_or_default();
+        let detail = issue
+            .map(|issue| issue.message.as_str())
+            .unwrap_or("the generated projects catalog is damaged");
+        return Err(CaptureError::io_code(
+            format!(
+                "cannot create a project note under {parent_route}.md: the Projects catalog is damaged{line_bit} ({detail})"
+            ),
+            "projects_catalog_damaged",
+        ));
+    }
+    let Some(edit) = host.edit.as_ref() else {
+        return Ok(None);
+    };
+    let before = planner.peek_text(parent_abs);
+    planner.stage_snapshot_postimage(parent_abs, before, edit.after.clone())?;
+    let action = match host.state {
+        CatalogState::Missing => "written",
+        _ => "updated",
+    };
+    Ok(Some(ProjectNoteParentCatalogJson {
+        path: parent_relative.to_string_lossy().replace('\\', "/"),
+        action,
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1708,6 +1769,14 @@ pub(super) fn plan_project_note_item(
         }
     }
 
+    let parent_catalog = stage_parent_projects_catalog(
+        planner,
+        &request.bob_dir,
+        &source_path,
+        &route,
+        today,
+    )?;
+
     let prj_text = parsed.body.trim().to_string();
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -1783,6 +1852,7 @@ pub(super) fn plan_project_note_item(
                     .as_ref()
                     .map(|execution| execution.repaired_files.clone()),
                 move_hint,
+                parent_catalog,
                 form: (form == ProjectNoteForm::Offer).then_some("offer"),
                 successors: (form == ProjectNoteForm::Offer).then(|| {
                     let mut scratch_index = 0;

@@ -6020,9 +6020,10 @@ items, so a later item can parent onto a note an earlier item created. When
 same batch, capture fails with `project note already exists: <path>` and
 writes nothing. A move edits the parent only to remove the moved blocks and
 repair their inbound links; it replaces the parent after the new note and all
-other move destinations. `bob projects sync` still owns the generated
-`- 🧩 **Sub-projects:** [[...]]` line, which is machine-owned and rewritten
-there.
+other move destinations. The same atomic write lists the new note in the
+parent's `## Projects` catalog (and retires a leftover
+`- 🧩 **Sub-projects:**` line). A damaged `[!projects]` region refuses the
+capture with `projects_catalog_damaged` and writes nothing.
 
 Project-note capture cannot be combined with clipboard input:
 `%c` fails with
@@ -7830,7 +7831,8 @@ rendered `^prj` line. A new `project_note` object reports `basename`,
 `parent_route`, `parent_link` (for example `"[[cash]]"`), `tasks` (the count
 of `## Tasks` lines written, including the placeholder when it is kept),
 `sections` (the ordered array of rendered section titles, excluding
-`## Tasks`), and `task_links` — always present, possibly empty — with one
+`## Tasks`), optional additive `parent_catalog` (`{path, action}` for the
+parent `## Projects` edit), and `task_links` — always present, possibly empty — with one
 `{"block_id", "block_link", "text", "task_line"}` entry per `:` task in
 source order. `block_link` is `[[<stem>#^<id>]]` and `task_line` is the
 rendered `[*]`/`[?]` task line. The offer form (`@<route>:<id>@`) adds two
@@ -7857,9 +7859,11 @@ created note, its `parent` link, the `^prj` line, a `<N> <task|tasks> ·
 sections <titles>` line, then — when links were written — `✓ linked
 <day_file>` (dry-run: `would link`), an `under <NAME>` line with
 ` (created)` when a named Pomodoro was created, one dim `- [[stem#^id]]`
-line per link, and the hint that `bob projects sync` adds the parent's
-Sub-projects line and `bob task reconcile` reconciles Blocked state, since
-neither is written here. The offer form prints a `New project <basename>`
+line per link, a `wrote`/`updated` (dry-run: `would write`/`would update`)
+line for the parent's Projects catalog, and the hint that this capture lists
+the new note there while `bob task reconcile` reconciles Blocked state. The
+optional `project_note.parent_catalog` object (`{path, action}`) names that
+parent edit and is omitted when the catalog already matches. The offer form prints a `New project <basename>`
 header over its numbered `offer N` rows before that hint, and a dry run adds
 the usual `-p 1,2 · -p all` hint when nothing was picked, followed by
 `· -x N done · -X N[=why] cancel` when an unresolved offer supports a

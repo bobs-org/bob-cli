@@ -1174,6 +1174,8 @@ bob capture '@work^intake-flow@' 'Ship the intake flow'
   parent  [[work]]
   - [ ] #task #prj Ship the intake flow #hide ^prj
   1 task · sections —
+  wrote  work.md  Projects catalog
+  hint: this capture lists the new note in the parent's Projects catalog; 'bob task reconcile' reconciles Blocked state
 ```
 
 ```bob-task
@@ -1211,7 +1213,8 @@ printf 'Ship the intake flow @work:intake-flow@\n- Name the stages\n- Draft the 
   New project work_intake_flow.md
   offer 1  unblocked [ ] → [ ] Name the stages  work_intake_flow.md
   offer 2  unblocked [ ] → [ ] Draft the memo  work_intake_flow.md
-  hint: 'bob projects sync' adds the parent's Sub-projects line; 'bob task reconcile' reconciles Blocked state
+  would write  work.md  Projects catalog
+  hint: this capture lists the new note in the parent's Projects catalog; 'bob task reconcile' reconciles Blocked state
   -p 1,2 · -p all
 ```
 

@@ -16,8 +16,8 @@ note from task** command, which instead promotes an existing task. The item's pa
 text becomes the [[project-task]] line `- [ ] #task #prj <text> #hide ^prj` (`[?]`
 once the item resolves a schedule), which is never linked. `<route>.md` must already
 be an area or non-terminal project note, a target note that already exists or is staged
-refuses the capture, and `bob projects sync` later adds the note to the parent's
-Sub-projects line.
+refuses the capture, and the same batch lists it in the parent's `## Projects`
+catalog.
 
 The sigil before the ID picks the form. The `^` (create) form links only the item's
 explicit `:` bullets. The `:` (offer) form creates the same note, then offers its open,
