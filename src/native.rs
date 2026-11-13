@@ -58,6 +58,7 @@ mod collect_done;
 pub(crate) mod completion;
 mod config;
 mod dataview;
+pub(crate) mod desktop_notify;
 pub(crate) mod done_archive;
 pub(crate) mod env;
 mod event_task;

@@ -52,7 +52,8 @@ mod gmail_support;
 use std::fs;
 
 use gmail_support::{
-    json_stdout, run_gmail, stderr, stdout, FakeGog, GmailEnv, ACCOUNT, HOST,
+    json_stdout, run_gmail, run_gmail_with_notify, stderr, stdout, FakeGog,
+    FakeNotify, GmailEnv, ACCOUNT, HOST,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -2745,4 +2746,205 @@ fn unarchive_works_with_archive_disabled_and_uses_the_recorded_label_id() {
         call.contains(&RECEIPT_ID.to_string())
             && !call.contains(&"bob/finished".to_string())
     }));
+}
+
+#[test]
+fn quiet_archive_notifies_once_then_stays_silent_on_repeat() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-notify-once");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let notify = FakeNotify::new(&env, "notify");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (_note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived = run_gmail_with_notify(
+        &env,
+        &fake,
+        &notify,
+        &["sync", "-q", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&archived, 0, "quiet archive succeeds");
+    let takes = notify.takes();
+    assert_eq!(takes.len(), 1, "one notification for the new archive");
+    assert!(
+        takes[0].contains("bob gmail")
+            && takes[0].contains(THREAD_A)
+            && takes[0].contains("bob gmail unarchive"),
+        "notification names the undo command and thread: {}",
+        takes[0]
+    );
+    assert!(
+        !takes[0].contains("Ada") && !takes[0].contains("Archive apply probe"),
+        "notification carries no sender or subject text: {}",
+        takes[0]
+    );
+    let again = run_gmail_with_notify(
+        &env,
+        &fake,
+        &notify,
+        &["sync", "-q", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&again, 0, "repeat sync is a no-op");
+    assert_eq!(
+        notify.takes().len(),
+        1,
+        "the consumed receipt never notifies again"
+    );
+}
+
+#[test]
+fn archive_notification_stays_silent_without_durable_outcomes() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-notify-silent");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let notify = FakeNotify::new(&env, "notify");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (_note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let preview = run_gmail_with_notify(
+        &env,
+        &fake,
+        &notify,
+        &["sync", "-d", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&preview, 0, "dry-run previews without writing");
+    assert!(notify.takes().is_empty(), "a preview never notifies");
+    let skipped = run_gmail_with_notify(
+        &env,
+        &fake,
+        &notify,
+        &["sync", "-n", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&skipped, 0, "skipped archive runs clean");
+    assert!(
+        notify.takes().is_empty(),
+        "a skipped archive phase never notifies"
+    );
+    fake.set_failure("batch_modify", "transient: PRIVATE_SENTINEL flap", 1);
+    let failed = run_gmail_with_notify(
+        &env,
+        &fake,
+        &notify,
+        &["sync", "-q", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&failed, 1, "isolated failure fails the run");
+    assert!(
+        !journal_has(&env, "gmail.archived"),
+        "failure consumes nothing"
+    );
+    assert!(
+        notify.takes().is_empty(),
+        "a failed remote write never notifies"
+    );
+}
+
+#[test]
+fn archive_notification_respects_the_shared_opt_out() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-notify-opt-out");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let notify = FakeNotify::new(&env, "notify");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (_note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let mut command = env.command();
+    fake.install(&mut command);
+    notify.install(&mut command);
+    command.env("BOB_VAULT_SYNC_NOTIFY", "0");
+    command.arg("gmail");
+    for arg in ["sync", "-q", "-l", "0", "-r", "0", "-f", "json"] {
+        command.arg(arg);
+    }
+    let muted = command.output().expect("run bob gmail");
+    assert_exit(&muted, 0, "opted-out archive succeeds");
+    assert_eq!(
+        json_stdout(&muted)["archive"][0]["action"],
+        "archived",
+        "the archive itself still lands"
+    );
+    assert!(
+        notify.takes().is_empty(),
+        "the vault-sync opt-out suppresses the gmail notification"
+    );
+}
+
+#[test]
+fn recovered_archive_notifies_once_without_remutating() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-notify-recovery");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let notify = FakeNotify::new(&env, "notify");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (_note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    fake.make_archive_journal_readonly_after_batch();
+    let interrupted = run_gmail_with_notify(
+        &env,
+        &fake,
+        &notify,
+        &["sync", "-q", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&interrupted, 1, "journal failure fails the run");
+    assert!(
+        notify.takes().is_empty(),
+        "the interrupted run notifies nothing"
+    );
+    let journal = env.vault().join(".bob/gmail/test-host.jsonl");
+    let mut permissions = fs::metadata(&journal)
+        .expect("journal metadata")
+        .permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&journal, permissions).expect("restore journal writes");
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID])],
+    );
+    fake.clear_calls();
+    let recovered = run_gmail_with_notify(
+        &env,
+        &fake,
+        &notify,
+        &["sync", "-q", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&recovered, 0, "recovery journals the archive");
+    assert_eq!(
+        json_stdout(&recovered)["archive"][0]["action"],
+        "archived",
+        "recovery reports the durable outcome"
+    );
+    let takes = notify.takes();
+    assert_eq!(takes.len(), 1, "recovery notifies exactly once");
+    assert!(
+        takes[0].contains(THREAD_A) && takes[0].contains("bob gmail unarchive"),
+        "recovery names the undo command and thread: {}",
+        takes[0]
+    );
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "recovery does not mutate"
+    );
 }

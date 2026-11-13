@@ -39,6 +39,7 @@
 //! enrollment events only after the vault writes they describe are durable.
 
 pub(crate) mod archive_apply;
+pub(crate) mod archive_notify;
 pub(crate) mod archive_preview;
 pub(crate) mod archive_projection;
 /// Wired by the preview/apply phases; covered by unit tests until then.

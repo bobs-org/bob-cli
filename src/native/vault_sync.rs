@@ -18,7 +18,7 @@ use clap::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    env as bob_env,
+    desktop_notify, env as bob_env,
     ob::{self, ChildEnv},
     style::Styler,
     vault_clobber,
@@ -100,7 +100,7 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Examples:\n  bob vault-sync\n  bob vault-sync run --dry-run\n  bob vault-sync status --json\n\n\
 Environment:\n  BOB_DIR                    Bob vault root; defaults to ~/bob\n  \
 BOB_VAULT_SYNC_LOCK_FILE   lock file; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n  \
-BOB_VAULT_SYNC_NOTIFY      set to 0 to suppress desktop clobber and conflict notifications\n  \
+BOB_VAULT_SYNC_NOTIFY      set to 0 to suppress desktop notifications (vault-sync clobber/conflict and Gmail archive receipts)\n  \
 BOB_VAULT_SYNC_STATE_FILE  status JSON path; defaults to ${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/vault-sync.json\n  \
 NO_COLOR                   disable color even when stdout is a TTY\n\n\
 Legacy BOB_BULK_GIT_COMMIT_* and BOB_SYNC_* environment variables are no longer recognized; use BOB_VAULT_SYNC_*.",
@@ -928,74 +928,11 @@ fn quarantine_notification_body(quarantined: &[QuarantinedPath]) -> String {
 }
 
 fn sync_notifications_enabled() -> bool {
-    match bob_env::var("BOB_VAULT_SYNC_NOTIFY") {
-        Ok(value)
-            if matches!(
-                value.to_ascii_lowercase().as_str(),
-                "0" | "false" | "no"
-            ) =>
-        {
-            false
-        }
-        Ok(value)
-            if matches!(value.to_ascii_lowercase().as_str(), "1" | "true") =>
-        {
-            true
-        }
-        _ => {
-            #[cfg(test)]
-            {
-                false
-            }
-            #[cfg(not(test))]
-            {
-                true
-            }
-        }
-    }
+    desktop_notify::notifications_enabled()
 }
 
 fn send_sync_notification(body: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let script = format!(
-            "display notification \"{}\" with title \"bob vault-sync\"",
-            osascript_escape(body)
-        );
-        let _ = Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        if !command_on_path("notify-send") {
-            return;
-        }
-        let _ = Command::new("notify-send")
-            .arg("bob vault-sync")
-            .arg(body)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn osascript_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn command_on_path(command: &str) -> bool {
-    let Some(path) = bob_env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| dir.join(command).is_file())
+    desktop_notify::send_notification(desktop_notify::VAULT_SYNC_TITLE, body);
 }
 
 fn gate_pending_overwrite_intent(

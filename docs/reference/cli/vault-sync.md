@@ -30,7 +30,7 @@ Examples:
 Environment:
   BOB_DIR                    Bob vault root; defaults to ~/bob
   BOB_VAULT_SYNC_LOCK_FILE   lock file; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock
-  BOB_VAULT_SYNC_NOTIFY      set to 0 to suppress desktop clobber and conflict notifications
+  BOB_VAULT_SYNC_NOTIFY      set to 0 to suppress desktop notifications (vault-sync clobber/conflict and Gmail archive receipts)
   BOB_VAULT_SYNC_STATE_FILE  status JSON path; defaults to ${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/vault-sync.json
   NO_COLOR                   disable color even when stdout is a TTY
 

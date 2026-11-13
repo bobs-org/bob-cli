@@ -8,7 +8,7 @@
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
 use super::{
-    archive_apply,
+    archive_apply, archive_notify,
     archive_preview::{self, PreviewInput},
     archive_projection,
     archive_scan::{scan_archive_evidence, SavedIdSnapshot},
@@ -47,6 +47,11 @@ pub(crate) fn run(args: &SyncArgs) -> i32 {
     match run_inner(args) {
         Ok(report) => {
             report::print(args, &report);
+            // The receipt notification fires after the report is printed so
+            // delivery can never corrupt human or JSON output, and it fires
+            // even under `-q`: a quiet run that archived mail still tells
+            // the desktop about it.
+            archive_notify::maybe_notify(args, &report);
             report.exit_code()
         }
         Err(error) => ui::report_error("sync", &error, args.format.as_str()),

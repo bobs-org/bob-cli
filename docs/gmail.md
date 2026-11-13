@@ -847,9 +847,20 @@ restoring a broader message set.
 
 `restored` is recorded in the archive journal and may appear as a historical
 `recent_archive` state; it remains reserved and never appears as an action in
-sync's live `archive[]`. Chips and desktop notifications stay deferred.
+sync's live `archive[]`. Chips stay deferred.
 Sync JSON includes a body-free `recent_archive` snapshot; there is no separate
 archive-history listing command.
+
+A live run that durably archives mail fires one best-effort desktop
+notification after the report prints, even under `-q`: `Archived N Gmail
+threads — undo: bob gmail unarchive -- <thread ids>`. The body names only the
+count and the exact archived thread ids, never sender or subject text.
+Previews, dry runs, skipped archive phases, failed runs, and repeat syncs with
+no new archives stay silent. A receipt recovered after a crash notifies once,
+on the run that journals it. The notification shares the vault-sync transport
+(`osascript` on macOS, `notify-send` on Linux) and the same
+`BOB_VAULT_SYNC_NOTIFY` opt-out; delivery can never change the report, its
+JSON, or the exit code.
 
 Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
 historical backlog or a batch above `archive_max`, and `-n` to skip archive

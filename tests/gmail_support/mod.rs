@@ -735,6 +735,84 @@ pub(crate) fn run_gmail(
     command.output().expect("run bob gmail")
 }
 
+/// Fake desktop-notification executables (`notify-send` on Linux,
+/// `osascript` on macOS) that record argv instead of notifying. Each
+/// invocation appends one `<argv...>` line to the log; tests assert on those
+/// lines, so no real desktop notification is ever needed.
+pub(crate) struct FakeNotify {
+    bin: PathBuf,
+    log: PathBuf,
+}
+
+impl FakeNotify {
+    pub(crate) fn new(env: &GmailEnv, name: &str) -> Self {
+        let root = env.root().join(name);
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("create fake notify dir");
+        let log = root.join("notifications.log");
+        for tool in ["notify-send", "osascript"] {
+            let path = bin.join(tool);
+            fs::write(
+                &path,
+                "#!/bin/sh\nprintf '%s argv:' \"$0\" >> \"$FAKE_NOTIFY_LOG\"\nprintf ' <%s>' \"$@\" >> \"$FAKE_NOTIFY_LOG\"\nprintf '\\n' >> \"$FAKE_NOTIFY_LOG\"\n",
+            )
+            .expect("write fake notify tool");
+            chmod_exec(&path);
+        }
+        Self { bin, log }
+    }
+
+    pub(crate) fn install<'a>(
+        &self,
+        command: &'a mut Command,
+    ) -> &'a mut Command {
+        let mut joined = self.bin.as_os_str().to_os_string();
+        joined.push(":");
+        joined.push(support_bin_dir().into_os_string());
+        if let Some(path) = std::env::var_os("PATH") {
+            if !path.is_empty() {
+                joined.push(":");
+                joined.push(path);
+            }
+        }
+        command
+            .env("PATH", joined)
+            .env("FAKE_NOTIFY_LOG", &self.log)
+    }
+
+    pub(crate) fn takes(&self) -> Vec<String> {
+        let text = fs::read_to_string(&self.log).unwrap_or_default();
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    pub(crate) fn clear(&self) {
+        fs::write(&self.log, "").expect("clear fake notify log");
+    }
+}
+
+/// Run `bob gmail <args>` with the fake gog and fake desktop notifications,
+/// with notifications forced on. Builds that need the opt-out covered set
+/// `BOB_VAULT_SYNC_NOTIFY=0` on their own command after `notify.install`.
+pub(crate) fn run_gmail_with_notify(
+    env: &GmailEnv,
+    fake: &FakeGog,
+    notify: &FakeNotify,
+    args: &[&str],
+) -> Output {
+    let mut command = env.command();
+    fake.install(&mut command);
+    notify.install(&mut command);
+    command.env("BOB_VAULT_SYNC_NOTIFY", "1");
+    command.arg("gmail");
+    for arg in args {
+        command.arg(arg);
+    }
+    command.output().expect("run bob gmail")
+}
+
 /// Run `bob gmail <args>` with piped stdin, treating stdin as a TTY.
 pub(crate) fn run_gmail_stdin(
     env: &GmailEnv,
