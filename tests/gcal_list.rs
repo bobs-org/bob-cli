@@ -39,6 +39,188 @@ fn today_note(env: &GcalEnv) -> String {
         .expect("read daily note")
 }
 
+fn timed_external(id: &str, summary: &str, start: &str, end: &str) -> Value {
+    json!({
+        "id": id,
+        "summary": summary,
+        "status": "confirmed",
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+        "attendees": [{"self": true, "responseStatus": "accepted"}],
+    })
+}
+
+fn list_ack_envelope() -> String {
+    serde_json::to_string(&json!({
+        "events": [
+            timed_external(
+                "ext-ack",
+                "Acked review",
+                "2026-10-30T13:00:00-04:00",
+                "2026-10-30T13:30:00-04:00",
+            ),
+            timed_external(
+                "ext-note",
+                "Noted review",
+                "2026-10-30T14:00:00-04:00",
+                "2026-10-30T14:30:00-04:00",
+            ),
+            timed_external(
+                "ext-plain",
+                "Plain review",
+                "2026-10-30T15:00:00-04:00",
+                "2026-10-30T15:30:00-04:00",
+            ),
+            {
+                "id": "owned-open",
+                "summary": "Owned sync",
+                "status": "confirmed",
+                "organizer": {
+                    "self": true,
+                    "displayName": "Bryan",
+                    "email": "you@example.com",
+                },
+                "start": {"dateTime": "2026-10-30T16:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T16:30:00-04:00"},
+                "attendees": [{"self": true, "responseStatus": "accepted"}],
+            },
+            {
+                "id": "ext-day",
+                "summary": "External holiday",
+                "status": "confirmed",
+                "start": {"date": "2026-10-30"},
+                "end": {"date": "2026-10-31"},
+                "attendees": [],
+            },
+        ],
+        "nextPageToken": null,
+    }))
+    .expect("envelope")
+}
+
+fn append_journal_line(env: &GcalEnv, line: &Value) {
+    fs::create_dir_all(env.vault().join(".bob/gcal")).expect("journal dir");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(env.vault().join(".bob/gcal/test-host.jsonl"))
+        .expect("open journal");
+    writeln!(file, "{}", serde_json::to_string(line).expect("line"))
+        .expect("append journal");
+}
+
+fn list_output(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+) -> std::process::Output {
+    let mut command = env.command();
+    let mut full = vec!["gcal", "list"];
+    full.extend(args);
+    fake.install(&mut command)
+        .args(full)
+        .output()
+        .expect("run list")
+}
+
+#[test]
+fn list_shows_ack_states_and_counts_unacked() {
+    let env = GcalEnv::new("bob-cli-gcal-list-ack");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&list_ack_envelope());
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    append_journal_line(
+        &env,
+        &json!({
+            "v": 1,
+            "ts": "2026-10-30T11:00:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.ack",
+            "account": "you@example.com",
+            "key": {"calendar_id": "primary", "event_id": "ext-ack"},
+            "scope": "event",
+            "acked": true,
+            "via": "ack",
+            "seen": {
+                "title": "Acked review",
+                "start": "2026-10-30T13:00:00-04:00",
+                "end": "2026-10-30T13:30:00-04:00",
+                "original_start": null,
+            },
+        }),
+    );
+    append_journal_line(
+        &env,
+        &json!({
+            "v": 1,
+            "ts": "2026-10-30T11:00:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.note",
+            "account": "you@example.com",
+            "key": {"calendar_id": "primary", "event_id": "ext-note"},
+            "scope": "event",
+            "text": "@family",
+        }),
+    );
+    // Reconcile the new evidence so the lines match the books.
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let output = list_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(report["counts"]["unacked"], 1);
+    let events = report["events"].as_array().expect("events");
+    let acked = events
+        .iter()
+        .find(|event| event["event_id"] == "ext-ack")
+        .expect("acked event");
+    assert_eq!(acked["ack"]["state"], "acked");
+    assert_eq!(acked["ack"]["scope"], "event");
+    assert_eq!(acked["ack"]["via"], "ack");
+    assert!(acked["ack"]["at"].is_string(), "{acked}");
+    let noted = events
+        .iter()
+        .find(|event| event["event_id"] == "ext-note")
+        .expect("noted event");
+    assert_eq!(noted["ack"]["state"], "noted");
+    assert_eq!(noted["ack"]["scope"], "event");
+    assert_eq!(noted["ack"]["via"], "note");
+    let plain = events
+        .iter()
+        .find(|event| event["event_id"] == "ext-plain")
+        .expect("plain event");
+    assert_eq!(plain["ack"]["state"], "unacked");
+    assert!(plain["ack"]["scope"].is_null(), "{plain}");
+    for id in ["owned-open", "ext-day"] {
+        let event = events
+            .iter()
+            .find(|event| event["event_id"] == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(event["ack"]["state"], "not_required", "{event}");
+    }
+
+    // Note and ack text never travels: neither object carries a body,
+    // only shapes and times (root warnings may still quote the route).
+    for event in events {
+        assert!(event["note"].get("text").is_none(), "{event}");
+        assert!(event["ack"].get("text").is_none(), "{event}");
+        assert!(event["ack"].get("seen").is_none(), "{event}");
+    }
+
+    let table = list_output(&env, &fake, &[]);
+    assert_eq!(table.status.code(), Some(0), "{}", stderr(&table));
+    let text = stdout(&table);
+    assert!(text.contains("Plain review ⚠"), "{text}");
+    assert!(!text.contains("Acked review ⚠"), "{text}");
+    assert!(!text.contains("Noted review ⚠"), "{text}");
+    assert!(
+        text.contains("⚠ 1 unacked external event · bob gcal ack"),
+        "{text}"
+    );
+}
+
 #[test]
 fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
     let env = GcalEnv::new("bob-cli-gcal-list");
@@ -93,7 +275,7 @@ fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
     let table_out = table.output().expect("run table list");
     assert_eq!(table_out.status.code(), Some(0), "{}", stderr(&table_out));
     assert!(
-        stdout(&table_out).contains("Dentist ≡ 1"),
+        stdout(&table_out).contains("Dentist ⚠ ≡ 1"),
         "{}",
         stdout(&table_out)
     );
@@ -193,7 +375,7 @@ fn list_shows_buffer_reasons_in_time_and_event_columns() {
         "TIME carries buffers: {table_text}"
     );
     assert!(
-        table_text.contains("Dentist \u{2261} 3"),
+        table_text.contains("Dentist ⚠ \u{2261} 3"),
         "EVENT carries reason count: {table_text}"
     );
 

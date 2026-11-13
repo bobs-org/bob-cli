@@ -164,7 +164,6 @@ impl GcalConfig {
         self.tentative
     }
 
-    #[allow(dead_code)] // The tag and queue phases consume this setting.
     pub(crate) fn ack_mode(&self) -> bob_config::GcalAckMode {
         self.ack
     }

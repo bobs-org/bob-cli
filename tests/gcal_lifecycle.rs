@@ -228,6 +228,38 @@ fn decline_dentist_fixture() -> String {
 }
 
 #[test]
+fn cancelled_external_row_loses_its_warning_tag() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-cancel-tag");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(dentist_row(&today_note(&env)).contains(" #unacked ^dentist"));
+
+    fake.events_json(&decline_dentist_fixture());
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let row = dentist_row(&today_note(&env));
+    assert!(row.starts_with("- [-] #task"), "{row}");
+    assert!(
+        !row.contains("#unacked"),
+        "a decided row never screams: {row}"
+    );
+
+    // No inferred ack: the lift at cancel is bookkeeping, not review, and
+    // a resurrected `[-]` row still reads as closed.
+    let journal = journal_lines(&env);
+    assert!(
+        journal.iter().all(|line| line["kind"] != "gcal.ack"),
+        "no receipt without a gesture"
+    );
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(!dentist_row(&today_note(&env)).contains("#unacked"));
+    assert_eq!(journal_lines(&env).len(), journal.len());
+}
+
+#[test]
 fn declined_event_cancels_untouched_task() {
     let env = GcalEnv::new("bob-cli-gcal-lifecycle-declined");
     prepare(&env);

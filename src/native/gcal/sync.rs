@@ -22,7 +22,7 @@ use super::{
     diagnostics,
     gog::Gog,
     journal::{self, OccurrenceState},
-    lifecycle::{AbsentVerdict, LifecycleItem},
+    lifecycle::{row_has_unacked, AbsentVerdict, LifecycleItem},
     model::{EventDateTime, GcalEvent},
     plan::{self, LinkPhase, MeetPomodoroEntry, PlannedOccurrence},
     render, replaced,
@@ -136,6 +136,7 @@ fn record_last_error(
             skipped: Vec::new(),
             in_sync: 0,
             held: None,
+            unacked: 0,
         },
         Some(format!("{}: {}", error.kind(), error.message())),
     );
@@ -161,6 +162,10 @@ struct ReportRow {
     completion: Option<String>,
     /// Private-note summary; never includes note text.
     note: Value,
+    /// Whether the row's line now carries Bob's warning tag.
+    unacked: bool,
+    /// Additive review evidence object; never note or ack text.
+    ack: Value,
 }
 
 struct SyncReport {
@@ -188,6 +193,8 @@ struct SyncReport {
     /// Included events already in the note that needed no change.
     in_sync: usize,
     held: Option<HeldSummary>,
+    /// Open task rows carrying Bob's warning tag in the final note.
+    unacked: usize,
 }
 
 struct HeldSummary {
@@ -394,6 +401,11 @@ fn sync_day(
     let (note_book, note_warnings) =
         journal::load_notes(&vault).unwrap_or_default();
     warnings.extend(note_warnings);
+    let (ack_book, ack_warnings) =
+        journal::load_acks(&vault).unwrap_or_default();
+    warnings.extend(ack_warnings);
+    let ack_on =
+        config.ack_mode() == crate::native::config::GcalAckMode::External;
     let malformed = journal::malformed_count(&vault);
     // Diagnostics stay ephemeral: they never create journal writes and
     // never make an otherwise unchanged plan changed.
@@ -448,6 +460,7 @@ fn sync_day(
             skipped,
             in_sync: 0,
             held: Some(held),
+            unacked: 0,
         };
         if !args.dry_run {
             record_status(host, day, "held", &report, None);
@@ -457,7 +470,8 @@ fn sync_day(
     let now = bob_env::current_datetime();
     let mut occurrences = Vec::new();
     for (occurrence, warning) in build_occurrences(
-        &snapshot, config, &vault, &daily_rel, is_today, &now, resolver,
+        &snapshot, config, &vault, &daily_rel, is_today, &now, &note_book,
+        &ack_book, resolver,
     ) {
         if let Some(warning) = warning {
             warnings.push(warning);
@@ -509,7 +523,9 @@ fn sync_day(
             day,
             path: display_path,
             status: "dry_run",
-            rows: report_rows(&plan, &snapshot, is_today),
+            rows: report_rows(
+                &plan, &snapshot, is_today, &ack_book, &note_book, ack_on,
+            ),
             entries: plan.pomodoro_entries.clone(),
             links_added: plan.links_added.len(),
             links_refiled: plan.links_refiled.len(),
@@ -527,6 +543,7 @@ fn sync_day(
             skipped: skips.skipped,
             in_sync: skips.in_sync,
             held: None,
+            unacked: count_unacked(&plan.contents),
         });
     }
 
@@ -537,7 +554,9 @@ fn sync_day(
             day,
             path: display_path.clone(),
             status: "unchanged",
-            rows: report_rows(&plan, &snapshot, is_today),
+            rows: report_rows(
+                &plan, &snapshot, is_today, &ack_book, &note_book, ack_on,
+            ),
             entries: Vec::new(),
             links_added: 0,
             links_refiled: 0,
@@ -555,6 +574,7 @@ fn sync_day(
             skipped: skips.skipped,
             in_sync: skips.in_sync,
             held: None,
+            unacked: count_unacked(&plan.contents),
         };
         record_status(host, day, "unchanged", &report, None);
         return Ok(report);
@@ -671,7 +691,10 @@ fn sync_day(
                         day,
                         path: display_path.clone(),
                         status: "unchanged",
-                        rows: report_rows(&plan, &snapshot, is_today),
+                        rows: report_rows(
+                            &plan, &snapshot, is_today, &ack_book, &note_book,
+                            ack_on,
+                        ),
                         entries: Vec::new(),
                         links_added: 0,
                         links_refiled: 0,
@@ -692,6 +715,7 @@ fn sync_day(
                         skipped: skips.skipped,
                         in_sync: skips.in_sync,
                         held: None,
+                        unacked: count_unacked(&plan.contents),
                     };
                     record_status(host, day, "unchanged", &report, None);
                     return Ok(report);
@@ -730,7 +754,9 @@ fn sync_day(
         day,
         path: display_path,
         status: "written",
-        rows: report_rows(&plan, &snapshot, is_today),
+        rows: report_rows(
+            &plan, &snapshot, is_today, &ack_book, &note_book, ack_on,
+        ),
         entries: plan.pomodoro_entries.clone(),
         links_added: plan.links_added.len(),
         links_refiled: plan.links_refiled.len(),
@@ -748,6 +774,7 @@ fn sync_day(
         skipped: skips.skipped,
         in_sync: skips.in_sync,
         held: None,
+        unacked: count_unacked(&plan.contents),
     };
     record_status(host, day, "written", &report, None);
     Ok(report)
@@ -816,6 +843,7 @@ fn waiting(
         skipped: Vec::new(),
         in_sync: 0,
         held: None,
+        unacked: 0,
     };
     if !args.dry_run {
         record_status(host, day, "waiting", &report, None);
@@ -914,8 +942,12 @@ pub(super) fn build_occurrences<S: HomeSource>(
     daily_rel: &std::path::Path,
     is_today: bool,
     now: &chrono::NaiveDateTime,
+    notes: &journal::NoteBook,
+    acks: &journal::AckBook,
     resolver: &mut HomeResolver<S>,
 ) -> Vec<(PlannedOccurrence, Option<String>)> {
+    let ack_on =
+        config.ack_mode() == crate::native::config::GcalAckMode::External;
     let mut out = Vec::new();
     for event in &snapshot.events {
         if matches!(event.inclusion, Inclusion::Omitted(_)) {
@@ -1008,6 +1040,15 @@ pub(super) fn build_occurrences<S: HomeSource>(
         let note = task
             .then(|| event.event.note.as_ref().map(|note| note.provenance()))
             .flatten();
+        let acked = acks.acked(
+            notes,
+            &snapshot.account,
+            &event.event.key.calendar_id,
+            &event.event.key.event_id,
+            event.event.series_id.as_deref(),
+        );
+        let want_unacked =
+            task && event.event.is_external() && !acked && ack_on;
         out.push((
             PlannedOccurrence {
                 calendar_id: event.event.key.calendar_id.clone(),
@@ -1015,6 +1056,9 @@ pub(super) fn build_occurrences<S: HomeSource>(
                 ical_uid: event.event.ical_uid.clone(),
                 series_id: event.event.series_id.clone(),
                 note,
+                acked,
+                want_unacked,
+                ack_seen: event.event.ack_seen(),
                 id_hint: event.event.title.clone(),
                 task,
                 time_label,
@@ -1356,11 +1400,61 @@ fn listed_note(
         .unwrap_or(Value::Null)
 }
 
+/// Review evidence for one report row: the folded books' answer when
+/// the row is an external task row and ack is on, else not-required.
+/// Note and ack text never travels.
+#[allow(clippy::too_many_arguments)]
+fn row_ack(
+    acks: &journal::AckBook,
+    notes: &journal::NoteBook,
+    account: &str,
+    ack_on: bool,
+    task: bool,
+    snapshot: &snapshot::DaySnapshot,
+    calendar_id: &str,
+    event_id: &str,
+) -> Value {
+    let listed = snapshot.events.iter().find(|listed| {
+        listed.event.key.calendar_id == calendar_id
+            && listed.event.key.event_id == event_id
+    });
+    let required = task
+        && ack_on
+        && listed.is_some_and(|listed| {
+            listed.inclusion == Inclusion::Task && listed.event.is_external()
+        });
+    if !required {
+        return journal::AckStatus::not_required().json();
+    }
+    let series_id = listed.and_then(|listed| listed.event.series_id.clone());
+    acks.status_for(notes, account, calendar_id, event_id, series_id.as_deref())
+        .json()
+}
+
+/// Open task rows carrying Bob's warning tag in the final note: the
+/// end-of-run unacked count for human and JSON surfaces. Counts the
+/// lines, not the books, so dry runs, unchanged runs, and hand-typed
+/// tags all report what the note actually shows.
+fn count_unacked(contents: &str) -> usize {
+    contents
+        .lines()
+        .filter(|line| {
+            super::lifecycle::split_row_spans(line)
+                .is_some_and(|spans| spans.task)
+                && row_has_unacked(line)
+        })
+        .count()
+}
+
 fn report_rows(
     plan: &plan::SyncPlan,
     snapshot: &snapshot::DaySnapshot,
     is_today: bool,
+    acks: &journal::AckBook,
+    notes: &journal::NoteBook,
+    ack_on: bool,
 ) -> Vec<ReportRow> {
+    let account = snapshot.account.clone();
     let mut rows = Vec::new();
     for added in &plan.rows_added {
         rows.push(ReportRow {
@@ -1382,6 +1476,17 @@ fn report_rows(
             detail: added.detail.clone(),
             completion: None,
             note: listed_note(snapshot, &added.calendar_id, &added.event_id),
+            unacked: added.unacked,
+            ack: row_ack(
+                acks,
+                notes,
+                &account,
+                ack_on,
+                added.row_kind == "task",
+                snapshot,
+                &added.calendar_id,
+                &added.event_id,
+            ),
         });
     }
     for restored in &plan.rows_restored {
@@ -1404,6 +1509,17 @@ fn report_rows(
             detail: restored.detail.clone(),
             completion: None,
             note: listed_note(
+                snapshot,
+                &restored.calendar_id,
+                &restored.event_id,
+            ),
+            unacked: restored.unacked,
+            ack: row_ack(
+                acks,
+                notes,
+                &account,
+                ack_on,
+                restored.row_kind == "task",
                 snapshot,
                 &restored.calendar_id,
                 &restored.event_id,
@@ -1434,11 +1550,33 @@ fn report_rows(
                 &adopted.calendar_id,
                 &adopted.event_id,
             ),
+            unacked: adopted.unacked,
+            ack: row_ack(
+                acks,
+                notes,
+                &account,
+                ack_on,
+                adopted.row_kind == "task",
+                snapshot,
+                &adopted.calendar_id,
+                &adopted.event_id,
+            ),
         });
     }
     for gone in &plan.rows_gone {
         // A lifecycle tombstone has no occurrence in the plan; borrow
         // the time and title from the snapshot when the event is there.
+        // The line is gone, so a tag can no longer be on it.
+        let gone_ack = row_ack(
+            acks,
+            notes,
+            &account,
+            ack_on,
+            true,
+            snapshot,
+            &gone.calendar_id,
+            &gone.event_id,
+        );
         let listed = snapshot.events.iter().find(|listed| {
             listed.event.key.calendar_id == gone.calendar_id
                 && listed.event.key.event_id == gone.event_id
@@ -1471,6 +1609,8 @@ fn report_rows(
             detail: None,
             completion: None,
             note: listed_note(snapshot, &gone.calendar_id, &gone.event_id),
+            unacked: false,
+            ack: gone_ack,
         });
     }
     for updated in &plan.rows_updated {
@@ -1497,6 +1637,17 @@ fn report_rows(
                 &updated.calendar_id,
                 &updated.event_id,
             ),
+            unacked: updated.unacked,
+            ack: row_ack(
+                acks,
+                notes,
+                &account,
+                ack_on,
+                updated.row_kind == "task",
+                snapshot,
+                &updated.calendar_id,
+                &updated.event_id,
+            ),
         });
     }
     for held in &plan.rows_held {
@@ -1519,6 +1670,17 @@ fn report_rows(
             detail: held.detail.clone(),
             completion: None,
             note: listed_note(snapshot, &held.calendar_id, &held.event_id),
+            unacked: held.unacked,
+            ack: row_ack(
+                acks,
+                notes,
+                &account,
+                ack_on,
+                held.row_kind == "task",
+                snapshot,
+                &held.calendar_id,
+                &held.event_id,
+            ),
         });
     }
     for closed in &plan.rows_closed {
@@ -1537,6 +1699,18 @@ fn report_rows(
             detail: None,
             completion: Some(closed.completion.clone()),
             note: listed_note(snapshot, &closed.calendar_id, &closed.event_id),
+            // The close lifts the tag, so a closed row never reports it.
+            unacked: false,
+            ack: row_ack(
+                acks,
+                notes,
+                &account,
+                ack_on,
+                true,
+                snapshot,
+                &closed.calendar_id,
+                &closed.event_id,
+            ),
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -1555,6 +1729,8 @@ fn report_rows(
             detail: None,
             completion: None,
             note: Value::Null,
+            unacked: false,
+            ack: journal::AckStatus::not_required().json(),
         });
     }
     for removed in &plan.rows_removed {
@@ -1577,6 +1753,8 @@ fn report_rows(
                 &removed.calendar_id,
                 &removed.event_id,
             ),
+            unacked: false,
+            ack: journal::AckStatus::not_required().json(),
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -1599,6 +1777,17 @@ fn report_rows(
                 &upgraded.calendar_id,
                 &upgraded.event_id,
             ),
+            unacked: upgraded.unacked,
+            ack: row_ack(
+                acks,
+                notes,
+                &account,
+                ack_on,
+                true,
+                snapshot,
+                &upgraded.calendar_id,
+                &upgraded.event_id,
+            ),
         });
     }
     for learned in &plan.learned {
@@ -1617,6 +1806,8 @@ fn report_rows(
             detail: None,
             completion: None,
             note: Value::Null,
+            unacked: false,
+            ack: journal::AckStatus::not_required().json(),
         });
     }
     rows
@@ -1640,6 +1831,7 @@ fn append_row_record(
     source: Option<&str>,
     description: &journal::DescriptionState,
     note: Option<&journal::NoteProvenance>,
+    unacked: bool,
 ) -> Result<(), GcalError> {
     journal::append_row(
         vault,
@@ -1659,6 +1851,7 @@ fn append_row_record(
             source: source.map(str::to_string),
             description: description.clone(),
             note: note.cloned(),
+            unacked,
         },
     )
     .map(|_| ())
@@ -1737,6 +1930,7 @@ fn append_journal(
             added.source.as_deref(),
             &added.description,
             added.note.as_ref(),
+            added.unacked,
         )?;
     }
     for adopted in &plan.rows_adopted {
@@ -1757,6 +1951,7 @@ fn append_journal(
             adopted.source.as_deref(),
             &adopted.description,
             adopted.note.as_ref(),
+            adopted.unacked,
         )?;
     }
     for updated in &plan.rows_updated {
@@ -1777,6 +1972,7 @@ fn append_journal(
             updated.source.as_deref(),
             &updated.description,
             updated.note.as_ref(),
+            updated.unacked,
         )?;
     }
     for upgraded in &plan.rows_upgraded {
@@ -1797,6 +1993,7 @@ fn append_journal(
             upgraded.source.as_deref(),
             &upgraded.description,
             upgraded.note.as_ref(),
+            upgraded.unacked,
         )?;
     }
     for refreshed in &plan.journal_refreshes {
@@ -1817,6 +2014,28 @@ fn append_journal(
             refreshed.source.as_deref(),
             &refreshed.description,
             refreshed.note.as_ref(),
+            refreshed.unacked,
+        )?;
+    }
+    for cleared in &plan.tag_clears {
+        append_row_record(
+            vault,
+            host,
+            &day_string,
+            display_path,
+            &cleared.calendar_id,
+            &cleared.event_id,
+            cleared.ical_uid.as_deref(),
+            cleared.series_id.as_deref(),
+            &cleared.block_id,
+            cleared.url.as_deref(),
+            &cleared.row_kind,
+            &cleared.spans,
+            cleared.root.as_deref(),
+            cleared.source.as_deref(),
+            &cleared.description,
+            cleared.note.as_ref(),
+            cleared.unacked,
         )?;
     }
     for adopted in &plan.rows_adopted {
@@ -1864,6 +2083,14 @@ fn append_journal(
             None,
             Some(kept.flag.as_str()),
         )?;
+    }
+    for ack in &plan.acks_append {
+        journal::append_ack(vault, host, ack).map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("append the gcal ack: {error}"),
+            )
+        })?;
     }
     for learned in &plan.learned {
         journal::append_series_root(
@@ -2023,6 +2250,7 @@ fn report_json(report: &SyncReport) -> Value {
                     row.skip.as_ref().map(|skip| skip.detail.as_str())
                 }),
                 "note": row.note,
+                "ack": row.ack,
             })
         })
         .collect();
@@ -2045,6 +2273,9 @@ fn report_json(report: &SyncReport) -> Value {
         "rows": rows,
         "in_sync": report.in_sync,
         "skipped": skipped,
+        "counts": {
+            "unacked": report.unacked,
+        },
         "pomodoro": {
             "entry_line": first_open_entry(report).map(|entry| entry.line),
             "created": first_open_entry(report)
@@ -2179,7 +2410,12 @@ fn print_human(report: &SyncReport) {
         } else {
             String::new()
         };
-        println!("  {sigil} {:<7} {detail}{bullets}", row.kind);
+        let unacked = if row.unacked {
+            format!("  {}", styler.dim("⚠ unacked"))
+        } else {
+            String::new()
+        };
+        println!("  {sigil} {:<7} {detail}{bullets}{unacked}", row.kind);
     }
     for entry in &report.entries {
         println!("  {}", meet_human_line(entry));
@@ -2341,6 +2577,17 @@ fn print_human(report: &SyncReport) {
         summary
     };
     println!("{summary}{}", counts_tail(report));
+    if report.unacked > 0 {
+        let noun = if report.unacked == 1 {
+            "event"
+        } else {
+            "events"
+        };
+        println!(
+            "⚠ {} unacked external {noun} · bob gcal ack",
+            report.unacked
+        );
+    }
     if let Some(stamp) = &report.stamp {
         println!("{}", styler.dim(&stamp.echo(report.day)));
     }

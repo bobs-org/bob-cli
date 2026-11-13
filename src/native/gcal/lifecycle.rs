@@ -84,6 +84,78 @@ pub(crate) struct LearnedSeries {
     pub block_id: String,
 }
 
+/// Bob-owned warning tag sync writes on open, unacked external Event
+/// Task rows as the last token before the `^id`. Deleting it by hand is
+/// itself an ack; sync never writes it on context or closed rows.
+pub(crate) const UNACKED_TAG: &str = "#unacked";
+
+/// Whether `suffix` carries Bob's exact unacked warning token.
+pub(crate) fn suffix_has_unacked(suffix: &str) -> bool {
+    suffix.split([' ', '\t']).any(|token| token == UNACKED_TAG)
+}
+
+/// Whether a task row line carries Bob's unacked warning token. A token
+/// Bryan typed by hand counts as present; the planner decides what that
+/// means.
+pub(crate) fn row_has_unacked(line: &str) -> bool {
+    split_row_spans(line).is_some_and(|spans| suffix_has_unacked(&spans.suffix))
+}
+
+/// Append Bob's unacked warning token to a task row line as the last
+/// token before the `^id`. Returns `None` when the line does not parse
+/// or already carries the token.
+pub(crate) fn add_unacked_tag(line: &str) -> Option<String> {
+    let mut spans = split_row_spans(line)?;
+    if !spans.task || suffix_has_unacked(&spans.suffix) {
+        return None;
+    }
+    if spans.suffix.is_empty() {
+        spans.suffix = format!(" {UNACKED_TAG}");
+    } else if let Some(caret) = trailing_caret_token(&spans.suffix) {
+        spans.suffix.insert_str(caret, &format!("{UNACKED_TAG} "));
+    } else {
+        spans.suffix.push_str(&format!(" {UNACKED_TAG}"));
+    }
+    Some(spans.rebuild())
+}
+
+/// Drop Bob's unacked warning token from a task row line. Returns `None`
+/// when the line does not parse or carries no token.
+pub(crate) fn strip_unacked_tag(line: &str) -> Option<String> {
+    let mut spans = split_row_spans(line)?;
+    if !spans.task || !suffix_has_unacked(&spans.suffix) {
+        return None;
+    }
+    let kept: Vec<&str> = spans
+        .suffix
+        .split([' ', '\t'])
+        .filter(|token| !token.is_empty() && *token != UNACKED_TAG)
+        .collect();
+    spans.suffix = if kept.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", kept.join(" "))
+    };
+    Some(spans.rebuild())
+}
+
+/// Index of the caret of a trailing `^block-id` token, when `suffix`
+/// ends with one (so the token can be kept last).
+fn trailing_caret_token(suffix: &str) -> Option<usize> {
+    let caret = suffix.rfind('^')?;
+    let id = suffix.get(caret + 1..)?;
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        || caret == 0
+        || !suffix.as_bytes()[caret - 1].is_ascii_whitespace()
+    {
+        return None;
+    }
+    Some(caret)
+}
+
 /// One Events row split into its Google-owned spans and Bryan-owned
 /// shell. `badges` keeps its leading space (or is empty); `suffix`
 /// keeps its leading space (or is empty); `qualifier` is the context
@@ -154,8 +226,10 @@ pub(crate) fn split_row_spans(line: &str) -> Option<RowSpans> {
     })
 }
 
-/// Split the trailing `[root::]` / `[type::]` / `[completion::]` / `^block`
-/// shell off a task row. Context rows keep no suffix.
+/// Split the trailing `[root::]` / `[type::]` / `[completion::]` /
+/// `#unacked` / `^block` shell off a task row. Context rows keep no
+/// suffix. The warning tag must split here (never into the hashed title
+/// span), even on rootless rows whose only shell is ` #unacked ^id`.
 fn split_suffix(middle: &str, task: bool) -> (&str, String) {
     if !task {
         return (middle, String::new());
@@ -168,6 +242,7 @@ fn split_suffix(middle: &str, task: bool) -> (&str, String) {
                     .then_some(at)
             })
         })
+        .chain(unacked_marker_at(middle))
         .min();
     if let Some(at) = marker_at {
         let mut start = at;
@@ -192,6 +267,22 @@ fn split_suffix(middle: &str, task: bool) -> (&str, String) {
         }
     }
     (middle, String::new())
+}
+
+/// Start of Bob's exact, whitespace-bounded `#unacked` warning token
+/// in a task row middle, when one is present. A mid-title `#unacked`
+/// always renders escaped (`\#unacked`), so a bare token here is the
+/// shell marker, never title text; lookalikes like `#unackedx` never
+/// match.
+fn unacked_marker_at(middle: &str) -> Option<usize> {
+    middle.match_indices(UNACKED_TAG).find_map(|(at, _)| {
+        let preceded =
+            at > 0 && middle.as_bytes()[at - 1].is_ascii_whitespace();
+        let end = at + UNACKED_TAG.len();
+        let followed =
+            middle.len() == end || middle.as_bytes()[end].is_ascii_whitespace();
+        (preceded && followed).then_some(at)
+    })
 }
 
 /// Split the trailing Google-owned run (an explicit clock tag and/or
@@ -553,6 +644,82 @@ mod tests {
         assert!(hashes["badges"].len() == 16);
         assert_eq!(line_root(line).as_deref(), Some("body"));
         assert_eq!(status_char(line), Some(' '));
+    }
+
+    #[test]
+    fn unacked_tag_splits_into_the_suffix_not_the_title() {
+        // Rootless and typeless: without the marker the tag would fall
+        // into the hashed title span and read as a user edit.
+        let row = spans(
+            "- [*] #task **0800-0830** Standup [📅](https://cal.example/e1) \
+             #unacked ^standup",
+        );
+        assert_eq!(row.title, "Standup");
+        assert!(row.suffix.contains("#unacked"));
+        assert_eq!(row.suffix, " #unacked ^standup");
+        assert_eq!(row.hashes()["title"], journal::span_hash("Standup"));
+
+        let rooted = spans(
+            "- [ ] #task **0800-0830** Standup [📅](https://cal.example/e1) \
+             [root:: meet] [type:: MEET] #unacked ^standup",
+        );
+        assert_eq!(rooted.title, "Standup");
+        assert!(rooted.hashes()["badges"].len() == 16);
+
+        // A lookalike stays title text and never counts as present.
+        let lookalike = "- [ ] #task **0800-0830** Fix #unackedx thing ^fix";
+        assert_eq!(spans(lookalike).title, "Fix #unackedx thing");
+        assert!(!row_has_unacked(lookalike));
+    }
+
+    #[test]
+    fn rendered_unacked_in_a_title_cannot_collide_with_the_marker() {
+        // The renderer escapes mid-line hashes, so a literal word in a
+        // title never parses as the shell marker.
+        let title = crate::native::gcal::render::escape_title(
+            "Discuss #unacked policy",
+        );
+        assert!(title.contains("\\#unacked"), "{title}");
+        let line = format!("- [ ] #task **0800-0830** {title} ^discuss");
+        let parsed = spans(&line);
+        assert_eq!(parsed.title, title);
+        assert!(!row_has_unacked(&line));
+        // Hand-typed, unescaped: the marker wins and the planner only
+        // reads presence off the suffix; the line itself is left alone.
+        let typed =
+            "- [ ] #task **0800-0830** Discuss #unacked policy ^discuss";
+        assert!(row_has_unacked(typed));
+        assert_eq!(spans(typed).title, "Discuss");
+    }
+
+    #[test]
+    fn unacked_tag_add_and_strip_round_trip() {
+        let line =
+            "- [*] #task **0800-0830** Standup [📅](https://cal.example/e1) \
+             [root:: meet] ^standup";
+        let tagged = add_unacked_tag(line).expect("add");
+        assert_eq!(
+            tagged,
+            "- [*] #task **0800-0830** Standup [📅](https://cal.example/e1) \
+             [root:: meet] #unacked ^standup",
+            "{tagged}",
+        );
+        assert!(row_has_unacked(&tagged));
+        assert!(add_unacked_tag(&tagged).is_none(), "never double the tag");
+        assert_eq!(strip_unacked_tag(&tagged).as_deref(), Some(line));
+
+        // Rootless rows keep the tag last before the block id.
+        let bare = "- [ ] #task **0800-0830** Standup ^standup";
+        let tagged_bare = add_unacked_tag(bare).expect("add bare");
+        assert_eq!(
+            tagged_bare,
+            "- [ ] #task **0800-0830** Standup #unacked ^standup",
+        );
+        assert_eq!(strip_unacked_tag(&tagged_bare).as_deref(), Some(bare));
+
+        // Context rows never carry the tag.
+        assert!(add_unacked_tag("- **all day** Holiday ^holiday").is_none());
+        assert!(!row_has_unacked("- **all day** Holiday ^holiday"));
     }
 
     #[test]

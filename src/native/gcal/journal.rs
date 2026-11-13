@@ -71,6 +71,10 @@ pub(crate) struct RowRecord {
     pub url: Option<String>,
     pub description: DescriptionState,
     pub note: Option<NoteProvenance>,
+    /// Whether Bob's `#unacked` warning tag was on the row last sync.
+    /// Additive: missing (or any malformed value) reads as false, so
+    /// older binaries ignore it and pre-tag journals stay valid.
+    pub unacked: bool,
     pub ts: DateTime<FixedOffset>,
     pub host: String,
     pub path: String,
@@ -195,6 +199,22 @@ impl NoteBook {
         self.event(account, calendar_id, event_id)
     }
 
+    /// The current folded note for one event or its series, event
+    /// preferred, including clears. Used to source the `noted` ack
+    /// display state.
+    pub(crate) fn current_note(
+        &self,
+        account: &str,
+        calendar_id: &str,
+        event_id: &str,
+        series_id: Option<&str>,
+    ) -> Option<&FoldedNote> {
+        self.event(account, calendar_id, event_id).or_else(|| {
+            series_id
+                .and_then(|series| self.series(account, calendar_id, series))
+        })
+    }
+
     /// Raw series-scope record for this account, including clears.
     pub(crate) fn series_record(
         &self,
@@ -211,8 +231,10 @@ impl NoteBook {
         self.events.values().chain(self.series.values())
     }
 
-    #[allow(dead_code)] // Used by AckBook once the row-tag phase lands.
-    fn has_nonempty_history(
+    /// Whether any historical nonempty note ever answered this event
+    /// or its series. Clearing a note never un-acks: review is a
+    /// historical gesture.
+    pub(crate) fn has_nonempty_history(
         &self,
         account: &str,
         calendar_id: &str,
@@ -320,7 +342,6 @@ pub(crate) struct AckBook {
 }
 
 impl AckBook {
-    #[allow(dead_code)] // The tag and review phases query folded receipts.
     pub(crate) fn event(
         &self,
         account: &str,
@@ -330,7 +351,6 @@ impl AckBook {
         self.events.get(&note_key(account, calendar_id, event_id))
     }
 
-    #[allow(dead_code)] // The tag and review phases query folded receipts.
     pub(crate) fn series(
         &self,
         account: &str,
@@ -340,9 +360,66 @@ impl AckBook {
         self.series.get(&note_key(account, calendar_id, series))
     }
 
+    /// The live explicit receipt answering one event, event preferred
+    /// then series. A deliberate clear (`acked: false`) is not live.
+    fn live_receipt(
+        &self,
+        account: &str,
+        calendar_id: &str,
+        event_id: &str,
+        series_id: Option<&str>,
+    ) -> Option<&FoldedAck> {
+        self.event(account, calendar_id, event_id)
+            .filter(|ack| ack.acked)
+            .or_else(|| {
+                series_id.and_then(|series| {
+                    self.series(account, calendar_id, series)
+                        .filter(|ack| ack.acked)
+                })
+            })
+    }
+
+    /// Review display state for one event: an explicit live receipt, else
+    /// any historical nonempty note, else unacked. Callers decide
+    /// whether review is required at all (task inclusion, external,
+    /// config); this reports only the evidence.
+    pub(crate) fn status_for(
+        &self,
+        notes: &NoteBook,
+        account: &str,
+        calendar_id: &str,
+        event_id: &str,
+        series_id: Option<&str>,
+    ) -> AckStatus {
+        if let Some(receipt) =
+            self.live_receipt(account, calendar_id, event_id, series_id)
+        {
+            return AckStatus {
+                state: AckState::Acked,
+                scope: Some(receipt.scope),
+                via: Some(receipt.via.as_str().to_string()),
+                at: Some(receipt.ts),
+            };
+        }
+        if notes.has_nonempty_history(account, calendar_id, event_id, series_id)
+        {
+            let current =
+                notes.current_note(account, calendar_id, event_id, series_id);
+            return AckStatus {
+                state: AckState::Noted,
+                scope: current.map(|note| match note.scope {
+                    NoteScope::Event => AckScope::Event,
+                    NoteScope::Series => AckScope::Series,
+                }),
+                via: Some("note".to_string()),
+                at: current.map(|note| note.ts),
+            };
+        }
+        AckStatus::unacked()
+    }
+
     /// An explicit live event/series receipt or any historical nonempty
     /// note answers this event. Note clears do not erase review history.
-    #[allow(dead_code)] // The tag and review phases query combined evidence.
     pub(crate) fn acked(
         &self,
         notes: &NoteBook,
@@ -371,6 +448,75 @@ impl AckBook {
     }
 }
 
+/// Review display state for one event, shared by `sync` and `list`
+/// JSON. Note and ack text never leaves the journal: only the receipt
+/// shape travels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AckState {
+    /// An explicit live `gcal.ack` receipt answers the event.
+    Acked,
+    /// A historical nonempty private note answers the event.
+    Noted,
+    /// No receipt and no note history: review is still owed.
+    Unacked,
+    /// Review is not required (context row, owned event, ack off).
+    NotRequired,
+}
+
+impl AckState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Acked => "acked",
+            Self::Noted => "noted",
+            Self::Unacked => "unacked",
+            Self::NotRequired => "not_required",
+        }
+    }
+}
+
+/// One event's review evidence for JSON surfaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AckStatus {
+    pub state: AckState,
+    pub scope: Option<AckScope>,
+    pub via: Option<String>,
+    pub at: Option<DateTime<FixedOffset>>,
+}
+
+impl AckStatus {
+    /// No receipt and no note history: review is still owed.
+    pub(crate) fn unacked() -> Self {
+        Self {
+            state: AckState::Unacked,
+            scope: None,
+            via: None,
+            at: None,
+        }
+    }
+
+    /// Review is not required for this row.
+    pub(crate) fn not_required() -> Self {
+        Self {
+            state: AckState::NotRequired,
+            scope: None,
+            via: None,
+            at: None,
+        }
+    }
+
+    /// The additive `ack` JSON object on row surfaces. Scope, source,
+    /// and time only; receipt and note text never travels.
+    pub(crate) fn json(&self) -> Value {
+        json!({
+            "state": self.state.as_str(),
+            "scope": self.scope.map(AckScope::as_str),
+            "via": self.via,
+            "at": self.at.map(|at| at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)),
+        })
+    }
+}
+
 fn note_key(account: &str, calendar_id: &str, part: &str) -> NoteKey {
     (
         account.to_string(),
@@ -393,7 +539,6 @@ pub(crate) struct NewNote {
 }
 
 /// A new `gcal.ack` receipt to append.
-#[allow(dead_code)] // The review command constructs this in a later phase.
 #[derive(Debug, Clone)]
 pub(crate) struct NewAck {
     pub account: String,
@@ -425,6 +570,9 @@ pub(crate) struct NewRow {
     pub url: Option<String>,
     pub description: DescriptionState,
     pub note: Option<NoteProvenance>,
+    /// Whether Bob's `#unacked` warning tag is on the row. Written only
+    /// when true, so pre-tag journals keep their shape.
+    pub unacked: bool,
 }
 
 /// A new `gcal.link` or `gcal.gone` to append.
@@ -604,6 +752,10 @@ fn parse_record(event: &StoredEvent) -> Option<(String, String, Update)> {
                 .map(str::to_string),
             description: parse_description_state(object.get("description")),
             note: parse_note_provenance(object.get("note")),
+            unacked: object
+                .get("unacked")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             ts: event.ts,
             host: event.host.clone(),
             path: object
@@ -774,7 +926,6 @@ pub(crate) fn load_notes(
 
 /// Fold every `gcal.ack` record by `(account, calendar, scope key)` in
 /// writer order. Explicit clears remain in the book as `acked: false`.
-#[allow(dead_code)] // The tag and review phases consume the folded book.
 pub(crate) fn load_acks(
     vault: &Path,
 ) -> std::io::Result<(AckBook, Vec<String>)> {
@@ -868,7 +1019,6 @@ pub(crate) fn append_note(
 }
 
 /// Append one `gcal.ack` receipt with a single `O_APPEND` write.
-#[allow(dead_code)] // The review command appends through this in a later phase.
 pub(crate) fn append_ack(
     vault: &Path,
     host: &str,
@@ -1266,6 +1416,9 @@ pub(crate) fn append_row(
     if let Some(note) = &row.note {
         value["note"] = json!({"hash": note.hash, "fields": note.fields});
     }
+    if row.unacked {
+        value["unacked"] = json!(true);
+    }
     let line = serde_json::to_string(&value)
         .unwrap_or_else(|_| "{}".to_string())
         + "\n";
@@ -1487,6 +1640,7 @@ mod tests {
                 source: Some("colour tomato".to_string()),
                 description: DescriptionState::Absent,
                 note: None,
+                unacked: false,
             },
         )
         .expect("row");
@@ -1556,6 +1710,7 @@ mod tests {
                     source: None,
                     description: DescriptionState::Absent,
                     note: None,
+                    unacked: false,
                 },
             )
             .expect("row")
@@ -2131,6 +2286,109 @@ mod tests {
         assert_eq!(ack.via, AckVia::Plugin);
         assert!(ack.acked);
         assert_eq!(malformed_count(dir.path()), 0);
+    }
+
+    #[test]
+    fn unacked_row_flag_round_trips_and_defaults_to_false() {
+        let dir = tempfile::tempdir().expect("vault");
+        let host = "mac";
+        let row = |unacked: bool| NewRow {
+            calendar_id: "primary".to_string(),
+            event_id: "e1".to_string(),
+            ical_uid: None,
+            series_id: None,
+            day: "2026-10-30".to_string(),
+            path: "2026/20261030.md".to_string(),
+            block_id: "standup".to_string(),
+            url: None,
+            row_kind: "task".to_string(),
+            spans: BTreeMap::new(),
+            root: None,
+            source: None,
+            description: DescriptionState::Absent,
+            note: None,
+            unacked,
+        };
+        let line = append_row(dir.path(), host, &row(true)).expect("row");
+        assert!(line.contains("\"unacked\":true"), "{line}");
+        let (state, _, _) = load_state(dir.path()).expect("state");
+        let key = (occurrence_key("primary", "e1"), "2026-10-30".to_string());
+        assert!(state[&key].row.as_ref().expect("row").unacked);
+
+        let plain = tempfile::tempdir().expect("vault");
+        let line = append_row(plain.path(), host, &row(false)).expect("row");
+        assert!(!line.contains("unacked"), "{line}");
+        let (state, _, _) = load_state(plain.path()).expect("state");
+        assert!(
+            !state[&key].row.as_ref().expect("row").unacked,
+            "missing flag reads false"
+        );
+    }
+
+    #[test]
+    fn ack_status_reports_receipts_notes_and_unacked() {
+        let dir = tempfile::tempdir().expect("vault");
+        let host = "mac";
+        let account = "you@example.com";
+        let (acks, _) = load_acks(dir.path()).expect("acks");
+        let (notes, _) = load_notes(dir.path()).expect("notes");
+        let status = acks.status_for(&notes, account, "primary", "e1", None);
+        assert_eq!(status.state, AckState::Unacked);
+        assert_eq!(
+            status.json()["state"],
+            Value::String("unacked".to_string())
+        );
+
+        let note = |text: &str| NewNote {
+            account: account.to_string(),
+            calendar_id: "primary".to_string(),
+            event_id: Some("e1".to_string()),
+            series: None,
+            scope: NoteScope::Event,
+            text: text.to_string(),
+            seen: None,
+        };
+        append_note(dir.path(), host, &note("fix the root")).expect("note");
+        append_note(dir.path(), host, &note("")).expect("clear");
+        let (acks, _) = load_acks(dir.path()).expect("acks");
+        let (notes, _) = load_notes(dir.path()).expect("notes");
+        assert!(acks.acked(&notes, account, "primary", "e1", None));
+        let noted = acks.status_for(&notes, account, "primary", "e1", None);
+        assert_eq!(noted.state, AckState::Noted);
+        assert_eq!(noted.scope, Some(AckScope::Event));
+        assert_eq!(noted.via.as_deref(), Some("note"));
+        assert!(noted.at.is_some());
+
+        append_ack(
+            dir.path(),
+            host,
+            &NewAck {
+                account: account.to_string(),
+                calendar_id: "primary".to_string(),
+                event_id: None,
+                series: Some("s1".to_string()),
+                scope: AckScope::Series,
+                acked: true,
+                via: AckVia::Mac,
+                seen: AckSeen::default(),
+            },
+        )
+        .expect("ack");
+        let (acks, _) = load_acks(dir.path()).expect("acks");
+        let (notes, _) = load_notes(dir.path()).expect("notes");
+        let acked =
+            acks.status_for(&notes, account, "primary", "e1", Some("s1"));
+        assert_eq!(acked.state, AckState::Acked);
+        assert_eq!(acked.scope, Some(AckScope::Series));
+        assert_eq!(acked.via.as_deref(), Some("mac"));
+
+        let off = AckStatus::not_required();
+        assert_eq!(
+            off.json()["state"],
+            Value::String("not_required".to_string())
+        );
+        assert!(off.json()["scope"].is_null());
+        assert!(off.json()["at"].is_null());
     }
 
     #[test]

@@ -70,7 +70,7 @@
     },
     "path": "2026/20261113.md",
     "rail": "● meet 09:15 09:15 ━━━━━━━━━━━━━━━━━━10:00 10:00",
-    "row": "- [*] #task **0915-1000** Little Gym [📅](https://calendar.google.com/event?eid=gym-1) [root:: meet] [type:: MEET] ^little-gym"
+    "row": "- [*] #task **0915-1000** Little Gym [📅](https://calendar.google.com/event?eid=gym-1) [root:: meet] [type:: MEET] #unacked ^little-gym"
   },
   "schema_version": 1,
   "scope": "series",

@@ -40,10 +40,14 @@ use crate::native::{
 
 use super::{
     description::bullets::{bullets_hash, DescriptionBullets},
-    journal::{occurrence_key, DescriptionState, OccurrenceState},
+    journal::{
+        occurrence_key, AckScope, AckSeen, AckVia, DescriptionState, NewAck,
+        OccurrenceState,
+    },
     lifecycle::{
-        cancel_task_row, line_root, remove_childless_untimed_meet,
-        remove_meet_link, row_untouched, split_row_spans, status_char,
+        add_unacked_tag, cancel_task_row, line_root,
+        remove_childless_untimed_meet, remove_meet_link, row_has_unacked,
+        row_untouched, split_row_spans, status_char, strip_unacked_tag,
         AbsentVerdict, KeptNotice, LearnedSeries, LifecycleItem,
     },
     render::{
@@ -96,6 +100,15 @@ pub(crate) struct PlannedOccurrence {
     /// planning and task-row reports prefer the retained line's effective
     /// clock and must never materialize an inherited tag.
     pub off_clock: bool,
+    /// Whether the folded books answer this event: an explicit live ack
+    /// or any historical nonempty note. Computed in `build_occurrences`.
+    pub acked: bool,
+    /// Whether this row wants Bob's `#unacked` warning tag: a task row
+    /// for an external event with no ack and ack enabled. Render gates
+    /// on open status; reconcile gates on the live line.
+    pub want_unacked: bool,
+    /// Display-only identity captured for an inferred ack receipt.
+    pub ack_seen: AckSeen,
     /// Phase at sync time; `None` for context rows.
     pub link_phase: Option<LinkPhase>,
     pub all_day: bool,
@@ -204,6 +217,9 @@ pub(crate) struct PlannedRow {
     pub wrote_description_lines: usize,
     /// Explanation for a force reset of a Google-owned span.
     pub detail: Option<String>,
+    /// Whether Bob's `#unacked` warning tag is on the row after this
+    /// run: the `last` the next sync reconciles against.
+    pub unacked: bool,
 }
 
 /// One adopted crash-recovery row, for the journal and the report.
@@ -224,6 +240,8 @@ pub(crate) struct AdoptedRow {
     pub title: String,
     pub off_clock: bool,
     pub note: Option<super::journal::NoteProvenance>,
+    /// Whether Bob's `#unacked` warning tag is on the adopted line.
+    pub unacked: bool,
     pub buffer: crate::native::event_task::EventBuffer,
     /// Crash recovery: `Tracked` when a window matches the fresh
     /// render (an empty render always matches), else `HandsOff`.
@@ -327,6 +345,15 @@ pub(crate) struct SyncPlan {
     pub journal_refreshes: Vec<PlannedRow>,
     /// Lifecycle notices reported once (kept edits, worked tasks, …).
     pub kept: Vec<KeptNotice>,
+    /// Inferred ack receipts to append: hand-deleted tags on still-open,
+    /// still-unacked rows. Kept in the plan (not appended inline) so the
+    /// journal write stays after the note write, like every other record.
+    pub acks_append: Vec<NewAck>,
+    /// Journal-only row records for warning-tag lifts at close: the `✔
+    /// closed` row is the report, so these carry no report of their own.
+    /// Without them the cleared `last` would linger and the next sync
+    /// would misread the close as a hand deletion.
+    pub tag_clears: Vec<PlannedRow>,
     /// Vault edits that teach a recurring series its root.
     pub learned: Vec<LearnedSeries>,
     /// Upgrade rows that earn a MEET link, as (calendar, event, block).
@@ -439,7 +466,12 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                     // Pasted back: adopt the line again. Its `gcal.row`
                     // revives the occurrence in the journal fold.
                     adopt_occurrence(
-                        &working, &mut plan, &mut used, occurrence, line_index,
+                        &mut working,
+                        &mut plan,
+                        &mut used,
+                        occurrence,
+                        Some(journaled),
+                        line_index,
                     );
                     continue;
                 }
@@ -526,7 +558,12 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                 ) {
                     // Crash recovery: adopt the unjournaled line.
                     adopt_occurrence(
-                        &working, &mut plan, &mut used, occurrence, line_index,
+                        &mut working,
+                        &mut plan,
+                        &mut used,
+                        occurrence,
+                        None,
+                        line_index,
                     );
                     continue;
                 }
@@ -559,6 +596,9 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                 };
                 let text =
                     render_occurrence(occurrence, &block_id, note_day(input));
+                // A fresh render is the only writer: the line carries the
+                // tag exactly when this run owns it.
+                let unacked = row_has_unacked(&text);
                 working.ensure_events_section();
                 let slot = insert_slot(
                     &working,
@@ -599,6 +639,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                         .map(|bullets| bullets.bullets.len())
                         .unwrap_or(0),
                     detail: None,
+                    unacked,
                 };
                 if prior_row.is_some() {
                     plan.rows_restored.push(row);
@@ -682,6 +723,8 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         && plan.rows_upgraded.is_empty()
         && plan.journal_refreshes.is_empty()
         && plan.kept.is_empty()
+        && plan.acks_append.is_empty()
+        && plan.tag_clears.is_empty()
         && plan.learned.is_empty();
     plan.changed = plan.contents != input.contents || !records_empty;
     if !plan.changed {
@@ -700,6 +743,8 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         plan.rows_upgraded.clear();
         plan.journal_refreshes.clear();
         plan.kept.clear();
+        plan.acks_append.clear();
+        plan.tag_clears.clear();
         plan.learned.clear();
         plan.extra_link_wants.clear();
         plan.entries_removed = 0;
@@ -777,6 +822,12 @@ fn reset_refreshes(
         };
         let block_id = trailing_block_id(line);
         let root = line_root(line);
+        // The reset cleared the journal, so `last` is gone: re-derive it
+        // from the live line. A hand-closed or hand-stripped row stays
+        // cleared; a surviving Bob-owned tag is re-affirmed.
+        let present = row_has_unacked(line);
+        let want = occurrence.want_unacked && line_open_for_unacked(line);
+        let unacked = present && (want || old_row.unacked);
         refreshed.push(PlannedRow {
             calendar_id: occurrence.calendar_id.clone(),
             event_id: occurrence.event_id.clone(),
@@ -804,6 +855,7 @@ fn reset_refreshes(
             description: old_row.description.clone(),
             wrote_description_lines: 0,
             detail: None,
+            unacked,
         });
     }
     refreshed
@@ -814,10 +866,11 @@ fn reset_refreshes(
 /// The new `gcal.row` records what Google says now; a line that differs
 /// reads as your edit on the next run.
 fn adopt_occurrence(
-    working: &WorkingNote,
+    working: &mut WorkingNote,
     plan: &mut SyncPlan,
     used: &mut HashSet<String>,
     occurrence: &PlannedOccurrence,
+    journaled: Option<&super::journal::RowRecord>,
     line_index: usize,
 ) {
     let block_id = trailing_block_id(&working.lines[line_index]);
@@ -825,6 +878,21 @@ fn adopt_occurrence(
         && pomodoro_link_present(&working.lines, &block_id);
     if !block_id.is_empty() {
         used.insert(block_id.clone());
+    }
+    // A revived tombstone is re-tagged when still wanted; a missing tag
+    // on an adopted line is a missing line, never a deleted tag, so this
+    // path never files an inferred ack.
+    let live = working.lines.get(line_index).cloned().unwrap_or_default();
+    let want = occurrence.want_unacked && line_open_for_unacked(&live);
+    let present = row_has_unacked(&live);
+    let old_last = journaled.is_some_and(|row| row.unacked);
+    let mut new_last = present && (want || old_last);
+    if want
+        && !present
+        && let Some(tagged) = add_unacked_tag(&live)
+    {
+        working.lines[line_index] = tagged;
+        new_last = true;
     }
     plan.rows_adopted.push(AdoptedRow {
         calendar_id: occurrence.calendar_id.clone(),
@@ -842,6 +910,7 @@ fn adopt_occurrence(
         title: occurrence.title.clone(),
         off_clock: occurrence.off_clock,
         note: occurrence.note.clone(),
+        unacked: new_last,
         buffer: buffer_for_row(occurrence),
         description: adopt_description(&working.lines, line_index, occurrence),
     });
@@ -1018,6 +1087,104 @@ fn adopt_description(
     }
 }
 
+/// Whether a live vault line still counts as open for the warning tag:
+/// a task row whose checkbox is not done or cancelled.
+fn line_open_for_unacked(line: &str) -> bool {
+    split_row_spans(line).is_some_and(|spans| spans.task)
+        && !matches!(status_char(line), Some('x' | '-'))
+}
+
+/// Outcome of reconciling Bob's `#unacked` warning tag on one journaled
+/// row.
+struct UnackedEdit {
+    /// What Bob last wrote after this run: the tag is on the line and
+    /// Bob owns it. Bryan's own tag never sets this.
+    new_last: bool,
+    /// The tag was added to or removed from the line.
+    changed_line: bool,
+    /// Report detail when the removal explains the row (`acked`/`closed`).
+    detail: Option<String>,
+    /// A hand-deleted tag with no other answer: file an inferred ack.
+    inferred: Option<NewAck>,
+}
+
+/// Reconcile Bob's `#unacked` warning tag through the want/present/last
+/// table. `current_line` is the live vault line; edits apply to `line`
+/// (the post-span-update line, whose tag state still matches live).
+/// Never tags context or closed rows, never re-adds a hand-deleted tag,
+/// and never mistakes Bryan's own tag for Bob's.
+fn reconcile_unacked(
+    input: &SyncPlanInput<'_>,
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+    current_line: &str,
+    line: &mut String,
+) -> UnackedEdit {
+    let open = line_open_for_unacked(current_line);
+    let want = occurrence.want_unacked && open;
+    let present = row_has_unacked(current_line);
+    let last = journaled.unacked;
+    // Bryan deleted the tag and nothing else answered the event: that
+    // deletion is itself an ack. Closed rows never infer: lifting the
+    // tag at close is bookkeeping, not review.
+    if last && !present && !occurrence.acked && open {
+        return UnackedEdit {
+            new_last: false,
+            changed_line: false,
+            detail: None,
+            inferred: Some(NewAck {
+                account: input.account.to_string(),
+                calendar_id: occurrence.calendar_id.clone(),
+                event_id: Some(occurrence.event_id.clone()),
+                series: None,
+                scope: AckScope::Event,
+                acked: true,
+                via: AckVia::Row,
+                seen: occurrence.ack_seen.clone(),
+            }),
+        };
+    }
+    // Add the tag Bob owns.
+    if want
+        && !present
+        && let Some(tagged) = add_unacked_tag(line)
+    {
+        *line = tagged;
+        return UnackedEdit {
+            new_last: true,
+            changed_line: true,
+            detail: None,
+            inferred: None,
+        };
+    }
+    // Lift the tag Bob owns: the event was acked, or the row closed.
+    if !want
+        && present
+        && last
+        && let Some(untagged) = strip_unacked_tag(line)
+    {
+        *line = untagged;
+        return UnackedEdit {
+            new_last: false,
+            changed_line: true,
+            detail: if occurrence.acked {
+                Some("acked".to_string())
+            } else if open {
+                None
+            } else {
+                Some("closed".to_string())
+            },
+            inferred: None,
+        };
+    }
+    UnackedEdit {
+        new_last: present && (want || last),
+        changed_line: false,
+        detail: None,
+        inferred: None,
+    }
+}
+
 /// Three-way update of one still-included row: re-render the time,
 /// title, and badge spans and replace each span whose current text
 /// still matches the journal hash. A span that differs from both the
@@ -1155,9 +1322,6 @@ fn apply_span_updates(
     let apply_spans =
         edited.is_empty() && (hashes_changed || qualifier_changed);
     let apply_root = matches!(root_action, RootAction::Reroute { .. });
-    if !apply_spans && !apply_root && !description.changed {
-        return;
-    }
     let mut line = if apply_spans {
         spans.rebuild()
     } else {
@@ -1177,6 +1341,36 @@ fn apply_span_updates(
         } else {
             (journaled.root.clone(), journaled.source.clone())
         };
+    // Span edits keep the suffix (and its tag) intact, so the reconcile
+    // below sees the same tag state on `line` as on the live line.
+    let unacked = reconcile_unacked(
+        input,
+        occurrence,
+        journaled,
+        &current_line,
+        &mut line,
+    );
+    let inferred = unacked.inferred.is_some();
+    if let Some(receipt) = unacked.inferred {
+        plan.acks_append.push(receipt);
+        push_kept_once(
+            input,
+            plan,
+            &occurrence.calendar_id,
+            &occurrence.event_id,
+            occurrence.title.clone(),
+            "acked by removing #unacked".to_string(),
+            "inferred_ack",
+        );
+    }
+    if !apply_spans
+        && !apply_root
+        && !description.changed
+        && !unacked.changed_line
+        && !inferred
+    {
+        return;
+    }
     let buffer_changed =
         apply_spans && event_task::parse_event_buffer(&line) != original_buffer;
     if journaled.row_kind == "task" && (replaced_time || buffer_changed) {
@@ -1225,12 +1419,17 @@ fn apply_span_updates(
             journaled.description.clone()
         },
         wrote_description_lines: description.wrote_lines,
+        // A force reset explains the row first: it rewrote Google-owned
+        // text. The tag lift rides along and reports only when nothing
+        // else explains the row.
         detail: forced_reset_detail(
             input,
             occurrence,
             &current_line,
             keep_off_clock,
-        ),
+        )
+        .or(unacked.detail),
+        unacked: unacked.new_last,
     });
 }
 
@@ -1314,6 +1513,9 @@ fn hold_journaled_row(
         description: journaled.description.clone(),
         wrote_description_lines: 0,
         detail: Some(warning),
+        // Held rows write nothing: carry the journaled flag through so
+        // the report marks the row the note actually shows.
+        unacked: journaled.unacked,
     });
 }
 
@@ -1550,6 +1752,8 @@ fn upgrade_context_row(
     used.insert(block_id.clone());
     working.lines[line_index] =
         render_occurrence(occurrence, &block_id, note_day(input));
+    // The fresh render is the only writer here too.
+    let unacked = row_has_unacked(&working.lines[line_index]);
     // The bullets land directly under the upgraded row, above any notes
     // Bryan already has there.
     if let Some(description) = occurrence.description.as_ref() {
@@ -1582,12 +1786,91 @@ fn upgrade_context_row(
             .map(|bullets| bullets.bullets.len())
             .unwrap_or(0),
         detail: None,
+        unacked,
     });
     plan.extra_link_wants.push((
         occurrence.calendar_id.clone(),
         occurrence.event_id.clone(),
         block_id,
     ));
+}
+
+/// Journal the warning-tag lift when the past-day close strips it:
+/// patch the already-planned row record for this event, or push a fresh
+/// journal-only record. The `✔ closed` row is the report; the lift
+/// itself stays silent.
+pub(super) fn lift_unacked_on_close(
+    plan: &mut SyncPlan,
+    input: &SyncPlanInput<'_>,
+    occurrence: &PlannedOccurrence,
+    block_id: &str,
+    stripped: bool,
+) {
+    if !stripped {
+        return;
+    }
+    for rows in [
+        &mut plan.rows_updated,
+        &mut plan.rows_upgraded,
+        &mut plan.rows_restored,
+    ] {
+        for row in rows.iter_mut() {
+            if row.calendar_id == occurrence.calendar_id
+                && row.event_id == occurrence.event_id
+            {
+                row.unacked = false;
+                return;
+            }
+        }
+    }
+    for row in &mut plan.rows_adopted {
+        if row.calendar_id == occurrence.calendar_id
+            && row.event_id == occurrence.event_id
+        {
+            row.unacked = false;
+            return;
+        }
+    }
+    let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
+    let journaled = input
+        .journal
+        .get(&(key, input.day_string.clone()))
+        .and_then(|state| state.row.as_ref());
+    plan.tag_clears.push(PlannedRow {
+        calendar_id: occurrence.calendar_id.clone(),
+        event_id: occurrence.event_id.clone(),
+        ical_uid: occurrence.ical_uid.clone(),
+        series_id: occurrence.series_id.clone(),
+        block_id: block_id.to_string(),
+        url: journaled
+            .and_then(|row| row.url.clone())
+            .or_else(|| occurrence.html_link.clone()),
+        row_kind: journaled
+            .map(|row| row.row_kind.clone())
+            .unwrap_or_else(|| "task".to_string()),
+        spans: journaled
+            .map(|row| row.spans.clone())
+            .unwrap_or_else(|| occurrence.spans.clone()),
+        root: journaled
+            .and_then(|row| row.root.clone())
+            .or_else(|| occurrence.root.clone()),
+        source: journaled
+            .and_then(|row| row.source.clone())
+            .or_else(|| occurrence.source.clone()),
+        time_label: occurrence.time_label.clone(),
+        title: occurrence.title.clone(),
+        off_clock: occurrence.off_clock,
+        note: journaled
+            .and_then(|row| row.note.clone())
+            .or_else(|| occurrence.note.clone()),
+        buffer: buffer_for_row(occurrence),
+        description: journaled
+            .map(|row| row.description.clone())
+            .unwrap_or_else(|| tracked_state(occurrence.description.as_ref())),
+        wrote_description_lines: 0,
+        detail: Some("closed".to_string()),
+        unacked: false,
+    });
 }
 
 /// Reconcile journaled occurrences that have no included snapshot row:
@@ -1736,6 +2019,15 @@ fn cancel_lifecycle_task(
         return;
     };
     working.replace(&cancelled);
+    // A cancelled row is decided: lift the warning tag so a dead row
+    // never screams. No journal update is needed: with no occurrence the
+    // tag can never reconcile back, and a resurrected `[-]` row reads as
+    // closed (never an inferred ack) on its return.
+    if let Some(line) = working.lines.get(line_index)
+        && let Some(untagged) = strip_unacked_tag(line)
+    {
+        working.lines[line_index] = untagged;
+    }
     let (contents, removed) =
         remove_meet_link(&working.as_string(), &journaled.block_id);
     if removed {
@@ -1894,6 +2186,10 @@ pub(super) fn render_occurrence(
     completion_day: NaiveDate,
 ) -> String {
     if occurrence.task {
+        // The tag marks open rows only: Past-phase rows are born done
+        // (`[x]` with a completion field) and never carry it.
+        let unacked = occurrence.want_unacked
+            && occurrence.link_phase != Some(LinkPhase::Past);
         let row = render_task_row(
             &super::render::TaskRowInput {
                 time_label: &occurrence.time_label,
@@ -1906,6 +2202,7 @@ pub(super) fn render_occurrence(
                 clock_tag: occurrence.clock_tag.clone(),
                 buffer: buffer_for_row(occurrence),
                 status: status_for_phase(occurrence.link_phase),
+                unacked,
             },
             block_id,
         );

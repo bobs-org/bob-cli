@@ -163,9 +163,23 @@ impl AppliedNote {
 impl GcalEvent {
     /// External events are those organized by someone else or created from
     /// a Gmail reservation, which can list the account owner as organizer.
-    #[allow(dead_code)] // The tag and review phases classify external events.
     pub(crate) fn is_external(&self) -> bool {
         !self.organizer_is_self || self.event_type == "fromGmail"
+    }
+
+    /// Display-only identity captured when this event is acknowledged.
+    /// Times are for stale comparison and display, never identity
+    /// transfer: identity stays `(calendar, event)` or `(calendar, series)`.
+    pub(crate) fn ack_seen(&self) -> journal::AckSeen {
+        journal::AckSeen {
+            title: Some(self.title.clone()),
+            start: Some(event_instant_label(&self.start)),
+            end: Some(event_instant_label(&self.end)),
+            original_start: self
+                .original_start
+                .as_ref()
+                .map(event_instant_label),
+        }
     }
 
     /// Drop `root` unless a note route won, and `bullets` unless a note
@@ -178,6 +192,17 @@ impl GcalEvent {
         if let Some(note) = &mut self.note {
             note.retain_won_fields(root_won, bullets_won);
         }
+    }
+}
+
+/// Display-only start/end label for ack `seen`: RFC 3339 for timed
+/// endpoints, the plain date for all-day ones.
+fn event_instant_label(instant: &EventDateTime) -> String {
+    match instant {
+        EventDateTime::Timed(moment) => {
+            moment.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+        }
+        EventDateTime::AllDay(day) => day.to_string(),
     }
 }
 

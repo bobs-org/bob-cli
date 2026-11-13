@@ -265,7 +265,14 @@ fn preview_save_unchanged_clear_and_invalid_json() {
     assert_eq!(saved["action"], "saved");
     assert_eq!(saved["status"]["state"], "waiting_note");
     assert_golden("saved", &saved);
-    assert_eq!(saved["preview"]["row"], preview["preview"]["row"]);
+    // The dry run saves nothing, so its row keeps the warning tag; the
+    // save acks the event, so its preview already omits it. Otherwise
+    // the two previews agree.
+    let dry_row = preview["preview"]["row"].as_str().expect("dry row");
+    let saved_row = saved["preview"]["row"].as_str().expect("saved row");
+    assert!(dry_row.contains(" #unacked "), "dry row:\n{dry_row}");
+    assert!(!saved_row.contains("#unacked"), "saved row:\n{saved_row}");
+    assert_eq!(saved_row, dry_row.replace(" #unacked", ""));
     assert_eq!(saved["preview"]["bullets"], preview["preview"]["bullets"]);
     assert!(saved["spans"]
         .as_array()

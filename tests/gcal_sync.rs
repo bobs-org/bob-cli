@@ -3602,6 +3602,511 @@ fn row_for<'a>(note: &'a str, needle: &str) -> &'a str {
         .unwrap_or_else(|| panic!("missing row {needle}:\n{note}"))
 }
 
+fn write_today(env: &GcalEnv, note: &str) {
+    fs::write(env.vault().join("2026/20261030.md"), note).expect("write note");
+}
+
+fn last_row_for(journal: &[Value], event_id: &str) -> Value {
+    journal
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.row" && line["key"]["event_id"] == event_id
+        })
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("no journal row for {event_id}"))
+}
+
+/// Events for the unacked-tag tests: one open external task (tagged),
+/// one owned open task (never tagged), one born-done external row
+/// (never tagged), and one external all-day context row (never tagged).
+fn unacked_envelope() -> String {
+    clock_envelope(vec![
+        clock_event(
+            "ext-open",
+            "External review",
+            "2026-10-30T13:00:00-04:00",
+            "2026-10-30T14:00:00-04:00",
+        ),
+        simple_event(
+            "owned-open",
+            "Owned sync",
+            "2026-10-30T15:00:00-04:00",
+            "2026-10-30T15:30:00-04:00",
+        ),
+        clock_event(
+            "ext-past",
+            "Past review",
+            "2026-10-30T08:00:00-04:00",
+            "2026-10-30T08:30:00-04:00",
+        ),
+        serde_json::json!({
+            "id": "ext-day",
+            "summary": "External holiday",
+            "status": "confirmed",
+            "start": {"date": "2026-10-30"},
+            "end": {"date": "2026-10-31"},
+            "attendees": [],
+        }),
+    ])
+}
+
+fn append_ack_receipt(
+    env: &GcalEnv,
+    calendar_id: &str,
+    event_id: &str,
+    scope: &str,
+) {
+    let line = serde_json::json!({
+        "v": 1,
+        "ts": "2026-10-30T11:00:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.ack",
+        "account": "you@example.com",
+        "key": {"calendar_id": calendar_id, "event_id": event_id},
+        "scope": scope,
+        "acked": true,
+        "via": "ack",
+        "seen": {
+            "title": "External review",
+            "start": "2026-10-30T13:00:00-04:00",
+            "end": "2026-10-30T14:00:00-04:00",
+            "original_start": null,
+        },
+    });
+    use std::io::Write as _;
+    fs::create_dir_all(env.vault().join(".bob/gcal")).expect("journal dir");
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(env.vault().join(".bob/gcal/test-host.jsonl"))
+        .expect("open journal");
+    writeln!(file, "{}", serde_json::to_string(&line).expect("line"))
+        .expect("append ack");
+}
+
+fn append_note_record(
+    env: &GcalEnv,
+    calendar_id: &str,
+    event_id: &str,
+    text: &str,
+) {
+    let line = serde_json::json!({
+        "v": 1,
+        "ts": "2026-10-30T11:00:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.note",
+        "account": "you@example.com",
+        "key": {"calendar_id": calendar_id, "event_id": event_id},
+        "scope": "event",
+        "text": text,
+    });
+    use std::io::Write as _;
+    fs::create_dir_all(env.vault().join(".bob/gcal")).expect("journal dir");
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(env.vault().join(".bob/gcal/test-host.jsonl"))
+        .expect("open journal");
+    writeln!(file, "{}", serde_json::to_string(&line).expect("line"))
+        .expect("append note");
+}
+
+#[test]
+fn sync_tags_only_open_external_task_rows() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-unacked-tag");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+
+    let ext = row_for(&note, "External review");
+    assert!(ext.starts_with("- [*] #task"), "{ext}");
+    assert!(ext.contains(" #unacked ^"), "{ext}");
+    let owned = row_for(&note, "Owned sync");
+    assert!(!owned.contains("#unacked"), "{owned}");
+    let past = row_for(&note, "Past review");
+    assert!(past.starts_with("- [x] #task"), "{past}");
+    assert!(!past.contains("#unacked"), "{past}");
+    let day = row_for(&note, "External holiday");
+    assert!(!day.contains("#unacked"), "{day}");
+
+    let text = stdout(&output);
+    assert!(text.contains("⚠ unacked"), "{text}");
+    assert!(
+        text.contains("⚠ 1 unacked external event · bob gcal ack"),
+        "{text}"
+    );
+
+    let journal = journal_lines(&env);
+    let ext_row = last_row_for(&journal, "ext-open");
+    assert_eq!(ext_row["unacked"], true, "{ext_row}");
+    let owned_row = last_row_for(&journal, "owned-open");
+    assert!(owned_row.get("unacked").is_none(), "{owned_row}");
+
+    // A second sync is byte-identical: the tag neither churns nor fades.
+    let journal_before = journal.len();
+    let second = sync_output(&env, &fake, &[]);
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    assert_eq!(today_note(&env), note, "second run is byte-identical");
+    assert_eq!(journal_lines(&env).len(), journal_before);
+    assert!(stdout(&second).contains("unchanged"), "{}", stdout(&second));
+}
+
+#[test]
+fn sync_row_json_carries_ack_evidence_and_counts() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-unacked-json");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(report["status"], "written");
+    assert_eq!(report["counts"]["unacked"], 1);
+    let rows = report["rows"].as_array().expect("rows");
+    let ext = rows
+        .iter()
+        .find(|row| row["title"] == "External review")
+        .expect("ext row");
+    assert_eq!(ext["ack"]["state"], "unacked");
+    assert!(ext["ack"]["scope"].is_null(), "{ext}");
+    let owned = rows
+        .iter()
+        .find(|row| row["title"] == "Owned sync")
+        .expect("owned row");
+    assert_eq!(owned["ack"]["state"], "not_required", "{owned}");
+    // Quiet JSON still carries the count for scripts (quiet suppresses
+    // human chatter, never the JSON document).
+    let quiet = sync_output(&env, &fake, &["-q", "-f", "json"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", stderr(&quiet));
+    let report: Value = serde_json::from_slice(&quiet.stdout).expect("JSON");
+    assert_eq!(report["counts"]["unacked"], 1);
+}
+
+#[test]
+fn deleting_the_tag_files_an_inferred_ack_once() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-inferred-ack");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let note = today_note(&env);
+    let without_tag = note.replace(" #unacked", "");
+    assert_ne!(without_tag, note, "fixture row carries the tag");
+    write_today(&env, &without_tag);
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let journal = journal_lines(&env);
+    let ack = journal
+        .iter()
+        .find(|line| {
+            line["kind"] == "gcal.ack" && line["key"]["event_id"] == "ext-open"
+        })
+        .expect("inferred ack receipt");
+    assert_eq!(ack["acked"], true);
+    assert_eq!(ack["via"], "row");
+    assert_eq!(ack["scope"], "event");
+    assert!(today_note(&env).contains("External review"));
+    assert!(
+        !row_for(&today_note(&env), "External review").contains("#unacked"),
+        "the tag stays deleted"
+    );
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("acked by removing #unacked"),
+        "{combined}"
+    );
+
+    // The ack folds: a rerun neither re-warns nor re-appends.
+    let before = journal.len();
+    let rerun = sync_output(&env, &fake, &[]);
+    assert_eq!(rerun.status.code(), Some(0), "{}", stderr(&rerun));
+    assert_eq!(journal_lines(&env).len(), before);
+    let combined = format!("{}{}", stdout(&rerun), stderr(&rerun));
+    assert!(!combined.contains("acked by removing"), "{combined}");
+}
+
+#[test]
+fn explicit_ack_and_hand_close_lift_the_tag() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-ack-lifts-tag");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    append_ack_receipt(&env, "primary", "ext-open", "event");
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let ext = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["title"] == "External review")
+        .expect("ext row");
+    assert_eq!(ext["action"], "added");
+    assert_eq!(ext["ack"]["state"], "acked");
+    assert_eq!(ext["ack"]["scope"], "event");
+    assert_eq!(ext["ack"]["via"], "ack");
+    assert!(ext["ack"]["at"].is_string(), "{ext}");
+    let note = today_note(&env);
+    assert!(!row_for(&note, "External review").contains("#unacked"));
+
+    // A historical nonempty note acks the same way, even after its text
+    // is cleared: the tag never renders and the state reads `noted`.
+    let env2 = GcalEnv::new("bob-cli-gcal-sync-note-history-acks");
+    prepare(&env2);
+    let fake2 = FakeGog::new(&env2, "fake-gog");
+    fake2.events_json(&unacked_envelope());
+    append_note_record(&env2, "primary", "ext-open", "@family");
+    append_note_record(&env2, "primary", "ext-open", "");
+    let noted = sync_output(&env2, &fake2, &["-f", "json"]);
+    assert_eq!(noted.status.code(), Some(0), "{}", stderr(&noted));
+    let report: Value = serde_json::from_slice(&noted.stdout).expect("JSON");
+    let ext = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["title"] == "External review")
+        .expect("ext row");
+    assert_eq!(ext["ack"]["state"], "noted");
+    assert_eq!(ext["ack"]["scope"], "event");
+    assert_eq!(ext["ack"]["via"], "note");
+    assert!(
+        !row_for(&today_note(&env2), "External review").contains("#unacked")
+    );
+}
+
+#[test]
+fn hand_closing_a_tagged_row_lifts_the_tag_as_closed() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-hand-close-tag");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let note = today_note(&env);
+    let closed = note.replace(
+        "- [*] #task **1300-1400** External review",
+        "- [x] #task **1300-1400** External review",
+    );
+    assert_ne!(closed, note);
+    write_today(&env, &closed);
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let ext = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["title"] == "External review")
+        .expect("ext row");
+    assert_eq!(ext["action"], "updated");
+    assert_eq!(ext["detail"], "closed");
+    assert!(!row_for(&today_note(&env), "External review").contains("#unacked"));
+
+    // The journal records the cleared flag, so no inferred ack follows.
+    let journal = journal_lines(&env);
+    let row = last_row_for(&journal, "ext-open");
+    assert!(row.get("unacked").is_none(), "{row}");
+    let rerun = sync_output(&env, &fake, &[]);
+    assert_eq!(rerun.status.code(), Some(0), "{}", stderr(&rerun));
+    assert_eq!(journal_lines(&env).len(), journal.len());
+}
+
+#[test]
+fn typed_tags_are_left_alone_and_config_off_removes_only_bobs() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-foreign-tag");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    // Bryan's own tag on the owned row: no journal, Bob must not touch it.
+    let note = today_note(&env);
+    let owned = row_for(&note, "Owned sync");
+    let caret = owned.rfind('^').expect("owned block id");
+    let typed_line =
+        format!("{} #unacked {}", owned[..caret].trim_end(), &owned[caret..]);
+    let typed = note.replacen(owned, &typed_line, 1);
+    assert_ne!(typed, note);
+    write_today(&env, &typed);
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let note = today_note(&env);
+    assert!(row_for(&note, "Owned sync").contains(" #unacked ^"));
+    assert!(last_row_for(&journal_lines(&env), "owned-open")
+        .get("unacked")
+        .is_none());
+
+    // Under `ack: off` the next sync removes Bob's tags, and only those.
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  ack: off\n",
+    );
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(!row_for(&note, "External review").contains("#unacked"));
+    assert!(row_for(&note, "Owned sync").contains(" #unacked ^"));
+}
+
+#[test]
+fn google_span_edits_do_not_blame_the_tag() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-tag-kept-edit");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let note = today_note(&env);
+    let edited = note.replace("External review", "External debrief");
+    assert_ne!(edited, note);
+    write_today(&env, &edited);
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(combined.contains("kept your edit to title"), "{combined}");
+    assert!(!combined.contains("title and badges"), "{combined}");
+    let note = today_note(&env);
+    let row = row_for(&note, "External debrief");
+    assert!(row.contains(" #unacked ^"), "{row}");
+}
+
+#[test]
+fn deleting_the_row_tombstones_without_an_inferred_ack() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-delete-row");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    // Deleting the whole row answers nothing: the row tombstones and no
+    // ack is inferred. Only deleting the tag is a gesture.
+    let note = today_note(&env);
+    let ext = row_for(&note, "External review");
+    let without_row = note.replacen(&format!("{ext}\n"), "", 1);
+    assert_ne!(without_row, note);
+    write_today(&env, &without_row);
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert!(
+        report["rows"].as_array().expect("rows").iter().any(|row| {
+            row["action"] == "removed" && row["title"] == "External review"
+        }),
+        "{}",
+        report
+    );
+    let journal = journal_lines(&env);
+    assert!(
+        journal.iter().all(|line| line["kind"] != "gcal.ack"),
+        "a deleted row is not a deleted tag"
+    );
+
+    // Pasting the row back revives it with the tag: review is still owed.
+    write_today(&env, &note);
+    let revived = sync_output(&env, &fake, &[]);
+    assert_eq!(revived.status.code(), Some(0), "{}", stderr(&revived));
+    assert!(
+        row_for(&today_note(&env), "External review").contains(" #unacked ^")
+    );
+}
+
+#[test]
+fn edited_root_keeps_tag_without_blaming_badges() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-tag-kept-root");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    // Bryan routes the row to love; Google then routes tomato-orange to
+    // job. The conflict keeps Bryan's root and still keeps the tag.
+    let note = today_note(&env);
+    let ext = row_for(&note, "External review");
+    assert!(ext.contains("[root:: meet]"), "{ext}");
+    let edited_line = ext.replacen("[root:: meet]", "[root:: love]", 1);
+    assert_ne!(edited_line, ext);
+    let edited = note.replacen(ext, &edited_line, 1);
+    write_today(&env, &edited);
+    let mut envelope: Value =
+        serde_json::from_str(&unacked_envelope()).expect("envelope");
+    for event in envelope["events"].as_array_mut().expect("events") {
+        if event["id"] == "ext-open" {
+            event["colorId"] = Value::String("11".to_string());
+        }
+    }
+    fake.events_json(&serde_json::to_string(&envelope).expect("envelope"));
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(combined.contains("kept your [root:: love]"), "{combined}");
+    assert!(!combined.contains("title and badges"), "{combined}");
+    let note = today_note(&env);
+    let row = row_for(&note, "External review");
+    assert!(row.contains("[root:: love]"), "{row}");
+    assert!(row.contains(" #unacked ^"), "{row}");
+}
+
+#[test]
+fn past_day_close_lifts_the_tag_silently() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-close-lifts-tag");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&unacked_envelope());
+    assert_eq!(
+        sync_at(&env, &fake, &[], "2026-10-30 12:00:00")
+            .status
+            .code(),
+        Some(0)
+    );
+    assert!(
+        row_for(&today_note(&env), "External review").contains(" #unacked ^")
+    );
+
+    let closed = sync_at(
+        &env,
+        &fake,
+        &["-D", "2026-10-30", "-f", "json"],
+        "2026-10-31 09:00:00",
+    );
+    assert_eq!(closed.status.code(), Some(0), "{}", stderr(&closed));
+    let report: Value = serde_json::from_slice(&closed.stdout).expect("JSON");
+    let rows = report["rows"].as_array().expect("rows");
+    let ext = rows
+        .iter()
+        .find(|row| row["title"] == "External review")
+        .expect("closed ext row");
+    assert_eq!(ext["action"], "closed");
+    // The review evidence survives the close: the event is still
+    // unreviewed, but the row no longer carries the tag.
+    assert_eq!(ext["ack"]["state"], "unacked");
+    assert!(rows.iter().all(|row| row["action"] == "closed"), "{rows:?}");
+    let note =
+        fs::read_to_string(env.vault().join("2026/20261030.md")).expect("note");
+    let row = row_for(&note, "External review");
+    assert!(row.contains("[completion:: 2026-10-30]"), "{row}");
+    assert!(!row.contains("#unacked"), "{row}");
+
+    // The cleared flag is journaled, so the close never reads as a hand
+    // deletion on the next run.
+    let journal = journal_lines(&env);
+    assert!(last_row_for(&journal, "ext-open").get("unacked").is_none());
+    let rerun =
+        sync_at(&env, &fake, &["-D", "2026-10-30"], "2026-10-31 09:00:00");
+    assert_eq!(rerun.status.code(), Some(0), "{}", stderr(&rerun));
+    assert_eq!(journal_lines(&env).len(), journal.len());
+}
+
 #[test]
 fn inherited_note_clock_stamps_meets_without_materializing_tags() {
     let env = GcalEnv::new("bob-cli-gcal-sync-note-clock");

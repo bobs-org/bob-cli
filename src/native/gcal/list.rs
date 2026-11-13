@@ -92,12 +92,11 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
         })
         .collect();
     let events = &snapshot.events;
-    let counts = counts(events);
     // The VAULT column reads the same journal sync writes, plus the
     // day's note. A missing note means every row is still waiting;
     // an unreadable journal degrades to unjournaled display with a
     // stderr warning rather than failing this read-only command.
-    let (journal_state, journal_warnings, newest) =
+    let (journal_state, mut journal_warnings, newest) =
         match journal::load_state(&vault) {
             Ok(loaded) => loaded,
             Err(error) => {
@@ -105,6 +104,14 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
                 Default::default()
             }
         };
+    let (note_book, note_warnings) =
+        journal::load_notes(&vault).unwrap_or_default();
+    journal_warnings.extend(note_warnings);
+    let (ack_book, ack_warnings) =
+        journal::load_acks(&vault).unwrap_or_default();
+    journal_warnings.extend(ack_warnings);
+    let ack_on =
+        config.ack_mode() == crate::native::config::GcalAckMode::External;
     let note = std::fs::read_to_string(vault.join(&snapshot.daily_rel)).ok();
     let note_lines: Vec<&str> = note
         .as_deref()
@@ -143,6 +150,31 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             )
         })
         .collect();
+    // Review evidence per event: required only for external task rows
+    // under ack, answered by a live receipt or any historical note.
+    let ack_states: Vec<journal::AckStatus> = events
+        .iter()
+        .map(|event| {
+            if event.inclusion != Inclusion::Task
+                || !event.event.is_external()
+                || !ack_on
+            {
+                return journal::AckStatus::not_required();
+            }
+            ack_book.status_for(
+                &note_book,
+                &snapshot.account,
+                &event.event.key.calendar_id,
+                &event.event.key.event_id,
+                event.event.series_id.as_deref(),
+            )
+        })
+        .collect();
+    let mut counts = counts(events);
+    counts.unacked = ack_states
+        .iter()
+        .filter(|status| status.state == journal::AckState::Unacked)
+        .count();
     // Missed meetings stay open and surface here; nothing auto-cancels.
     let past_open = past_open_meetings(&vault, day);
     if args.format.is_json() {
@@ -154,6 +186,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             &counts,
             args.include_omitted,
             &cells,
+            &ack_states,
             last_sync_json(&newest),
             &past_open,
             &journal_warnings,
@@ -169,6 +202,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             &counts,
             args.include_omitted,
             &cells,
+            &ack_states,
             (day, is_today),
             &last_sync_human(&newest, unrendered, held),
             &journal_warnings,
@@ -348,10 +382,24 @@ fn vault_cell(
     VaultCell { vault, skip: None }
 }
 
-fn event_title_plain(event: &ListedEvent, lines: usize) -> String {
+/// Whether one event still owes review: required and neither acked
+/// nor noted. A dim `⚠` rides beside the `✎` note glyph on unacked
+/// task rows.
+fn event_unacked(status: &journal::AckStatus) -> bool {
+    status.state == journal::AckState::Unacked
+}
+
+fn event_title_plain(
+    event: &ListedEvent,
+    lines: usize,
+    unacked: bool,
+) -> String {
     let mut title = event.event.title.clone();
     if event.event.note.is_some() {
         title.push_str(" ✎");
+    }
+    if unacked {
+        title.push_str(" ⚠");
     }
     match lines {
         0 => title,
@@ -362,12 +410,17 @@ fn event_title_plain(event: &ListedEvent, lines: usize) -> String {
 fn event_title_styled(
     event: &ListedEvent,
     lines: usize,
+    unacked: bool,
     styler: &Styler,
 ) -> String {
     let mut title = event.event.title.clone();
     if event.event.note.is_some() {
         title.push(' ');
         title.push_str(&styler.dim("✎"));
+    }
+    if unacked {
+        title.push(' ');
+        title.push_str(&styler.dim("⚠"));
     }
     match lines {
         0 => title,
@@ -550,6 +603,7 @@ struct Counts {
     context: usize,
     omitted: usize,
     awaiting_reply: usize,
+    unacked: usize,
 }
 
 fn counts(events: &[ListedEvent]) -> Counts {
@@ -595,6 +649,7 @@ fn print_json(
     counts: &Counts,
     include_omitted: bool,
     cells: &[VaultCell],
+    ack_states: &[journal::AckStatus],
     last_sync: Value,
     past_open: &[(NaiveDate, String)],
     journal_warnings: &[String],
@@ -604,8 +659,9 @@ fn print_json(
     let rows: Vec<Value> = events
         .iter()
         .zip(cells)
-        .filter(|(event, _)| include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_)))
-        .map(|(event, cell)| {
+        .zip(ack_states)
+        .filter(|((event, _), _)| include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_)))
+        .map(|((event, cell), ack)| {
             let root = event.root.as_ref();
             json!({
                 "time": event.time,
@@ -632,6 +688,7 @@ fn print_json(
                 "fragile_directives": fragile_directives(event),
                 "vault": cell.vault,
                 "skip": cell.skip_json(),
+                "ack": ack.json(),
             })
         })
         .collect();
@@ -651,6 +708,7 @@ fn print_json(
             "context": counts.context,
             "omitted": counts.omitted,
             "awaiting_reply": counts.awaiting_reply,
+            "unacked": counts.unacked,
         },
         "last_sync": last_sync,
         "past_open": past,
@@ -668,6 +726,7 @@ fn print_table(
     counts: &Counts,
     include_omitted: bool,
     cells: &[VaultCell],
+    ack_states: &[journal::AckStatus],
     (day_for_hint, is_today): (NaiveDate, bool),
     sync_state: &str,
     journal_warnings: &[String],
@@ -689,14 +748,16 @@ fn print_table(
     );
     let headers = ["TIME", "EVENT", "RSVP", "ROOT", "VAULT"];
     let mut rows = Vec::new();
-    let shown: Vec<(&ListedEvent, &VaultCell)> = events
+    let shown: Vec<(&ListedEvent, &VaultCell, &journal::AckStatus)> = events
         .iter()
         .zip(cells)
-        .filter(|(event, _)| {
+        .zip(ack_states)
+        .filter(|((event, _), _)| {
             include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_))
         })
+        .map(|((event, cell), ack)| (event, cell, ack))
         .collect();
-    for (event, cell) in &shown {
+    for (event, cell, ack) in &shown {
         let root_label = event
             .root
             .as_ref()
@@ -710,7 +771,11 @@ fn print_table(
         };
         // The pencil and bullet count ride plain here so column widths
         // are computed before styling, the way `buffer_label` does.
-        let title = event_title_plain(event, description_lines(config, event));
+        let title = event_title_plain(
+            event,
+            description_lines(config, event),
+            event_unacked(ack),
+        );
         rows.push([
             time,
             title,
@@ -735,7 +800,7 @@ fn print_table(
         &styler.dim(&format_row(&headers.map(str::to_string), &widths)),
     );
     output.push('\n');
-    for ((event, _), row) in shown.iter().zip(rows.iter()) {
+    for ((event, _, ack), row) in shown.iter().zip(rows.iter()) {
         let mut cells = row.clone();
         if let Some(label) = buffer_label(event) {
             cells[0] = format!("{} {}", event.time, styler.dim(&label));
@@ -743,6 +808,7 @@ fn print_table(
         cells[1] = event_title_styled(
             event,
             description_lines(config, event),
+            event_unacked(ack),
             &styler,
         );
         if let Some(root) = event.root.as_ref()
@@ -775,6 +841,17 @@ fn print_table(
         "{} tasks · {} context · {} awaiting your reply\n",
         counts.tasks, counts.context, counts.awaiting_reply
     ));
+    if counts.unacked > 0 {
+        let noun = if counts.unacked == 1 {
+            "event"
+        } else {
+            "events"
+        };
+        output.push_str(&format!(
+            "⚠ {} unacked external {noun} · bob gcal ack\n",
+            counts.unacked
+        ));
+    }
     let removed = cells.iter().filter(|cell| cell.removed_by_you()).count();
     if removed > 0 {
         let whose = if is_today {

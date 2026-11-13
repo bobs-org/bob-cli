@@ -135,7 +135,7 @@ pub(super) fn write_one<S: HomeSource>(
     if args.clear {
         if current.is_none() {
             if args.edit {
-                let rendered = preview(&candidate, vault)?;
+                let rendered = preview(&candidate, vault, false)?;
                 return print_result(
                     args,
                     &candidate,
@@ -159,7 +159,7 @@ pub(super) fn write_one<S: HomeSource>(
         let clear_candidate = rebuild_candidate(
             &candidate, config, vault, resolver, account, &book, scope, None,
         )?;
-        let rendered = preview(&clear_candidate, vault)?;
+        let rendered = preview(&clear_candidate, vault, false)?;
         if args.dry_run {
             // Empty `-e -d` previews like a nonempty `-e -d`: no journal
             // append, no sync. Direct `-c -d` is rejected before this path.
@@ -240,8 +240,9 @@ pub(super) fn write_one<S: HomeSource>(
     )?;
     // Compute the preview before saving or syncing. In particular, a new
     // row must use the same freshly minted block id that sync will write.
-    let rendered = preview(&candidate, vault)?;
+    // A save acks the event, so its preview already omits the tag.
     let unchanged = current.as_deref() == Some(note.canonical.as_str());
+    let rendered = preview(&candidate, vault, !args.dry_run && !unchanged)?;
     let action = if args.dry_run {
         "preview"
     } else if unchanged {
@@ -1528,7 +1529,7 @@ pub(super) fn show_result(
     scope_text: Option<String>,
     warnings: &[String],
 ) -> Result<(), GcalError> {
-    let rendered = preview(candidate, vault)?;
+    let rendered = preview(candidate, vault, false)?;
     if args.format.is_json() {
         let effective = effective_json(candidate, &rendered);
         let document = json!({
@@ -1643,13 +1644,26 @@ struct Preview {
     rail: Option<String>,
 }
 
+/// Render the row preview for one note candidate. `saving` means this
+/// command will append the note: the save itself acks the event, so the
+/// preview omits the warning tag to match what sync will write. Dry
+/// runs, shows, clears, and invalid drafts preview pre-save truth.
 fn preview(
     candidate: &NoteCandidate,
     vault: &std::path::Path,
+    saving: bool,
 ) -> Result<Preview, GcalError> {
     let window = DayWindow::new(candidate.day, bob_env::configured_timezone())?;
     let daily_rel = snapshot::daily_relative_path(candidate.day);
     let mut resolver = HomeResolver::new(DiskHomeSource::new(vault));
+    let gcal_config = GcalConfig::resolve()?;
+    // The preview shows pre-save truth: the folded books as they stand,
+    // under the configured account when one is set. Saving the note acks
+    // the event; the following sync re-renders without the tag.
+    let account = gcal_config
+        .account()
+        .map(str::to_string)
+        .unwrap_or_else(|| candidate.event.key.calendar_id.clone());
     let snapshot = DaySnapshot {
         day: candidate.day,
         window: window.clone(),
@@ -1665,21 +1679,30 @@ fn preview(
             clock: candidate.clock.clone(),
             root_only_clock: candidate.root_only_clock.clone(),
         }],
-        account: candidate.event.key.calendar_id.clone(),
+        account,
         series_roots: journal::load_series_roots(vault).unwrap_or_default(),
     };
+    let (note_book, _) = journal::load_notes(vault).unwrap_or_default();
+    let (ack_book, _) = journal::load_acks(vault).unwrap_or_default();
     let planned = super::super::sync::build_occurrences(
         &snapshot,
-        &GcalConfig::resolve()?,
+        &gcal_config,
         vault,
         &daily_rel,
         candidate.day == today(),
         &bob_env::current_datetime(),
+        &note_book,
+        &ack_book,
         &mut resolver,
     )
     .into_iter()
     .next()
-    .map(|(occurrence, _)| occurrence);
+    .map(|(mut occurrence, _)| {
+        if saving {
+            occurrence.want_unacked = false;
+        }
+        occurrence
+    });
     let mut row = None;
     let mut bullets = Vec::new();
     let path = daily_rel.display().to_string();

@@ -436,7 +436,14 @@ pub(super) fn plan_clock_passed_close<C: ClockLookup + ?Sized>(
                 if let Some(event) =
                     unique_event_by_id(&current_events, &block_id)
                 {
-                    complete_row(working, event.line_index, &input.day_string);
+                    let stripped = complete_row(
+                        working,
+                        event.line_index,
+                        &input.day_string,
+                    );
+                    plan::lift_unacked_on_close(
+                        plan_out, input, occurrence, &block_id, stripped,
+                    );
                     let updated = working.as_string();
                     let updated_events =
                         event_task::events_in_note(&updated, note_day(input));
@@ -1116,13 +1123,25 @@ fn wanted_for_event<C: ClockLookup + ?Sized>(
     })
 }
 
-fn complete_row(working: &mut WorkingNote, line_index: usize, day: &str) {
+/// Close one row in place, lifting Bob's warning tag first: a closed
+/// row never keeps it. Returns whether a tag was stripped, so the
+/// planner can journal the cleared `last`.
+fn complete_row(
+    working: &mut WorkingNote,
+    line_index: usize,
+    day: &str,
+) -> bool {
     let Some(line) = working.lines.get_mut(line_index) else {
-        return;
+        return false;
     };
     if let Some(completed) = set_task_line_status(line, 'x') {
         *line = add_or_replace_completion_field(&completed, day);
     }
+    if let Some(untagged) = lifecycle::strip_unacked_tag(line) {
+        *line = untagged;
+        return true;
+    }
+    false
 }
 
 fn reopen_row(working: &mut WorkingNote, line_index: usize) {

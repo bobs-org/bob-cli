@@ -31,6 +31,10 @@ pub(crate) struct TaskRowInput<'a> {
     pub clock_tag: ClockTag,
     /// Task checkbox: `x` (Past), `*` (Next), `/` (In Progress), or ` ` (Ready).
     pub status: char,
+    /// Write Bob's `#unacked` warning tag as the last token before the
+    /// `^id`. Only set for open, unacked external rows; never for
+    /// born-done, context, or closed rows.
+    pub unacked: bool,
 }
 
 /// Input for one context row.
@@ -60,6 +64,9 @@ pub(crate) fn render_task_row(
         row.push_str(&format!(" {field}"));
     }
     row = set_row_metadata(&row, input.root, input.needs_type);
+    if input.unacked {
+        row.push_str(&format!(" {}", super::lifecycle::UNACKED_TAG));
+    }
     format!("{row} ^{block_id}")
 }
 
@@ -379,6 +386,7 @@ mod tests {
             buffer: EventBuffer::default(),
             clock_tag: ClockTag::None,
             status,
+            unacked: false,
         }
     }
 
@@ -595,6 +603,7 @@ mod tests {
                 buffer: EventBuffer::default(),
                 clock_tag: ClockTag::None,
                 status: '*',
+                unacked: false,
             },
             "party",
         );
@@ -654,6 +663,7 @@ mod tests {
                 time_label: "0800-0830",
                 title: "Dentist",
                 status: '*',
+                unacked: false,
             },
             "dentist",
         );
