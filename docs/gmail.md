@@ -886,7 +886,9 @@ watch follows Ctrl+Shift+M moves and Task Merges. Enrollment is durable:
 removing the Gmail label never ends it. Fetching stops when every linking
 task is closed, cancelled, or deleted; a later open link restores
 membership without the label. A Gmail Task's thread opens in the browser
-with Cmd+Enter ([Mail link marks](mail-link-marks.md)).
+with the vault's Meta+Enter dispatch — Highlights target first, then Gmail
+context via bob-mail's `api.mailOpen`, then link in new tab — from the Gmail
+Task row or a link-only Task Link to it ([Mail link marks](mail-link-marks.md)).
 
 Each `bob gmail sync` run, including `-l 0`, refreshes currently watched
 threads through the same coordinated read used by discovery. A first watch

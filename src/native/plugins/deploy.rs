@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::native::{env as bob_env, ob, vault_git, vault_sync};
 
-use super::model::{MANAGED_FILES, VAULT_PLUGINS_SUBDIR};
+use super::model::{COMMUNITY_PLUGINS_FILE, MANAGED_FILES, VAULT_PLUGINS_SUBDIR};
 
 pub(super) const STAMP_FILE: &str = ".bob-deploy.json";
 pub(super) const STAMP_VERSION: u32 = 1;
@@ -373,6 +373,40 @@ pub(super) enum VaultIgnoreStatus {
     Tracked,
     NotIgnored,
     Unknown,
+}
+
+/// Disabled-plugin finding for one synced plugin.
+///
+/// Carried by sync output (table and JSON) as a warning only when the synced
+/// plugin's id is missing from the vault's `.obsidian/community-plugins.json`.
+/// List already reports enablement in its VAULT column, so only sync gains
+/// this warning. Nothing refuses on it and nothing edits the vault config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DisabledWarningInfo {
+    pub(super) warning: String,
+}
+
+/// Warn when a synced plugin is not enabled in the vault's
+/// `.obsidian/community-plugins.json`. A missing or unreadable enablement
+/// file yields no warning so a fresh vault never warns spuriously. Never
+/// refuses, never edits the vault config.
+pub(super) fn check_plugin_disabled(
+    bob_dir: &Path,
+    plugin_id: &str,
+) -> Option<DisabledWarningInfo> {
+    let contents = fs::read_to_string(bob_dir.join(COMMUNITY_PLUGINS_FILE)).ok()?;
+    let enabled: Vec<String> = serde_json::from_str(&contents).unwrap_or_default();
+    if enabled.iter().any(|id| id == plugin_id) {
+        return None;
+    }
+    Some(DisabledWarningInfo {
+        warning: format!(
+            "plugin {plugin_id} is deployed but not enabled in \
+{COMMUNITY_PLUGINS_FILE}. Enable it in Obsidian Settings → Community \
+plugins (then restart Obsidian) so its commands and keymaps load; \
+`bob plugins list` shows enablement in its VAULT column."
+        ),
+    })
 }
 
 pub(super) enum VaultGit {

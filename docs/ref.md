@@ -66,12 +66,15 @@ is the Refs panel in Bob Mac Capture, which runs it when Bryan presses ⌘S
 there or when Bob Mac Capture observes ⌘S in Highlights after a library PDF
 finishes saving.
 
-In Obsidian, `Cmd+Enter` on a reading task (or a Task Link or managed
-embed pointing at one) opens its `source_pdf` in Highlights through
-bob-navigation-hotkeys, without writing the vault. On a highlight in a
-reference note, a 🔖 bookmark line, or a Task Link to an annotation task,
-it opens the PDF at that highlight's page. The page jump runs through
-Hammerspoon on the Mac.
+In Obsidian, `Cmd+Enter` (the vault's Meta+Enter
+`bob-navigation-hotkeys:open-reference-pdf-in-highlights`) on a reading task
+(or a Task Link or managed embed pointing at one) opens its `source_pdf` in
+Highlights through bob-navigation-hotkeys, without writing the vault. On a
+highlight in a reference note, a 🔖 bookmark line, or a Task Link to an
+annotation task, it opens the PDF at that highlight's page. When no Highlights
+target resolves, a Gmail context opens the thread in the browser via bob-mail's
+`api.mailOpen` before falling through to link in new tab. The page jump runs
+through Hammerspoon on the Mac.
 
 Lookup commands require the configured reference directory to exist;
 a missing directory is an error rather than an empty library. Directory

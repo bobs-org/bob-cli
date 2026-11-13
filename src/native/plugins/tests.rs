@@ -12,9 +12,9 @@ use crate::native::{env::TestEnvGuard, style::truncate};
 
 use super::{
     deploy::{
-        acquire_deploy_lock, check_plugin_ignore, deploy_lock_path,
-        scan_deployment, stamp_path, DeployStatus, VaultIgnoreStatus,
-        STAMP_FILE, STAMP_IGNORE_HINT,
+        acquire_deploy_lock, check_plugin_disabled, check_plugin_ignore,
+        deploy_lock_path, scan_deployment, stamp_path, DeployStatus,
+        VaultIgnoreStatus, STAMP_FILE, STAMP_IGNORE_HINT,
     },
     diff::{diff_existing_file, diff_text, MINIFIED_BYTE_THRESHOLD},
     git::{pull_repo, PullOutcome},
@@ -1493,6 +1493,124 @@ fn list_carries_ignore_warning_without_changing_columns() {
         serde_json::from_str(&success_json(&report.result())).expect("json");
     assert_eq!(value["plugins"][0]["sync"], "synced");
     assert_eq!(value["plugins"][0]["vault_ignore"]["status"], "not_ignored");
+}
+
+#[test]
+fn disabled_plugin_warns_but_still_syncs() {
+    let temp = TempDir::new("bob-cli-plugins-disabled-warn");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_file(
+        &vault.join(".obsidian/community-plugins.json"),
+        "[\"beta\"]\n",
+    );
+
+    let warned = check_plugin_disabled(&vault, "alpha").expect("warning");
+    assert!(
+        warned.warning.contains("not enabled")
+            && warned.warning.contains(".obsidian/community-plugins.json"),
+        "unexpected warning: {}",
+        warned.warning
+    );
+
+    let (opts, _guard) = options(&repo, &vault);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    // A disabled warning never blocks the copy.
+    assert_eq!(
+        action_for(&report, "alpha", "main.js"),
+        Some(FileAction::Created)
+    );
+    let warned = report.plugins[0]
+        .disabled_warning
+        .as_ref()
+        .expect("warning");
+    assert!(
+        warned.warning.contains("not enabled"),
+        "unexpected warning: {}",
+        warned.warning
+    );
+
+    let value: serde_json::Value =
+        serde_json::from_str(&sync_success_json(&report.result(false)))
+            .expect("json");
+    assert!(
+        value["plugins"][0]["disabled_warning"]["warning"]
+            .as_str()
+            .is_some_and(|warning| warning.contains("not enabled")),
+        "json must carry the warning: {value}"
+    );
+}
+
+#[test]
+fn enabled_plugin_has_no_disabled_warning() {
+    let temp = TempDir::new("bob-cli-plugins-disabled-enabled");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_file(
+        &vault.join(".obsidian/community-plugins.json"),
+        "[\"alpha\"]\n",
+    );
+
+    assert_eq!(check_plugin_disabled(&vault, "alpha"), None);
+
+    let (opts, _guard) = options(&repo, &vault);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(report.plugins[0].disabled_warning, None);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&sync_success_json(&report.result(false)))
+            .expect("json");
+    assert!(
+        value["plugins"][0].get("disabled_warning").is_none(),
+        "enabled plugin must omit the warning: {value}"
+    );
+}
+
+#[test]
+fn missing_community_file_has_no_disabled_warning() {
+    let temp = TempDir::new("bob-cli-plugins-disabled-missing");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+
+    assert_eq!(check_plugin_disabled(&vault, "alpha"), None);
+
+    let (opts, _guard) = options(&repo, &vault);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(report.plugins[0].disabled_warning, None);
+}
+
+#[test]
+fn dry_run_carries_disabled_warning_without_writing() {
+    let temp = TempDir::new("bob-cli-plugins-disabled-dry");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha", "stale");
+    write_file(
+        &vault.join(".obsidian/community-plugins.json"),
+        "[]\n",
+    );
+
+    let (mut opts, _guard) = options(&repo, &vault);
+    opts.dry_run = true;
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    report.plugins[0]
+        .disabled_warning
+        .as_ref()
+        .expect("dry-run must carry the warning");
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// stale\n",
+        "dry-run must not write the vault file"
+    );
 }
 
 #[test]

@@ -23,8 +23,10 @@ A task whose mail note says the ball is in Bryan's court wears a quiet reply
 badge after the mail link. A Ready row whose `#awaiting_reply` hold is due
 or overdue replaces that tag with a muted no-reply pill. A row still held
 `[?]` for another reason after they reply adds one tooltip line on the
-blocked-reason mark. With the cursor on a line where Cmd+Enter will open
-an email, a muted `⌘↵ Gmail` chip sits at the end of that line.
+blocked-reason mark. With the cursor on a line where Meta+Enter will open
+an email (a Gmail Task row, a line-borne mail link, a child hop, or a link-only
+Task Link hop to a Gmail Task), a muted `⌘↵ Gmail` chip sits at the end of that
+line.
 
 ```text
 they replied
@@ -122,7 +124,7 @@ awaiting reason is still live (that case already has
 ## Gmail open hint
 
 A muted `⌘↵ Gmail` capsule at the end of the cursor's line shows exactly
-where the bob-mail Cmd+Enter keymap will act: `⌘↵ Gmail` on macOS,
+where the vault's Meta+Enter Gmail gesture will act: `⌘↵ Gmail` on macOS,
 `M-↵ Gmail` elsewhere (honest vim notation off-Mac). The cursor revealing
 the raw `[[…]]` text does not move the chip.
 
@@ -131,16 +133,20 @@ It shows when **all** of these hold:
 1. The line can open an email: the first non-embedded `[[mail/…]]`
    wikilink in the cursor line's own text resolves to a mail note whose
    `gmail_url` passes `mailIsGmailUrl` (links inside fenced or inline
-   code never count; first mail link wins), or the cursor line is a
+   code never count; first mail link wins), the cursor line is a
    checkbox task row with no mail link of its own and one of its direct
    link-only child bullets resolves to such a mail note (first such child
-   wins). Task status does not matter. The whole-note fallback (inside a
-   mail note, any line opens that note's email) is keymap-only and never
-   shows the chip.
+   wins), or the cursor line is a plain link-only `[[note#^id]]` Task Link
+   bullet whose target task row is a Gmail Task row (exactly one hop, no
+   recursion; embeds and struck links stay excluded; multi-link rows stay
+   excluded under `link_only`). Task status does not matter. The whole-note
+   fallback (inside a mail note, any line opens that note's email) is
+   keymap-only and never shows the chip.
 2. The cursor head is on the line (updates on `selectionSet` as well as
    doc/viewport changes). The chip does not track vim mode.
-3. bob-mail is enabled and exposes the keymap capability flag (set only
-   after the vim mappings register).
+3. bob-mail is enabled and its delivery path is live (`mailGmailOpenKeymap = 1`,
+   set when the vim mapping registers or the navigation dispatcher path is
+   reachable; with bob-mail disabled the chip stays absent).
 4. The existing mail-link-marks gate is on
    (`body.bob-mail-link-marks`, command `toggle-mail-link-marks`).
 
@@ -237,6 +243,11 @@ bob-mail capability on.
 | GO9 | `- [x] #task A`                                               | chip (status-independent) |
 | GO10 | a line inside a mail note body                               | none            |
 | GO11 | reading view                                                 | none            |
+| GO12 | link-only `[[job#^abc123]]` Task Link to a Gmail Task row    | chip            |
+| GO13 | Task Link row with two block links                           | none (`link_only`) |
+| GO14 | `![[job#^abc123]]` embed or `~~[[job#^abc123]]~~` struck     | none            |
+| GO15 | Task Link to a non-Gmail task row                            | none            |
+| GO16 | Task Link to a task row with a link-only child mail bullet   | chip (hop-then-child-hop) |
 
 Verification: ML, NR, and AP are covered by
 `scripts/test-ledger-tools-mail-link-marks.cjs` and

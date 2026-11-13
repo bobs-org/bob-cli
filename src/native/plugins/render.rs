@@ -3,7 +3,7 @@ use crate::native::style::{
 };
 
 use super::{
-    deploy::{short_sha, uncommitted_detail, VaultIgnoreInfo},
+    deploy::{short_sha, uncommitted_detail, DisabledWarningInfo, VaultIgnoreInfo},
     model::{
         DiffKind, FileAction, FileDiff, FileSync, PluginsReport, PluginsResult,
         SyncReport, SyncResult, SyncState, VaultState,
@@ -92,6 +92,7 @@ pub(super) fn print_sync_report(
             let prefix = styler.warning_prefix();
             println!("  {prefix} {id}  {blocked}");
             print_vault_ignore(&plugin.vault_ignore, styler);
+            print_disabled_warning(&plugin.disabled_warning, styler);
             continue;
         }
 
@@ -105,6 +106,7 @@ pub(super) fn print_sync_report(
             }
             print_proving_commit(&plugin.proving_commit, styler);
             print_vault_ignore(&plugin.vault_ignore, styler);
+            print_disabled_warning(&plugin.disabled_warning, styler);
             continue;
         }
 
@@ -126,6 +128,7 @@ pub(super) fn print_sync_report(
         }
         print_proving_commit(&plugin.proving_commit, styler);
         print_vault_ignore(&plugin.vault_ignore, styler);
+        print_disabled_warning(&plugin.disabled_warning, styler);
     }
 
     println!();
@@ -268,6 +271,14 @@ fn print_backup_outcome(file: &FileSync, dry_run: bool, styler: &Styler) {
 
 fn print_vault_ignore(ignore: &Option<VaultIgnoreInfo>, styler: &Styler) {
     let Some(info) = ignore else {
+        return;
+    };
+    let prefix = styler.warning_prefix();
+    println!("{DETAIL_INDENT}{prefix} {}", styler.yellow(&info.warning));
+}
+
+fn print_disabled_warning(warning: &Option<DisabledWarningInfo>, styler: &Styler) {
+    let Some(info) = warning else {
         return;
     };
     let prefix = styler.warning_prefix();

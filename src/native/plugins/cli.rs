@@ -145,6 +145,11 @@ unchanged. In a Git vault, sync also warns when a plugin's whole vault folder \
 (.obsidian/plugins/<id>/) is not ignored or holds tracked files; the warning \
 prints under the plugin row and appears as `vault_ignore` in JSON output, in \
 dry-run too, and never blocks the copy, edits .gitignore, or untracks files. \
+Sync also warns when a deployed plugin id is missing from the vault's \
+.obsidian/community-plugins.json; the warning prints under the plugin row and \
+appears as `disabled_warning` in JSON output, in dry-run too, and never blocks \
+the copy or edits the vault config. List already reports enablement in its \
+VAULT column; only sync gains this warning. \
 The plugins repo is refreshed with a non-interactive `git pull` \
 before analysis unless --no-pull is given; when the pull fails the refresh \
 falls back to `git fetch` so remote-tracking refs stay fresh while checkout \

@@ -3,12 +3,13 @@ use std::{fs, path::Path, path::PathBuf};
 use super::{
     deploy::{
         allocate_backup_run_dir, backup_prior_stamp, build_stamp,
-        capture_plugin, check_plugin_ignore, check_stamp_storage,
-        current_agent, current_host, deploy_timestamp, deployment_info,
-        deployment_info_from_prior, evaluate_guard, read_prior_stamp,
-        snapshot_vault, stamp_path, vault_bytes, verify_copied_bytes,
-        write_stamp_atomic, CapturedPlugin, DeployLock, GuardDecision,
-        PriorStamp, StampAction, StampState, VaultBundle, STAMP_FILE,
+        capture_plugin, check_plugin_disabled, check_plugin_ignore,
+        check_stamp_storage, current_agent, current_host, deploy_timestamp,
+        deployment_info, deployment_info_from_prior, evaluate_guard,
+        read_prior_stamp, snapshot_vault, stamp_path, vault_bytes,
+        verify_copied_bytes, write_stamp_atomic, CapturedPlugin, DeployLock,
+        GuardDecision, PriorStamp, StampAction, StampState, VaultBundle,
+        STAMP_FILE,
     },
     diff::{byte_line_count, diff_existing_file},
     git::vault_file_is_dirty,
@@ -155,8 +156,10 @@ fn sync_one_plugin(
         .join(id);
 
     // A vault-ignore warning never blocks: it rides along on every outcome,
-    // including dry-run previews and stamp/guard refusals.
+    // including dry-run previews and stamp/guard refusals. The disabled-plugin
+    // warning rides the same channel for the same outcomes.
     let vault_ignore = check_plugin_ignore(&options.bob_dir, id);
+    let disabled_warning = check_plugin_disabled(&options.bob_dir, id);
 
     if !options.dry_run
         && let Err(message) = check_stamp_storage(&options.bob_dir, id)
@@ -167,6 +170,7 @@ fn sync_one_plugin(
             files: Vec::new(),
             deployment: super::deploy::scan_deployment(&vault_plugin_dir),
             vault_ignore,
+            disabled_warning,
             blocked: Some(message),
             proving_commit: None,
         };
@@ -181,6 +185,7 @@ fn sync_one_plugin(
                 files: Vec::new(),
                 deployment: super::deploy::scan_deployment(&vault_plugin_dir),
                 vault_ignore,
+                disabled_warning,
                 blocked: Some(message),
                 proving_commit: None,
             };
@@ -208,6 +213,7 @@ fn sync_one_plugin(
                 files: Vec::new(),
                 deployment: deployment_info_from_prior(&prior),
                 vault_ignore,
+                disabled_warning,
                 blocked: Some(message),
                 proving_commit: None,
             }
@@ -231,6 +237,7 @@ fn sync_one_plugin(
             backup_run_dir,
             backup_dir_allocated,
             vault_ignore,
+            disabled_warning,
             issues,
         ),
     }
@@ -252,6 +259,7 @@ fn apply_plugin(
     backup_run_dir: &mut PathBuf,
     backup_dir_allocated: &mut bool,
     vault_ignore: Option<super::deploy::VaultIgnoreInfo>,
+    disabled_warning: Option<super::deploy::DisabledWarningInfo>,
     issues: &mut Vec<String>,
 ) -> PluginSync {
     let mut files = Vec::new();
@@ -303,6 +311,7 @@ fn apply_plugin(
                     files: Vec::new(),
                     deployment: deployment_info_from_prior(prior),
                     vault_ignore: vault_ignore.clone(),
+                    disabled_warning: disabled_warning.clone(),
                     blocked: Some(message),
                     proving_commit: proving_commit.clone(),
                 };
@@ -316,6 +325,7 @@ fn apply_plugin(
                     files: Vec::new(),
                     deployment: deployment_info_from_prior(prior),
                     vault_ignore: vault_ignore.clone(),
+                    disabled_warning: disabled_warning.clone(),
                     blocked: Some(message),
                     proving_commit: proving_commit.clone(),
                 };
@@ -338,6 +348,7 @@ fn apply_plugin(
                 files: Vec::new(),
                 deployment: deployment_info_from_prior(prior),
                 vault_ignore: vault_ignore.clone(),
+                disabled_warning: disabled_warning.clone(),
                 blocked: Some(message),
                 proving_commit: proving_commit.clone(),
             };
@@ -421,6 +432,7 @@ fn apply_plugin(
             files,
             deployment,
             vault_ignore,
+            disabled_warning,
             blocked: None,
             proving_commit,
         };
@@ -453,6 +465,7 @@ fn apply_plugin(
         files,
         deployment,
         vault_ignore,
+        disabled_warning,
         blocked: None,
         proving_commit,
     }
