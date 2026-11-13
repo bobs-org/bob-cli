@@ -778,7 +778,8 @@ carries `inbox` and `note` and is read-only. `gmail.save` receipts carry
 `note`, `created`, and `added`. Archive adds `gmail.archive_enabled`,
 `gmail.archive_observed`, `gmail.archive_closed` (frozen IDs, note, tasks,
 label), `gmail.archived` (`message_ids`, label), `gmail.kept` (`reason`),
-`gmail.let_go` (`message_ids`, label), and reserved `gmail.restored`; full
+`gmail.let_go` (`message_ids`, label), and `gmail.restored` (the exact saved
+message IDs, recorded label identity, and matching archive event); full
 fields, reasons, and errors in [Archive on close](../gmail.md#archive-on-close).
 Values never contain bodies, snippets, or subjects. See [Bob Gmail](../gmail.md#sync).
 

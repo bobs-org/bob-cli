@@ -25,6 +25,13 @@ impl ReceiptLabel {
         label: &GmailLabel,
         enrollment: &GmailLabel,
     ) -> Result<Self, GmailError> {
+        Self::validated(label, Some(enrollment))
+    }
+
+    fn validated(
+        label: &GmailLabel,
+        enrollment: Option<&GmailLabel>,
+    ) -> Result<Self, GmailError> {
         let id = label.id.trim();
         let name = label.name.trim();
         let valid_id = !id.is_empty()
@@ -47,9 +54,10 @@ impl ReceiptLabel {
             )
             || id.to_ascii_uppercase().starts_with("CATEGORY_");
         let user_label = label.is_user();
-        let aliases_enrollment = name
-            .eq_ignore_ascii_case(enrollment.name.trim())
-            || id == enrollment.id;
+        let aliases_enrollment = enrollment.is_some_and(|enrollment| {
+            name.eq_ignore_ascii_case(enrollment.name.trim())
+                || id == enrollment.id
+        });
         if !valid_id
             || name.is_empty()
             || name.len() > 512
@@ -153,6 +161,36 @@ pub(crate) fn resolve_existing_receipt_label(
         label
     };
     ReceiptLabel::new(label, enrollment).map(Some)
+}
+
+/// Resolve the stable recorded receipt identity without requiring the
+/// current enrollment label to remain configured. A caller that still has
+/// an enrollment label passes it to reject a current alias; the journal
+/// proves the receipt was valid when it was created.
+pub(crate) fn resolve_recorded_receipt_label(
+    labels: &[GmailLabel],
+    identity: &super::archive_state::ArchiveLabelIdentity,
+    enrollment: Option<&GmailLabel>,
+) -> Result<Option<ReceiptLabel>, GmailError> {
+    let label = if let Some(id) = identity.id.as_deref() {
+        let mut matches = labels.iter().filter(|label| label.id == id);
+        let Some(label) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(GmailError::setup(
+                "archive_label",
+                "the recorded Gmail receipt label ID is ambiguous".to_string(),
+            ));
+        }
+        label
+    } else {
+        let Some(label) = unique_named_label(labels, &identity.name)? else {
+            return Ok(None);
+        };
+        label
+    };
+    ReceiptLabel::validated(label, enrollment).map(Some)
 }
 
 fn validate_receipt_name(

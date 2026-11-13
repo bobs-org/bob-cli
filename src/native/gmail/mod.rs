@@ -30,6 +30,7 @@ pub(crate) mod search_peek;
 pub(crate) mod sync;
 pub(crate) mod turn;
 pub(crate) mod ui;
+mod unarchive;
 mod vault_walk;
 pub(crate) mod worker;
 pub(crate) use crate::native::google::{
@@ -44,7 +45,7 @@ pub(crate) use crate::native::google::GoogleError as GmailError;
 pub(crate) use cli::{
     AttachArgs, DoctorArgs, DraftArgs, LinkArgs, ListArgs, LoginArgs,
     LogoutArgs, NewArgs, PeekArgs, ReplyArgs, SaveArgs, SearchArgs, SendArgs,
-    SyncArgs, TopArgs,
+    SyncArgs, TopArgs, UnarchiveArgs,
 };
 
 const COMMAND_NAME: &str = "bob gmail";
@@ -112,6 +113,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("sync", sub_matches)) => {
             sync::run(&SyncArgs::from_matches(sub_matches))
+        }
+        Some(("unarchive", sub_matches)) => {
+            unarchive::run(&UnarchiveArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");

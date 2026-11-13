@@ -806,7 +806,8 @@ The Gmail receipt label records Bob-owned archives and supports crash
 recovery. A new reply or your manual Move to Inbox removes the receipt only;
 Bob then lets go (removing the receipt label) and never archives that close
 again. Reopening a task does not move mail: the report gives a typed restore
-hint, and restore stays manual: Move to Inbox in Gmail.
+hint. Use `bob gmail unarchive` to restore one of Bob's recorded receipts;
+reopening alone never moves mail.
 
 Each owned archive also materializes into its mail note. `gmail_archived`
 carries the newest still-owned receipt's archive time, and one banner line
@@ -817,11 +818,38 @@ an interrupted local write without touching Gmail or the journal. Save,
 refresh, and rerender preserve the receipt; damaged or duplicated markers are
 refused instead of guessed.
 
-There is no `bob gmail unarchive` command and no automatic restore;
-`restored` is a reserved action in `archive[]` and is never emitted there.
-Chips and desktop notifications stay deferred. Sync JSON includes a body-free
-`recent_archive` snapshot; there is no separate archive-history listing
-command.
+### Explicit undo
+
+`bob gmail unarchive NOTE|THREAD...` restores only active, journaled Bob
+receipts. Give it an exact saved mail-note path or stem, or a raw Gmail thread
+ID for the configured account. A repeated input is processed once; inputs
+without an owned receipt return a typed `unchanged` result. Ambiguous note
+identities and notes belonging to another account fail without changing mail.
+
+Live undo requires the configured Gmail writer and its `gmail.modify` grant.
+Bob reads metadata for each exact saved message ID, checks that each still
+belongs to the recorded thread, and refuses missing or malformed evidence,
+Spam, Trash, Drafts, or a message with neither its receipt label nor `INBOX`.
+It then adds `INBOX` and removes that receipt label from only the frozen IDs.
+New replies, other labels, read/star/trash state, and task rows are untouched.
+The account sync guard serializes undo with Gmail sync; short vault-lock
+sections recheck ownership before the mutation and record the matching
+`gmail.restored` release afterward.
+
+`-d` performs the same receipt and Gmail reads but does not need the writer or
+modify grant and never takes a lock, writes a journal, or changes mail. JSON
+uses schema 1 with `ok` and per-input `results[]`; actions are `would_restore`,
+`restored`, `unchanged`, or `failed`, and each result includes the exact
+`message_ids` and recorded label identity. Runtime and partial failures exit
+1; setup or authorization failures exit 2. If Gmail succeeded but a local
+journal or note write failed, retrying settles the same receipt without
+restoring a broader message set.
+
+`restored` is recorded in the archive journal and may appear as a historical
+`recent_archive` state; it remains reserved and never appears as an action in
+sync's live `archive[]`. Chips and desktop notifications stay deferred.
+Sync JSON includes a body-free `recent_archive` snapshot; there is no separate
+archive-history listing command.
 
 Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
 historical backlog or a batch above `archive_max`, and `-n` to skip archive
@@ -839,7 +867,8 @@ subject, body, or token is stored there. Events are `gmail.archive_enabled`
 (account, enabled, epoch, label), `gmail.archive_observed` (open witness),
 `gmail.archive_closed` (frozen saved IDs, note, tasks, label), `gmail.archived`
 (`message_ids`, label, `recovered`), `gmail.kept` (`reason`), `gmail.let_go`
-(`message_ids`, label), and `gmail.restored` (reserved, never written).
+(`message_ids`, label), and `gmail.restored` (the exact `message_ids`, recorded
+label identity, and matching `archive_event_id`).
 Reasons are `eligible`, `backlog`, `unsaved`, `consent_removed`, `policy`,
 `gone`, `manual`, `replied`, `manual_return`, and `recovered`. Actions are
 `would_archive`, `archived`, `kept`, `let_go`, `paused`, and reserved
@@ -1148,7 +1177,9 @@ current `state: archived | let_go | restored`. This is archive history,
 including actions later undone, not the active-ownership list. Unavailable or
 unsafe journal history is `null` with a warning, never an empty snapshot.
 Reopen advice is a typed hint, not a watch action.
-`restored` is reserved and never emitted. `watch[]` and
+The `restored` action stays reserved in sync `archive[]`; explicit undo is
+reported by `bob gmail unarchive` and only its historical state appears here.
+`watch[]` and
 `summary.{watching,awaiting,archived}` are specified under [Watch](#watch).
 See [JSON outputs](reference/json-outputs.md) for the field list and status
 contract.

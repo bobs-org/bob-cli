@@ -1527,7 +1527,12 @@ if op == "message_get":
     if scenario in {"message_malformed", "malformed_json"}:
         sys.stdout.write("{malformed JSON\n")
         raise SystemExit(0)
-    message = {"id": hex_id, "threadId": "0123456789abcdef", "labelIds": ["INBOX"]}
+    saved = (state.get("messages") or {}).get(hex_id)
+    message = {
+        "id": hex_id,
+        "threadId": (saved or {}).get("threadId", "0123456789abcdef"),
+        "labelIds": (saved or {}).get("labelIds", ["INBOX"]),
+    }
     if "metadata" not in args and scenario == "poison":
         message["snippet"] = "PRIVATE_SENTINEL message snippet"
         message["payload"] = {"mimeType": "text/plain", "body": {"data": "PRIVATE_SENTINEL"}}

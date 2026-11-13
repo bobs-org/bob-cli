@@ -14,21 +14,22 @@ Gmail threads you choose become inert, append-only mail notes: a read-only login
 Usage: bob gmail [OPTIONS] [COMMAND]
 
 Commands:
-  attach  Import one listed Gmail attachment into the vault
-  doctor  Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
-  draft   Create or update a Gmail draft and show its exact preview
-  link    Swap Gmail URLs for labelled links to saved mail notes
-  list    List saved Gmail threads (offline unless --remote)
-  login   Connect Gmail in one guided step
-  logout  Remove Bob's Gmail grant only; prints the Google revoke URL
-  new     Create a local Gmail compose note
-  peek    Preview Gmail thread metadata without saving it
-  reply   Add a Reply section to a saved Gmail note
-  save    Save or refresh Gmail threads as inert mail notes
-  search  Search Gmail threads for a picker
-  send    Preview and explicitly send a Gmail draft
-  sync    File labelled Gmail threads into area or project notes
-  help    Print this message or the help of the given subcommand(s)
+  attach     Import one listed Gmail attachment into the vault
+  doctor     Check the Gmail setup: gog, client, account, token, scopes, config, writer, and journal
+  draft      Create or update a Gmail draft and show its exact preview
+  link       Swap Gmail URLs for labelled links to saved mail notes
+  list       List saved Gmail threads (offline unless --remote)
+  login      Connect Gmail in one guided step
+  logout     Remove Bob's Gmail grant only; prints the Google revoke URL
+  new        Create a local Gmail compose note
+  peek       Preview Gmail thread metadata without saving it
+  reply      Add a Reply section to a saved Gmail note
+  save       Save or refresh Gmail threads as inert mail notes
+  search     Search Gmail threads for a picker
+  send       Preview and explicitly send a Gmail draft
+  sync       File labelled Gmail threads into area or project notes
+  unarchive  Move Bob-owned archived Gmail messages back to the Inbox
+  help       Print this message or the help of the given subcommand(s)
 
 Options:
   -a, --all

@@ -2410,3 +2410,17 @@ fn link_needs_a_note_or_all() {
     let doc = json_stdout(&output);
     assert_eq!(doc["ok"], false);
 }
+
+#[test]
+fn unarchive_help_describes_receipt_scoped_restore() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-help");
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail(&env, &fake, &["unarchive", "--help"]);
+    assert_success(&output, "unarchive help");
+    let help = stdout(&output);
+    assert!(help.contains("NOTE|THREAD"), "{help}");
+    assert!(help.contains("exact message IDs"), "{help}");
+    assert!(help.contains("--dry-run"), "{help}");
+    assert!(help.contains("--format"), "{help}");
+    assert!(help.contains("bob gmail unarchive"), "{help}");
+}

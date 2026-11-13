@@ -44,6 +44,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(search_command())
         .subcommand(send_command())
         .subcommand(sync_command())
+        .subcommand(unarchive_command())
 }
 
 fn top_after_help() -> &'static str {
@@ -98,6 +99,30 @@ fn sync_command() -> ClapCommand {
         .arg(retry_timeout_arg())
         .after_help(
             "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n  bob gmail sync -d -c 0123abcd\n  bob gmail sync -c 0123abcd\n  bob gmail sync -n\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
+        )
+}
+
+fn unarchive_command() -> ClapCommand {
+    ClapCommand::new("unarchive")
+        .about("Move Bob-owned archived Gmail messages back to the Inbox")
+        .long_about(
+            "Restore only the exact message IDs recorded in an active Bob archive receipt. Supply a saved mail-note path or stem, or a Gmail thread ID. Bob adds INBOX and removes that receipt label; replies, unrelated labels, and task state stay unchanged. Repeating an undo is safe.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(save_format_arg())
+        .arg(help_arg())
+        .arg(
+            Arg::new("input")
+                .value_name("NOTE|THREAD")
+                .value_parser(OsStringValueParser::new())
+                .num_args(1..)
+                .required(true)
+                .help("Exact saved mail note path/stem or Gmail thread ID"),
+        )
+        .after_help(
+            "Examples:\n  bob gmail unarchive mail/2026/lease.md\n  bob gmail unarchive lease\n  bob gmail unarchive 18a4b0c2d3e4f501\n  bob gmail unarchive lease -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -871,6 +896,35 @@ pub(crate) struct SyncArgs {
     pub retry_timeout: u32,
 }
 
+/// Typed `bob gmail unarchive` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnarchiveArgs {
+    pub bob_dir: Option<PathBuf>,
+    pub dry_run: bool,
+    pub format: HumanFormat,
+    pub inputs: Vec<String>,
+}
+
+impl UnarchiveArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            inputs: matches
+                .get_many::<OsString>("input")
+                .into_iter()
+                .flatten()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+}
+
 impl SyncArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
@@ -1346,6 +1400,28 @@ mod tests {
         assert!(!args.no_archive);
         assert!(!args.quiet);
         assert_eq!(args.format, HumanFormat::Human);
+    }
+
+    #[test]
+    fn unarchive_accepts_multiple_exact_inputs_and_read_only_preview() {
+        let args = UnarchiveArgs::from_matches(&sub_matches_for(
+            &[
+                "bob gmail",
+                "unarchive",
+                "mail/2026/one.md",
+                "0123456789abcdef",
+                "-b",
+                "~/vault",
+                "-d",
+                "-f",
+                "json",
+            ],
+            "unarchive",
+        ));
+        assert_eq!(args.inputs, ["mail/2026/one.md", "0123456789abcdef"]);
+        assert!(args.dry_run);
+        assert!(args.format.is_json());
+        assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
     }
 
     #[test]
