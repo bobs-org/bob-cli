@@ -46,10 +46,57 @@
 //! (live success omits `archive_digest`) and
 //! `gmail_sync::help_lists_sync_and_hides_the_pull_alias`
 //! (sync `-c`/`-n` option order).
+//!
+//! Receipts (bob-cli-kx.3.1) acceptance matrix:
+//! - C1/C2/C5 receipt bytes and notification: `live_archives_a_fresh_close_and_repeats_as_noop`,
+//!   `receipt_lifecycle_materializes_banner_and_clears_on_let_go`,
+//!   `cancelled_linker_is_positive_archive_evidence`,
+//!   `archive_scan::positive_closed_covers_cancelled_uppercase_and_done`,
+//!   `quiet_archive_notifies_once_then_stays_silent_on_repeat`,
+//!   `recovered_archive_notifies_once_without_remutating`.
+//! - C9/C10 clearing: `new_reply_lets_go_and_preserves_inbox`,
+//!   `manual_move_to_inbox_lets_go_without_removing_inbox`,
+//!   `receipt_lifecycle_materializes_banner_and_clears_on_let_go`.
+//! - C11 no auto-restore: `reopening_an_archived_task_reports_a_restore_hint_without_writing`,
+//!   `reopening_an_archived_task_retains_its_receipt_banner`.
+//! - C14 recovered visibility: `live_reconciles_after_remote_success_and_journal_failure_without_remutating`,
+//!   `boundary_recovery_after_crash_followed_by_reply_records_once`.
+//! - C16/C19 read-only preview: `unarchive_dry_run_needs_no_writer_and_writes_nothing`,
+//!   `dry_run_and_skipped_archive_write_no_receipt_bytes`,
+//!   `archive_preview::remote_verdict_keeps_unsaved_consent_and_policy`,
+//!   `gmail_archive_preview::dry_run_pauses_backlog_and_confirms_with_the_digest`.
+//! - C20 inert output, argv, and journals: `archive_reports_and_journals_never_echo_hostile_task_text`,
+//!   `quiet_archive_notifies_once_then_stays_silent_on_repeat`,
+//!   `cli::unarchive_banner_argv_keeps_json_and_one_exact_operand`.
+//! - `recent_archive` timezone/DST and generation: `archive_projection::previous_calendar_day_starts_at_local_midnight_across_dst`,
+//!   `archive_state::recent_projection_keeps_each_generation_but_counts_one_thread_once`,
+//!   `archive_state::reopen_rearms_a_new_generation_and_stale_open_cannot_rearm_it_again`.
+//! - Undo faults: `unarchive_wrong_writer_fails_before_gog_or_vault_writes`,
+//!   `unarchive_missing_modify_scope_is_typed_setup_failure_without_writes`,
+//!   `unarchive_partial_metadata_failure_settles_only_the_successful_thread`,
+//!   `unarchive_retries_after_remote_success_and_journal_append_failure`,
+//!   `unarchive_detects_concurrent_release_and_sequential_reply_let_go`,
+//!   `unarchive_invalid_grant_reports_remaining_input_without_mutating_it`,
+//!   `unarchive_policy_exclusions_do_not_mutate_spam_or_trash`,
+//!   `unarchive_ambiguous_stem_fails_without_mutating_notes_or_mail`,
+//!   `unarchive_other_account_note_fails_and_unknown_thread_is_unchanged`,
+//!   `unarchive_unsafe_journal_fails_each_input_without_mutation`,
+//!   `unarchive_restores_only_frozen_ids_and_clears_the_note_receipt` (duplicate inputs).
+//! - Complete flows: `archive_restore_sync_flow_shows_historical_restored_state_without_rearchiving`,
+//!   `reopen_restore_and_reclose_archives_a_new_generation`,
+//!   `receipt_lifecycle_materializes_banner_and_clears_on_let_go`,
+//!   `manual_move_to_inbox_lets_go_without_removing_inbox`.
+//! - bob-plugins suites: `scripts/test-bob-mail-archive-banner.cjs`,
+//!   `scripts/test-ledger-tools-mail-link-marks.cjs`,
+//!   `scripts/test-ledger-tools-gcal-events.cjs`.
 
 mod gmail_support;
 
 use std::fs;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use gmail_support::{
     json_stdout, run_gmail, run_gmail_with_notify, stderr, stdout, FakeGog,
@@ -1108,10 +1155,10 @@ fn reopening_an_archived_task_reports_a_restore_hint_without_writing() {
     let value = json_stdout(&reopened);
     assert_eq!(value["archive_hints"][0]["kind"], "restore_to_inbox");
     assert_eq!(value["archive_hints"][0]["thread_id"], THREAD_A);
-    assert!(value["archive_hints"][0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("restore stays manual: Move to Inbox in Gmail"));
+    assert_eq!(
+        value["archive_hints"][0]["message"],
+        "Task reopened; archived mail stays in Gmail. Restore with bob gmail unarchive."
+    );
     assert!(
         remote_write_calls(&fake).is_empty(),
         "reopen does not mutate Gmail"
@@ -1119,7 +1166,7 @@ fn reopening_an_archived_task_reports_a_restore_hint_without_writing() {
     let human = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0"]);
     assert_exit(&human, 0, "human reopen hint");
     assert!(
-        stdout(&human).contains("restore stays manual: Move to Inbox in Gmail")
+        stdout(&human).contains(&format!("bob gmail unarchive -- {THREAD_A}"))
     );
     assert!(remote_write_calls(&fake).is_empty());
 }
@@ -2549,6 +2596,198 @@ fn create_owned_receipt(env: &GmailEnv, fake: &FakeGog) -> String {
     note
 }
 
+fn create_two_owned_receipts(
+    env: &GmailEnv,
+    fake: &FakeGog,
+) -> (String, String) {
+    env.write_journal_rules();
+    write_archive_config(env);
+    write_task_settings(env);
+    seed_labels(fake, true);
+    seed_threads(
+        fake,
+        vec![
+            (
+                THREAD_A,
+                vec![thread_message_in(
+                    THREAD_A,
+                    MESSAGE_A,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+            (
+                THREAD_B,
+                vec![thread_message_in(
+                    THREAD_B,
+                    MESSAGE_C,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+        ],
+    );
+    let saved_a = run_gmail(env, fake, &["save", THREAD_A, "-f", "json"]);
+    assert_exit(&saved_a, 0, "save first restore thread");
+    let note_a = json_stdout(&saved_a)["note"]
+        .as_str()
+        .expect("first note path")
+        .to_string();
+    let link_a = json_stdout(&saved_a)["link"]
+        .as_str()
+        .expect("first task link")
+        .to_string();
+    let saved_b = run_gmail(env, fake, &["save", THREAD_B, "-f", "json"]);
+    assert_exit(&saved_b, 0, "save second restore thread");
+    let note_b = json_stdout(&saved_b)["note"]
+        .as_str()
+        .expect("second note path")
+        .to_string();
+    let link_b = json_stdout(&saved_b)["link"]
+        .as_str()
+        .expect("second task link")
+        .to_string();
+    assert_ne!(note_a, note_b, "each thread has its own mail note");
+
+    fs::write(
+        env.vault().join("gmail_inbox.md"),
+        format!(
+            "#task archive apply probe\n\n- [ ] #task archive apply probe {link_a}\n- [ ] #task archive apply probe {link_b}\n"
+        ),
+    )
+    .expect("write two linked tasks");
+    let adopted =
+        run_gmail(env, fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&adopted, 0, "observe both open tasks");
+    close_all_inbox_tasks(env);
+    let archived =
+        run_gmail(env, fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive both closed threads");
+    let archived_value = json_stdout(&archived);
+    let actions = archived_value["archive"]
+        .as_array()
+        .expect("archive results");
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|row| row["action"] == "archived")
+            .count(),
+        2,
+        "both inputs start with owned receipts"
+    );
+    (note_a, note_b)
+}
+
+fn markdown_snapshot(env: &GmailEnv) -> BTreeMap<String, Vec<u8>> {
+    fn collect(
+        root: &Path,
+        directory: &Path,
+        output: &mut BTreeMap<String, Vec<u8>>,
+    ) {
+        for entry in fs::read_dir(directory).expect("read vault directory") {
+            let entry = entry.expect("read vault entry");
+            let path = entry.path();
+            let file_type = entry.file_type().expect("vault entry type");
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                collect(root, &path, output);
+            } else if file_type.is_file()
+                && path.extension().is_some_and(|extension| extension == "md")
+            {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("note inside vault")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                output
+                    .insert(relative, fs::read(path).expect("read note bytes"));
+            }
+        }
+    }
+
+    let mut snapshot = BTreeMap::new();
+    collect(env.vault(), env.vault(), &mut snapshot);
+    snapshot
+}
+
+fn assert_unrelated_markdown_unchanged(
+    env: &GmailEnv,
+    before: &BTreeMap<String, Vec<u8>>,
+    targets: &[&str],
+) {
+    let after = markdown_snapshot(env);
+    for (path, bytes) in before {
+        if targets.contains(&path.as_str()) {
+            continue;
+        }
+        assert_eq!(
+            after.get(path),
+            Some(bytes),
+            "unrelated note changed: {path}"
+        );
+    }
+    for path in after.keys() {
+        if !targets.contains(&path.as_str()) {
+            assert!(
+                before.contains_key(path),
+                "unexpected note appeared: {path}"
+            );
+        }
+    }
+}
+
+fn receipt_neutral(contents: &str) -> (serde_yaml::Value, String) {
+    const BEGIN: &str = "<!-- bob:gmail:receipt:begin v1 -->";
+    const END: &str = "<!-- bob:gmail:receipt:end -->";
+    let contents = contents.strip_prefix("---\n").expect("note frontmatter");
+    let (frontmatter, body) = contents
+        .split_once("\n---\n")
+        .expect("frontmatter terminator");
+    let mut frontmatter: serde_yaml::Value =
+        serde_yaml::from_str(frontmatter).expect("parse note frontmatter");
+    if let Some(mapping) = frontmatter.as_mapping_mut() {
+        mapping.remove(serde_yaml::Value::String("gmail_archived".into()));
+    }
+    let mut body_without_receipt = String::new();
+    let mut in_receipt = false;
+    for line in body.split_inclusive('\n') {
+        match line.trim() {
+            BEGIN => {
+                assert!(!in_receipt, "receipt span is not nested");
+                in_receipt = true;
+            }
+            END => {
+                assert!(in_receipt, "receipt end has a begin");
+                in_receipt = false;
+            }
+            _ if !in_receipt => body_without_receipt.push_str(line),
+            _ => {}
+        }
+    }
+    assert!(!in_receipt, "receipt span is closed");
+    (frontmatter, body_without_receipt)
+}
+
+fn assert_receipt_projection_only(before: &str, after: &str) {
+    assert_eq!(
+        receipt_neutral(before),
+        receipt_neutral(after),
+        "unarchive may change only gmail_archived and the managed banner"
+    );
+}
+
+fn gmail_journal_path(env: &GmailEnv) -> PathBuf {
+    fs::read_dir(env.vault().join(".bob/gmail"))
+        .expect("Gmail journal directory")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .expect("Gmail journal file")
+}
+
 #[test]
 fn unarchive_restores_only_frozen_ids_and_clears_the_note_receipt() {
     let env = GmailEnv::new("bob-cli-gmail-unarchive-exact-ids");
@@ -2746,6 +2985,582 @@ fn unarchive_works_with_archive_disabled_and_uses_the_recorded_label_id() {
         call.contains(&RECEIPT_ID.to_string())
             && !call.contains(&"bob/finished".to_string())
     }));
+}
+
+#[test]
+fn unarchive_wrong_writer_fails_before_gog_or_vault_writes() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-wrong-writer");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let before_note = note_text(&env, &note);
+    let before_journal = journal_text(&env);
+    let before_markdown = markdown_snapshot(&env);
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  writer: another-host\n  sync:\n    archive: on\n"
+    ));
+    fake.clear_calls();
+
+    let refused = run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(&refused, 2, "live restore requires its configured writer");
+    let value = json_stdout(&refused);
+    assert_eq!(value["error"]["kind"], "writer");
+    assert!(value["error"]["hint"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("another-host"));
+    assert!(fake.calls().is_empty(), "writer refusal precedes gog calls");
+    assert!(remote_write_calls(&fake).is_empty());
+    assert_eq!(note_text(&env, &note), before_note);
+    assert_eq!(journal_text(&env), before_journal);
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[]);
+}
+
+#[test]
+fn unarchive_missing_modify_scope_is_typed_setup_failure_without_writes() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-missing-modify");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let before_note = note_text(&env, &note);
+    let before_journal = journal_text(&env);
+    let before_markdown = markdown_snapshot(&env);
+    fake.set_accounts(json!([{
+        "email": ACCOUNT,
+        "client": "bob-gmail",
+        "services": ["gmail"],
+        "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+    }]));
+    fake.clear_calls();
+
+    let refused = run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(&refused, 2, "missing Gmail modify scope is setup failure");
+    let error = &json_stdout(&refused)["error"];
+    assert_eq!(error["kind"], "modify_grant");
+    assert!(error["hint"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("bob gmail login -s modify"));
+    assert!(remote_write_calls(&fake).is_empty());
+    assert_eq!(note_text(&env, &note), before_note);
+    assert_eq!(journal_text(&env), before_journal);
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+}
+
+#[test]
+fn unarchive_partial_metadata_failure_settles_only_the_successful_thread() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-partial-metadata");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let (note_a, note_b) = create_two_owned_receipts(&env, &fake);
+    let before_a = note_text(&env, &note_a);
+    let before_b = note_text(&env, &note_b);
+    let before_markdown = markdown_snapshot(&env);
+    fake.set_fail_after(
+        "message_get",
+        "notFound: synthetic recorded-message metadata failure",
+        1,
+        1,
+    );
+    fake.clear_calls();
+
+    let output =
+        run_gmail(&env, &fake, &["unarchive", &note_a, &note_b, "-f", "json"]);
+    assert_exit(
+        &output,
+        1,
+        "one failed input does not erase the other result",
+    );
+    let value = json_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["results"].as_array().unwrap().len(), 2);
+    assert_eq!(value["results"][0]["action"], "restored");
+    assert_eq!(value["results"][1]["action"], "failed");
+    assert_eq!(value["results"][1]["error"]["kind"], "not_found");
+    assert_eq!(fake.message_labels(MESSAGE_A), vec!["INBOX", ENROLLMENT_ID]);
+    assert_eq!(
+        fake.message_labels(MESSAGE_C),
+        vec![RECEIPT_ID, ENROLLMENT_ID]
+    );
+    assert!(journal_has(&env, "gmail.restored"));
+    assert_eq!(journal_text(&env).matches("gmail.restored").count(), 1);
+    assert_receipt_projection_only(&before_a, &note_text(&env, &note_a));
+    assert_eq!(note_text(&env, &note_b), before_b);
+    assert_unrelated_markdown_unchanged(
+        &env,
+        &before_markdown,
+        &[&note_a, &note_b],
+    );
+}
+
+#[test]
+fn unarchive_retries_after_remote_success_and_journal_append_failure() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-journal-retry");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let before_note = note_text(&env, &note);
+    let before_markdown = markdown_snapshot(&env);
+    fake.make_archive_journal_readonly_after_batch();
+    fake.clear_calls();
+
+    let interrupted =
+        run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(
+        &interrupted,
+        1,
+        "journal failure follows successful Gmail restore",
+    );
+    let first = json_stdout(&interrupted);
+    assert_eq!(first["results"][0]["action"], "failed");
+    assert_eq!(first["results"][0]["error"]["kind"], "journal");
+    assert_eq!(fake.message_labels(MESSAGE_A), vec!["INBOX", ENROLLMENT_ID]);
+    assert!(!journal_has(&env, "gmail.restored"));
+    assert_eq!(note_text(&env, &note), before_note);
+    assert!(remote_write_calls(&fake)
+        .iter()
+        .any(|call| call.iter().any(|arg| arg == "gmail.batch.modify")));
+
+    let journal = gmail_journal_path(&env);
+    let mut permissions = fs::metadata(&journal)
+        .expect("archive journal metadata")
+        .permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&journal, permissions)
+        .expect("make the journal writable for retry");
+    fake.clear_calls();
+    let retry = run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(&retry, 0, "retry settles the already-restored remote state");
+    assert_eq!(json_stdout(&retry)["results"][0]["action"], "restored");
+    assert_eq!(
+        json_stdout(&retry)["results"][0]["reason"],
+        "already_in_inbox"
+    );
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "retry does not modify Gmail twice"
+    );
+    assert_eq!(journal_text(&env).matches("gmail.restored").count(), 1);
+    assert_receipt_projection_only(&before_note, &note_text(&env, &note));
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+}
+
+#[test]
+fn unarchive_detects_concurrent_release_and_sequential_reply_let_go() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-stale-ownership");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let journal = gmail_journal_path(&env);
+    let owned_journal = fs::read(&journal).expect("owned journal bytes");
+    let owned_note = note_text(&env, &note);
+
+    // Capture the exact let-go event a real sync writes after a reply, then
+    // restore the owned snapshot so the fake can inject that release between
+    // unarchive's journal read and its ownership recheck.
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX", ENROLLMENT_ID]),
+        ],
+    );
+    let released =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&released, 0, "sync lets go after a new reply");
+    assert_eq!(json_stdout(&released)["archive"][0]["action"], "let_go");
+    let released_journal = fs::read(&journal).expect("released journal bytes");
+    assert!(String::from_utf8_lossy(&released_journal).contains("gmail.let_go"));
+
+    fs::write(&journal, &owned_journal)
+        .expect("restore owned journal snapshot");
+    fs::write(env.vault().join(&note), &owned_note)
+        .expect("restore owned note projection");
+    fake.set_messages(json!({
+        MESSAGE_A: {"threadId": THREAD_A, "labelIds": [RECEIPT_ID, ENROLLMENT_ID]}
+    }));
+    let before_markdown = markdown_snapshot(&env);
+    fake.clear_calls();
+    fake.write_vault_before_message_metadata_read(
+        MESSAGE_A,
+        1,
+        &journal,
+        &released_journal,
+    );
+    let concurrent =
+        run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(&concurrent, 1, "concurrent let-go makes the receipt stale");
+    let row = &json_stdout(&concurrent)["results"][0];
+    assert_eq!(row["action"], "failed");
+    assert_eq!(row["error"]["kind"], "stale_ownership");
+    assert!(remote_write_calls(&fake).is_empty());
+    assert!(!journal_has(&env, "gmail.restored"));
+    assert_eq!(note_text(&env, &note), owned_note);
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+
+    // The ordinary sequential reply path also leaves a harmless typed no-op
+    // for a later explicit undo.
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-after-let-go");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX", ENROLLMENT_ID]),
+        ],
+    );
+    let let_go =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&let_go, 0, "sync releases after reply");
+    let before_note = note_text(&env, &note);
+    let before_markdown = markdown_snapshot(&env);
+    fake.clear_calls();
+    let unchanged = run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(&unchanged, 0, "released receipt is a harmless no-op");
+    assert_eq!(json_stdout(&unchanged)["results"][0]["action"], "unchanged");
+    assert_eq!(
+        json_stdout(&unchanged)["results"][0]["reason"],
+        "no_owned_receipt"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    assert!(!journal_has(&env, "gmail.restored"));
+    assert_eq!(note_text(&env, &note), before_note);
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+}
+
+#[test]
+fn unarchive_invalid_grant_reports_remaining_input_without_mutating_it() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-invalid-grant");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let (note_a, note_b) = create_two_owned_receipts(&env, &fake);
+    let before_a = note_text(&env, &note_a);
+    let before_b = note_text(&env, &note_b);
+    let before_markdown = markdown_snapshot(&env);
+    fake.set_failure(
+        "batch_modify",
+        "invalid_grant: synthetic revoked token",
+        1,
+    );
+    fake.clear_calls();
+
+    let output =
+        run_gmail(&env, &fake, &["unarchive", &note_a, &note_b, "-f", "json"]);
+    assert_exit(&output, 2, "invalid_grant stops remaining restores");
+    let value = json_stdout(&output);
+    assert_eq!(value["results"].as_array().unwrap().len(), 2);
+    assert_eq!(value["results"][0]["action"], "failed");
+    assert_eq!(value["results"][0]["error"]["kind"], "invalid_grant");
+    assert!(value["results"][0]["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("sign-in needs renewal"));
+    assert_eq!(value["results"][1]["action"], "failed");
+    assert_eq!(value["results"][1]["error"]["kind"], "aborted");
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec![RECEIPT_ID, ENROLLMENT_ID]
+    );
+    assert_eq!(
+        fake.message_labels(MESSAGE_C),
+        vec![RECEIPT_ID, ENROLLMENT_ID]
+    );
+    assert!(!journal_has(&env, "gmail.restored"));
+    assert_eq!(note_text(&env, &note_a), before_a);
+    assert_eq!(note_text(&env, &note_b), before_b);
+    assert_unrelated_markdown_unchanged(
+        &env,
+        &before_markdown,
+        &[&note_a, &note_b],
+    );
+    assert_eq!(
+        remote_write_calls(&fake)
+            .iter()
+            .filter(|call| call.iter().any(|arg| arg == "gmail.batch.modify"))
+            .count(),
+        1,
+        "only the first restore attempted a mutation"
+    );
+}
+
+#[test]
+fn unarchive_policy_exclusions_do_not_mutate_spam_or_trash() {
+    for policy_label in ["SPAM", "TRASH"] {
+        let env =
+            GmailEnv::new(&format!("bob-cli-gmail-unarchive-{policy_label}"));
+        let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+        let note = create_owned_receipt(&env, &fake);
+        fake.set_messages(json!({
+            MESSAGE_A: {
+                "threadId": THREAD_A,
+                "labelIds": [RECEIPT_ID, ENROLLMENT_ID, policy_label]
+            }
+        }));
+        let before_note = note_text(&env, &note);
+        let before_markdown = markdown_snapshot(&env);
+        fake.clear_calls();
+
+        let output =
+            run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+        assert_exit(&output, 1, "policy-excluded message is not restored");
+        assert_eq!(
+            json_stdout(&output)["results"][0]["error"]["kind"],
+            "policy_excluded"
+        );
+        assert_eq!(note_text(&env, &note), before_note);
+        assert_eq!(
+            fake.message_labels(MESSAGE_A),
+            vec![RECEIPT_ID, ENROLLMENT_ID, policy_label]
+        );
+        assert!(remote_write_calls(&fake).is_empty());
+        assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+    }
+}
+
+#[test]
+fn unarchive_ambiguous_stem_fails_without_mutating_notes_or_mail() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-ambiguous-stem");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let (note_a, note_b) = create_two_owned_receipts(&env, &fake);
+    let shared_a = env.vault().join("mail/unarchive-a/shared.md");
+    let shared_b = env.vault().join("mail/unarchive-b/shared.md");
+    fs::create_dir_all(shared_a.parent().unwrap())
+        .expect("first alias directory");
+    fs::create_dir_all(shared_b.parent().unwrap())
+        .expect("second alias directory");
+    fs::rename(env.vault().join(&note_a), &shared_a).expect("move first note");
+    fs::rename(env.vault().join(&note_b), &shared_b).expect("move second note");
+    let before_markdown = markdown_snapshot(&env);
+    fake.clear_calls();
+
+    let output = run_gmail(&env, &fake, &["unarchive", "shared", "-f", "json"]);
+    assert_exit(&output, 2, "ambiguous note stem is a typed setup error");
+    assert_eq!(
+        json_stdout(&output)["results"][0]["error"]["kind"],
+        "ambiguous_identity"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[]);
+}
+
+#[test]
+fn unarchive_other_account_note_fails_and_unknown_thread_is_unchanged() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-cross-account");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let foreign = env.vault().join("mail/foreign/other-account.md");
+    fs::create_dir_all(foreign.parent().unwrap())
+        .expect("foreign note directory");
+    let text = note_text(&env, &note);
+    let foreign_text = text.replace(
+        &format!("gmail_account: {ACCOUNT}"),
+        "gmail_account: other@example.com",
+    );
+    assert_ne!(foreign_text, text, "the copied note has a foreign account");
+    fs::write(&foreign, foreign_text).expect("write foreign-account note");
+    let before_markdown = markdown_snapshot(&env);
+    fake.clear_calls();
+
+    let foreign_path = "mail/foreign/other-account.md";
+    let refused =
+        run_gmail(&env, &fake, &["unarchive", foreign_path, "-f", "json"]);
+    assert_exit(&refused, 2, "cross-account note is refused");
+    assert_eq!(
+        json_stdout(&refused)["results"][0]["error"]["kind"],
+        "cross_account"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[]);
+
+    fake.clear_calls();
+    let absent = run_gmail(&env, &fake, &["unarchive", THREAD_D, "-f", "json"]);
+    assert_exit(&absent, 0, "unknown thread has no restore authority");
+    assert_eq!(json_stdout(&absent)["results"][0]["action"], "unchanged");
+    assert_eq!(
+        json_stdout(&absent)["results"][0]["reason"],
+        "no_owned_receipt"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[]);
+}
+
+#[test]
+fn unarchive_unsafe_journal_fails_each_input_without_mutation() {
+    let env = GmailEnv::new("bob-cli-gmail-unarchive-unsafe-journal");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let before_note = note_text(&env, &note);
+    let journal = gmail_journal_path(&env);
+    use std::io::Write;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&journal)
+        .expect("open journal")
+        .write_all(b"not a journal event\n")
+        .expect("make journal unsafe");
+    let before_markdown = markdown_snapshot(&env);
+    fake.clear_calls();
+
+    let output =
+        run_gmail(&env, &fake, &["unarchive", &note, THREAD_D, "-f", "json"]);
+    assert_exit(&output, 1, "unsafe journal reports every input");
+    let output_value = json_stdout(&output);
+    let results = output_value["results"].as_array().expect("per-input rows");
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|row| {
+        row["action"] == "failed" && row["error"]["kind"] == "unsafe_journal"
+    }));
+    assert!(remote_write_calls(&fake).is_empty());
+    assert_eq!(note_text(&env, &note), before_note);
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+}
+
+#[test]
+fn archive_restore_sync_flow_shows_historical_restored_state_without_rearchiving(
+) {
+    let env = GmailEnv::new("bob-cli-gmail-archive-restore-flow");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let before_note = note_text(&env, &note);
+
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "sync exposes the archived history");
+    assert_eq!(json_stdout(&archived)["recent_archive"]["count"], 1);
+    assert_eq!(
+        json_stdout(&archived)["recent_archive"]["items"][0]["state"],
+        "archived"
+    );
+    let listed = run_gmail(&env, &fake, &["list", "-a", "-f", "json"]);
+    assert_exit(&listed, 0, "list exposes the active receipt");
+    let listed_value = json_stdout(&listed);
+    let listed_thread = listed_value["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["thread_id"] == THREAD_A)
+        .expect("listed archived thread");
+    assert_eq!(listed_thread["archive_receipts"][0]["message_count"], 1);
+    assert_eq!(
+        listed_thread["archive_receipts"][0]["label"]["name"],
+        "bob/closed"
+    );
+
+    let before_markdown = markdown_snapshot(&env);
+    let restored = run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(&restored, 0, "explicit restore clears the active receipt");
+    assert_eq!(json_stdout(&restored)["results"][0]["action"], "restored");
+    assert_receipt_projection_only(&before_note, &note_text(&env, &note));
+    assert!(!note_text(&env, &note).contains("gmail_archived:"));
+    assert!(!note_text(&env, &note).contains("bob:gmail:receipt:begin"));
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+    let cleared = run_gmail(&env, &fake, &["list", "-a", "-f", "json"]);
+    assert_exit(&cleared, 0, "list confirms that no active receipt remains");
+    let cleared_value = json_stdout(&cleared);
+    let cleared_thread = cleared_value["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["thread_id"] == THREAD_A)
+        .expect("listed restored thread");
+    assert_eq!(cleared_thread["archive_receipts"], json!([]));
+
+    fake.clear_calls();
+    let after =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&after, 0, "later sync reads the restored history");
+    let after_value = json_stdout(&after);
+    assert_eq!(after_value["recent_archive"]["count"], 1);
+    assert_eq!(
+        after_value["recent_archive"]["items"][0]["state"],
+        "restored"
+    );
+    assert!(!after_value["archive"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["action"] == "archived"));
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "restored mail is not rearchived"
+    );
+}
+
+#[test]
+fn reopen_restore_and_reclose_archives_a_new_generation() {
+    let mut env = GmailEnv::new("bob-cli-gmail-unarchive-new-generation");
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let note = create_owned_receipt(&env, &fake);
+    let first_sync =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&first_sync, 0, "read initial archive event");
+    let first_event = json_stdout(&first_sync)["recent_archive"]["items"][0]
+        ["archive_event_id"]
+        .as_str()
+        .expect("first event id")
+        .to_string();
+    let first_stamp = json_stdout(&first_sync)["recent_archive"]["items"][0]
+        ["archived_at"]
+        .as_str()
+        .expect("first archive timestamp")
+        .to_string();
+    let first_note = note_text(&env, &note);
+
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID])],
+    );
+    set_inbox_task_status(&env, ' ');
+    fake.clear_calls();
+    let reopened =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&reopened, 0, "reopening reports the receipt restore hint");
+    assert_eq!(
+        json_stdout(&reopened)["archive_hints"][0]["thread_id"],
+        THREAD_A
+    );
+    assert_eq!(note_text(&env, &note), first_note);
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "reopen never restores mail"
+    );
+
+    let before_markdown = markdown_snapshot(&env);
+    fake.clear_calls();
+    let restored = run_gmail(&env, &fake, &["unarchive", &note, "-f", "json"]);
+    assert_exit(&restored, 0, "explicit undo releases the first generation");
+    assert_eq!(json_stdout(&restored)["results"][0]["action"], "restored");
+    assert_receipt_projection_only(&first_note, &note_text(&env, &note));
+    assert_unrelated_markdown_unchanged(&env, &before_markdown, &[&note]);
+
+    env.set_now("2026-11-05 12:01:00");
+    set_inbox_task_status(&env, 'x');
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    fake.clear_calls();
+    let rearchived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(
+        &rearchived,
+        0,
+        "later close creates a fresh archive generation",
+    );
+    let value = json_stdout(&rearchived);
+    assert_eq!(value["archive"][0]["action"], "archived");
+    assert_eq!(value["recent_archive"]["count"], 1);
+    assert_eq!(value["recent_archive"]["items"][0]["state"], "archived");
+    let second_event = value["recent_archive"]["items"][0]["archive_event_id"]
+        .as_str()
+        .expect("second event id");
+    assert_ne!(
+        second_event, first_event,
+        "new close has a distinct archive event"
+    );
+    let final_note = note_text(&env, &note);
+    assert_ne!(archived_stamp(&final_note), first_stamp);
+    assert_eq!(
+        archived_stamp(&final_note),
+        value["recent_archive"]["items"][0]["archived_at"]
+    );
+    assert_eq!(final_note.matches("bob:gmail:receipt:begin").count(), 1);
+    assert!(final_note.contains("gmail_archived:"));
 }
 
 #[test]

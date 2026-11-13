@@ -498,9 +498,10 @@ fn print_archive_preview(styler: &Styler, report: &SyncReport, quiet: bool) {
             println!(
                 "  {}",
                 styler.blue(&format!(
-                    "↩ reopened {} → {} (archived mail stays in Gmail; restore stays manual: Move to Inbox in Gmail)",
+                    "↩ reopened {} → {} (archived mail stays in Gmail; restore with: bob gmail unarchive -- {})",
                     hint.thread_id,
-                    inert_single_line(&hint.note)
+                    inert_single_line(&hint.note),
+                    hint.thread_id
                 ))
             );
         }
@@ -659,7 +660,7 @@ fn json_document(report: &SyncReport) -> Value {
             "kind": hint.kind,
             "thread_id": hint.thread_id,
             "note": hint.note,
-            "message": "Task reopened; archived mail stays in Gmail; restore stays manual: Move to Inbox in Gmail.",
+            "message": "Task reopened; archived mail stays in Gmail. Restore with bob gmail unarchive.",
         })).collect::<Vec<_>>(),
         "summary": {
             "watching": report.watching,
@@ -1141,6 +1142,10 @@ mod tests {
         assert_eq!(value["archive"][0]["tasks"][0]["line"], 12);
         assert_eq!(value["archive"][0]["tasks"][0]["block_id"], "follow-up");
         assert_eq!(value["archive_hints"][0]["kind"], "restore_to_inbox");
+        assert_eq!(
+            value["archive_hints"][0]["message"],
+            "Task reopened; archived mail stays in Gmail. Restore with bob gmail unarchive."
+        );
         assert_eq!(value["summary"]["archived"], 1);
     }
 

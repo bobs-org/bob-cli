@@ -325,19 +325,20 @@ fn run_inner(args: &UnarchiveArgs) -> Result<(Vec<Row>, bool), GmailError> {
                                 super::sync::retry::is_auth_abort(&error);
                             auth_failed |= auth;
                             setup_failure |= error.exit_code() == 2;
+                            let mut mapped_error = row_error(error);
+                            if auth {
+                                mapped_error.setup = true;
+                            }
                             rows.push(Row::failed(
                                 input,
                                 Some(target),
-                                row_error(error),
+                                mapped_error,
                             ));
                             if auth_failed {
                                 break;
                             }
                         }
                     }
-                }
-                if auth_failed {
-                    break;
                 }
             }
         }

@@ -143,6 +143,7 @@ pub(crate) struct ArchiveTerminalRecord {
     archive_event_id: Option<String>,
     pub(crate) kind: ArchiveTerminalKind,
     pub(crate) ts: DateTime<FixedOffset>,
+    pub(crate) writer_order: (DateTime<FixedOffset>, String, String, u32),
 }
 
 /// An owned, still-live archive receipt, suitable for the later undo phase.
@@ -155,6 +156,7 @@ pub(crate) struct ArchiveReceipt {
     pub(crate) recovered: bool,
     pub(crate) archived_at: DateTime<FixedOffset>,
     pub(crate) archive_event_id: String,
+    pub(crate) writer_order: (DateTime<FixedOffset>, String, String, u32),
 }
 
 /// The accepted state of one archived generation, including generations
@@ -1144,6 +1146,7 @@ impl ArchiveJournal {
                     recovered: *recovered,
                     archived_at: parsed.ts,
                     archive_event_id: parsed.event_id.clone(),
+                    writer_order: parsed.writer_order.clone(),
                 };
                 generation.receipt = Some(receipt);
                 generation.first_terminal = Some(parsed.clone());
@@ -1805,6 +1808,12 @@ fn parse_terminal(event: &StoredEvent) -> Option<ArchiveTerminalRecord> {
         archive_event_id,
         kind,
         ts: event.ts,
+        writer_order: (
+            event.ts,
+            event.host.clone(),
+            event.path.clone(),
+            event.line,
+        ),
     })
 }
 
@@ -2456,6 +2465,23 @@ mod tests {
         );
         push(&mut events, &first_archive, "athena", 100_000);
         state = ArchiveJournal::from_events(events.clone(), Vec::new());
+        let recovered_only = super::super::archive_projection::recent_archive(
+            &state,
+            ACCOUNT,
+            chrono_tz::UTC,
+            Utc.timestamp_opt(100_001, 0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(recovered_only.count, 1);
+        assert_eq!(
+            recovered_only.items[0].archive_event_id,
+            first_archive.value["event_id"].as_str().unwrap()
+        );
+        assert_eq!(recovered_only.items[0].state, "archived");
+        assert_eq!(
+            recovered_only.items[0].label.id.as_deref(),
+            Some("old-label")
+        );
 
         let open = evidence(key(), ' ');
         let open_scan = scan(open.clone());
@@ -2483,7 +2509,9 @@ mod tests {
                 recovered: false,
             },
         );
-        push(&mut events, &second_archive, "athena", 100_003);
+        // Coarse timestamps can tie; same-host journal order still identifies
+        // the later generation as the thread's newest accepted archive.
+        push(&mut events, &second_archive, "athena", 100_000);
         let folded = ArchiveJournal::from_events(events, Vec::new());
         let owned: Vec<_> = folded.owned_receipts().collect();
         assert_eq!(owned.len(), 2);
@@ -2527,24 +2555,6 @@ mod tests {
                 .get(&("other@example.com".to_string(), THREAD.to_string()))
                 .is_none(),
             "thread IDs from another account never inherit this receipt"
-        );
-
-        let recovered_only = super::super::archive_projection::recent_archive(
-            &folded,
-            ACCOUNT,
-            chrono_tz::UTC,
-            Utc.timestamp_opt(100_001, 0).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(recovered_only.count, 1);
-        assert_eq!(
-            recovered_only.items[0].archive_event_id,
-            first_archive.value["event_id"].as_str().unwrap()
-        );
-        assert_eq!(recovered_only.items[0].state, "archived");
-        assert_eq!(
-            recovered_only.items[0].label.id.as_deref(),
-            Some("old-label")
         );
 
         let recent = super::super::archive_projection::recent_archive(

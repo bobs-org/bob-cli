@@ -103,9 +103,9 @@ On the approved archive writer only, also grant modify:
 bob gmail login -s modify
 ```
 
-That requests Gmail's broader modify scope for label-only archiving; restore
-stays manual: Move to Inbox in Gmail. It cannot permanently delete mail. Keep
-this grant off agent hosts.
+That requests Gmail's broader modify scope for label-only archiving and explicit
+receipt restore with `bob gmail unarchive -- <thread-id>`. It cannot permanently
+delete mail. Keep this grant off agent hosts.
 
 A valid grant is idempotent: login still prints all three steps, reports
 `already connected`, rechecks one Gmail search page, and reports the granted

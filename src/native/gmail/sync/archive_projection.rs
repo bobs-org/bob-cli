@@ -83,7 +83,7 @@ pub(crate) fn list_receipts(
             .into_iter()
             .map(|(identity, mut values)| {
                 values.sort_by(|left, right| {
-                    right.archived_at.cmp(&left.archived_at).then_with(|| {
+                    right.writer_order.cmp(&left.writer_order).then_with(|| {
                         left.archive_event_id.cmp(&right.archive_event_id)
                     })
                 });
@@ -119,10 +119,7 @@ pub(crate) fn recent_archive(
             continue;
         }
         let replace = newest_by_thread.get(&receipt.key).is_none_or(|prior| {
-            receipt.archived_at > prior.receipt.archived_at
-                || (receipt.archived_at == prior.receipt.archived_at
-                    && receipt.archive_event_id
-                        > prior.receipt.archive_event_id)
+            receipt.writer_order > prior.receipt.writer_order
         });
         if replace {
             newest_by_thread.insert(receipt.key.clone(), record);

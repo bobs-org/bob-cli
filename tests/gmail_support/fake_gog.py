@@ -1522,6 +1522,24 @@ if op == "thread_get":
 
 if op == "message_get":
     hex_id = pos[2] if len(pos) > 2 else "msg1"
+    counts = state.setdefault("metadata_message_get_counts", {})
+    counts[hex_id] = int(counts.get(hex_id) or 0) + 1
+    hook = (state.get("metadata_message_hooks") or {}).get(hex_id)
+    if (
+        isinstance(hook, dict)
+        and not hook.get("fired")
+        and counts[hex_id] == int(hook.get("occurrence") or 0)
+    ):
+        hook["fired"] = True
+        action = hook.get("action") or {}
+        if action.get("type") == "write_file":
+            target = Path(action.get("path") or "")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(bytes(action.get("bytes") or []))
+        else:
+            save_state(state)
+            fail("fake gog: invalid metadata message hook", 2)
+        save_state(state)
     if scenario == "message_mismatch":
         hex_id = "2222222222222222"
     if scenario in {"message_malformed", "malformed_json"}:

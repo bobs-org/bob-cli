@@ -85,6 +85,7 @@ pub(crate) struct GmailEnv {
     dir: TempDir,
     vault: PathBuf,
     config: PathBuf,
+    now: String,
 }
 
 impl GmailEnv {
@@ -100,7 +101,12 @@ impl GmailEnv {
             format!("gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n"),
         )
         .expect("write gmail config");
-        Self { dir, vault, config }
+        Self {
+            dir,
+            vault,
+            config,
+            now: NOW.to_string(),
+        }
     }
 
     pub(crate) fn vault(&self) -> &Path {
@@ -117,6 +123,10 @@ impl GmailEnv {
 
     pub(crate) fn write_config(&self, text: &str) {
         fs::write(&self.config, text).expect("write gmail config");
+    }
+
+    pub(crate) fn set_now(&mut self, now: &str) {
+        self.now = now.to_string();
     }
 
     /// A `bob` command isolated to this vault and config.
@@ -166,7 +176,7 @@ impl GmailEnv {
             .env("BOB_DIR", self.vault())
             .env("BOB_CONFIG_FILE", self.config())
             .env("HOSTNAME", HOST)
-            .env("BOB_NOW", NOW)
+            .env("BOB_NOW", &self.now)
             .env("GIT_AUTHOR_DATE", "2026-11-05T17:00:00Z")
             .env("GIT_COMMITTER_DATE", "2026-11-05T17:00:00Z")
             .env("BOB_GMAIL_CONSENT_SECS", "20")
@@ -452,6 +462,47 @@ impl FakeGog {
         );
     }
 
+    /// Change a synthetic vault file immediately before a recorded-message
+    /// metadata response. Unarchive uses `messages.get`, unlike sync's
+    /// thread metadata reads.
+    pub(crate) fn write_vault_before_message_metadata_read(
+        &self,
+        message_id: &str,
+        occurrence: u32,
+        path: &Path,
+        bytes: &[u8],
+    ) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !state
+            .get("metadata_message_hooks")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["metadata_message_hooks"] = serde_json::json!({});
+        }
+        if !state
+            .get("metadata_message_get_counts")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["metadata_message_get_counts"] = serde_json::json!({});
+        }
+        state["metadata_message_get_counts"][message_id] =
+            serde_json::Value::from(0);
+        state["metadata_message_hooks"][message_id] = serde_json::json!({
+            "occurrence": occurrence,
+            "action": {
+                "type": "write_file",
+                "path": path,
+                "bytes": bytes,
+            },
+            "fired": false,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write message metadata hook");
+    }
+
     /// Replace a synthetic Gmail thread immediately before its selected
     /// metadata response, modeling a real remote state transition.
     pub(crate) fn replace_thread_before_metadata_read(
@@ -525,6 +576,18 @@ impl FakeGog {
         state["labels"] = labels;
         fs::write(&self.state, serde_json::to_vec(&state).unwrap())
             .expect("write fake labels state");
+    }
+
+    /// Replace the fake connected-account scopes without changing the
+    /// credentials or other Gmail state.
+    pub(crate) fn set_accounts(&self, accounts: serde_json::Value) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["accounts"] = accounts;
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake accounts state");
     }
 
     /// Seed a stateful set of Gmail messages keyed by message ID. Each entry
