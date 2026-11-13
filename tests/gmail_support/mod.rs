@@ -185,6 +185,17 @@ impl GmailEnv {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        // Forward archive boundary fault-injection seams. The harness clears
+        // the environment, so test-only `BOB_GMAIL_ARCHIVE_TEST_*` vars set
+        // via `std::env::set_var` must be explicitly passed through.
+        for key in [
+            "BOB_GMAIL_ARCHIVE_TEST_REOPEN_THREAD",
+            "BOB_GMAIL_ARCHIVE_TEST_FORCE_ARCHIVABLE",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
         command
     }
 

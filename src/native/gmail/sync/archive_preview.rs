@@ -411,7 +411,7 @@ pub(crate) fn remote_verdict<R: GmailRead>(
     enrollment_id: &str,
     receipt: &ArchiveLabelIdentity,
     policy: &NeverSavePolicy,
-) -> RemoteVerdict {
+) -> Result<RemoteVerdict, GmailError> {
     remote_verdict_for_saved_ids(
         reader,
         account,
@@ -426,6 +426,13 @@ pub(crate) fn remote_verdict<R: GmailRead>(
 
 /// Evaluate remote metadata using the close's frozen saved IDs when one
 /// exists. Backlog callers pass the current scan's IDs instead.
+///
+/// Recovery ordering: a crash can leave frozen messages carrying the
+/// receipt with no archived event. That evidence is evaluated before
+/// consent, policy, and unsaved checks, so a reply or a removed enrollment
+/// label after the crash still records the recovered ownership once. An
+/// `invalid_grant` from the never-save policy read aborts like every other
+/// call site.
 pub(crate) fn remote_verdict_for_saved_ids<R: GmailRead>(
     reader: &R,
     account: &str,
@@ -435,7 +442,7 @@ pub(crate) fn remote_verdict_for_saved_ids<R: GmailRead>(
     enrollment_id: &str,
     receipt: &ArchiveLabelIdentity,
     policy: &NeverSavePolicy,
-) -> RemoteVerdict {
+) -> Result<RemoteVerdict, GmailError> {
     if thread.id != evidence.key.thread_id()
         || thread.messages.is_empty()
         || thread
@@ -443,13 +450,22 @@ pub(crate) fn remote_verdict_for_saved_ids<R: GmailRead>(
             .iter()
             .any(|message| message.thread_id != evidence.key.thread_id())
     {
-        return RemoteVerdict::Held {
+        return Ok(RemoteVerdict::Held {
             reason: HOLD_UNRESOLVABLE,
             warning: Some(format!(
                 "skipped Gmail thread {}: unresolvable: Gmail returned a different thread identity",
                 evidence.key.thread_id(),
             )),
-        };
+        });
+    }
+    // Crash recovery first: frozen receipt-bearing IDs with no archived
+    // event reconcile once, even past a removed enrollment label, a policy
+    // exclusion, or a new unsaved reply. It covers only the frozen set.
+    if has_receipt(thread, saved_ids, receipt) {
+        return Ok(RemoteVerdict::Held {
+            reason: HOLD_UNRECONCILED,
+            warning: None,
+        });
     }
     if !thread
         .messages
@@ -457,24 +473,27 @@ pub(crate) fn remote_verdict_for_saved_ids<R: GmailRead>(
         .flat_map(|message| &message.label_ids)
         .any(|label| label == enrollment_id)
     {
-        return RemoteVerdict::Kept {
+        return Ok(RemoteVerdict::Kept {
             reason: KEPT_CONSENT_REMOVED,
-        };
+        });
     }
     if has_spam_or_trash(thread) || has_inbox_draft(thread) {
-        return RemoteVerdict::Kept {
+        return Ok(RemoteVerdict::Kept {
             reason: KEPT_POLICY,
-        };
+        });
     }
     match policy::check(reader, account, thread, policy) {
         Ok(()) => {}
         Err(error) if error.kind() == "never_save" => {
-            return RemoteVerdict::Kept {
+            return Ok(RemoteVerdict::Kept {
                 reason: KEPT_POLICY,
-            };
+            });
+        }
+        Err(error) if is_auth_abort(&error) => {
+            return Err(error);
         }
         Err(error) => {
-            return RemoteVerdict::Held {
+            return Ok(RemoteVerdict::Held {
                 reason: HOLD_FETCH_FAILED,
                 warning: Some(format!(
                     "skipped Gmail thread {}: {}: {}",
@@ -482,29 +501,23 @@ pub(crate) fn remote_verdict_for_saved_ids<R: GmailRead>(
                     error.kind(),
                     error.message(),
                 )),
-            };
+            });
         }
     }
     let (archive, unsaved) = frozen_sets(saved_ids, thread);
     if !unsaved.is_empty() {
-        return RemoteVerdict::Kept {
+        return Ok(RemoteVerdict::Kept {
             reason: KEPT_UNSAVED,
-        };
+        });
     }
     if archive.is_empty() {
-        if has_receipt(thread, saved_ids, receipt) {
-            return RemoteVerdict::Held {
-                reason: HOLD_UNRECONCILED,
-                warning: None,
-            };
-        }
-        return RemoteVerdict::Kept {
+        return Ok(RemoteVerdict::Kept {
             reason: KEPT_MANUAL,
-        };
+        });
     }
-    RemoteVerdict::Archive {
+    Ok(RemoteVerdict::Archive {
         archive_ids: archive,
-    }
+    })
 }
 
 /// One thread row of the canonical digest document.
@@ -829,7 +842,7 @@ pub(crate) fn preview<R: GmailRead>(
                     &enrollment_id,
                     &receipt,
                     input.policy,
-                ) {
+                )? {
                     RemoteVerdict::Archive { archive_ids } => {
                         rows.push(row_for(
                             evidence,
@@ -1463,7 +1476,9 @@ mod tests {
             ENROLLMENT_ID,
             &receipt(),
             &policy,
-        ) {
+        )
+        .expect("verdict")
+        {
             RemoteVerdict::Archive { archive_ids } => {
                 assert_eq!(
                     archive_ids,
@@ -1498,7 +1513,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy,
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_UNSAVED
             }
@@ -1516,7 +1532,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy,
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_MANUAL
             }
@@ -1545,7 +1562,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_UNSAVED
             }
@@ -1562,7 +1580,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_CONSENT_REMOVED
             }
@@ -1585,7 +1604,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_POLICY
             }
@@ -1608,7 +1628,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_POLICY
             }
@@ -1636,7 +1657,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &blocked
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_POLICY
             }
@@ -1661,7 +1683,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Held {
                 reason: HOLD_UNRESOLVABLE,
                 ..
@@ -1678,7 +1701,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Kept {
                 reason: KEPT_MANUAL
             }
@@ -1700,7 +1724,8 @@ mod tests {
                 ENROLLMENT_ID,
                 &receipt(),
                 &policy
-            ),
+            )
+            .expect("verdict"),
             RemoteVerdict::Held {
                 reason: HOLD_UNRECONCILED,
                 ..

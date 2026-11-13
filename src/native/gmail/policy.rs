@@ -115,12 +115,13 @@ fn blocked_address(address: &str, blocked: &[String]) -> bool {
 fn label_lookup_error(error: GmailError) -> GmailError {
     match error.kind() {
         "network" | "timeout" => error,
-        "invalid_grant" | "not_logged_in" | "insufficient_scope" => {
-            GmailError::runtime(
-                "awaiting_sign_in",
-                "the bob-gmail read grant needs attention".to_string(),
-            )
-        }
+        // `invalid_grant` must abort the run like every other call site, so
+        // it is preserved verbatim instead of being folded into a hold.
+        "invalid_grant" => error,
+        "not_logged_in" | "insufficient_scope" => GmailError::runtime(
+            "awaiting_sign_in",
+            "the bob-gmail read grant needs attention".to_string(),
+        ),
         _ => GmailError::runtime(
             "refused",
             "could not verify configured never_save labels".to_string(),

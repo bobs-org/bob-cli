@@ -939,3 +939,729 @@ fn archive_reports_and_journals_never_echo_hostile_task_text() {
     assert!(!report.contains("PRIVATE TASK TEXT"));
     assert!(!journal_text(&env).contains("PRIVATE TASK TEXT"));
 }
+
+// --- Section 2 (boundary) fault-isolation tests ---
+
+fn thread_message_in(thread_id: &str, id: &str, labels: &[&str]) -> Value {
+    json!({
+        "id": id,
+        "threadId": thread_id,
+        "labelIds": labels,
+        "internalDate": "1793908800000",
+        "snippet": "A metadata-only archive fixture.",
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "From", "value": "Ada <ada@example.com>"},
+                {"name": "To", "value": ACCOUNT},
+                {"name": "Subject", "value": "Archive apply probe"},
+                {"name": "Message-ID", "value": format!("<{id}@example.test>")}
+            ],
+            "body": {"size": 5, "data": "SGVsbG8="}
+        }
+    })
+}
+
+fn seed_threads(fake: &FakeGog, threads: Vec<(&str, Vec<Value>)>) {
+    let mut thread_map = serde_json::Map::new();
+    let mut message_map = serde_json::Map::new();
+    for (thread_id, messages) in threads {
+        thread_map.insert(
+            thread_id.to_string(),
+            json!({"thread": {"id": thread_id, "historyId": "1", "messages": messages}}),
+        );
+        for message in &messages {
+            let id = message["id"].as_str().expect("message id").to_string();
+            let label_ids = message["labelIds"].clone();
+            let tid = message["threadId"]
+                .as_str()
+                .unwrap_or(thread_id)
+                .to_string();
+            message_map
+                .insert(id, json!({"threadId": tid, "labelIds": label_ids}));
+        }
+    }
+    fake.set_threads(Value::Object(thread_map));
+    fake.set_messages(Value::Object(message_map));
+}
+
+fn file_adopt_thread(
+    env: &GmailEnv,
+    fake: &FakeGog,
+    thread_id: &str,
+) -> (String, String) {
+    let saved = run_gmail(env, fake, &["save", thread_id, "-f", "json"]);
+    assert_eq!(
+        saved.status.code(),
+        Some(0),
+        "save the watched mail note:\n{}\n{}",
+        stdout(&saved),
+        stderr(&saved)
+    );
+    let doc = json_stdout(&saved);
+    let note = doc["note"].as_str().expect("saved note").to_string();
+    let link = doc["link"].as_str().expect("saved link").to_string();
+    let inbox = env.vault().join("gmail_inbox.md");
+    fs::write(
+        &inbox,
+        format!("#task archive apply probe {link}\n\n- [ ] #task archive apply probe {link}\n"),
+    )
+    .expect("write inbox task");
+    let adopted =
+        run_gmail(env, fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_eq!(
+        adopted.status.code(),
+        Some(0),
+        "adopt the watched thread:\n{}\n{}",
+        stdout(&adopted),
+        stderr(&adopted)
+    );
+    (note, link)
+}
+
+#[test]
+fn boundary_reopened_between_planning_and_mutation_holds_without_writing() {
+    // Unique thread so the reopen seam cannot leak into parallel tests.
+    const THREAD_R: &str = "cccccccccccccccc";
+    const MESSAGE_R: &str = "cccccccccccccccc";
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-reopen");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_threads(
+        &fake,
+        vec![(
+            THREAD_R,
+            vec![thread_message_in(
+                THREAD_R,
+                MESSAGE_R,
+                &["INBOX", ENROLLMENT_ID],
+            )],
+        )],
+    );
+    let (_note, _link) = file_adopt_thread(&env, &fake, THREAD_R);
+    set_inbox_task_status(&env, 'x');
+    fake.clear_calls();
+    unsafe {
+        std::env::set_var("BOB_GMAIL_ARCHIVE_TEST_REOPEN_THREAD", THREAD_R);
+    }
+    let held =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    unsafe {
+        std::env::remove_var("BOB_GMAIL_ARCHIVE_TEST_REOPEN_THREAD");
+    }
+    assert_exit(&held, 1, "reopened evidence holds the run");
+    let value = json_stdout(&held);
+    assert!(
+        value["archive"].as_array().expect("archive").is_empty(),
+        "no terminal row on hold: {value}"
+    );
+    assert!(
+        !journal_has(&env, "gmail.archived"),
+        "no archive without a plannable terminal"
+    );
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "held evidence writes nothing"
+    );
+}
+
+#[test]
+fn boundary_reply_between_read_and_batch_archives_only_frozen_ids() {
+    const MESSAGE_REPLY: &str = "00000000000000c2";
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-race");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    // A reply arrives between the last read and the batch. The thread envelope
+    // the preview reads holds only the frozen ID; the messages map already
+    // holds the reply without INBOX, and the race flips it to INBOX just
+    // before the batch modify. The batch must touch only frozen IDs.
+    fake.set_threads(json!({
+        THREAD_A: {"thread": {"id": THREAD_A, "historyId": "1", "messages": [
+            thread_message_in(THREAD_A, MESSAGE_A, &["INBOX", ENROLLMENT_ID]),
+        ]}}
+    }));
+    fake.set_messages(json!({
+        MESSAGE_A: {"threadId": THREAD_A, "labelIds": ["INBOX", ENROLLMENT_ID]},
+        MESSAGE_REPLY: {"threadId": THREAD_A, "labelIds": [ENROLLMENT_ID]},
+    }));
+    fake.set_batch_race_before_modify(MESSAGE_REPLY, &["INBOX", ENROLLMENT_ID]);
+    fake.clear_calls();
+    // Re-arm the race after clearing the call log (clear_calls preserves state).
+    fake.set_batch_race_before_modify(MESSAGE_REPLY, &["INBOX", ENROLLMENT_ID]);
+    let raced =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&raced, 0, "race after read archives frozen only");
+    let value = json_stdout(&raced);
+    let rows = value["archive"].as_array().expect("archive");
+    assert_eq!(rows[0]["action"], "archived");
+    assert_eq!(rows[0]["messages"], json!([MESSAGE_A]));
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec![RECEIPT_ID.to_string(), ENROLLMENT_ID.to_string()],
+        "only frozen IDs change"
+    );
+    assert_eq!(
+        fake.message_labels(MESSAGE_REPLY),
+        vec!["INBOX".to_string(), ENROLLMENT_ID.to_string()],
+        "the reply stays in INBOX"
+    );
+    assert!(journal_has(&env, "gmail.archived"));
+}
+
+#[test]
+fn boundary_crash_between_let_go_write_and_journal_converges() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-letgo-crash");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive the closed thread");
+    // A reply reopens INBOX membership; the next let-go will crash after its
+    // remote write but before its journal append.
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX"]),
+        ],
+    );
+    // Messages map needs both IDs with correct threadIds for the race-free path.
+    seed_threads(
+        &fake,
+        vec![(
+            THREAD_A,
+            vec![
+                thread_message_in(
+                    THREAD_A,
+                    MESSAGE_A,
+                    &[RECEIPT_ID, ENROLLMENT_ID],
+                ),
+                thread_message_in(THREAD_A, MESSAGE_B, &["INBOX"]),
+            ],
+        )],
+    );
+    fake.clear_calls();
+    fake.make_archive_journal_readonly_after_batch();
+    let crashed =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&crashed, 1, "let-go journal failure fails the run");
+    assert!(
+        !journal_has(&env, "gmail.let_go"),
+        "the failed local append claims nothing"
+    );
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec![ENROLLMENT_ID.to_string()],
+        "the remote let-go succeeded before the crash"
+    );
+    // Restore journal writes; convergence records the release without another write.
+    let journal = env.vault().join(".bob/gmail/test-host.jsonl");
+    let mut permissions = fs::metadata(&journal)
+        .expect("journal metadata")
+        .permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&journal, permissions).expect("restore journal writes");
+    fake.clear_calls();
+    let converged =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&converged, 0, "crash convergence records let-go");
+    assert!(journal_has(&env, "gmail.let_go"));
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "convergence does not remutate"
+    );
+}
+
+#[test]
+fn boundary_recovery_after_crash_followed_by_reply_records_once() {
+    const MESSAGE_NEW: &str = "00000000000000d3";
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-recover-reply");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    fake.make_archive_journal_readonly_after_batch();
+    let crashed =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&crashed, 1, "archive write succeeds then journal fails");
+    assert!(!journal_has(&env, "gmail.archived"));
+    let journal = env.vault().join(".bob/gmail/test-host.jsonl");
+    let mut permissions = fs::metadata(&journal)
+        .expect("journal metadata")
+        .permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&journal, permissions).expect("restore journal writes");
+    // A reply (and a removed enrollment label stays) after the crash: the
+    // thread now carries the receipt on the frozen ID plus a new unsaved reply.
+    seed_threads(
+        &fake,
+        vec![(
+            THREAD_A,
+            vec![
+                thread_message_in(
+                    THREAD_A,
+                    MESSAGE_A,
+                    &[RECEIPT_ID, ENROLLMENT_ID],
+                ),
+                thread_message_in(
+                    THREAD_A,
+                    MESSAGE_NEW,
+                    &["INBOX", ENROLLMENT_ID],
+                ),
+            ],
+        )],
+    );
+    fake.clear_calls();
+    let recovered =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&recovered, 0, "recovery records the frozen receipt once");
+    let value = json_stdout(&recovered);
+    assert_eq!(value["archive"][0]["action"], "archived");
+    assert_eq!(value["archive"][0]["reason"], "recovered");
+    assert_eq!(value["archive"][0]["messages"], json!([MESSAGE_A]));
+    assert_eq!(
+        fake.message_labels(MESSAGE_NEW),
+        vec!["INBOX".to_string(), ENROLLMENT_ID.to_string()],
+        "the reply stays in INBOX and is never touched"
+    );
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "recovery does not remutate"
+    );
+}
+
+#[test]
+fn boundary_planned_kept_turning_archivable_is_held() {
+    // A row planned Kept (unsaved reply visible at preview) that becomes
+    // archivable before mutation must be held, never widening the batch.
+    const THREAD_K: &str = "dddddddddddddddd";
+    const MESSAGE_K: &str = "dddddddddddddddd";
+    const MESSAGE_U: &str = "ddddddddddddddde";
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-planned-kept");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    // Save with only the frozen ID; the unsaved reply arrives after the close
+    // without a save, so it falls in U.
+    seed_threads(
+        &fake,
+        vec![(
+            THREAD_K,
+            vec![thread_message_in(
+                THREAD_K,
+                MESSAGE_K,
+                &["INBOX", ENROLLMENT_ID],
+            )],
+        )],
+    );
+    let (_note, _link) = file_adopt_thread(&env, &fake, THREAD_K);
+    set_inbox_task_status(&env, 'x');
+    // The reply arrives after the close (visible in Gmail, never saved).
+    seed_threads(
+        &fake,
+        vec![(
+            THREAD_K,
+            vec![
+                thread_message_in(
+                    THREAD_K,
+                    MESSAGE_K,
+                    &["INBOX", ENROLLMENT_ID],
+                ),
+                thread_message_in(
+                    THREAD_K,
+                    MESSAGE_U,
+                    &["INBOX", ENROLLMENT_ID],
+                ),
+            ],
+        )],
+    );
+    // Preview plans Kept for the unsaved reply. The seam simulates the reply
+    // disappearing between planning and mutation, so the fresh verdict turns
+    // archivable: the planned-decision gate must hold without widening.
+    unsafe {
+        std::env::set_var("BOB_GMAIL_ARCHIVE_TEST_FORCE_ARCHIVABLE", THREAD_K);
+    }
+    let held =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    unsafe {
+        std::env::remove_var("BOB_GMAIL_ARCHIVE_TEST_FORCE_ARCHIVABLE");
+    }
+    assert_exit(&held, 1, "upgrade after planning is held");
+    let value = json_stdout(&held);
+    assert!(
+        value["archive"].as_array().expect("archive").is_empty(),
+        "held upgrade reports no terminal row: {value}"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    assert!(!journal_has(&env, "gmail.archived"));
+    assert!(!journal_has(&env, "gmail.kept"));
+}
+
+fn file_adopt_two(
+    env: &GmailEnv,
+    fake: &FakeGog,
+    thread_a: &str,
+    message_a: &str,
+    thread_b: &str,
+    message_b: &str,
+) {
+    seed_threads(
+        fake,
+        vec![
+            (
+                thread_a,
+                vec![thread_message_in(
+                    thread_a,
+                    message_a,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+            (
+                thread_b,
+                vec![thread_message_in(
+                    thread_b,
+                    message_b,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+        ],
+    );
+    for thread_id in [thread_a, thread_b] {
+        let saved = run_gmail(env, fake, &["save", thread_id, "-f", "json"]);
+        assert_eq!(
+            saved.status.code(),
+            Some(0),
+            "save {thread_id}:\n{}\n{}",
+            stdout(&saved),
+            stderr(&saved)
+        );
+    }
+    // Re-read links from the two saves (save twice to capture both links).
+    let inbox = env.vault().join("gmail_inbox.md");
+    // Collect links by re-saving? Simpler: link tasks via thread IDs directly
+    // is not supported; instead write two generic tasks and rely on the mail
+    // index (saved notes) plus explicit links discovered from a second save.
+    // For determinism, save once more to fetch links is unnecessary: write
+    // tasks that reference each thread's note via a second save round-trip.
+    let mut links = Vec::new();
+    for thread_id in [thread_a, thread_b] {
+        let saved = run_gmail(env, fake, &["save", thread_id, "-f", "json"]);
+        let doc = json_stdout(&saved);
+        links.push(doc["link"].as_str().expect("link").to_string());
+    }
+    let body = links
+        .iter()
+        .map(|link| format!("- [ ] #task archive apply probe {link}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&inbox, format!("#task archive apply probe\n\n{body}\n"))
+        .expect("write inbox tasks");
+    let adopted =
+        run_gmail(env, fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_eq!(
+        adopted.status.code(),
+        Some(0),
+        "adopt both threads:\n{}\n{}",
+        stdout(&adopted),
+        stderr(&adopted)
+    );
+}
+
+fn close_all_inbox_tasks(env: &GmailEnv) {
+    let inbox = env.vault().join("gmail_inbox.md");
+    let text = fs::read_to_string(&inbox).expect("read inbox");
+    fs::write(&inbox, text.replace("- [ ]", "- [x]"))
+        .expect("close inbox tasks");
+}
+
+#[test]
+fn boundary_two_threads_where_one_batch_fails_isolates() {
+    const THREAD_C: &str = "bbbbbbbbbbbbbbbb";
+    const MESSAGE_C: &str = "bbbbbbbbbbbbbbbb";
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-two-fail");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    file_adopt_two(&env, &fake, THREAD_A, MESSAGE_A, THREAD_C, MESSAGE_C);
+    close_all_inbox_tasks(&env);
+    // First batch (THREAD_A, sorted first) succeeds; second fails transiently.
+    fake.set_fail_after(
+        "batch_modify",
+        "transient: PRIVATE_SENTINEL flap",
+        1,
+        1,
+    );
+    fake.clear_calls();
+    // Re-arm after clearing the log (state is preserved).
+    fake.set_fail_after(
+        "batch_modify",
+        "transient: PRIVATE_SENTINEL flap",
+        1,
+        1,
+    );
+    let failed =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&failed, 1, "one failure fails the run without rollback");
+    let value = json_stdout(&failed);
+    let rows = value["archive"].as_array().expect("archive");
+    assert_eq!(rows.len(), 1, "only the successful thread reports: {value}");
+    assert_eq!(rows[0]["thread_id"], THREAD_A);
+    assert_eq!(rows[0]["action"], "archived");
+    assert!(journal_has(&env, "gmail.archive_closed"));
+    // The successful thread's filing and archive are kept; the failed thread
+    // consumes nothing.
+    assert!(env.vault().join("gmail_inbox.md").is_file());
+}
+
+#[test]
+fn boundary_invalid_grant_on_second_thread_aborts_later_writes() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-invalid-grant");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    // Run 1: archive THREAD_A to create an owned receipt.
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let first =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&first, 0, "first archive succeeds");
+    assert!(journal_has(&env, "gmail.archived"));
+    // Run 2: THREAD_B needs archiving; THREAD_A needs let-go via a reply.
+    // THREAD_B's metadata fetch fails with invalid_grant, aborting before
+    // any later write (including let-go and label creation).
+    const THREAD_D: &str = "ddddddddddddddd0";
+    const MESSAGE_D: &str = "ddddddddddddddd0";
+    seed_threads(
+        &fake,
+        vec![
+            (
+                THREAD_A,
+                vec![
+                    thread_message_in(
+                        THREAD_A,
+                        MESSAGE_A,
+                        &[RECEIPT_ID, ENROLLMENT_ID],
+                    ),
+                    thread_message_in(
+                        THREAD_A,
+                        MESSAGE_B,
+                        &["INBOX", ENROLLMENT_ID],
+                    ),
+                ],
+            ),
+            (
+                THREAD_D,
+                vec![thread_message_in(
+                    THREAD_D,
+                    MESSAGE_D,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+        ],
+    );
+    // Adopt THREAD_D (save + link + close) without disturbing THREAD_A's note.
+    let saved = run_gmail(&env, &fake, &["save", THREAD_D, "-f", "json"]);
+    assert_eq!(saved.status.code(), Some(0), "save second thread");
+    let link = json_stdout(&saved)["link"]
+        .as_str()
+        .expect("link")
+        .to_string();
+    let inbox = env.vault().join("gmail_inbox.md");
+    let mut text = fs::read_to_string(&inbox).expect("read inbox");
+    text.push_str(&format!("\n- [ ] #task archive apply probe {link}\n"));
+    fs::write(&inbox, &text).expect("add second task");
+    // Adopt with -n to skip archive (and let-go), preserving A's let-go for
+    // the final aborted run.
+    let adopted = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-n", "-f", "json"],
+    );
+    assert_exit(&adopted, 0, "adopt second thread without archiving");
+    // Close the second thread's task (last task row).
+    let text = fs::read_to_string(&inbox).expect("read inbox");
+    // Close only the newly added (last) open row.
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    if let Some(pos) = lines.iter().rposition(|l| l.starts_with("- [ ]")) {
+        lines[pos] = lines[pos].replacen("- [ ]", "- [x]", 1);
+    }
+    fs::write(&inbox, lines.join("\n") + "\n").expect("close second task");
+    fake.set_thread_fail(THREAD_D, "invalid_grant: expired", 1);
+    fake.clear_calls();
+    let aborted =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&aborted, 1, "invalid_grant aborts the run");
+    // First thread's filing and archive from run 1 are kept.
+    assert!(journal_has(&env, "gmail.archived"));
+    assert!(env.vault().join("gmail_inbox.md").is_file());
+    // The abort happens before release_owned, so A's pending let-go never runs.
+    assert!(!journal_has(&env, "gmail.let_go"), "abort stops let-go");
+    // No let-go was recorded for THREAD_A in the aborted run (would need a
+    // second journal entry); the abort stopped later writes.
+    let writes = remote_write_calls(&fake);
+    assert!(
+        writes
+            .iter()
+            .all(|call| !call.contains(&"gmail.labels.create".to_string())),
+        "no label creation after the abort: {writes:?}"
+    );
+}
+
+#[test]
+fn boundary_let_go_runs_while_backlog_gate_is_paused() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-paused-letgo");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    // Run 1: archive THREAD_A to create an owned receipt.
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let first =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&first, 0, "first archive succeeds");
+    // THREAD_A now needs let-go via a reply; THREAD_B becomes a paused backlog
+    // (adopted with -n so its first close is historical and needs -c).
+    seed_threads(
+        &fake,
+        vec![
+            (
+                THREAD_A,
+                vec![
+                    thread_message_in(
+                        THREAD_A,
+                        MESSAGE_A,
+                        &[RECEIPT_ID, ENROLLMENT_ID],
+                    ),
+                    thread_message_in(
+                        THREAD_A,
+                        MESSAGE_B,
+                        &["INBOX", ENROLLMENT_ID],
+                    ),
+                ],
+            ),
+            (
+                THREAD_B,
+                vec![thread_message_in(
+                    THREAD_B,
+                    MESSAGE_C_BLANK,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+        ],
+    );
+    // Adopt THREAD_B without archive observations so its first close is a
+    // historical backlog. Use -n to skip archive (and let-go) during adoption.
+    let saved_b = run_gmail(&env, &fake, &["save", THREAD_B, "-f", "json"]);
+    assert_eq!(saved_b.status.code(), Some(0), "save backlog thread");
+    let link_b = json_stdout(&saved_b)["link"]
+        .as_str()
+        .expect("link")
+        .to_string();
+    let inbox = env.vault().join("gmail_inbox.md");
+    let mut text = fs::read_to_string(&inbox).expect("read inbox");
+    text.push_str(&format!("\n- [ ] #task archive apply probe {link_b}\n"));
+    fs::write(&inbox, &text).expect("add backlog task");
+    let adopted_b = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-n", "-f", "json"],
+    );
+    assert_exit(&adopted_b, 0, "adopt backlog thread without archiving");
+    // Close the backlog thread's task (last open row).
+    let text = fs::read_to_string(&inbox).expect("read inbox");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    if let Some(pos) = lines.iter().rposition(|l| l.starts_with("- [ ]")) {
+        lines[pos] = lines[pos].replacen("- [ ]", "- [x]", 1);
+    }
+    fs::write(&inbox, lines.join("\n") + "\n").expect("close backlog task");
+    fake.clear_calls();
+    let paused =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&paused, 1, "backlog gate pauses the run");
+    let value = json_stdout(&paused);
+    let rows = value["archive"].as_array().expect("archive rows");
+    // One paused backlog row and one let-go row.
+    assert!(
+        rows.iter().any(|row| row["thread_id"] == THREAD_B
+            && row["action"] == "paused"
+            && row["reason"] == "backlog_unconfirmed"),
+        "backlog row is paused: {value}"
+    );
+    assert!(
+        rows.iter().any(
+            |row| row["thread_id"] == THREAD_A && row["action"] == "let_go"
+        ),
+        "let-go still runs while paused: {value}"
+    );
+    assert!(journal_has(&env, "gmail.let_go"), "let-go journaled");
+    assert!(
+        !journal_text(&env).contains(
+            "\"thread_id\":\"aaaaaaaaaaaaaaaa\",\"action\":\"archived\""
+        ) && !value["archive"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["thread_id"] == THREAD_B
+                && row["action"] == "archived"),
+        "paused backlog never archives"
+    );
+    let writes = remote_write_calls(&fake);
+    assert!(
+        writes
+            .iter()
+            .any(|call| call.contains(&"gmail.batch.modify".to_string())),
+        "let-go batch ran while paused: {writes:?}"
+    );
+    assert!(
+        !writes
+            .iter()
+            .any(|call| call.contains(&"gmail.labels.create".to_string())),
+        "paused creates no labels: {writes:?}"
+    );
+}
+
+const MESSAGE_C_BLANK: &str = "00000000000000e4";
