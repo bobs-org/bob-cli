@@ -17,7 +17,9 @@ use sha2::{Digest, Sha256};
 
 use crate::native::{env as bob_env, ob, vault_git, vault_sync};
 
-use super::model::{COMMUNITY_PLUGINS_FILE, MANAGED_FILES, VAULT_PLUGINS_SUBDIR};
+use super::model::{
+    COMMUNITY_PLUGINS_FILE, MANAGED_FILES, VAULT_PLUGINS_SUBDIR,
+};
 
 pub(super) const STAMP_FILE: &str = ".bob-deploy.json";
 pub(super) const STAMP_VERSION: u32 = 1;
@@ -394,8 +396,10 @@ pub(super) fn check_plugin_disabled(
     bob_dir: &Path,
     plugin_id: &str,
 ) -> Option<DisabledWarningInfo> {
-    let contents = fs::read_to_string(bob_dir.join(COMMUNITY_PLUGINS_FILE)).ok()?;
-    let enabled: Vec<String> = serde_json::from_str(&contents).unwrap_or_default();
+    let contents =
+        fs::read_to_string(bob_dir.join(COMMUNITY_PLUGINS_FILE)).ok()?;
+    let enabled: Vec<String> =
+        serde_json::from_str(&contents).unwrap_or_default();
     if enabled.iter().any(|id| id == plugin_id) {
         return None;
     }

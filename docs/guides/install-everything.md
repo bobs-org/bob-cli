@@ -42,7 +42,8 @@ just install-all
 The recipe pulls this checkout with `--ff-only`, then pulls available sibling
 checkouts before it starts any build. It shows a compact “What’s new” digest for
 commits since each checkout's last successful install. It then installs `bob`,
-deploys `../bob-plugins` with `bob plugins sync --no-pull --repo`, and on macOS
+deploys the plugin ids in `plugins.sync` from `../bob-plugins` with
+`bob plugins sync --no-pull --repo`, and on macOS
 installs `../bob-mac-capture`. During a build, one live line reports the current
 activity and elapsed time. An ETA appears only after this host has enough
 comparable build history. Cargo output is saved to a log; if a build fails, the

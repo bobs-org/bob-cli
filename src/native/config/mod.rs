@@ -15,6 +15,7 @@ pub(crate) mod freshness;
 pub(crate) mod gcal;
 pub(crate) mod gmail;
 pub(crate) mod plan;
+pub(crate) mod plugins;
 pub(crate) mod relations;
 pub(crate) mod stats;
 pub(crate) mod themes;
@@ -40,6 +41,10 @@ pub(crate) use gmail::{
 #[cfg(test)]
 pub(crate) use gmail::{GmailPullSettings, GmailSyncSettings};
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
+#[allow(unused_imports)]
+pub(crate) use plugins::{
+    load_plugins_config, parse_plugins_config, PluginsConfig,
+};
 // Relation-successor authoring consumers use `LabelEffect`; this phase
 // publishes the policy type before those consumers land.
 #[allow(unused_imports)]
@@ -502,6 +507,8 @@ pub(crate) struct RawConfig {
     #[allow(dead_code)]
     #[serde(default)]
     pub(crate) stats: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) plugins: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]

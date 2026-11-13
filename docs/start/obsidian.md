@@ -53,6 +53,19 @@ source, then deploy that checkout into the demo vault:
 git clone https://github.com/bobs-org/bob-plugins.git ~/projects/github/bobs-org/bob-plugins
 ```
 
+<!-- tutorial-test: skip plugin allowlist needs a plugin source checkout -->
+```yaml
+plugins:
+  sync:
+    - bob-ledger-tools
+    - bob-navigation-hotkeys
+```
+
+Add that list to bob's config file (`BOB_CONFIG_FILE`, then
+`$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`) before
+you sync: `bob plugins sync` deploys only the ids it lists and exits 2 with a
+ready-to-paste snippet when the list is missing.
+
 <!-- tutorial-test: skip plugin sync needs a plugin source checkout and Obsidian -->
 ```bash
 bob plugins sync --repo ~/projects/github/bobs-org/bob-plugins --bob-dir "$BOB_DIR"

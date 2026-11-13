@@ -128,12 +128,16 @@ echo "Finished local-install profile"
 FAKE_BOB = """#!/usr/bin/env bash
 if [[ "${1:-}" == "plugins" && "${2:-}" == "sync" ]]; then
   if [[ " $* " == *" --dry-run "* ]]; then
+    if [[ "${FAKE_BOB_DRY_FAIL:-}" == "1" ]]; then
+      printf '{"ok": false, "error": "fake preview reason"}\\n'
+      exit 1
+    fi
     if [[ "${FAKE_BOB_DRY_COPIED:-0}" == "0" ]]; then
-      printf '{"copied": 0, "plugins": []}\\n'
+      printf '{"copied": 0, "plugins": [], "not_configured": %s}\\n' "${FAKE_BOB_NOT_CONFIGURED:-[]}"
     else
       printf '{"copied": %s, "plugins": [{"id": "sample-plugin", "files": ' "${FAKE_BOB_DRY_COPIED}"
       printf '[{"name": "main.js", "action": "updated"}, '
-      printf '{"name": "styles.css", "action": "unchanged"}]}]}\\n'
+      printf '{"name": "styles.css", "action": "unchanged"}]}], "not_configured": %s}\\n' "${FAKE_BOB_NOT_CONFIGURED:-[]}"
     fi
     exit 0
   fi
@@ -152,7 +156,11 @@ if [[ "${1:-}" == "plugins" && "${2:-}" == "sync" ]]; then
   exit 0
 fi
 if [[ "${1:-}" == "plugins" && "${2:-}" == "list" ]]; then
-  printf '{"count": 9, "synced": 9, "drift": %s}\\n' "${FAKE_BOB_DRIFT:-0}"
+  list_plugins="${FAKE_BOB_LIST_PLUGINS:-}"
+  if [[ -z "$list_plugins" ]]; then
+    list_plugins=\'{"id": "sample-plugin", "sync": "synced", "configured": true}\'
+  fi
+  printf '{"count": 9, "synced": 9, "drift": %s, "plugins": [%s]}\\n' "${FAKE_BOB_DRIFT:-0}" "$list_plugins"
   exit 0
 fi
 echo "fake bob: unexpected $*" >&2
@@ -705,6 +713,36 @@ class QuietBuildTests(_InstallAllCase):
         self.assertIn("plugin sync log excerpt", out)
         self.assertIn("error: fake sync failed", out)
         self.assertIn("full log", out)
+
+    def test_failed_preview_prints_json_error(self) -> None:
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_BOB_DRY_FAIL="1",
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 1, err.decode("utf-8", "replace"))
+        self.assertIn("could not preview plugin sync", out)
+        self.assertIn("fake preview reason", out)
+
+    def test_unconfigured_plugins_named_and_excluded_from_counts(
+        self,
+    ) -> None:
+        rows = (
+            '{"id": "sample-plugin", "sync": "synced", "configured": true}, '
+            '{"id": "drift-plugin", "sync": "drift", "configured": true}, '
+            '{"id": "left-out", "sync": "drift", "configured": false}'
+        )
+        status, raw, err = _run_install_all_pty(
+            self.sbox,
+            FAKE_BOB_DRY_COPIED="1",
+            FAKE_BOB_NOT_CONFIGURED='["left-out"]',
+            FAKE_BOB_LIST_PLUGINS=rows,
+        )
+        out = raw.decode("utf-8", "replace")
+        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
+        self.assertIn("not in plugins.sync; skipped: left-out", out)
+        self.assertIn("1/2 plugins in sync", out)
+        self.assertIn("1 drifted", out)
 
     def test_sync_and_obsidian_restart_append_timed_history_rows(self) -> None:
         cli = self.sbox.home / ".local" / "bin" / "obsidian"

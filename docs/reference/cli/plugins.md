@@ -15,7 +15,7 @@ The list subcommand is read-only: it reads each plugin manifest from the repo, b
 
 Before list or sync analyzes files, the plugins repo is refreshed with a non-interactive `git pull` unless --no-pull is given. Pull failures warn and continue with the existing checkout.
 
-The sync subcommand deploys the repo into the vault: it copies the managed files (manifest.json, main.js, and styles.css) from the repo into the vault plugin folder, never touching data.json or other runtime files. Each real deploy records a `.bob-deploy.json` provenance stamp beside the plugin. Sync refuses to overwrite another checkout's uncommitted or non-ancestor deploy unless --force is given, except that a clean checkout overwrites a dirty deploy from another checkout or host without --force when one commit reachable from its HEAD holds the stamped bundle byte for byte; the sync names that proving commit. Sync also refuses to overwrite a vault file that has uncommitted changes in the vault Git repo unless --force is given. For files that would change, sync prints a diff, and every overwritten vault file is backed up before it is replaced. In a Git vault, sync and list also warn when a plugin's whole vault folder is not ignored or holds tracked files; the warning rides along in table and JSON output and never edits .gitignore.
+The sync subcommand deploys the repo into the vault: it copies the managed files (manifest.json, main.js, and styles.css) from the repo into the vault plugin folder, never touching data.json or other runtime files. Sync deploys only the plugin ids listed in `plugins.sync` in bob's config file; a missing list exits 2 with a ready-to-paste snippet. Each real deploy records a `.bob-deploy.json` provenance stamp beside the plugin. Sync refuses to overwrite another checkout's uncommitted or non-ancestor deploy unless --force is given, except that a clean checkout overwrites a dirty deploy from another checkout or host without --force when one commit reachable from its HEAD holds the stamped bundle byte for byte; the sync names that proving commit. Sync also refuses to overwrite a vault file that has uncommitted changes in the vault Git repo unless --force is given. For files that would change, sync prints a diff, and every overwritten vault file is backed up before it is replaced. In a Git vault, sync and list also warn when a plugin's whole vault folder is not ignored or holds tracked files; the warning rides along in table and JSON output and never edits .gitignore.
 
 Usage: bob plugins [OPTIONS] [COMMAND]
 
@@ -48,6 +48,7 @@ Examples:
   bob plugins list
   bob plugins list -f json
   bob plugins sync --dry-run
+  bob plugins sync -d
   bob plugins sync --no-pull --dry-run
   bob plugins sync -p bob-project-tasks
 ```

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
@@ -23,7 +23,7 @@ use super::{
         SyncOptions, SyncReport, SyncState, VaultState,
     },
     render::{success_json, sync_success_json},
-    scan::{scan_plugins, sync_state, vault_state},
+    scan::{plugin_ids_in_repo, scan_plugins, sync_state, vault_state},
     sync::sync_plugins,
 };
 
@@ -91,7 +91,12 @@ fn scan_reports_states_and_counts() {
         "[\"alpha\"]\n",
     );
 
-    let report = scan_plugins(&repo, &vault, RepoSource::Flag);
+    let report = scan_plugins(
+        &repo,
+        &vault,
+        RepoSource::Flag,
+        allow_all(&repo).as_ref(),
+    );
     assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
     assert_eq!(report.plugins.len(), 3);
 
@@ -122,6 +127,7 @@ fn unreadable_repo_is_an_error() {
         &temp.path().join("missing"),
         temp.path(),
         RepoSource::Flag,
+        None,
     );
     assert_eq!(report.issues.len(), 1);
     assert!(report.plugins.is_empty());
@@ -300,7 +306,13 @@ fn json_shape_is_stable() {
         "[\"alpha\"]\n",
     );
 
-    let result = scan_plugins(&repo, &vault, RepoSource::Flag).result();
+    let result = scan_plugins(
+        &repo,
+        &vault,
+        RepoSource::Flag,
+        allow_all(&repo).as_ref(),
+    )
+    .result();
     let value: serde_json::Value =
         serde_json::from_str(&success_json(&result)).expect("json");
     assert_eq!(value["ok"], true);
@@ -352,6 +364,7 @@ fn sync_json_shape_is_stable() {
             "bob_dir",
             "copied",
             "dry_run",
+            "not_configured",
             "ok",
             "plugins",
             "repo",
@@ -360,6 +373,7 @@ fn sync_json_shape_is_stable() {
             "unchanged",
         ]
     );
+    assert_eq!(value["not_configured"], serde_json::json!([]));
     assert_eq!(value["ok"], true);
     assert_eq!(value["dry_run"], false);
     assert_eq!(value["repo_source"], "flag");
@@ -388,6 +402,166 @@ fn sync_json_shape_is_stable() {
         "skipped_dirty"
     );
     assert_eq!(serde_json::to_value(FileAction::Failed).unwrap(), "failed");
+}
+
+#[test]
+fn unlisted_plugin_is_skipped_and_reported() {
+    let temp = TempDir::new("bob-cli-plugins-not-configured");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+
+    let (mut opts, _guard) = options(&repo, &vault);
+    opts.configured = ["alpha".to_string()].into_iter().collect();
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
+    assert_eq!(report.not_configured, vec!["beta".to_string()]);
+    assert_eq!(report.plugins.len(), 1);
+    assert_eq!(report.plugins[0].id, "alpha");
+    assert!(
+        vault.join(".obsidian/plugins/alpha/main.js").is_file(),
+        "listed plugin should sync"
+    );
+    assert!(
+        !vault.join(".obsidian/plugins/beta").exists(),
+        "unlisted plugin must leave no vault folder"
+    );
+
+    let value: serde_json::Value =
+        serde_json::from_str(&sync_success_json(&report.result(false)))
+            .expect("json");
+    assert_eq!(value["not_configured"], serde_json::json!(["beta"]));
+}
+
+#[test]
+fn listed_id_missing_from_repo_is_an_issue() {
+    let temp = TempDir::new("bob-cli-plugins-missing-listed");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+
+    let (mut opts, _guard) = options(&repo, &vault);
+    opts.configured = ["alpha".to_string(), "ghost".to_string()]
+        .into_iter()
+        .collect();
+    let report = sync_plugins(&opts);
+    assert_eq!(report.issues.len(), 1);
+    assert!(
+        report.issues[0].contains("plugins.sync")
+            && report.issues[0].contains("ghost")
+            && report.issues[0].contains("has no plugin with that id"),
+        "unexpected issue: {:?}",
+        report.issues
+    );
+    assert_eq!(report.plugins.len(), 1);
+    assert!(
+        vault.join(".obsidian/plugins/alpha/main.js").is_file(),
+        "other plugins still sync"
+    );
+}
+
+#[test]
+fn unlisted_single_plugin_is_refused() {
+    let temp = TempDir::new("bob-cli-plugins-unlisted-only");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+
+    let (mut opts, _guard) = options(&repo, &vault);
+    opts.configured = ["alpha".to_string()].into_iter().collect();
+    opts.only = Some("beta".to_string());
+    let report = sync_plugins(&opts);
+    assert_eq!(report.plugins.len(), 0);
+    assert!(report.not_configured.is_empty());
+    assert_eq!(report.issues.len(), 1);
+    assert!(
+        report.issues[0].contains("beta")
+            && report.issues[0].contains("not listed in plugins.sync"),
+        "unexpected issue: {:?}",
+        report.issues
+    );
+    assert!(
+        !vault.join(".obsidian/plugins/beta").exists(),
+        "refused single plugin must not write"
+    );
+}
+
+#[test]
+fn empty_allowlist_syncs_nothing() {
+    let temp = TempDir::new("bob-cli-plugins-empty-allow");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+
+    let (mut opts, _guard) = options(&repo, &vault);
+    opts.configured = BTreeSet::new();
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
+    assert!(report.plugins.is_empty());
+    assert_eq!(
+        report.not_configured,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+    assert!(
+        !vault.join(".obsidian/plugins").exists(),
+        "empty list must write nothing"
+    );
+}
+
+#[test]
+fn dry_run_carries_not_configured_without_writing() {
+    let temp = TempDir::new("bob-cli-plugins-dry-not-configured");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+    write_vault_plugin(&vault, "beta", "2.0.0", "Beta", "stale");
+
+    let (mut opts, _guard) = options(&repo, &vault);
+    opts.configured = ["alpha".to_string()].into_iter().collect();
+    opts.dry_run = true;
+    let report = sync_plugins(&opts);
+    assert_eq!(report.not_configured, vec!["beta".to_string()]);
+    assert!(
+        !vault.join(".obsidian/plugins/alpha").exists(),
+        "dry run must not write listed plugins"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
+            .unwrap(),
+        "// stale\n",
+        "dry run must not touch unlisted vault files"
+    );
+}
+
+#[test]
+fn list_rows_carry_configured() {
+    let temp = TempDir::new("bob-cli-plugins-list-configured");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha plugin", "alpha");
+    write_plugin(&repo, "beta", "2.0.0", "Beta plugin", "beta");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha plugin", "alpha");
+
+    let allowed: BTreeSet<String> = ["alpha".to_string()].into_iter().collect();
+    let report = scan_plugins(&repo, &vault, RepoSource::Flag, Some(&allowed));
+    assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
+    assert!(report.plugins[0].configured);
+    assert!(!report.plugins[1].configured);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&success_json(&report.result())).expect("json");
+    assert_eq!(value["plugins"][0]["configured"], true);
+    assert_eq!(value["plugins"][1]["configured"], false);
+
+    let unset = scan_plugins(&repo, &vault, RepoSource::Flag, None);
+    assert!(
+        unset.plugins.iter().all(|plugin| !plugin.configured),
+        "unset list marks every row unconfigured"
+    );
 }
 
 #[test]
@@ -1318,7 +1492,12 @@ fn nongit_vault_has_no_ignore_warning() {
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(report.plugins[0].vault_ignore, None);
 
-    let scanned = scan_plugins(&repo, &vault, RepoSource::Flag);
+    let scanned = scan_plugins(
+        &repo,
+        &vault,
+        RepoSource::Flag,
+        allow_all(&repo).as_ref(),
+    );
     assert!(scanned.issues.is_empty(), "{:?}", scanned.issues);
     assert_eq!(scanned.plugins[0].vault_ignore, None);
 }
@@ -1340,7 +1519,12 @@ fn ignored_folder_has_no_warning_in_git_vault() {
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(report.plugins[0].vault_ignore, None);
 
-    let scanned = scan_plugins(&repo, &vault, RepoSource::Flag);
+    let scanned = scan_plugins(
+        &repo,
+        &vault,
+        RepoSource::Flag,
+        allow_all(&repo).as_ref(),
+    );
     assert_eq!(scanned.plugins[0].vault_ignore, None);
 }
 
@@ -1480,7 +1664,12 @@ fn list_carries_ignore_warning_without_changing_columns() {
     write_stamp_ignore(&vault);
     run_git(&vault, &["init", "-q"]);
 
-    let report = scan_plugins(&repo, &vault, RepoSource::Flag);
+    let report = scan_plugins(
+        &repo,
+        &vault,
+        RepoSource::Flag,
+        allow_all(&repo).as_ref(),
+    );
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     let entry = &report.plugins[0];
     // The warning rides along without changing the sync/vault columns.
@@ -1592,10 +1781,7 @@ fn dry_run_carries_disabled_warning_without_writing() {
     let vault = temp.path().join("vault");
     write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
     write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha", "stale");
-    write_file(
-        &vault.join(".obsidian/community-plugins.json"),
-        "[]\n",
-    );
+    write_file(&vault.join(".obsidian/community-plugins.json"), "[]\n");
 
     let (mut opts, _guard) = options(&repo, &vault);
     opts.dry_run = true;
@@ -1695,7 +1881,12 @@ fn list_reports_uncommitted_deployment() {
     let (opts, _guard) = options(&repo, &vault);
     assert!(sync_plugins(&opts).issues.is_empty());
 
-    let report = scan_plugins(&repo, &vault, RepoSource::Flag);
+    let report = scan_plugins(
+        &repo,
+        &vault,
+        RepoSource::Flag,
+        allow_all(&repo).as_ref(),
+    );
     let info = report.plugins[0]
         .deployment
         .as_ref()
@@ -1850,6 +2041,10 @@ fn clean_nonancestor_is_refused() {
     );
 }
 
+fn allow_all(repo: &Path) -> Option<BTreeSet<String>> {
+    Some(plugin_ids_in_repo(repo).into_iter().collect())
+}
+
 fn options(repo: &Path, vault: &Path) -> (SyncOptions, TestEnvGuard) {
     let state = vault.parent().unwrap_or(vault).join("xdg-state");
     let guard = TestEnvGuard::set(&[
@@ -1869,6 +2064,8 @@ fn options(repo: &Path, vault: &Path) -> (SyncOptions, TestEnvGuard) {
             only: None,
             dry_run: false,
             force: false,
+            configured: plugin_ids_in_repo(repo).into_iter().collect(),
+            config_path: PathBuf::from("/test-config.yml"),
         },
         guard,
     )

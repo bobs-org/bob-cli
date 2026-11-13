@@ -542,6 +542,19 @@ resolve_legacy_pull_detail() {
   cli_pull_post="$new_full"
 }
 
+# Python for JSON reads in the plugin step. Prefers the cached interpreter
+# from install_ui.sh, then any python3 or python on PATH. Callers guard
+# failures, so a host without Python degrades to the unreadable-preview path.
+install_step_python() {
+  if [[ -n "${BOB_INSTALL_UI_PYTHON:-}" ]]; then
+    printf '%s\n' "$BOB_INSTALL_UI_PYTHON"
+  elif command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' python3
+  else
+    printf '%s\n' python
+  fi
+}
+
 extract_json_integer() {
   local key="$1"
   local json="$2"
@@ -563,7 +576,7 @@ plugin_sync_rows() {
   while IFS= read -r line || [[ -n "$line" ]]; do
     printf '%s\n' "$line"
     note_line "$line"
-  done < <(printf '%s\n' "$preview" | "${BOB_INSTALL_UI_PYTHON}" -c '
+  done < <(printf '%s\n' "$preview" | "$(install_step_python)" -c '
 import json, sys
 try:
     result = json.load(sys.stdin)
@@ -680,9 +693,30 @@ plugin_step() {
   if ! preview="$("$bob_bin" plugins sync --dry-run --format json --no-pull --repo "$plugins_dir")"; then
     plugin_detail="$pull_detail · could not preview plugin sync"
     glyph_line 31 '  ' '✗' "$plugin_detail"
+    preview_error="$(printf '%s\n' "$preview" | "$(install_step_python)" -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("error", ""))
+except (ValueError, TypeError):
+    raise SystemExit(1)
+' 2>/dev/null || true)"
+    if [[ -n "${preview_error:-}" ]]; then
+      dim_diagnostics "$preview_error"
+    fi
     FAILURES=$((FAILURES + 1))
     add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
     return 0
+  fi
+  not_configured="$(printf '%s\n' "$preview" | "$(install_step_python)" -c '
+import json, sys
+try:
+    result = json.load(sys.stdin)
+except (ValueError, TypeError):
+    raise SystemExit(1)
+print(" ".join(result.get("not_configured", []) or []))
+' 2>/dev/null || true)"
+  if [[ -n "${not_configured:-}" ]]; then
+    dim_row "not in plugins.sync; skipped: $not_configured"
   fi
   pending="$(extract_json_integer copied "$preview")"
   if [[ -z "$pending" ]]; then
@@ -756,9 +790,18 @@ plugin_step() {
     add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
     return 0
   fi
-  count="$(extract_json_integer count "$output")"
-  synced="$(extract_json_integer synced "$output")"
-  drift="$(extract_json_integer drift "$output")"
+  read -r count synced drift <<<"$(printf '%s\n' "$output" | "$(install_step_python)" -c '
+import json, sys
+try:
+    result = json.load(sys.stdin)
+except (ValueError, TypeError):
+    raise SystemExit(1)
+rows = [row for row in result.get("plugins", []) if row.get("configured", True)]
+count = len(rows)
+synced = sum(1 for row in rows if row.get("sync") == "synced")
+drift = sum(1 for row in rows if row.get("sync") == "drift")
+print(f"{count} {synced} {drift}")
+' 2>/dev/null || true)"
   if [[ -z "$count" || -z "$synced" || -z "$drift" ]]; then
     plugin_detail="$pull_detail · could not read plugin sync counts"
     glyph_line 31 '  ' '✗' "$plugin_detail"

@@ -36,6 +36,7 @@ pub(super) fn sync_plugins(options: &SyncOptions) -> SyncReport {
         bob_dir: options.bob_dir.clone(),
         backup_run_dir: options.backup_run_dir.clone(),
         plugins: Vec::new(),
+        not_configured: Vec::new(),
         issues: Vec::new(),
     };
 
@@ -67,6 +68,9 @@ pub(super) fn sync_plugins(options: &SyncOptions) -> SyncReport {
     let mut backup_dir_allocated = false;
 
     let mut matched = false;
+    let mut seen: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    let single = options.only.clone();
     for entry in entries {
         let path = entry.path();
         let is_dir = entry
@@ -85,6 +89,7 @@ pub(super) fn sync_plugins(options: &SyncOptions) -> SyncReport {
             Ok(manifest) => manifest,
             Err(error) => {
                 report.issues.push(format!("{folder}: {error}"));
+                seen.insert(folder.to_string());
                 continue;
             }
         };
@@ -94,10 +99,23 @@ pub(super) fn sync_plugins(options: &SyncOptions) -> SyncReport {
         } else {
             manifest.id
         };
-        if options.only.as_deref().is_some_and(|only| only != id) {
+        seen.insert(id.clone());
+        if single.as_deref().is_some_and(|only| only != id) {
             continue;
         }
         matched = true;
+
+        if !options.configured.contains(&id) {
+            if single.is_some() {
+                let config = options.config_path.display();
+                report.issues.push(format!(
+                    "plugin {id} is not listed in plugins.sync in {config}; add it there to sync it"
+                ));
+            } else {
+                report.not_configured.push(id);
+            }
+            continue;
+        }
 
         let plugin = sync_one_plugin(
             options,
@@ -113,16 +131,28 @@ pub(super) fn sync_plugins(options: &SyncOptions) -> SyncReport {
         report.plugins.push(plugin);
     }
 
-    if let Some(only) = &options.only
+    if let Some(only) = &single
         && !matched
     {
         report
             .issues
             .push(format!("plugin not found in repo: {only}"));
     }
+    if single.is_none() {
+        let config = options.config_path.display();
+        for id in &options.configured {
+            if !seen.contains(id) {
+                report.issues.push(format!(
+                    "plugins.sync in {config} lists {id}, but {} has no plugin with that id",
+                    options.repo.join(REPO_PLUGINS_SUBDIR).display()
+                ));
+            }
+        }
+    }
 
     report.backup_run_dir = backup_run_dir;
     report.plugins.sort_by(|left, right| left.id.cmp(&right.id));
+    report.not_configured.sort();
     report
 }
 

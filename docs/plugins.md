@@ -31,10 +31,15 @@ bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--f
 ```
 
 `list` is read-only. Running `bob plugins` with no subcommand runs `list` with
-the same options. `sync` deploys the repo into the vault (see [Sync](#sync)).
+the same options. `sync` deploys only the plugin ids listed in `plugins.sync`
+in bob's config file into the vault (see [Sync](#sync)).
 When a plugin has a `.bob-deploy.json` stamp, list prints a dimmed provenance
 line under the row — including the exact phrase `deployed from uncommitted build`
 for a dirty source checkout — without changing the SYNC/VAULT columns or counts.
+Rows whose id the allowlist leaves out carry a dim
+`not in plugins.sync; bob plugins sync skips it` line (suppressed when the
+list itself is unset or invalid) without changing the SYNC/VAULT columns,
+counts, header, or footer.
 In a Git vault, list also prints a `warning` line under the row when the
 plugin's whole vault folder is not ignored or holds tracked files (see
 [Vault-ignore warnings](#vault-ignore-warnings)); the warning never changes
@@ -66,7 +71,7 @@ folder. The plugin id, version, and description come from that folder's
 A folder whose `manifest.json` is missing or unparseable is reported as an error
 on stderr and the command exits non-zero, but the remaining plugins still list.
 
-Two roots feed the report:
+Three inputs feed the report:
 
 - **Repo root.** Resolves from `-r, --repo`, then the enclosing
   bob-plugins checkout when the cwd sits inside one, then the
@@ -78,6 +83,12 @@ Two roots feed the report:
 - **Vault root.** Resolves from `-b, --bob-dir`, then `BOB_DIR`, then `~/bob`.
   Installed plugins live under `<bob-dir>/.obsidian/plugins/<id>/`, and the
   enabled set is read from `<bob-dir>/.obsidian/community-plugins.json`.
+- **Config allowlist.** The `plugins.sync` list in bob's config file
+  (`BOB_CONFIG_FILE`, then `$XDG_CONFIG_HOME/bob/config.yml`, then
+  `~/.config/bob/config.yml`). `list` marks each row `configured: true`
+  when its id is on the list and `false` otherwise; when the list is unset
+  or invalid, every row reads `configured: false` and list notes the problem
+  on stderr without failing. `sync` deploys only listed ids.
 
 ## Columns
 
@@ -163,7 +174,11 @@ error to stderr.
 `repo_source` is `flag`, `enclosing_checkout`, `env`, or `default`,
 naming which resolution rule selected the repo root. The `sync` field is
 `synced`, `drift`, or `missing`; the `vault` field is
-`enabled`, `disabled`, or `not_installed`. `deployment` is omitted when the
+`enabled`, `disabled`, or `not_installed`. `configured` is `true` when the
+plugin id is listed in `plugins.sync` in bob's config file and `false`
+otherwise — including every row when the list is unset or invalid, in which
+case list also notes the problem on stderr and stays exit `0`.
+`deployment` is omitted when the
 plugin has no stamp (legacy installs and plugins that have never been synced
 by a stamp-aware `bob`). When present it includes `status`, `source_root`,
 `source_head`, `host`, and `deployed_at`. `status` is `clean`, `uncommitted`,
@@ -175,11 +190,21 @@ carries the warning as `{"status": "tracked" | "not_ignored" | "unknown",
 
 ## Sync
 
-`sync` deploys the repo into the vault. For each plugin it copies the managed
+`sync` deploys the repo into the vault. For each plugin id listed in
+`plugins.sync` in bob's config file, it copies the managed
 files — `manifest.json`, `main.js`, and `styles.css` when the repo has one —
 from `<repo>/plugins/<id>/` into `<bob-dir>/.obsidian/plugins/<id>/`. Runtime
 files such as `data.json` are never read or written, so plugin settings survive
-a sync. Each real deploy writes a `.bob-deploy.json` stamp beside the plugin
+a sync. Repo plugins the list leaves out are skipped entirely: no copies,
+stamps, backups, or guard evaluation, one dim
+`not in plugins.sync; skipped` row per id in table output, and their ids in
+the JSON `not_configured` array. Each listed id with no matching repo plugin
+is an error naming the id, while the other plugins still sync. A missing list
+or an invalid `plugins` block exits 2 before any pull, lock, vault read, or
+write; table mode explains the setup error on stderr and JSON mode prints
+`{"ok": false, "error": "..."}`. A missing list ends its message with a
+ready-to-paste `plugins.sync` YAML snippet listing every plugin id in the
+current checkout. Each real deploy writes a `.bob-deploy.json` stamp beside the plugin
 recording the canonical source checkout, HEAD, a tri-state dirty result (clean,
 dirty, or unknown), host, UTC time, optional `SASE_AGENT_ID`, SHA-256
 fingerprints of the managed assets, and whether the deploy finished. The stamp
@@ -235,8 +260,10 @@ For every managed file, `sync` reports one of:
 - `-f, --format <FORMAT>` is `table` (default) or `json`.
 - `-n, --no-pull` skips the default `git pull` before analyzing the plugins
   repo.
-- `-p, --plugin <ID>` syncs a single plugin instead of all of them. An id that
-  the repo does not contain is an error.
+- `-p, --plugin <ID>` syncs a single plugin instead of all listed ones. The
+  id must also be listed in `plugins.sync`: an unlisted id copies nothing and
+  is an error telling you to add it there. An id that the repo does not
+  contain is an error.
 - `-r, --repo <DIR>` selects the plugins repo root. An explicit flag
   always wins; without it the enclosing bob-plugins checkout wins over
   `BOB_PLUGINS_DIR` and the default.
@@ -365,8 +392,12 @@ uses `would copy` and `would back up to` wording and writes nothing. This makes
 
 `sync` exits `0` even when it skips dirty vault files — that skip is a
 deliberate warning, matching how `list` treats drift. Deploy-protection
-refusals, unreadable repos, unknown `--plugin` ids, lock contention, unsafe
+refusals, unreadable repos, unknown `--plugin` ids, listed ids missing from
+the repo, unlisted `-p` ids, lock contention, unsafe
 stamp storage, and failed copies exit `1` and write the cause to stderr.
+A missing `plugins.sync` list or an invalid `plugins` block exits `2` with
+the setup error (table mode on stderr, JSON mode as
+`{"ok": false, "error": "..."}` on stdout), as do clap usage errors.
 Dry-run uses the same exit codes and writes nothing.
 
 ### JSON output
@@ -412,6 +443,8 @@ on stderr.
 run, would be), otherwise `null`. `copied` counts managed assets, not stamp
 writes, so installer restart detection is unchanged for stamp-only
 reconciliation. In a dry run, `copied` counts the files that would be copied.
+`not_configured` lists every repo plugin id the `plugins.sync` allowlist
+leaves out; it is always present and `[]` when everything is listed.
 Each plugin entry also carries `vault_ignore` when its vault folder is not
 ignored or holds tracked files (see [Vault-ignore warnings](#vault-ignore-warnings));
 it is omitted otherwise. A sync that overwrites a dirty deploy through an

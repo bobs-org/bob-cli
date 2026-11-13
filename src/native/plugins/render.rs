@@ -3,7 +3,9 @@ use crate::native::style::{
 };
 
 use super::{
-    deploy::{short_sha, uncommitted_detail, DisabledWarningInfo, VaultIgnoreInfo},
+    deploy::{
+        short_sha, uncommitted_detail, DisabledWarningInfo, VaultIgnoreInfo,
+    },
     model::{
         DiffKind, FileAction, FileDiff, FileSync, PluginsReport, PluginsResult,
         SyncReport, SyncResult, SyncState, VaultState,
@@ -77,6 +79,7 @@ pub(super) fn print_sync_report(
         .plugins
         .iter()
         .map(|plugin| display_width(&plugin.id))
+        .chain(report.not_configured.iter().map(|id| display_width(id)))
         .max()
         .unwrap_or(0);
 
@@ -131,6 +134,15 @@ pub(super) fn print_sync_report(
         print_disabled_warning(&plugin.disabled_warning, styler);
     }
 
+    for id in &report.not_configured {
+        let rendered = styler.cyan(&pad_right(id, id_width));
+        let prefix = styler.dim("-");
+        println!(
+            "  {prefix} {rendered}  {}",
+            styler.dim("not in plugins.sync; skipped")
+        );
+    }
+
     println!();
     let copied_label = if dry_run { "to copy" } else { "copied" };
     let mut summary = format!(
@@ -139,6 +151,12 @@ pub(super) fn print_sync_report(
         report.skipped(),
         report.unchanged()
     );
+    if !report.not_configured.is_empty() {
+        summary.push_str(&format!(
+            " {separator} {} not configured",
+            report.not_configured.len()
+        ));
+    }
     if !report.issues.is_empty() {
         summary
             .push_str(&format!(" {separator} {} errors", report.issues.len()));
@@ -277,7 +295,10 @@ fn print_vault_ignore(ignore: &Option<VaultIgnoreInfo>, styler: &Styler) {
     println!("{DETAIL_INDENT}{prefix} {}", styler.yellow(&info.warning));
 }
 
-fn print_disabled_warning(warning: &Option<DisabledWarningInfo>, styler: &Styler) {
+fn print_disabled_warning(
+    warning: &Option<DisabledWarningInfo>,
+    styler: &Styler,
+) {
     let Some(info) = warning else {
         return;
     };
@@ -319,7 +340,11 @@ fn format_bytes(bytes: usize) -> String {
     format!("{:.1} MB", kib / 1024.0)
 }
 
-pub(super) fn print_plugins_table(report: &PluginsReport, styler: &Styler) {
+pub(super) fn print_plugins_table(
+    report: &PluginsReport,
+    styler: &Styler,
+    mark_configured: bool,
+) {
     let separator = styler.separator();
     println!(
         "Bob Plugins {separator} {} {separator} {}",
@@ -360,6 +385,12 @@ pub(super) fn print_plugins_table(report: &PluginsReport, styler: &Styler) {
             println!("{DETAIL_INDENT}{}", styler.dim(&detail));
         }
         print_vault_ignore(&plugin.vault_ignore, styler);
+        if mark_configured && !plugin.configured {
+            println!(
+                "{DETAIL_INDENT}{}",
+                styler.dim("not in plugins.sync; bob plugins sync skips it")
+            );
+        }
     }
 
     println!();

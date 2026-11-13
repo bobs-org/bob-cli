@@ -10,7 +10,11 @@ use clap::{
 };
 use serde_json::json;
 
-use crate::native::{env as bob_env, style::Styler};
+use crate::native::{
+    config::{display_config_path, load_plugins_config},
+    env as bob_env,
+    style::Styler,
+};
 
 use super::{
     git::{print_pull_outcome, pull_repo},
@@ -19,7 +23,7 @@ use super::{
     render::{
         print_plugins_table, print_sync_report, success_json, sync_success_json,
     },
-    scan::scan_plugins,
+    scan::{plugin_ids_in_repo, scan_plugins},
     sync::sync_plugins,
 };
 
@@ -75,7 +79,9 @@ non-interactive `git pull` unless --no-pull is given. Pull failures warn and \
 continue with the existing checkout.\n\n\
 The sync subcommand deploys the repo into the vault: it copies the managed \
 files (manifest.json, main.js, and styles.css) from the repo into the vault \
-plugin folder, never touching data.json or other runtime files. Each real \
+plugin folder, never touching data.json or other runtime files. Sync deploys \
+only the plugin ids listed in `plugins.sync` in bob's config file; a missing \
+list exits 2 with a ready-to-paste snippet. Each real \
 deploy records a `.bob-deploy.json` provenance stamp beside the plugin. Sync \
 refuses to overwrite another checkout's uncommitted or non-ancestor deploy \
 unless --force is given, except that a clean checkout overwrites a dirty \
@@ -89,7 +95,7 @@ when a plugin's whole vault folder is not ignored or holds tracked files; \
 the warning rides along in table and JSON output and never edits .gitignore.",
         )
         .after_help(
-            "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks",
+            "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync -d\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
@@ -107,7 +113,9 @@ fn list_command() -> ClapCommand {
 In a Git vault, list also warns when a plugin's whole vault folder \
 (.obsidian/plugins/<id>/) is not ignored or holds tracked files. The warning \
 prints under the plugin row and appears as `vault_ignore` in JSON output; it \
-never edits .gitignore and never changes the SYNC/VAULT columns.",
+never edits .gitignore and never changes the SYNC/VAULT columns. Rows whose \
+id is left out of `plugins.sync` in bob's config file carry `configured: \
+false` and a detail line noting that `bob plugins sync` skips them.",
         )
         .after_help(
             "Examples:\n  bob plugins list\n  bob plugins list -f json\n  bob plugins list --no-pull\n  bob plugins list -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
@@ -123,8 +131,10 @@ fn sync_command() -> ClapCommand {
         .about("Deploy repo plugin files into the vault")
         .long_about(
             "Deploy Bob plugins from the bob-plugins repo into the vault.\n\n\
-For each plugin, the managed files (manifest.json, main.js, and styles.css \
-when present) are copied from <repo>/plugins/<id>/ into \
+Sync deploys only the plugin ids listed in `plugins.sync` in bob's config \
+file; a missing list exits 2 with a ready-to-paste snippet. \
+For each listed plugin, the managed files (manifest.json, main.js, and \
+styles.css when present) are copied from <repo>/plugins/<id>/ into \
 <bob-dir>/.obsidian/plugins/<id>/. Runtime files such as data.json are never \
 touched. Each real deploy writes a `.bob-deploy.json` stamp recording the \
 source checkout, HEAD, dirty state, host, time, and managed-file hashes. In a \
@@ -159,7 +169,7 @@ resolves from --repo, then the enclosing bob-plugins checkout when the cwd \
 sits inside one, then BOB_PLUGINS_DIR, then the default checkout.",
         )
         .after_help(
-            "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync --dry-run -f json\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
+            "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync -d\n  bob plugins sync --dry-run -f json\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
         )
         .arg(backup_dir_arg())
         .arg(bob_dir_arg())
@@ -246,7 +256,9 @@ fn plugin_arg() -> Arg {
         .long("plugin")
         .short('p')
         .value_name("ID")
-        .help("Sync only this plugin id; defaults to every plugin")
+        .help(
+            "Sync only this plugin id, which must also be listed in plugins.sync; defaults to every listed plugin",
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,19 +312,39 @@ fn backup_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 
 fn run_list(matches: &ArgMatches) -> i32 {
     let (repo, repo_source) = repo_from_matches(matches);
+    let config_path = crate::native::config::config_path();
+    let (configured, notice) = match load_plugins_config(&config_path) {
+        Ok(config) => match config.sync {
+            Some(ids) => (
+                Some(
+                    ids.into_iter().collect::<std::collections::BTreeSet<_>>(),
+                ),
+                None,
+            ),
+            None => (None, Some(unset_list_notice())),
+        },
+        Err(error) => (None, Some(error.to_string())),
+    };
     maybe_pull_repo(matches, &repo);
     let bob_dir = bob_dir_from_matches(matches);
-    let report = scan_plugins(&repo, &bob_dir, repo_source);
+    let report =
+        scan_plugins(&repo, &bob_dir, repo_source, configured.as_ref());
 
     match OutputFormat::from_matches(matches) {
         OutputFormat::Table => {
             let styler = Styler::detect();
-            print_plugins_table(&report, &styler);
+            print_plugins_table(&report, &styler, configured.is_some());
+            if let Some(notice) = &notice {
+                eprintln!("{COMMAND_NAME}: {notice}");
+            }
             for issue in &report.issues {
                 eprintln!("{COMMAND_NAME}: {issue}");
             }
         }
         OutputFormat::Json => {
+            if let Some(notice) = &notice {
+                eprintln!("{COMMAND_NAME}: {notice}");
+            }
             if report.issues.is_empty() {
                 println!("{}", success_json(&report.result()));
             } else {
@@ -333,8 +365,62 @@ fn run_list(matches: &ArgMatches) -> i32 {
     }
 }
 
+fn unset_list_notice() -> String {
+    format!(
+        "{} has no plugins.sync list; bob plugins sync deploys nothing until you add one",
+        display_config_path()
+    )
+}
+
+fn unset_sync_message(repo: &Path) -> String {
+    let mut message = format!(
+        "{} has no plugins.sync list; bob plugins sync deploys only the ids listed in plugins.sync there. Add one, for example:",
+        display_config_path()
+    );
+    let ids = plugin_ids_in_repo(repo);
+    let readable = !ids.is_empty();
+    let ids = if readable {
+        ids
+    } else {
+        vec!["<plugin-id>".to_string()]
+    };
+    message.push_str("\nplugins:\n  sync:");
+    for id in &ids {
+        message.push_str(&format!("\n    - {id}"));
+    }
+    if !readable {
+        message
+            .push_str("\nRun `bob plugins list` to see the repo plugin ids.");
+    }
+    message
+}
+
+fn exit_config_error(message: String, matches: &ArgMatches) -> i32 {
+    match OutputFormat::from_matches(matches) {
+        OutputFormat::Table => {
+            eprintln!("{COMMAND_NAME}: {message}");
+        }
+        OutputFormat::Json => {
+            println!("{}", json!({ "ok": false, "error": message }));
+        }
+    }
+    2
+}
+
 fn run_sync(matches: &ArgMatches) -> i32 {
     let (repo, repo_source) = repo_from_matches(matches);
+    let config_path = crate::native::config::config_path();
+    let configured = match load_plugins_config(&config_path) {
+        Ok(config) => match config.sync {
+            Some(ids) => ids,
+            None => {
+                return exit_config_error(unset_sync_message(&repo), matches);
+            }
+        },
+        Err(error) => {
+            return exit_config_error(error.to_string(), matches);
+        }
+    };
     maybe_pull_repo(matches, &repo);
     let timestamp = bob_env::current_datetime().format("%Y%m%d-%H%M%S");
     let options = SyncOptions {
@@ -346,6 +432,8 @@ fn run_sync(matches: &ArgMatches) -> i32 {
         only: matches.get_one::<String>("plugin").cloned(),
         dry_run: matches.get_flag("dry-run"),
         force: matches.get_flag("force"),
+        configured: configured.into_iter().collect(),
+        config_path,
     };
 
     let report = sync_plugins(&options);

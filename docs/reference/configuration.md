@@ -115,6 +115,24 @@ copy:
 
 See the [Copy card](plugins/copy-card.md).
 
+### `plugins`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `plugins.sync` | Sequence of nonempty plugin ids | Unset (sync exits 2) | Only ids `bob plugins sync` deploys; `[]` deploys nothing |
+
+```yaml
+plugins:
+  sync:
+    - bob-ledger-tools
+    - bob-navigation-hotkeys
+```
+
+Entries are trimmed; blank, non-string, or duplicate entries are config errors
+naming `plugins.sync`. `plugins` must be a mapping and `plugins.sync` a
+sequence. Unknown sibling keys are ignored. When unset, sync exits 2 with a
+snippet and list marks every row `configured: false`. See [Bob Plugins](../plugins.md).
+
 ### `plan`
 
 All caps are positive integers. `max_ready_per_note` is limited to 1–999;
@@ -444,7 +462,9 @@ See [`bob completion`](cli/completion.md), [plugin deployment](../plugins.md),
 the [Obsidian plugins reference](plugins/index.md), and the
 [plugin deployment guide](../develop/plugins/deployment.md).
 
-To install plugins, name the checkout you mean. Bare `bob plugins sync`
+To install plugins, name the checkout you mean and list its plugin ids in
+`plugins.sync` — `bob plugins sync` deploys only those ids and exits 2 when
+the list is missing. Bare `bob plugins sync`
 resolves `--repo`, then `BOB_PLUGINS_DIR`, then
 `~/projects/github/bobs-org/bob-plugins`; a bare sync from inside a different
 bob-plugins checkout refuses before any pull or copy. From the checkout you

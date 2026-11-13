@@ -24,9 +24,9 @@ fn plugins_list_renders_table_and_summary() {
 
     assert_success(&output);
     assert!(
-        stderr(&output).is_empty(),
-        "unexpected stderr:\n{}",
-        stderr(&output)
+        stderr(&output).contains("has no plugins.sync list"),
+        "list with a missing config must note the unset allowlist:\n{}",
+        format_output(&output)
     );
     assert_stdout_has_no_ansi(&output);
     let out = stdout(&output);
@@ -194,8 +194,13 @@ fn plugins_list_no_pull_uses_existing_checkout() {
 
     assert_success(&output);
     assert!(
-        stderr(&output).is_empty(),
+        !stderr(&output).contains("pull") && !stderr(&output).contains("fetch"),
         "--no-pull should not run git or warn:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("has no plugins.sync list"),
+        "list with a missing config must note the unset allowlist:\n{}",
         format_output(&output)
     );
     assert!(
@@ -276,6 +281,7 @@ fn plugins_list_unreadable_repo_reports_error() {
 #[test]
 fn plugins_sync_pulls_repo_before_copying() {
     let temp = TempDir::new("bob-cli-plugins-sync-pull");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let (repo, upstream) = init_pullable_plugins_repo(&temp);
     let vault = temp.path().join("vault");
     advance_plugins_remote(&upstream, "new");
@@ -289,6 +295,7 @@ fn plugins_sync_pulls_repo_before_copying() {
         .arg(&vault)
         .arg("-B")
         .arg(temp.path().join("backups"))
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync with pull");
 
@@ -304,6 +311,8 @@ fn plugins_sync_pulls_repo_before_copying() {
 #[test]
 fn plugins_sync_dry_run_reports_without_writing() {
     let temp = TempDir::new("bob-cli-plugins-sync-dry");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -322,6 +331,7 @@ fn plugins_sync_dry_run_reports_without_writing() {
         .arg("-b")
         .arg(&vault)
         .env("BOB_NOW", "2026-06-26 14:30:00")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync --dry-run");
 
@@ -368,6 +378,8 @@ fn plugins_sync_dry_run_reports_without_writing() {
 #[test]
 fn plugins_sync_json_reports_file_actions() {
     let temp = TempDir::new("bob-cli-plugins-sync-json");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -386,6 +398,7 @@ fn plugins_sync_json_reports_file_actions() {
         .arg("-b")
         .arg(&vault)
         .env("BOB_NOW", "2026-06-26 14:30:00")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -f json");
 
@@ -450,6 +463,8 @@ fn plugins_sync_json_reports_file_actions() {
 #[test]
 fn plugins_sync_dry_run_json_writes_nothing() {
     let temp = TempDir::new("bob-cli-plugins-sync-dry-json");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -469,6 +484,7 @@ fn plugins_sync_dry_run_json_writes_nothing() {
         .arg("-b")
         .arg(&vault)
         .env("BOB_NOW", "2026-06-26 14:30:00")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -d -f json");
 
@@ -494,6 +510,8 @@ fn plugins_sync_dry_run_json_writes_nothing() {
 #[test]
 fn plugins_sync_json_reports_errors_as_object() {
     let temp = TempDir::new("bob-cli-plugins-sync-json-error");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     write_plugins_fixture(&repo, &vault);
@@ -509,6 +527,7 @@ fn plugins_sync_json_reports_errors_as_object() {
         .arg(&repo)
         .arg("-b")
         .arg(&vault)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -p nope -f json");
 
@@ -530,8 +549,225 @@ fn plugins_sync_json_reports_errors_as_object() {
 }
 
 #[test]
+fn plugins_sync_missing_config_exits_2_with_snippet() {
+    let temp = TempDir::new("bob-cli-plugins-sync-no-config");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--no-pull")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync with missing config");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing plugins.sync list must exit 2:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("plugins.sync")
+            && err.contains("alpha")
+            && err.contains("beta")
+            && err.contains("gamma"),
+        "stderr must name the key and snippet the fixture ids:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
+            .expect("read beta main"),
+        "// beta-stale\n",
+        "a setup error must not touch the vault"
+    );
+    assert!(
+        !vault.join(".obsidian/plugins/gamma").exists(),
+        "a setup error must not create missing plugins"
+    );
+}
+
+#[test]
+fn plugins_sync_missing_config_json_exits_2() {
+    let temp = TempDir::new("bob-cli-plugins-sync-no-config-json");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--no-pull")
+        .arg("-f")
+        .arg("json")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync -f json with missing config");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing plugins.sync list must exit 2:\n{}",
+        format_output(&output)
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output))
+        .expect("parse plugins sync json");
+    assert_eq!(value["ok"], false);
+    assert!(
+        value["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("plugins.sync")),
+        "json error must name the key: {value}"
+    );
+}
+
+#[test]
+fn plugins_sync_invalid_config_exits_2() {
+    let temp = TempDir::new("bob-cli-plugins-sync-bad-config");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+    let config = temp.path().join("bad-config.yml");
+    write_file(&config, "plugins:\n  sync: 42\n");
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--no-pull")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run bob plugins sync with invalid config");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an invalid plugins.sync must exit 2:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("plugins.sync"),
+        "stderr must name the key:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn plugins_sync_json_reports_not_configured() {
+    let temp = TempDir::new("bob-cli-plugins-sync-not-configured");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+    let config = write_sync_config(temp.path(), &["alpha", "beta"]);
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--no-pull")
+        .arg("-f")
+        .arg("json")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-06-26 14:30:00")
+        .output()
+        .expect("run bob plugins sync -f json with a partial allowlist");
+
+    assert_success(&output);
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output))
+        .expect("parse plugins sync json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["not_configured"], serde_json::json!(["gamma"]));
+}
+
+#[test]
+fn plugins_list_json_marks_configured() {
+    let temp = TempDir::new("bob-cli-plugins-list-configured");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+    let config = write_sync_config(temp.path(), &["alpha", "beta"]);
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("--no-pull")
+        .arg("-f")
+        .arg("json")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run bob plugins list -f json with an allowlist");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "a configured list must stay quiet:\n{}",
+        format_output(&output)
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output))
+        .expect("parse plugins list json");
+    assert_eq!(value["plugins"][0]["configured"], true);
+    assert_eq!(value["plugins"][1]["configured"], true);
+    assert_eq!(value["plugins"][2]["configured"], false);
+
+    let missing = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("--no-pull")
+        .arg("-f")
+        .arg("json")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins list -f json with missing config");
+
+    assert_success(&missing);
+    assert!(
+        stderr(&missing).contains("has no plugins.sync list"),
+        "list with a missing config must note the unset allowlist:\n{}",
+        format_output(&missing)
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout(&missing))
+        .expect("parse plugins list json");
+    assert!(
+        value["plugins"]
+            .as_array()
+            .expect("plugins array")
+            .iter()
+            .all(|plugin| plugin["configured"] == false),
+        "an unset list marks every row unconfigured: {value}"
+    );
+}
+
+#[test]
 fn plugins_sync_backs_up_overwritten_file() {
     let temp = TempDir::new("bob-cli-plugins-sync-backup");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -550,6 +786,7 @@ fn plugins_sync_backs_up_overwritten_file() {
         .arg("-b")
         .arg(&vault)
         .env("BOB_NOW", "2026-06-26 14:30:00")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -p beta");
 
@@ -589,6 +826,8 @@ fn plugins_sync_backs_up_overwritten_file() {
 #[test]
 fn plugins_sync_single_plugin_copies_only_that_plugin() {
     let temp = TempDir::new("bob-cli-plugins-sync-one");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -605,6 +844,7 @@ fn plugins_sync_single_plugin_copies_only_that_plugin() {
         .arg(&repo)
         .arg("-b")
         .arg(&vault)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -p beta");
 
@@ -624,6 +864,8 @@ fn plugins_sync_single_plugin_copies_only_that_plugin() {
 #[test]
 fn plugins_sync_preserves_runtime_data_json() {
     let temp = TempDir::new("bob-cli-plugins-sync-data");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -642,6 +884,7 @@ fn plugins_sync_preserves_runtime_data_json() {
         .arg(&repo)
         .arg("-b")
         .arg(&vault)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -p beta");
 
@@ -662,6 +905,7 @@ fn plugins_sync_preserves_runtime_data_json() {
 #[test]
 fn plugins_sync_refuses_dirty_vault_file_then_forces() {
     let temp = TempDir::new("bob-cli-plugins-sync-dirty");
+    let sync_config = write_sync_config(temp.path(), &["delta"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -698,6 +942,7 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
         .arg(&repo)
         .arg("-b")
         .arg(&vault)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -p delta");
 
@@ -725,6 +970,7 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
         .arg(&repo)
         .arg("-b")
         .arg(&vault)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bob plugins sync -p delta -F");
 
@@ -739,6 +985,7 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
 #[test]
 fn plugins_sync_bare_from_enclosing_checkout_deploys_with_notice() {
     let temp = TempDir::new("bob-cli-plugins-sync-enclosing");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -773,6 +1020,7 @@ fn plugins_sync_bare_from_enclosing_checkout_deploys_with_notice() {
         .arg(&backups)
         .env("BOB_PLUGINS_DIR", &repo)
         .current_dir(&foreign_cwd)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bare bob plugins sync");
 
@@ -818,6 +1066,7 @@ fn plugins_sync_bare_from_enclosing_checkout_deploys_with_notice() {
         .arg(&backups)
         .env("BOB_PLUGINS_DIR", &repo)
         .current_dir(&foreign_cwd)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bare bob plugins sync -f json");
 
@@ -852,6 +1101,7 @@ fn plugins_sync_bare_from_enclosing_checkout_deploys_with_notice() {
         .arg(&dry_backups)
         .env("BOB_PLUGINS_DIR", &repo)
         .current_dir(&foreign_cwd)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bare bob plugins sync --dry-run");
 
@@ -962,6 +1212,8 @@ fn plugins_list_bare_from_enclosing_checkout_names_same_repo() {
 #[test]
 fn plugins_sync_bare_from_resolved_checkout_is_allowed() {
     let temp = TempDir::new("bob-cli-plugins-sync-guard-resolved");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -981,6 +1233,7 @@ fn plugins_sync_bare_from_resolved_checkout_is_allowed() {
         .arg(&backups)
         .env("BOB_PLUGINS_DIR", &repo)
         .current_dir(repo.join("plugins"))
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bare bob plugins sync from the resolved checkout");
 
@@ -1009,6 +1262,7 @@ fn plugins_sync_bare_from_resolved_checkout_is_allowed() {
         .arg(&backups)
         .env("BOB_PLUGINS_DIR", &repo)
         .current_dir(repo.join("plugins"))
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("run bare sync json from the resolved checkout");
 
@@ -1022,6 +1276,8 @@ fn plugins_sync_bare_from_resolved_checkout_is_allowed() {
 #[test]
 fn plugins_sync_bare_from_unrelated_cwd_is_allowed() {
     let temp = TempDir::new("bob-cli-plugins-sync-guard-unrelated");
+    let sync_config =
+        write_sync_config(temp.path(), &["alpha", "beta", "gamma"]);
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
@@ -1059,6 +1315,7 @@ fn plugins_sync_bare_from_unrelated_cwd_is_allowed() {
             .arg(&backups)
             .env("BOB_PLUGINS_DIR", &repo)
             .current_dir(cwd)
+            .env("BOB_CONFIG_FILE", &sync_config)
             .output()
             .expect("run bare bob plugins sync from an unrelated cwd");
 
@@ -1084,6 +1341,16 @@ fn plugins_sync_explicit_repo_from_foreign_checkout_is_allowed() {
     let vault = temp.path().join("vault");
     let backups = temp.path().join("backups");
     write_plugins_fixture(&canonical, &vault);
+    let sync_config_alpha = write_named_sync_config(
+        temp.path(),
+        "sync-config-alpha.yml",
+        &["alpha"],
+    );
+    let sync_config_full = write_named_sync_config(
+        temp.path(),
+        "sync-config-full.yml",
+        &["alpha", "beta", "gamma"],
+    );
 
     // A foreign checkout identified by the repo-root marker alone: no origin
     // remote, but a plugins/ dir plus the monorepo package.json.
@@ -1108,6 +1375,7 @@ fn plugins_sync_explicit_repo_from_foreign_checkout_is_allowed() {
         .arg("-B")
         .arg(&backups)
         .env("BOB_PLUGINS_DIR", &canonical)
+        .env("BOB_CONFIG_FILE", &sync_config_alpha)
         .current_dir(&foreign)
         .output()
         .expect("run bare bob plugins sync from a marker checkout");
@@ -1145,6 +1413,7 @@ fn plugins_sync_explicit_repo_from_foreign_checkout_is_allowed() {
         .arg("-f")
         .arg("json")
         .env("BOB_PLUGINS_DIR", &canonical)
+        .env("BOB_CONFIG_FILE", &sync_config_full)
         .current_dir(&foreign)
         .output()
         .expect("run bob plugins sync --repo from a foreign checkout");
@@ -1170,6 +1439,7 @@ fn plugins_sync_explicit_repo_from_foreign_checkout_is_allowed() {
 #[test]
 fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
     let temp = TempDir::new("bob-cli-plugins-guard-ab");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let (checkout_a, checkout_b, vault, backups) =
         init_two_checkouts_and_vault(&temp);
     write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
@@ -1186,6 +1456,7 @@ fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("deploy from checkout A");
     assert_success(&deployed);
@@ -1207,6 +1478,7 @@ fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("overwrite from checkout B");
     assert_eq!(
@@ -1250,6 +1522,7 @@ fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("descendant without dirty bytes");
     assert_eq!(still.status.code(), Some(1), "{}", format_output(&still));
@@ -1272,6 +1545,7 @@ fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("dry-run refusal");
     assert_eq!(dry.status.code(), Some(1), "{}", format_output(&dry));
@@ -1290,6 +1564,7 @@ fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("forced overwrite");
     assert_success(&forced);
@@ -1309,6 +1584,7 @@ fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
 #[test]
 fn plugins_sync_clean_landing_reconciles_then_updates() {
     let temp = TempDir::new("bob-cli-plugins-guard-land");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let seed = temp.path().join("seed");
     write_plugin(&seed.join("plugins/alpha"), "alpha", "1.0.0", "base");
     git(["init", "-q", path_str(&seed)]);
@@ -1336,6 +1612,7 @@ fn plugins_sync_clean_landing_reconciles_then_updates() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("deploy A's dirty fix");
     assert_success(&first);
@@ -1355,6 +1632,7 @@ fn plugins_sync_clean_landing_reconciles_then_updates() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("clean landing");
     assert_success(&landed);
@@ -1392,6 +1670,7 @@ fn plugins_sync_clean_landing_reconciles_then_updates() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("descendant update");
     assert_success(&updated);
@@ -1405,6 +1684,7 @@ fn plugins_sync_clean_landing_reconciles_then_updates() {
 #[test]
 fn plugins_sync_committed_dirty_deploy_overwrites_without_force() {
     let temp = TempDir::new("bob-cli-plugins-guard-proof-cli");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let (checkout_a, _checkout_b, vault, backups) =
         init_two_checkouts_and_vault(&temp);
     configure_test_git_identity(&checkout_a);
@@ -1421,6 +1701,7 @@ fn plugins_sync_committed_dirty_deploy_overwrites_without_force() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("dirty deploy from checkout A");
     assert_success(&deployed);
@@ -1452,6 +1733,7 @@ fn plugins_sync_committed_dirty_deploy_overwrites_without_force() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("proof dry-run json");
     assert_success(&json_out);
@@ -1472,6 +1754,7 @@ fn plugins_sync_committed_dirty_deploy_overwrites_without_force() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("proof sync from clean checkout");
     assert_success(&landed);
@@ -1491,6 +1774,7 @@ fn plugins_sync_committed_dirty_deploy_overwrites_without_force() {
 #[test]
 fn plugins_list_and_json_report_uncommitted_deployment() {
     let temp = TempDir::new("bob-cli-plugins-list-uncommitted");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let repo = temp.path().join("repo");
     write_plugin(&repo.join("plugins/alpha"), "alpha", "1.0.0", "alpha");
     git(["init", "-q", path_str(&repo)]);
@@ -1515,6 +1799,7 @@ fn plugins_list_and_json_report_uncommitted_deployment() {
         .arg(&backups)
         .arg("-f")
         .arg("json")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("dirty deploy");
     assert_success(&synced);
@@ -1566,6 +1851,7 @@ fn plugins_list_and_json_report_uncommitted_deployment() {
 #[test]
 fn plugins_sync_git_vault_requires_ignored_stamp() {
     let temp = TempDir::new("bob-cli-plugins-stamp-ignore-cli");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let repo = temp.path().join("repo");
     write_plugin(&repo.join("plugins/alpha"), "alpha", "1.0.0", "alpha");
     let vault = temp.path().join("vault");
@@ -1588,6 +1874,7 @@ fn plugins_sync_git_vault_requires_ignored_stamp() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("sync without stamp ignore");
     assert_eq!(
@@ -1622,6 +1909,7 @@ fn plugins_sync_git_vault_requires_ignored_stamp() {
         .arg(&vault)
         .arg("-B")
         .arg(&backups)
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("sync with stamp ignore");
     assert_success(&allowed);
@@ -1653,6 +1941,22 @@ fn write_plugins_fixture(repo: &Path, vault: &Path) {
         &vault.join(".obsidian/community-plugins.json"),
         "[\"alpha\"]\n",
     );
+}
+
+/// Writes a `plugins.sync` allowlist config listing `ids`, returning its path.
+/// Set `BOB_CONFIG_FILE` to the result before running `bob plugins sync`.
+fn write_sync_config(dir: &Path, ids: &[&str]) -> PathBuf {
+    write_named_sync_config(dir, "sync-config.yml", ids)
+}
+
+fn write_named_sync_config(dir: &Path, name: &str, ids: &[&str]) -> PathBuf {
+    let path = dir.join(name);
+    let mut text = String::from("plugins:\n  sync:\n");
+    for id in ids {
+        text.push_str(&format!("    - {id}\n"));
+    }
+    write_file(&path, &text);
+    path
 }
 
 fn plugin_file<'a>(
@@ -1796,6 +2100,7 @@ fn remote_refs_snapshot(repo: &Path) -> String {
 #[test]
 fn plugins_sync_dirty_refusal_names_landed_build() {
     let temp = TempDir::new("bob-cli-plugins-guard-landed");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let (checkout_a, checkout_b, vault, backups) =
         init_bare_guard_fixture(&temp);
     write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
@@ -1813,6 +2118,7 @@ fn plugins_sync_dirty_refusal_names_landed_build() {
         .arg("-B")
         .arg(&backups)
         .env("SASE_AGENT_ID", "agent-a")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("dirty deploy from checkout A");
     assert_success(&deployed);
@@ -1839,6 +2145,7 @@ fn plugins_sync_dirty_refusal_names_landed_build() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("refuse from stale checkout B");
     assert_eq!(
@@ -1869,6 +2176,7 @@ fn plugins_sync_dirty_refusal_names_landed_build() {
 #[test]
 fn plugins_sync_landed_recovery_without_force() {
     let temp = TempDir::new("bob-cli-plugins-guard-recover");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let (checkout_a, checkout_b, vault, backups) =
         init_bare_guard_fixture(&temp);
     write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
@@ -1885,6 +2193,7 @@ fn plugins_sync_landed_recovery_without_force() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("dirty deploy from checkout A");
     assert_success(&deployed);
@@ -1914,6 +2223,7 @@ fn plugins_sync_landed_recovery_without_force() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("clean reconcile after update");
     assert_success(&clean);
@@ -1941,6 +2251,7 @@ fn plugins_sync_landed_recovery_without_force() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("redeploy B change without force");
     assert_success(&redeploy);
@@ -1960,6 +2271,7 @@ fn plugins_sync_landed_recovery_without_force() {
 #[test]
 fn plugins_sync_dirty_refusal_generic_remedy_without_fetch() {
     let temp = TempDir::new("bob-cli-plugins-guard-generic");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let (checkout_a, checkout_b, vault, backups) =
         init_bare_guard_fixture(&temp);
     write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
@@ -1976,6 +2288,7 @@ fn plugins_sync_dirty_refusal_generic_remedy_without_fetch() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("dirty deploy from checkout A");
     assert_success(&deployed);
@@ -2000,6 +2313,7 @@ fn plugins_sync_dirty_refusal_generic_remedy_without_fetch() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("refuse without fetching");
     assert_eq!(
@@ -2029,6 +2343,7 @@ fn plugins_sync_dirty_refusal_generic_remedy_without_fetch() {
 #[test]
 fn plugins_sync_clean_refusal_names_landed_revision() {
     let temp = TempDir::new("bob-cli-plugins-guard-clean");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
     let (checkout_a, checkout_b, vault, backups) =
         init_bare_guard_fixture(&temp);
     write_file(&checkout_a.join("plugins/alpha/main.js"), "// new\n");
@@ -2047,6 +2362,7 @@ fn plugins_sync_clean_refusal_names_landed_revision() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("clean deploy from checkout A");
     assert_success(&clean);
@@ -2068,6 +2384,7 @@ fn plugins_sync_clean_refusal_names_landed_revision() {
         .arg("-B")
         .arg(&backups)
         .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
         .output()
         .expect("clean non-ancestor refusal");
     assert_eq!(

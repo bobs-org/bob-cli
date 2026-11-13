@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, io, path::Path};
+use std::{
+    collections::{BTreeSet, HashSet},
+    fs, io,
+    path::Path,
+};
 
 use super::{
     deploy::{check_plugin_ignore, scan_deployment},
@@ -13,6 +17,7 @@ pub(super) fn scan_plugins(
     repo: &Path,
     bob_dir: &Path,
     repo_source: RepoSource,
+    configured: Option<&BTreeSet<String>>,
 ) -> PluginsReport {
     let mut plugins = Vec::new();
     let mut issues = Vec::new();
@@ -66,6 +71,8 @@ pub(super) fn scan_plugins(
         let vault_plugin_dir = bob_dir.join(VAULT_PLUGINS_SUBDIR).join(&id);
 
         let vault_ignore = check_plugin_ignore(bob_dir, &id);
+        let is_configured =
+            configured.is_some_and(|allowed| allowed.contains(&id));
         plugins.push(PluginEntry {
             sync: sync_state(&path, &vault_plugin_dir),
             vault: vault_state(&id, &enabled, &vault_plugin_dir),
@@ -74,6 +81,7 @@ pub(super) fn scan_plugins(
             version: manifest.version,
             description: manifest.description,
             id,
+            configured: is_configured,
         });
     }
 
@@ -93,6 +101,44 @@ pub(super) fn read_manifest(plugin_dir: &Path) -> Result<Manifest, String> {
         .map_err(|error| format!("failed to read manifest.json: {error}"))?;
     serde_json::from_str(&contents)
         .map_err(|error| format!("failed to parse manifest.json: {error}"))
+}
+
+/// Plugin id for one repo folder without failing on manifest problems.
+pub(super) fn read_plugin_id(plugin_dir: &Path) -> String {
+    let folder = plugin_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("plugin")
+        .to_string();
+    match read_manifest(plugin_dir) {
+        Ok(manifest) if !manifest.id.is_empty() => manifest.id,
+        _ => folder,
+    }
+}
+
+/// Every plugin id in the current checkout, sorted. Empty when unreadable.
+pub(super) fn plugin_ids_in_repo(repo: &Path) -> Vec<String> {
+    let Ok(entries) = read_sorted_directory(&repo.join(REPO_PLUGINS_SUBDIR))
+    else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        let is_dir = entry
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false);
+        if !is_dir {
+            continue;
+        }
+        if path.file_name().and_then(|name| name.to_str()).is_none() {
+            continue;
+        }
+        ids.push(read_plugin_id(&path));
+    }
+    ids.sort();
+    ids
 }
 
 fn read_enabled_plugins(bob_dir: &Path) -> HashSet<String> {

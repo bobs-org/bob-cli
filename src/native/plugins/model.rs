@@ -23,6 +23,8 @@ pub(super) struct SyncOptions {
     pub(super) only: Option<String>,
     pub(super) dry_run: bool,
     pub(super) force: bool,
+    pub(super) configured: std::collections::BTreeSet<String>,
+    pub(super) config_path: PathBuf,
 }
 
 /// Where the plugins repo root came from.
@@ -46,6 +48,7 @@ pub(super) struct SyncReport {
     pub(super) bob_dir: PathBuf,
     pub(super) backup_run_dir: PathBuf,
     pub(super) plugins: Vec<PluginSync>,
+    pub(super) not_configured: Vec<String>,
     pub(super) issues: Vec<String>,
 }
 
@@ -90,6 +93,7 @@ impl SyncReport {
             copied: self.copied(),
             skipped: self.skipped(),
             unchanged: self.unchanged(),
+            not_configured: self.not_configured.clone(),
             plugins: self
                 .plugins
                 .iter()
@@ -130,6 +134,7 @@ pub(super) struct SyncResult {
     pub(super) copied: usize,
     pub(super) skipped: usize,
     pub(super) unchanged: usize,
+    pub(super) not_configured: Vec<String>,
     pub(super) plugins: Vec<PluginSyncResult>,
 }
 
@@ -307,6 +312,7 @@ pub(super) struct PluginEntry {
     pub(super) description: String,
     pub(super) sync: SyncState,
     pub(super) vault: VaultState,
+    pub(super) configured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) deployment: Option<DeploymentInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]

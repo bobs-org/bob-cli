@@ -17,7 +17,18 @@ checkout.
 Install the CLI and choose a vault with `-b` or `BOB_DIR`. Clone
 [bob-plugins](https://github.com/bobs-org/bob-plugins) and keep that checkout as
 the source of truth. Do not edit copies under the vault's `.obsidian/plugins/`
-folder; the next sync overwrites them. Sync copies plugin files. It does not
+folder; the next sync overwrites them. `bob plugins sync` deploys only the
+plugin ids listed in `plugins.sync` in bob's config file, so list every plugin
+you deploy there first:
+
+```yaml
+plugins:
+  sync:
+    - bob-ledger-tools
+    - bob-navigation-hotkeys
+```
+
+Sync copies plugin files. It does not
 enable plugins or create dashboard notes.
 
 ## 1. List repo versions against the vault
@@ -84,9 +95,12 @@ skipped, unrun, or failing check, do not claim rollout success.
 
 ## If it goes wrong
 
-Uncommitted vault edits are skipped with `skipped <file> (dirty in vault; use
--F/--force)`. Read the printed diff, commit or discard the vault change, and
-rerun the sync. Do not make `--force` a habit. A
+A missing `plugins.sync` list or an invalid `plugins` block exits 2 before any
+pull, copy, or vault read: add the list to bob's config file (the error ends
+with a ready-to-paste snippet) and rerun. Uncommitted vault edits are skipped
+with `skipped <file> (dirty in vault; use -F/--force)`. Read the printed diff,
+commit or discard the vault change, and rerun the sync. Do not make `--force`
+a habit. A
 [deployment-protection refusal](../plugins.md#deploy-protection-guard) exits 1;
 follow the printed preview and recovery commands. In a Git vault, ignore
 `.obsidian/plugins/*/.bob-deploy.json` so the provenance stamp stays out of
