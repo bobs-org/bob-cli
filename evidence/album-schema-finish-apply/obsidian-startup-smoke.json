@@ -1,0 +1,442 @@
+{
+  "tool": "obsidian-startup-smoke",
+  "pass": true,
+  "failures": [],
+  "thresholds": {
+    "layoutReadyMs": 30000,
+    "peakHeapBytes": 1610612736,
+    "peakHeapHuman": "1.5 GiB"
+  },
+  "observation": {
+    "executable": "/snap/bin/obsidian",
+    "appVersion": ".obsidian",
+    "sourceSha": "unknown",
+    "layoutReadyMs": 328,
+    "layoutReadyTimeoutMs": 30000,
+    "hookInstalled": true,
+    "hookEarly": true,
+    "plugins": [
+      {
+        "id": "block-id-prompt",
+        "loaded": true,
+        "version": "1.39.0"
+      },
+      {
+        "id": "bob-articles",
+        "loaded": true,
+        "version": "0.2.1"
+      },
+      {
+        "id": "bob-command-mode",
+        "loaded": true,
+        "version": "0.1.0"
+      },
+      {
+        "id": "bob-emoji",
+        "loaded": true,
+        "version": "0.1.0"
+      },
+      {
+        "id": "bob-ledger-tools",
+        "loaded": true,
+        "version": "1.113.0"
+      },
+      {
+        "id": "bob-mail",
+        "loaded": true,
+        "version": "0.2.0"
+      },
+      {
+        "id": "bob-navigation-hotkeys",
+        "loaded": true,
+        "version": "2.81.0"
+      },
+      {
+        "id": "bob-project-tasks",
+        "loaded": true,
+        "version": "1.1.0"
+      },
+      {
+        "id": "bob-vim-surround",
+        "loaded": true,
+        "version": "1.5.2"
+      },
+      {
+        "id": "bob-vim-yank-flash",
+        "loaded": true,
+        "version": "0.1.1"
+      },
+      {
+        "id": "task-status-cycler",
+        "loaded": true,
+        "version": "1.49.1"
+      }
+    ],
+    "expectedPlugins": [
+      {
+        "id": "block-id-prompt",
+        "version": "1.39.0"
+      },
+      {
+        "id": "bob-articles",
+        "version": "0.2.1"
+      },
+      {
+        "id": "bob-command-mode",
+        "version": "0.1.0"
+      },
+      {
+        "id": "bob-emoji",
+        "version": "0.1.0"
+      },
+      {
+        "id": "bob-ledger-tools",
+        "version": "1.113.0"
+      },
+      {
+        "id": "bob-mail",
+        "version": "0.2.0"
+      },
+      {
+        "id": "bob-navigation-hotkeys",
+        "version": "2.81.0"
+      },
+      {
+        "id": "bob-project-tasks",
+        "version": "1.1.0"
+      },
+      {
+        "id": "bob-vim-surround",
+        "version": "1.5.2"
+      },
+      {
+        "id": "bob-vim-yank-flash",
+        "version": "0.1.1"
+      },
+      {
+        "id": "task-status-cycler",
+        "version": "1.49.1"
+      }
+    ],
+    "heapPeakBytes": 43713564,
+    "heapLimitBytes": 1610612736,
+    "heapSamples": [
+      43504214,
+      43504214,
+      43697156,
+      43713564
+    ],
+    "relation": {
+      "ready": true,
+      "nonMdKeys": 0,
+      "fixtureRelationIndexed": true,
+      "readsBeforeLayoutReady": 0,
+      "nonMdReads": 0,
+      "createReplayCount": 210
+    },
+    "editors": [
+      {
+        "file": "2026/20261027.md",
+        "mode": "live",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      },
+      {
+        "file": "2026/20261027.md",
+        "mode": "source",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      },
+      {
+        "file": "tasks/note-a.md",
+        "mode": "live",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      },
+      {
+        "file": "tasks/note-a.md",
+        "mode": "source",
+        "opened": true,
+        "correctPath": true,
+        "correctMode": true,
+        "actualMode": "source",
+        "editorConnected": true,
+        "textMatches": true,
+        "readingView": false,
+        "staleEditor": false
+      }
+    ],
+    "runtime": {
+      "exceptions": [],
+      "rejections": [],
+      "pluginLoadErrors": [],
+      "consoleErrors": []
+    },
+    "crashes": {
+      "artifacts": [],
+      "events": [],
+      "processExits": []
+    },
+    "vaultPath": "/tmp/bob-obsidian-smoke-jcMN2R/vault",
+    "fixturePath": "/tmp/bob-obsidian-smoke-jcMN2R/vault",
+    "crashObservationMethod": "owned-profile scan for crash dumps plus CDP disconnect/process-exit evidence",
+    "deploy": null,
+    "counters": {
+      "initialLaunchMs": 8289,
+      "instrumentedStartOffsetMs": 1036,
+      "cdpEvents": [
+        "Runtime.executionContextCreated",
+        "Runtime.consoleAPICalled",
+        "Page.frameStartedNavigating",
+        "Page.frameStartedLoading",
+        "Runtime.executionContextsCleared",
+        "Page.frameNavigated",
+        "Page.domContentEventFired",
+        "Page.loadEventFired",
+        "Page.frameStoppedLoading"
+      ],
+      "heapSamples": [
+        43504214,
+        43504214,
+        43697156,
+        43713564
+      ],
+      "relationProbe": {
+        "hasLedgerTools": true,
+        "live": [
+          {
+            "id": "block-id-prompt",
+            "loaded": true,
+            "version": "1.39.0"
+          },
+          {
+            "id": "bob-articles",
+            "loaded": true,
+            "version": "0.2.1"
+          },
+          {
+            "id": "bob-command-mode",
+            "loaded": true,
+            "version": "0.1.0"
+          },
+          {
+            "id": "bob-emoji",
+            "loaded": true,
+            "version": "0.1.0"
+          },
+          {
+            "id": "bob-ledger-tools",
+            "loaded": true,
+            "version": "1.113.0"
+          },
+          {
+            "id": "bob-mail",
+            "loaded": true,
+            "version": "0.2.0"
+          },
+          {
+            "id": "bob-navigation-hotkeys",
+            "loaded": true,
+            "version": "2.81.0"
+          },
+          {
+            "id": "bob-project-tasks",
+            "loaded": true,
+            "version": "1.1.0"
+          },
+          {
+            "id": "bob-vim-surround",
+            "loaded": true,
+            "version": "1.5.2"
+          },
+          {
+            "id": "bob-vim-yank-flash",
+            "loaded": true,
+            "version": "0.1.1"
+          },
+          {
+            "id": "task-status-cycler",
+            "loaded": true,
+            "version": "1.49.1"
+          }
+        ],
+        "loadedIds": [
+          "block-id-prompt",
+          "bob-articles",
+          "bob-command-mode",
+          "bob-emoji",
+          "bob-ledger-tools",
+          "bob-mail",
+          "bob-navigation-hotkeys",
+          "bob-project-tasks",
+          "bob-vim-surround",
+          "bob-vim-yank-flash",
+          "task-status-cycler"
+        ],
+        "loadedCount": 11,
+        "ready": true,
+        "keys": 2,
+        "nonMd": 0,
+        "hasDaily": false,
+        "hasNoteA": true,
+        "hasRelation": true,
+        "manifestVersion": "1.113.0"
+      },
+      "pluginDiagnostics": {
+        "loadedIds": [
+          "block-id-prompt",
+          "bob-articles",
+          "bob-command-mode",
+          "bob-emoji",
+          "bob-ledger-tools",
+          "bob-mail",
+          "bob-navigation-hotkeys",
+          "bob-project-tasks",
+          "bob-vim-surround",
+          "bob-vim-yank-flash",
+          "task-status-cycler"
+        ],
+        "loadedCount": 11,
+        "probeError": null
+      },
+      "communityGate": {
+        "wasEnabled": false,
+        "setEnableCalled": true,
+        "nowEnabled": true
+      }
+    }
+  },
+  "managedFileHashes": {
+    "block-id-prompt": {
+      "version": "1.39.0",
+      "manifest.json": "1b3e1041047c0145",
+      "main.js": "85de172de56b17c8",
+      "styles.css": "b3c53115b9b70638"
+    },
+    "bob-articles": {
+      "version": "0.2.1",
+      "manifest.json": "056768caee4f794a",
+      "main.js": "aed3b99804c3bf24",
+      "styles.css": "93176b1c3c780ea2"
+    },
+    "bob-command-mode": {
+      "version": "0.1.0",
+      "manifest.json": "85ffc68e8848aa8d",
+      "main.js": "d3ab989ef343e350",
+      "styles.css": "8f13ae6e83597990"
+    },
+    "bob-emoji": {
+      "version": "0.1.0",
+      "manifest.json": "349d830c20492d45",
+      "main.js": "b16f0c005cd1b19b",
+      "styles.css": "0c6f92b834b1ffc0"
+    },
+    "bob-ledger-tools": {
+      "version": "1.113.0",
+      "manifest.json": "798a3e9bacceaa4c",
+      "main.js": "152b1952ce046f77",
+      "styles.css": "3b2532484d290934"
+    },
+    "bob-mail": {
+      "version": "0.2.0",
+      "manifest.json": "9aa837e16f952de8",
+      "main.js": "581334d7b7b18853",
+      "styles.css": "f7e5fe1f52fdd906"
+    },
+    "bob-navigation-hotkeys": {
+      "version": "2.81.0",
+      "manifest.json": "fa8b4a4c7b6262a3",
+      "main.js": "975b12b8cfc58c47",
+      "styles.css": "42e67b6d511c6561"
+    },
+    "bob-project-tasks": {
+      "version": "1.1.0",
+      "manifest.json": "7e52808a81eb3966",
+      "main.js": "7c037229b002da06",
+      "styles.css": null
+    },
+    "bob-vim-surround": {
+      "version": "1.5.2",
+      "manifest.json": "4c62612c40f4e9c1",
+      "main.js": "3f5585028fb2b95f",
+      "styles.css": null
+    },
+    "bob-vim-yank-flash": {
+      "version": "0.1.1",
+      "manifest.json": "7f9d045ba7bd8666",
+      "main.js": "212f9fae284434b2",
+      "styles.css": "589ba4c1f6685462"
+    },
+    "task-status-cycler": {
+      "version": "1.49.1",
+      "manifest.json": "ffb4af88dfabbafe",
+      "main.js": "12e2635022211fee",
+      "styles.css": "214c213ebd1fb132"
+    }
+  },
+  "expectedPlugins": [
+    {
+      "id": "block-id-prompt",
+      "version": "1.39.0"
+    },
+    {
+      "id": "bob-articles",
+      "version": "0.2.1"
+    },
+    {
+      "id": "bob-command-mode",
+      "version": "0.1.0"
+    },
+    {
+      "id": "bob-emoji",
+      "version": "0.1.0"
+    },
+    {
+      "id": "bob-ledger-tools",
+      "version": "1.113.0"
+    },
+    {
+      "id": "bob-mail",
+      "version": "0.2.0"
+    },
+    {
+      "id": "bob-navigation-hotkeys",
+      "version": "2.81.0"
+    },
+    {
+      "id": "bob-project-tasks",
+      "version": "1.1.0"
+    },
+    {
+      "id": "bob-vim-surround",
+      "version": "1.5.2"
+    },
+    {
+      "id": "bob-vim-yank-flash",
+      "version": "0.1.1"
+    },
+    {
+      "id": "task-status-cycler",
+      "version": "1.49.1"
+    }
+  ],
+  "note": "The fixture verifies the managed Bob plugin build, not the user's full third-party plugin/settings combination."
+}

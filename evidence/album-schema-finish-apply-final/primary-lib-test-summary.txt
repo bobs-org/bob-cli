@@ -1,0 +1,218 @@
+
+running 6884 tests
+....................................................................................... 87/6884
+................................i...................................................... 174/6884
+....................................................................................... 261/6884
+....................................................................................... 348/6884
+....................................................................................... 435/6884
+....................................................................................... 522/6884
+....................................................................................... 609/6884
+........................................................................i.............. 696/6884
+....................................................................................... 783/6884
+....................................................................................... 870/6884
+....................................................................................... 957/6884
+....................................................................................... 1044/6884
+....................................................................................... 1131/6884
+....................................................................................... 1218/6884
+....................................................................................... 1305/6884
+....................................................................................... 1392/6884
+....................................................................................... 1479/6884
+....................................................................................... 1566/6884
+....................................................................................... 1653/6884
+....................................................................................... 1740/6884
+....................................................................................... 1827/6884
+....................................................................................... 1914/6884
+....................................................................................... 2001/6884
+....................................................................................... 2088/6884
+....................................................................................... 2175/6884
+....................................................................................... 2262/6884
+....................................................................................... 2349/6884
+....................................................................................... 2436/6884
+....................................................................................... 2523/6884
+....................................................................................... 2610/6884
+....................................................................................... 2697/6884
+....................................................................................... 2784/6884
+....................................................................................... 2871/6884
+....................................................................................... 2958/6884
+................................. 2991/6884
+native::gcal::cli::tests::sync_args_read_last_n_days_aliases_and_default_to_none --- FAILED
+....................................................................................... 3079/6884
+....................................................................................... 3166/6884
+....................................................................................... 3253/6884
+.........................hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+.Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpL7jAeK/.git/
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpVcx14p/.git/
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmp95zEpt/.git/
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpn9coKE/.git/
+.hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpk3lsOv/.git/
+..hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpjSRGT9/.git/
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpsGita5/.git/
+.hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+.[master (root-commit) 3fc7241] receipt
+ 1 file changed, 1 insertion(+)
+ create mode 100644 .bob/gkeep/imports/abc.json
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpMtIQTe/.git/
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpE052KJ/.git/
+.....................[master (root-commit) b1f2eaa] track
+ 1 file changed, 1 insertion(+)
+ create mode 100644 .bob/gkeep/imports/tracked.json
+................................... 3340/6884
+....................................................................................... 3427/6884
+....................................................................................... 3514/6884
+....................................................................................... 3601/6884
+....................................................................................... 3688/6884
+....................................................................................... 3775/6884
+....................................................................................... 3862/6884
+....................................................................................... 3949/6884
+....................................................................................... 4036/6884
+....................................................................................... 4123/6884
+....................................................................................... 4210/6884
+....................................................................................... 4297/6884
+....................................................................................... 4384/6884
+....................................................................................... 4471/6884
+........................Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpKXNJXl/.git/
+Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpvGITCi/.git/
+..........Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpO7QssS/.git/
+...................Initialized empty Git repository in /home/bryan/.cache/sase/tmp/agent-tmp/gh_bobs-org__bob-cli-ws10-261113_075728/.tmpxRQKYU/.git/
+.................................. 4558/6884
+....................................................................................... 4645/6884
+....................................................................................... 4732/6884
+....................................................................................... 4819/6884
+....................................................................................... 4906/6884
+....................................................................................... 4993/6884
+....................................................................................... 5080/6884
+....................................................................................... 5167/6884
+....................................................................................... 5254/6884
+...........................................warning: You appear to have cloned an empty repository.
+warning: You appear to have cloned an empty repository.
+............................................ 5341/6884
+....................................................................................... 5428/6884
+....................................................................................... 5515/6884
+..............................................................i........................ 5602/6884
+....................................................................................... 5689/6884
+....................................................................................... 5776/6884
+....................................................................................... 5863/6884
+....................................................................................... 5950/6884
+....................................................................................... 6037/6884
+............................................................... 6100/6884
+native::subprocess_runner::tests::run_bounds_pipe_drain_when_detached_grandchild_holds_output --- FAILED
+....................................................................................... 6188/6884
+....................................................................................... 6275/6884
+....................................................................................... 6362/6884
+....................................................................................... 6449/6884
+....................................................................................... 6536/6884
+....................................................................................... 6623/6884
+....................................................................................... 6710/6884
+....................................................................................... 6797/6884
+....................................................................................... 6884/6884
+
+failures:
+
+---- native::gcal::cli::tests::sync_args_read_last_n_days_aliases_and_default_to_none stdout ----
+
+thread 'native::gcal::cli::tests::sync_args_read_last_n_days_aliases_and_default_to_none' (57950) panicked at src/native/gcal/cli.rs:1032:9:
+assertion `left == right` failed
+  left: ["tomorrow"]
+ right: ["today", "tomorrow"]
+
+---- native::subprocess_runner::tests::run_bounds_pipe_drain_when_detached_grandchild_holds_output stdout ----
+
+thread 'native::subprocess_runner::tests::run_bounds_pipe_drain_when_detached_grandchild_holds_output' (71772) panicked at src/native/subprocess_runner.rs:462:9:
+assertion failed: output.stderr.contains("output truncated")
+
+
+failures:
+    native::gcal::cli::tests::sync_args_read_last_n_days_aliases_and_default_to_none
+    native::subprocess_runner::tests::run_bounds_pipe_drain_when_detached_grandchild_holds_output
+
+test result: FAILED. 6879 passed; 2 failed; 3 ignored; 0 measured; 0 filtered out; finished in 24.06s
+
+error: test failed, to rerun pass `-p bob-obsidian --lib`
