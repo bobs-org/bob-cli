@@ -30,6 +30,8 @@ use crate::native::{
 /// One classified event with its valid root and display fields.
 pub(crate) struct SnapshotEvent {
     pub event: GcalEvent,
+    /// The Google-only event before private notes and root choices are applied.
+    pub google_event: GcalEvent,
     pub inclusion: Inclusion,
     pub root: Option<EventRoot>,
     #[allow(dead_code)]
@@ -132,6 +134,18 @@ impl<'a> FetchContext<'a> {
         Ok(by_day)
     }
 
+    pub(crate) fn account(&self) -> &str {
+        &self.account
+    }
+
+    pub(crate) fn lookup_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Result<serde_json::Value, GcalError> {
+        self.gog.event(calendar_id, event_id, &self.account)
+    }
+
     pub(crate) fn assemble_day<S: HomeSource>(
         &self,
         vault: PathBuf,
@@ -190,6 +204,7 @@ fn assemble_day<S: HomeSource>(
             .map(|calendar| calendar.name().to_string())
             .unwrap_or_else(|| calendar_id.clone());
         let mut event = GcalEvent::from_google(&calendar_id, raw_event)?;
+        let google_event = event.clone();
         let occurrence_note = matching_note(
             notes.event(account, &event.key.calendar_id, &event.key.event_id),
             account,
@@ -247,6 +262,7 @@ fn assemble_day<S: HomeSource>(
         event.title = title;
         events.push(SnapshotEvent {
             event,
+            google_event,
             inclusion,
             root,
             calendar_name,

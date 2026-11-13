@@ -1010,6 +1010,23 @@ const TABLE: &[Entry] = &[
         arg: "event-id",
         kind: Kind::FreeText,
     },
+    // `bob gcal ack` shares Calendar and event-id selectors with note;
+    // its next-N value is a bounded day count looking forward.
+    Entry {
+        path: &["gcal", "ack"],
+        arg: "calendar",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["gcal", "ack"],
+        arg: "event-id",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["gcal", "ack"],
+        arg: "next-n-days",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &[],
         arg: "ref-type",

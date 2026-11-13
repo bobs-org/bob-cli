@@ -471,7 +471,7 @@ fn today() -> NaiveDate {
 
 /// 90-day window `[today midnight, today+90 midnight)` plus the single-day
 /// override. Returns `(from, to, window_label_from, window_label_to)`.
-fn window_range(
+pub(crate) fn window_range(
     day_filter: Option<NaiveDate>,
 ) -> Result<(String, String, NaiveDate, NaiveDate), GcalError> {
     let timezone = bob_env::configured_timezone();
@@ -779,7 +779,7 @@ pub(crate) fn rank_candidate(
 /// A genuine not-found from `gog calendar event`: the id is not on that
 /// calendar. Every other lookup failure (network, auth, outage) must
 /// never be mistaken for one.
-fn is_not_found_error(error: &GcalError) -> bool {
+pub(crate) fn is_not_found_error(error: &GcalError) -> bool {
     error.kind() == "bad_json"
         || error.kind() == "not_found"
         || error.message().contains("Not Found")

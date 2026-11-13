@@ -27,6 +27,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .arg(day_arg())
         .arg(list_format_arg())
         .arg(help_arg())
+        .subcommand(ack_command())
         .subcommand(calendars_command())
         .subcommand(doctor_command())
         .subcommand(list_command())
@@ -119,6 +120,105 @@ fn note_after_help() -> &'static str {
      description directive and reason lines, including bare `-N`/`+M` and \
      `-0`/`+0`; it refuses when a note already exists unless combined with \
      `-e`.\n\nExamples:\n  bob gcal note\n  bob gcal note -a -f json\n  bob gcal note -l deerwood\n  bob gcal note deerwood\n  bob gcal note deerwood @family -30 Drive there\n  bob gcal note deerwood -e\n  bob gcal note deerwood -A\n  bob gcal note -d -i event-id -- @family -30 Drive there\n  bob gcal note -c -i event-id\n  bob gcal note -D 2026-12-13 little gym\n  bob gcal note -i st49ogf0k0jiciob1ebgj1aupo\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       overrides gcal.gog and gog on PATH\n  BOB_NOW            Local datetime override for default day selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests\n  VISUAL, EDITOR       Editor executable used by `-e` (`vi` if both are unset)"
+}
+
+fn ack_command() -> ClapCommand {
+    ClapCommand::new("ack")
+        .about("Review and acknowledge external Event Tasks")
+        .long_about(
+            "Bob asks once about every event you can't describe in Google: press `a` when Bob's handling is right, or `n` to write a private note. Until you answer, that Event Task carries an `#unacked` tag.\n\n\
+             A bare command lists the review queue in this build. A selector acknowledges one event unless `-c` clears its explicit receipt. `-d` and `-f json` only preview; they never write or prompt.",
+        )
+        .disable_help_flag(true)
+        .arg(ack_all_arg())
+        .arg(bob_dir_arg())
+        .arg(calendar_arg())
+        .arg(ack_clear_arg())
+        .arg(ack_day_arg())
+        .arg(ack_dry_run_arg())
+        .arg(event_id_arg())
+        .arg(ack_format_arg())
+        .arg(help_arg())
+        .arg(ack_list_arg())
+        .arg(next_n_days_arg())
+        .arg(quiet_arg())
+        .arg(ack_scope_arg())
+        .arg(query_arg())
+        .after_help(ack_after_help())
+}
+
+fn ack_after_help() -> &'static str {
+    "Window: today through today+(N−1) in Bob's timezone; `-n` looks forward (default 7, range 1..=366). `-D` sets the anchor. `-a` also queues eligible unanswered and Maybe events. `-l` always lists without writing. QUERY and `-i` select one event with the same title matching, `eid=` URL decoding, calendar disambiguation, and recurring scope rules as `bob gcal note`; explicit IDs may be outside the queue window. Recurring one-shot writes need `-s event|series` off a TTY. Clearing one scope leaves note or other-scope evidence intact.\n\nExit codes: 0 for list, empty queue, or a completed action; 1 for Google or journal failures; 2 for usage, setup, ambiguity, or a non-TTY walk request; 130 for Ctrl-C after saving session answers. JSON preview reports the proposed action separately from persisted state and never includes note text.\n\nExamples:\n  bob gcal ack\n  bob gcal ack -l -f json\n  bob gcal ack -n 14\n  bob gcal ack -a\n  bob gcal ack -i event-id -s event\n  bob gcal ack -c -i event-id -s series\n  bob gcal ack screening -d\n  bob gcal ack 'https://calendar.google.com/event?eid=...'\n\nEnvironment:\n  BOB_DIR              Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE      gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG         overrides gcal.gog and gog on PATH\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests\n  BOB_NOW              Local datetime override for default day selection\n  VISUAL, EDITOR       Editor executable used for note review in the session"
+}
+
+fn ack_all_arg() -> Arg {
+    Arg::new("all")
+        .long("all")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help("Also include eligible unanswered and Maybe events")
+}
+
+fn ack_clear_arg() -> Arg {
+    Arg::new("clear")
+        .long("clear")
+        .short('c')
+        .action(ArgAction::SetTrue)
+        .help("Clear the selected event or series receipt")
+}
+
+fn ack_day_arg() -> Arg {
+    Arg::new("day")
+        .long("day")
+        .short('D')
+        .value_name("DAY")
+        .value_parser(OsStringValueParser::new())
+        .help("Local anchor day: today, tomorrow, yesterday, or YYYY-MM-DD")
+}
+
+fn ack_dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Preview the queue or selected action without writing")
+}
+
+fn ack_format_arg() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .short('f')
+        .value_name("FORMAT")
+        .value_parser(["human", "json"])
+        .default_value("human")
+        .help("Output format: human or redacted JSON (JSON never writes)")
+}
+
+fn ack_list_arg() -> Arg {
+    Arg::new("list")
+        .long("list")
+        .short('l')
+        .action(ArgAction::SetTrue)
+        .help("List the queue without prompting or writing")
+}
+
+fn next_n_days_arg() -> Arg {
+    Arg::new("next-n-days")
+        .long("next-n-days")
+        .short('n')
+        .value_name("N")
+        .allow_hyphen_values(true)
+        .value_parser(OsStringValueParser::new())
+        .help("Look forward N local days including the anchor (1..=366; default 7)")
+}
+
+fn ack_scope_arg() -> Arg {
+    Arg::new("scope")
+        .long("scope")
+        .short('s')
+        .value_name("SCOPE")
+        .value_parser(["event", "series"])
+        .help("Receipt scope for recurring events: event or series")
 }
 
 fn sync_command() -> ClapCommand {
@@ -315,7 +415,7 @@ fn last_n_days_arg() -> Arg {
         .value_name("N")
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
-        .help("Sync the last N days ending today (2 = today and yesterday; combines with -D)")
+        .help("Look backward: sync the last N days ending today (2 = today and yesterday; combines with -D)")
 }
 
 fn manual_arg() -> Arg {
@@ -685,6 +785,73 @@ pub(crate) struct NoteArgs {
     pub scope: Option<String>,
     pub query: Vec<String>,
     pub text: Vec<String>,
+}
+
+/// Typed `ack` arguments: a queue request or one selected event action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AckArgs {
+    pub all: bool,
+    pub bob_dir: Option<PathBuf>,
+    pub calendar: Option<String>,
+    pub clear: bool,
+    pub day: Option<String>,
+    pub dry_run: bool,
+    pub event_id: Option<String>,
+    pub format: HumanFormat,
+    pub list: bool,
+    pub next_n_days: Option<String>,
+    pub quiet: bool,
+    pub scope: Option<String>,
+    pub query: Vec<String>,
+}
+
+impl AckArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            all: matches.get_flag("all"),
+            bob_dir: raw_bob_dir(matches),
+            calendar: matches
+                .get_one::<OsString>("calendar")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .filter(|value| !value.is_empty()),
+            clear: matches.get_flag("clear"),
+            day: matches
+                .get_one::<OsString>("day")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .filter(|value| !value.is_empty()),
+            dry_run: matches.get_flag("dry-run"),
+            event_id: matches
+                .get_one::<OsString>("event-id")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .filter(|value| !value.is_empty()),
+            format: HumanFormat::from_matches(matches),
+            list: matches.get_flag("list"),
+            next_n_days: matches
+                .get_one::<OsString>("next-n-days")
+                .map(|value| value.to_string_lossy().trim().to_string()),
+            quiet: matches.get_flag("quiet"),
+            scope: matches
+                .get_one::<String>("scope")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            query: matches
+                .get_many::<OsString>("query")
+                .map(|values| {
+                    values
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+
+    pub(crate) fn error_format(&self) -> &'static str {
+        self.format.as_str()
+    }
 }
 
 impl NoteArgs {

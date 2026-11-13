@@ -1270,6 +1270,19 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         network: true,
+        slots: &[("QUERY", "text"), ("query", "text")],
+        ..writes(
+            "gcal-ack",
+            &["gcal", "ack"],
+            "Review external Calendar events",
+            &["calendar", "google", "gcal", "events", "ack", "review"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
+        network: true,
         invalidates: &["tasks"],
         ..writes(
             "gcal-sync",

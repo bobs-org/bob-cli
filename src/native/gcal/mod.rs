@@ -3,6 +3,7 @@
 //! The read-only `list` command previews the event snapshot and its roots;
 //! `sync` writes the rows above today's Pomodoros, idempotently.
 
+mod ack;
 mod bullet_block;
 mod calendars;
 mod classify;
@@ -42,8 +43,8 @@ use std::{ffi::OsString, iter};
 pub(crate) use crate::native::google::GoogleError as GcalError;
 
 pub(crate) use cli::{
-    CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs, NoteArgs,
-    SyncArgs,
+    AckArgs, CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs,
+    NoteArgs, SyncArgs,
 };
 
 const COMMAND_NAME: &str = "bob gcal";
@@ -70,6 +71,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     match matches.subcommand() {
+        Some(("ack", sub_matches)) => {
+            ack::run(&AckArgs::from_matches(sub_matches))
+        }
         Some(("calendars", sub_matches)) => {
             calendars::run(&CalendarsArgs::from_matches(sub_matches))
         }

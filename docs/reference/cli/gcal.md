@@ -14,6 +14,7 @@ Google Calendar → daily-note Event Tasks: one read-only login through gog, the
 Usage: bob gcal [OPTIONS] [COMMAND]
 
 Commands:
+  ack        Review and acknowledge external Event Tasks
   calendars  List Google calendars with id, access role, colour, and mapped root
   doctor     Check the Calendar setup: gog, client, account, token, calendars, default root, today, journal, notes, and writer
   list       List a local day of events and show how Bob would classify them

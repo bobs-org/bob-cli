@@ -442,10 +442,40 @@ impl AckBook {
             )
     }
 
-    #[allow(dead_code)] // Later review surfaces inspect all receipts.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &FoldedAck> {
         self.events.values().chain(self.series.values())
     }
+}
+
+/// True only for a live event-scope receipt whose stored and current
+/// timed endpoints are both parseable and differ as instants. Titles,
+/// local formatting, series times, and incomplete legacy metadata do not
+/// create a stale notice.
+pub(crate) fn ack_is_stale(receipt: &FoldedAck, current: &AckSeen) -> bool {
+    if receipt.scope != AckScope::Event || !receipt.acked {
+        return false;
+    }
+    let Some(seen_start) = receipt.seen.start.as_deref() else {
+        return false;
+    };
+    let Some(seen_end) = receipt.seen.end.as_deref() else {
+        return false;
+    };
+    let Some(current_start) = current.start.as_deref() else {
+        return false;
+    };
+    let Some(current_end) = current.end.as_deref() else {
+        return false;
+    };
+    let (Ok(seen_start), Ok(seen_end), Ok(current_start), Ok(current_end)) = (
+        DateTime::parse_from_rfc3339(seen_start),
+        DateTime::parse_from_rfc3339(seen_end),
+        DateTime::parse_from_rfc3339(current_start),
+        DateTime::parse_from_rfc3339(current_end),
+    ) else {
+        return false;
+    };
+    seen_start != current_start || seen_end != current_end
 }
 
 /// Review display state for one event, shared by `sync` and `list`
@@ -2252,6 +2282,58 @@ mod tests {
             "noted",
             None
         ));
+    }
+
+    #[test]
+    fn ack_stale_compares_only_live_event_instants() {
+        let receipt = FoldedAck {
+            account: "you@example.com".to_string(),
+            scope: AckScope::Event,
+            calendar_id: "primary".to_string(),
+            key: "e1".to_string(),
+            acked: true,
+            via: AckVia::Ack,
+            seen: AckSeen {
+                title: Some("Original title".to_string()),
+                start: Some("2026-11-09T12:00:00-05:00".to_string()),
+                end: Some("2026-11-09T12:30:00-05:00".to_string()),
+                original_start: Some("2026-11-09T12:00:00-05:00".to_string()),
+            },
+            host: "mac".to_string(),
+            ts: DateTime::parse_from_rfc3339("2026-11-08T10:00:00-05:00")
+                .expect("timestamp"),
+        };
+        let unchanged_offset = AckSeen {
+            title: Some("Renamed title".to_string()),
+            start: Some("2026-11-09T13:00:00-04:00".to_string()),
+            end: Some("2026-11-09T13:30:00-04:00".to_string()),
+            original_start: Some("2026-11-09T13:00:00-04:00".to_string()),
+        };
+        assert!(!ack_is_stale(&receipt, &unchanged_offset));
+
+        let moved = AckSeen {
+            start: Some("2026-11-09T14:00:00-05:00".to_string()),
+            ..unchanged_offset.clone()
+        };
+        assert!(ack_is_stale(&receipt, &moved));
+
+        let incomplete = AckSeen {
+            end: None,
+            ..unchanged_offset.clone()
+        };
+        assert!(!ack_is_stale(&receipt, &incomplete));
+        let malformed = AckSeen {
+            start: Some("not-an-instant".to_string()),
+            ..unchanged_offset.clone()
+        };
+        assert!(!ack_is_stale(&receipt, &malformed));
+
+        let mut series = receipt.clone();
+        series.scope = AckScope::Series;
+        assert!(!ack_is_stale(&series, &moved));
+        let mut cleared = receipt;
+        cleared.acked = false;
+        assert!(!ack_is_stale(&cleared, &moved));
     }
 
     #[test]

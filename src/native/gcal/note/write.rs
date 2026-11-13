@@ -1772,6 +1772,7 @@ pub(crate) fn preview(
         daily_rel: daily_rel.clone(),
         events: vec![SnapshotEvent {
             event: candidate.event.clone(),
+            google_event: candidate.google_event.clone(),
             inclusion: candidate.inclusion.clone(),
             root: candidate.root.clone(),
             calendar_name: candidate.calendar_name.clone(),
