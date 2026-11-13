@@ -1,8 +1,9 @@
 # Mail link marks
 
-This guide is the authoritative display contract for Gmail reply signals on
-task lines. The JavaScript mirror lives in bob-ledger-tools:
+This guide is the authoritative display contract for Gmail receipt chips and
+reply signals on task lines. The JavaScript mirror lives in bob-ledger-tools:
 `src/142i-mail-link-marks.js` (pure core),
+`src/142l-mail-archive-receipts.js` (archive-chip models and cached-list fold),
 `src/271e-plugin-mail-link-marks.js` (Live Preview, refresh, and toggle),
 `src/271f-plugin-mail-link-marks-reading.js` (rendered views),
 `src/142k-gmail-open-hint.js` (open-hint core) plus
@@ -11,7 +12,8 @@ task lines. The JavaScript mirror lives in bob-ledger-tools:
 no-reply pill, through the task-tag-marks machinery). The "Also: \<who\>
 replied" tooltip pip is part of the blocked-reason tooltip in
 `src/142c-block-marks-model.js`. Tests run the conformance vectors below
-verbatim. There is no api namespace.
+verbatim. Ledger Tools adds no API namespace; it uses Bob Mail's optional
+`api.mailArchive` cache when available.
 
 All signals are display-only. They read the linked mail note's frontmatter
 through the metadata cache (`turn`, `turn_since`, `who`) and never write.
@@ -93,6 +95,41 @@ Live Preview: a zero-width `Decoration.widget` at the closing `]]`,
 `side: 1`. The cursor on the link reveals the raw `[[…]]`; the badge
 stays put. Reading view inserts the host after the link's
 `a.internal-link`.
+
+## Archive receipt chip
+
+A closed Gmail Task row gets `⤓ archived <day>` for each directly linked
+mail note with at least one active archive receipt. The task must be a
+quote-aware `#task` row with status `x`, `X`, or `-`. A receipt can be linked
+on that row or on one of its direct link-only child bullets. Nested note
+content, plain mentions, embeds, code, open rows, and unknown rows never
+qualify.
+
+The note must be a mail note with an exact `gmail_account` and
+`gmail_thread_id`. Its Bob-owned `gmail_archived` timestamp must match the
+newest active receipt Bob reports for that note. The chip date uses the
+timestamp's recorded calendar date; it does not convert that instant across
+time zones. If a task links several mail notes, each note gets its own chip.
+If one note has several active receipts, its tooltip lists each receipt's
+archive time, exact saved-message count, and label separately. It never adds
+those counts together. The tooltip also says how to move the mail back to the
+Inbox.
+
+Ledger Tools reads the complete offline `bob gmail list -a -f json` snapshot
+through one coalesced in-memory cache. It prefers Bob Mail's shared
+`api.mailArchive` cache when available and otherwise keeps its own cache.
+Relevant mail-note or journal changes, completed sync or undo, and view
+activation revalidate the snapshot. Rendering a row never starts a process or
+contacts Gmail. Unavailable or older Bob data shows no chip; it is never
+reconstructed from note cards, labels, or task text. Both Live Preview and
+Reading view use listener-free text nodes and the `toggle-mail-link-marks`
+gate.
+
+Live Preview places the chip group at the end of the task line. Reading view
+places it at the end of the corresponding task row. Its host is
+`span.bob-mail-archive-chip[role=img][aria-label][data-tooltip-position=top]`;
+the label is its text content and the tooltip is an accessible text
+attribute. The renderer never inserts HTML or edits task text.
 
 ## No-reply pill
 
@@ -201,6 +238,37 @@ The linked note has `type: [[mail]]`, `who: Ada`, unless a row says otherwise.
 | ML9 | ML1 with empty `who`                                                                                      | `↩ 2h`                            |
 | ML10 | ``- [ ] #task `[[mail/x]]` ``, `turn: yours`                                                              | none (inline code)                |
 
+**AR — Gmail archive receipt chip.** `R` is a ready cache row for the exact
+linked note/account/thread with one owned receipt at
+`2026-11-13T08:15:00-05:00`, one saved message, and label `bob/closed`.
+The note's `gmail_archived` value matches that timestamp.
+
+| # | Line / receipt facts | Expected |
+| --- | --- | --- |
+| AR1 | `- [x] #task A`, `R` | `⤓ archived Fri, Nov 13` |
+| AR2 | `- [X] #task A`, `R` | same chip |
+| AR3 | `- [-] #task A`, `R` | same chip |
+| AR4 | `- [ ] #task A`, `R` | none (open task) |
+| AR5 | `- [?] #task A`, `R` | none (unknown task) |
+| AR6 | `- [x] #task A`, no exact `#task` token | none |
+| AR7 | `- [x] Mention [[mail/…]]`, no `#task` token | none |
+| AR8 | `- [x] #task` with a direct link-only child `- A`, `R` | same chip on the task row |
+| AR9 | Mail link only in a nested child or prose bullet | none |
+| AR10 | `R` with an empty active receipt list (restored/let-go) | none |
+| AR11 | Note timestamp differs from newest active receipt | none |
+| AR12 | Two active receipts on one note | one chip; tooltip lists each exact count and label separately |
+| AR13 | Two linked archived mail notes | one chip per exact linked note |
+| AR14 | `R` unavailable or from an older Bob | none, without a guessed count or label |
+| AR15 | Label contains `<script>` | text in the tooltip; no HTML element |
+
+The cached list path is coalesced and invalidated on mail metadata/journal
+changes, sync/undo completion, and view activation. Row painting makes no
+process call. `recent_archive.count = 1` after a successful daily-note sync
+shows `⤓ Bob archived 1 Gmail thread since yesterday — tasks you closed.`;
+repeating that sync for the same daily note on the same local day shows no
+second notice. Missing, empty, or malformed `recent_archive` data shows no
+notice.
+
 **NR — no-reply pill.**
 
 | #   | Line / mail facts                                                                      | Expected                            |
@@ -254,4 +322,5 @@ Verification: ML, NR, and AP are covered by
 `scripts/test-ledger-tools-no-reply-pills.cjs` in bob-plugins, GO by
 `scripts/test-ledger-tools-gmail-open-hint.cjs`, plus the block-marks
 tooltip tests. The daily-note Gmail sync trigger is covered by
-`scripts/test-ledger-tools-gcal-events.cjs`.
+`scripts/test-ledger-tools-gcal-events.cjs`; AR and the morning notice are
+covered by the corresponding archive-chip and Gmail-sync Node suites.

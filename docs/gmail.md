@@ -847,7 +847,9 @@ restoring a broader message set.
 
 `restored` is recorded in the archive journal and may appear as a historical
 `recent_archive` state; it remains reserved and never appears as an action in
-sync's live `archive[]`. Chips stay deferred.
+sync's live `archive[]`. Ledger Tools renders `⤓ archived <day>` chips on
+closed Gmail Task rows only while Bob reports an active receipt for that exact
+mail note and the note's `gmail_archived` timestamp agrees.
 Sync JSON includes a body-free `recent_archive` snapshot; there is no separate
 archive-history listing command.
 
@@ -861,6 +863,12 @@ on the run that journals it. The notification shares the vault-sync transport
 (`osascript` on macOS, `notify-send` on Linux) and the same
 `BOB_VAULT_SYNC_NOTIFY` opt-out; delivery can never change the report, its
 JSON, or the exit code.
+
+After a successful daily-note Gmail sync, Ledger Tools shows one calm notice
+when `recent_archive.count` is positive:
+`⤓ Bob archived N Gmail threads since yesterday — tasks you closed.` It
+deduplicates by created daily note and local day. Missing or malformed
+`recent_archive` data shows no notice.
 
 Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
 historical backlog or a batch above `archive_max`, and `-n` to skip archive
