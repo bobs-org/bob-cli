@@ -99,7 +99,7 @@
     }
   ],
   "status": {
-    "detail": "saved · immediate sync failed: fake gog: second page failed · run `bob gcal sync`",
+    "detail": "saved · immediate sync failed: fake gog: second page failed · run `bob gcal sync` · acked",
     "path": "2026/20261030.md",
     "state": "sync_failed"
   },

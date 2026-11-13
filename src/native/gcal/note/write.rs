@@ -99,7 +99,7 @@ pub(super) fn write_one<S: HomeSource>(
     candidate: NoteCandidate,
     mut warnings: Vec<String>,
     related_days: Vec<NaiveDate>,
-) -> Result<(), GcalError> {
+) -> Result<WriteOutcome, GcalError> {
     let (book, journal_warnings) =
         journal::load_notes(vault).unwrap_or_default();
     warnings.extend(journal_warnings);
@@ -136,7 +136,7 @@ pub(super) fn write_one<S: HomeSource>(
         if current.is_none() {
             if args.edit {
                 let rendered = preview(&candidate, vault, false)?;
-                return print_result(
+                print_result(
                     args,
                     &candidate,
                     scope,
@@ -149,7 +149,12 @@ pub(super) fn write_one<S: HomeSource>(
                     &warnings,
                     &rendered,
                     false,
-                );
+                    false,
+                )?;
+                return Ok(WriteOutcome {
+                    action: WriteAction::Unchanged,
+                    newly_acked: false,
+                });
             }
             return Err(GcalError::setup(
                 "no_note",
@@ -163,7 +168,7 @@ pub(super) fn write_one<S: HomeSource>(
         if args.dry_run {
             // Empty `-e -d` previews like a nonempty `-e -d`: no journal
             // append, no sync. Direct `-c -d` is rejected before this path.
-            return print_result(
+            print_result(
                 args,
                 &clear_candidate,
                 scope,
@@ -176,7 +181,12 @@ pub(super) fn write_one<S: HomeSource>(
                 &warnings,
                 &rendered,
                 false,
-            );
+                false,
+            )?;
+            return Ok(WriteOutcome {
+                action: WriteAction::Preview,
+                newly_acked: false,
+            });
         }
         append(&clear_candidate, vault, account, scope, String::new())?;
         let (status, status_detail, status_path, sync_warnings) =
@@ -188,7 +198,7 @@ pub(super) fn write_one<S: HomeSource>(
                 scope == NoteScope::Series,
             );
         warnings.extend(sync_warnings);
-        return print_result(
+        print_result(
             args,
             &clear_candidate,
             scope,
@@ -201,7 +211,12 @@ pub(super) fn write_one<S: HomeSource>(
             &warnings,
             &rendered,
             true,
-        );
+            false,
+        )?;
+        return Ok(WriteOutcome {
+            action: WriteAction::Cleared,
+            newly_acked: false,
+        });
     }
 
     let input = if args.text.is_empty() {
@@ -243,6 +258,12 @@ pub(super) fn write_one<S: HomeSource>(
     // A save acks the event, so its preview already omits the tag.
     let unchanged = current.as_deref() == Some(note.canonical.as_str());
     let rendered = preview(&candidate, vault, !args.dry_run && !unchanged)?;
+    // Capture the ack transition before the append: a successful nonempty
+    // save that newly answers an external event claims `· acked`. Failed
+    // validation, dry-run, clear, and an already-reviewed save never do.
+    let pending_acked = !args.dry_run
+        && !unchanged
+        && was_unacked(config, vault, account, &candidate);
     let action = if args.dry_run {
         "preview"
     } else if unchanged {
@@ -251,6 +272,7 @@ pub(super) fn write_one<S: HomeSource>(
         append(&candidate, vault, account, scope, note.canonical.clone())?;
         "saved"
     };
+    let newly_acked = action == "saved" && pending_acked;
     let (status, status_detail, status_path, sync_warnings) =
         if action == "preview" {
             (
@@ -289,7 +311,18 @@ pub(super) fn write_one<S: HomeSource>(
         &warnings,
         &rendered,
         false,
-    )
+        newly_acked,
+    )?;
+    let outcome_action = match action {
+        "saved" => WriteAction::Saved,
+        "unchanged" => WriteAction::Unchanged,
+        "preview" => WriteAction::Preview,
+        _ => WriteAction::Preview,
+    };
+    Ok(WriteOutcome {
+        action: outcome_action,
+        newly_acked,
+    })
 }
 
 fn note_for_scope<'a>(
@@ -312,7 +345,7 @@ fn note_for_scope<'a>(
     }
 }
 
-fn choose_write_scope(
+pub(crate) fn choose_write_scope(
     args: &NoteArgs,
     candidate: &NoteCandidate,
 ) -> Result<NoteScope, GcalError> {
@@ -349,7 +382,7 @@ fn choose_write_scope(
     pick_scope(candidate)
 }
 
-fn choose_clear_scope(
+pub(crate) fn choose_clear_scope(
     args: &NoteArgs,
     candidate: &NoteCandidate,
     book: &journal::NoteBook,
@@ -500,7 +533,7 @@ fn append(
     Ok(())
 }
 
-fn rebuild_candidate<S: HomeSource>(
+pub(crate) fn rebuild_candidate<S: HomeSource>(
     original: &NoteCandidate,
     config: &GcalConfig,
     vault: &std::path::Path,
@@ -750,7 +783,7 @@ fn apply_one_if_possible(
     }
 }
 
-pub(super) fn validation_errors(
+pub(crate) fn validation_errors(
     vault: &std::path::Path,
     day: NaiveDate,
     input: &str,
@@ -758,6 +791,60 @@ pub(super) fn validation_errors(
     let mut note = normalize(input);
     validate(&mut note, vault, day);
     note.errors.into_iter().map(|error| error.message).collect()
+}
+
+/// Typed write outcome for the shared note service.
+///
+/// The ack review session matches on this instead of parsing stdout:
+/// `Saved` carries whether the save newly answered an external event;
+/// `Unchanged`/`Preview`/`Cleared` need no ack claim. Validation
+/// failures surface as `Err` with kind `invalid_note` (JSON prints via
+/// `invalid_output` with kind `printed_exit_2`); user-cancelled picks
+/// surface as `Err` with kind `cancelled`; every other `Err` is a
+/// runtime failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteAction {
+    Saved,
+    Unchanged,
+    Preview,
+    Cleared,
+}
+
+/// What `write_one` did, separate from how it printed.
+///
+/// `note` keeps printing the same human/JSON surfaces; the ack session
+/// matches on `action`/`newly_acked` without parsing that output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WriteOutcome {
+    pub(crate) action: WriteAction,
+    pub(crate) newly_acked: bool,
+}
+
+/// Whether a successful save newly answered review.
+fn was_unacked(
+    config: &GcalConfig,
+    vault: &std::path::Path,
+    account: &str,
+    candidate: &NoteCandidate,
+) -> bool {
+    if config.ack_mode() != crate::native::config::GcalAckMode::External {
+        return false;
+    }
+    if !candidate.event.is_external() {
+        return false;
+    }
+    if candidate.inclusion != Inclusion::Task {
+        return false;
+    }
+    let (ack_book, _) = journal::load_acks(vault).unwrap_or_default();
+    let (note_book, _) = journal::load_notes(vault).unwrap_or_default();
+    !ack_book.acked(
+        &note_book,
+        account,
+        &candidate.event.key.calendar_id,
+        &candidate.event.key.event_id,
+        candidate.event.series_id.as_deref(),
+    )
 }
 
 fn normalize(input: &str) -> NormalizedNote {
@@ -1400,7 +1487,7 @@ fn invalid_output(
     input: &str,
     note: &NormalizedNote,
     warnings: Vec<String>,
-) -> Result<(), GcalError> {
+) -> Result<WriteOutcome, GcalError> {
     let message = note
         .errors
         .iter()
@@ -1441,8 +1528,19 @@ fn print_result(
     warnings: &[String],
     rendered: &Preview,
     cleared: bool,
+    newly_acked: bool,
 ) -> Result<(), GcalError> {
     let canonical = note.map(|note| note.canonical.as_str()).unwrap_or("");
+    // A save that newly answers an external event appends the required
+    // `· acked` confirmation to the same human/JSON detail the command
+    // already prints. Dry-run, clear, unchanged, invalid, and
+    // already-reviewed saves never claim it.
+    let detail = if newly_acked {
+        format!("{status_detail} · acked")
+    } else {
+        status_detail.to_string()
+    };
+    let status_detail = detail.as_str();
     if args.format.is_json() {
         let note_lines = note.map(note_lines_json).unwrap_or_default();
         let effective = effective_json(candidate, rendered);
@@ -1521,7 +1619,7 @@ fn print_result(
     Ok(())
 }
 
-pub(super) fn show_result(
+pub(crate) fn show_result(
     args: &NoteArgs,
     vault: &std::path::Path,
     candidate: &NoteCandidate,
@@ -1569,7 +1667,7 @@ pub(super) fn show_result(
     Ok(())
 }
 
-pub(super) fn canonical_display_lines(
+pub(crate) fn canonical_display_lines(
     text: &str,
     candidate: &NoteCandidate,
 ) -> Vec<String> {
@@ -1637,18 +1735,21 @@ fn span_priority(kind: &str) -> u8 {
     }
 }
 
-struct Preview {
-    json: Value,
-    row: Option<String>,
-    bullets: Vec<String>,
-    rail: Option<String>,
+pub(crate) struct Preview {
+    pub(crate) json: Value,
+    pub(crate) row: Option<String>,
+    pub(crate) bullets: Vec<String>,
+    pub(crate) rail: Option<String>,
 }
 
 /// Render the row preview for one note candidate. `saving` means this
 /// command will append the note: the save itself acks the event, so the
 /// preview omits the warning tag to match what sync will write. Dry
 /// runs, shows, clears, and invalid drafts preview pre-save truth.
-fn preview(
+///
+/// Shared with the ack review queue, which calls these preview components
+/// rather than reproducing row grammar.
+pub(crate) fn preview(
     candidate: &NoteCandidate,
     vault: &std::path::Path,
     saving: bool,

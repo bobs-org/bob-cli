@@ -23,7 +23,7 @@ use super::{
     model::{EventDateTime, GcalEvent, MyAnswer, ParsedNote},
     root, snapshot, ui, GcalError, NoteArgs,
 };
-mod write;
+pub(super) mod write;
 use crate::native::{
     env as bob_env,
     pomodoro_homes::{DiskHomeSource, HomeResolver, HomeSource},
@@ -75,8 +75,16 @@ fn find_note_subcommand(args: &[OsString]) -> Option<usize> {
             || token == "--all"
             || token == "-h"
             || token == "--help"
-            || ["calendars", "doctor", "list", "login", "logout", "sync"]
-                .contains(&token.as_ref())
+            || [
+                "ack",
+                "calendars",
+                "doctor",
+                "list",
+                "login",
+                "logout",
+                "sync",
+            ]
+            .contains(&token.as_ref())
         {
             // A different subcommand means there is no `note` tail.
             if token != "note" && !token.starts_with('-') {
@@ -427,7 +435,7 @@ fn inner(args: &NoteArgs) -> Result<(), GcalError> {
     }
 }
 
-fn extract_url_event_id(query: &[String]) -> Option<String> {
+pub(crate) fn extract_url_event_id(query: &[String]) -> Option<String> {
     if query.len() != 1 {
         return None;
     }
@@ -493,26 +501,32 @@ fn resolve_day_filter(
 }
 
 /// One eligible event with its display fields and layered root/clock.
-struct NoteCandidate {
-    event: GcalEvent,
+///
+/// Shared with the ack review queue: candidate construction always starts
+/// from the original Google event, and `google_event` retains that
+/// pre-note copy so previews rebuild from Google truth and overlays never
+/// become their own input.
+#[derive(Debug, Clone)]
+pub(crate) struct NoteCandidate {
+    pub(crate) event: GcalEvent,
     /// Google-only event, before private notes were layered over it.
-    google_event: GcalEvent,
-    calendar_name: String,
-    day: NaiveDate,
-    time: String,
-    sort_at: DateTime<FixedOffset>,
-    inclusion: Inclusion,
-    root: Option<root::EventRoot>,
-    clock: crate::native::pomodoro_homes::ClockResolution,
-    root_only_clock: crate::native::pomodoro_homes::ClockResolution,
+    pub(crate) google_event: GcalEvent,
+    pub(crate) calendar_name: String,
+    pub(crate) day: NaiveDate,
+    pub(crate) time: String,
+    pub(crate) sort_at: DateTime<FixedOffset>,
+    pub(crate) inclusion: Inclusion,
+    pub(crate) root: Option<root::EventRoot>,
+    pub(crate) clock: crate::native::pomodoro_homes::ClockResolution,
+    pub(crate) root_only_clock: crate::native::pomodoro_homes::ClockResolution,
 }
 
 impl NoteCandidate {
-    fn recurring(&self) -> bool {
+    pub(crate) fn recurring(&self) -> bool {
         self.event.series_id.is_some()
     }
 
-    fn lands(&self) -> &'static str {
+    pub(crate) fn lands(&self) -> &'static str {
         match self.event.my_answer {
             MyAnswer::NoReply => "waiting_reply",
             MyAnswer::Maybe if self.inclusion != Inclusion::Task => {
@@ -523,7 +537,7 @@ impl NoteCandidate {
         }
     }
 
-    fn organizer_name(&self) -> String {
+    pub(crate) fn organizer_name(&self) -> String {
         self.event
             .organizer_name
             .clone()
@@ -535,7 +549,7 @@ impl NoteCandidate {
 /// Timed, busy, under-24-hour `default`/`fromGmail` events answered Yes,
 /// Maybe, or awaiting a reply. Declined, cancelled, all-day, multi-day,
 /// and free events can never become Event Tasks.
-fn is_eligible(event: &GcalEvent) -> bool {
+pub(crate) fn is_eligible(event: &GcalEvent) -> bool {
     if !matches!(event.event_type.as_str(), "default" | "fromGmail") {
         return false;
     }
@@ -564,7 +578,7 @@ fn is_eligible(event: &GcalEvent) -> bool {
 }
 
 /// Fetch every event in the window, layer notes, keep the eligible ones.
-fn fetch_candidates<S: HomeSource>(
+pub(crate) fn fetch_candidates<S: HomeSource>(
     config: &GcalConfig,
     vault: &std::path::Path,
     resolver: &mut HomeResolver<S>,
@@ -713,7 +727,7 @@ fn fetch_candidates<S: HomeSource>(
     Ok((candidates, warnings))
 }
 
-fn base_day_for(
+pub(crate) fn base_day_for(
     start: &DateTime<FixedOffset>,
     timezone: Option<chrono_tz::Tz>,
 ) -> NaiveDate {
@@ -723,7 +737,7 @@ fn base_day_for(
     }
 }
 
-fn matching_note(
+pub(crate) fn matching_note(
     record: Option<&FoldedNote>,
     account: &str,
 ) -> Option<ParsedNote> {
@@ -735,7 +749,7 @@ fn matching_note(
 }
 
 /// Every QUERY word must appear case-insensitively in the displayed title.
-fn matches_query(title: &str, query: &[String]) -> bool {
+pub(crate) fn matches_query(title: &str, query: &[String]) -> bool {
     let lower = title.to_ascii_lowercase();
     query.iter().all(|word| {
         let needle = word.to_ascii_lowercase();
@@ -743,7 +757,7 @@ fn matches_query(title: &str, query: &[String]) -> bool {
     })
 }
 
-fn rank_candidate(
+pub(crate) fn rank_candidate(
     title: &str,
     query: &[String],
     sort_at: &DateTime<FixedOffset>,
@@ -776,7 +790,10 @@ fn is_not_found_error(error: &GcalError) -> bool {
 
 /// Look up one event id across configured calendars. Returns the parsed
 /// candidate plus every calendar that held the id.
-fn lookup_exact<S: HomeSource>(
+///
+/// Shared with the ack queue for explicit `-i` selection, including
+/// exact-ID disambiguation across calendars.
+pub(crate) fn lookup_exact<S: HomeSource>(
     config: &GcalConfig,
     vault: &std::path::Path,
     resolver: &mut HomeResolver<S>,
@@ -918,13 +935,15 @@ fn lookup_exact<S: HomeSource>(
 }
 
 /// Group recurring instances of one series into one picker row.
-struct SeriesGroup {
-    key: (String, String),
-    indices: Vec<usize>,
-    soonest: usize,
+pub(crate) struct SeriesGroup {
+    pub(crate) key: (String, String),
+    pub(crate) indices: Vec<usize>,
+    pub(crate) soonest: usize,
 }
 
-fn group_candidates(candidates: &[NoteCandidate]) -> Vec<SeriesGroup> {
+pub(crate) fn group_candidates(
+    candidates: &[NoteCandidate],
+) -> Vec<SeriesGroup> {
     let mut by_series: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (index, candidate) in candidates.iter().enumerate() {
         let series_key = match candidate.event.series_id.clone() {
@@ -956,7 +975,7 @@ fn group_candidates(candidates: &[NoteCandidate]) -> Vec<SeriesGroup> {
     groups
 }
 
-fn is_tty() -> bool {
+pub(crate) fn is_tty() -> bool {
     config::assume_tty() || io::stdin().is_terminal()
 }
 
@@ -1521,7 +1540,8 @@ fn clear_live_series_by_master<S: HomeSource>(
                     occurrence,
                     occurrence_warnings,
                     related,
-                );
+                )
+                .map(|_| ());
             }
             clear_live_series_no_occurrence(
                 args,
@@ -1930,7 +1950,7 @@ fn show_from_query<S: HomeSource>(
     )
 }
 
-fn series_days(
+pub(crate) fn series_days(
     candidates: &[NoteCandidate],
     calendar_id: &str,
     series_id: Option<&str>,
@@ -1950,14 +1970,14 @@ fn series_days(
     )
 }
 
-fn unique_days(days: Vec<NaiveDate>) -> Vec<NaiveDate> {
+pub(crate) fn unique_days(days: Vec<NaiveDate>) -> Vec<NaiveDate> {
     let mut days = days;
     days.sort_unstable();
     days.dedup();
     days
 }
 
-fn pick_group_owned(
+pub(crate) fn pick_group_owned(
     candidates: &[NoteCandidate],
     groups: &[&SeriesGroup],
 ) -> Result<usize, GcalError> {
@@ -2045,7 +2065,7 @@ fn note_summary(
     Some(parts.join(" "))
 }
 
-fn select_from_group(
+pub(crate) fn select_from_group(
     candidates: &[NoteCandidate],
     group: &SeriesGroup,
     day_filter: Option<NaiveDate>,
@@ -2060,7 +2080,7 @@ fn select_from_group(
     Ok(clone_candidate(&candidates[group.soonest]))
 }
 
-fn clone_candidate(candidate: &NoteCandidate) -> NoteCandidate {
+pub(crate) fn clone_candidate(candidate: &NoteCandidate) -> NoteCandidate {
     NoteCandidate {
         event: candidate.event.clone(),
         google_event: candidate.google_event.clone(),
@@ -2105,7 +2125,12 @@ fn ambiguous_error(
 }
 
 /// This event / All events scope prompt on a TTY.
-fn pick_scope(candidate: &NoteCandidate) -> Result<NoteScope, GcalError> {
+///
+/// Shared scope selection: note/editor/adopt keep **This event** as the
+/// default and use the existing scope-resolved note path.
+pub(crate) fn pick_scope(
+    candidate: &NoteCandidate,
+) -> Result<NoteScope, GcalError> {
     // No cadence word (weekly, daily, …): the recurrence rule is not on
     // the event, and the prompt must not cost an extra Google request.
     let role = if candidate.event.organizer_is_self {
@@ -2147,7 +2172,7 @@ fn pick_scope(candidate: &NoteCandidate) -> Result<NoteScope, GcalError> {
     }
 }
 
-fn resolve_show_scope(
+pub(crate) fn resolve_show_scope(
     args: &NoteArgs,
     candidate: &NoteCandidate,
 ) -> Result<Option<NoteScope>, GcalError> {
@@ -2271,6 +2296,7 @@ fn present_candidate<S: HomeSource>(
             warnings,
             related_days,
         )
+        .map(|_| ())
     } else {
         show_one(args, vault, account, candidate, warnings)
     }
@@ -2279,7 +2305,11 @@ fn present_candidate<S: HomeSource>(
 const EDITOR_SCISSORS: &str =
     "------------------------ >8 ------------------------";
 
-fn edit_text(
+/// Reopen the editor with an invalid one-line draft intact.
+///
+/// Returns the edited text without making the caller parse stdout: the
+/// ack session uses this after `validation_errors` keeps a draft.
+pub(crate) fn edit_text(
     seed: &str,
     candidate: &NoteCandidate,
 ) -> Result<String, GcalError> {
@@ -2372,7 +2402,7 @@ fn identity_line(candidate: &NoteCandidate) -> String {
     )
 }
 
-fn ask_edit_again() -> Result<bool, GcalError> {
+pub(crate) fn ask_edit_again() -> Result<bool, GcalError> {
     eprint!("Edit again? [Y/n] ");
     let _ = io::stderr().flush();
     match read_line()? {
@@ -2386,7 +2416,7 @@ fn ask_edit_again() -> Result<bool, GcalError> {
     }
 }
 
-fn current_scope_text(
+pub(crate) fn current_scope_text(
     args: &NoteArgs,
     candidate: &NoteCandidate,
     vault: &std::path::Path,
@@ -2420,7 +2450,7 @@ fn current_scope_text(
     ))
 }
 
-fn adopted_google_text(event: &GcalEvent) -> String {
+pub(crate) fn adopted_google_text(event: &GcalEvent) -> String {
     let description = &event.description;
     let mut lines = Vec::new();
     if let Some(route) = description.directives.route.as_deref() {
@@ -2599,7 +2629,7 @@ fn note_summary_json(candidate: &NoteCandidate) -> Value {
     })
 }
 
-fn event_json(
+pub(crate) fn event_json(
     candidate: &NoteCandidate,
     include_text: bool,
     scope_text: Option<&str>,
@@ -3074,5 +3104,47 @@ mod prepass_tests {
         let out =
             rewrite_note_tail(&tail(&["@fam", "Drive", "--", "--", "-d"]));
         assert_eq!(strings(&out), vec!["--", "@fam", "Drive", "--", "-d"]);
+    }
+
+    fn argv(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn ack_sibling_never_enters_note_rewrite() {
+        // `ack` is a sibling subcommand: its query may contain the
+        // literal word `note` without becoming a `note` tail.
+        for args in [
+            argv(&["ack", "note"]),
+            argv(&["ack", "note", "planning"]),
+            argv(&["ack", "@family", "-30", "Drive"]),
+            argv(&["ack", "deerwood", "@family", "-30", "Drive", "-d"]),
+            argv(&["ack", "-i", "e1", "--", "@family"]),
+        ] {
+            assert_eq!(rewrite_gcal_argv(args.clone()), args);
+        }
+        // Top-level options before `ack` still resolve to the sibling.
+        let args = argv(&["-b", "vault", "ack", "note"]);
+        assert_eq!(rewrite_gcal_argv(args.clone()), args);
+    }
+
+    #[test]
+    fn note_tail_still_rewrites_after_sibling_fix() {
+        // The sibling fix must not change existing `note` handling.
+        assert_eq!(
+            strings(&rewrite_gcal_argv(argv(&[
+                "note", "deerwood", "@family", "-30", "Drive"
+            ]))),
+            vec!["note", "deerwood", "--", "@family", "-30", "Drive"]
+        );
+        assert_eq!(
+            strings(&rewrite_gcal_argv(argv(&[
+                "note", "-i", "e1", "--", "-d"
+            ]))),
+            vec!["note", "-i", "e1", "--", "-d"]
+        );
+        // No subcommand means no rewrite.
+        let args = argv(&["list", "deerwood"]);
+        assert_eq!(rewrite_gcal_argv(args.clone()), args);
     }
 }

@@ -445,6 +445,272 @@ fn preview_save_unchanged_clear_and_invalid_json() {
 }
 
 #[test]
+fn saved_note_appends_acked_only_for_new_external_review() {
+    let env = GcalEnv::new("bob-cli-gcal-note-acked");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "acked-new",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "acked-new",
+                "Deerwood",
+                "2026-12-13T10:00:00-05:00",
+                "2026-12-13T12:00:00-05:00",
+            )
+        }))
+        .expect("lookup body"),
+    );
+
+    // Dry-run previews pre-save truth and never claims an ack.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "acked-new",
+            "-d",
+            "-f",
+            "json",
+            "--",
+            "@family",
+        ])
+        .output()
+        .expect("preview private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let preview = json_stdout(&output);
+    assert_eq!(preview["action"], "preview");
+    assert!(
+        !preview["status"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("· acked"),
+        "dry-run must not claim an ack: {}",
+        preview["status"]["detail"]
+    );
+
+    // First save on a previously-unacked external event appends `· acked`.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "acked-new",
+            "-f",
+            "json",
+            "--",
+            "@family",
+        ])
+        .output()
+        .expect("save private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = json_stdout(&output);
+    assert_eq!(saved["action"], "saved");
+    assert!(
+        saved["status"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("· acked"),
+        "first save must append · acked: {}",
+        saved["status"]["detail"]
+    );
+
+    // Human confirmation carries the same suffix (fresh event, first save).
+    fake.event_lookup(
+        "acked-human",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "acked-human",
+                "Deerwood",
+                "2026-12-13T10:00:00-05:00",
+                "2026-12-13T12:00:00-05:00",
+            )
+        }))
+        .expect("human lookup body"),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "acked-human", "--", "@family"])
+        .output()
+        .expect("save with human output");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let human = stdout(&output);
+    assert!(human.contains("· acked"), "{human}");
+
+    // An already-reviewed save (unchanged canonical text) never re-claims.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "acked-new",
+            "-f",
+            "json",
+            "--",
+            "@family",
+        ])
+        .output()
+        .expect("repeat private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let unchanged = json_stdout(&output);
+    assert_eq!(unchanged["action"], "unchanged");
+    assert!(
+        !unchanged["status"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("· acked"),
+        "already-reviewed save must not claim a new ack: {}",
+        unchanged["status"]["detail"]
+    );
+
+    // Invalid input never claims an ack.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "acked-new",
+            "-f",
+            "json",
+            "--",
+            "@nope",
+        ])
+        .output()
+        .expect("reject invalid note");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let invalid = json_stdout(&output);
+    assert_eq!(invalid["action"], "invalid");
+    assert!(
+        !serde_json::to_string(&invalid)
+            .unwrap_or_default()
+            .contains("· acked"),
+        "invalid must not claim an ack: {invalid}"
+    );
+
+    // Clearing the note never claims an ack.
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args(["gcal", "note", "-i", "acked-new", "-c", "-f", "json"])
+        .output()
+        .expect("clear private note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let cleared = json_stdout(&output);
+    assert_eq!(cleared["action"], "cleared");
+    assert!(
+        !cleared["status"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("· acked"),
+        "clear must not claim an ack: {}",
+        cleared["status"]["detail"]
+    );
+}
+
+#[test]
+fn saved_note_never_acks_owned_or_config_off_events() {
+    // Owned (non-external) events never claim `· acked`, even on first save.
+    let env = GcalEnv::new("bob-cli-gcal-note-acked-owned");
+    prepare(&env);
+    let owned = json!({
+        "id": "owned-new",
+        "summary": "Team standup",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-12-13T10:00:00-05:00"},
+        "end": {"dateTime": "2026-12-13T12:00:00-05:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=owned-new",
+        "organizer": {"displayName": "Bryan", "email": "you@example.com", "self": true},
+        "attendees": [{"self": true, "responseStatus": "accepted"}],
+    });
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.event_lookup(
+        "owned-new",
+        &serde_json::to_string(&json!({"event": owned})).expect("lookup body"),
+    );
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .args([
+            "gcal",
+            "note",
+            "-i",
+            "owned-new",
+            "-f",
+            "json",
+            "--",
+            "@family",
+        ])
+        .output()
+        .expect("save owned note");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = json_stdout(&output);
+    assert_eq!(saved["action"], "saved");
+    assert!(
+        !saved["status"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("· acked"),
+        "owned events must not claim an ack: {}",
+        saved["status"]["detail"]
+    );
+
+    // Config `ack: off` never claims `· acked`, even for external events.
+    let off_env = GcalEnv::new("bob-cli-gcal-note-acked-off");
+    off_env.prepare_healthy_vault();
+    for area in ["body", "job", "health", "family", "abby"] {
+        fs::write(
+            off_env.vault().join(format!("{area}.md")),
+            format!("---\ntype: area\n---\n# {area}\n"),
+        )
+        .expect("write area");
+    }
+    off_env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  ack: off\n",
+    );
+    let off_fake = FakeGog::new(&off_env, "fake-gog");
+    off_fake.event_lookup(
+        "off-new",
+        &serde_json::to_string(&json!({
+            "event": guest_event(
+                "off-new",
+                "Deerwood",
+                "2026-12-13T10:00:00-05:00",
+                "2026-12-13T12:00:00-05:00",
+            )
+        }))
+        .expect("lookup body"),
+    );
+    let mut command = off_env.command();
+    let output = off_fake
+        .install(&mut command)
+        .args([
+            "gcal", "note", "-i", "off-new", "-f", "json", "--", "@family",
+        ])
+        .output()
+        .expect("save with ack off");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let saved = json_stdout(&output);
+    assert_eq!(saved["action"], "saved");
+    assert!(
+        !saved["status"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("· acked"),
+        "ack off must not claim an ack: {}",
+        saved["status"]["detail"]
+    );
+}
+
+#[test]
 fn invalid_routes_and_empty_notes_have_ranged_errors() {
     let env = GcalEnv::new("bob-cli-gcal-note-write-errors");
     prepare(&env);
