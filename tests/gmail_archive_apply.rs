@@ -288,6 +288,198 @@ fn live_archives_a_fresh_close_and_repeats_as_noop() {
 }
 
 #[test]
+fn first_use_receipt_id_is_journaled_and_released_by_id() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-first-use-label");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, false);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "first-use archive creates its receipt label");
+    assert_eq!(json_stdout(&archived)["archive"][0]["action"], "archived");
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec!["Label_1", ENROLLMENT_ID]
+    );
+    let journal = journal_text(&env);
+    assert!(journal.contains("gmail.archived"));
+    assert!(journal.contains("\"id\":\"Label_1\""));
+
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &["Label_1", ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX"]),
+        ],
+    );
+    fake.clear_calls();
+    let returned =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&returned, 0, "reply lets go of the created receipt by ID");
+    assert_eq!(json_stdout(&returned)["archive"][0]["action"], "let_go");
+    assert_eq!(fake.message_labels(MESSAGE_A), vec![ENROLLMENT_ID]);
+    assert_eq!(fake.message_labels(MESSAGE_B), vec!["INBOX"]);
+    assert!(journal_text(&env).contains("gmail.let_go"));
+}
+
+#[test]
+fn archive_label_rename_rebaselines_and_keeps_old_receipt_identity() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-label-rename");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive under the original receipt name");
+
+    set_inbox_task_status(&env, ' ');
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX"]),
+        ],
+    );
+    env.write_config(&format!(
+        "timezone: America/New_York\ngmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    archive: on\n    archive_label: bob/finished\n"
+    ));
+    fake.set_labels(json!([
+        {"id": ENROLLMENT_ID, "name": "bob", "type": "user"},
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+        {"id": RECEIPT_ID, "name": "bob/closed", "type": "user"},
+        {"id": "Label_11", "name": "bob/finished", "type": "user"}
+    ]));
+
+    let released =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(
+        &released,
+        0,
+        "renamed label rebaseline still releases old receipt",
+    );
+    let value = json_stdout(&released);
+    assert_eq!(value["archive"][0]["action"], "let_go");
+    assert_eq!(value["archive"][0]["reason"], "replied");
+    assert_eq!(fake.message_labels(MESSAGE_A), vec![ENROLLMENT_ID]);
+    assert_eq!(fake.message_labels(MESSAGE_B), vec!["INBOX"]);
+    let journal = journal_text(&env);
+    assert!(journal.contains("bob/finished"));
+    assert!(journal.contains("Label_11"));
+    assert!(journal.contains("gmail.let_go"));
+}
+
+#[test]
+fn saved_messages_added_after_close_do_not_widen_the_retry_set() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-frozen-saved-ids");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    fake.set_transient_failure(
+        "batch_modify",
+        "temporary archive failure",
+        1,
+        1,
+    );
+    let first =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&first, 1, "first archive attempt fails transiently");
+    assert!(journal_has(&env, "gmail.archive_closed"));
+    assert!(!journal_has(&env, "gmail.archived"));
+
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX", ENROLLMENT_ID]),
+        ],
+    );
+    let saved = run_gmail(&env, &fake, &["save", THREAD_A, "-f", "json"]);
+    assert_exit(&saved, 0, "save the new message after the close");
+    fake.clear_calls();
+
+    let retry =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(
+        &retry,
+        0,
+        "retry keeps the newly saved ID outside the close",
+    );
+    let value = json_stdout(&retry);
+    assert_eq!(value["archive"][0]["action"], "kept");
+    assert_eq!(value["archive"][0]["reason"], "unsaved");
+    assert!(remote_write_calls(&fake).is_empty());
+    assert!(fake
+        .message_labels(MESSAGE_A)
+        .contains(&"INBOX".to_string()));
+    assert!(fake
+        .message_labels(MESSAGE_B)
+        .contains(&"INBOX".to_string()));
+    assert!(journal_has(&env, "gmail.kept"));
+    assert!(!journal_has(&env, "gmail.archived"));
+}
+
+#[test]
+fn question_mark_linker_can_be_observed_open_and_archived_after_closing() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-question-status");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let saved = run_gmail(&env, &fake, &["save", THREAD_A, "-f", "json"]);
+    assert_exit(&saved, 0, "save the mail note");
+    let saved_json = json_stdout(&saved);
+    let link = saved_json["link"].as_str().unwrap();
+    fs::write(
+        env.vault().join("gmail_inbox.md"),
+        format!("#task question status probe {link}\n\n- [?] #task question status probe {link}\n"),
+    )
+    .expect("write question-mark task");
+
+    let observed =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&observed, 0, "observe the question-mark task as open");
+    assert!(json_stdout(&observed)["archive"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    set_inbox_task_status(&env, 'x');
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive after the question-mark task closes");
+    assert_eq!(json_stdout(&archived)["archive"][0]["action"], "archived");
+}
+
+#[test]
 fn live_pauses_backlog_without_confirm_and_creates_no_labels() {
     let env = GmailEnv::new("bob-cli-gmail-archive-apply-backlog");
     write_archive_config(&env);

@@ -354,9 +354,9 @@ fn has_inbox_draft(thread: &GmailThread) -> bool {
     })
 }
 
-/// Whether a saved message still carries the receipt label, by resolved id
-/// or configured name. Gmail stores user-label ids on messages, so the id
-/// wins when the label list resolved one; the name is a fallback only.
+/// Whether a saved message still carries the receipt label. Gmail stores
+/// user-label IDs on messages, so names must be resolved through the live
+/// label list before reaching this check.
 fn has_receipt(
     thread: &GmailThread,
     saved_ids: &[String],
@@ -364,9 +364,8 @@ fn has_receipt(
 ) -> bool {
     thread.messages.iter().any(|message| {
         saved_ids.binary_search(&message.id).is_ok()
-            && message.label_ids.iter().any(|label| {
-                receipt.id.as_ref().is_some_and(|id| label == id)
-                    || label == &receipt.name
+            && receipt.id.as_ref().is_some_and(|id| {
+                message.label_ids.iter().any(|label| label == id)
             })
     })
 }
@@ -403,10 +402,35 @@ pub(crate) enum RemoteVerdict {
 /// Evaluate one locally-ready thread against fresh remote metadata.
 /// `receipt` is the row's effective receipt identity: the recorded close
 /// label for journaled closes, the configured label for backlog rows.
+#[cfg(test)]
 pub(crate) fn remote_verdict<R: GmailRead>(
     reader: &R,
     account: &str,
     evidence: &ArchiveThreadEvidence,
+    thread: &GmailThread,
+    enrollment_id: &str,
+    receipt: &ArchiveLabelIdentity,
+    policy: &NeverSavePolicy,
+) -> RemoteVerdict {
+    remote_verdict_for_saved_ids(
+        reader,
+        account,
+        evidence,
+        &evidence.saved_ids,
+        thread,
+        enrollment_id,
+        receipt,
+        policy,
+    )
+}
+
+/// Evaluate remote metadata using the close's frozen saved IDs when one
+/// exists. Backlog callers pass the current scan's IDs instead.
+pub(crate) fn remote_verdict_for_saved_ids<R: GmailRead>(
+    reader: &R,
+    account: &str,
+    evidence: &ArchiveThreadEvidence,
+    saved_ids: &[String],
     thread: &GmailThread,
     enrollment_id: &str,
     receipt: &ArchiveLabelIdentity,
@@ -461,14 +485,14 @@ pub(crate) fn remote_verdict<R: GmailRead>(
             };
         }
     }
-    let (archive, unsaved) = frozen_sets(&evidence.saved_ids, thread);
+    let (archive, unsaved) = frozen_sets(saved_ids, thread);
     if !unsaved.is_empty() {
         return RemoteVerdict::Kept {
             reason: KEPT_UNSAVED,
         };
     }
     if archive.is_empty() {
-        if has_receipt(thread, &evidence.saved_ids, receipt) {
+        if has_receipt(thread, saved_ids, receipt) {
             return RemoteVerdict::Held {
                 reason: HOLD_UNRECONCILED,
                 warning: None,
@@ -792,10 +816,15 @@ pub(crate) fn preview<R: GmailRead>(
                         }
                     })
                     .unwrap_or_else(|| input.receipt_label.clone());
-                match remote_verdict(
+                let saved_ids = close
+                    .as_ref()
+                    .map(|close| close.saved_ids.as_slice())
+                    .unwrap_or(&evidence.saved_ids);
+                match remote_verdict_for_saved_ids(
                     reader,
                     input.account,
                     evidence,
+                    saved_ids,
                     &thread,
                     &enrollment_id,
                     &receipt,
@@ -882,7 +911,10 @@ fn row_for(
         key: evidence.key.clone(),
         note: evidence.note.clone(),
         tasks,
-        saved_ids: evidence.saved_ids.clone(),
+        saved_ids: close
+            .as_ref()
+            .map(|close| close.saved_ids.clone())
+            .unwrap_or_else(|| evidence.saved_ids.clone()),
         note_fingerprint: evidence.note_fingerprint.clone().unwrap_or_default(),
         enable_epoch: close
             .as_ref()
@@ -1440,6 +1472,55 @@ mod tests {
             }
             other => panic!("expected archive, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn close_saved_ids_keep_new_inbox_saves_unsaved_and_receipt_checks_use_ids()
+    {
+        let policy = NeverSavePolicy::for_test(&[], &[]);
+        let mut evidence = closed_evidence("aa11");
+        evidence.saved_ids = vec!["aa01".to_string(), "bb02".to_string()];
+        let thread = thread_json(
+            &[
+                message("aa01", &["INBOX", ENROLLMENT_ID], None),
+                message("bb02", &["INBOX", ENROLLMENT_ID], None),
+            ]
+            .join(","),
+        );
+        let reader = StubRead::ok(thread.clone());
+        assert!(matches!(
+            remote_verdict_for_saved_ids(
+                &reader,
+                ACCOUNT,
+                &evidence,
+                &["aa01".to_string()],
+                &thread,
+                ENROLLMENT_ID,
+                &receipt(),
+                &policy,
+            ),
+            RemoteVerdict::Kept {
+                reason: KEPT_UNSAVED
+            }
+        ));
+
+        let receipt_name_only =
+            thread_json(&message("aa01", &[ENROLLMENT_ID, "bob/closed"], None));
+        assert!(matches!(
+            remote_verdict_for_saved_ids(
+                &reader,
+                ACCOUNT,
+                &evidence,
+                &["aa01".to_string()],
+                &receipt_name_only,
+                ENROLLMENT_ID,
+                &receipt(),
+                &policy,
+            ),
+            RemoteVerdict::Kept {
+                reason: KEPT_MANUAL
+            }
+        ));
     }
 
     #[test]

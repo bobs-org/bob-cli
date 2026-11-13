@@ -21,8 +21,8 @@ use super::{
         ArchiveJournal, ArchiveLabelIdentity, ArchiveTerminalKind,
     },
     archive_transport::{
-        resolve_or_create_receipt_label, LabelOperation, MessageLabelState,
-        ReceiptLabel,
+        resolve_existing_receipt_label, resolve_or_create_receipt_label,
+        LabelOperation, MessageLabelState,
     },
     discover,
     enroll::EnrollmentFold,
@@ -292,7 +292,15 @@ pub(crate) fn apply_live<R: GmailRead>(
 
     // Baseline: enablement plus open observations. Transitions only; an
     // unchanged hourly run appends nothing.
-    if ensure_baseline(vault, &host, config, account, &scan, &mut journal)? {
+    if ensure_baseline(
+        vault,
+        &host,
+        config,
+        account,
+        &initial_labels,
+        &scan,
+        &mut journal,
+    )? {
         enrollment = match EnrollmentFold::load(vault) {
             Ok(fold) => fold,
             Err(error) => {
@@ -378,6 +386,10 @@ pub(crate) fn apply_live<R: GmailRead>(
             return Ok(outcome);
         }
     };
+    let enrollment_label = unique_named_enrollment_label(
+        &labels,
+        config.sync_label().unwrap_or_default(),
+    );
 
     let mut suppressed = BTreeSet::new();
     for thread in watch_threads {
@@ -441,6 +453,8 @@ pub(crate) fn apply_live<R: GmailRead>(
             reader,
             gog,
             account,
+            &labels,
+            enrollment_label.as_ref(),
             &mut journal,
             &owned_before,
             &mut outcome,
@@ -501,11 +515,8 @@ pub(crate) fn apply_live<R: GmailRead>(
         }
     };
 
-    let enrollment_label = match labels
-        .iter()
-        .find(|label| label.name == config.sync_label().unwrap_or_default())
-    {
-        Some(label) => label.clone(),
+    let enrollment_label = match enrollment_label {
+        Some(label) => label,
         None => {
             outcome.warnings.push(format!(
                 "skipped archive mutations: Gmail enrollment label {:?} is missing or ambiguous",
@@ -535,6 +546,16 @@ pub(crate) fn apply_live<R: GmailRead>(
             return Ok(outcome);
         }
     };
+    let resolved_receipt_identity = ArchiveLabelIdentity::new(
+        receipt.name(),
+        Some(receipt.id().to_string()),
+    )
+    .ok_or_else(|| {
+        GmailError::runtime(
+            "archive_label",
+            "resolved Gmail receipt label has an invalid identity".to_string(),
+        )
+    })?;
 
     let enrollment_id = enrollment_label.id.clone();
     // Previously owned receipts only: newly archived threads in this run must
@@ -547,24 +568,27 @@ pub(crate) fn apply_live<R: GmailRead>(
         let Some(evidence) = scan.evidence(&row.key) else {
             continue;
         };
-        // Mutation-boundary evidence revalidation: the frozen saved set,
-        // fingerprint, and task locators must match the planned row.
-        if evidence.saved_ids != row.saved_ids
+        let Some(close) = journal.unconsumed_close(&row.key).cloned() else {
+            outcome.warnings.push(format!(
+                "skipped Gmail thread {}: archive close is no longer open",
+                row.key.thread_id(),
+            ));
+            continue;
+        };
+        // The plan and the persisted close must agree on frozen evidence.
+        // Current scan IDs may grow after the close; those new Inbox messages
+        // stay unsaved and never widen its archive set.
+        if close.saved_ids != row.saved_ids
+            || close.note != row.note
+            || close.tasks != row.tasks
             || evidence.note_fingerprint.as_deref().unwrap_or_default()
-                != row.note_fingerprint.as_str()
+                != row.note_fingerprint
         {
             outcome.warnings.push(format!(
                 "skipped Gmail thread {}: archive evidence changed before mutation",
                 row.key.thread_id(),
             ));
             outcome.failed = true;
-            continue;
-        }
-        let Some(close) = journal.unconsumed_close(&row.key).cloned() else {
-            outcome.warnings.push(format!(
-                "skipped Gmail thread {}: archive close is no longer open",
-                row.key.thread_id(),
-            ));
             continue;
         };
         if close.generation != row.generation.as_deref().unwrap_or_default()
@@ -608,13 +632,14 @@ pub(crate) fn apply_live<R: GmailRead>(
                 continue;
             }
         };
-        let verdict = archive_preview::remote_verdict(
+        let verdict = archive_preview::remote_verdict_for_saved_ids(
             reader,
             account,
             evidence,
+            &close.saved_ids,
             &thread,
             &enrollment_id,
-            &receipt_identity,
+            &resolved_receipt_identity,
             &policy,
         );
         match verdict {
@@ -636,9 +661,8 @@ pub(crate) fn apply_live<R: GmailRead>(
                         vault,
                         &host,
                         &thread,
-                        evidence,
                         &close,
-                        &receipt_identity,
+                        &resolved_receipt_identity,
                         &mut journal,
                         &mut outcome,
                     )?;
@@ -700,7 +724,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                             &journal,
                             &row.key,
                             &close,
-                            &receipt_identity,
+                            &resolved_receipt_identity,
                             &archive_ids,
                             false,
                             &mut outcome,
@@ -734,6 +758,8 @@ pub(crate) fn apply_live<R: GmailRead>(
         reader,
         gog,
         account,
+        &labels,
+        Some(&enrollment_label),
         &mut journal,
         &owned_before,
         &mut outcome,
@@ -796,10 +822,11 @@ fn reconcile_ready_receipts<R: GmailRead>(
                     continue;
                 }
             };
-        match archive_preview::remote_verdict(
+        match archive_preview::remote_verdict_for_saved_ids(
             reader,
             account,
             &evidence,
+            &close.saved_ids,
             &thread,
             enrollment_id,
             receipt_label,
@@ -812,7 +839,6 @@ fn reconcile_ready_receipts<R: GmailRead>(
                 vault,
                 host,
                 &thread,
-                &evidence,
                 &close,
                 receipt_label,
                 journal,
@@ -839,17 +865,24 @@ fn ensure_baseline(
     host: &str,
     config: &GmailConfig,
     account: &str,
+    labels: &[GmailLabel],
     scan: &super::archive_scan::ArchiveScan,
     journal: &mut ArchiveJournal,
 ) -> Result<bool, GmailError> {
     let mut appended = false;
-    if !journal.is_enabled(account) {
-        let Some(label) =
-            ArchiveLabelIdentity::new(config.archive_label(), None)
-        else {
-            return Ok(false);
+    let configured_label_id =
+        unique_named_enrollment_label(labels, config.archive_label())
+            .map(|label| label.id.clone());
+    let configured_label =
+        ArchiveLabelIdentity::new(config.archive_label(), configured_label_id);
+    if let Some(label) = configured_label {
+        let needs_enablement = match journal.enablement(account) {
+            Some((_, current)) => current.name != label.name,
+            None => !journal.is_enabled(account),
         };
-        if let Some(event) = journal.event_for_enablement(account, true, label)
+        if needs_enablement
+            && let Some(event) =
+                journal.event_for_enablement(account, true, label)
         {
             ArchiveJournal::append(vault, host, &event).map_err(|error| {
                 GmailError::runtime(
@@ -899,6 +932,15 @@ fn ensure_baseline(
         appended = true;
     }
     Ok(appended)
+}
+
+fn unique_named_enrollment_label(
+    labels: &[GmailLabel],
+    name: &str,
+) -> Option<GmailLabel> {
+    let mut matches = labels.iter().filter(|label| label.name == name);
+    let label = matches.next()?;
+    matches.next().is_none().then(|| label.clone())
 }
 
 /// Persist close generations for every actionable preview row. Historical
@@ -1104,20 +1146,30 @@ fn reconcile_recovered(
     vault: &Path,
     host: &str,
     thread: &crate::native::gmail::model::GmailThread,
-    evidence: &super::archive_scan::ArchiveThreadEvidence,
     close: &super::archive_state::ArchiveCloseGeneration,
     receipt_label: &ArchiveLabelIdentity,
     journal: &mut ArchiveJournal,
     outcome: &mut LiveArchiveOutcome,
 ) -> Result<(), GmailError> {
+    let previously_owned: BTreeSet<String> = journal
+        .owned_receipts()
+        .filter(|receipt| {
+            receipt.key == close.key
+                && receipt.generation != close.generation
+                && (receipt.label.id == receipt_label.id
+                    || (receipt.label.id.is_none()
+                        && receipt.label.name == receipt_label.name))
+        })
+        .flat_map(|receipt| receipt.message_ids.iter().cloned())
+        .collect();
     let mut recovered: Vec<String> = thread
         .messages
         .iter()
         .filter(|message| {
-            evidence.saved_ids.binary_search(&message.id).is_ok()
-                && message.label_ids.iter().any(|label| {
-                    receipt_label.id.as_ref().is_some_and(|id| label == id)
-                        || label == &receipt_label.name
+            close.saved_ids.binary_search(&message.id).is_ok()
+                && !previously_owned.contains(&message.id)
+                && receipt_label.id.as_ref().is_some_and(|id| {
+                    message.label_ids.iter().any(|label| label == id)
                 })
         })
         .map(|message| message.id.clone())
@@ -1125,6 +1177,32 @@ fn reconcile_recovered(
     recovered.sort();
     recovered.dedup();
     if recovered.is_empty() {
+        let already_owned = thread.messages.iter().any(|message| {
+            close.saved_ids.binary_search(&message.id).is_ok()
+                && previously_owned.contains(&message.id)
+                && receipt_label.id.as_ref().is_some_and(|id| {
+                    message.label_ids.iter().any(|label| label == id)
+                })
+        });
+        if already_owned {
+            append_kept(
+                vault,
+                host,
+                journal,
+                &close.key,
+                &close.generation,
+                KEPT_MANUAL,
+                outcome,
+            )?;
+            *journal = ArchiveJournal::load(vault).map_err(|error| {
+                GmailError::runtime(
+                    "journal",
+                    format!(
+                        "could not read the Gmail archive journal: {error}"
+                    ),
+                )
+            })?;
+        }
         return Ok(());
     }
     let Some(event) = journal.event_for_terminal(
@@ -1179,10 +1257,19 @@ fn release_owned<R: GmailRead>(
     reader: &R,
     gog: &Gog,
     account: &str,
+    labels: &[GmailLabel],
+    enrollment_label: Option<&GmailLabel>,
     journal: &mut ArchiveJournal,
     owned: &[super::archive_state::ArchiveReceipt],
     outcome: &mut LiveArchiveOutcome,
 ) -> Result<(), GmailError> {
+    if !owned.is_empty() && enrollment_label.is_none() {
+        outcome.warnings.push(
+            "skipped Gmail archive release: the enrollment label is missing or ambiguous; work is held".to_string(),
+        );
+        outcome.failed = true;
+        return Ok(());
+    }
     for receipt in owned {
         let thread =
             match reader.thread_metadata(account, receipt.key.thread_id()) {
@@ -1210,14 +1297,48 @@ fn release_owned<R: GmailRead>(
         if !has_inbox {
             continue;
         }
+        let Some(enrollment_label) = enrollment_label else {
+            continue;
+        };
+        let live_receipt = match resolve_existing_receipt_label(
+            labels,
+            &receipt.label,
+            enrollment_label,
+        ) {
+            Ok(Some(label)) => label,
+            Ok(None) => {
+                outcome.warnings.push(format!(
+                    "skipped Gmail thread {}: the recorded receipt label is missing or ambiguous; work is held",
+                    receipt.key.thread_id(),
+                ));
+                outcome.failed = true;
+                continue;
+            }
+            Err(error) => {
+                outcome.warnings.push(format!(
+                    "skipped Gmail thread {}: {}: {}",
+                    receipt.key.thread_id(),
+                    error.kind(),
+                    error.message(),
+                ));
+                outcome.failed = true;
+                continue;
+            }
+        };
+        let receipt_identity = ArchiveLabelIdentity::new(
+            receipt.label.name.clone(),
+            Some(live_receipt.id().to_string()),
+        )
+        .expect("resolved receipt identity remains valid");
         let mut bearing: Vec<String> = thread
             .messages
             .iter()
             .filter(|message| {
-                message.label_ids.iter().any(|label| {
-                    Some(label) == receipt.label.id.as_ref()
-                        || label == &receipt.label.name
-                })
+                receipt.message_ids.contains(&message.id)
+                    && message
+                        .label_ids
+                        .iter()
+                        .any(|label| label == live_receipt.id())
             })
             .map(|message| message.id.clone())
             .collect();
@@ -1232,7 +1353,7 @@ fn release_owned<R: GmailRead>(
                 &receipt.generation,
                 ArchiveTerminalKind::LetGo {
                     message_ids: receipt.message_ids.clone(),
-                    label: receipt.label.clone(),
+                    label: receipt_identity.clone(),
                 },
             ) else {
                 continue;
@@ -1275,13 +1396,6 @@ fn release_owned<R: GmailRead>(
                 })
             })
             .collect();
-        // Re-resolve the receipt through the strict boundary using the live
-        // label list would reject historical shapes; use the recorded id
-        // directly through the pure diff with a fresh user label.
-        let live_receipt = match live_receipt_label(receipt) {
-            Some(label) => label,
-            None => continue,
-        };
         let diff = match super::archive_transport::LabelDiff::for_messages(
             LabelOperation::LetGo,
             &live_receipt,
@@ -1309,7 +1423,7 @@ fn release_owned<R: GmailRead>(
                     &receipt.generation,
                     ArchiveTerminalKind::LetGo {
                         message_ids: bearing.clone(),
-                        label: receipt.label.clone(),
+                        label: receipt_identity.clone(),
                     },
                 ) else {
                     continue;
@@ -1369,21 +1483,146 @@ fn release_owned<R: GmailRead>(
     Ok(())
 }
 
-fn live_receipt_label(
-    receipt: &super::archive_state::ArchiveReceipt,
-) -> Option<ReceiptLabel> {
-    let id = receipt.label.id.clone()?;
-    ReceiptLabel::new(
-        &GmailLabel {
-            id,
-            name: receipt.label.name.clone(),
-            kind: Some("user".to_string()),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::gmail::{
+        model::{GmailMessage, GmailThread},
+        sync::{
+            archive_scan::{
+                classify_archive_status, ArchiveIssue, ArchiveLinkTask,
+                ArchiveScan, ArchiveThreadEvidence,
+            },
+            archive_state::ArchiveDisposition,
+            scan::LinkPlacement,
         },
-        &GmailLabel {
-            id: "Label_0".to_string(),
-            name: "enrollment-placeholder".to_string(),
-            kind: Some("user".to_string()),
-        },
-    )
-    .ok()
+    };
+
+    const ACCOUNT: &str = "you@example.com";
+    const THREAD: &str = "0123456789abcdef";
+
+    fn evidence(status: char, saved_ids: Vec<String>) -> ArchiveThreadEvidence {
+        ArchiveThreadEvidence {
+            key: ThreadKey::new(ACCOUNT, THREAD).unwrap(),
+            note: "mail/thread.md".to_string(),
+            tasks: vec![ArchiveLinkTask {
+                path: "Projects/Task.md".to_string(),
+                line: 3,
+                text: format!("- [{status}] #task [[mail/thread]]"),
+                block_id: Some("task-3".to_string()),
+                status,
+                class: classify_archive_status(status),
+                placement: LinkPlacement::TaskLine,
+                in_done: false,
+                merge_retired: false,
+                from_duplicate_note: false,
+            }],
+            saved_ids,
+            note_fingerprint: Some(format!("sha256:{}", "a".repeat(64))),
+            merge_hold: false,
+            identity_uncertain: false,
+            issues: Vec::<ArchiveIssue>::new(),
+        }
+    }
+
+    fn scan(evidence: ArchiveThreadEvidence) -> ArchiveScan {
+        ArchiveScan::test_scan(evidence, true)
+    }
+
+    #[test]
+    fn reclose_does_not_recover_a_receipt_owned_by_an_earlier_generation() {
+        let vault = tempfile::tempdir().unwrap();
+        let label = ArchiveLabelIdentity::new(
+            "bob/closed",
+            Some("Label_10".to_string()),
+        )
+        .unwrap();
+        let mut journal = ArchiveJournal::load(vault.path()).unwrap();
+        let enabled = journal
+            .event_for_enablement(ACCOUNT, true, label.clone())
+            .unwrap();
+        ArchiveJournal::append(vault.path(), "athena", &enabled).unwrap();
+        journal = ArchiveJournal::load(vault.path()).unwrap();
+
+        let opened = evidence(' ', vec!["aa01".to_string()]);
+        let open_scan = scan(opened.clone());
+        let observed = journal.event_for_open(&open_scan, &opened).unwrap();
+        ArchiveJournal::append(vault.path(), "athena", &observed).unwrap();
+        journal = ArchiveJournal::load(vault.path()).unwrap();
+
+        let closed = evidence('x', vec!["aa01".to_string()]);
+        let closed_scan = scan(closed.clone());
+        let close_event = journal
+            .event_for_close(&closed_scan, &closed, label.clone())
+            .unwrap();
+        ArchiveJournal::append(vault.path(), "athena", &close_event).unwrap();
+        journal = ArchiveJournal::load(vault.path()).unwrap();
+        let ArchiveDisposition::Ready {
+            close: first_close, ..
+        } = journal.project(&closed_scan, &closed)
+        else {
+            panic!("first close should be ready");
+        };
+        let archived = journal
+            .event_for_terminal(
+                &first_close.key,
+                &first_close.generation,
+                ArchiveTerminalKind::Archived {
+                    message_ids: vec!["aa01".to_string()],
+                    label: label.clone(),
+                    recovered: false,
+                },
+            )
+            .unwrap();
+        ArchiveJournal::append(vault.path(), "athena", &archived).unwrap();
+        journal = ArchiveJournal::load(vault.path()).unwrap();
+
+        let reopened = evidence(' ', vec!["aa01".to_string()]);
+        let reopened_scan = scan(reopened.clone());
+        let observed =
+            journal.event_for_open(&reopened_scan, &reopened).unwrap();
+        ArchiveJournal::append(vault.path(), "mac", &observed).unwrap();
+        journal = ArchiveJournal::load(vault.path()).unwrap();
+
+        let reclosed =
+            evidence('x', vec!["aa01".to_string(), "bb02".to_string()]);
+        let reclosed_scan = scan(reclosed.clone());
+        let close_event = journal
+            .event_for_close(&reclosed_scan, &reclosed, label.clone())
+            .unwrap();
+        ArchiveJournal::append(vault.path(), "mac", &close_event).unwrap();
+        journal = ArchiveJournal::load(vault.path()).unwrap();
+        let close = journal.unconsumed_close(&reclosed.key).unwrap().clone();
+        let thread = GmailThread {
+            id: THREAD.to_string(),
+            history_id: None,
+            messages: vec![GmailMessage {
+                id: "aa01".to_string(),
+                thread_id: THREAD.to_string(),
+                label_ids: vec!["Label_10".to_string(), "Label_9".to_string()],
+                internal_date: None,
+                snippet: None,
+                headers: Vec::new(),
+                payload: None,
+            }],
+        };
+        let mut outcome = LiveArchiveOutcome::default();
+        reconcile_recovered(
+            vault.path(),
+            "mac",
+            &thread,
+            &close,
+            &label,
+            &mut journal,
+            &mut outcome,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.rows.len(), 1);
+        assert_eq!(outcome.rows[0].action, ACTION_KEPT_LIVE);
+        assert_eq!(outcome.rows[0].reason, KEPT_MANUAL);
+        assert_eq!(journal.owned_receipts().count(), 1);
+        assert_eq!(journal.unconsumed_close(&reclosed.key), None);
+        assert_eq!(outcome.warnings.len(), 0);
+    }
 }

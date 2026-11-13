@@ -905,6 +905,17 @@ impl ArchiveJournal {
         if !enabled.enabled || enabled.epoch != parsed.close.enable_epoch {
             return;
         }
+        if let Some(existing) = self
+            .threads
+            .get(&parsed.close.key)
+            .and_then(|thread| thread.generations.get(&parsed.close.generation))
+        {
+            if existing.close.as_ref() == Some(&parsed.close) {
+                return;
+            }
+            self.mark_invalid_scope(Some(&parsed.close.key));
+            return;
+        }
         let thread = self.threads.entry(parsed.close.key.clone()).or_default();
         if parsed.close.historical {
             if matches!(
@@ -920,6 +931,7 @@ impl ArchiveJournal {
                 after_generation,
             }) = thread.observation.as_ref()
             else {
+                self.mark_invalid_scope(Some(&parsed.close.key));
                 return;
             };
             if enable_epoch != &parsed.close.enable_epoch
@@ -927,16 +939,9 @@ impl ArchiveJournal {
                     != parsed.opened_by.as_deref().unwrap_or_default()
                 || after_generation != &parsed.after_generation
             {
+                self.mark_invalid_scope(Some(&parsed.close.key));
                 return;
             }
-        }
-        if let Some(existing) = thread.generations.get(&parsed.close.generation)
-        {
-            if existing.close.as_ref() == Some(&parsed.close) {
-                return;
-            }
-            self.mark_invalid_scope(Some(&parsed.close.key));
-            return;
         }
         thread.generations.insert(
             parsed.close.generation.clone(),
@@ -966,6 +971,13 @@ impl ArchiveJournal {
                 label,
                 recovered,
             } => {
+                if generation
+                    .first_terminal
+                    .as_ref()
+                    .is_some_and(|first| first.event_id == parsed.event_id)
+                {
+                    return;
+                }
                 let Some(close) = generation.close.as_ref() else {
                     self.mark_invalid_scope(Some(&parsed.key));
                     return;
@@ -975,6 +987,7 @@ impl ArchiveJournal {
                     || !ids_are_subset(message_ids, &close.saved_ids)
                     || !compatible_label(&close.label, label)
                 {
+                    self.mark_invalid_scope(Some(&parsed.key));
                     return;
                 }
                 let receipt = ArchiveReceipt {
@@ -1097,6 +1110,10 @@ impl ArchiveJournal {
         } else {
             self.unsafe_all = true;
         }
+        push_warning(
+            &mut self.warnings,
+            "Gmail archive journal transition does not match its generation; work is held",
+        );
     }
 }
 
@@ -1423,9 +1440,9 @@ fn parse_open_observation(event: &StoredEvent) -> Option<OpenObservation> {
         || tasks.is_empty()
         || !tasks
             .iter()
-            .any(|task| matches!(task.status, ' ' | '*' | '/'))
+            .any(|task| matches!(task.status, ' ' | '*' | '/' | '?'))
         || tasks.iter().any(|task| {
-            !matches!(task.status, ' ' | '*' | '/' | 'x' | 'X' | '-')
+            !matches!(task.status, ' ' | '*' | '/' | '?' | 'x' | 'X' | '-')
         })
     {
         return None;
@@ -1988,6 +2005,122 @@ mod tests {
     }
 
     #[test]
+    fn question_mark_open_observation_round_trips_and_can_close_later() {
+        let (mut state, mut events, receipt_label) = enabled();
+        let open = evidence(key(), '?');
+        let open_scan = scan(open.clone());
+        let open_event = state.event_for_open(&open_scan, &open).unwrap();
+        push(&mut events, &open_event, "athena", 2);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+        assert!(state.thread_is_safe(&key()));
+
+        let closed = evidence(key(), 'x');
+        let closed_scan = scan(closed.clone());
+        let close_event = state
+            .event_for_close(&closed_scan, &closed, receipt_label)
+            .unwrap();
+        push(&mut events, &close_event, "athena", 3);
+        state = ArchiveJournal::from_events(events, Vec::new());
+        assert!(state.unconsumed_close(&key()).is_some());
+    }
+
+    #[test]
+    fn divergent_host_close_is_warned_and_holds_the_thread() {
+        let (mut state, mut events, receipt_label) = enabled();
+        let open = evidence(key(), ' ');
+        let open_scan = scan(open.clone());
+        let open_event = state.event_for_open(&open_scan, &open).unwrap();
+        push(&mut events, &open_event, "athena", 2);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+
+        let closed_a = evidence(key(), 'x');
+        let close_a = state
+            .event_for_close(
+                &scan(closed_a.clone()),
+                &closed_a,
+                receipt_label.clone(),
+            )
+            .unwrap();
+        let mut closed_b = closed_a;
+        closed_b.saved_ids = vec!["cc03".to_string()];
+        let close_b = state
+            .event_for_close(&scan(closed_b.clone()), &closed_b, receipt_label)
+            .unwrap();
+        push(&mut events, &close_a, "apollo", 3);
+        push(&mut events, &close_a, "athena", 3);
+        push(&mut events, &close_b, "mac", 3);
+
+        let folded = ArchiveJournal::from_events(events, Vec::new());
+        assert!(!folded.thread_is_safe(&key()));
+        assert!(folded
+            .warnings()
+            .iter()
+            .any(|warning| warning.contains("transition")));
+    }
+
+    #[test]
+    fn rejected_and_unknown_archived_events_warn_and_hold_the_thread() {
+        let (state, mut events, closed, close) = closed_after_open();
+        let valid = terminal_event(
+            &state,
+            &close,
+            ArchiveTerminalKind::Archived {
+                message_ids: vec!["aa01".to_string()],
+                label: close.label.clone(),
+                recovered: false,
+            },
+        );
+
+        let mut rejected = valid.clone();
+        {
+            let rejected_value = rejected.value.as_object_mut().unwrap();
+            rejected_value.insert("message_ids".to_string(), json!(["cc03"]));
+            rejected_value.remove("event_id");
+        }
+        let rejected_id = terminal_event_id(ARCHIVED_KIND, &rejected.value);
+        rejected
+            .value
+            .as_object_mut()
+            .unwrap()
+            .insert("event_id".to_string(), json!(rejected_id));
+        let mut rejected_events = events.clone();
+        push(&mut rejected_events, &rejected, "mac", 4);
+        let rejected_fold =
+            ArchiveJournal::from_events(rejected_events, Vec::new());
+        assert!(!rejected_fold.thread_is_safe(&key()));
+        assert!(rejected_fold
+            .warnings()
+            .iter()
+            .any(|warning| warning.contains("transition")));
+
+        let mut unknown = valid;
+        {
+            let unknown_value = unknown.value.as_object_mut().unwrap();
+            unknown_value.insert(
+                "generation".to_string(),
+                json!(format!("sha256:{}", "f".repeat(64))),
+            );
+            unknown_value.remove("event_id");
+        }
+        let unknown_id = terminal_event_id(ARCHIVED_KIND, &unknown.value);
+        unknown
+            .value
+            .as_object_mut()
+            .unwrap()
+            .insert("event_id".to_string(), json!(unknown_id));
+        events.retain(|event| event.kind != ARCHIVED_KIND);
+        push(&mut events, &unknown, "mac", 4);
+        let unknown_fold = ArchiveJournal::from_events(events, Vec::new());
+        assert!(!unknown_fold.thread_is_safe(&key()));
+        assert!(unknown_fold
+            .warnings()
+            .iter()
+            .any(|warning| warning.contains("transition")));
+
+        assert!(closed.note.contains("mail/"));
+    }
+
+    #[test]
     fn terminal_outcomes_consume_once_and_release_only_the_matching_receipt() {
         let (state, mut events, closed, close) = closed_after_open();
         let archived = terminal_event(
@@ -2075,7 +2208,7 @@ mod tests {
     }
 
     #[test]
-    fn keep_is_one_shot_and_late_archive_cannot_reopen_it() {
+    fn conflicting_late_archive_holds_one_shot_keep_without_receipt() {
         let (state, mut events, closed, close) = closed_after_open();
         let kept = terminal_event(
             &state,
@@ -2097,12 +2230,10 @@ mod tests {
         push(&mut events, &archive, "athena", 20);
         let folded = ArchiveJournal::from_events(events, Vec::new());
         assert_eq!(folded.owned_receipts().count(), 0);
+        assert!(!folded.thread_is_safe(&key()));
         assert!(matches!(
             folded.project(&scan(closed.clone()), &closed),
-            ArchiveDisposition::Consumed {
-                outcome: ArchiveTerminalKind::Kept { .. },
-                ..
-            }
+            ArchiveDisposition::Held
         ));
     }
 
