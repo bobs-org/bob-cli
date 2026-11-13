@@ -3,10 +3,10 @@
 //! affects exit codes or JSON output: every failure is swallowed.
 //!
 //! macOS notifies through `osascript`; Linux notifies through `notify-send`
-//! when it is on `PATH`. The existing `BOB_VAULT_SYNC_NOTIFY` opt-out covers
-//! every caller: the exact values `0`, `false`, or `no` suppress, `1` or
-//! `true` force, and anything else keeps the default (on outside tests, off
-//! inside unit tests so suites stay silent).
+//! when it is an executable on `PATH`. The existing `BOB_VAULT_SYNC_NOTIFY`
+//! opt-out covers every caller: the exact values `0`, `false`, or `no` suppress,
+//! `1` or `true` force, and anything else keeps the default (on outside tests,
+//! off inside unit tests so suites stay silent).
 
 use std::process::{Command, Stdio};
 
@@ -63,9 +63,9 @@ pub(crate) fn send_notification(title: &str, body: &str) {
 }
 
 /// Pure program-plus-argv builder behind [`send_notification`]. Returns `None`
-/// when this host has no usable transport (Linux without `notify-send` on
-/// `PATH`). Tests assert on this value with fake executables instead of
-/// delivering real notifications.
+/// when this host has no usable transport (Linux without an executable
+/// `notify-send` on `PATH`). Tests assert on this value with fake executables
+/// instead of delivering real notifications.
 pub(crate) fn notification_command(
     title: &str,
     body: &str,
@@ -81,9 +81,7 @@ pub(crate) fn notification_command(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        if !command_on_path("notify-send") {
-            return None;
-        }
+        bob_env::find_on_path("notify-send")?;
         Some((
             "notify-send".to_string(),
             vec![title.to_string(), body.to_string()],
@@ -113,13 +111,6 @@ pub(crate) fn osascript_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub(crate) fn command_on_path(command: &str) -> bool {
-    let Some(path) = bob_env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| dir.join(command).is_file())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,7 +132,7 @@ mod tests {
         assert_eq!(shell_display_token(""), "''");
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn linux_builds_notify_send_argv() {
         let missing = bob_env::TestEnvGuard::set(&[(
@@ -153,18 +144,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake = dir.path().join("notify-send");
         std::fs::write(&fake, "#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions =
-                std::fs::metadata(&fake).unwrap().permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&fake, permissions).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(&fake, permissions).unwrap();
         let present = bob_env::TestEnvGuard::set(&[(
             "PATH",
             Some(dir.path().as_os_str()),
         )]);
+        assert!(notification_command("bob gmail", "hello").is_none());
+        let mut permissions = std::fs::metadata(&fake).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake, permissions).unwrap();
         assert_eq!(
             notification_command("bob gmail", "hello"),
             Some((
