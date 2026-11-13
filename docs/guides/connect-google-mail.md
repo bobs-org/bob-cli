@@ -97,9 +97,20 @@ On Google's consent screen, allow both "Read your email messages" and "Manage
 drafts and send emails"; if compose stays unticked, login fails with
 `compose_not_granted` and keeps the read-only grant.
 
+On the approved archive writer only, also grant modify:
+
+```bash
+bob gmail login -s modify
+```
+
+That requests Gmail's broader modify scope for label-only archiving; restore
+stays manual: Move to Inbox in Gmail. It cannot permanently delete mail. Keep
+this grant off agent hosts.
+
 A valid grant is idempotent: login still prints all three steps, reports
 `already connected`, rechecks one Gmail search page, and reports the granted
-scopes (`readonly` or `readonly+compose`).
+scopes (`readonly`, `readonly+compose`, `readonly+modify`,
+`modify`, or the granted modify combination).
 
 If a saved grant expired or was revoked, Bob guides you through sign-in again.
 If the Gmail API is disabled, Bob gives you the project-specific Cloud

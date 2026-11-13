@@ -64,13 +64,13 @@ fn login(
     if wants_modify {
         let archive_use = if config.archive_enabled() {
             format!(
-                "Bob uses it only for label-based archiving of saved messages (receipt label {:?}, limit {} per run); restore is explicit.",
+                "Bob uses it only for label-based archiving of saved messages (receipt label {:?}, limit {} per run); restore stays manual: Move to Inbox in Gmail.",
                 config.archive_label(),
                 config.archive_max()
             )
         } else {
             format!(
-                "Archive mode is off; if enabled, Bob uses this grant only for label-based archiving of saved messages (receipt label {:?}, limit {} per run); restore is explicit.",
+                "Archive mode is off; if enabled, Bob uses this grant only for label-based archiving of saved messages (receipt label {:?}, limit {} per run); restore stays manual: Move to Inbox in Gmail.",
                 config.archive_label(),
                 config.archive_max()
             )
@@ -255,7 +255,7 @@ fn modify_not_granted() -> GmailError {
             .to_string(),
     )
     .with_hint(
-        "rerun `bob gmail login -s modify` and allow Google's Gmail modify permission; Bob uses it for label-based archive and explicit restore, cannot permanently delete messages, and still requires the separate confirmed compose workflow to send",
+        "rerun `bob gmail login -s modify` and allow Google's Gmail modify permission; Bob uses it for label-based archive; restore stays manual: Move to Inbox in Gmail; cannot permanently delete messages, and still requires the separate confirmed compose workflow to send",
     )
 }
 

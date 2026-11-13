@@ -393,6 +393,21 @@ impl ArchiveJournal {
             .flatten()
     }
 
+    /// The recorded close for one generation, regardless of consumption.
+    /// Used to fill live report rows from the frozen evidence.
+    pub(crate) fn close_for(
+        &self,
+        key: &ThreadKey,
+        generation: &str,
+    ) -> Option<&ArchiveCloseGeneration> {
+        self.threads
+            .get(key)?
+            .generations
+            .get(generation)?
+            .close
+            .as_ref()
+    }
+
     /// Return all still-owned archived receipts, including receipts from
     /// older label/config epochs. Release events remove ownership without
     /// rewriting the receipt's original label identity.

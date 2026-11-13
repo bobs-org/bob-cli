@@ -416,15 +416,41 @@ fn archive_check(
         "{settings} · this week {} archived · {} kept{account_scope}",
         counts.archived, counts.kept,
     );
+    let modify_missing = match (account, granted_scopes) {
+        (Some(acct), Some(scopes)) => {
+            config.archive_enabled()
+                && !scopes
+                    .iter()
+                    .any(|scope| {
+                        scope == super::config::MODIFY_SCOPE
+                            || scope.contains("gmail.modify")
+                    })
+                    .then_some(acct)
+                    .is_some()
+        }
+        _ => false,
+    };
     if let Some(warning) = journal_warning {
+        let mut summary = format!("{summary} · {warning}");
+        let mut fixes = vec![
+            "inspect .bob/gmail/<host>.jsonl; unsafe archive state is held"
+                .to_string(),
+        ];
+        if modify_missing {
+            summary.push_str(&format!(
+                " · modify grant missing for {}",
+                account.unwrap_or_default()
+            ));
+            fixes.push(
+                "run `bob gmail login -s modify` on the approved archive host"
+                    .to_string(),
+            );
+        }
         return Check {
             id: "archive",
             status: CheckStatus::Warn,
-            summary: format!("{summary} · {warning}"),
-            fix: Some(
-                "inspect .bob/gmail/<host>.jsonl; unsafe archive state is held"
-                    .to_string(),
-            ),
+            summary,
+            fix: Some(fixes.join("; ")),
         };
     }
     let Some(account) = account else {

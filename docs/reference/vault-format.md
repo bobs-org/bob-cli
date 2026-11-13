@@ -772,8 +772,12 @@ identity (`account`, lowercase hex `thread_id`): `gmail.filed` carries
 carries `note`, `task_file`, and `route`; `gmail.route_conflict` carries
 `note`, `task_file`, `label`, and `dest_file`; legacy `gmail.pulled`
 carries `inbox` and `note` and is read-only. `gmail.save` receipts carry
-`note`, `created`, and `added`. Values never contain bodies, snippets, or
-subjects. See [Bob Gmail](../gmail.md#sync).
+`note`, `created`, and `added`. Archive adds `gmail.archive_enabled`,
+`gmail.archive_observed`, `gmail.archive_closed` (frozen IDs, note, tasks,
+label), `gmail.archived` (`message_ids`, label), `gmail.kept` (`reason`),
+`gmail.let_go` (`message_ids`, label), and reserved `gmail.restored`; full
+fields, reasons, and errors in [Archive on close](../gmail.md#archive-on-close).
+Values never contain bodies, snippets, or subjects. See [Bob Gmail](../gmail.md#sync).
 
 `old_lib/` is the archival predecessor of `lib/`. Ordinary capture routes
 select root-level notes: `@work` writes `work.md`. Album record routes also

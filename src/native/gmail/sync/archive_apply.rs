@@ -19,7 +19,8 @@ use super::{
     },
     archive_scan::{scan_archive_evidence, SavedIdSnapshot},
     archive_state::{
-        ArchiveJournal, ArchiveLabelIdentity, ArchiveTerminalKind,
+        ArchiveCloseGeneration, ArchiveJournal, ArchiveLabelIdentity,
+        ArchiveTerminalKind,
     },
     archive_transport::{
         resolve_existing_receipt_label, resolve_or_create_receipt_label,
@@ -94,7 +95,7 @@ fn setup_missing_modify() -> GmailError {
     )
     .with_hint(
         "run `bob gmail login -s modify` on the approved archive host; \
-         Bob uses it for label-based archive and explicit restore",
+         Bob uses it for label-based archive; restore stays manual: Move to Inbox in Gmail",
     )
 }
 
@@ -349,6 +350,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                     note: row.note.clone(),
                     action: ACTION_PAUSED_LIVE,
                     reason: gate_reason(&preview.plan.gate),
+                    decision: planned_decision(&row.decision),
                     messages: row.messages(),
                     tasks: row
                         .tasks
@@ -577,6 +579,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 note: row.note.clone(),
                 action: ACTION_PAUSED_LIVE,
                 reason: gate_reason(&preview.plan.gate),
+                decision: planned_decision(&row.decision),
                 messages: row.messages(),
                 tasks: row
                     .tasks
@@ -833,7 +836,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                         &host,
                         &journal,
                         &row.key,
-                        &close.generation,
+                        &close,
                         KEPT_GONE,
                         &mut outcome,
                     )?;
@@ -885,7 +888,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                     &host,
                     &journal,
                     &row.key,
-                    &close.generation,
+                    &close,
                     reason,
                     &mut outcome,
                 )?;
@@ -1018,16 +1021,9 @@ pub(crate) fn apply_live<R: GmailRead>(
                             } else {
                                 "eligible"
                             },
+                            decision: "would_archive".to_string(),
                             messages: archive_ids,
-                            tasks: close
-                                .tasks
-                                .iter()
-                                .map(|task| ArchiveTaskRef {
-                                    path: task.path.clone(),
-                                    line: task.line,
-                                    block_id: task.block_id.clone(),
-                                })
-                                .collect(),
+                            tasks: task_refs(&close.tasks),
                         });
                     }
                     Err(error) => {
@@ -1075,6 +1071,26 @@ fn gate_reason(gate: &archive_preview::ArchiveGate) -> &'static str {
     }
 }
 
+fn planned_decision(decision: &PreviewDecision) -> String {
+    match decision {
+        PreviewDecision::Archive { .. } => "would_archive".to_string(),
+        PreviewDecision::Kept { reason } => format!("kept:{reason}"),
+    }
+}
+
+fn task_refs(
+    tasks: &[super::archive_state::ArchiveTaskLocator],
+) -> Vec<ArchiveTaskRef> {
+    tasks
+        .iter()
+        .map(|task| ArchiveTaskRef {
+            path: task.path.clone(),
+            line: task.line,
+            block_id: task.block_id.clone(),
+        })
+        .collect()
+}
+
 fn append_paused_rows(
     plan: &archive_preview::ArchivePlan,
     outcome: &mut LiveArchiveOutcome,
@@ -1086,6 +1102,7 @@ fn append_paused_rows(
             note: row.note.clone(),
             action: ACTION_PAUSED_LIVE,
             reason,
+            decision: planned_decision(&row.decision),
             messages: row.messages(),
             tasks: row
                 .tasks
@@ -1363,13 +1380,13 @@ fn append_kept(
     host: &str,
     journal: &ArchiveJournal,
     key: &ThreadKey,
-    generation: &str,
+    close: &ArchiveCloseGeneration,
     reason: &str,
     outcome: &mut LiveArchiveOutcome,
 ) -> Result<(), GmailError> {
     let Some(event) = journal.event_for_terminal(
         key,
-        generation,
+        &close.generation,
         ArchiveTerminalKind::Kept {
             reason: reason.to_string(),
         },
@@ -1394,13 +1411,18 @@ fn append_kept(
         )
     })?;
     let _ = reloaded;
+    let kept = kept_reason(reason);
+    let mut messages = close.saved_ids.clone();
+    messages.sort();
+    messages.dedup();
     outcome.rows.push(ArchiveRow {
         thread_id: key.thread_id().to_string(),
-        note: String::new(),
+        note: close.note.clone(),
         action: ACTION_KEPT_LIVE,
-        reason: kept_reason(reason),
-        messages: Vec::new(),
-        tasks: Vec::new(),
+        reason: kept,
+        decision: format!("kept:{kept}"),
+        messages,
+        tasks: task_refs(&close.tasks),
     });
     Ok(())
 }
@@ -1467,7 +1489,7 @@ fn reconcile_recovered(
                 host,
                 journal,
                 &close.key,
-                &close.generation,
+                close,
                 KEPT_MANUAL,
                 outcome,
             )?;
@@ -1515,16 +1537,9 @@ fn reconcile_recovered(
         note: close.note.clone(),
         action: ACTION_ARCHIVED,
         reason: REASON_RECOVERED,
+        decision: "would_archive".to_string(),
         messages: recovered,
-        tasks: close
-            .tasks
-            .iter()
-            .map(|task| ArchiveTaskRef {
-                path: task.path.clone(),
-                line: task.line,
-                block_id: task.block_id.clone(),
-            })
-            .collect(),
+        tasks: task_refs(&close.tasks),
     });
     Ok(())
 }
@@ -1682,13 +1697,22 @@ fn release_owned<R: GmailRead>(
                     ),
                 )
             })?;
+            let recorded = journal.close_for(&receipt.key, &receipt.generation);
+            let mut crash_messages = receipt.message_ids.clone();
+            crash_messages.sort();
+            crash_messages.dedup();
             outcome.rows.push(ArchiveRow {
                 thread_id: receipt.key.thread_id().to_string(),
-                note: String::new(),
+                note: recorded
+                    .map(|close| close.note.clone())
+                    .unwrap_or_default(),
                 action: ACTION_LET_GO,
                 reason: REASON_MANUAL_RETURN,
-                messages: receipt.message_ids.clone(),
-                tasks: Vec::new(),
+                decision: "let_go".to_string(),
+                messages: crash_messages,
+                tasks: recorded
+                    .map(|close| task_refs(&close.tasks))
+                    .unwrap_or_default(),
             });
             continue;
         }
@@ -1775,13 +1799,20 @@ fn release_owned<R: GmailRead>(
                 } else {
                     REASON_MANUAL_RETURN
                 };
+                let recorded =
+                    journal.close_for(&receipt.key, &receipt.generation);
                 outcome.rows.push(ArchiveRow {
                     thread_id: receipt.key.thread_id().to_string(),
-                    note: String::new(),
+                    note: recorded
+                        .map(|close| close.note.clone())
+                        .unwrap_or_default(),
                     action: ACTION_LET_GO,
                     reason,
+                    decision: "let_go".to_string(),
                     messages: bearing,
-                    tasks: Vec::new(),
+                    tasks: recorded
+                        .map(|close| task_refs(&close.tasks))
+                        .unwrap_or_default(),
                 });
             }
             Err(error) => {

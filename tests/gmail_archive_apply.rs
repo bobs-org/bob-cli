@@ -27,6 +27,16 @@
 //! and `cli::sync_accepts_confirm_no_archive_and_preserves_pull`; C20
 //! `archive_reports_and_journals_never_echo_hostile_task_text` and the
 //! body-free terminal tests in `archive_state`.
+//!
+//! Surfaces (section 4): `report::{live_success_omits_digest_in_json_and_hides_quiet_leak,
+//! dry_run_and_paused_runs_keep_digest,
+//! paused_rows_show_gate_reason_and_decision_without_dangling_arrow,
+//! kept_and_let_go_rows_render_note_without_dangling_arrow,
+//! no_archive_skip_serializes_additively}` plus
+//! `gmail_archive_preview::first_enablement_dry_run_previews_the_same_confirmable_backlog`
+//! (live success omits `archive_digest`) and
+//! `gmail_sync::help_lists_sync_and_hides_the_pull_alias`
+//! (sync `-c`/`-n` option order).
 
 mod gmail_support;
 
@@ -1034,14 +1044,16 @@ fn reopening_an_archived_task_reports_a_restore_hint_without_writing() {
     assert!(value["archive_hints"][0]["message"]
         .as_str()
         .unwrap()
-        .contains("Move it to Inbox"));
+        .contains("restore stays manual: Move to Inbox in Gmail"));
     assert!(
         remote_write_calls(&fake).is_empty(),
         "reopen does not mutate Gmail"
     );
     let human = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0"]);
     assert_exit(&human, 0, "human reopen hint");
-    assert!(stdout(&human).contains("move it to Inbox"));
+    assert!(
+        stdout(&human).contains("restore stays manual: Move to Inbox in Gmail")
+    );
     assert!(remote_write_calls(&fake).is_empty());
 }
 

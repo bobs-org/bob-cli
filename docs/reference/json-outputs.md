@@ -12,19 +12,14 @@ stdout `schema_version` counts.
 
 ## Framing
 
-JSON goes to stdout; warnings, progress, and hook chatter go to stderr.
-Usage errors exit 2.
+JSON goes to stdout, warnings and chatter to stderr; usage errors exit 2.
 
-Envelopes vary by family:
+Envelopes vary by family (details in rows below):
 
-- Versioned helpers (`capture-parse`, `plan`, `freshness`, most `ref`) print
-  `ok: true` plus a payload; many carry `schema_version`.
-- Capture-helper errors are often `{"ok":false,"error":"…"}` without
-  `schema_version`.
-- `bob capture -f json` is unversioned (`ok`, no `schema_version`).
-- `bob vault-sync status -j` prints the status record directly.
+- Versioned helpers print `ok: true` plus a payload; many carry `schema_version`.
+- Capture-helper errors are often `{"ok":false,"error":"…"}` without one.
 
-Examples show selected fields; `…` marks omissions.
+`…` marks omissions.
 
 ```bash
 bob capture-parse -f json -- 'Buy milk @dev'
@@ -553,7 +548,7 @@ no `--format json` or `--json` flag.
 | `bob gmail search` | `-f json` (default is `table`) | `query`, `shown`, `limit`, and metadata-only `threads[]` with optional saved-note matches | `schema_version: 1` | [Search](../gmail.md#search) |
 | `bob gmail peek` | `-f json` | Identity verdict, thread metadata, saved note, label, and message; no body or vault writes | `schema_version: 1` | [Peek](../gmail.md#peek) |
 | `bob gmail link` | `-f json` | Link replacements | `schema_version: 1` | [Link](../gmail.md#link) |
-| `bob gmail sync` | `-f json`; `-d` previews; `-c` confirms an exact archive digest; `-n` skips archive planning | `ok`, `dry_run`, `pulled`, `results[]`, `warnings`, `watch[]`, `problems[]`, `archive[]` (thread, note, action, reason, sorted message IDs, task locators), typed `archive_hints[]`, `archive_enabled`, `archive_label`, `archive_max`, optional `archive_digest`, and summary (`watching`, `awaiting`, `archived`). Archive actions: `archived`, `would_archive`, `kept`, `let_go`, `restored`, `paused`; `pulled` counts filed problems. | `schema_version: 1` | [Sync](../gmail.md#sync), [Archive on close](../gmail.md#archive-on-close), [Watch](../gmail.md#watch) |
+| `bob gmail sync` | `-f json`; `-d` previews on a non-writer host, `-c` digest, `-n` (`archive_skipped`) | `ok`, `dry_run`, `pulled`, `warnings`, `archive_enabled`, `archive_label`, `archive_max`, `archive_digest` (dry-run/paused only); `results[]` (`thread_id`, `note`, `link`, `status`, `task_file`, `route`; `filed`, `would_file`, `adopted`, `already_filed`, `already_pulled`, `problem`, `refiled`, `would_refile`); `watch[]` (`thread_id`, `note`, `tasks`, `turn`, `turn_since`, `action`, `nudge_on`); `problems[]` (`thread_id`, `note`, `label`, `kind`, `message`, `hint`, `first_seen`); `archive[]` (`thread_id`, `note`, `action`, `reason`, `decision`, `messages`, `tasks`); `archive_hints[]` (`kind`, `thread_id`, `note`, `message`); `summary` (`watching`, `awaiting`, `archived`); `pulled` counts filed problems; first-seen fail `ok`; archive `archived`, `would_archive`, `kept`, `let_go`, `paused` (`restored` reserved). | `schema_version: 1` | [Sync](../gmail.md#sync), [Archive](../gmail.md#archive-on-close), [Watch](../gmail.md#watch) |
 | `bob gmail attach` | `-f json` | Attachment import results | `schema_version: 1` | [Attachments](../gmail.md#attachments) |
 | `bob gmail new`, `reply` | `-f json` | `status`, `note`, and `cursor: {line, column}` for the local edit | `schema_version: 1` | [Compose notes](../gmail.md#compose-notes) |
 | `bob gmail draft`, `send` | `-f json` | Draft and `send -d`: `status: preview`, `preview`, and `digest` after storing a remote draft. Send: status and message identities. Send recovery runs first, including with `-d`, and can return without a preview | `schema_version: 1` | [Gmail drafts](../gmail.md#gmail-drafts), [Writing and sending](../gmail.md#writing-and-sending) |

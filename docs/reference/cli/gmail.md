@@ -9,7 +9,7 @@ description: "Save Gmail threads as inert mail notes, linked from tasks"
 Save Gmail threads as inert mail notes, linked from tasks
 
 ```text title="bob gmail --help"
-Gmail threads you choose become inert, append-only mail notes: one read-only login through gog, then save threads offline and link them from tasks. Every send goes through a previewed Gmail draft. The `new` and `reply` commands create local notes without sending. Bare `bob gmail` lists saved threads.
+Gmail threads you choose become inert, append-only mail notes: a read-only login by default through gog, then save threads offline and link them from tasks. Every send goes through a previewed Gmail draft. The `new` and `reply` commands create local notes without sending. Bare `bob gmail` lists saved threads.
 
 Usage: bob gmail [OPTIONS] [COMMAND]
 

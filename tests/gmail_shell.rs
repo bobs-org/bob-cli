@@ -355,7 +355,10 @@ fn login_modify_requests_only_the_exact_gmail_modify_scope() {
     let err = stderr(&output);
     assert!(err.contains("Gmail modify grant is broad"), "{err}");
     assert!(err.contains("only for label-based archiving"), "{err}");
-    assert!(err.contains("restore is explicit"), "{err}");
+    assert!(
+        err.contains("restore stays manual: Move to Inbox in Gmail"),
+        "{err}"
+    );
     assert!(err.contains("cannot permanently delete"), "{err}");
     assert!(err.contains("separate compose workflow"), "{err}");
     assert!(
@@ -404,7 +407,7 @@ fn login_modify_reports_when_google_withholds_the_scope() {
     assert!(doc["error"]["hint"]
         .as_str()
         .unwrap_or_default()
-        .contains("explicit restore"));
+        .contains("restore stays manual: Move to Inbox in Gmail"));
     assert!(!stderr(&output).contains("Connected."));
 }
 

@@ -39,9 +39,12 @@ named after the note routes the thread, and a `#/job` label is ignored so
 the thread files to the inbox.
 
 Only the original conversation is watched. Removing the Gmail label later
-changes nothing: enrollment is durable after the first sync, even when the
-label is gone or the task is closed, moved, or deleted. Reopening the task
-or linking its mail note restores the watch without needing the label again.
+changes nothing for filing: enrollment is durable after the first sync, even
+when the label is gone or the task is closed, moved, or deleted. Reopening
+the task or linking its mail note restores the watch without needing the
+label again. For archive-on-close, removing the enrollment label opts the
+thread out of archiving: the close is recorded as one `kept`
+(`consent_removed`) that consumes the close.
 
 ## 2. Sync the label into Bob
 

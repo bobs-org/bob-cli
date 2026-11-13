@@ -455,7 +455,10 @@ fn first_enablement_dry_run_previews_the_same_confirmable_backlog() {
     );
     assert_exit(&confirmed, 0, "the first live run accepts the preview");
     let value = json_stdout(&confirmed);
-    assert_eq!(value["archive_digest"].as_str(), Some(digest.as_str()));
+    assert!(
+        value.get("archive_digest").is_none(),
+        "live success omits the digest: {value}"
+    );
     assert_eq!(value["archive"][0]["action"], "archived");
     assert_eq!(value["archive"][0]["messages"], json!([MESSAGE_ID]));
     assert!(journal_kinds(&env).contains(&"gmail.archive_enabled".to_string()));

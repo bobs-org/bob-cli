@@ -74,7 +74,8 @@ selected threads to the vault. `link` finds Gmail URLs in notes, saves each
 confirmed thread, and replaces those URL tokens with labelled wikilinks.
 `sync` reads the configured label and files saved threads into the area or
 project named by a routing label, or into the Gmail inbox when none or an
-invalid one is present, without changing Gmail labels. Each run also refreshes
+invalid one is present. By default it leaves Gmail labels unchanged; the
+archive-on-close path below is the only message-label mutation. Each run also refreshes
 currently watched threads and applies a new counted turn to their open linking
 tasks. `attach` reads one listed attachment and writes
 its bytes into the vault. `new` and `reply` write local Markdown notes without
@@ -117,6 +118,12 @@ Reads always pass `--readonly --gmail-no-send` plus `--enable-commands`
 restricted to the Gmail read commands, and never pass `--sanitize-content` or
 `--wrap-untrusted`. The bodies live only in mail notes, never in argv, logs,
 journals, or JSON errors.
+
+Archive writes run without `--readonly` and fence the mutation to the exact
+receipt/`INBOX` label pair: batch archive uses
+`--enable-commands-exact gmail.batch.modify`, receipt creation uses
+`--enable-commands-exact gmail.labels.create`. The fence never includes send,
+delete, mark-read, or any other label.
 
 ## Body rendering
 
@@ -761,41 +768,61 @@ still follows its separate draft and confirmation workflow.
 
 Archive eligibility requires an enrolled thread that still has its Gmail
 enrollment label, at least one linking task closed as `[x]`, `[X]`, or `[-]`,
-and no open or unknown linking task. The strict scan includes `done/`, holds
-merge-retired sources for review, and refuses incomplete or ambiguous mail
-evidence. The first live run after enabling records the baseline; only a later
-observed open-to-closed transition archives automatically. A thread already
-closed at the baseline is historical backlog and needs a matching preview
-digest. Reopening and closing entirely between sync observations cannot be
-detected.
+and no open or unknown linking task. The strict scan includes `done/`,
+refuses incomplete or ambiguous mail evidence, and holds merge-retired
+sources for review with no human row. The baseline needs a live run on the
+writer that has the modify grant: the first such run after enabling records
+enablement and open observations; only a later observed open-to-closed
+transition archives automatically. A thread already closed at the baseline is
+historical backlog and needs a matching preview digest. Reopening and closing
+entirely between sync observations cannot be detected. An `archive_label`
+rename re-baselines: the next live run records a new enablement, old-epoch
+closes project as backlog and need `-c`, and owned receipts keep their old
+identity for let-go.
 
 Bob freezes the message IDs already saved in the mail note. If an Inbox reply
 is present but unsaved, the whole thread stays in Inbox and one `kept`
-outcome is recorded. Removing the enrollment label is a per-thread opt-out;
-Bob reports that case in JSON without a human row. If you already archived a
-thread yourself, Bob does nothing and adds no receipt. Spam, Trash, Drafts,
-missing mail, and configured `never_save` cases are held. A merge-retired
-source is held for review instead of being treated as finished.
+(`unsaved`) outcome is recorded, consuming the close; a reopen re-arms it.
+Removing the enrollment label is a per-thread opt-out; Bob reports that case
+in JSON without a human row. If you already archived a thread yourself, Bob
+records one `kept` (`manual`) that consumes the close and adds no receipt.
+Policy exclusions (Spam, Trash, Drafts, `never_save`) and gone mail are a
+one-time `kept` that consumes the close; they are not held. Merge holds stay
+silent.
 
 The Gmail receipt label records Bob-owned archives and supports crash
 recovery. A new reply or your manual Move to Inbox removes the receipt only;
-Bob then lets go and never archives that close again. Reopening a task does
-not move mail: the report gives a typed restore hint, and you can move the
-thread to Inbox yourself. This core release has no `bob gmail unarchive`
-command or automatic restore.
+Bob then lets go (removing the receipt label) and never archives that close
+again. Reopening a task does not move mail: the report gives a typed restore
+hint, and restore stays manual: Move to Inbox in Gmail. There is no
+`bob gmail unarchive` command and no automatic restore; `restored` is a
+reserved JSON action that is never emitted. Present no deferred surface as
+shipped: no `unarchive`, no `gmail_archived` field, no `recent_archive`
+listing, no chips, and no notifications.
 
 Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
 historical backlog or a batch above `archive_max`, and `-n` to skip archive
-planning for one run. A pause shows every candidate thread and the digest,
-archives none, and exits 1. A supplied digest that no longer matches the
-current saved IDs, labels, or tasks makes no archive writes. Archive failures
-do not undo completed filing or watch work; `invalid_grant` stops remaining
-Gmail mutations. `-q` still shows archive and let-go rows because those
-changes matter to the Inbox.
+planning for one run. A pause shows every candidate thread, its `decision`
+(`would_archive` or `kept:<reason>`), and the digest, archives none, and
+exits 1. A supplied digest that no longer matches the current saved IDs,
+labels, or tasks makes no archive writes. Archive failures do not undo
+completed filing or watch work; `invalid_grant` stops remaining Gmail
+mutations. `-q` still shows archive and let-go rows because those changes
+matter to the Inbox, but it never prints the digest for a live successful run.
 
 The journal at `.bob/gmail/<host>.jsonl` records body-free enablement,
 observations, close generations, and terminal outcomes. No task prose,
-subject, body, or token is stored there.
+subject, body, or token is stored there. Events are `gmail.archive_enabled`
+(account, enabled, epoch, label), `gmail.archive_observed` (open witness),
+`gmail.archive_closed` (frozen saved IDs, note, tasks, label), `gmail.archived`
+(`message_ids`, label, `recovered`), `gmail.kept` (`reason`), `gmail.let_go`
+(`message_ids`, label), and `gmail.restored` (reserved, never written).
+Reasons are `eligible`, `backlog`, `unsaved`, `consent_removed`, `policy`,
+`gone`, `manual`, `replied`, `manual_return`, and `recovered`. Actions are
+`would_archive`, `archived`, `kept`, `let_go`, `paused`, and reserved
+`restored`. Hints name the missing-modify grant and the confirm digest;
+errors are typed `{kind, message, hint?}` with exit 2 for setup (`modify_grant`)
+and auth, and exit 1 for paused, `confirm_mismatch`, and archive failure.
 
 A thread whose routing label does not resolve is still filed to the inbox
 with a managed `GMAIL ROUTE` child that names the offending label, the
@@ -816,24 +843,33 @@ remote failures with no durable row.
 
 JSON schema 1 keeps pull's `ok`, `dry_run`, `pulled`, `results`, and
 `warnings`, and adds `watch`, `problems`, and
-`summary: {watching, awaiting}`. Each `watch[]` row carries `thread_id`,
-`note`, `tasks` (each `path`, 1-based `line`, and nullable `block_id`),
-`turn`, `turn_since`, `action`, and optional `nudge_on`. Actions are
-`held`, `lifted`, `bounced`, `resurfaced`, `deferred_running`, `refreshed`,
-and `unchanged`. A missing or trashed thread is not an action: it is
-reported once through a `gmail.gone` journal event plus a human and warning
-row. Result statuses are `filed`, `would_file`, `adopted`, `already_filed`,
-`already_pulled`, `problem`, `refiled`, and `would_refile`. Exit 0 on
-success, no-op, or a quiet contention skip; 1 on a runtime failure,
-deferred work, a first-seen route problem, or a quiet busy-skip once live
-runs have kept skipping for more than two hours with no successful run in
-between; 2 on setup (empty label, writer, bad `-l`).
+`summary: {watching, awaiting, archived}`. Each `watch[]` row carries
+`thread_id`, `note`, `tasks` (each `path`, 1-based `line`, and nullable
+`block_id`), `turn`, `turn_since`, `action`, and optional `nudge_on`. Actions
+are `held`, `lifted`, `bounced`, `resurfaced`, `deferred_running`,
+`refreshed`, and `unchanged`. A first-seen failure keeps `ok: false`: the
+`results[]` row is present with `status: problem` and the body-free warning
+names the kind. A missing or trashed thread is not an action: it is reported
+once through a `gmail.gone` journal event plus a human and warning row.
+`results[]` rows carry `thread_id`, `note`, `link`, `status`, `task_file`,
+and `route`; `problems[]` rows carry `thread_id`, `note`, `label`, `kind`,
+`message`, `hint`, and `first_seen`. Result statuses are `filed`,
+`would_file`, `adopted`, `already_filed`, `already_pulled`, `problem`,
+`refiled`, and `would_refile`. Archive rows add `decision`, and only dry-run
+and paused runs carry `archive_digest`; `-n` sets `archive_skipped`.
+`-d` is allowed on a non-writer host: the writer pin is live-only. Exit 0 on
+success, no-op, or a quiet contention skip; 1 on a runtime failure, deferred
+work, a first-seen route problem, a paused batch, `confirm_mismatch`, or an
+archive failure, or a quiet busy-skip once live runs have kept skipping for
+more than two hours with no successful run in between; 2 on setup (empty
+label, writer, bad `-l`, `modify_grant`) and auth.
 
 ```bash
 bob gmail sync -d
 bob gmail sync -l 5 -f json
 bob gmail sync -l 0
 bob gmail sync
+bob gmail sync -c DIGEST
 ```
 
 The [phone filing guide](guides/file-email-from-your-phone.md) explains how
@@ -1008,11 +1044,11 @@ config, the writer pin, and journal readability. Rows look like
 - `archive`: on/off, resolved receipt label, `archive_max`, and distinct
   archived and kept outcomes since Monday midnight in the configured
   timezone. A missing modify grant while archive mode is on shows the login
-  hint. The row stays visible as skipped when the account or grant cannot be
-  checked.
+  hint even when the journal also warns; the row stays visible as skipped
+  when the account or grant cannot be checked.
 - `config`: folder, body mode, the sync label and inbox after fallbacks
   (`sync disabled` when the label is empty), the route prefixes (`none` in
-  no-prefix mode), the reply wait in days, and archive settings.
+  no-prefix mode), and the reply wait in days.
 - `routes`: a warning, never a failure. It reads the account's label list once
   and lists every label under a configured prefix that doesn't resolve, one
   `label → kind · hint` line each. When all resolve it shows the routing-label
@@ -1059,9 +1095,12 @@ vault.
 ## Exit status
 
 0 success, 1 runtime failure, 2 usage or setup error. Config errors name the
-key (for example `gmail.account`). A quiet Gmail sync busy-skip is 0 unless
-live runs have kept skipping for more than two hours with no successful run
-in between, in which case it is 1.
+key (for example `gmail.account`). `summary.archived` counts live `archived`
+rows. Exit 2 for setup (`modify_grant`) and auth (`invalid_grant`); exit 1
+for paused batches, `confirm_mismatch`, and any archive failure that keeps
+filing and watch rows. A quiet Gmail sync busy-skip is 0 unless live runs
+have kept skipping for more than two hours with no successful run in between,
+in which case it is 1.
 
 ## JSON output
 
@@ -1072,12 +1111,14 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 `bob gmail sync -f json` prints the schema-1 sync document (`ok`,
 `dry_run`, `pulled`, `results`, `warnings`, `watch`, `problems`, and
 `summary`) plus additive `archive[]`, `archive_hints[]`, `archive_enabled`,
-`archive_label`, and `archive_max`. Archive rows contain exact sorted message
-IDs and task path/line/block-ID locators, never task text. Paused and dry-run
-confirmations add `archive_digest`. Reopen advice is a typed hint, not a watch
-action. `watch[]` and `summary.{watching,awaiting}` are specified under
-[Watch](#watch). See [JSON outputs](reference/json-outputs.md) for the field
-list and status contract.
+`archive_label`, `archive_max`, and `archive_skipped`. Archive rows carry
+`thread_id`, `note`, `action`, `reason`, `decision`, exact sorted message IDs,
+and task path/line/block-ID locators, never task text. Only dry-run and paused
+runs add `archive_digest`. Reopen advice is a typed hint, not a watch action.
+`restored` is reserved and never emitted. `watch[]` and
+`summary.{watching,awaiting,archived}` are specified under [Watch](#watch).
+See [JSON outputs](reference/json-outputs.md) for the field list and status
+contract.
 
 ## Security
 

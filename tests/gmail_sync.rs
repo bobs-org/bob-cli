@@ -989,10 +989,12 @@ fn help_lists_sync_and_hides_the_pull_alias() {
     );
     let options: Vec<&str> = [
         "-b, --bob-dir",
+        "-c, --confirm",
         "-d, --dry-run",
         "-f, --format",
         "-h, --help",
         "-l, --limit",
+        "-n, --no-archive",
         "-q, --quiet",
         "-r, --retry-timeout",
     ]

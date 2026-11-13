@@ -18,7 +18,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .about("Save Gmail threads as inert mail notes, linked from tasks")
         .long_about(
             "Gmail threads you choose become inert, append-only mail notes: \
-             one read-only login through gog, then save threads offline and \
+             a read-only login by default through gog, then save threads offline and \
              link them from tasks. Every send goes through a previewed Gmail \
              draft. The `new` and `reply` commands create local notes without \
              sending. Bare `bob gmail` lists saved threads.",
@@ -84,7 +84,7 @@ fn sync_command() -> ClapCommand {
         .alias("pull")
         .about("File labelled Gmail threads into area or project notes")
         .long_about(
-            "Read the configured Gmail enrollment label (default: bob), save each new thread as a mail note, and append one task linking it from the area or project named by a routing label, or from the configured inbox file when none or an invalid routing label is present (default: gmail_inbox.md). Sync is read-only in Gmail and idempotent by thread identity. `pull` is a hidden alias.",
+            "Read the configured Gmail enrollment label (default: bob), save each new thread as a mail note, and append one task linking it from the area or project named by a routing label, or from the configured inbox file when none or an invalid routing label is present (default: gmail_inbox.md). By default sync leaves Gmail unchanged. With gmail.sync.archive: on and the modify grant, it archives saved messages once every linking task is closed (adds the receipt label, removes INBOX); backlog or batches above archive_max need -c DIGEST from a -d preview; -n skips archiving for one run. Idempotent by thread identity. `pull` is a hidden alias.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -97,7 +97,7 @@ fn sync_command() -> ClapCommand {
         .arg(quiet_arg())
         .arg(retry_timeout_arg())
         .after_help(
-            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n  bob gmail sync -d -c 0123abcd\n  bob gmail sync -n\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
+            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n  bob gmail sync -d -c 0123abcd\n  bob gmail sync -c 0123abcd\n  bob gmail sync -n\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
 }
 
@@ -338,9 +338,9 @@ fn login_command() -> ClapCommand {
              scope (which also permits sending); the gate is the \
              preview/confirm step plus keeping that grant off agent hosts. \
              `-s modify` requests Gmail's broader modify scope for Bob's \
-             label-only archive and explicit restore flow; it does not permit \
-             permanent deletion. Bob's send workflow still requires compose \
-             setup and confirmation.",
+             label-only archive; restore stays manual: Move to Inbox in Gmail; \
+             it does not permit permanent deletion. Bob's send workflow still \
+             requires compose setup and confirmation.",
         )
         .disable_help_flag(true)
         .arg(account_arg())

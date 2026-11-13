@@ -19,6 +19,7 @@ use super::scan::WatchScan;
 use super::watch_apply::{WatchGoneOutcome, WatchThreadOutcome};
 use super::ThreadKey;
 use crate::native::env as bob_env;
+use crate::native::gmail::body::inert_single_line;
 use crate::native::gmail::cli::SyncArgs;
 use crate::native::gmail::route::RouteProblem;
 use crate::native::gmail::{save, ui, GmailError};
@@ -98,21 +99,34 @@ pub(crate) fn archive_restore_hints(
 }
 
 /// One archive preview row: `would_archive`, `kept`, or `paused`. Live
-/// `archived`, `let_go`, and `restored` rows arrive with the apply phase.
+/// `archived`, `kept`, `let_go`, and `restored` rows arrive with the apply phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArchiveRow {
     pub(crate) thread_id: String,
     pub(crate) note: String,
     pub(crate) action: &'static str,
     pub(crate) reason: &'static str,
+    /// What the row would do without the pause: `would_archive` or
+    /// `kept:<reason>`. Live `archived` rows carry `would_archive`,
+    /// live `kept` rows carry `kept:<reason>`, and live `let_go` rows
+    /// carry `let_go`.
+    pub(crate) decision: String,
     pub(crate) messages: Vec<String>,
     pub(crate) tasks: Vec<ArchiveTaskRef>,
+}
+
+fn preview_decision(row: &ArchivePreviewRow) -> String {
+    match &row.decision {
+        PreviewDecision::Archive { .. } => ACTION_WOULD_ARCHIVE.to_string(),
+        PreviewDecision::Kept { reason } => format!("kept:{reason}"),
+    }
 }
 
 impl ArchiveRow {
     /// Map a preview row to its display action. A paused gate rewrites
     /// every actionable row to `paused` with the gate reason: a paused
-    /// batch contains no mutation of any kind.
+    /// batch contains no mutation of any kind. The underlying decision is
+    /// kept so the confirmation shows what each row would do.
     fn from_plan(plan: &ArchivePlan, row: &ArchivePreviewRow) -> Self {
         let (action, reason) = match &plan.gate {
             ArchiveGate::Open { .. } => match &row.decision {
@@ -128,11 +142,13 @@ impl ArchiveRow {
             },
             ArchiveGate::Paused { reason } => (ACTION_PAUSED, *reason),
         };
+        let decision = preview_decision(row);
         ArchiveRow {
             thread_id: row.key.thread_id().to_string(),
             note: row.note.clone(),
             action,
             reason,
+            decision,
             messages: row.messages(),
             tasks: row
                 .tasks
@@ -169,9 +185,10 @@ pub(crate) struct SyncReport {
     pub(crate) first_seen: bool,
     /// Guard or vault lock was busy: exit 0 with no human output.
     pub(crate) busy: bool,
-    /// Read-only archive preview rows (dry-run only until apply lands).
+    /// Archive rows: preview rows on dry-run, live outcomes on live runs.
     pub(crate) archive: Vec<ArchiveRow>,
     /// Canonical digest over the previewed set, when any row is actionable.
+    /// Kept only for dry-run and paused runs; live successful runs omit it.
     pub(crate) archive_digest: Option<String>,
     /// Archive configuration projected for clients in schema 1.
     pub(crate) archive_config: Option<ArchiveConfigSummary>,
@@ -240,7 +257,8 @@ impl SyncReport {
     /// Attach a live archive apply outcome. Filing results are already in
     /// the report; archive rows, digest, warnings, and failure state join
     /// them. A paused batch or any isolated failure fails the run without
-    /// rolling back durable filings.
+    /// rolling back durable filings. The digest is kept only for paused
+    /// batches; live successful runs omit it.
     pub(crate) fn attach_live_archive(
         &mut self,
         rows: Vec<ArchiveRow>,
@@ -252,7 +270,8 @@ impl SyncReport {
     ) {
         self.archive = rows;
         self.archive_hints = hints;
-        if self.archive_digest.is_none() {
+        let paused = self.archive.iter().any(|row| row.action == "paused");
+        if paused && self.archive_digest.is_none() {
             self.archive_digest = digest;
         }
         self.warnings.extend(warnings);
@@ -473,13 +492,18 @@ fn print_archive_preview(styler: &Styler, report: &SyncReport, quiet: bool) {
             println!(
                 "  {}",
                 styler.blue(&format!(
-                    "↩ reopened {} → {} (archived mail stays in Gmail; move it to Inbox to restore it)",
-                    hint.thread_id, hint.note
+                    "↩ reopened {} → {} (archived mail stays in Gmail; restore stays manual: Move to Inbox in Gmail)",
+                    hint.thread_id,
+                    inert_single_line(&hint.note)
                 ))
             );
         }
     }
-    if let Some(digest) = &report.archive_digest {
+    // The digest is only meaningful for dry-run and paused runs. A quiet
+    // live run whose rows are silent must not leak it.
+    let show_digest = report.dry_run
+        || report.archive.iter().any(|row| row.action == ACTION_PAUSED);
+    if show_digest && let Some(digest) = &report.archive_digest {
         shown = true;
         println!("  {}", styler.dim(&format!("archive digest {digest}")));
         if report.archive.iter().any(|row| row.action == ACTION_PAUSED) {
@@ -504,31 +528,63 @@ fn archive_human_row(row: &ArchiveRow) -> Option<String> {
     } else {
         format!("{} messages", row.messages.len())
     };
+    let note = inert_single_line(&row.note);
+    let dest = if note.is_empty() {
+        String::new()
+    } else {
+        format!(" → {note}")
+    };
     match row.action {
         ACTION_WOULD_ARCHIVE => Some(format!(
-            "✉ would archive {} → {} ({messages})",
-            row.thread_id, row.note
+            "✉ would archive {}{dest} ({messages})",
+            row.thread_id,
         )),
-        "archived" => Some(format!(
-            "✉ archived {} → {} ({messages})",
-            row.thread_id, row.note
-        )),
-        "let_go" => Some(format!(
-            "✉ back in inbox {} ({}) → {}",
-            row.thread_id, row.reason, row.note
-        )),
-        "restored" => Some(format!(
-            "✉ restored {} → {} ({messages})",
-            row.thread_id, row.note
-        )),
-        ACTION_KEPT => Some(format!(
-            "✉ kept {} ({}) → {}",
-            row.thread_id, row.reason, row.note
-        )),
-        ACTION_PAUSED => Some(format!(
-            "⏸ paused {} ({}) → {}",
-            row.thread_id, row.reason, row.note
-        )),
+        "archived" => {
+            Some(format!("✉ archived {}{dest} ({messages})", row.thread_id,))
+        }
+        "let_go" => {
+            if dest.is_empty() {
+                Some(format!(
+                    "✉ back in inbox {} ({})",
+                    row.thread_id, row.reason,
+                ))
+            } else {
+                Some(format!(
+                    "✉ back in inbox {} ({}){dest}",
+                    row.thread_id, row.reason,
+                ))
+            }
+        }
+        "restored" => {
+            Some(format!("✉ restored {}{dest} ({messages})", row.thread_id,))
+        }
+        ACTION_KEPT => {
+            if dest.is_empty() {
+                Some(format!("✉ kept {} ({})", row.thread_id, row.reason,))
+            } else {
+                Some(
+                    format!("✉ kept {} ({}){dest}", row.thread_id, row.reason,),
+                )
+            }
+        }
+        ACTION_PAUSED => {
+            let decision = if row.decision.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", row.decision)
+            };
+            if dest.is_empty() {
+                Some(format!(
+                    "⏸ paused {} ({}{decision})",
+                    row.thread_id, row.reason,
+                ))
+            } else {
+                Some(format!(
+                    "⏸ paused {} ({}{decision}){dest}",
+                    row.thread_id, row.reason,
+                ))
+            }
+        }
         _ => None,
     }
 }
@@ -572,6 +628,7 @@ fn json_document(report: &SyncReport) -> Value {
                 "note": row.note,
                 "action": row.action,
                 "reason": row.reason,
+                "decision": row.decision,
                 "messages": row.messages,
                 "tasks": row.tasks.iter().map(|task| {
                     json!({
@@ -596,7 +653,7 @@ fn json_document(report: &SyncReport) -> Value {
             "kind": hint.kind,
             "thread_id": hint.thread_id,
             "note": hint.note,
-            "message": "Task reopened; archived mail stays in Gmail. Move it to Inbox in Gmail to restore it.",
+            "message": "Task reopened; archived mail stays in Gmail; restore stays manual: Move to Inbox in Gmail.",
         })).collect::<Vec<_>>(),
         "summary": {
             "watching": report.watching,
@@ -609,8 +666,15 @@ fn json_document(report: &SyncReport) -> Value {
         },
         "warnings": report.warnings,
     });
-    if let Some(digest) = &report.archive_digest {
+    // The digest is only meaningful for dry-run and paused runs. A quiet
+    // live run whose rows are silent must not leak it.
+    let show_digest = report.dry_run
+        || report.archive.iter().any(|row| row.action == "paused");
+    if show_digest && let Some(digest) = &report.archive_digest {
         document["archive_digest"] = json!(digest);
+    }
+    if report.archive_skipped {
+        document["archive_skipped"] = json!(true);
     }
     if let Some(config) = &report.archive_config {
         document["archive_enabled"] = json!(config.enabled);
@@ -998,7 +1062,7 @@ mod tests {
     fn archive_json_is_additive_and_contains_only_ids_and_task_locators() {
         let report = SyncReport {
             ok: true,
-            dry_run: false,
+            dry_run: true,
             pulled: 0,
             results: Vec::new(),
             watch: Vec::new(),
@@ -1014,6 +1078,7 @@ mod tests {
                 note: "mail/2026/aa01.md".into(),
                 action: "archived",
                 reason: "eligible",
+                decision: "would_archive".to_string(),
                 messages: vec!["00000000000000a0".into()],
                 tasks: vec![ArchiveTaskRef {
                     path: "job.md".into(),
@@ -1060,6 +1125,7 @@ mod tests {
             note: "mail/2026/aa01.md".into(),
             action: ACTION_KEPT,
             reason: KEPT_MANUAL,
+            decision: format!("kept:{KEPT_MANUAL}"),
             messages: Vec::new(),
             tasks: Vec::new(),
         };
@@ -1091,6 +1157,7 @@ mod tests {
             archive: vec![ArchiveRow {
                 action: "let_go",
                 reason: "replied",
+                decision: "let_go".to_string(),
                 ..manual
             }],
             archive_digest: None,
@@ -1644,5 +1711,137 @@ mod tests {
         assert_eq!(live_report.pulled, 1);
         assert!(dry_report.dry_run);
         assert!(!live_report.dry_run);
+    }
+
+    fn surfaces_row(
+        action: &'static str,
+        reason: &'static str,
+        decision: &str,
+    ) -> ArchiveRow {
+        ArchiveRow {
+            thread_id: "aa01".into(),
+            note: "mail/2026/aa01.md".into(),
+            action,
+            reason,
+            decision: decision.to_string(),
+            messages: vec!["00000000000000a0".into()],
+            tasks: vec![ArchiveTaskRef {
+                path: "job.md".into(),
+                line: 12,
+                block_id: Some("follow-up".into()),
+            }],
+        }
+    }
+
+    fn surfaces_report(
+        dry_run: bool,
+        rows: Vec<ArchiveRow>,
+        digest: Option<String>,
+    ) -> SyncReport {
+        SyncReport {
+            ok: true,
+            dry_run,
+            pulled: 0,
+            results: Vec::new(),
+            watch: Vec::new(),
+            gone: Vec::new(),
+            problems: Vec::new(),
+            warnings: Vec::new(),
+            watching: 0,
+            awaiting: 0,
+            first_seen: false,
+            busy: false,
+            archive: rows,
+            archive_digest: digest,
+            archive_config: None,
+            archive_hints: Vec::new(),
+            archive_skipped: false,
+            archive_error: None,
+        }
+    }
+
+    #[test]
+    fn live_success_omits_digest_in_json_and_hides_quiet_leak() {
+        let live = surfaces_report(
+            false,
+            vec![surfaces_row("archived", "eligible", "would_archive")],
+            Some("abcd".into()),
+        );
+        let value = json_document(&live);
+        assert!(
+            value.get("archive_digest").is_none(),
+            "live success omits digest: {value}"
+        );
+        assert_eq!(value["archive"][0]["decision"], "would_archive");
+    }
+
+    #[test]
+    fn dry_run_and_paused_runs_keep_digest() {
+        let dry = surfaces_report(
+            true,
+            vec![surfaces_row("would_archive", "eligible", "would_archive")],
+            Some("abcd".into()),
+        );
+        assert_eq!(
+            json_document(&dry)["archive_digest"],
+            "abcd",
+            "dry-run keeps digest"
+        );
+        let paused = surfaces_report(
+            false,
+            vec![surfaces_row(
+                "paused",
+                "backlog_unconfirmed",
+                "would_archive",
+            )],
+            Some("abcd".into()),
+        );
+        assert_eq!(
+            json_document(&paused)["archive_digest"],
+            "abcd",
+            "paused keeps digest"
+        );
+    }
+
+    #[test]
+    fn paused_rows_show_gate_reason_and_decision_without_dangling_arrow() {
+        let row =
+            surfaces_row("paused", "backlog_unconfirmed", "would_archive");
+        let line = archive_human_row(&row).expect("paused row");
+        assert!(line.contains("backlog_unconfirmed"), "{line}");
+        assert!(line.contains("would_archive"), "{line}");
+        assert!(line.contains("mail/2026/aa01.md"), "{line}");
+        assert!(!line.trim_end().ends_with('→'), "{line}");
+        let kept = surfaces_row("paused", "over_limit", "kept:unsaved");
+        let line = archive_human_row(&kept).expect("paused kept");
+        assert!(line.contains("kept:unsaved"), "{line}");
+    }
+
+    #[test]
+    fn kept_and_let_go_rows_render_note_without_dangling_arrow() {
+        let kept = surfaces_row("kept", "unsaved", "kept:unsaved");
+        let line = archive_human_row(&kept).expect("kept row");
+        assert!(line.contains("mail/2026/aa01.md"), "{line}");
+        assert!(!line.trim_end().ends_with('→'), "{line}");
+        let let_go = surfaces_row("let_go", "replied", "let_go");
+        let line = archive_human_row(&let_go).expect("let-go row");
+        assert!(line.contains("back in inbox"), "{line}");
+        assert!(line.contains("mail/2026/aa01.md"), "{line}");
+        assert!(!line.trim_end().ends_with('→'), "{line}");
+        let value = json_document(&surfaces_report(false, vec![kept], None));
+        assert_eq!(value["archive"][0]["note"], "mail/2026/aa01.md");
+        assert_eq!(
+            value["archive"][0]["messages"],
+            serde_json::json!(["00000000000000a0"])
+        );
+        assert_eq!(value["archive"][0]["tasks"][0]["path"], "job.md");
+    }
+
+    #[test]
+    fn no_archive_skip_serializes_additively() {
+        let mut report = surfaces_report(false, Vec::new(), None);
+        report.archive_skipped = true;
+        let value = json_document(&report);
+        assert_eq!(value["archive_skipped"], true);
     }
 }
