@@ -58,7 +58,8 @@ In the month note, Ctrl+Enter on a waiting row opens the Category card.
 Bob's suggestion is highlighted: ↵ (or a second Ctrl+Enter) accepts it, a
 letter picks another category, Space files the row with no category, and
 Esc cancels. Each filing ticks the row and writes `[cat:: key]` in one
-undo step, then lands the cursor on the next waiting row. After the last
+undo step. The card stays open on the next waiting row, so the next key
+files it, and Esc leaves the cursor there. After the last
 row, a notice reports the session (rows, time, and accepted / picked /
 no-category counts) and names any other months that still hold waiting
 rows.
