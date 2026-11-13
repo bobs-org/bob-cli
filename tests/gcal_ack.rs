@@ -3,7 +3,8 @@
 mod gcal_support;
 
 use gcal_support::{
-    json_stdout, run_gcal, stderr, stdout, FakeGog, GcalEnv, ACCOUNT,
+    json_stdout, run_gcal, run_gcal_stdin, stderr, stdout, FakeGog, GcalEnv,
+    ACCOUNT,
 };
 use serde_json::{json, Value};
 use std::{fs, fs::OpenOptions, io::Write};
@@ -377,4 +378,634 @@ fn ack_selector_keeps_literal_note_query_and_scope_format_are_choices() {
     assert_eq!(contradictory.status.code(), Some(2));
     assert!(stderr(&contradictory)
         .contains("cannot be combined with a title query"));
+}
+
+// ---------- terminal review session ----------
+//
+// `BOB_GCAL_ASSUME_TTY` treats piped stdin as the session's key stream; the
+// session reads keys and cooked lines unbuffered from the same descriptor,
+// so these tests drive it with exact bytes.
+
+fn session_events() -> String {
+    json!({"events": [
+        timed_event("task-1", "Budget review", "2026-10-31T13:00:00-04:00", "2026-10-31T13:30:00-04:00"),
+        timed_event("task-2", "Hiring sync", "2026-11-02T13:00:00-05:00", "2026-11-02T13:30:00-05:00"),
+    ], "nextPageToken": null})
+    .to_string()
+}
+
+fn recurring_pair() -> Vec<Value> {
+    let event = |id: &str, start: &str, end: &str| {
+        json!({
+            "id": id,
+            "summary": "Little Gym",
+            "status": "confirmed",
+            "recurringEventId": "gym-series",
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+            "organizer": {"displayName": "Kelly", "email": "kelly@example.com", "self": false},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+        })
+    };
+    vec![
+        event(
+            "gym-1",
+            "2026-10-31T09:15:00-04:00",
+            "2026-10-31T10:00:00-04:00",
+        ),
+        event(
+            "gym-2",
+            "2026-11-03T09:15:00-05:00",
+            "2026-11-03T10:00:00-05:00",
+        ),
+    ]
+}
+
+fn journal_text(env: &GcalEnv) -> String {
+    fs::read_to_string(env.vault().join(".bob/gcal/test-host.jsonl"))
+        .expect("read session journal")
+}
+
+fn ack_receipts(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|value| value["kind"] == "gcal.ack")
+        .collect()
+}
+
+fn note_records(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|value| value["kind"] == "gcal.note")
+        .collect()
+}
+
+/// Spawn `bob gcal` with piped stdin, writing each chunk after its delay so
+/// separately timed presses stay distinct from one held-key burst.
+fn run_gcal_script(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    writes: &[(&str, u64)],
+) -> std::process::Output {
+    use std::process::Stdio;
+    let mut command = env.command();
+    fake.install(&mut command);
+    command.arg("gcal");
+    for arg in args {
+        command.arg(arg);
+    }
+    command.env("BOB_GCAL_ASSUME_TTY", "1");
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn bob gcal");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    for (chunk, delay_ms) in writes {
+        std::thread::sleep(std::time::Duration::from_millis(*delay_ms));
+        if let Err(error) = stdin.write_all(chunk.as_bytes()) {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "write stdin"
+            );
+            break;
+        }
+    }
+    drop(stdin);
+    child.wait_with_output().expect("wait for bob gcal")
+}
+
+fn write_exec_script(env: &GcalEnv, name: &str, body: &str) -> String {
+    let path = env.vault().join(name);
+    fs::write(&path, body).expect("write helper script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions =
+            fs::metadata(&path).expect("stat helper").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("chmod helper");
+    }
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn session_ack_then_quit_saves_first_answer() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-quit");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output =
+        run_gcal_script(&env, &fake, &["ack"], &[], &[("a", 400), ("q", 600)]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ Acked Budget review · event scope"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ 1 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("→ 1 remaining · rerun `bob gcal ack`"),
+        "{errors}"
+    );
+    let receipts = ack_receipts(&journal_text(&env));
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0]["key"]["event_id"], "task-1");
+}
+
+#[test]
+fn session_quit_reports_nothing_saved() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-empty-quit");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "q");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("Budget review"), "{errors}");
+    assert!(errors.contains("─ 1 of 2 ─"), "{errors}");
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped · 0 series-covered"),
+        "{errors}"
+    );
+    assert!(errors.contains("→ 2 remaining"), "{errors}");
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_return_is_inert_and_eof_quits() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-return");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(errors.contains("→ 2 remaining"), "{errors}");
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_ctrl_c_byte_exits_130_after_saving() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-int");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_script(
+        &env,
+        &fake,
+        &["ack"],
+        &[],
+        &[("a", 400), ("\x03", 600)],
+    );
+    assert_eq!(output.status.code(), Some(130), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ 1 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(errors.contains("→ 1 remaining"), "{errors}");
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), 1);
+}
+
+#[test]
+fn session_skip_returns_next_run() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-skip");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "sq");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("→ Skipped Budget review · returns next run"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 1 skipped"),
+        "{errors}"
+    );
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+    let listed = run_gcal(&env, &fake, &["ack", "-l", "-f", "json"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert_eq!(json_stdout(&listed)["counts"]["queue"], 2);
+}
+
+#[test]
+fn session_recurring_ack_defaults_to_all_events() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-series");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": recurring_pair(), "nextPageToken": null}).to_string(),
+    );
+    // Empty scope answer takes the All events default: the sibling instance
+    // leaves the queue as series-covered, never as a manual ack.
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "a\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ Acked Little Gym · series scope"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ 1 acked · 0 noted · 0 skipped · 1 series-covered"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ queue complete for this window"),
+        "{errors}"
+    );
+    let receipts = ack_receipts(&journal_text(&env));
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0]["scope"], "series");
+    assert_eq!(receipts[0]["key"]["series"], "gym-series");
+}
+
+#[test]
+fn session_recurring_ack_event_scope_keeps_sibling() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-event-scope");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": recurring_pair(), "nextPageToken": null}).to_string(),
+    );
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "a1\nq");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ Acked Little Gym · event scope"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ 1 acked · 0 noted · 0 skipped · 0 series-covered"),
+        "{errors}"
+    );
+    assert!(errors.contains("→ 1 remaining"), "{errors}");
+    let receipts = ack_receipts(&journal_text(&env));
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0]["scope"], "event");
+    assert_eq!(receipts[0]["key"]["event_id"], "gym-1");
+}
+
+#[test]
+fn session_recurring_scope_eof_quits_cleanly() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-scope-eof");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": recurring_pair(), "nextPageToken": null}).to_string(),
+    );
+    // EOF inside the This-event scope prompt quits the session without an
+    // answer and without touching the journal.
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "n");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(errors.contains("→ 2 remaining"), "{errors}");
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_note_line_saves_and_answers() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-note");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "nBring snacks\nq");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ Noted Budget review · event scope · acked"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ 0 acked · 1 noted · 0 skipped"),
+        "{errors}"
+    );
+    let notes = note_records(&journal_text(&env));
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0]["text"].as_str().unwrap().contains("Bring snacks"));
+}
+
+#[test]
+fn session_empty_note_returns_to_card() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-empty-note");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "n\nq");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("unchanged · nothing was saved"), "{errors}");
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_invalid_note_offer_decline_stays() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-invalid");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let noop = write_exec_script(&env, "noop-editor.sh", "#!/bin/sh\nexit 0\n");
+    let output = run_gcal_script(
+        &env,
+        &fake,
+        &["ack"],
+        &[("VISUAL", &noop)],
+        &[("n@no-such-root-xyz\n", 400), ("n\n", 400), ("q", 400)],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("Open the editor with this draft? [Y/n]"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_invalid_note_decline_keeps_no_record() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-invalid-decline");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let noop = write_exec_script(&env, "noop-editor.sh", "#!/bin/sh\nexit 0\n");
+    let output = run_gcal_script(
+        &env,
+        &fake,
+        &["ack"],
+        &[("VISUAL", &noop)],
+        &[
+            ("n@no-such-root-xyz\n", 400),
+            ("\n", 400),
+            ("n\n", 400),
+            ("q", 400),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("Edit again? [Y/n]"), "{errors}");
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_editor_appends_valid_text() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-editor");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let append = write_exec_script(
+        &env,
+        "append-editor.sh",
+        "#!/bin/sh\n{ printf 'Bring snacks\\n'; cat \"$1\"; } > \"$1.new\" && mv \"$1.new\" \"$1\"\n",
+    );
+    let output = run_gcal_script(
+        &env,
+        &fake,
+        &["ack"],
+        &[("VISUAL", &append)],
+        &[("e", 400)],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ Noted Budget review · event scope · acked"),
+        "{errors}"
+    );
+    let notes = note_records(&journal_text(&env));
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0]["text"].as_str().unwrap().contains("Bring snacks"));
+}
+
+#[test]
+fn session_editor_failure_stays_on_card() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-editor-fail");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_script(
+        &env,
+        &fake,
+        &["ack"],
+        &[("VISUAL", "/bin/false")],
+        &[("e", 400)],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("could not open the editor"), "{errors}");
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_adopt_answers_from_google_description() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-adopt");
+    prepare(&env);
+    let mut event = timed_event(
+        "drive-1",
+        "Airport pickup",
+        "2026-10-31T13:00:00-04:00",
+        "2026-10-31T13:30:00-04:00",
+    );
+    event["description"] = json!("-30 Drive to the airport");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({"events": [event], "nextPageToken": null}).to_string(),
+    );
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "A");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("press A to adopt")
+            || errors.contains("⚑ Google description"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ Noted Airport pickup · event scope · acked"),
+        "{errors}"
+    );
+    let notes = note_records(&journal_text(&env));
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0]["text"].as_str().unwrap().contains("-30"));
+}
+
+#[test]
+fn session_adopt_unavailable_stays_on_card() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-no-adopt");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "Aq");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("no Google description lines to adopt"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+}
+
+#[test]
+fn session_help_and_open_preserve_state() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-open");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    let out_file = env.vault().join("browser.out");
+    let browser = write_exec_script(
+        &env,
+        "record-browser.sh",
+        "#!/bin/sh\necho \"$1\" >> \"$BOB_GCAL_FAKE_BROWSER_OUT\"\n",
+    );
+    let output = run_gcal_script(
+        &env,
+        &fake,
+        &["ack"],
+        &[
+            ("BOB_GCAL_BROWSER", browser.as_str()),
+            (
+                "BOB_GCAL_FAKE_BROWSER_OUT",
+                out_file.to_string_lossy().as_ref(),
+            ),
+        ],
+        &[("?", 400), ("o", 500), ("q", 900)],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("a  ack this event"), "{errors}");
+    assert!(errors.contains("↗ Opened https://calendar.google.com/event?eid=task-1 in a browser"), "{errors}");
+    assert!(
+        errors.contains("✓ 0 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(!env.vault().join(".bob/gcal/test-host.jsonl").exists());
+    let mut seen = String::new();
+    for _ in 0..50 {
+        seen = fs::read_to_string(&out_file).unwrap_or_default();
+        if seen.contains("task-1") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(seen.contains("task-1"), "browser saw no URL: {seen:?}");
+}
+
+#[test]
+fn session_burst_repeats_answer_only_once() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-burst");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    // One held-key burst arrives all at once: only the visible card answers.
+    let output = run_gcal_stdin(&env, &fake, &["ack"], "aaaq");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ 1 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(errors.contains("→ 1 remaining"), "{errors}");
+    let receipts = ack_receipts(&journal_text(&env));
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0]["key"]["event_id"], "task-1");
+}
+
+#[test]
+fn session_timed_presses_answer_each_card() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-timed");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    // The same key pressed with settling time between cards answers twice,
+    // proving the debounce only drops in-flight repeats.
+    let output =
+        run_gcal_script(&env, &fake, &["ack"], &[], &[("a", 400), ("a", 800)]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("✓ 2 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("✓ queue complete for this window"),
+        "{errors}"
+    );
+    assert_eq!(ack_receipts(&journal_text(&env)).len(), 2);
+}
+
+#[test]
+fn session_write_failure_keeps_earlier_answers() {
+    let env = GcalEnv::new("bob-cli-gcal-ack-session-failure");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&session_events());
+    use std::process::Stdio;
+    let mut command = env.command();
+    fake.install(&mut command);
+    command.args(["gcal", "ack"]);
+    command.env("BOB_GCAL_ASSUME_TTY", "1");
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn bob gcal");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    stdin.write_all(b"a").expect("answer first card");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let journal_dir = env.vault().join(".bob/gcal");
+    let journal_file = fs::read_dir(&journal_dir)
+        .expect("read journal dir")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .find(|path| path.is_file())
+        .expect("one journal file after the first answer");
+    fs::remove_file(&journal_file).expect("remove journal file");
+    fs::create_dir(&journal_file).expect("block the journal path");
+    stdin.write_all(b"a").expect("answer second card");
+    drop(stdin);
+    let output = child.wait_with_output().expect("wait for bob gcal");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("append gcal ack receipt"), "{errors}");
+    assert!(
+        errors.contains("✓ 1 acked · 0 noted · 0 skipped"),
+        "{errors}"
+    );
+    fs::remove_dir(&journal_file).expect("unblock the journal path");
 }

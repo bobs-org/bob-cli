@@ -863,7 +863,10 @@ fn browser_denied(ui: &LoginUi) -> Result<PasteOutcome, GoogleError> {
     retry_or_quit(ui, consent_denied(ui.service()))
 }
 
-fn spawn_opener(url: &str, service: GoogleService) -> io::Result<Child> {
+pub(crate) fn spawn_opener(
+    url: &str,
+    service: GoogleService,
+) -> io::Result<Child> {
     let program: PathBuf = if let Some(override_cmd) =
         bob_env::var_os(service.browser_override_env)
             .filter(|value| !value.is_empty())

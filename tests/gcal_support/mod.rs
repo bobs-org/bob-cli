@@ -121,6 +121,82 @@ impl GcalEnv {
         self.dir.path()
     }
 
+    /// The explicit child environment [`command`](Self::command) installs,
+    /// exposed so PTY tests can `exec` with the identical environment.
+    pub(crate) fn env_pairs(
+        &self,
+    ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        let path = std::env::var_os("PATH");
+        let tmpdir = std::env::var_os("TMPDIR");
+        let ld_library_path = std::env::var_os("LD_LIBRARY_PATH");
+        let mut pairs = Vec::new();
+        // Join PATH manually: the ambient PATH may hold entries that
+        // `join_paths` refuses, and `:` separates PATH on every platform
+        // these tests run on.
+        let shim = support_bin_dir();
+        match path {
+            Some(path) if !path.is_empty() => {
+                let mut joined = shim.into_os_string();
+                joined.push(":");
+                joined.push(path);
+                pairs.push(("PATH".into(), joined));
+            }
+            _ => {
+                pairs.push(("PATH".into(), shim.into_os_string()));
+            }
+        }
+        if let Some(tmpdir) = tmpdir {
+            pairs.push(("TMPDIR".into(), tmpdir));
+        }
+        if let Some(ld_library_path) = ld_library_path {
+            pairs.push(("LD_LIBRARY_PATH".into(), ld_library_path));
+        }
+        pairs.extend(
+            [
+                ("BOB_DIR", self.vault().as_os_str()),
+                ("BOB_CONFIG_FILE", self.config().as_os_str()),
+                ("HOSTNAME", std::ffi::OsStr::new(HOST)),
+                ("BOB_NOW", std::ffi::OsStr::new(NOW)),
+                ("BOB_GCAL_CONSENT_SECS", std::ffi::OsStr::new("20")),
+                ("NO_COLOR", std::ffi::OsStr::new("1")),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.to_os_string())),
+        );
+        pairs.extend(
+            [
+                (
+                    "BOB_VAULT_SYNC_LOCK_FILE",
+                    self.dir.path().join("bob_sync.lock").into_os_string(),
+                ),
+                (
+                    "BOB_VAULT_SYNC_STATE_FILE",
+                    self.dir.path().join("vault-sync.json").into_os_string(),
+                ),
+                ("BOB_REF_INTAKE_LOCK_WAIT_SECONDS", "0".into()),
+                (
+                    "XDG_STATE_HOME",
+                    self.dir.path().join("state").into_os_string(),
+                ),
+                ("HOME", self.dir.path().join("home").into_os_string()),
+                ("GIT_CONFIG_NOSYSTEM", "1".into()),
+                ("GIT_CONFIG_GLOBAL", "/dev/null".into()),
+                ("GIT_CONFIG_SYSTEM", "/dev/null".into()),
+                ("BOB_HIGHLIGHTS_RESOLVE", "*=203.0.113.1".into()),
+                (
+                    "BOB_WEB_CLIP_ADAPTER",
+                    "/definitely/missing/bob-cli-test-web-clip-adapter".into(),
+                ),
+                ("BOB_HIGHLIGHTS_CURL", "/bin/false".into()),
+            ]
+            .into_iter()
+            .map(|(key, value): (&str, std::ffi::OsString)| {
+                (std::ffi::OsString::from(key), value)
+            }),
+        );
+        pairs
+    }
+
     pub(crate) fn write_config(&self, text: &str) {
         fs::write(&self.config, text).expect("write gcal config");
     }
@@ -138,9 +214,6 @@ impl GcalEnv {
     /// Tests that mean SSH, display, or browser set them explicitly.
     pub(crate) fn command(&self) -> Command {
         let mut command = Command::new(BOB_BIN);
-        let path = std::env::var_os("PATH");
-        let tmpdir = std::env::var_os("TMPDIR");
-        let ld_library_path = std::env::var_os("LD_LIBRARY_PATH");
         command.env_clear();
         for key in [
             "SSH_CONNECTION",
@@ -151,54 +224,9 @@ impl GcalEnv {
         ] {
             command.env_remove(key);
         }
-        let shim = support_bin_dir();
-        match path {
-            Some(path) if !path.is_empty() => {
-                // Join manually: the ambient PATH may hold entries that
-                // `join_paths` refuses, and `:` separates PATH on every
-                // platform these tests run on.
-                let mut joined = shim.into_os_string();
-                joined.push(":");
-                joined.push(path);
-                command.env("PATH", joined);
-            }
-            _ => {
-                command.env("PATH", shim);
-            }
+        for (key, value) in self.env_pairs() {
+            command.env(key, value);
         }
-        if let Some(tmpdir) = tmpdir {
-            command.env("TMPDIR", tmpdir);
-        }
-        if let Some(ld_library_path) = ld_library_path {
-            command.env("LD_LIBRARY_PATH", ld_library_path);
-        }
-        command
-            .env("BOB_DIR", self.vault())
-            .env("BOB_CONFIG_FILE", self.config())
-            .env("HOSTNAME", HOST)
-            .env("BOB_NOW", NOW)
-            .env("BOB_GCAL_CONSENT_SECS", "20")
-            .env("NO_COLOR", "1")
-            .env(
-                "BOB_VAULT_SYNC_LOCK_FILE",
-                self.dir.path().join("bob_sync.lock"),
-            )
-            .env(
-                "BOB_VAULT_SYNC_STATE_FILE",
-                self.dir.path().join("vault-sync.json"),
-            )
-            .env("BOB_REF_INTAKE_LOCK_WAIT_SECONDS", "0")
-            .env("XDG_STATE_HOME", self.dir.path().join("state"))
-            .env("HOME", self.dir.path().join("home"))
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("BOB_HIGHLIGHTS_RESOLVE", "*=203.0.113.1")
-            .env(
-                "BOB_WEB_CLIP_ADAPTER",
-                "/definitely/missing/bob-cli-test-web-clip-adapter",
-            )
-            .env("BOB_HIGHLIGHTS_CURL", "/bin/false");
         command
     }
 
@@ -329,20 +357,40 @@ impl FakeGog {
         fs::write(&self.events, text).expect("write fake event snapshot");
     }
 
+    /// The fake-gog environment [`install`](Self::install) sets, exposed so
+    /// PTY tests can `exec` with the identical environment.
+    pub(crate) fn env_pairs(
+        &self,
+    ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        [
+            ("BOB_GCAL_GOG", self.path.as_os_str()),
+            ("BOB_GCAL_FAKE_LOG", self.log.as_os_str()),
+            ("BOB_GCAL_FAKE_STATE", self.state.as_os_str()),
+            ("BOB_GCAL_FAKE_EVENTS", self.events.as_os_str()),
+            ("BOB_GCAL_FAKE_EVENT_DIR", self.event_dir.as_os_str()),
+            ("BOB_GCAL_FAKE_HOME", self.home.as_os_str()),
+            ("BOB_GCAL_FAKE_STDIN_LOG", self.stdin_log.as_os_str()),
+            ("BOB_GCAL_FAKE_ENV_LOG", self.env_log.as_os_str()),
+        ]
+        .into_iter()
+        .map(|(key, value)| {
+            (std::ffi::OsString::from(key), value.to_os_string())
+        })
+        .chain([(
+            std::ffi::OsString::from("BOB_GCAL_FAKE_SCENARIO"),
+            std::ffi::OsString::from(&self.scenario),
+        )])
+        .collect()
+    }
+
     pub(crate) fn install<'a>(
         &self,
         command: &'a mut Command,
     ) -> &'a mut Command {
+        for (key, value) in self.env_pairs() {
+            command.env(key, value);
+        }
         command
-            .env("BOB_GCAL_GOG", &self.path)
-            .env("BOB_GCAL_FAKE_LOG", &self.log)
-            .env("BOB_GCAL_FAKE_STATE", &self.state)
-            .env("BOB_GCAL_FAKE_EVENTS", &self.events)
-            .env("BOB_GCAL_FAKE_EVENT_DIR", &self.event_dir)
-            .env("BOB_GCAL_FAKE_HOME", &self.home)
-            .env("BOB_GCAL_FAKE_STDIN_LOG", &self.stdin_log)
-            .env("BOB_GCAL_FAKE_ENV_LOG", &self.env_log)
-            .env("BOB_GCAL_FAKE_SCENARIO", &self.scenario)
     }
 
     pub(crate) fn calls(&self) -> Vec<Vec<String>> {

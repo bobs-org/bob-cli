@@ -325,6 +325,107 @@ pub(super) fn write_one<S: HomeSource>(
     })
 }
 
+/// What the ack review session saved, without the note command's printing.
+///
+/// The session renders its own cards and summaries, so it calls this instead
+/// of `write_one`: the same TEXT grammar, validation, preview/SEED helpers,
+/// append, and guarded application run byte-for-byte, but nothing is printed
+/// and interactive scope/editor prompts stay with the caller.
+pub(crate) struct SessionNoteSave {
+    pub(crate) unchanged: bool,
+    pub(crate) newly_acked: bool,
+    pub(crate) warnings: Vec<String>,
+}
+
+/// Saved private-note text in one scope, ignoring cleared records.
+pub(crate) fn note_text_for(
+    candidate: &NoteCandidate,
+    book: &journal::NoteBook,
+    account: &str,
+    scope: NoteScope,
+) -> String {
+    note_for_scope(candidate, book, account, scope)
+        .filter(|note| !note.cleared)
+        .map(|note| note.text.clone())
+        .unwrap_or_default()
+}
+
+/// Persist session-entered note `text` through the shared write path.
+///
+/// `scope` is already resolved by the session's own prompt. Validation
+/// failures surface as `Err` with kind `invalid_note` carrying the joined
+/// messages, so the session can keep the draft and offer its editor.
+pub(crate) fn save_session_note<S: HomeSource>(
+    candidate: &NoteCandidate,
+    vault: &std::path::Path,
+    config: &GcalConfig,
+    account: &str,
+    scope: NoteScope,
+    text: &str,
+    resolver: &mut HomeResolver<S>,
+    related_days: &[chrono::NaiveDate],
+) -> Result<SessionNoteSave, GcalError> {
+    let (book, mut warnings) = journal::load_notes(vault).unwrap_or_default();
+    let current = note_text_for(candidate, &book, account, scope);
+    let mut note = normalize(text);
+    validate(&mut note, vault, candidate.day);
+    refresh_invalid_spans(&mut note);
+    if !note.errors.is_empty() {
+        let message = note
+            .errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(GcalError::setup("invalid_note", message)
+            .with_hint("fix the note text and try again"));
+    }
+    if note.canonical.is_empty() {
+        return Err(GcalError::setup(
+            "invalid_note",
+            "a private note needs at least one directive, reason, or prose line"
+                .to_string(),
+        )
+        .with_hint("write a note, or leave the card with `s`"));
+    }
+    if current == note.canonical {
+        return Ok(SessionNoteSave {
+            unchanged: true,
+            newly_acked: false,
+            warnings,
+        });
+    }
+    let rebuilt = rebuild_candidate(
+        candidate,
+        config,
+        vault,
+        resolver,
+        account,
+        &book,
+        scope,
+        Some(&note.canonical),
+    )?;
+    let newly_acked = was_unacked(config, vault, account, &rebuilt);
+    append(&rebuilt, vault, account, scope, note.canonical)?;
+    let mut affected = related_days.to_vec();
+    affected.push(candidate.day);
+    affected.sort_unstable();
+    affected.dedup();
+    let (_, _, _, sync_warnings) = apply_if_possible(
+        config,
+        vault,
+        &rebuilt,
+        &affected,
+        scope == NoteScope::Series,
+    );
+    warnings.extend(sync_warnings);
+    Ok(SessionNoteSave {
+        unchanged: false,
+        newly_acked,
+        warnings,
+    })
+}
+
 fn note_for_scope<'a>(
     candidate: &NoteCandidate,
     book: &'a journal::NoteBook,
