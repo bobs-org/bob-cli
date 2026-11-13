@@ -8,6 +8,7 @@
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
 use super::{
+    archive_apply,
     archive_preview::{self, PreviewInput},
     archive_scan::scan_archive_evidence,
     archive_state::{ArchiveJournal, ArchiveLabelIdentity},
@@ -427,6 +428,23 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     {
         return Err(GmailError::runtime("stale", message));
     }
+    // Live archive runs after durable filing/watch application and before
+    // final report/health settlement. Filing commits are already durable;
+    // archive failures never roll them back.
+    let live_archive = if !args.dry_run && !outcome.busy {
+        let watch_snapshot = outcome.watch_threads.clone();
+        Some(archive_apply::apply_live(
+            &coordinator,
+            &gog,
+            &config,
+            &vault,
+            &account,
+            args,
+            &watch_snapshot,
+        )?)
+    } else {
+        None
+    };
     if !args.dry_run && !outcome.busy {
         health::record_success()?;
     }
@@ -456,6 +474,22 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             &watch_threads,
             &mut report,
         )?;
+    } else if let Some(live) = live_archive {
+        if live.skipped_no_archive {
+            report.archive_skipped = true;
+        }
+        let deferred_empty = live.deferred.is_empty();
+        report.attach_live_archive(
+            live.rows,
+            live.digest,
+            live.warnings,
+            live.failed,
+            deferred_empty,
+        );
+        if !deferred_empty {
+            // Deferred archive fetches fail the run without losing filings.
+            report.ok = false;
+        }
     }
     Ok(report)
 }

@@ -179,6 +179,7 @@ impl MessageIds {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabelOperation {
     Archive,
+    #[allow(dead_code)] // Wired by the outer receipts phase.
     Restore,
     LetGo,
 }

@@ -172,6 +172,29 @@ impl SyncReport {
         }
     }
 
+    /// Attach a live archive apply outcome. Filing results are already in
+    /// the report; archive rows, digest, warnings, and failure state join
+    /// them. A paused batch or any isolated failure fails the run without
+    /// rolling back durable filings.
+    pub(crate) fn attach_live_archive(
+        &mut self,
+        rows: Vec<ArchiveRow>,
+        digest: Option<String>,
+        warnings: Vec<String>,
+        failed: bool,
+        deferred_empty: bool,
+    ) {
+        self.archive = rows;
+        if self.archive_digest.is_none() {
+            self.archive_digest = digest;
+        }
+        self.warnings.extend(warnings);
+        let paused = self.archive.iter().any(|row| row.action == "paused");
+        if failed || paused || !deferred_empty {
+            self.ok = false;
+        }
+    }
+
     pub(crate) fn exit_code(&self) -> i32 {
         if self.ok {
             0
@@ -352,7 +375,7 @@ fn print_archive_preview(styler: &Styler, report: &SyncReport, quiet: bool) {
         };
         shown = true;
         let colored = match row.action {
-            ACTION_WOULD_ARCHIVE => styler.green(&line),
+            ACTION_WOULD_ARCHIVE | "archived" => styler.green(&line),
             _ => styler.yellow(&line),
         };
         println!("  {colored}");
@@ -385,6 +408,18 @@ fn archive_human_row(row: &ArchiveRow) -> Option<String> {
     match row.action {
         ACTION_WOULD_ARCHIVE => Some(format!(
             "✉ would archive {} → {} ({messages})",
+            row.thread_id, row.note
+        )),
+        "archived" => Some(format!(
+            "✉ archived {} → {} ({messages})",
+            row.thread_id, row.note
+        )),
+        "let_go" => Some(format!(
+            "✉ back in inbox {} ({}) → {}",
+            row.thread_id, row.reason, row.note
+        )),
+        "restored" => Some(format!(
+            "✉ restored {} → {} ({messages})",
             row.thread_id, row.note
         )),
         ACTION_KEPT => Some(format!(
