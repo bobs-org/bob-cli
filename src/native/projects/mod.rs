@@ -191,6 +191,7 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
         .unwrap_or_else(bob_env::bob_dir)
 }
 
+mod catalog_rows;
 pub(crate) mod edits;
 mod model;
 mod output;

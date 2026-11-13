@@ -5,15 +5,17 @@
 //! staged note text: recognition, plannability, the effective status, the
 //! sync schedule, and the recounted effective-unhidden count come from the
 //! factored sync helpers, so the close-gesture pull-in and sync cannot
-//! drift. Sub-projects come from R's sync-maintained marker line instead of
-//! child notes' `parent:` frontmatter, which would need a vault-wide walk.
+//! drift. SUBOPEN reads the Projects host catalog first and falls back to
+//! R's legacy sync-maintained marker line when no catalog exists.
 
 use std::path::Path;
 
 use chrono::NaiveDate;
 
 use super::super::task_status_hooks::canonical_daily_date;
+use super::catalog_rows::{parse_catalog, CatalogRead};
 use super::*;
+use crate::native::host_catalog::RegionDamage;
 
 /// Surface state of one project note N (§12.10 Terms).
 #[derive(Debug, Clone)]
@@ -27,10 +29,10 @@ pub(crate) struct ProjectSurface {
     pub(crate) sched_raw: Option<String>,
     /// REMAINING(N): sync's effective-unhidden count on the staged text.
     pub(crate) remaining: usize,
-    /// SUBOPEN(N): the marker line lists an open child.
+    /// SUBOPEN(N): a catalog row or legacy marker lists an open child.
     pub(crate) subopen: bool,
-    /// Open children on R's `🧩 **Sub-projects:**` marker, counted with
-    /// the same predicate as `subopen` (a `closed_child` stem is ignored).
+    /// Open children in the catalog or `🧩 **Sub-projects:**` marker,
+    /// counted with the same predicate as `subopen`.
     pub(crate) open_subprojects: usize,
 }
 
@@ -54,12 +56,10 @@ pub(crate) fn project_surface(
     project_surface_inner(relative, contents, today, None)
 }
 
-/// [`project_surface`] with one sub-project read as closed: the marker
-/// entry naming `closed_child` counts as Done for SUBOPEN(N), whatever
-/// the marker line still says (`docs/task-dependencies.md` §12.10
-/// trigger (c)). The entry matches by lowercased file stem, which is
-/// how sync keys marker displays, so `[[N]]`, `[[N|Alias]]`,
-/// `[[dir/N]]` and `[[N#Heading]]` all match.
+/// [`project_surface`] with one sub-project read as closed: the catalog row
+/// or legacy marker naming `closed_child` is ignored for SUBOPEN(N), whatever
+/// its stored state (`docs/task-dependencies.md` §12.10 trigger (c)). The
+/// entry matches by lowercased file stem.
 pub(crate) fn project_surface_with_closed_child(
     relative: &Path,
     contents: &str,
@@ -109,21 +109,15 @@ fn project_surface_inner(
             .and_then(|stem| stem.to_str())
             .map(|stem| stem.to_ascii_lowercase())
     });
-    let open_subprojects = project
+    let legacy_line = project
         .prj_task
         .sub_block
         .first_marker_line()
-        .map(|line| subproject_displays_in_marker_line(&line.trimmed_text))
-        .map(|displays| {
-            displays
-                .iter()
-                .filter(|(link_name, display)| {
-                    display.state.is_open()
-                        && closed_stem.as_deref() != Some(link_name.as_str())
-                })
-                .count()
-        })
-        .unwrap_or(0);
+        .map(|line| line.trimmed_text.clone());
+    let open_subprojects =
+        read_subopen(contents, legacy_line.as_deref(), closed_stem.as_deref())
+            .ok()?
+            .open;
     let prj_line = project.task_lines.iter().find(|task| task.is_prj)?;
     Some(ProjectSurface {
         prj_line_number: prj_line.line_number,
@@ -133,4 +127,153 @@ fn project_surface_inner(
         subopen: open_subprojects > 0,
         open_subprojects,
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubopenSource {
+    Catalog,
+    Legacy,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SubopenRead {
+    source: SubopenSource,
+    open: usize,
+}
+
+/// Apply the shared catalog-first SUBOPEN rule. A damaged catalog is an
+/// error so callers treat the project as unplannable; it never falls back to
+/// the potentially stale legacy marker.
+fn read_subopen(
+    contents: &str,
+    legacy_line: Option<&str>,
+    closed_stem: Option<&str>,
+) -> Result<SubopenRead, RegionDamage> {
+    match parse_catalog(contents) {
+        CatalogRead::Damaged(damage) => Err(damage),
+        CatalogRead::Rows(rows) => Ok(SubopenRead {
+            source: SubopenSource::Catalog,
+            open: rows
+                .iter()
+                .filter(|row| {
+                    row.state.is_open() && closed_stem != Some(row.key.as_str())
+                })
+                .count(),
+        }),
+        CatalogRead::Absent => {
+            let Some(legacy_line) = legacy_line else {
+                return Ok(SubopenRead {
+                    source: SubopenSource::None,
+                    open: 0,
+                });
+            };
+            let displays = subproject_displays_in_marker_line(legacy_line);
+            Ok(SubopenRead {
+                source: SubopenSource::Legacy,
+                open: displays
+                    .iter()
+                    .filter(|(link_name, display)| {
+                        display.state.is_open()
+                            && closed_stem != Some(link_name.as_str())
+                    })
+                    .count(),
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Vectors {
+        vectors: Vec<Vector>,
+    }
+
+    #[derive(Deserialize)]
+    struct Vector {
+        name: String,
+        text: String,
+        #[serde(default)]
+        closed_child: Option<String>,
+        expect: Expected,
+    }
+
+    #[derive(Deserialize)]
+    struct Expected {
+        source: String,
+        open: usize,
+    }
+
+    #[test]
+    fn shared_project_catalog_vectors_match_rust_reader() {
+        let vectors: Vectors = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/project_catalog/vectors.json"
+        ))
+        .expect("project catalog vectors parse");
+
+        for vector in vectors.vectors {
+            let mut issues = Vec::new();
+            let project = parse_project(
+                Path::new("Parent.md"),
+                &vector.text,
+                &mut issues,
+            )
+            .expect("fixture is a project note");
+            assert!(issues.is_empty(), "{}: {issues:?}", vector.name);
+            let legacy_line = project
+                .prj_task
+                .sub_block
+                .first_marker_line()
+                .map(|line| line.trimmed_text.as_str());
+            let closed_stem = vector.closed_child.as_deref().map(|child| {
+                Path::new(child)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .expect("closed child has a stem")
+                    .to_ascii_lowercase()
+            });
+
+            let actual =
+                read_subopen(&vector.text, legacy_line, closed_stem.as_deref());
+            match vector.expect.source.as_str() {
+                "damaged" => assert!(
+                    actual.is_err(),
+                    "{}: expected damaged, got {actual:?}",
+                    vector.name
+                ),
+                source => {
+                    let actual = actual.unwrap_or_else(|damage| {
+                        panic!("{}: unexpected damage: {damage:?}", vector.name)
+                    });
+                    let actual_source = match actual.source {
+                        SubopenSource::Catalog => "catalog",
+                        SubopenSource::Legacy => "legacy",
+                        SubopenSource::None => "none",
+                    };
+                    assert_eq!(actual_source, source, "{}", vector.name);
+                    assert_eq!(
+                        actual.open, vector.expect.open,
+                        "{}",
+                        vector.name
+                    );
+                }
+            }
+            if vector.expect.source == "damaged" {
+                assert!(
+                    project_surface(
+                        Path::new("Parent.md"),
+                        &vector.text,
+                        NaiveDate::from_ymd_opt(2026, 10, 5).expect("date"),
+                    )
+                    .is_none(),
+                    "{}: damaged catalog must make the project unplannable",
+                    vector.name
+                );
+            }
+        }
+    }
 }

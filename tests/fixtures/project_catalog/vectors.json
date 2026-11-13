@@ -1,0 +1,126 @@
+{
+  "vectors": [
+    {
+      "name": "legacy open",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n  - 🧩 **Sub-projects:** [[child]]\n",
+      "expect": {"source": "legacy", "open": 1}
+    },
+    {
+      "name": "legacy struck without terminal marker",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n  - 🧩 **Sub-projects:** ~~[[child]]~~\n",
+      "expect": {"source": "legacy", "open": 1}
+    },
+    {
+      "name": "legacy done marker",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n  - 🧩 **Sub-projects:** ~~[[child]]~~ ✅\n",
+      "expect": {"source": "legacy", "open": 0}
+    },
+    {
+      "name": "legacy canceled marker",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n  - 🧩 **Sub-projects:** ~~[[child]]~~ ❌\n",
+      "expect": {"source": "legacy", "open": 0}
+    },
+    {
+      "name": "legacy marker in fence",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n```markdown\n  - 🧩 **Sub-projects:** [[child]]\n```\n",
+      "expect": {"source": "none", "open": 0}
+    },
+    {
+      "name": "legacy marker in prose mention",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\nThe text 🧩 **Sub-projects:** [[child]] is only an example.\n",
+      "expect": {"source": "none", "open": 0}
+    },
+    {
+      "name": "catalog open row",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n## Projects\n> [!projects]\n> - **[[child]]** — Ship it\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "catalog scheduled row",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n## Projects\n> [!projects]\n> - 🗓️ **[[child]]** — Ship it\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "catalog blocked row",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n## Projects\n> [!projects]\n> - ⛓️ **[[child]]** — Ship it\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "catalog warning row",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n## Projects\n> [!projects]\n> - ⚠️ **[[child]]** — no valid lifecycle task\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "catalog done row",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n## Projects\n> [!projects]\n> - ✅ **[[child]]** — Finished\n",
+      "expect": {"source": "catalog", "open": 0}
+    },
+    {
+      "name": "catalog canceled row",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n## Projects\n> [!projects]\n> - ❌ **[[child]]** — Canceled\n",
+      "expect": {"source": "catalog", "open": 0}
+    },
+    {
+      "name": "catalog wins over legacy marker",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n  - 🧩 **Sub-projects:** [[stale]]\n## Projects\n> [!projects]\n> - **[[child]]** — Ship it\n> - ✅ **[[done]]** — Finished\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "empty catalog overrides legacy marker",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n  - 🧩 **Sub-projects:** [[stale]]\n## Projects\n> [!projects]\n",
+      "expect": {"source": "catalog", "open": 0}
+    },
+    {
+      "name": "catalog in fence is absent",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n```markdown\n> [!projects]\n> - **[[child]]** — Ship it\n```\n",
+      "expect": {"source": "none", "open": 0}
+    },
+    {
+      "name": "catalog in frontmatter is absent",
+      "text": "---\ntype: [[project]]\nstatus: wip\nexample: |\n  > [!projects]\n  > - **[[child]]** — Ship it\n---\n- [ ] #task #prj Parent #hide ^prj\n",
+      "expect": {"source": "none", "open": 0}
+    },
+    {
+      "name": "path and alias link target",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n> [!projects]\n> - **[[dir/X|Alias]]** — Ship it\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "heading link target",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n> [!projects]\n> - **[[X#Now]]** — Ship it\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "closed child override in catalog",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n> [!projects]\n> - **[[dir/Child|Alias]]** — Ship it\n",
+      "closed_child": "Child.md",
+      "expect": {"source": "catalog", "open": 0}
+    },
+    {
+      "name": "closed child override in legacy marker",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n  - 🧩 **Sub-projects:** [[dir/Child|Alias]]\n",
+      "closed_child": "Child.md",
+      "expect": {"source": "legacy", "open": 0}
+    },
+    {
+      "name": "malformed catalog opener is damaged",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n> [!projects\n> - **[[child]]** — Ship it\n",
+      "expect": {"source": "damaged", "open": 0}
+    },
+    {
+      "name": "multiple catalogs union their rows",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n> [!projects]\n> - **[[one]]** — One\n\nAuthored prose.\n\n> [!projects]\n> - ⚠️ **[[two]]** — Warning\n> - ❌ **[[three]]** — Canceled\n",
+      "expect": {"source": "catalog", "open": 2}
+    },
+    {
+      "name": "catalog CRLF",
+      "text": "---\r\ntype: [[project]]\r\nstatus: wip\r\n---\r\n- [ ] #task #prj Parent #hide ^prj\r\n> [!projects]\r\n> - ⛓️ **[[child]]** — Waiting\r\n> - ✅ **[[done]]** — Finished\r\n",
+      "expect": {"source": "catalog", "open": 1}
+    },
+    {
+      "name": "glyphs without variation selectors",
+      "text": "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task #prj Parent #hide ^prj\n> [!projects]\n> - 🗓 **[[scheduled]]** — Later\n> - ⛓ **[[blocked]]** — Waiting\n> - ⚠ **[[warning]]** — Broken lifecycle\n",
+      "expect": {"source": "catalog", "open": 3}
+    }
+  ]
+}

@@ -2170,21 +2170,29 @@ SCHED(N)    = sync's project schedule: a leftover frontmatter
               `scheduled` on an open ^prj, else R's inline
               [scheduled::]. Rule step 2 compares SCHED(N), not only
               R's inline field, with today.
-SUBOPEN(N)  = R's machine-owned "🧩 **Sub-projects:**" marker line
-              lists a child that sync's marker reading treats as open,
-              i.e. anything but ~~[[child]]~~ ✅ (Done) or
-              ~~[[child]]~~ ❌ (Canceled). A link struck without ✅/❌
-              is still open.
+SUBOPEN(N)  = if N has a real `[!projects]` catalog, it counts catalog
+              rows whose leading glyph is not ✅ (Done) or ❌ (Canceled);
+              otherwise it reads R's legacy "🧩 **Sub-projects:**" marker,
+              where anything but ~~[[child]]~~ ✅ or ~~[[child]]~~ ❌ is
+              open. A struck legacy link without ✅/❌ is still open.
 EMPTY(N)    = REMAINING(N) = ∅ and not SUBOPEN(N), on the staged
               post-gesture text
 ```
 
-SUBOPEN reads the marker line instead of child notes' `parent:`
-frontmatter, which would need a vault-wide walk. The marker is
-sync-maintained (rewritten at most every 15 minutes), so it can be
-stale. Both stale outcomes are benign: a missed pull-in (sync surfaces
-R on its next run instead), or an extra one (sync re-hides R, and R
-stays Next until Alt+N or a close).
+SUBOPEN reads the catalog when present and ignores the legacy marker in
+that case. Catalog rows are open unless their leading glyph is ✅ or ❌,
+including ⚠️ rows; multiple catalogs contribute their rows, and a matching
+`closed_child` stem is ignored in either format. With no catalog, the
+sync-maintained marker remains the fallback, so older notes continue to
+work. A malformed `[!projects` opener makes R unplannable instead of
+falling back to a possibly stale marker. Rust and JavaScript readers share
+the vectors in `tests/fixtures/project_catalog/vectors.json`.
+
+The reader uses these local lines instead of child notes' `parent:`
+frontmatter, which would need a vault-wide walk. Sync maintains the
+catalog and legacy marker, so either may lag until its next run. A missed
+pull-in means sync surfaces R on its next run; an extra pull-in means sync
+re-hides R, and R stays Next until Alt+N or a close.
 
 **Trigger**
 

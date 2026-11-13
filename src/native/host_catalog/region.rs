@@ -106,6 +106,16 @@ pub(crate) struct RegionDamage {
     pub(crate) message: String,
 }
 
+/// One real catalog region, with the physical 1-based line range and each
+/// line's text without its line ending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedRegion {
+    pub(crate) start_line: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) end_line: usize,
+    pub(crate) lines: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EditState {
     /// Required content, no managed region yet.
@@ -425,6 +435,29 @@ impl<'a> Scanned<'a> {
     fn line_byte_range(&self, start: usize, end: usize) -> Range<usize> {
         self.lines[start].start..self.lines[end].end
     }
+}
+
+/// Read the real, owned regions for `spec` without planning or applying
+/// edits. Frontmatter, fences, strict malformed-opener handling, and legacy
+/// recognition are shared with the catalog writer.
+pub(crate) fn owned_regions(
+    spec: &RegionSpec<'_>,
+    text: &str,
+) -> Result<Vec<OwnedRegion>, RegionDamage> {
+    let scanned = Scanned::new(text);
+    scanned.owned_regions(spec).map(|regions| {
+        regions
+            .into_iter()
+            .map(|(start, end, _)| OwnedRegion {
+                start_line: start + 1,
+                end_line: end + 1,
+                lines: scanned.lines[start..=end]
+                    .iter()
+                    .map(|line| line.content.to_string())
+                    .collect(),
+            })
+            .collect()
+    })
 }
 
 /// True when `content` is a `> [!{callout}]` callout head: at most 3 spaces
