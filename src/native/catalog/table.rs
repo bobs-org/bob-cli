@@ -1559,6 +1559,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason: "Sends a confirmed email; run it from a terminal",
     },
     Excluded {
+        path: &["gmail", "unarchive"],
+        reason: "Move-back is owned by the Bob Mail archive banner",
+    },
+    Excluded {
         path: &["gkeep", "migrate-markers"],
         reason: "One-time migration; run it from a terminal",
     },

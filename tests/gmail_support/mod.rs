@@ -769,11 +769,11 @@ impl FakeNotify {
         let mut joined = self.bin.as_os_str().to_os_string();
         joined.push(":");
         joined.push(support_bin_dir().into_os_string());
-        if let Some(path) = std::env::var_os("PATH") {
-            if !path.is_empty() {
-                joined.push(":");
-                joined.push(path);
-            }
+        if let Some(path) = std::env::var_os("PATH")
+            && !path.is_empty()
+        {
+            joined.push(":");
+            joined.push(path);
         }
         command
             .env("PATH", joined)

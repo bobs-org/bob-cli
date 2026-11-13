@@ -280,7 +280,7 @@ fn run_inner(args: &UnarchiveArgs) -> Result<(Vec<Row>, bool), GmailError> {
             } => {
                 if !args.dry_run
                     && let Some((key, note_path)) = repair
-                    && let Err(error) = project_note(&vault, &note_path, &key)
+                    && let Err(error) = project_note(&vault, note_path, key)
                 {
                     rows.push(Row::failed(input, None, row_error(error)));
                 } else {
@@ -310,7 +310,7 @@ fn run_inner(args: &UnarchiveArgs) -> Result<(Vec<Row>, bool), GmailError> {
                     }
                     match restore_one(
                         input,
-                        &target,
+                        target,
                         &account,
                         &vault,
                         &reader,
@@ -327,7 +327,7 @@ fn run_inner(args: &UnarchiveArgs) -> Result<(Vec<Row>, bool), GmailError> {
                             setup_failure |= error.exit_code() == 2;
                             rows.push(Row::failed(
                                 input,
-                                Some(&target),
+                                Some(target),
                                 row_error(error),
                             ));
                             if auth_failed {
@@ -461,7 +461,7 @@ fn resolve_inputs(
             known.iter().filter(|((_, id), _)| id.eq_ignore_ascii_case(input)).collect()
         } else { Vec::new() };
         let mut identities = BTreeMap::<(String, String), String>::new();
-        for (key, path) in note_matches.into_iter().chain(thread_matches.into_iter()) {
+        for (key, path) in note_matches.into_iter().chain(thread_matches) {
             identities.insert(key.clone(), path.clone());
         }
         if identities.len() > 1 {

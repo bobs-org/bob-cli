@@ -1424,6 +1424,19 @@ mod tests {
         assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
     }
 
+    /// Bob Mail's Move-back button sends options before `--` and the exact
+    /// note last, so a hostile stem stays one operand and JSON stays on.
+    #[test]
+    fn unarchive_banner_argv_keeps_json_and_one_exact_operand() {
+        let args = UnarchiveArgs::from_matches(&sub_matches_for(
+            &["bob gmail", "unarchive", "-f", "json", "--", "--evil.md"],
+            "unarchive",
+        ));
+        assert_eq!(args.inputs, ["--evil.md"]);
+        assert!(args.format.is_json());
+        assert!(!args.dry_run);
+    }
+
     #[test]
     fn bare_and_explicit_list_share_all_and_format() {
         let top = TopArgs::from_matches(&matches_for(&[
