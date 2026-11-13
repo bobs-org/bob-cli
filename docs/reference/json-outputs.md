@@ -1,6 +1,6 @@
 ---
 title: JSON outputs
-description: Every bob machine-readable output, its flag, envelope shape, schema version, and contract link.
+description: Machine-readable Bob output contracts.
 ---
 
 # JSON outputs
@@ -179,8 +179,7 @@ sets `one_off: true`.
 
 ### Bank reports {#bank-reports}
 
-`bob bank check|list|report|ensure|ack|import -f json` use
-`schema_version: 1`. Bank status and restoration: [Bank](../bank.md#json).
+`schema_version: 1`; [Bank JSON](../bank.md#json).
 
 ### Session edits and successor offers
 

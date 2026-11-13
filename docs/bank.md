@@ -94,7 +94,7 @@ bank:
 
 | Key | Rule |
 | --- | --- |
-| `bank.accounts` | Required, non-empty, ordered map. Alias `[a-z][a-z0-9_]*`. The first account is the default for rows without `[acct::]`. |
+| `bank.accounts` | Required, non-empty, ordered map. Alias `[a-z][a-z0-9_]*`. The first account is the default for rows without `[acct::]`; imports omit that default alias from new rows and write `[acct:: alias]` only for another account. |
 | `…<alias>.label` | Optional display name. Defaults to the humanized alias. |
 | `…<alias>.kind` | Required. `checking`, `savings`, `credit`, or `cash`. A `cash` account is never imported. |
 | `…<alias>.start` | Required for every kind except `cash`. `YYYY-MM-DD`. |
@@ -251,7 +251,9 @@ OFX kind chooses the unique configured account of that kind. Ambiguity
 refuses with the candidate aliases and a `-a` hint; unknown and `cash`
 aliases refuse. CSV always requires `-a ALIAS`, even with one configured
 account. Account and routing numbers select nothing and
-are discarded: never stored, never echoed.
+are discarded: never stored, never echoed. The first configured account is
+the default. New rows omit `[acct::]` for it and include the alias only for
+non-default accounts; JSON continues to report the selected account.
 
 ### Matching
 
@@ -299,15 +301,25 @@ highest first:
    can remove a useful discriminator.
 4. The cleaned, title-cased description.
 
-Cleaning is conservative and fixture-driven: authorization/date
-prefixes, `SQ *`, `TST*`, `PAYPAL *`, `#1234` store numbers, trailing
-`S<digits> CARD <dddd>`, and recognizable trailing city/state spans are
-stripped, but never so much that an ordinary multiword merchant is
-erased. Only bank-derived payees (tiers 3–4) pass through the grammar
-sanitizer; rule and learned payees are already vault text. Untrusted
-source descriptions stay one grammar-safe payee line and cannot inject
-headings, block IDs, fields, or links. A positive amount alone never
-implies income or refund; undeclared categories are dropped.
+Cleaning is conservative and fixture-driven. It strips Wells Fargo QFX
+`PURCHASE [RETURN] [AUTHORIZED ON] MM/DD … [CARD dddd]` and
+`RECURRING PAYMENT [AUTHORIZED ON] MM/DD …` segments at the start or after
+the merchant, including the place, state, and plain `CARD dddd` tail. The
+CSV `AUTHORIZED ON` shape remains supported. It also removes `SQ *`, `TST*`,
+and `PAYPAL *` prefixes,
+short digit-bearing `*` order codes, `#1234` store numbers, trailing
+`S<digits> CARD <dddd>` and `CARD <dddd>` tails, and recognizable city/state
+spans. A word-only `*` sub-merchant stays distinct. Standalone long digit
+runs are redacted, phone-number tokens are dropped, and formatted ACH/P2P
+account-holder name tails are removed only after reference digits and a
+recognized payment-rail marker. The stages never erase an ordinary
+multiword merchant. A learned payee is re-cleaned only when it still carries
+one of these forms of noise; an already-clean edited name stays byte-for-byte
+unchanged. Bank-derived payees (tiers 3–4) pass through the grammar
+sanitizer; rules remain vault text. Untrusted source descriptions stay one
+grammar-safe payee line and cannot inject headings, block IDs, fields, or
+links. A positive amount alone never implies income or refund; undeclared
+categories are dropped.
 
 With no selected link, an exact case-insensitive restaurant title match
 through the records registry supplies its note link and kind emoji
@@ -325,8 +337,10 @@ ID is the key's first eight hex characters, extended to twelve when a
 different known key occupies the eight-character ID; an unresolvable
 twelve-character collision refuses rather than conflates rows. Every run
 of at least four digits in `desc` is masked as `••••`, and the merchant
-key derives from cleaned, masked text so identifiers cannot leak
-through that second field.
+key derives from the same cleaned, masked text. Purchase dates, places,
+card tails, order codes, and other transaction-specific noise therefore do
+not split repeat-merchant keys. Old journal events are recomputed from their
+masked descriptions at read time; no journal migration is needed.
 
 ### Journal
 

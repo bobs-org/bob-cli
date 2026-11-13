@@ -11,11 +11,12 @@
 //! 4. the cleaned, title-cased description.
 //!
 //! Unspecified rule fields fall through to lower tiers. A rule-selected link
-//! always wins over the restaurant lookup. Only bank-derived payees
-//! (tiers 3-with-cleaned-text and 4) pass through [`sanitize_payee`]; rule
-//! and learned payees are already vault text.
+//! always wins over the restaurant lookup. Bank-derived payees
+//! (tiers 3-with-cleaned-text and 4) pass through [`sanitize_payee`]; learned
+//! payees retain their edited text unless the current cleaner removes bank
+//! transaction noise.
 
-use super::config::BankConfig;
+use super::{config::BankConfig, identity::mask_digits};
 
 /// A learned name taught by one acknowledged ID-bearing row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +57,7 @@ pub(crate) fn resolve_name(
 
     let payee = match rule.and_then(|rule| rule.payee.clone()) {
         Some(payee) => payee,
-        None => match learned.map(|name| name.payee.clone()) {
+        None => match learned.map(|name| clean_learned_payee(&name.payee)) {
             Some(payee) => payee,
             None => match builtin.clone().and_then(|item| item.payee) {
                 Some(payee) => payee,
@@ -171,19 +172,24 @@ fn is_transfer(folded: &str, tx_type: &str) -> bool {
 
 /// Clean a raw bank description down to a merchant core.
 ///
-/// Stages strip authorization/date prefixes, `SQ *` / `TST*` / `PAYPAL *`
-/// prefixes, `#1234` store numbers, trailing `S<digits> CARD <dddd>`, and a
-/// trailing city + US-state span. Every stage keeps its input when stripping
-/// would leave nothing, so cleaning never erases a merchant; the strip
-/// patterns themselves stay conservative and fixture-driven.
+/// Stages strip authorization/QFX date prefixes, processor prefixes and
+/// order codes, store numbers, holder/phone/card tails, and recognizable
+/// city + US-state spans, then redact long digit runs. Every removal stage
+/// keeps its input when stripping would leave nothing, so cleaning never
+/// erases a merchant; the patterns stay conservative and fixture-driven.
 pub(crate) fn clean_description(raw: &str) -> String {
     let mut text = collapse_spaces(raw.trim());
     for stage in [
+        strip_qfx_transaction_segment as fn(&str) -> Option<String>,
         strip_auth_prefix as fn(&str) -> Option<String>,
         strip_processor_prefix,
+        strip_processor_order_code,
+        strip_account_holder_tail,
         strip_store_numbers,
+        strip_phone_number,
         strip_card_suffix,
         strip_city_state,
+        mask_long_digits,
     ] {
         if let Some(next) = stage(&text)
             && !next.trim().is_empty()
@@ -192,6 +198,105 @@ pub(crate) fn clean_description(raw: &str) -> String {
         }
     }
     text
+}
+
+/// Remove Wells Fargo's transaction-kind/date segment, whether it precedes
+/// the merchant or trails it, while retaining the merchant body.
+fn strip_qfx_transaction_segment(text: &str) -> Option<String> {
+    let upper = text.to_ascii_uppercase();
+    for (marker, is_purchase) in
+        [("PURCHASE", true), ("RECURRING PAYMENT", false)]
+    {
+        let mut search_from = 0;
+        while let Some(relative) = upper.get(search_from..)?.find(marker) {
+            let start = search_from + relative;
+            let end = start + marker.len();
+            let has_left_boundary = start == 0
+                || upper
+                    .as_bytes()
+                    .get(start - 1)
+                    .is_some_and(u8::is_ascii_whitespace);
+            let has_right_boundary = upper
+                .as_bytes()
+                .get(end)
+                .is_some_and(u8::is_ascii_whitespace);
+            if !has_left_boundary || !has_right_boundary {
+                search_from = end;
+                continue;
+            }
+
+            let mut rest = text.get(end..)?.trim_start();
+            if is_purchase
+                && let Some(after_return) = take_leading_word(rest, "RETURN")
+            {
+                rest = after_return;
+            }
+            if let Some(after_auth) = strip_ascii_prefix(rest, "AUTHORIZED ON ")
+            {
+                rest = after_auth;
+            }
+            rest = rest.trim_start();
+            let date_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let date = rest.get(..date_end)?;
+            if !is_month_day_token(date) {
+                search_from = end;
+                continue;
+            }
+            let after_date =
+                rest.get(date_end..).unwrap_or_default().trim_start();
+            let merchant = text.get(..start)?.trim_end();
+            if !merchant.is_empty() {
+                return Some(collapse_spaces(merchant));
+            }
+            if !after_date.is_empty() {
+                return Some(collapse_spaces(after_date));
+            }
+            search_from = end;
+        }
+    }
+    None
+}
+
+fn strip_ascii_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.get(..prefix.len())
+        .filter(|head| head.eq_ignore_ascii_case(prefix))
+        .map(|_| &text[prefix.len()..])
+}
+
+fn take_leading_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    let text = text.trim_start();
+    let head = text.get(..word.len())?;
+    if !head.eq_ignore_ascii_case(word) {
+        return None;
+    }
+    let rest = text.get(word.len()..)?;
+    rest.starts_with(char::is_whitespace)
+        .then(|| rest.trim_start())
+}
+
+fn is_month_day_token(token: &str) -> bool {
+    let parts: Vec<&str> = token.split('/').collect();
+    matches!(parts.len(), 2 | 3)
+        && parts[0].len() <= 2
+        && !parts[0].is_empty()
+        && parts[0].bytes().all(|byte| byte.is_ascii_digit())
+        && parts[1].len() <= 2
+        && !parts[1].is_empty()
+        && parts[1].bytes().all(|byte| byte.is_ascii_digit())
+        && (parts.len() == 2
+            || (matches!(parts[2].len(), 2 | 4)
+                && parts[2].bytes().all(|byte| byte.is_ascii_digit())))
+}
+
+/// Keep clean, user-edited learned names byte-for-byte. Re-run the cleaner
+/// only when it removes substantive transaction noise, not just whitespace.
+fn clean_learned_payee(payee: &str) -> String {
+    let cleaned = clean_description(payee);
+    if cleaned != collapse_spaces(payee.trim()) {
+        cleaned
+    } else {
+        payee.to_owned()
+    }
 }
 
 fn collapse_spaces(text: &str) -> String {
@@ -234,10 +339,52 @@ fn strip_processor_prefix(text: &str) -> Option<String> {
             if rest.is_empty() {
                 return None;
             }
+            let code_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let code = rest.get(..code_end).unwrap_or_default();
+            if is_short_digit_code(code) {
+                let after_code =
+                    rest.get(code_end..).unwrap_or_default().trim_start();
+                return Some(collapse_spaces(after_code));
+            }
             return Some(collapse_spaces(rest));
         }
     }
     None
+}
+
+/// Drop short, digit-bearing processor/order tokens introduced by `*`.
+/// Word-only sub-merchants after `*` are deliberately preserved.
+fn strip_processor_order_code(text: &str) -> Option<String> {
+    let mut words = Vec::new();
+    let mut changed = false;
+    for word in text.split_whitespace() {
+        let Some((before, after)) = word.split_once('*') else {
+            words.push(word);
+            continue;
+        };
+        if !is_short_digit_code(after) {
+            words.push(word);
+            continue;
+        }
+        if !before.is_empty() {
+            words.push(before);
+        }
+        changed = true;
+    }
+    changed.then(|| words.join(" "))
+}
+
+fn is_short_digit_code(token: &str) -> bool {
+    let code = token
+        .strip_prefix('*')
+        .unwrap_or(token)
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '•');
+    let length = code.chars().count();
+    (1..=12).contains(&length)
+        && code
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '•')
+        && code.chars().any(|ch| ch.is_ascii_digit() || ch == '•')
 }
 
 fn strip_store_numbers(text: &str) -> Option<String> {
@@ -282,25 +429,128 @@ fn strip_store_numbers(text: &str) -> Option<String> {
     changed.then(|| collapse_spaces(out.trim()))
 }
 
-fn strip_card_suffix(text: &str) -> Option<String> {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.len() < 4 {
+/// Drop an ACH/P2P account-holder suffix such as `REF 123456 DOE, JANE M`.
+/// A formatted name is removed only after reference digits and a recognized
+/// payment-rail marker, so an actual counterparty name remains part of the
+/// merchant.
+fn strip_account_holder_tail(text: &str) -> Option<String> {
+    let (before_comma, after_comma) = text.rsplit_once(',')?;
+    let given: Vec<&str> = after_comma.split_whitespace().collect();
+    if given.len() != 2 || !is_name_word(given[0]) || !is_name_initial(given[1])
+    {
         return None;
     }
-    let tail = &words[words.len() - 3..];
+    let surname = before_comma.split_whitespace().next_back()?;
+    if !is_name_word(surname) {
+        return None;
+    }
+    let surname_start = before_comma
+        .rfind(char::is_whitespace)
+        .map_or(0, |index| index + 1);
+    let prefix = before_comma.get(..surname_start)?.trim_end();
+    let upper = prefix.to_ascii_uppercase();
+    let has_rail = ["ACH", "P2P", "ZELLE", "VENMO", "CASHAPP", "PAYPAL"]
+        .iter()
+        .any(|rail| upper.split_whitespace().any(|word| word == *rail))
+        || upper.contains("CASH APP");
+    let reference_digits = prefix
+        .split_whitespace()
+        .map(|word| word.bytes().filter(u8::is_ascii_digit).count())
+        .sum::<usize>()
+        + prefix.matches("••••").count() * 4;
+    if !has_rail || reference_digits < 4 || prefix.is_empty() {
+        return None;
+    }
+    Some(prefix.to_owned())
+}
+
+fn is_name_word(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .chars()
+            .all(|ch| ch.is_alphabetic() || matches!(ch, '\'' | '’' | '-'))
+}
+
+fn is_name_initial(word: &str) -> bool {
+    let initial = word.strip_suffix('.').unwrap_or(word);
+    initial.chars().count() == 1 && initial.chars().all(char::is_alphabetic)
+}
+
+/// Remove complete phone-number tokens, including common punctuation and
+/// space-separated formats. Other long numeric identifiers are redacted by
+/// `mask_long_digits` below.
+fn strip_phone_number(text: &str) -> Option<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut output = Vec::new();
+    let mut changed = false;
+    let mut index = 0;
+    while index < words.len() {
+        if !is_phone_piece(words[index]) {
+            output.push(words[index]);
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let mut digits = 0;
+        while index < words.len() && is_phone_piece(words[index]) {
+            digits += words[index]
+                .chars()
+                .filter(|ch| ch.is_ascii_digit() || *ch == '•')
+                .count();
+            index += 1;
+        }
+        let has_phone_shape = index - start > 1
+            || words[start]
+                .chars()
+                .any(|ch| !ch.is_ascii_digit() && ch != '•');
+        if digits >= 7 && has_phone_shape {
+            changed = true;
+        } else {
+            output.extend_from_slice(&words[start..index]);
+        }
+    }
+    changed.then(|| output.join(" "))
+}
+
+fn is_phone_piece(word: &str) -> bool {
+    !word.is_empty()
+        && word.chars().all(|ch| {
+            ch.is_ascii_digit()
+                || ch == '•'
+                || matches!(ch, '-' | '(' | ')' | '.' | '+' | ',')
+        })
+}
+
+fn mask_long_digits(text: &str) -> Option<String> {
+    let masked = mask_digits(text);
+    (masked != text).then_some(masked)
+}
+
+fn strip_card_suffix(text: &str) -> Option<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 3 {
+        return None;
+    }
     let digits = |word: &str| {
         (word.len() == 4 && word.bytes().all(|byte| byte.is_ascii_digit()))
             || word == "••••"
     };
-    let is_card_trailer = tail[0].starts_with('S')
-        && tail[0].len() > 1
-        && tail[0][1..].bytes().all(|byte| byte.is_ascii_digit())
-        && tail[1].eq_ignore_ascii_case("CARD")
-        && digits(tail[2]);
-    if !is_card_trailer {
-        return None;
+    let len = words.len();
+    if words[len - 2].eq_ignore_ascii_case("CARD") && digits(words[len - 1]) {
+        return Some(words[..len - 2].join(" "));
     }
-    Some(words[..words.len() - 3].join(" "))
+    if len >= 4
+        && words[len - 3].starts_with('S')
+        && words[len - 3].len() > 1
+        && words[len - 3][1..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+        && words[len - 2].eq_ignore_ascii_case("CARD")
+        && digits(words[len - 1])
+    {
+        return Some(words[..len - 3].join(" "));
+    }
+    None
 }
 
 fn strip_city_state(text: &str) -> Option<String> {
@@ -309,11 +559,36 @@ fn strip_city_state(text: &str) -> Option<String> {
         return None;
     }
     let state = words[words.len() - 1];
-    let city = words[words.len() - 2];
-    if !is_state_code(state) || !is_city_word(city) {
+    if !is_state_code(state) {
         return None;
     }
-    Some(words[..words.len() - 2].join(" "))
+    if words.len() >= 4 {
+        let city = words[words.len() - 3..words.len() - 1]
+            .join(" ")
+            .to_ascii_uppercase();
+        if is_known_two_word_city(&city) {
+            return Some(words[..words.len() - 3].join(" "));
+        }
+    }
+    let city = words[words.len() - 2];
+    if is_city_word(city) {
+        return Some(words[..words.len() - 2].join(" "));
+    }
+    None
+}
+
+fn is_known_two_word_city(city: &str) -> bool {
+    matches!(
+        city,
+        "FORT WORTH"
+            | "LAS VEGAS"
+            | "LOS ANGELES"
+            | "NEW YORK"
+            | "PALO ALTO"
+            | "SAN DIEGO"
+            | "SAN FRANCISCO"
+            | "ST LOUIS"
+    )
 }
 
 fn is_city_word(word: &str) -> bool {
@@ -479,7 +754,7 @@ mod tests {
         );
         assert_eq!(
             clean_description("COSTCO S123 CARD 4321 WHSE"),
-            "COSTCO S123 CARD 4321 WHSE"
+            "COSTCO S123 CARD •••• WHSE"
         );
         assert_eq!(clean_description("SHOPRITE S987 CARD 1234"), "SHOPRITE");
         // Two-word cores survive even when the tail looks strippable.
@@ -489,6 +764,85 @@ mod tests {
         );
         assert_eq!(clean_description("A B"), "A B");
         assert_eq!(title_case("BLUE RIBBON BBQ"), "Blue Ribbon Bbq");
+    }
+
+    #[test]
+    fn qfx_shapes_clean_dates_places_cards_and_processor_codes() {
+        assert_eq!(
+            clean_description(
+                "PURCHASE 11/12/26 SQ *COFFEE SHOP NEW YORK NY CARD 4321"
+            ),
+            "COFFEE SHOP"
+        );
+        assert_eq!(
+            clean_description(
+                "COFFEE SHOP PURCHASE 11/12/26 NEW YORK NY CARD 4321"
+            ),
+            "COFFEE SHOP"
+        );
+        assert_eq!(
+            clean_description(
+                "PURCHASE 11/12/26 SQ *COFFEE SHOP NEW YORK NY CARD ••••"
+            ),
+            "COFFEE SHOP"
+        );
+        assert_eq!(
+            clean_description(
+                "PURCHASE RETURN AUTHORIZED ON 11/12/26 STORE RETURN BOSTON MA CARD 4321"
+            ),
+            "STORE RETURN"
+        );
+        assert_eq!(
+            clean_description(
+                "RECURRING PAYMENT AUTHORIZED ON 11/12/26 STREAMING SERVICE"
+            ),
+            "STREAMING SERVICE"
+        );
+        assert_eq!(
+            clean_description(
+                "STREAMING SERVICE RECURRING PAYMENT AUTHORIZED ON 11/12/26"
+            ),
+            "STREAMING SERVICE"
+        );
+        assert_eq!(
+            clean_description("PURCHASE AUTHORIZED ON 11/12/26 COFFEE SHOP"),
+            "COFFEE SHOP"
+        );
+        assert_eq!(
+            clean_description("AUTHORIZED ON 11/12/26 COFFEE SHOP"),
+            "COFFEE SHOP"
+        );
+        assert_eq!(clean_description("GROCERY SHOP *AB12"), "GROCERY SHOP");
+        assert_eq!(clean_description("GROCERY SHOP *7"), "GROCERY SHOP");
+        assert_eq!(clean_description("GROCERY SHOP *••••"), "GROCERY SHOP");
+        assert_eq!(clean_description("GROCERY SHOP *AB••••"), "GROCERY SHOP");
+        assert_eq!(clean_description("DELIVERY *SUSHI"), "DELIVERY *SUSHI");
+        assert_eq!(clean_description("DELIVERY *PIZZA"), "DELIVERY *PIZZA");
+    }
+
+    #[test]
+    fn account_holder_and_phone_noise_do_not_become_payees() {
+        assert_eq!(
+            clean_description("ACH PAYMENT REF 938271 DOE, JANE Q"),
+            "ACH PAYMENT REF ••••"
+        );
+        assert_eq!(
+            clean_description("ACH PAYMENT REF •••• DOE, JANE Q"),
+            "ACH PAYMENT REF ••••"
+        );
+        assert_eq!(
+            clean_description("P2P PAYMENT FROM 555-123-4567"),
+            "P2P PAYMENT FROM"
+        );
+        assert_eq!(
+            clean_description("P2P PAYMENT FROM 555-123-••••"),
+            "P2P PAYMENT FROM"
+        );
+        assert_eq!(clean_description("MERCHANT 12345678"), "MERCHANT ••••");
+        assert_eq!(
+            clean_description("ACH PAYMENT TO DOE, JANE"),
+            "ACH PAYMENT TO DOE, JANE"
+        );
     }
 
     #[test]
@@ -561,6 +915,31 @@ mod tests {
     }
 
     #[test]
+    fn learned_payees_are_cleaned_only_when_they_still_carry_noise() {
+        let config = plain_hub();
+        let noisy = LearnedName {
+            payee: "PURCHASE 11/12/26 COFFEE SHOP CARD 4321".to_owned(),
+            category: None,
+            links: Vec::new(),
+        };
+        assert_eq!(
+            resolve_name(&config, "new transaction", None, Some(&noisy), None)
+                .payee,
+            "COFFEE SHOP"
+        );
+
+        let edited = "my preferred café";
+        let clean = LearnedName {
+            payee: edited.to_owned(),
+            category: None,
+            links: Vec::new(),
+        };
+        let resolved =
+            resolve_name(&config, "new transaction", None, Some(&clean), None);
+        assert_eq!(resolved.payee.as_bytes(), edited.as_bytes());
+    }
+
+    #[test]
     fn positive_amounts_never_imply_income() {
         let config = plain_hub();
         let inflow = resolve_name(
@@ -571,7 +950,7 @@ mod tests {
             None,
         );
         assert_eq!(inflow.category, None);
-        assert_eq!(inflow.payee, "Check 1001 Deposit");
+        assert_eq!(inflow.payee, "Check •••• Deposit");
     }
 
     #[test]

@@ -954,7 +954,12 @@ impl<'a> Planner<'a> {
                     pending.cents,
                     &pending.payee,
                     pending.category.as_deref(),
-                    Some(&pending.account),
+                    self.config
+                        .default_account()
+                        .filter(|default| {
+                            default.alias.as_str() != pending.account.as_str()
+                        })
+                        .map(|_| pending.account.as_str()),
                     &pending.links,
                     Some(&pending.id),
                 );
@@ -1582,16 +1587,14 @@ mod tests {
             .take(8)
             .collect();
         assert!(
-            edit.after.contains(&format!(
-                "- [ ] $13.71 Smashburger Card 1234 [acct:: checking] ^bank-{id1}"
-            )),
+            edit.after
+                .contains(&format!("- [ ] $13.71 Smashburger ^bank-{id1}")),
             "after: {}",
             edit.after
         );
         assert!(
-            edit.after.contains(&format!(
-                "- [ ] $61.20 Shoprite [acct:: checking] ^bank-{id2}"
-            )),
+            edit.after
+                .contains(&format!("- [ ] $61.20 Shoprite ^bank-{id2}")),
             "after: {}",
             edit.after
         );
@@ -1624,6 +1627,88 @@ mod tests {
     }
 
     #[test]
+    fn qfx_cleaning_omits_default_account_but_keeps_non_default_account() {
+        let config = hub();
+        let scan = scan_with(vec![november(&[])]);
+        let plan = run_plan(
+            &config,
+            &scan,
+            &JournalSnapshot::default(),
+            vec![
+                stmt(
+                    "checking",
+                    0,
+                    vec![txn(
+                        nov(12),
+                        -850,
+                        "qfx-checking",
+                        "COFFEE STAND PURCHASE 11/12/26 BOSTON MA CARD 4321",
+                        Some("POS"),
+                    )],
+                    &digest("qfx-checking"),
+                ),
+                stmt(
+                    "savings",
+                    1,
+                    vec![txn(
+                        nov(13),
+                        -1250,
+                        "qfx-savings",
+                        "BOOK SHOP PURCHASE 11/13/26 CAMBRIDGE MA CARD 9876",
+                        Some("POS"),
+                    )],
+                    &digest("qfx-savings"),
+                ),
+            ],
+            vec!["checking.qfx", "savings.qfx"],
+            Vec::new(),
+        )
+        .expect("plan");
+        let after = &plan.month_edits[0].after;
+        let checking_id: String = transaction_key("checking", "qfx-checking")
+            .chars()
+            .take(8)
+            .collect();
+        let savings_id: String = transaction_key("savings", "qfx-savings")
+            .chars()
+            .take(8)
+            .collect();
+        let checking_row = after
+            .lines()
+            .find(|line| line.starts_with("- [ ] $8.50 "))
+            .expect("checking row");
+        let savings_row = after
+            .lines()
+            .find(|line| line.starts_with("- [ ] $12.50 "))
+            .expect("savings row");
+        assert_eq!(
+            checking_row.split(" ^bank-").next(),
+            Some("- [ ] $8.50 Coffee Stand")
+        );
+        assert_eq!(
+            checking_row.split(" ^bank-").nth(1),
+            Some(checking_id.as_str())
+        );
+        assert_eq!(
+            savings_row.split(" ^bank-").next(),
+            Some("- [ ] $12.50 Book Shop [acct:: savings]")
+        );
+        assert_eq!(
+            savings_row.split(" ^bank-").nth(1),
+            Some(savings_id.as_str())
+        );
+        let checking_payee = checking_row.split(" ^bank-").next().unwrap();
+        let savings_payee = savings_row.split(" ^bank-").next().unwrap();
+        for row in [checking_payee, savings_payee] {
+            assert!(!row.contains("4321"));
+            assert!(!row.contains("9876"));
+            assert!(!row.contains("BOSTON"));
+            assert!(!row.contains("CAMBRIDGE"));
+        }
+        assert!(!checking_row.contains("[acct:: checking]"));
+    }
+
+    #[test]
     fn force_restore_recreates_only_missing_journal_rows() {
         let config = hub();
         let id = "8f3a2c1d";
@@ -1634,9 +1719,9 @@ mod tests {
         assert_eq!(plan.restored_rows[0].id.as_deref(), Some(id));
         assert_eq!(plan.restored_rows[0].cents, -1_000);
         assert!(!plan.restored_rows[0].acknowledged);
-        assert!(plan.month_edits[0].after.contains(
-            "- [ ] $10.00 Shoprite [acct:: checking] ^bank-8f3a2c1d"
-        ));
+        assert!(plan.month_edits[0]
+            .after
+            .contains("- [ ] $10.00 Shoprite ^bank-8f3a2c1d"));
         assert!(plan.journal_events.is_empty());
         assert!(plan.changed);
 
@@ -1882,8 +1967,7 @@ mod tests {
         assert!(!edit.after.contains("Past tie ^bank-"));
         assert!(!edit.after.contains("Future tie ^bank-"));
         assert!(
-            edit.after
-                .contains("- [ ] $20.00 Coffee Shop [acct:: checking] ^bank-"),
+            edit.after.contains("- [ ] $20.00 Coffee Shop ^bank-"),
             "after: {}",
             edit.after
         );
@@ -2417,7 +2501,7 @@ mod tests {
         let edit = &plan.month_edits[0];
         assert!(
             edit.after.contains(
-                "- [ ] $42.00 Whole Foods Market [cat:: groceries] [acct:: checking] ^bank-"
+                "- [ ] $42.00 Whole Foods Market [cat:: groceries] ^bank-"
             ),
             "after: {}",
             edit.after
@@ -2452,8 +2536,7 @@ mod tests {
         // fixture row itself), never as a second taught row.
         let edit = &plan.month_edits[0];
         assert!(
-            edit.after
-                .contains("- [ ] $42.00 Wholefds [acct:: checking] ^bank-"),
+            edit.after.contains("- [ ] $42.00 Wholefds ^bank-"),
             "after: {}",
             edit.after
         );
@@ -2508,9 +2591,9 @@ mod tests {
             Vec::new(),
         )
         .expect("cleaned merchant match");
-        assert!(plan.month_edits[0].after.contains(
-            "- [ ] $11.00 My preferred cafe [acct:: checking] ^bank-"
-        ));
+        assert!(plan.month_edits[0]
+            .after
+            .contains("- [ ] $11.00 My preferred cafe ^bank-"));
     }
 
     #[test]
@@ -2591,9 +2674,8 @@ mod tests {
         .expect("plan");
         let edit = &plan.month_edits[0];
         assert!(
-            edit.after.contains(
-                "- [ ] $42.00 Second Tie [cat:: dining] [acct:: checking] ^bank-"
-            ),
+            edit.after
+                .contains("- [ ] $42.00 Second Tie [cat:: dining] ^bank-"),
             "after: {}",
             edit.after
         );
@@ -2635,7 +2717,7 @@ mod tests {
         let edit = &plan.month_edits[0];
         assert!(
             edit.after.contains(
-                "- [ ] $9.99 Smashburger [acct:: checking] [[eat/smashburger|🍔]] ^bank-"
+                "- [ ] $9.99 Smashburger [[eat/smashburger|🍔]] ^bank-"
             ),
             "after: {}",
             edit.after
@@ -2672,8 +2754,7 @@ mod tests {
         .expect("plan");
         let edit = &plan.month_edits[0];
         assert!(
-            edit.after
-                .contains("- [ ] $9.99 Smashburger [acct:: checking] ^bank-"),
+            edit.after.contains("- [ ] $9.99 Smashburger ^bank-"),
             "after: {}",
             edit.after
         );
@@ -2710,9 +2791,8 @@ mod tests {
         .expect("plan");
         let edit = &plan.month_edits[0];
         assert!(
-            edit.after.contains(
-                "- [ ] $9.99 Smashburger [acct:: checking] [[recipes/smash]] ^bank-"
-            ),
+            edit.after
+                .contains("- [ ] $9.99 Smashburger [[recipes/smash]] ^bank-"),
             "after: {}",
             edit.after
         );
@@ -2752,8 +2832,7 @@ mod tests {
         assert!(edit.after.contains("month: 2026-10"));
         assert!(edit.after.contains(STAMP));
         assert!(
-            edit.after
-                .contains("- [ ] $25.00 Corner Store [acct:: checking] ^bank-"),
+            edit.after.contains("- [ ] $25.00 Corner Store ^bank-"),
             "after: {}",
             edit.after
         );
@@ -2828,9 +2907,7 @@ mod tests {
             assert!(edit.after.find(content).unwrap() < inserted, "{content}");
         }
         assert!(inserted < edit.after.find("## Sat Nov 14\r\n").unwrap());
-        assert!(edit
-            .after
-            .contains("- [ ] $2.00 Newsstand [acct:: checking] ^bank-"));
+        assert!(edit.after.contains("- [ ] $2.00 Newsstand ^bank-"));
     }
 
     #[test]
@@ -2923,9 +3000,7 @@ mod tests {
         assert_eq!(plan.files[0].balance_cents, Some(100_000));
         let edit = &plan.month_edits[0];
         assert!(
-            edit.after.contains(
-                "- [ ] $13.71 Smashburger Card 1234 [acct:: checking] ^bank-"
-            ),
+            edit.after.contains("- [ ] $13.71 Smashburger ^bank-"),
             "after: {}",
             edit.after
         );

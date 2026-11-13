@@ -148,6 +148,30 @@ mod tests {
     }
 
     #[test]
+    fn qfx_merchant_keys_ignore_dates_cards_and_order_codes() {
+        assert_eq!(
+            merchant_key(
+                "PURCHASE 11/12/26 SQ *COFFEE SHOP NEW YORK NY CARD 4321"
+            ),
+            merchant_key(
+                "PURCHASE 11/14/26 SQ *COFFEE SHOP NEW YORK NY CARD 9876"
+            )
+        );
+        assert_eq!(
+            merchant_key("COFFEE SHOP PURCHASE 11/12/26 NEW YORK NY CARD 4321"),
+            merchant_key("COFFEE SHOP PURCHASE 11/14/26 NEW YORK NY CARD 9876")
+        );
+        assert_eq!(
+            merchant_key("GROCERY SHOP *AB12"),
+            merchant_key("GROCERY SHOP *CD34")
+        );
+        assert_ne!(
+            merchant_key("DELIVERY *SUSHI"),
+            merchant_key("DELIVERY *PIZZA")
+        );
+    }
+
+    #[test]
     fn reserve_reuses_and_extends_on_collision() {
         let (first, second) = colliding_bank_ids("checking");
         let key_a = transaction_key("checking", &first);
