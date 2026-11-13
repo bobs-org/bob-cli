@@ -17,7 +17,7 @@ use super::{
         HOLD_UNRECONCILED, HOLD_UNRESOLVABLE, KEPT_CONSENT_REMOVED, KEPT_GONE,
         KEPT_MANUAL, KEPT_POLICY, KEPT_UNSAVED,
     },
-    archive_scan::scan_archive_evidence,
+    archive_scan::{scan_archive_evidence, SavedIdSnapshot},
     archive_state::{
         ArchiveJournal, ArchiveLabelIdentity, ArchiveTerminalKind,
     },
@@ -173,6 +173,7 @@ pub(crate) fn apply_live<R: GmailRead>(
     account: &str,
     args: &SyncArgs,
     watch_threads: &[WatchThreadOutcome],
+    saved_id_snapshot: &SavedIdSnapshot,
 ) -> Result<LiveArchiveOutcome, GmailError> {
     let mut outcome = LiveArchiveOutcome::default();
     if !config.archive_enabled() {
@@ -242,6 +243,7 @@ pub(crate) fn apply_live<R: GmailRead>(
             return Ok(outcome);
         }
     };
+    scan = scan.with_saved_id_snapshot(saved_id_snapshot);
     let mut journal = match ArchiveJournal::load(vault) {
         Ok(journal) => journal,
         Err(error) => {
@@ -322,6 +324,19 @@ pub(crate) fn apply_live<R: GmailRead>(
         }
         outcome.deferred.extend(preview.deferred);
         outcome.digest.clone_from(&preview.plan.digest);
+        if matches!(
+            &preview.plan.gate,
+            archive_preview::ArchiveGate::Paused { reason }
+                if *reason == archive_preview::GATE_MISMATCH
+        ) {
+            outcome.warnings.push(
+                "the confirmation digest does not match the current Gmail preview".to_string(),
+            );
+            append_paused_rows(&preview.plan, &mut outcome);
+            outcome.hints =
+                super::report::archive_restore_hints(&scan, &journal);
+            return Ok(outcome);
+        }
         if preview.plan.rows.is_empty() {
             outcome.hints =
                 super::report::archive_restore_hints(&scan, &journal);
@@ -408,6 +423,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 return Ok(outcome);
             }
         };
+        scan = scan.with_saved_id_snapshot(saved_id_snapshot);
     }
     if !scan.scan_complete() {
         outcome.warnings.push(
@@ -484,6 +500,22 @@ pub(crate) fn apply_live<R: GmailRead>(
     }
     outcome.deferred.extend(preview.deferred);
     outcome.digest.clone_from(&preview.plan.digest);
+
+    // A supplied digest mismatch is a hard no-write result, even when the
+    // plan would otherwise be ungated or contains no actionable rows.
+    if matches!(
+        &preview.plan.gate,
+        archive_preview::ArchiveGate::Paused { reason }
+            if *reason == archive_preview::GATE_MISMATCH
+    ) {
+        outcome.warnings.push(
+            "the confirmation digest does not match the current Gmail preview"
+                .to_string(),
+        );
+        append_paused_rows(&preview.plan, &mut outcome);
+        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
+        return Ok(outcome);
+    }
 
     // Previously owned receipts only, captured before any recovery or close
     // persistence in this run: newly archived or reconciled threads in this
@@ -1041,6 +1073,32 @@ fn gate_reason(gate: &archive_preview::ArchiveGate) -> &'static str {
         archive_preview::ArchiveGate::Open { .. } => "eligible",
         archive_preview::ArchiveGate::Paused { reason } => reason,
     }
+}
+
+fn append_paused_rows(
+    plan: &archive_preview::ArchivePlan,
+    outcome: &mut LiveArchiveOutcome,
+) {
+    let reason = gate_reason(&plan.gate);
+    for row in &plan.rows {
+        outcome.rows.push(ArchiveRow {
+            thread_id: row.key.thread_id().to_string(),
+            note: row.note.clone(),
+            action: ACTION_PAUSED_LIVE,
+            reason,
+            messages: row.messages(),
+            tasks: row
+                .tasks
+                .iter()
+                .map(|task| ArchiveTaskRef {
+                    path: task.path.clone(),
+                    line: task.line,
+                    block_id: task.block_id.clone(),
+                })
+                .collect(),
+        });
+    }
+    outcome.failed = true;
 }
 
 /// Recover a remote archive whose terminal journal append failed. The

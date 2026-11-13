@@ -10,7 +10,7 @@ use std::{collections::BTreeSet, path::Path, time::Duration};
 use super::{
     archive_apply,
     archive_preview::{self, PreviewInput},
-    archive_scan::scan_archive_evidence,
+    archive_scan::{scan_archive_evidence, SavedIdSnapshot},
     archive_state::{ArchiveJournal, ArchiveLabelIdentity},
     discover::{self, select_candidates, validate_limit},
     enroll::{EnrollmentFold, EnrollmentOrigin, Membership},
@@ -138,6 +138,19 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     warnings.extend(enrollment.warnings().iter().cloned());
     warnings.extend(watchers.warnings().iter().cloned());
 
+    // Freeze validated saved IDs before watch preparation can hydrate the
+    // managed mail cards. IDs introduced by this run stay unsaved until the
+    // next sync, in both live apply and dry-run projection.
+    let (saved_id_snapshot, saved_id_snapshot_error) =
+        if config.archive_enabled() && !args.no_archive {
+            match capture_archive_saved_ids(&vault, folder, &index) {
+                Ok(snapshot) => (Some(snapshot), None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
+
     let mut discovered_ids = Vec::new();
     let mut has_run_failure = false;
     if args.limit > 0 {
@@ -240,6 +253,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             fetch_deferred_keys.extend(fetched.deferred.iter().cloned());
         }
         for (key, error) in fetched.failures {
+            has_run_failure = true;
             warnings.push(format!(
                 "skipped Gmail thread {}: {}: {}",
                 key.thread_id(),
@@ -431,21 +445,67 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     // Live archive runs after durable filing/watch application and before
     // final report/health settlement. Filing commits are already durable;
     // archive failures never roll them back.
+    let filing_incomplete = outcome.failed
+        || !outcome.failures.is_empty()
+        || !outcome.deferred.is_empty()
+        || extra_results.iter().any(|row| row.status == "problem");
+    let recovery_incomplete = !args.dry_run
+        && !matches!(
+            file::recovery_presence(&vault, &account),
+            file::RecoveryPresence::Absent
+        );
+    let mut archive_skip_warning = None;
+    let mut archive_error = None;
     let live_archive = if !args.dry_run && !outcome.busy {
-        let watch_snapshot = outcome.watch_threads.clone();
-        Some(archive_apply::apply_live(
-            &coordinator,
-            &gog,
-            &config,
-            &vault,
-            &account,
-            args,
-            &watch_snapshot,
-        )?)
+        if !config.archive_enabled() {
+            Some(archive_apply::LiveArchiveOutcome::default())
+        } else if args.no_archive {
+            Some(archive_apply::LiveArchiveOutcome {
+                skipped_no_archive: true,
+                ..archive_apply::LiveArchiveOutcome::default()
+            })
+        } else if let Some(error) = saved_id_snapshot_error.as_deref() {
+            archive_skip_warning = Some(format!(
+                "skipped Gmail archive writes: could not capture pre-hydration saved IDs: {error}"
+            ));
+            None
+        } else if filing_incomplete || recovery_incomplete {
+            archive_skip_warning = Some(
+                "skipped Gmail archive writes: filing failed or Gmail sync recovery evidence is incomplete".to_string(),
+            );
+            None
+        } else if let Some(snapshot) = saved_id_snapshot.as_ref() {
+            let watch_snapshot = outcome.watch_threads.clone();
+            match archive_apply::apply_live(
+                &coordinator,
+                &gog,
+                &config,
+                &vault,
+                &account,
+                args,
+                &watch_snapshot,
+                snapshot,
+            ) {
+                Ok(live) => Some(live),
+                Err(error) => {
+                    archive_error = Some(error);
+                    None
+                }
+            }
+        } else {
+            archive_skip_warning = Some(
+                "skipped Gmail archive writes: no complete pre-hydration saved-ID snapshot is available".to_string(),
+            );
+            None
+        }
     } else {
         None
     };
-    if !args.dry_run && !outcome.busy {
+    if !args.dry_run
+        && !outcome.busy
+        && !filing_incomplete
+        && !recovery_incomplete
+    {
         health::record_success()?;
     }
     // The filing projection's watch outcomes feed archive planning: threads
@@ -477,6 +537,8 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             labels.as_ref(),
             args,
             &watch_threads,
+            saved_id_snapshot.as_ref(),
+            saved_id_snapshot_error.as_deref(),
             &mut report,
         )?;
     } else if let Some(live) = live_archive {
@@ -497,7 +559,32 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             report.ok = false;
         }
     }
+    if let Some(warning) = archive_skip_warning {
+        report.warnings.push(warning);
+        report.ok = false;
+    }
+    if let Some(error) = archive_error {
+        report.attach_archive_error(error);
+    }
     Ok(report)
+}
+
+fn capture_archive_saved_ids(
+    vault: &Path,
+    folder: &Path,
+    index: &MailIndex,
+) -> Result<SavedIdSnapshot, String> {
+    let relations = bob_config::load_relations_config(
+        &bob_config::config_path(),
+    )
+    .map_err(|error| format!("could not read relations config: {error}"))?;
+    let scan = scan_archive_evidence(vault, folder, index, &relations)
+        .map_err(|error| format!("{}: {}", error.kind(), error.message()))?;
+    let snapshot = scan.saved_id_snapshot();
+    if !snapshot.is_complete() {
+        return Err("the vault scan did not read every note".to_string());
+    }
+    Ok(snapshot)
 }
 
 /// Read-only dry-run archive projection after the filing projection.
@@ -516,6 +603,8 @@ fn attach_archive_dry_run<R: GmailRead>(
     labels: Option<&Vec<GmailLabel>>,
     args: &SyncArgs,
     watch_threads: &[super::watch_apply::WatchThreadOutcome],
+    saved_id_snapshot: Option<&SavedIdSnapshot>,
+    saved_id_snapshot_error: Option<&str>,
     report: &mut SyncReport,
 ) -> Result<(), GmailError> {
     if !config.archive_enabled() {
@@ -523,6 +612,24 @@ fn attach_archive_dry_run<R: GmailRead>(
     }
     if args.no_archive {
         report.archive_skipped = true;
+        return Ok(());
+    }
+    let Some(saved_id_snapshot) = saved_id_snapshot else {
+        let message = saved_id_snapshot_error.unwrap_or(
+            "no complete pre-hydration saved-ID snapshot is available",
+        );
+        report.warnings.push(format!(
+            "skipped archive preview: could not capture pre-hydration saved IDs: {message}"
+        ));
+        report.ok = false;
+        return Ok(());
+    };
+    if !saved_id_snapshot.is_complete() {
+        report.warnings.push(
+            "skipped archive preview: the pre-hydration vault scan was incomplete"
+                .to_string(),
+        );
+        report.ok = false;
         return Ok(());
     }
     let relations = match bob_config::load_relations_config(
@@ -550,6 +657,7 @@ fn attach_archive_dry_run<R: GmailRead>(
             return Ok(());
         }
     };
+    let scan = scan.with_saved_id_snapshot(saved_id_snapshot);
     if !scan.scan_complete() {
         report.warnings.push(
             "skipped archive preview: the vault scan did not read every note"
@@ -592,6 +700,7 @@ fn attach_archive_dry_run<R: GmailRead>(
             return Ok(());
         }
     };
+    let journal = journal.project_baseline(account, receipt.clone(), &scan);
     let mut suppressed = BTreeSet::new();
     for outcome in watch_threads {
         if outcome.action == ACTION_LIFTED || outcome.action == ACTION_BOUNCED {

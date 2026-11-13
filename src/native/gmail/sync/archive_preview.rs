@@ -635,18 +635,29 @@ pub(crate) fn plan_digest(
     hex::encode(Sha256::digest(bytes))
 }
 
-/// The confirmation gate: any historical-backlog member requires an
-/// explicit matching `-c` digest regardless of count, and so does an
-/// archive batch larger than `archive_max`. An empty plan stays open and
-/// ignores a supplied digest.
+/// The confirmation gate: any supplied digest must match the current plan,
+/// even when confirmation would otherwise be unnecessary or the plan is
+/// empty. Historical backlog and batches larger than `archive_max` still
+/// require an explicit matching digest.
 pub(crate) fn apply_gate(
     rows: &[ArchivePreviewRow],
     archive_max: u32,
     confirm: Option<&str>,
     digest: &str,
 ) -> ArchiveGate {
+    if confirm.is_some_and(|supplied| supplied != digest) {
+        return ArchiveGate::Paused {
+            reason: GATE_MISMATCH,
+        };
+    }
     if rows.is_empty() {
-        return ArchiveGate::Open { confirmed: false };
+        return if confirm.is_some() {
+            ArchiveGate::Paused {
+                reason: GATE_MISMATCH,
+            }
+        } else {
+            ArchiveGate::Open { confirmed: false }
+        };
     }
     let archive_count =
         rows.iter().filter(|row| row.is_archive()).count() as u32;
@@ -656,12 +667,7 @@ pub(crate) fn apply_gate(
         return ArchiveGate::Open { confirmed: false };
     }
     match confirm {
-        Some(supplied) if supplied == digest => {
-            ArchiveGate::Open { confirmed: true }
-        }
-        Some(_) => ArchiveGate::Paused {
-            reason: GATE_MISMATCH,
-        },
+        Some(_) => ArchiveGate::Open { confirmed: true },
         None => ArchiveGate::Paused {
             reason: if rows.iter().any(|row| row.historical) {
                 GATE_BACKLOG
@@ -892,12 +898,12 @@ pub(crate) fn preview<R: GmailRead>(
             &rows,
         ))
     };
-    let gate = match &digest {
-        Some(digest) => {
-            apply_gate(&rows, config.archive_max(), confirm, digest)
-        }
-        None => ArchiveGate::Open { confirmed: false },
-    };
+    let gate = apply_gate(
+        &rows,
+        config.archive_max(),
+        confirm,
+        digest.as_deref().unwrap_or_default(),
+    );
     Ok(PreviewReport {
         plan: ArchivePlan { rows, digest, gate },
         warnings,
@@ -1832,6 +1838,12 @@ mod tests {
             ArchiveGate::Open { confirmed: false }
         );
         assert_eq!(
+            apply_gate(&[row(false)], 10, Some("stale"), digest),
+            ArchiveGate::Paused {
+                reason: GATE_MISMATCH
+            }
+        );
+        assert_eq!(
             apply_gate(&[row(true)], 10, None, digest),
             ArchiveGate::Paused {
                 reason: GATE_BACKLOG
@@ -1885,7 +1897,15 @@ mod tests {
 
         assert_eq!(
             apply_gate(&[], 10, Some(digest), digest),
-            ArchiveGate::Open { confirmed: false }
+            ArchiveGate::Paused {
+                reason: GATE_MISMATCH
+            }
+        );
+        assert_eq!(
+            apply_gate(&[], 10, Some("stale"), ""),
+            ArchiveGate::Paused {
+                reason: GATE_MISMATCH
+            }
         );
     }
 

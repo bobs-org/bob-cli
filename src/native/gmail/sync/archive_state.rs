@@ -454,6 +454,59 @@ impl ArchiveJournal {
         counts
     }
 
+    /// Project the baseline that a live enabled run would append, entirely
+    /// in memory. Dry-run uses this to show first-enable backlog rows and to
+    /// derive the same open-observation witnesses as the following live run.
+    pub(crate) fn project_baseline(
+        &self,
+        account: &str,
+        label: ArchiveLabelIdentity,
+        scan: &ArchiveScan,
+    ) -> Self {
+        let mut projected = self.clone();
+        if let Some(event) =
+            projected.event_for_enablement(account, true, label)
+        {
+            projected.apply_projected_observation(&event);
+        }
+
+        let mut keys: Vec<&ThreadKey> = scan.threads().collect();
+        keys.sort();
+        for key in keys {
+            let Some(evidence) = scan.evidence(key) else {
+                continue;
+            };
+            if let Some(event) = projected.event_for_open(scan, evidence) {
+                projected.apply_projected_observation(&event);
+            }
+        }
+        projected
+    }
+
+    fn apply_projected_observation(&mut self, event: &PlannedArchiveEvent) {
+        let stored = StoredEvent {
+            ts: pref_journal::event_timestamp(),
+            host: "dry-run".to_string(),
+            path: "dry-run.jsonl".to_string(),
+            line: 0,
+            kind: event.kind.to_string(),
+            value: json!({"value": event.value.clone()}),
+        };
+        match event.kind {
+            ENABLED_KIND => {
+                if let Some(parsed) = parse_enablement(&stored) {
+                    self.apply_enablement(parsed);
+                }
+            }
+            OBSERVED_KIND => {
+                if let Some(parsed) = parse_open_observation(&stored) {
+                    self.apply_open_observation(parsed);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Plan a body-free enable/disable transition. Fresh default-off state
     /// stays write-free; a disable record is emitted only when it turns off
     /// a previously enabled account.

@@ -21,7 +21,7 @@ use super::ThreadKey;
 use crate::native::env as bob_env;
 use crate::native::gmail::cli::SyncArgs;
 use crate::native::gmail::route::RouteProblem;
-use crate::native::gmail::{save, ui};
+use crate::native::gmail::{save, ui, GmailError};
 use crate::native::style::Styler;
 
 const AWAITING_TAG: &str = "#awaiting_reply";
@@ -179,6 +179,10 @@ pub(crate) struct SyncReport {
     pub(crate) archive_hints: Vec<ArchiveHint>,
     /// Archive planning was skipped with `-n` on an archive-enabled host.
     pub(crate) archive_skipped: bool,
+    /// The live archive phase failed after filing/watch work completed.
+    /// Keeping it on the report preserves those rows and the error's exit
+    /// code instead of replacing the whole sync report.
+    pub(crate) archive_error: Option<GmailError>,
 }
 
 impl SyncReport {
@@ -202,6 +206,7 @@ impl SyncReport {
             archive_config: None,
             archive_hints: Vec::new(),
             archive_skipped: false,
+            archive_error: None,
         }
     }
 
@@ -257,7 +262,25 @@ impl SyncReport {
         }
     }
 
+    pub(crate) fn attach_archive_error(&mut self, error: GmailError) {
+        self.warnings.extend(error.warnings().iter().cloned());
+        let mut warning = format!(
+            "Gmail archive phase failed: {}: {}",
+            error.kind(),
+            error.message()
+        );
+        if let Some(hint) = error.hint() {
+            warning.push_str(&format!("; hint: {hint}"));
+        }
+        self.warnings.push(warning);
+        self.archive_error = Some(error);
+        self.ok = false;
+    }
+
     pub(crate) fn exit_code(&self) -> i32 {
+        if let Some(error) = &self.archive_error {
+            return error.exit_code();
+        }
         if self.ok {
             0
         } else {
@@ -370,6 +393,7 @@ pub(crate) fn from_outcome(
         archive_config: None,
         archive_hints: Vec::new(),
         archive_skipped: false,
+        archive_error: None,
     }
 }
 
@@ -592,6 +616,13 @@ fn json_document(report: &SyncReport) -> Value {
         document["archive_enabled"] = json!(config.enabled);
         document["archive_label"] = json!(config.label);
         document["archive_max"] = json!(config.max);
+    }
+    if let Some(error) = &report.archive_error {
+        document["archive_error"] = json!({
+            "kind": error.kind(),
+            "message": error.message(),
+            "hint": error.hint(),
+        });
     }
     document
 }
@@ -948,6 +979,7 @@ mod tests {
             archive_config: None,
             archive_hints: Vec::new(),
             archive_skipped: false,
+            archive_error: None,
         };
         let value = json_document(&report);
         assert_eq!(value["schema_version"], 1);
@@ -1001,6 +1033,7 @@ mod tests {
                 note: "mail/2026/bb02.md".into(),
             }],
             archive_skipped: false,
+            archive_error: None,
         };
         let value = json_document(&report);
         assert_eq!(value["schema_version"], 1);
@@ -1064,6 +1097,7 @@ mod tests {
             archive_config: None,
             archive_hints: Vec::new(),
             archive_skipped: false,
+            archive_error: None,
         };
         assert!(!with_nothing(&quiet_report, "header".into())
             .contains("nothing new"));
@@ -1191,6 +1225,7 @@ mod tests {
             archive_config: None,
             archive_hints: Vec::new(),
             archive_skipped: false,
+            archive_error: None,
         };
         let one = header(&report);
         assert!(one.contains("watching 1 thread ·"), "{one}");
@@ -1229,6 +1264,7 @@ mod tests {
             archive_config: None,
             archive_hints: Vec::new(),
             archive_skipped: false,
+            archive_error: None,
         };
         let text = with_nothing(&report, "header".into());
         assert!(text.ends_with("nothing new"), "{text}");
@@ -1265,6 +1301,7 @@ mod tests {
             archive_config: None,
             archive_hints: Vec::new(),
             archive_skipped: false,
+            archive_error: None,
         };
         let text = with_nothing(&report, "header".into());
         assert!(!text.contains("nothing new"), "{text}");

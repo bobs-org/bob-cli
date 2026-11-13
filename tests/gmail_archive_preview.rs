@@ -36,6 +36,12 @@ fn write_archive_config(env: &GmailEnv, extra: &str) {
     ));
 }
 
+fn write_archive_disabled_config(env: &GmailEnv) {
+    env.write_config(&format!(
+        "timezone: America/New_York\ngmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n"
+    ));
+}
+
 fn write_task_settings(env: &GmailEnv) {
     let path = env
         .vault()
@@ -146,6 +152,22 @@ fn seed_thread(fake: &FakeGog, messages: Vec<Value>) {
     }));
 }
 
+fn seed_thread_and_messages(fake: &FakeGog, messages: Vec<Value>) {
+    seed_thread(fake, messages.clone());
+    let mut indexed = serde_json::Map::new();
+    for message in messages {
+        let id = message["id"].as_str().expect("message id").to_string();
+        indexed.insert(
+            id,
+            json!({
+                "threadId": WATCH_THREAD,
+                "labelIds": message["labelIds"],
+            }),
+        );
+    }
+    fake.set_messages(Value::Object(indexed));
+}
+
 fn journal_kinds(env: &GmailEnv) -> Vec<String> {
     let dir = env.vault().join(".bob/gmail");
     let Ok(entries) = fs::read_dir(dir) else {
@@ -253,7 +275,7 @@ fn dry_run_pauses_backlog_and_confirms_with_the_digest() {
     write_task_settings(&env);
     let fake = FakeGog::new(&env, "gog");
     seed_labels(&fake, true);
-    seed_thread(
+    seed_thread_and_messages(
         &fake,
         vec![thread_message(MESSAGE_ID, &["INBOX", ENROLLMENT_ID])],
     );
@@ -366,6 +388,77 @@ fn dry_run_pauses_backlog_and_confirms_with_the_digest() {
     assert!(value["archive"].as_array().unwrap().is_empty());
     assert!(value.get("archive_digest").is_none());
     assert_eq!(journal_kinds(&env), before_journal, "-n consumes nothing");
+}
+
+#[test]
+fn first_enablement_dry_run_previews_the_same_confirmable_backlog() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-first-enable-preview");
+    write_archive_disabled_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_ID, &["INBOX", ENROLLMENT_ID])],
+    );
+
+    let saved = run_gmail(&env, &fake, &["save", WATCH_THREAD, "-f", "json"]);
+    assert_exit(&saved, 0, "save the thread before archive is enabled");
+    let doc = json_stdout(&saved);
+    let note = doc["note"].as_str().expect("saved note").to_string();
+    let link = doc["link"].as_str().expect("saved link");
+    let inbox = env.vault().join("gmail_inbox.md");
+    fs::write(
+        &inbox,
+        format!(
+            "---\ntype: \"[[inbox]]\"\nready_cap: off\n---\n\n## Tasks\n- [ ] #task first enable preview {link}\n"
+        ),
+    )
+    .expect("write linking task");
+    let adopted =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&adopted, 0, "adopt before enabling archive");
+    let text = fs::read_to_string(&inbox).expect("read task");
+    fs::write(&inbox, text.replacen("- [ ] #task", "- [x] #task", 1))
+        .expect("close task");
+
+    write_archive_config(&env, "");
+    let before_vault = snapshot_vault(&env);
+    let before_journal = journal_kinds(&env);
+    fake.clear_calls();
+    let preview = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-d", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&preview, 1, "first-enable backlog needs confirmation");
+    let value = json_stdout(&preview);
+    assert_eq!(value["archive"][0]["note"], note);
+    assert_eq!(value["archive"][0]["action"], "paused");
+    assert_eq!(value["archive"][0]["reason"], "backlog_unconfirmed");
+    let digest = value["archive_digest"]
+        .as_str()
+        .expect("first-enable preview digest")
+        .to_string();
+    assert_eq!(snapshot_vault(&env), before_vault, "dry-run writes nothing");
+    assert_eq!(
+        journal_kinds(&env),
+        before_journal,
+        "dry-run journals nothing"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+
+    let confirmed = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-c", &digest, "-f", "json"],
+    );
+    assert_exit(&confirmed, 0, "the first live run accepts the preview");
+    let value = json_stdout(&confirmed);
+    assert_eq!(value["archive_digest"].as_str(), Some(digest.as_str()));
+    assert_eq!(value["archive"][0]["action"], "archived");
+    assert_eq!(value["archive"][0]["messages"], json!([MESSAGE_ID]));
+    assert!(journal_kinds(&env).contains(&"gmail.archive_enabled".to_string()));
 }
 
 #[test]

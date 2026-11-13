@@ -36,6 +36,7 @@ use gmail_support::{
     json_stdout, run_gmail, stderr, stdout, FakeGog, GmailEnv, ACCOUNT, HOST,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 const THREAD_A: &str = "0123456789abcdef";
 const THREAD_B: &str = "aaaaaaaaaaaaaaaa";
@@ -160,6 +161,23 @@ fn remote_write_calls(fake: &FakeGog) -> Vec<Vec<String>> {
             })
         })
         .collect()
+}
+
+fn make_recovery_unreadable(env: &GmailEnv) {
+    let mut keyed = ACCOUNT.to_ascii_lowercase().into_bytes();
+    keyed.push(0);
+    keyed.extend_from_slice(
+        fs::canonicalize(env.vault())
+            .expect("canonical vault path")
+            .to_string_lossy()
+            .as_bytes(),
+    );
+    let digest = hex::encode(Sha256::digest(keyed));
+    let path = env
+        .root()
+        .join("state/bob/gmail")
+        .join(format!("sync-recovery-{digest}.json"));
+    fs::create_dir_all(path).expect("create unreadable recovery directory");
 }
 
 fn file_adopt(env: &GmailEnv, fake: &FakeGog) -> (String, String) {
@@ -611,6 +629,122 @@ fn live_pauses_backlog_without_confirm_and_creates_no_labels() {
 }
 
 #[test]
+fn supplied_confirmation_mismatch_never_writes_even_without_a_gate() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-confirm-mismatch");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let stale = "f".repeat(64);
+
+    fake.clear_calls();
+    let dry = run_gmail(
+        &env,
+        &fake,
+        &[
+            "sync", "-d", "-l", "0", "-r", "0", "-c", &stale, "-f", "json",
+        ],
+    );
+    assert_exit(&dry, 1, "wrong digest pauses the dry-run");
+    assert_eq!(
+        json_stdout(&dry)["archive"][0]["reason"],
+        "confirm_mismatch"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+
+    fake.clear_calls();
+    let live = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-c", &stale, "-f", "json"],
+    );
+    assert_exit(&live, 1, "wrong digest pauses live apply");
+    assert_eq!(
+        json_stdout(&live)["archive"][0]["reason"],
+        "confirm_mismatch"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    assert!(!journal_has(&env, "gmail.archived"));
+
+    set_inbox_task_status(&env, ' ');
+    fake.clear_calls();
+    let dry_empty = run_gmail(
+        &env,
+        &fake,
+        &[
+            "sync", "-d", "-l", "0", "-r", "0", "-c", &stale, "-f", "json",
+        ],
+    );
+    assert_exit(&dry_empty, 1, "wrong digest mismatches an empty dry-run");
+    let empty_value = json_stdout(&dry_empty);
+    assert!(empty_value["archive"].as_array().unwrap().is_empty());
+    assert!(empty_value.get("archive_digest").is_none());
+    assert!(empty_value["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| {
+            row.as_str()
+                .is_some_and(|text| text.contains("does not match"))
+        }));
+    assert!(remote_write_calls(&fake).is_empty());
+
+    fake.clear_calls();
+    let live_empty = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-c", &stale, "-f", "json"],
+    );
+    assert_exit(&live_empty, 1, "wrong digest mismatches an empty live plan");
+    let empty_value = json_stdout(&live_empty);
+    assert!(empty_value["archive"].as_array().unwrap().is_empty());
+    assert!(empty_value.get("archive_digest").is_none());
+    assert!(remote_write_calls(&fake).is_empty());
+}
+
+#[test]
+fn incomplete_filing_recovery_blocks_every_archive_write() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-filing-gate");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    make_recovery_unreadable(&env);
+    fake.clear_calls();
+
+    let output =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&output, 1, "incomplete sync recovery blocks archive");
+    let value = json_stdout(&output);
+    assert!(value["archive"].as_array().unwrap().is_empty());
+    assert!(
+        value["warnings"].as_array().unwrap().iter().any(|warning| {
+            warning.as_str().is_some_and(|warning| {
+                warning.contains("recovery evidence is incomplete")
+            })
+        }),
+        "the archive skip is explained: {value}"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    assert!(!journal_has(&env, "gmail.archive_closed"));
+    assert!(!journal_has(&env, "gmail.archived"));
+}
+
+#[test]
 fn live_keeps_unsaved_inbox_mail_without_mutation() {
     let env = GmailEnv::new("bob-cli-gmail-archive-apply-unsaved");
     write_archive_config(&env);
@@ -690,19 +824,27 @@ fn live_missing_modify_grant_is_setup_with_login_hint() {
     );
     let (_note, _) = file_adopt(&env, &fake);
     close_inbox_task(&env);
+    fake.set_search_pages(json!([{
+        "threads": [{"id": THREAD_A}],
+        "nextPageToken": null,
+        "resultSizeEstimate": 1
+    }]));
     fake.clear_calls();
-    let denied =
-        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    let denied = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
     assert_exit(&denied, 2, "missing modify grant is setup");
     let denied_json = json_stdout(&denied);
-    assert_eq!(denied_json["error"]["kind"], "modify_grant");
+    assert_eq!(denied_json["archive_error"]["kind"], "modify_grant");
     assert!(
-        denied_json["error"]["hint"]
+        denied_json["archive_error"]["hint"]
             .as_str()
             .unwrap_or_default()
             .contains("bob gmail login -s modify"),
         "login hint is loud:\n{denied_json}"
     );
+    assert!(denied_json["results"].as_array().is_some_and(|rows| {
+        rows.iter().any(|row| row["thread_id"] == THREAD_A)
+    }), "the enrolled filing row survives the archive setup error: {denied_json}");
+    assert!(denied_json["ok"] == false);
     assert!(
         fs::read_to_string(env.vault().join("gmail_inbox.md")).is_ok(),
         "filings remain after setup failure"

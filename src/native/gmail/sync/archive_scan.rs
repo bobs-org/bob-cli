@@ -219,6 +219,21 @@ pub(crate) struct ArchiveScan {
     dropped_ambiguous: Vec<DroppedMailLink>,
 }
 
+/// Saved message identities validated from managed mail cards before this
+/// sync hydrates any notes. A new card written during the run is deliberately
+/// absent, so its message IDs stay unsaved until a later run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SavedIdSnapshot {
+    ids_by_thread: BTreeMap<ThreadKey, BTreeSet<String>>,
+    complete: bool,
+}
+
+impl SavedIdSnapshot {
+    pub(crate) fn is_complete(&self) -> bool {
+        self.complete
+    }
+}
+
 impl ArchiveScan {
     /// Small synthetic scan for the archive-state fold tests. Production
     /// scans always use [`scan_archive_evidence`].
@@ -288,6 +303,42 @@ impl ArchiveScan {
     /// reads succeed.
     pub(crate) fn scan_complete(&self) -> bool {
         self.incomplete_reads.is_empty()
+    }
+
+    /// Capture only IDs from complete, validated managed mail cards.
+    pub(crate) fn saved_id_snapshot(&self) -> SavedIdSnapshot {
+        let ids_by_thread = self
+            .threads
+            .iter()
+            .filter(|(_, evidence)| evidence.mail_complete())
+            .map(|(key, evidence)| {
+                (key.clone(), evidence.saved_ids.iter().cloned().collect())
+            })
+            .collect();
+        SavedIdSnapshot {
+            ids_by_thread,
+            complete: self.scan_complete(),
+        }
+    }
+
+    /// Restrict post-hydration evidence to IDs already present at the start
+    /// of this run. Intersecting preserves validation from the current scan
+    /// and also drops IDs removed while filing was in progress.
+    pub(crate) fn with_saved_id_snapshot(
+        &self,
+        snapshot: &SavedIdSnapshot,
+    ) -> Self {
+        let mut scan = self.clone();
+        for (key, evidence) in &mut scan.threads {
+            let Some(saved_before_run) = snapshot.ids_by_thread.get(key) else {
+                evidence.saved_ids.clear();
+                continue;
+            };
+            evidence
+                .saved_ids
+                .retain(|id| saved_before_run.contains(id));
+        }
+        scan
     }
 
     /// Whether one thread's evidence proves all-closed completion: at
@@ -1390,6 +1441,32 @@ mod tests {
         assert_eq!(edited_found.saved_ids, before.saved_ids);
         assert_ne!(edited_found.note_fingerprint, Some(fingerprint));
         assert!(third.archivable(edited_found));
+    }
+
+    #[test]
+    fn pre_hydration_snapshot_excludes_ids_added_during_the_run() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.write("job.md", "- [x] #task Done [[mail/2026/lease]]\n");
+        let before = vault.scan();
+        let snapshot = before.saved_id_snapshot();
+        assert!(snapshot.is_complete());
+
+        vault.mail(
+            "mail/2026/lease.md",
+            ACCOUNT,
+            THREAD,
+            &[THREAD, "ff02ff02ff02ff02"],
+        );
+        let hydrated = vault.scan();
+        assert_eq!(evidence(&hydrated, THREAD).saved_ids.len(), 2);
+
+        let frozen = hydrated.with_saved_id_snapshot(&snapshot);
+        assert_eq!(
+            evidence(&frozen, THREAD).saved_ids,
+            vec![THREAD.to_string()]
+        );
+        assert!(frozen.archivable(evidence(&frozen, THREAD)));
     }
 
     #[test]
