@@ -80,7 +80,9 @@ pub(crate) fn parse_catalog(text: &str) -> CatalogRead {
     CatalogRead::Rows(rows)
 }
 
-fn parse_row(line: &str) -> Option<(String, String, CatalogRowState)> {
+pub(crate) fn parse_row(
+    line: &str,
+) -> Option<(String, String, CatalogRowState)> {
     let quote_indent = line.chars().take_while(|ch| *ch == ' ').count();
     if quote_indent > 3 {
         return None;
@@ -149,7 +151,7 @@ fn row_state(before_link: &str) -> CatalogRowState {
     CatalogRowState::Open
 }
 
-fn glyph_prefix_len(text: &str, glyph: &str) -> Option<usize> {
+pub(crate) fn glyph_prefix_len(text: &str, glyph: &str) -> Option<usize> {
     if text.starts_with(glyph) {
         return Some(glyph.len());
     }

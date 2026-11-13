@@ -2837,6 +2837,116 @@ Unrelated prose after the closed lane stays visible.\n\
     }
 
     #[test]
+    fn projects_catalog_snapshot_keeps_open_rows_and_omits_closed() {
+        let directory = vault(&[
+            ("Portfolio.md", "# Portfolio\n"),
+            ("alpha.md", "# Alpha\n"),
+            ("scheduled_child.md", "# Scheduled child\n"),
+            ("blocked_child.md", "# Blocked child\n"),
+            ("warning_child.md", "# Warning child\n"),
+            ("done_child.md", "# Done child\n"),
+            ("canceled_child.md", "# Canceled child\n"),
+            (
+                "Host.md",
+                "---\n\
+type: [[project]]\n\
+parent: \"[[Portfolio]]\"\n\
+status: wip\n\
+---\n\
+# Catalog host\n\
+\n\
+## Projects\n\
+\n\
+> [!projects]\n\
+>\n\
+> - **[[alpha]]** — Ship the open child!\n\
+> - 🗓️ **[[scheduled_child]]** — Wait until later!\n\
+> - ⛓️ **[[blocked_child]]** — Waiting on a dependency!\n\
+> - ⚠️ **[[warning_child]]** — no valid `^prj` task\n\
+> - **Closed**\n\
+>   - ✅ **[[done_child]]** — Finished the closed child!\n\
+>   - ❌ **[[canceled_child]]** — Dropped the canceled child!\n\
+\n\
+## Outcome\n\
+- [ ] Deliver the catalog host #task #prj ^prj\n",
+            ),
+        ]);
+        let projection = project_bob(&directory, "Host.md", false, true);
+        let output = markdown(&projection);
+        assert!(output.contains("# Projects"), "{output}");
+        assert!(output.contains("kind=\"projects\""), "{output}");
+        assert!(output.contains("[scheduled]{.chip}"), "{output}");
+        assert!(output.contains("[blocked]{.chip}"), "{output}");
+        assert!(output.contains("[needs \\^prj]{.chip}"), "{output}");
+        assert!(output.contains("Ship the open child"), "{output}");
+        assert!(!output.contains("Finished the closed child"), "{output}");
+        assert!(!output.contains("Dropped the canceled child"), "{output}");
+        assert!(!output.contains("Sub\\-projects\\:"), "{output}");
+        assert_transclusion_golden(&output, "bob-projects-catalog-only");
+    }
+
+    #[test]
+    fn projects_legacy_marker_keeps_the_masthead_row() {
+        let directory = vault(&[
+            ("Portfolio.md", "# Portfolio\n"),
+            ("OpenChild.md", "# Open child\n"),
+            ("DoneChild.md", "# Done child\n"),
+            (
+                "Host.md",
+                "---\n\
+type: [[project]]\n\
+parent: \"[[Portfolio]]\"\n\
+status: wip\n\
+---\n\
+# Legacy host\n\
+\n\
+## Outcome\n\
+- [ ] Deliver the legacy host #task #prj ^prj\n\
+\t- 🧩 **Sub-projects:** [[OpenChild]] • ~~[[DoneChild]]~~ ✅\n",
+            ),
+        ]);
+        let projection = project_bob(&directory, "Host.md", false, true);
+        let output = markdown(&projection);
+        assert!(output.contains("Sub\\-projects\\:"), "{output}");
+        assert!(output.contains("[done]{.chip}"), "{output}");
+        assert!(!output.contains("kind=\"projects\""), "{output}");
+        assert_transclusion_golden(&output, "bob-projects-legacy-only");
+    }
+
+    #[test]
+    fn projects_all_closed_catalog_omits_the_section() {
+        let directory = vault(&[
+            ("Portfolio.md", "# Portfolio\n"),
+            ("done_child.md", "# Done child\n"),
+            (
+                "Host.md",
+                "---\n\
+type: [[project]]\n\
+parent: \"[[Portfolio]]\"\n\
+status: wip\n\
+---\n\
+# Closed host\n\
+\n\
+## Projects\n\
+\n\
+> [!projects]\n\
+>\n\
+> - **Closed**\n\
+>   - ✅ **[[done_child]]** — Finished the closed child!\n\
+\n\
+## Outcome\n\
+- [ ] Deliver the closed host #task #prj ^prj\n",
+            ),
+        ]);
+        let projection = project_bob(&directory, "Host.md", false, true);
+        let output = markdown(&projection);
+        assert!(!output.contains("# Projects"), "{output}");
+        assert!(!output.contains("kind=\"projects\""), "{output}");
+        assert!(!output.contains("Finished the closed child"), "{output}");
+        assert_transclusion_golden(&output, "bob-projects-all-closed");
+    }
+
+    #[test]
     fn area_projection_keeps_blocked_ticklers_and_condenses_long_histories() {
         let mut area_note = String::from(
             "---\ntype: [[area]]\nparent: \"[[Portfolio|Portfolio Alpha]]\"\ncreated: 2026-09-30\n---\n# Area title\n\nIntro paragraph stays above sections.\n\n## Tasks\n### Blocked\n",

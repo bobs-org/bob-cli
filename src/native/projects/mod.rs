@@ -192,6 +192,10 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 }
 
 mod catalog_rows;
+pub(crate) use catalog_rows::{
+    glyph_prefix_len, parse_row, CatalogRowState, BLOCKED_GLYPH,
+    CANCELED_GLYPH, DONE_GLYPH, SCHEDULED_GLYPH, WARNING_GLYPH,
+};
 pub(crate) mod edits;
 mod model;
 mod output;

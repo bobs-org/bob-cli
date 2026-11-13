@@ -10,7 +10,7 @@
 //! text, or inside repeated transclusions keep their actual source because
 //! each occurrence carries its own attribution.
 //!
-//! Three responsibilities live here for the task-rows phase:
+//! Four responsibilities live here for the task-rows phase:
 //!
 //! - [`BobTaskContext`] carries the snapshot date every chip formats
 //!   against. Dates come from the caller; this module never reads the
@@ -29,13 +29,20 @@
 //!   the Obsidian layer already resolved (`Note › task text`); closed
 //!   sub-projects get `done`/`canceled` chips with no strike around the
 //!   link. Code, prose mentioning a marker, malformed lines, and nested
-//!   children's rows are never mistaken for a parent's metadata.
+//!   children's rows are never mistaken for a parent's metadata. Notes
+//!   that still carry only that legacy marker keep this masthead row.
+//! - A `[!projects]` callout becomes a linked block of open rows with
+//!   their criterion. Leading state glyphs become chips (`scheduled`,
+//!   `blocked`, `needs ^prj`) rather than raw emoji; the `**Closed**`
+//!   group and its rows are omitted. When no open rows remain the callout
+//!   is dropped so empty-section handling can retire the heading.
 //!
 //! Wire-up note: [`apply_bob_task_rows`] is the per-view entry point for
-//! chips and relationship rows. The transclusion assembler calls it on the
-//! final section blocks while each occurrence still carries its own
-//! [`TaskSource`], then the logs/visibility pass condenses managed logs,
-//! omits or restores closed tasks, and filters self-snapshot `#ref` rows.
+//! chips, relationship rows, and the projects catalog. The transclusion
+//! assembler calls it on the final section blocks while each occurrence
+//! still carries its own [`TaskSource`], then the logs/visibility pass
+//! condenses managed logs, omits or restores closed tasks, and filters
+//! self-snapshot `#ref` rows.
 //! [`apply_scheduled_lanes`] then splits remaining Blocked `[?]` tasks
 //! into a Waiting on lane (open dependencies, `#prj_is_blocked`, or no
 //! future date) and a compact Scheduled lane grouped This week / This
@@ -59,9 +66,10 @@ use super::view::{
     TaskSource,
 };
 use crate::native::projects::{
-    display_for_wikilink, list_item_content, wikilink_spans_in_line,
-    SubprojectState, SUBPROJECTS_MARKER_PREFIX,
-    SUBPROJECT_FUTURE_SCHEDULE_MARKER,
+    display_for_wikilink, glyph_prefix_len, list_item_content, parse_row,
+    wikilink_spans_in_line, CatalogRowState, SubprojectState, BLOCKED_GLYPH,
+    CANCELED_GLYPH, DONE_GLYPH, SCHEDULED_GLYPH, SUBPROJECTS_MARKER_PREFIX,
+    SUBPROJECT_FUTURE_SCHEDULE_MARKER, WARNING_GLYPH,
 };
 use crate::native::task_dependencies::blocks::{parse_blocks_line, BlocksLine};
 use crate::native::task_dependencies::inline_code_spans;
@@ -234,14 +242,17 @@ fn flatten_label(inlines: &[Inline]) -> String {
 /// callouts, and compact containers. Status values are never touched —
 /// they stay exactly what the checkbox and Tasks settings produced.
 /// Tasks without source attribution (synthetic test fixtures) keep their
-/// content and children unchanged.
+/// content and children unchanged. Open `[!projects]` rows keep their
+/// criterion with state chips; a callout that has no open rows is
+/// removed.
 pub(crate) fn apply_bob_task_rows(
-    blocks: &mut [Block],
+    blocks: &mut Vec<Block>,
     context: &BobTaskContext,
 ) {
     for block in blocks.iter_mut() {
         apply_to_block(block, context);
     }
+    rewrite_projects_catalogs(blocks);
 }
 
 fn apply_to_block(block: &mut Block, context: &BobTaskContext) {
@@ -315,6 +326,132 @@ fn apply_to_inlines(inlines: &mut [Inline], context: &BobTaskContext) {
 fn apply_to_blocks(blocks: &mut [Block], context: &BobTaskContext) {
     for block in blocks.iter_mut() {
         apply_to_block(block, context);
+    }
+}
+
+/// Keep open `[!projects]` rows as a linked block with state chips, and
+/// drop the Closed group. An emptied callout is removed so the heading
+/// can follow ordinary empty-section handling.
+fn rewrite_projects_catalogs(blocks: &mut Vec<Block>) {
+    let mut kept = Vec::with_capacity(blocks.len());
+    for mut block in std::mem::take(blocks) {
+        match &mut block {
+            Block::Callout {
+                kind,
+                blocks: inner,
+                ..
+            } if kind.eq_ignore_ascii_case("projects") => {
+                rewrite_projects_callout_body(inner);
+                if !inner.is_empty() {
+                    kept.push(block);
+                }
+            }
+            Block::Task(task) => {
+                rewrite_projects_catalogs(&mut task.children);
+                kept.push(block);
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    rewrite_projects_catalogs(&mut item.children);
+                }
+                kept.push(block);
+            }
+            Block::Embed { blocks: inner, .. }
+            | Block::LiveQuery { blocks: inner }
+            | Block::Compact { blocks: inner } => {
+                rewrite_projects_catalogs(inner);
+                kept.push(block);
+            }
+            Block::Callout { blocks: inner, .. } => {
+                rewrite_projects_catalogs(inner);
+                kept.push(block);
+            }
+            _ => kept.push(block),
+        }
+    }
+    *blocks = kept;
+}
+
+fn rewrite_projects_callout_body(blocks: &mut Vec<Block>) {
+    let mut kept = Vec::with_capacity(blocks.len());
+    for mut block in std::mem::take(blocks) {
+        if let Block::List { items, .. } = &mut block {
+            items.retain_mut(keep_open_catalog_row);
+            if !items.is_empty() {
+                kept.push(block);
+            }
+        }
+    }
+    *blocks = kept;
+}
+
+fn keep_open_catalog_row(item: &mut ListItem) -> bool {
+    let Some(state) = catalog_row_state(item) else {
+        return false;
+    };
+    if !state.is_open() {
+        return false;
+    }
+    item.children.clear();
+    strip_leading_catalog_glyph(&mut item.content);
+    if let Some(chip) = catalog_state_chip(state) {
+        let mut content = vec![Inline::Chip(chip), Inline::Text(" ".into())];
+        content.append(&mut item.content);
+        item.content = content;
+    }
+    true
+}
+
+fn catalog_row_state(item: &ListItem) -> Option<CatalogRowState> {
+    let source = item.source.as_ref()?;
+    if let Some((_, _, state)) = parse_row(&source.raw_line) {
+        return Some(state);
+    }
+    let semantic = source.semantic_line();
+    if let Some((_, _, state)) = parse_row(semantic) {
+        return Some(state);
+    }
+    let quoted = format!("> {}", semantic.trim_start());
+    parse_row(&quoted).map(|(_, _, state)| state)
+}
+
+fn catalog_state_chip(state: CatalogRowState) -> Option<Chip> {
+    let label = match state {
+        CatalogRowState::Scheduled => "scheduled",
+        CatalogRowState::Blocked => "blocked",
+        CatalogRowState::Warning => "needs ^prj",
+        CatalogRowState::Open
+        | CatalogRowState::Done
+        | CatalogRowState::Canceled => return None,
+    };
+    Some(Chip {
+        content: vec![Inline::Text(label.to_string())],
+        kind: ChipKind::Normal,
+        target: None,
+    })
+}
+
+fn strip_leading_catalog_glyph(inlines: &mut Vec<Inline>) {
+    let Some(Inline::Text(text)) = inlines.first_mut() else {
+        return;
+    };
+    let trimmed = text.trim_start();
+    for glyph in [
+        SCHEDULED_GLYPH,
+        BLOCKED_GLYPH,
+        WARNING_GLYPH,
+        DONE_GLYPH,
+        CANCELED_GLYPH,
+    ] {
+        if let Some(len) = glyph_prefix_len(trimmed, glyph) {
+            let rest = trimmed[len..].trim_start();
+            if rest.is_empty() {
+                inlines.remove(0);
+            } else {
+                *text = rest.to_string();
+            }
+            return;
+        }
     }
 }
 
@@ -1357,6 +1494,31 @@ mod tests {
         rows
     }
 
+    fn projects_callouts(blocks: &[Block]) -> Vec<&Block> {
+        let mut found = Vec::new();
+        walk_blocks(blocks, &mut |block| {
+            if let Block::Callout { kind, .. } = block
+                && kind.eq_ignore_ascii_case("projects")
+            {
+                found.push(block);
+            }
+        });
+        found
+    }
+
+    fn catalog_item_chips(content: &[Inline]) -> Vec<&str> {
+        content
+            .iter()
+            .filter_map(|inline| match inline {
+                Inline::Chip(chip) => match chip.content.as_slice() {
+                    [Inline::Text(text)] => Some(text.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
     fn chip_texts(task: &SnapshotTask) -> Vec<String> {
         task.chips
             .iter()
@@ -1754,6 +1916,94 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn projects_catalog_converts_glyphs_to_chips_and_drops_closed() {
+        let blocks = bob_blocks(
+            &[
+                (
+                    "Host.md",
+                    "## Projects\n\
+                     \n\
+                     > [!projects]\n\
+                     >\n\
+                     > - **[[alpha]]** — Ship the open child!\n\
+                     > - 🗓️ **[[scheduled_child]]** — Wait until later!\n\
+                     > - ⛓ **[[blocked_child]]** — Waiting on a dependency!\n\
+                     > - ⚠️ **[[warning_child]]** — no valid `^prj` task\n\
+                     > - **Closed**\n\
+                     >   - ✅ **[[done_child]]** — Finished!\n\
+                     >   - ❌ **[[canceled_child]]** — Dropped!\n",
+                ),
+                ("alpha.md", "# Alpha\n"),
+                ("scheduled_child.md", "# Scheduled child\n"),
+                ("blocked_child.md", "# Blocked child\n"),
+                ("warning_child.md", "# Warning child\n"),
+                ("done_child.md", "# Done child\n"),
+                ("canceled_child.md", "# Canceled child\n"),
+            ],
+            "Host.md",
+        );
+        let callouts = projects_callouts(&blocks);
+        assert_eq!(callouts.len(), 1, "{blocks:?}");
+        let Block::Callout {
+            kind,
+            blocks: inner,
+            ..
+        } = callouts[0]
+        else {
+            panic!("projects callout: {callouts:?}");
+        };
+        assert_eq!(kind, "projects");
+        let Block::List { items, .. } = &inner[0] else {
+            panic!("catalog list: {inner:?}");
+        };
+        assert_eq!(items.len(), 4, "{items:?}");
+        assert_eq!(catalog_item_chips(&items[0].content), Vec::<&str>::new());
+        assert!(
+            flat(&items[0].content).contains("Ship the open child"),
+            "{:?}",
+            items[0].content
+        );
+        assert_eq!(catalog_item_chips(&items[1].content), vec!["scheduled"]);
+        assert_eq!(catalog_item_chips(&items[2].content), vec!["blocked"]);
+        assert_eq!(catalog_item_chips(&items[3].content), vec!["needs ^prj"]);
+        let joined = items
+            .iter()
+            .map(|item| flat(&item.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined.contains("Finished"), "{joined}");
+        assert!(!joined.contains("Dropped"), "{joined}");
+        assert!(!joined.contains("Closed"), "{joined}");
+        assert!(!joined.contains('✅'), "{joined}");
+        assert!(!joined.contains("🗓️"), "{joined}");
+        assert!(!joined.contains("⛓️"), "{joined}");
+        assert!(!joined.contains("⚠️"), "{joined}");
+    }
+
+    #[test]
+    fn projects_catalog_all_closed_omits_the_callout() {
+        let blocks = bob_blocks(
+            &[
+                (
+                    "Host.md",
+                    "## Projects\n\
+                     \n\
+                     > [!projects]\n\
+                     >\n\
+                     > - **Closed**\n\
+                     >   - ✅ **[[done_child]]** — Finished!\n",
+                ),
+                ("done_child.md", "# Done child\n"),
+            ],
+            "Host.md",
+        );
+        assert!(
+            projects_callouts(&blocks).is_empty(),
+            "all-closed catalog must drop the callout: {blocks:?}"
+        );
     }
 
     fn masthead() -> SnapshotMasthead {
