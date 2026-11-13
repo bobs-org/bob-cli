@@ -2,7 +2,7 @@
 
 A bank hub and monthly notes turn every posted transaction and deposit into
 one checkbox row. Typing a row acknowledges it. Totals are drawn when they
-are shown and never written into notes. Daily ritual:
+are shown and never written into notes. Weekly ritual:
 [Acknowledge bank transactions](guides/acknowledge-bank-transactions.md).
 
 `bob bank` lives in the Integrations section of `bob --help`. Membership:
@@ -200,7 +200,9 @@ bob writes a row once. After that, bob makes only two edits to a row:
 `ack` ticks `[ ]` to `[x]`, and `import` appends ` ^bank-<hex>` to a typed
 row it matched. A match changes only the trailing bank ID: checkbox,
 wording, fields, links, notes, existing non-bank IDs, and child bullets
-stay byte-identical. Bryan's edits always win.
+stay byte-identical. The Category card never writes rows itself: the
+category it files is Bryan's edit in his editor, applied through the same
+single editor transaction as the tick. Bryan's edits always win.
 
 ## Import
 

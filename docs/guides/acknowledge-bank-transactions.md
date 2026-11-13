@@ -1,6 +1,6 @@
 ---
 title: "Acknowledge bank transactions"
-description: "Type today's posted rows in two minutes, import a weekly QFX, catch up after a lapse, and read account status."
+description: "File a week of bank rows in two minutes: Monday's QFX import, the Category card walk, the mid-week glance, and account status."
 tags:
   - CLI
   - Obsidian
@@ -8,10 +8,10 @@ tags:
 
 # Acknowledge bank transactions
 
-This guide is the daily bank ritual. Each posted transaction or deposit
-becomes one checkbox row in this month's bank note. Typing it acknowledges
-it. A Monday QFX import writes only what you missed, and `bob bank check`
-proves the bank's own numbers.
+Bank tracking is one Monday chore. Download the QFX, run one import, then
+file each waiting row with one key: Ctrl+Enter opens the Category card, a
+single key files the row's category, and the cursor lands on the next
+waiting row. A week of transactions takes about two minutes.
 
 Exact grammar, totals, and findings live in [Bank](../bank.md).
 
@@ -21,62 +21,19 @@ Install the CLI, point it at the vault, and enable **Bob Ledger Tools**.
 `bank.md` already holds the `bank:` block and a `view: queue` card. The
 default account is Wells Fargo checking.
 
-## 1. Acknowledge what posted today
+## 1. Download and import on Monday
 
-Open today's heading and type each posted row ticked. In a bank month note,
-Enter after a row continues with `- [x] $`. Completing the chore with
-nothing new is the record; do not write a fake `$0.00` row.
-
-```bash
-bob bank ensure -D today
-```
-
-```text { .no-copy title="Output" }
-Created heading Thu Nov 12 in bank/2026-11.md
-bank/2026-11.md:12
-```
-
-In Obsidian, **Bank: open today** runs the same ensure and parks the cursor
-on that line. Type:
-
-```markdown
-- [x] $13.71 Smashburger [cat:: dining]
-- [x] $4.25 7-Eleven — coffee on the walk
-```
-
-`$` is required. `+` is money in. `⚑` or `!!` flags a row to look into.
-`—` or `--` starts a note. `[cat:: cash]` is an ATM; a `[acct:: cash]`
-row traces where that cash went and never counts in Out.
-
-Tick leftover waiting rows, or acknowledge the day in one gesture:
+Open the weekly **Bank** chore and follow its Wells Fargo link (Download
+Account Activity sign-on). Pick Checking and Quicken (QFX), keep the
+default dates (at least 14 days back, so the overlap heals a skipped
+week), and run one command on the Mac:
 
 ```bash
-bob bank ack -D today
+bob bank import ~/Downloads/*.qfx && rm ~/Downloads/*.qfx
 ```
 
-**Bank: acknowledge this day** acks the IDs the queue card drew.
-
-```bash
-bob bank
-```
-
-```text { .no-copy title="Output" }
-🏦 Bank · nothing to acknowledge
-  WF Checking · unverified · Nov 12
-
-Download a QFX from Wells Fargo, then: bob bank import ~/Downloads/*.qfx
-```
-
-Today's daily note also shows a quiet chip, `🏦 out $17.96 · in +$0.00`.
-A click ensures that day and jumps there.
-
-## 2. Import last week's QFX on Monday
-
-Download the last 14 days as Quicken (QFX) from Wells Fargo, then:
-
-```bash
-bob bank import ~/Downloads/*.qfx
-```
+The `rm` removes the download because the QFX holds the full account
+number, and `&&` never deletes after a refused import.
 
 ```text { .no-copy title="Output" }
 🏦 Import · WF Checking · Nov 1 – Nov 14 · Checking1.qfx
@@ -89,17 +46,64 @@ Next: file the 9 waiting rows — Ctrl+Enter on each in bank/2026-11.md (or bob 
 ```
 
 Import writes new rows unchecked, matches typed rows by account, exact
-cents, and a short date window, and commits once. Tick the waiting rows
-with Ctrl+Enter in the month note, or with `bob bank`. In last week's
-note, write one line: what surprised you?
+cents, and a short date window, and commits once. It ends by naming the
+walk. A second import of the same file is a no-op. `-d` prints the exact
+diffs without writing.
 
-A second import of the same file is a no-op. `-d` prints the exact diffs
-without writing.
+In last week's note, write one line: what surprised you?
 
-## 3. Catch up after a lapse
+## 2. File each waiting row with one key
 
-Import fills the days you skipped. Acknowledge a whole day with
-`bob bank ack -D YYYY-MM-DD` or **Bank: acknowledge this day**. Then:
+In the month note, Ctrl+Enter on a waiting row opens the Category card.
+Bob's suggestion is highlighted: ↵ (or a second Ctrl+Enter) accepts it, a
+letter picks another category, Space files the row with no category, and
+Esc cancels. Each filing ticks the row and writes `[cat:: key]` in one
+undo step, then lands the cursor on the next waiting row. After the last
+row, a notice reports the session (rows, time, and accepted / picked /
+no-category counts) and names any other months that still hold waiting
+rows.
+
+Ctrl+Enter on a ticked row only unticks it: no card, no jump.
+**Bank: set category** opens the same card on any row later without
+touching its checkbox, so a correction never disturbs the tick.
+
+Row basics: `$` is required, `+` is money in, `⚑` or `!!` flags a row to
+look into, and `—` or `--` starts a note. `[cat:: cash]` is an ATM; an
+`[acct:: cash]` row traces where that cash went and never counts in Out.
+
+## 3. Glance mid-week (optional)
+
+Typing a row still acknowledges it. Open today's heading and type each
+posted row ticked; in a bank month note, Enter after a row continues with
+`- [x] $`. Typed rows match the next import by account, cents, and date.
+Completing the chore with nothing new is the record; do not write a fake
+`$0.00` row.
+
+```bash
+bob bank ensure -D today
+```
+
+```text { .no-copy title="Output" }
+Created heading Thu Nov 12 in bank/2026-11.md
+bank/2026-11.md:12
+```
+
+In Obsidian, **Bank: open today** runs the same ensure and parks the
+cursor on that line. Type:
+
+```markdown
+- [x] $6.45 Corner Cafe [cat:: coffee]
+```
+
+Today's daily note keeps its quiet chip,
+`🏦 out $17.96 · in +$0.00`. A click ensures that day and jumps there.
+
+## 4. Catch up after a lapse
+
+Import fills the days you skipped. Bulk paths stay tick-only and never set
+a category: acknowledge a whole day with `bob bank ack -D YYYY-MM-DD` or
+**Bank: acknowledge this day**, or click waiting checkboxes. Then walk the
+month with the card and fix stragglers with **Bank: set category**. Then:
 
 ```bash
 bob bank check
@@ -112,22 +116,27 @@ A deleted imported row stays deleted until you restore it on purpose:
 bob bank import -F
 ```
 
-## 4. Add an account or a rule
+## 5. Edit the categories
 
-The first `bank.accounts` alias is the default for rows without
-`[acct::]`. Add a card later with one more entry (`kind: credit`, the same
-`start:`). A `cash` account is never imported.
+`bank.categories` in `bank.md` is an ordered map from key to emoji label.
+A value is either a scalar or a mapping with a hotkey, a group, and a
+hidden flag:
 
 ```yaml
-rules:
-  - match: VENMO
-    cat: transfer
+categories:
+  coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }
+  kids: { label: 🧸 Kids, hidden: true }
+  transit: 🚆 Transit
 ```
 
-The first matching rule names rows that import writes. Categories are
-optional; only `transfer`, `income`, `refund`, and `cash` change totals.
+Hotkeys are one character in `a-z0-9` (`q` always cancels the card).
+Groups name the card's sections. A hidden category stays valid on rows, in
+`check`, and in totals, but is never offered. Built-ins always exist
+(`income` i, `refund` r, `transfer` t, `cash` a, under Money moves) and may
+be overridden. Renames are free while no row carries a category, and new
+rules stay rare: after one filing, learning suggests the repeat.
 
-## 5. Read the status chips
+## 6. Read the status chips
 
 | Status | Meaning |
 | --- | --- |
@@ -146,7 +155,9 @@ gap, or shows a Δ.
 `bob bank check` names every finding. A malformed QFX refuses the whole
 batch (exit 2) and writes nothing. Possible twins are listed; delete one,
 bob never merges. An ignored `.bob/bank/<host>.jsonl` is refused until
-`!/.bob/bank/*.jsonl` is on the vault `.gitignore` allowlist.
+`!/.bob/bank/*.jsonl` is on the vault `.gitignore` allowlist. If the card
+opens restricted (Space and Esc only), update the plugins and retry:
+Ctrl+Enter keeps its plain tick in the meantime.
 
 ## Related
 
