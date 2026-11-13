@@ -185,6 +185,13 @@ impl VaultLinkResolver {
         }
     }
 
+    /// Return the same vault-wide note index used for basename fallback.
+    /// Callers that need to resolve several links can share the scanned index
+    /// rather than duplicating the resolver's visibility and ordering rules.
+    pub(crate) fn note_index(&self) -> &NoteIndex {
+        self.index.get_or_init(|| self.build_index())
+    }
+
     pub(crate) fn resolve(
         &self,
         current_path: &Path,

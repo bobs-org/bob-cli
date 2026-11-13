@@ -1,7 +1,18 @@
 //! List and sync-report rendering and display helpers.
 use super::*;
+use chrono::NaiveDate;
+use serde_json::{json, Value};
 
-pub(super) fn print_project_list(projects: &[Project], styler: &Styler) {
+use super::{
+    catalog::{CatalogChild, CatalogPlan, CatalogState},
+    catalog_rows::CatalogRowState,
+};
+
+pub(super) fn print_project_list(
+    projects: &[Project],
+    catalogs_needing_repair: usize,
+    styler: &Styler,
+) {
     let summary = Summary::from_projects(projects);
     let separator = styler.separator();
     println!(
@@ -38,6 +49,182 @@ pub(super) fn print_project_list(projects: &[Project], styler: &Styler) {
             project.prj_task.column(styler)
         );
     }
+
+    if catalogs_needing_repair > 0 {
+        println!(
+            "\n{}",
+            styler.dim(&format!(
+                "{catalogs_needing_repair} Projects catalogs need `bob projects sync`"
+            ))
+        );
+    }
+}
+
+pub(super) struct ProjectListRow<'a> {
+    pub(super) project: &'a Project,
+    pub(super) detail: Option<&'a CatalogChild>,
+    pub(super) parent: Option<String>,
+    pub(super) children: Vec<String>,
+    pub(super) today: Option<usize>,
+}
+
+pub(super) fn project_list_json(
+    today: NaiveDate,
+    rows: &[ProjectListRow<'_>],
+    catalogs: &CatalogPlan,
+    scan_issues: &[ScanIssue],
+) -> Value {
+    let projects = rows
+        .iter()
+        .map(|row| project_to_json(row))
+        .collect::<Vec<_>>();
+    let catalogs_json = catalogs
+        .hosts
+        .iter()
+        .map(|catalog| {
+            json!({
+                "host": catalog.stem,
+                "path": display_slash(&catalog.host),
+                "kind": catalog.kind.as_str(),
+                "state": catalog.state.as_str(),
+                "rows": {
+                    "open": catalog.open,
+                    "blocked": catalog.blocked,
+                    "warning": catalog.warning,
+                    "closed": catalog.closed,
+                },
+                "issues": catalog.issues.iter().map(|issue| {
+                    json!({
+                        "code": issue.code,
+                        "severity": catalog_issue_severity(catalog.state),
+                        "line": issue.line,
+                        "message": issue.message,
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut findings = scan_issues
+        .iter()
+        .map(|issue| {
+            json!({
+                "path": display_slash(&issue.relative_path),
+                "code": "projects_scan_issue",
+                "severity": "error",
+                "line": issue.line_number,
+                "message": issue.message,
+            })
+        })
+        .collect::<Vec<_>>();
+    for catalog in &catalogs.hosts {
+        for issue in &catalog.issues {
+            findings.push(json!({
+                "host": catalog.stem,
+                "path": display_slash(&catalog.host),
+                "code": issue.code,
+                "severity": catalog_issue_severity(catalog.state),
+                "line": issue.line,
+                "message": issue.message,
+            }));
+        }
+    }
+
+    let errors = scan_issues.len()
+        + catalogs
+            .hosts
+            .iter()
+            .filter(|catalog| catalog.state == CatalogState::Damaged)
+            .map(|catalog| catalog.issues.len())
+            .sum::<usize>();
+    let warnings = catalogs
+        .hosts
+        .iter()
+        .filter(|catalog| catalog.state != CatalogState::Damaged)
+        .map(|catalog| catalog.issues.len())
+        .sum::<usize>();
+
+    json!({
+        "schema_version": 1,
+        "ok": errors == 0,
+        "command": "list",
+        "today": today.format("%Y-%m-%d").to_string(),
+        "projects": projects,
+        "catalogs": catalogs_json,
+        "findings": findings,
+        "counts": {
+            "projects": rows.len(),
+            "catalogs": catalogs.hosts.len(),
+            "errors": errors,
+            "warnings": warnings,
+        },
+    })
+}
+
+fn project_to_json(row: &ProjectListRow<'_>) -> Value {
+    let project = row.project;
+    let detail = row.detail;
+    let state = detail.map(|detail| row_state_name(detail.state));
+    let prj_valid = detail.is_some_and(|detail| detail.prj_line > 0);
+    let blocked = detail.and_then(|detail| match detail.state {
+        CatalogRowState::Scheduled => Some(json!({
+            "kind": "scheduled",
+            "date": detail.effective_scheduled.map(|date| date.to_string()),
+        })),
+        CatalogRowState::Blocked if detail.prj_blocked_tag => {
+            Some(json!({"kind": "inherited"}))
+        }
+        CatalogRowState::Blocked => Some(json!({
+            "kind": "dependency",
+            "waits_on": detail.waits_on,
+        })),
+        _ => None,
+    });
+    json!({
+        "path": display_slash(&project.relative_path),
+        "stem": project.relative_path.file_stem().and_then(|stem| stem.to_str()).unwrap_or(&project.name),
+        "status": project.status.label(),
+        "state": state,
+        "criterion": detail.and_then(|detail| detail.criterion.clone()),
+        "parent": row.parent,
+        "children": row.children,
+        "closed_on": detail.and_then(|detail| detail.closed_on.map(|date| date.to_string())),
+        "prj": {
+            "line": prj_valid.then(|| detail.map(|detail| detail.prj_line)).flatten(),
+            "mark": prj_valid.then(|| detail.map(|detail| detail.prj_mark.to_string())).flatten(),
+            "hidden": prj_valid.then(|| detail.map(|detail| detail.prj_hidden)).flatten(),
+            "scheduled": prj_valid.then(|| detail.and_then(|detail| detail.effective_scheduled.map(|date| date.to_string()))).flatten(),
+        },
+        "blocked": blocked,
+        "tasks": {
+            "open": project.open_task_count,
+            "shown": project.dash_visible_count,
+            "today": row.today,
+        },
+    })
+}
+
+fn row_state_name(state: CatalogRowState) -> &'static str {
+    match state {
+        CatalogRowState::Open => "open",
+        CatalogRowState::Scheduled => "scheduled",
+        CatalogRowState::Blocked => "blocked",
+        CatalogRowState::Warning => "warning",
+        CatalogRowState::Done => "done",
+        CatalogRowState::Canceled => "canceled",
+    }
+}
+
+fn catalog_issue_severity(state: CatalogState) -> &'static str {
+    if state == CatalogState::Damaged {
+        "error"
+    } else {
+        "warning"
+    }
+}
+
+fn display_slash(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 pub(super) fn print_sync_report(

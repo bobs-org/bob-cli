@@ -643,9 +643,12 @@ fn projects_help_lists_subcommands_and_options() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("-b, --bob-dir"),
-        "expected bob-dir short and long option in list help:\n{help}"
+        help.contains("-b, --bob-dir")
+            && help.contains("-f, --format <FORMAT>")
+            && help.contains("human or json"),
+        "expected bob-dir and output-format options in list help:\n{help}"
     );
+    assert_text_order(&help, &["\n  -b, --bob-dir", "\n  -f, --format"]);
     assert_stdout_has_no_ansi(&output);
 
     let output = bob_command()

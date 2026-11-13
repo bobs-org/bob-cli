@@ -463,7 +463,7 @@ fn link_inner(index: &NoteIndex, path: &Path, stem: &str) -> String {
     format!("{slashed}|{stem}")
 }
 
-fn child_info(
+pub(super) fn child_info(
     path: &Path,
     contents: &str,
     project: &Project,

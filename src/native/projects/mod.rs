@@ -90,10 +90,19 @@ and manages the single Sub-projects line from the ^prj task.",
 fn list_command() -> ClapCommand {
     ClapCommand::new("list")
         .about("List project notes and ^prj task state")
+        .long_about(
+            "List project notes, their lifecycle tasks, direct sub-projects, and \
+            the health of each generated Projects catalog. The human table remains \
+            the default; --format json prints the versioned report used by \
+            Bob Ledger Tools. A missing or stale catalog is reported as a warning \
+            and can be repaired with `bob projects sync`; a damaged catalog is an \
+            error because it cannot be read or safely repaired.",
+        )
         .after_help(
-            "Examples:\n  bob projects list\n  bob projects list --bob-dir ~/bob\n  bob projects list -b /tmp/bob-vault",
+            "Examples:\n  bob projects list\n  bob projects list -f json\n  bob projects list --bob-dir ~/bob\n  bob projects list -b /tmp/bob-vault -f json",
         )
         .arg(bob_dir_arg())
+        .arg(format_arg())
 }
 
 fn sync_command() -> ClapCommand {
@@ -146,22 +155,169 @@ fn dry_run_arg() -> Arg {
         .help("Preview changes without writing files")
 }
 
+fn format_arg() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .short('f')
+        .value_name("FORMAT")
+        .value_parser(["human", "json"])
+        .default_value("human")
+        .help("Output format: human or json")
+}
+
 fn run_list(matches: &ArgMatches) -> i32 {
     let bob_dir = bob_dir_from_matches(matches);
 
     let report = scan_projects(&bob_dir);
+    let today = projects_list_today(&bob_dir);
+    let typed_notes = walk_typed_notes(&bob_dir);
+    let mut note_contents = BTreeMap::new();
+    let mut typed_paths = HashSet::new();
+    for note in typed_notes {
+        let path = PathBuf::from(&note.path);
+        typed_paths.insert(path.clone());
+        if let Ok(contents) = fs::read_to_string(bob_dir.join(&path)) {
+            note_contents.insert(path, contents);
+        }
+    }
+    let link_resolver =
+        crate::native::vault_links::VaultLinkResolver::new(bob_dir.clone());
+    let note_index = link_resolver.note_index();
+    let catalogs = catalog::plan_catalogs(&note_contents, note_index, today);
+
+    let mut details = BTreeMap::new();
+    let mut parents = BTreeMap::new();
+    let mut children = BTreeMap::new();
+    for project in &report.projects {
+        if let Some(contents) = note_contents.get(&project.relative_path) {
+            details.insert(
+                project.relative_path.clone(),
+                catalog::child_info(
+                    &project.relative_path,
+                    contents,
+                    project,
+                    note_index,
+                    today,
+                ),
+            );
+        }
+        let parent = project
+            .parent_target
+            .as_deref()
+            .and_then(|target| {
+                note_index.resolve(Some(&project.relative_path), target)
+            })
+            .filter(|path| typed_paths.contains(path))
+            .map(|path| display_slash(&path));
+        parents.insert(project.relative_path.clone(), parent);
+        let descendants = catalogs
+            .host(&project.relative_path)
+            .map(|host| {
+                host.rows
+                    .iter()
+                    .map(|row| display_slash(&row.path))
+                    .collect()
+            })
+            .unwrap_or_default();
+        children.insert(project.relative_path.clone(), descendants);
+    }
+
+    let day_file = crate::native::pomodoro::day_file_for(&bob_dir);
+    let absolute_day_file = if day_file.is_absolute() {
+        day_file.clone()
+    } else {
+        bob_dir.join(&day_file)
+    };
+    let daily_relative = absolute_day_file
+        .strip_prefix(&bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
+    let today_tasks =
+        fs::read_to_string(&absolute_day_file).ok().map(|contents| {
+            crate::native::plan_budget::today::today_tasks(
+                &bob_dir,
+                &daily_relative.to_string_lossy(),
+                &contents,
+            )
+            .tasks
+        });
+    let today_counts = today_tasks.map(|tasks| {
+        let mut counts = HashMap::new();
+        for task in tasks {
+            *counts.entry(task.path).or_insert(0usize) += 1;
+        }
+        counts
+    });
+
     let styler = Styler::detect();
-    print_project_list(&report.projects, &styler);
+    let catalogs_needing_repair = catalogs
+        .hosts
+        .iter()
+        .filter(|catalog| catalog.state != catalog::CatalogState::Current)
+        .count();
+    let json_format = matches
+        .get_one::<String>("format")
+        .is_some_and(|format| format == "json");
+    if json_format {
+        let rows = report
+            .projects
+            .iter()
+            .map(|project| {
+                let path = &project.relative_path;
+                output::ProjectListRow {
+                    project,
+                    detail: details.get(path),
+                    parent: parents.get(path).cloned().flatten(),
+                    children: children.get(path).cloned().unwrap_or_default(),
+                    today: today_counts.as_ref().map(|counts| {
+                        counts.get(&display_slash(path)).copied().unwrap_or(0)
+                    }),
+                }
+            })
+            .collect::<Vec<_>>();
+        let payload =
+            output::project_list_json(today, &rows, &catalogs, &report.issues);
+        println!("{}", payload);
+    } else {
+        print_project_list(&report.projects, catalogs_needing_repair, &styler);
+    }
 
     for issue in &report.issues {
         eprintln!("{COMMAND_NAME}: {}", issue.display());
     }
+    for host in catalogs
+        .hosts
+        .iter()
+        .filter(|host| host.state == catalog::CatalogState::Damaged)
+    {
+        for issue in &host.issues {
+            eprintln!("{COMMAND_NAME}: {}", issue.message);
+        }
+    }
 
-    if report.issues.is_empty() {
+    if report.issues.is_empty()
+        && !catalogs
+            .hosts
+            .iter()
+            .any(|host| host.state == catalog::CatalogState::Damaged)
+    {
         0
     } else {
         1
     }
+}
+
+fn projects_list_today(bob_dir: &Path) -> NaiveDate {
+    let day_file = crate::native::pomodoro::day_file_for(bob_dir);
+    day_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(crate::native::pomodoro::parse_day_file_date)
+        .unwrap_or_else(|| bob_env::current_datetime().date())
+}
+
+fn display_slash(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn run_sync(matches: &ArgMatches) -> i32 {

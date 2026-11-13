@@ -177,6 +177,12 @@ sets `one_off: true`.
 | `bob notebooks check` | `-f json` | Same report as list; `ok` reflects error findings | `schema_version: 1` | [Notebooks](../notebooks.md#json) |
 | `bob notebooks sync`, `create` | `-f json` | Envelope: `ok`, `changes[]`, `commit`, `error`; `create` adds `notebook` | `schema_version: 1` | [Notebooks](../notebooks.md#sync) |
 
+### Project reports {#project-reports}
+
+| Command | Flag | Shape | Version | Contract |
+| --- | --- | --- | --- | --- |
+| `bob projects list` | `-f json` | Projects, catalogs, findings, and counts | `schema_version: 1` | [Projects](../projects.md#json-report) |
+
 ### Bank reports {#bank-reports}
 
 `schema_version: 1`; [Bank JSON](../bank.md#json).
@@ -487,12 +493,9 @@ otherwise rewrite matching vault content in a verified transaction.
 | `bob attachments origin` | `-f json` | `path`, `origin` (`{source, display, host, ts, via, state}`) or `null`, and `warnings` | `schema_version: 1` | [Attachment origins](../attachments.md#resolution) |
 | `bob relations rename` | `-f json` | `mode`, `changed`, `from`, `to`, `merge`, affected `files` (`{path, links, mirrors, lines: [{line, kind, before, after}]}`), `counts` (`{links, notes, mirrors, done_links, done_notes}`), `state`, `inverse`, replacement strings, `commit` (`{sha, subject}`), `sync` (`{pre, post}`), and `warnings`. With `-r/--reverse`, adds `reversed: true`, `moves[]` (`{source: {path, line, block_id, text}, target: {path, line, block_id, text}, from_label, to_label, action: "moved"\|"merged"}`, one-based task lines, minted IDs included), and `minted_block_ids[]` (`{path, line, block_id}`) | `schema_version: 1` | [Rename transaction](../task-relations.md#rv8-the-rename-transaction), [Reversing a label](../task-relations.md#rv10-reversing-a-label) |
 
-Theme colors also appear in existing reports as `{key, name, hue, hue_source}`
-objects: `themes` on Pomodoro-name parse spans, completion rows, and ledger
-entries; `theme_refs` beside plan `theme_names`; and `added_theme_refs` in
-capture's `plan_budget`. Stats supplies `theme_hues` keyed by normalized
-theme key. These additions retain each command's existing envelope version;
-`bob plan` uses schema 3 and capture remains unversioned.
+Theme metadata appears as `themes`, `theme_refs`, `added_theme_refs`, or
+`theme_hues`; these additions keep existing versions (`bob plan` schema 3;
+capture unversioned).
 
 ## Tasks, reconciliation, and queries
 
@@ -509,9 +512,6 @@ theme key. These additions retain each command's existing envelope version;
 | `bob articles format` | `-f json` | Article plans | `schema_version: 1` | [Articles](../articles.md) |
 | `bob articles list` | `-f json` | Article notes needing work | `schema_version: 1` | [Articles](../articles.md) |
 | `bob articles outline` | `-f json` | Section outline of one note | `schema_version: 1` | [Articles](../articles.md) |
-
-`bob projects` and `bob nightly` are human-only in this checkout: they expose
-no `--format json` or `--json` flag.
 
 ## References, jobs, Keep, plugins, and status
 

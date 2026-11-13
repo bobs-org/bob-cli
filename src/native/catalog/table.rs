@@ -452,14 +452,17 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     // Tasks and projects
-    reads(
-        "projects-list",
-        &["projects", "list"],
-        "Projects",
-        &["projects", "list", "prj"],
-        Presentation::Report,
-        60,
-    ),
+    Row {
+        fixed: JSON,
+        ..reads(
+            "projects-list",
+            &["projects", "list"],
+            "Projects",
+            &["projects", "list", "prj"],
+            Presentation::Report,
+            60,
+        )
+    },
     Row {
         invalidates: &["tasks"],
         ..writes(

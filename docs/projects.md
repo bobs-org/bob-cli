@@ -44,18 +44,40 @@ that task instead of asking users to edit machine-facing metadata directly.
 ## Commands
 
 ```bash
-bob projects list [-b|--bob-dir DIR]
+bob projects list [-b|--bob-dir DIR] [-f|--format human|json]
 bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 ```
 
 `list` is read-only. It scans project notes, validates project scheduling,
 prints frontmatter status, open `#task` count, dashboard-visible task count,
-and the current `^prj` state.
+and the current `^prj` state. Human output adds one repair footer when a
+generated Projects catalog is missing or stale. Damaged catalogs make the
+command exit 1. See [JSON report](#json-report).
 
 `sync` mutates only the exact lines it needs to change. It prints one line for
 each action or warning, then a summary. Per-file errors are reported without
 stopping the rest of the scan, and the command exits 1 when any file error
 occurred.
+
+## JSON report
+
+`bob projects list -f json` prints a `schema_version: 1` envelope with `ok`,
+`command: "list"`, the effective `today`, `projects`, `catalogs`, `findings`,
+and `counts`.
+
+Each project reports its frontmatter `status`, effective catalog `state`,
+cleaned `criterion`, resolved `parent`, direct `children`, `closed_on`, `prj`
+line details, nullable `blocked` reason, and `tasks` counts (`open`, `shown`,
+`today`). The state is `open`, `scheduled`, `blocked`, `warning`, `done`, or
+`canceled`. A scheduled reason is `{kind: "scheduled", date}`; dependency
+blocking is `{kind: "dependency", waits_on}`; inherited blocking is
+`{kind: "inherited"}`. Other projects report `blocked: null`. `tasks.today` is
+null when today's daily note is missing or unreadable.
+
+Catalogs report host identity, `kind`, `state` (`current`, `missing`, `stale`,
+or `damaged`), expected row counts, and per-host `issues`. `findings` combines
+project scan errors with catalog issues. Missing and stale catalogs are warnings;
+a damaged catalog is an error, makes `ok` false, and exits 1.
 
 ## Project Notes
 
