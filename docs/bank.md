@@ -82,6 +82,8 @@ bank:
       kind: checking
       start: 2026-11-12
   categories:
+    coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }
+    kids: { label: 🧸 Kids, hidden: true }
     groceries: 🛒 Groceries
     dining: 🍽️ Dining
   rules:
@@ -98,10 +100,22 @@ bank:
 | `…<alias>.label` | Optional display name. Defaults to the humanized alias. |
 | `…<alias>.kind` | Required. `checking`, `savings`, `credit`, or `cash`. A `cash` account is never imported. |
 | `…<alias>.start` | Required for every kind except `cash`. `YYYY-MM-DD`. |
-| `bank.categories` | Optional ordered map from key to `"<emoji> Label"`. Labels split by the album choice-label rule. |
-| built-in categories | `income` (💵 Income), `refund` (↩️ Refund), `transfer` (↔️ Transfer), and `cash` (🏧 Cash out) always exist. Declaring one overrides only its label. |
-| `bank.rules` | Optional list of `{match, payee?, cat?, link?}`. First match wins; used when import writes rows. |
+| `bank.categories` | Optional ordered map. A value is the scalar `"<emoji> Label"` or a mapping. Labels split by the album choice-label rule. |
+| `…<key>.label` | Required in the mapping form. Same emoji/label split as the scalar form. |
+| `…<key>.hotkey` | Optional. One character in `[a-z0-9]`. A YAML integer 0–9 reads as that digit; quote it in docs (`hotkey: "1"`). `q` is reserved. |
+| `…<key>.group` | Optional, non-empty text. Names the Category card's section. |
+| `…<key>.hidden` | Optional boolean, default false. A hidden category stays valid on rows, in `check`, and in totals. It is never offered as a suggestion. |
+| built-in categories | `income` (💵 Income, `i`), `refund` (↩️ Refund, `r`), `transfer` (↔️ Transfer, `t`), and `cash` (🏧 Cash out, `a`) always exist, in group `Money moves`. Declaring one may override its label, hotkey, group, or hidden flag. Undeclared built-ins follow the declared keys. |
+| `bank.rules` | Optional list of `{match, payee?, cat?, link?}`. First match wins; used when import writes rows and when read-time suggestions run. A match text with a run of four or more digits cannot match at read time (the journal description is masked). |
 | `bank.stale_after` | Optional days (default `10`). |
+
+Hotkeys are assigned once, in this order: every explicit hotkey is claimed
+(including hidden keys, so unhiding never reshuffles); built-in defaults
+are claimed unless taken; remaining visible categories derive a key in
+declared order (first free character of the key, then the rest of the key,
+then the label's ASCII letters lowercased, then `1`–`9` and `0`). A visible
+category with no free character reports `hotkey: null`. Hidden categories
+without an explicit hotkey report `null`.
 
 Every configuration error names the file, the 1-based line, and the key
 path, for example
@@ -283,22 +297,33 @@ and fenced content; rows append after existing row blocks without
 separating a row from its children. BOM and CRLF are preserved. Dates can
 cross months.
 
+When import writes waiting rows, the human `Next:` line points at the
+walk and names the oldest month that still has waiting rows:
+`Next: file the N waiting rows — Ctrl+Enter on each in bank/YYYY-MM.md (or bob bank to list them).`
+Several waiting months add `and K more months`. JSON is unchanged.
+
 ### Naming
 
 New rows resolve `payee` / `category` / `link` through four tiers,
-highest first:
+highest first. Category uses one shared suggestion function with
+`list`/`report` (rule, then learned, then bank). Import calls it with the
+raw description and transaction type; reads use the masked journal
+description and no type.
 
 1. The first `bank.rules` entry whose `match` text is a
    case-insensitive substring of the raw description. Unspecified rule
-   fields fall through to lower tiers.
+   fields fall through to lower tiers. At read time the same rule runs on
+   the journal description, or the payee when there is none; a match text
+   with a run of four or more digits cannot match then.
 2. The most recent acknowledged ID-bearing row with the same journal
    merchant (learned from current row text, never a stale journal copy).
    Waiting rows never teach a name; ties break deterministically by note
-   and line.
+   and line. Typed rows join through `merchant_key(payee)`.
 3. Wells Fargo built-ins: ATM withdrawals (`cash`), ATM/overdraft fees
    (`fees` when configured), card payments and online transfers
    (`transfer`). The raw type and description classify before cleaning
-   can remove a useful discriminator.
+   can remove a useful discriminator. Reads classify from the journal
+   description only.
 4. The cleaned, title-cased description.
 
 Cleaning is conservative and fixture-driven. It strips Wells Fargo QFX
@@ -531,9 +556,14 @@ bounded output. Balance findings are:
 `schema_version: 1`. Amounts are always signed integer `*_cents`, never
 strings or floats. Every report shares the objects below. A row is
 `{path, line, date, account, cents, payee, category, links, note,
-flagged, acknowledged, id, origin}`; `origin` is `typed` (no ID),
+flagged, acknowledged, id, origin, suggestion}`; `origin` is `typed` (no ID),
 `matched` (ID with journal `matched` evidence), or `imported` (an ID
 without journal evidence, including every journaled `written` row).
+`suggestion` is `{category, source}` or `null`; `source` is `rule`,
+`learned`, or `bank`. Hidden and undeclared categories are never
+suggested. Each `categories[]` entry is
+`{key, emoji, label, builtin, hotkey, group, hidden}`; `hotkey` and
+`group` are a string or `null`.
 
 - `list` adds `filter` (`waiting` or `all`), `month`,
   `days[] {date, heading, path, line, rows[]}`, and
@@ -570,7 +600,7 @@ Shared objects:
   "schema_version": 1,
   "today": "2026-11-14",
   "categories": [
-    { "key": "groceries", "emoji": "🛒", "label": "Groceries", "builtin": false }
+    { "key": "groceries", "emoji": "🛒", "label": "Groceries", "builtin": false, "hotkey": "g", "group": null, "hidden": false }
   ],
   "accounts": [
     {

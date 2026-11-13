@@ -612,6 +612,7 @@ mod tests {
             acknowledged: false,
             id: Some(id.to_owned()),
             origin: "imported",
+            suggestion: None,
         }
     }
 
@@ -718,6 +719,7 @@ mod tests {
                 acknowledged: false,
                 id: Some("aaaaaaaa".to_owned()),
                 origin: "imported",
+                suggestion: None,
             },
             BankRow {
                 path: "bank/2026-11.md".to_owned(),
@@ -734,6 +736,7 @@ mod tests {
                 acknowledged: true,
                 id: None,
                 origin: "typed",
+                suggestion: None,
             },
         ];
         let (_, findings) =

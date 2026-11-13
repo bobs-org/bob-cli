@@ -87,7 +87,7 @@ impl CheckReport {
             "ok": self.ok(),
             "schema_version": SCHEMA_VERSION,
             "today": self.today.format("%Y-%m-%d").to_string(),
-            "categories": self.categories.iter().map(category_json).collect::<Vec<_>>(),
+            "categories": self.categories.iter().map(Category::to_json).collect::<Vec<_>>(),
             "accounts": self.accounts.iter().map(|account| account.to_json()).collect::<Vec<_>>(),
             "issues": {
                 "errors": self.issues.errors,
@@ -660,14 +660,5 @@ fn finding_json(finding: &Finding) -> Value {
         "line": finding.line,
         "message": finding.message,
         "hint": finding.hint,
-    })
-}
-
-fn category_json(category: &Category) -> Value {
-    json!({
-        "key": category.key,
-        "emoji": category.emoji,
-        "label": category.label,
-        "builtin": category.builtin,
     })
 }

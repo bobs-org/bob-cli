@@ -230,6 +230,45 @@ fn grammar_findings_cover_the_table() {
 }
 
 #[test]
+fn hidden_category_stays_valid_in_check_and_totals() {
+    let _guard = guard();
+    let root = temp_vault("hidden-cat");
+    write(
+        root.as_path(),
+        "bank.md",
+        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      kind: checking\n      start: 2026-11-12\n  categories:\n    kids: { label: 🧸 Kids, hidden: true }\n    groceries: 🛒 Groceries\n---\n# Bank\n",
+    );
+    let mut body =
+        canonical_template(month(), "2026-11-12T07:30:00-05:00", today());
+    body.push_str("- [x] $10.00 Toy Store [cat:: kids]\n");
+    write(root.as_path(), "bank/2026-11.md", &body);
+    let report = report_for(&root);
+    assert!(
+        !has_code(&report, "bank_category_unknown"),
+        "{:?}",
+        report.findings
+    );
+    assert_eq!(report.exit_code(), 0);
+    let kids = report
+        .categories
+        .iter()
+        .find(|category| category.key == "kids")
+        .unwrap();
+    assert!(kids.hidden);
+    assert!(kids.hotkey.is_none());
+    let scan = scan_bank(&root);
+    let config = match super::config::parse_bank_config(
+        &scan.hub.as_ref().expect("hub").contents,
+    ) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    let rows = super::model::collect_rows(&scan, Some(&config), None);
+    let totals = super::model::compute_totals(&rows, Some(&config));
+    assert_eq!(totals.out_cents, 1000);
+}
+
+#[test]
 fn clean_month_is_ok() {
     let _guard = guard();
     let root = temp_vault("clean");
@@ -443,6 +482,24 @@ fn list_filters_waiting_all_and_month() {
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["filter"], "waiting");
     assert_eq!(json["counts"]["waiting"], 1);
+    let groceries = json["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|category| category["key"] == "groceries")
+        .unwrap();
+    assert_eq!(groceries["hotkey"], "g");
+    assert_eq!(groceries["hidden"], false);
+    assert!(groceries["group"].is_null());
+    let income = json["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|category| category["key"] == "income")
+        .unwrap();
+    assert_eq!(income["hotkey"], "i");
+    assert_eq!(income["group"], "Money moves");
+    assert!(json["days"][0]["rows"][0].get("suggestion").is_some());
 }
 
 #[test]
@@ -490,6 +547,14 @@ fn report_periods_and_breakdown() {
     let json = super::report::to_json(&built);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["period"]["kind"], "month");
+    assert_eq!(json["categories"][0]["hotkey"], "g");
+    assert_eq!(json["categories"][0]["hidden"], false);
+    assert!(json["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|day| day["rows"].as_array().unwrap())
+        .all(|row| row.get("suggestion").is_some()));
     assert!(json["totals"]["out_cents"].as_i64().unwrap() > 0);
     // One day, one week, one year all resolve; at most one period.
     assert!(super::report::resolve_period(

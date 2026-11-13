@@ -135,7 +135,7 @@ impl ImportReport {
             "schema_version": 1,
             "ok": self.failure.is_none(),
             "today": self.today.format("%Y-%m-%d").to_string(),
-            "categories": categories.iter().map(category_json).collect::<Vec<_>>(),
+            "categories": categories.iter().map(Category::to_json).collect::<Vec<_>>(),
             "accounts": accounts.iter().map(AccountStatus::to_json).collect::<Vec<_>>(),
             "issues": {
                 "errors": if self.failure.is_some() { 1 } else { 0 },
@@ -170,15 +170,6 @@ impl ImportReport {
         }
         payload
     }
-}
-
-fn category_json(category: &Category) -> Value {
-    json!({
-        "key": category.key,
-        "emoji": category.emoji,
-        "label": category.label,
-        "builtin": category.builtin,
-    })
 }
 
 fn file_json(file: &import_plan::PlannedFile) -> Value {
@@ -1203,11 +1194,36 @@ pub(crate) fn print_human(report: &ImportReport) {
     for warning in &report.warnings {
         println!("warning: {warning}");
     }
-    if plan.counts.new > 0 {
-        println!("Next: review the waiting rows with `bob bank list`.");
+    if plan.wrote_waiting && plan.waiting > 0 {
+        println!("{}", walk_next_line(plan));
     } else {
         println!("Next: check the import summary with `bob bank report`.");
     }
+}
+
+fn walk_next_line(plan: &import_plan::BatchPlan) -> String {
+    format_walk_next(
+        plan.waiting,
+        plan.waiting_oldest_month.as_deref(),
+        plan.waiting_extra_months,
+    )
+}
+
+fn format_walk_next(
+    waiting: usize,
+    month: Option<&str>,
+    extra: usize,
+) -> String {
+    let noun = if waiting == 1 { "row" } else { "rows" };
+    let month = month.unwrap_or("YYYY-MM");
+    let extra = match extra {
+        0 => String::new(),
+        1 => " and 1 more month".to_owned(),
+        n => format!(" and {n} more months"),
+    };
+    format!(
+        "Next: file the {waiting} waiting {noun} — Ctrl+Enter on each in bank/{month}.md{extra} (or bob bank to list them)."
+    )
 }
 
 /// The run's single frozen instant: wall time in Bob's configured zone (the
@@ -1237,6 +1253,22 @@ mod tests {
 
     const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n# Bank\n";
     const CSV: &str = "11/12/2026,-13.71,*,,\"SMASHBURGER CARD 1234\"\n";
+
+    #[test]
+    fn walk_next_names_oldest_month_and_extra_months() {
+        assert_eq!(
+            super::format_walk_next(31, Some("2026-11"), 0),
+            "Next: file the 31 waiting rows — Ctrl+Enter on each in bank/2026-11.md (or bob bank to list them)."
+        );
+        assert_eq!(
+            super::format_walk_next(1, Some("2026-10"), 1),
+            "Next: file the 1 waiting row — Ctrl+Enter on each in bank/2026-10.md and 1 more month (or bob bank to list them)."
+        );
+        assert_eq!(
+            super::format_walk_next(4, Some("2026-09"), 2),
+            "Next: file the 4 waiting rows — Ctrl+Enter on each in bank/2026-09.md and 2 more months (or bob bank to list them)."
+        );
+    }
 
     struct TestVault {
         _temp: tempfile::TempDir,
@@ -1767,9 +1799,7 @@ mod tests {
         assert_eq!(result, 0);
         let month = fs::read_to_string(vault.path.join("bank/2026-11.md"))
             .expect("restored month note");
-        assert!(month.contains(&format!(
-            "- [ ] $10.00 Shoprite [acct:: checking] ^bank-{id}"
-        )));
+        assert!(month.contains(&format!("- [ ] $10.00 Shoprite ^bank-{id}")));
         assert_eq!(fs::read(&journal_path).unwrap(), journal_before);
         assert!(git(&vault.path, &["log", "-1", "--format=%s"])
             .contains("bank: import restore 1 rows (checking)"));
@@ -1917,6 +1947,28 @@ mod tests {
         assert_eq!(value["changed"], true);
         assert_eq!(value["files"][0]["source"], "csv");
         assert_eq!(value["files"][0]["new"], 1);
+        let groceries = value["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|category| category["key"] == "groceries")
+            .unwrap();
+        assert_eq!(groceries["hotkey"], "g");
+        assert_eq!(groceries["hidden"], false);
+        assert!(groceries["group"].is_null());
+        let income = value["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|category| category["key"] == "income")
+            .unwrap();
+        assert_eq!(income["hotkey"], "i");
+        assert_eq!(income["group"], "Money moves");
+        assert!(value["rows"][0].get("suggestion").is_some());
+        assert_eq!(
+            value["rows"][0]["category"],
+            value["rows"][0]["suggestion"]["category"]
+        );
         assert!(value["changes"].as_array().unwrap().iter().any(|change| {
             change["path"] == "bank/2026-11.md"
                 && change["diff"]

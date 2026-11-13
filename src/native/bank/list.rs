@@ -141,12 +141,7 @@ pub(crate) fn to_json(report: &ListReport, default_alias: &str) -> Value {
         "ok": true,
         "schema_version": SCHEMA_VERSION,
         "today": report.today.format("%Y-%m-%d").to_string(),
-        "categories": report.categories.iter().map(|category| json!({
-            "key": category.key,
-            "emoji": category.emoji,
-            "label": category.label,
-            "builtin": category.builtin,
-        })).collect::<Vec<_>>(),
+        "categories": report.categories.iter().map(Category::to_json).collect::<Vec<_>>(),
         "accounts": report.accounts.iter().map(|account| account.to_json()).collect::<Vec<_>>(),
         "issues": {"errors": 0, "warnings": 0},
         "filter": report.filter,

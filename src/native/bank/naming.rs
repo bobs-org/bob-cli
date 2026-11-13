@@ -16,7 +16,11 @@
 //! payees retain their edited text unless the current cleaner removes bank
 //! transaction noise.
 
-use super::{config::BankConfig, identity::mask_digits};
+use super::{
+    config::BankConfig,
+    identity::mask_digits,
+    suggest::{self, LearnedIndex, SuggestQuery},
+};
 
 /// A learned name taught by one acknowledged ID-bearing row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +51,7 @@ pub(crate) fn resolve_name(
     trntype: Option<&str>,
     learned: Option<&LearnedName>,
     restaurant: Option<String>,
+    index: &LearnedIndex,
 ) -> NameResolution {
     let rule = config
         .rules
@@ -66,19 +71,20 @@ pub(crate) fn resolve_name(
         },
     };
 
-    let category = rule
-        .and_then(|rule| rule.cat.clone())
-        .filter(|cat| is_declared(config, cat))
-        .or_else(|| {
-            learned
-                .and_then(|name| name.category.clone())
-                .filter(|cat| is_declared(config, cat))
-        })
-        .or_else(|| {
-            builtin
-                .and_then(|item| item.category.map(str::to_owned))
-                .filter(|cat| is_declared(config, cat))
-        });
+    let identities = suggest::identities(Some(raw_desc), None);
+    let suggestion = suggest::suggest_category(
+        config,
+        &SuggestQuery {
+            desc: Some(raw_desc),
+            payee: None,
+            trntype,
+            identities: &identities,
+            skip: None,
+            read_time: false,
+        },
+        index,
+    );
+    let category = suggestion.map(|item| item.category);
 
     let link = rule
         .and_then(|rule| rule.link.clone())
@@ -92,10 +98,6 @@ pub(crate) fn resolve_name(
     }
 }
 
-fn is_declared(config: &BankConfig, key: &str) -> bool {
-    config.category(key).is_some()
-}
-
 fn contains_folded(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -104,9 +106,9 @@ fn contains_folded(haystack: &str, needle: &str) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Builtin {
-    payee: Option<String>,
-    category: Option<&'static str>,
+pub(crate) struct Builtin {
+    pub(crate) payee: Option<String>,
+    pub(crate) category: Option<&'static str>,
 }
 
 /// Classify Wells Fargo built-ins from the raw description and OFX type.
@@ -116,7 +118,10 @@ struct Builtin {
 /// the cleaned payee with `fees`; card payments and online transfers keep
 /// the cleaned payee with `transfer`. The caller drops categories the hub
 /// does not declare.
-fn classify_builtin(raw_desc: &str, trntype: Option<&str>) -> Option<Builtin> {
+pub(crate) fn classify_builtin(
+    raw_desc: &str,
+    trntype: Option<&str>,
+) -> Option<Builtin> {
     let folded = raw_desc.to_ascii_uppercase();
     let tx_type = trntype.unwrap_or_default().to_ascii_uppercase();
     if is_atm_withdrawal(&folded, &tx_type) {
@@ -536,9 +541,6 @@ fn strip_card_suffix(text: &str) -> Option<String> {
             || word == "••••"
     };
     let len = words.len();
-    if words[len - 2].eq_ignore_ascii_case("CARD") && digits(words[len - 1]) {
-        return Some(words[..len - 2].join(" "));
-    }
     if len >= 4
         && words[len - 3].starts_with('S')
         && words[len - 3].len() > 1
@@ -549,6 +551,9 @@ fn strip_card_suffix(text: &str) -> Option<String> {
         && digits(words[len - 1])
     {
         return Some(words[..len - 3].join(" "));
+    }
+    if words[len - 2].eq_ignore_ascii_case("CARD") && digits(words[len - 1]) {
+        return Some(words[..len - 2].join(" "));
     }
     None
 }
@@ -720,6 +725,23 @@ fn strip_leading_checkbox(text: &str) -> &str {
 mod tests {
     use super::*;
 
+    fn named(
+        config: &BankConfig,
+        desc: &str,
+        trntype: Option<&str>,
+        learned: Option<&LearnedName>,
+        restaurant: Option<String>,
+    ) -> NameResolution {
+        resolve_name(
+            config,
+            desc,
+            trntype,
+            learned,
+            restaurant,
+            &LearnedIndex::default(),
+        )
+    }
+
     fn hub(extra: &str) -> BankConfig {
         let text = format!(
             "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: \u{1f6d2} Groceries\n    dining: \u{1f37d}\u{fe0f} Dining\n    fees: \u{1f9fe} Fees\n    transfer: \u{2194}\u{fe0f} Transfer\n    cash: \u{1f3e7} Cash out\n{extra}---\n# Bank\n"
@@ -848,7 +870,7 @@ mod tests {
     #[test]
     fn builtins_cover_atm_fees_and_transfers() {
         let config = plain_hub();
-        let atm = resolve_name(
+        let atm = named(
             &config,
             "ATM WITHDRAWAL 009821 NEW YORK NY",
             Some("ATM"),
@@ -858,12 +880,11 @@ mod tests {
         assert_eq!(atm.payee, "ATM withdrawal");
         assert_eq!(atm.category.as_deref(), Some("cash"));
 
-        let fee =
-            resolve_name(&config, "OVERDRAFT FEE", Some("FEE"), None, None);
+        let fee = named(&config, "OVERDRAFT FEE", Some("FEE"), None, None);
         assert_eq!(fee.category.as_deref(), Some("fees"));
         assert_eq!(fee.payee, "Overdraft Fee");
 
-        let xfer = resolve_name(
+        let xfer = named(
             &config,
             "ONLINE TRANSFER TO SAVINGS 4821",
             Some("XFER"),
@@ -878,8 +899,7 @@ mod tests {
             super::super::config::ConfigParse::Ok(config) => config,
             other => panic!("minimal hub should parse: {other:?}"),
         };
-        let fee_bare =
-            resolve_name(&bare, "OVERDRAFT FEE", Some("FEE"), None, None);
+        let fee_bare = named(&bare, "OVERDRAFT FEE", Some("FEE"), None, None);
         assert_eq!(fee_bare.category, None);
         assert_eq!(fee_bare.payee, "Overdraft Fee");
     }
@@ -888,7 +908,9 @@ mod tests {
     fn rule_and_learned_tiers_fill_downward() {
         let config =
             hub("  rules:\n    - match: VENMO\n      payee: Venmo cashout\n");
-        let named = resolve_name(
+        let identity =
+            super::super::identity::merchant_key("VENMO CASHOUT 5551234567");
+        let resolved = resolve_name(
             &config,
             "VENMO CASHOUT 5551234567",
             Some("POS"),
@@ -898,20 +920,20 @@ mod tests {
                 links: vec!["[[eat/old|🍽️]]".to_owned()],
             }),
             Some("[[eat/new|🍽️]]".to_owned()),
+            &LearnedIndex::with_teacher(&identity, "dining"),
         );
         // Rule payee wins; rule leaves cat/link unspecified so the learned
         // row fills them and the restaurant link stays out.
-        assert_eq!(named.payee, "Venmo cashout");
-        assert_eq!(named.category.as_deref(), Some("dining"));
-        assert_eq!(named.link.as_deref(), Some("[[eat/old|🍽️]]"));
+        assert_eq!(resolved.payee, "Venmo cashout");
+        assert_eq!(resolved.category.as_deref(), Some("dining"));
+        assert_eq!(resolved.link.as_deref(), Some("[[eat/old|🍽️]]"));
 
         // Case-insensitive substring match; first rule wins.
         let multi = hub(
             "  rules:\n    - match: first\n      payee: First\n    - match: FIRST SECOND\n      payee: Second\n",
         );
-        let named =
-            resolve_name(&multi, "a first second spot", None, None, None);
-        assert_eq!(named.payee, "First");
+        let first = named(&multi, "a first second spot", None, None, None);
+        assert_eq!(first.payee, "First");
     }
 
     #[test]
@@ -923,8 +945,7 @@ mod tests {
             links: Vec::new(),
         };
         assert_eq!(
-            resolve_name(&config, "new transaction", None, Some(&noisy), None)
-                .payee,
+            named(&config, "new transaction", None, Some(&noisy), None).payee,
             "COFFEE SHOP"
         );
 
@@ -935,20 +956,15 @@ mod tests {
             links: Vec::new(),
         };
         let resolved =
-            resolve_name(&config, "new transaction", None, Some(&clean), None);
+            named(&config, "new transaction", None, Some(&clean), None);
         assert_eq!(resolved.payee.as_bytes(), edited.as_bytes());
     }
 
     #[test]
     fn positive_amounts_never_imply_income() {
         let config = plain_hub();
-        let inflow = resolve_name(
-            &config,
-            "CHECK 1001 DEPOSIT",
-            Some("CREDIT"),
-            None,
-            None,
-        );
+        let inflow =
+            named(&config, "CHECK 1001 DEPOSIT", Some("CREDIT"), None, None);
         assert_eq!(inflow.category, None);
         assert_eq!(inflow.payee, "Check •••• Deposit");
     }

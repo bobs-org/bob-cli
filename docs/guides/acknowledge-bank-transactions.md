@@ -84,13 +84,14 @@ bob bank import ~/Downloads/*.qfx
   out $1,204.33 · in +$2,500.00
   ledger balance $12,345.67 as of Nov 14 · ✓ balanced
   → bank/2026-11.md  +9 rows, 23 IDs
-Committed bank: import 9 rows (checking). Next: bob bank to acknowledge the 9.
+Committed bank: import 9 rows (checking).
+Next: file the 9 waiting rows — Ctrl+Enter on each in bank/2026-11.md (or bob bank to list them).
 ```
 
 Import writes new rows unchecked, matches typed rows by account, exact
 cents, and a short date window, and commits once. Tick the waiting rows
-with `bob bank` or the queue card. In last week's note, write one line:
-what surprised you?
+with Ctrl+Enter in the month note, or with `bob bank`. In last week's
+note, write one line: what surprised you?
 
 A second import of the same file is a no-op. `-d` prints the exact diffs
 without writing.

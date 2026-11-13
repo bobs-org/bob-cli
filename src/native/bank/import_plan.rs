@@ -30,7 +30,7 @@
 //! (digest, window, or balance), even when every transaction was seen. A
 //! fully recorded identical replay yields no events and no edits.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::NaiveDate;
 
@@ -50,6 +50,7 @@ use super::{
     naming::{resolve_name, LearnedName},
     scan::BankScan,
     source::{ParsedTransaction, ResolvedStatement, SourceKind},
+    suggest::{self, CategorySuggestion, LearnedIndex},
 };
 
 /// One vault file the planner read, with the exact bytes it saw.
@@ -196,6 +197,11 @@ pub(crate) struct BatchPlan {
     pub(crate) counts: ImportCounts,
     /// False for an identical replay: no edits and no events.
     pub(crate) changed: bool,
+    /// Waiting rows after this plan, for the human Next: walk line.
+    pub(crate) waiting: usize,
+    pub(crate) waiting_oldest_month: Option<String>,
+    pub(crate) waiting_extra_months: usize,
+    pub(crate) wrote_waiting: bool,
 }
 
 /// Plan the whole batch, or refuse it before producing any mutation.
@@ -226,6 +232,7 @@ struct Planner<'a> {
     counts: ImportCounts,
     batch_keys: HashSet<String>,
     batch_money: HashMap<String, (NaiveDate, i64)>,
+    learned_index: LearnedIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -234,11 +241,13 @@ struct RowState {
     consumed: bool,
 }
 
+#[derive(Clone)]
 struct PendingRow {
     waiting: bool,
     cents: i64,
     payee: String,
     category: Option<String>,
+    suggestion: Option<CategorySuggestion>,
     account: String,
     links: Vec<String>,
     id: String,
@@ -247,6 +256,11 @@ struct PendingRow {
 impl<'a> Planner<'a> {
     fn new(input: &'a PlanInput<'a>, config: &'a BankConfig) -> Self {
         let rows = collect_planner_rows(input, config);
+        let learned_index = suggest::learned_index(
+            &rows.iter().map(|row| row.row.clone()).collect::<Vec<_>>(),
+            input.journal,
+            config,
+        );
         let mut ids = IdReservation::from_map(&input.journal.ids);
         // Occupy every unjournaled in-notes ID up front so a fresh
         // reservation can never hand the same ID to a different
@@ -278,6 +292,7 @@ impl<'a> Planner<'a> {
             counts: ImportCounts::default(),
             batch_keys: HashSet::new(),
             batch_money: HashMap::new(),
+            learned_index,
         }
     }
 
@@ -318,8 +333,11 @@ impl<'a> Planner<'a> {
         for (file_index, statement) in input.statements.iter().enumerate() {
             files.push(self.finish_file(input, file_index, statement));
         }
+        let wrote_waiting = self.counts.new > 0
+            || self.pending_rows.values().flatten().any(|row| row.waiting);
+        let walk = waiting_walk(&self.rows, &self.pending_rows);
         self.emit_months(input);
-        Ok(self.finish(input, files))
+        Ok(self.finish(input, files, wrote_waiting, walk))
     }
 
     /// Record duplicate `^bank-` IDs as findings; duplicates are never
@@ -525,6 +543,19 @@ impl<'a> Planner<'a> {
                     txn.trntype.as_deref(),
                     learned.as_ref(),
                     restaurant,
+                    &self.learned_index,
+                );
+                let suggestion = suggest::suggest_category(
+                    self.config,
+                    &suggest::SuggestQuery {
+                        desc: Some(&txn.desc),
+                        payee: None,
+                        trntype: txn.trntype.as_deref(),
+                        identities: &[merchant_key(&txn.desc)],
+                        skip: None,
+                        read_time: false,
+                    },
+                    &self.learned_index,
                 );
                 let mut links = Vec::new();
                 if let Some(link) = named.link {
@@ -539,6 +570,7 @@ impl<'a> Planner<'a> {
                         cents: txn.cents,
                         payee: named.payee,
                         category: named.category,
+                        suggestion,
                         account: alias.clone(),
                         links,
                         id: id.clone(),
@@ -649,6 +681,19 @@ impl<'a> Planner<'a> {
                 None,
                 learned.as_ref(),
                 None,
+                &self.learned_index,
+            );
+            let suggestion = suggest::suggest_category(
+                self.config,
+                &suggest::SuggestQuery {
+                    desc: Some(&event.desc),
+                    payee: None,
+                    trntype: None,
+                    identities: &[merchant_key(&event.desc)],
+                    skip: None,
+                    read_time: false,
+                },
+                &self.learned_index,
             );
             self.pending_rows
                 .entry((path, event.posted))
@@ -658,6 +703,7 @@ impl<'a> Planner<'a> {
                     cents: event.cents,
                     payee: named.payee,
                     category: named.category,
+                    suggestion,
                     account: event.account.clone(),
                     links: named.link.into_iter().collect(),
                     id: event.id.clone(),
@@ -942,9 +988,8 @@ impl<'a> Planner<'a> {
             self.pending_rows.keys().cloned().collect();
         keys.sort();
         for key in keys {
-            let rows = std::mem::take(
-                self.pending_rows.get_mut(&key).expect("pending rows"),
-            );
+            let rows =
+                self.pending_rows.get(&key).cloned().expect("pending rows");
             for pending in rows {
                 let path = key.0.clone();
                 let current =
@@ -977,6 +1022,8 @@ impl<'a> Planner<'a> {
         self,
         input: &'a PlanInput<'a>,
         files: Vec<PlannedFile>,
+        wrote_waiting: bool,
+        waiting_walk: (usize, Option<String>, usize),
     ) -> BatchPlan {
         let mut journal_events = Vec::new();
         for (statement, report) in input.statements.iter().zip(files.iter()) {
@@ -1031,6 +1078,8 @@ impl<'a> Planner<'a> {
             })
             .collect();
         month_edits.sort_by(|left, right| left.path.cmp(&right.path));
+        let (waiting, waiting_oldest_month, waiting_extra_months) =
+            waiting_walk;
         let rows = self.affected_rows(input);
         let restored_rows = rows
             .iter()
@@ -1068,6 +1117,10 @@ impl<'a> Planner<'a> {
             findings: self.findings,
             counts: self.counts,
             changed,
+            waiting,
+            waiting_oldest_month,
+            waiting_extra_months,
+            wrote_waiting,
         }
     }
 
@@ -1135,6 +1188,7 @@ impl<'a> Planner<'a> {
                         acknowledged: parsed.acknowledged,
                         id: parsed.id.clone(),
                         origin,
+                        suggestion: None,
                     });
                 }
             }
@@ -1142,6 +1196,22 @@ impl<'a> Planner<'a> {
         rows.sort_by(|left, right| {
             left.path.cmp(&right.path).then(left.line.cmp(&right.line))
         });
+        let pending_by_id: HashMap<String, Option<CategorySuggestion>> = self
+            .pending_rows
+            .values()
+            .flatten()
+            .map(|row| (row.id.clone(), row.suggestion.clone()))
+            .collect();
+        for row in &mut rows {
+            if let Some(id) = &row.id
+                && let Some(suggestion) = pending_by_id.get(id)
+            {
+                row.suggestion = suggestion.clone();
+            }
+        }
+        if let Some(config) = input.config {
+            suggest::attach_suggestions(&mut rows, config, input.journal);
+        }
         rows
     }
 
@@ -1194,6 +1264,33 @@ fn coverage_fallback(
     }
 }
 
+fn waiting_walk(
+    rows: &[RowState],
+    pending: &BTreeMap<(String, NaiveDate), Vec<PendingRow>>,
+) -> (usize, Option<String>, usize) {
+    let mut months = BTreeSet::new();
+    let mut count = 0usize;
+    for row in rows {
+        if row.row.acknowledged {
+            continue;
+        }
+        count += 1;
+        months.insert(month_of(row.row.date).as_str());
+    }
+    for ((_, date), group) in pending {
+        for row in group {
+            if !row.waiting {
+                continue;
+            }
+            count += 1;
+            months.insert(month_of(*date).as_str());
+        }
+    }
+    let extra = months.len().saturating_sub(1);
+    let oldest = months.iter().next().cloned();
+    (count, oldest, extra)
+}
+
 /// Collect planner rows from every scanned month. Rows whose account is
 /// unknown to the configuration keep the default-account fallback so
 /// matching sees the same attribution the vault shows.
@@ -1231,6 +1328,7 @@ fn collect_planner_rows(
                         acknowledged: parsed.acknowledged,
                         id: parsed.id.clone(),
                         origin: "typed",
+                        suggestion: None,
                     },
                     consumed: false,
                 });

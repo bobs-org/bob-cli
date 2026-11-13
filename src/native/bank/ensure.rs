@@ -98,12 +98,7 @@ pub(crate) fn to_json(
         "ok": true,
         "schema_version": SCHEMA_VERSION,
         "today": today.format("%Y-%m-%d").to_string(),
-        "categories": categories.iter().map(|category| json!({
-            "key": category.key,
-            "emoji": category.emoji,
-            "label": category.label,
-            "builtin": category.builtin,
-        })).collect::<Vec<_>>(),
+        "categories": categories.iter().map(super::config::Category::to_json).collect::<Vec<_>>(),
         "accounts": accounts.iter().map(|account| account.to_json()).collect::<Vec<_>>(),
         "issues": {"errors": 0, "warnings": 0},
         "path": plan.path,

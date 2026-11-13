@@ -26,6 +26,7 @@ pub(crate) struct BankRow {
     pub(crate) acknowledged: bool,
     pub(crate) id: Option<String>,
     pub(crate) origin: &'static str,
+    pub(crate) suggestion: Option<super::suggest::CategorySuggestion>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -105,6 +106,7 @@ pub(crate) fn collect_rows(
                     acknowledged: parsed.acknowledged,
                     id: parsed.id.clone(),
                     origin,
+                    suggestion: None,
                 });
             }
         }
@@ -115,6 +117,9 @@ pub(crate) fn collect_rows(
             .then(left.path.cmp(&right.path))
             .then(left.line.cmp(&right.line))
     });
+    if let (Some(config), Some(journal)) = (config, journal) {
+        super::suggest::attach_suggestions(&mut rows, config, journal);
+    }
     rows
 }
 
@@ -228,5 +233,6 @@ pub(crate) fn row_json(
         "acknowledged": row.acknowledged,
         "id": row.id,
         "origin": row.origin,
+        "suggestion": row.suggestion.as_ref().map(|suggestion| suggestion.to_json()),
     })
 }

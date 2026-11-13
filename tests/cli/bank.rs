@@ -559,3 +559,108 @@ fn malformed_file_refuses_the_batch() {
     assert!(!vault.path.join(".bob/bank").exists());
     assert_eq!(stdout(&git_in(&vault.path, ["rev-parse", "HEAD"])), head);
 }
+
+const MAPPING_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }\n    kids: { label: 🧸 Kids, hidden: true }\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
+
+#[test]
+fn mapping_categories_report_hotkeys_and_hidden_stays_valid() {
+    let vault = syncable(MAPPING_HUB);
+    assert_success(&run(&vault, &["ensure", "-f", "json"]));
+    append_rows(
+        &vault,
+        "- [x] $10.00 Toy Store [cat:: kids]\n- [x] $4.00 Cafe Nero [cat:: coffee]\n- [ ] $5.00 Cafe Nero\n",
+    );
+
+    let checked = run(&vault, &["check", "-f", "json"]);
+    assert_success(&checked);
+    let payload = json(&checked);
+    assert_eq!(payload["ok"], true);
+    assert!(
+        !findings(&payload)
+            .iter()
+            .any(|code| code == "bank_category_unknown"),
+        "{payload}"
+    );
+    let kids = payload["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|category| category["key"] == "kids")
+        .unwrap();
+    assert_eq!(kids["hidden"], true);
+    assert!(kids["hotkey"].is_null());
+    let coffee = payload["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|category| category["key"] == "coffee")
+        .unwrap();
+    assert_eq!(coffee["hotkey"], "c");
+    assert_eq!(coffee["group"], "Everyday");
+
+    let listed = json(&run(&vault, &["list", "-a", "-f", "json"]));
+    assert_eq!(listed["categories"][0]["key"], "coffee");
+    assert_eq!(listed["categories"][0]["hotkey"], "c");
+    let waiting = listed["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|day| day["rows"].as_array().unwrap())
+        .find(|row| row["acknowledged"] == false)
+        .unwrap();
+    assert_eq!(waiting["payee"], "Cafe Nero");
+    assert_eq!(waiting["suggestion"]["category"], "coffee");
+    assert_eq!(waiting["suggestion"]["source"], "learned");
+
+    let report = json(&run(&vault, &["report", "-m", "2026-11", "-f", "json"]));
+    assert_eq!(report["totals"]["out_cents"], 1000 + 400 + 500);
+}
+
+#[test]
+fn import_writes_shared_suggestion_and_points_next_at_the_walk() {
+    let vault = syncable(MAPPING_HUB);
+    assert_success(&run(&vault, &["ensure", "-f", "json"]));
+    commit_all(&vault.path, "month note");
+    let qfx = write_qfx(
+        &vault,
+        "checking.qfx",
+        &ofx(
+            "20261112",
+            "20261112",
+            "1000.00",
+            "20261112",
+            &[
+                (
+                    "ATM",
+                    "20261112",
+                    "-63.50",
+                    "fit-atm-walk-1",
+                    "ATM WITHDRAWAL",
+                ),
+                ("DEBIT", "20261112", "-4.00", "fit-cafe-walk-1", "CAFE NERO"),
+            ],
+        ),
+    );
+    let imported = run(&vault, &["import", "-a", "checking", path_str(&qfx)]);
+    assert_success(&imported);
+    let text = stdout(&imported);
+    assert!(
+        text.contains(
+            "Next: file the 2 waiting rows — Ctrl+Enter on each in bank/2026-11.md (or bob bank to list them)."
+        ),
+        "{text}"
+    );
+
+    let listed = json(&run(&vault, &["list", "-a", "-f", "json"]));
+    let atm = listed["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|day| day["rows"].as_array().unwrap())
+        .find(|row| row["payee"] == "ATM withdrawal")
+        .unwrap();
+    assert_eq!(atm["category"], "cash");
+    assert_eq!(atm["suggestion"]["category"], "cash");
+    assert_eq!(atm["suggestion"]["source"], "bank");
+    assert_eq!(atm["category"], atm["suggestion"]["category"]);
+}

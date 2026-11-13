@@ -24,6 +24,7 @@ pub(crate) mod scan;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod source;
 pub(crate) mod status;
+pub(crate) mod suggest;
 
 pub(crate) use cli::{
     build_cli_ack, build_cli_check, build_cli_ensure, build_cli_import,
