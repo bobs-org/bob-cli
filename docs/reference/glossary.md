@@ -238,6 +238,19 @@ repeats its total. Facts and the bars open the [Stats Dash](#stats-dash) with th
 pinned. "Day stats" in UI copy (`Toggle Day stats`, `stats.day_strip`).
 Not the [Morning GTD Review Footer](#morning-gtd-review-footer).
 
+### Event Ack {#event-ack}
+
+*Aliases: ack, unacked, event acknowledgement, gcal ack.*
+
+Bob's one-time review answer for an external Google Calendar event that will
+land as an [Event Task](#event-task). A live `gcal.ack` receipt or any persisted
+nonempty private event note counts, including note text later cleared; a
+series note covers its future instances. Until answered, an open Event Task
+carries Bob's `#unacked` warning tag. Removing that exact tag is itself an
+acknowledgement. The review is a reminder, not an RSVP or a sync gate: Bob
+still writes eligible Event Tasks, and never writes to Google. See
+`docs/gcal-acks.md`.
+
 ### Event Task {#event-task}
 
 *Aliases: event row, calendar task.*

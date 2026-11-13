@@ -94,6 +94,7 @@ plugins:
           - completion.md
           - getting-started.md
           - gcal.md
+          - gcal-acks.md
           - gcal-notes.md
           - gkeep.md
           - gmail.md
@@ -315,6 +316,7 @@ nav:
               - "Shell completion": completion.md
               - "Getting started": getting-started.md
               - "Bob Gcal": gcal.md
+              - "External event acknowledgements": gcal-acks.md
               - "Private event notes": gcal-notes.md
               - "Bob Gkeep": gkeep.md
               - "Bob Gmail": gmail.md

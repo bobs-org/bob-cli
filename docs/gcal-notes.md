@@ -12,6 +12,11 @@ writes the row. Any event qualifies: events you own, locked guest events, and
 invitations still awaiting a reply or answered Maybe. A note never changes
 inclusion, never RSVPs, and never creates a row.
 
+Saving any nonempty private note also acknowledges that event for the
+external-event review queue. Clearing or replacing the text later does not
+erase that historical acknowledgement; a nonempty series note covers future
+instances as well. See [External event acknowledgements](gcal-acks.md).
+
 List, show, preview, write, clear, editor, and Google-description adoption are
 available in `bob gcal note`. Bob Mac Capture ships an
 [Event notes](../reference/mac-capture/event-notes.md) surface for the
@@ -127,6 +132,12 @@ fallback bullet.
 Notes live in the existing per-host journal, `.bob/gcal/<host>.jsonl`
 (union-merged and already tracked). Any host may append a note. Only the
 `gcal.writer` host applies notes, through sync.
+
+The acknowledgement fold also keeps note history: once a note record for an
+event or series has held nonempty text, later clears do not make those events
+unacknowledged. This evidence is read from the existing note records; saving
+a note does not append a separate ack record. See
+[External event acknowledgements](gcal-acks.md#precedence).
 
 ```json
 {

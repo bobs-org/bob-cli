@@ -1,7 +1,19 @@
+---
+origin: requested
+scope: project
+aliases:
+  - ack
+  - unacked
+  - event acknowledgement
+  - gcal ack
+---
 # Event Ack
 
-*Requested · project*
-
-aka ack, unacked, event acknowledgement
-
-A recorded review of an external Google Calendar event bound for an [[event-task]]. It is answered by an explicit `bob gcal ack` receipt or any historical nonempty private event note. Until answered, sync reflects the review state with a Bob-owned `#unacked` tag on the open Event Task row; deleting that tag records an ack.
+Bob's one-time review answer for an external Google Calendar event that will
+land as an [[event-task]]. A live `gcal.ack` receipt or any persisted
+nonempty private event note counts, including note text later cleared; a
+series note covers its future instances. Until answered, an open Event Task
+carries Bob's `#unacked` warning tag. Removing that exact tag is itself an
+acknowledgement. The review is a reminder, not an RSVP or a sync gate: Bob
+still writes eligible Event Tasks, and never writes to Google. See
+`docs/gcal-acks.md`.

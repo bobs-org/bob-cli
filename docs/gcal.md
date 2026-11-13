@@ -22,6 +22,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [Doctor](#doctor)
 - [Calendars](#calendars)
 - [List](#list)
+- [External event acknowledgements](gcal-acks.md)
 - [Sync](#sync)
 - [Off-clock events](#off-clock-events)
 - [Buffers](#buffers)
@@ -41,6 +42,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 
 ```bash
 bob gcal
+bob gcal ack [-a|--all] [-b|--bob-dir DIR] [-C|--calendar ID] [-c|--clear] [-D|--day DAY] [-d|--dry-run] [-f|--format human|json] [-h|--help] [-i|--event-id ID] [-l|--list] [-n|--next-n-days N] [-q|--quiet] [-s|--scope event|series] [QUERY]
 bob gcal calendars [-f|--format table|json]
 bob gcal doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gcal [list] [-a] [-b|--bob-dir DIR] [-D|--day DAY] [-f|--format table|json]
@@ -54,7 +56,8 @@ Running `bob gcal` with no subcommand runs `bob gcal list`. The list is
 read-only; `sync` writes Event Task rows. `bob gcal note` writes Bob-only
 private notes to the gcal journal and never changes Google. See
 [Private event notes](gcal-notes.md) for the grammar, preview, and JSON
-contract.
+contract, and [External event acknowledgements](gcal-acks.md) for the review
+queue, warning tag, and receipt contract.
 
 ## How it works
 
@@ -143,7 +146,8 @@ gcal:
 - `tentative` controls whether a busy Maybe event is context (default) or an
   Event Task (`task`).
 - `ack` enables the external-event acknowledgement workflow (`external`,
-  default) or disables it (`off`).
+  default) or disables its queue and warning tags (`off`). See
+  [External event acknowledgements](gcal-acks.md).
 - `description` controls whether sync copies each event's human description
   as bullets under its Event Task (`bullets`, default) or writes none
   (`off`, the kill switch).
@@ -482,6 +486,13 @@ that step writes nothing and appends nothing. Sync keeps a
 blank line between the `## Events` heading and its first line, and adds the gap
 to an existing section that lacks it, even when there are no calendar changes.
 
+Open external Event Task rows that still need review carry Bob's exact
+`#unacked` warning tag. Human sync output marks those rows with `⚠ unacked`
+and ends with one `⚠ N unacked external event(s) · bob gcal ack` hint;
+`-q` suppresses success output. The tag is a reminder, not a sync gate: the
+event row and its Pomodoro link are still created. See
+[External event acknowledgements](gcal-acks.md).
+
 ### Reset a day (`-F`)
 
 `bob gcal sync -F` forgets the day's prior sync decisions and applies the
@@ -504,6 +515,8 @@ to a restored block ID are reused instead of duplicated. The journal records
 `gcal.reset` before the new row and link records, so the next ordinary sync is
 idempotent. Older bob versions ignore the keyless `gcal.reset` journal line
 and may count it as one unknown malformed entry until an updated bob runs.
+The acknowledgement journal is separate: `-F` preserves receipts and
+historical note evidence, then restores any warning tag still owed.
 
 Every Event Task row this run creates (a new row, or a Maybe context row
 upgraded in place) is linked by phase, on any day:
@@ -619,6 +632,14 @@ summary looks like `✓ Events updated · Pomodoros +1 entry, ✔2 closed`, or
 `✓ Events updated · Pomodoros ✔2 closed` when a stale running MEET closes in
 place.
 
+Each `sync -f json` row has an additive `ack` object and `ack_stale` boolean;
+`counts.unacked` counts rows that carry Bob's warning tag. `bob gcal list
+-f json` adds the same fields to event rows; its `counts.unacked` counts
+returned events whose `ack.state` is `unacked`. The human list marks those
+events with `⚠` and shows one `bob gcal ack` hint. Neither command returns
+private note or acknowledgement text; see the
+[JSON contract](gcal-acks.md#json).
+
 A multi-day JSON run wraps the unchanged per-day reports in one document:
 `{"schema_version":1,"ok":true,"days":[…]}`. If a day fails, the run stops
 after that day's error, and the wrapper contains the completed reports,
@@ -723,6 +744,7 @@ account, or set `gcal.account` to the stamp's account.
 | `[root::]` | your private note, then Google, until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Other child bullets (your notes) | You | Never touched |
+| `#unacked` warning tag | Bob, until you remove it | Written on open external Event Tasks that still need review. Deleting the exact token is an acknowledgement; the next sync records it and does not add it back. Closed rows and answered events lose Bob's tag. |
 | MEET Task Link | Google until you edit it | A Google time or buffer change re-files Bob's untouched placeholder or Bob-shaped closed filing; a hand-edited filing is kept and reported once |
 | MEET Pomodoro entries | Google until you edit them | Created with their first link; only Bob-shaped closed entries are retimed or regrouped after a Google time or buffer change |
 | The whole row | You | Deleted or moved away: tombstoned once and skipped on ordinary runs. Paste the line back to adopt it, or run `bob gcal sync -F` to restore it from Google |
@@ -1181,7 +1203,11 @@ attendee list, and carries `calendar_id`, `event_id`, `clock`,
 `clock_source`, `clock_note`, `off_clock`, deprecated `untracked`, the
 `vault` state, `skip` (`{reason, detail, hint}` or `null`; see
 [Skipped events](#skipped-events)), `root.kind`, and a `note` summary
-(never note text; see [Private event notes](gcal-notes.md)).
+(never note text; see [Private event notes](gcal-notes.md)), plus `ack`
+(`{state, scope, via, at}`) and `ack_stale`. The ack states are `unacked`,
+`acked`, `noted`, and `not_required`; note or ack text is never included.
+`counts.unacked` counts returned event rows whose `ack.state` is `unacked`;
+it reports acknowledgement evidence, not queue membership.
 The raw `reason` values and existing `vault` strings are unchanged.
 
 `sync -f json`: `ok`, `day`, `path`, `status` (`written`, `unchanged`,
@@ -1203,6 +1229,9 @@ and `line` the 1-based line of the pending Templater tag (else `null`).
 `adopted`, and `removed` (task) actions; lifecycle notices also arrive as
 `warnings`. `deprecations` carry one record per distinct deprecated Google
 clock alias per occurrence (see [Off-clock events](#off-clock-events)).
+Each row also carries `ack` (`{state, scope, via, at}`) and `ack_stale`;
+`counts.unacked` reports the number of rows awaiting review. See the
+[acknowledgement JSON contract](gcal-acks.md#json).
 
 ## Security
 
@@ -1229,6 +1258,13 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 ## Known limits
 
 - One writer: `gcal.writer` pins the single host allowed to sync.
+- Older bob binaries do not recognize `gcal.ack` journal records. They warn
+  for each such line and may use an ack record as the `list` header's last-sync
+  time. Upgrade the writer Mac first, then keep readers and the writer on the
+  same release.
+- Acknowledgement is a soft review reminder. Sync still creates eligible
+  Event Tasks, and v1 reports changed event times as stale without asking
+  automatically again. See [External event acknowledgements](gcal-acks.md).
 - An older bob binary ignores the keyless `gcal.reset` journal record and may
   report it as one unknown malformed entry. Run an updated bob to fold the
   reset and its following row records correctly.

@@ -15,22 +15,22 @@ Run `sase memory read glossary:<term> [<term> ...] -r "<why>"` before relying on
 **GLOSSARY TERMS:** Album Note; Annotation Section (section tag, section card); Area
 Note; Bank Month Note (bank month, month note); Bank Row (bank row, transaction row);
 Bulk Capture (multi-item capture, batch capture); Capture; Capture Alias (sigil alias);
-Command Mode (Bob Command Mode, command sheet); Day Strip (day stats); Event Ack; Event
-Task (event row, calendar task); Gmail Task (gmail task, email task); Inbox File (inbox
-note); Keep Streak (keeps); Leaf Project; Mac Menu Bar Pomodoro Indicator (mac pom);
-Merged Pomodoro (merged pomodoro, composite pomodoro, base type); Morning GTD Review
-Footer (review footer); Notebook (notebook note); Off-Clock Pomodoro (off-clock session,
-untracked pomodoro, untracked session); Period Note (weekly note, quarterly note, yearly
-note, all\_time); Pomodoro; Project Note (prj note); Project Note Capture (project
-capture, project-note capture); Project Task (prj task); Record Note; Reference Note
-(ref note); Reference Task (ref task); Root Parent; Rotten Log (keep log); Schedule Log;
-Stats Dash (dash\_stats); Stats Strip (period strip, week strip, quarter strip, year
-strip); Successor Offer; Task Decay (decay, decay ladder, decay card, step down); Task
-Dependency Link (task dep link, dep link); Task Drawer (drawer); Task Freshness
-(freshness); Task Link (task block link); Task Mention (mention, text mention); Task
-Merge; Task Relation (relation, LINKS line, LINKED FROM line); Task Split; Task
-Successor (successor); Task Type (type, theme, pomodoro theme, pomodoro-theme);
-Top-Level Project (top project); Walker Footer (walk footer, lane footer, links footer);
-Work Log
+Command Mode (Bob Command Mode, command sheet); Day Strip (day stats); Event Ack (ack,
+unacked, event acknowledgement, gcal ack); Event Task (event row, calendar task); Gmail
+Task (gmail task, email task); Inbox File (inbox note); Keep Streak (keeps); Leaf
+Project; Mac Menu Bar Pomodoro Indicator (mac pom); Merged Pomodoro (merged pomodoro,
+composite pomodoro, base type); Morning GTD Review Footer (review footer); Notebook
+(notebook note); Off-Clock Pomodoro (off-clock session, untracked pomodoro, untracked
+session); Period Note (weekly note, quarterly note, yearly note, all\_time); Pomodoro;
+Project Note (prj note); Project Note Capture (project capture, project-note capture);
+Project Task (prj task); Record Note; Reference Note (ref note); Reference Task (ref
+task); Root Parent; Rotten Log (keep log); Schedule Log; Stats Dash (dash\_stats); Stats
+Strip (period strip, week strip, quarter strip, year strip); Successor Offer; Task Decay
+(decay, decay ladder, decay card, step down); Task Dependency Link (task dep link, dep
+link); Task Drawer (drawer); Task Freshness (freshness); Task Link (task block link);
+Task Mention (mention, text mention); Task Merge; Task Relation (relation, LINKS line,
+LINKED FROM line); Task Split; Task Successor (successor); Task Type (type, theme,
+pomodoro theme, pomodoro-theme); Top-Level Project (top project); Walker Footer (walk
+footer, lane footer, links footer); Work Log
 
 <!-- /sase:strands -->
