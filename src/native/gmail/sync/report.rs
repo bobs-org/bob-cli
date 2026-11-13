@@ -7,6 +7,11 @@
 
 use serde_json::{json, Value};
 
+use super::archive_preview::{
+    ArchiveGate, ArchivePlan, ArchivePreviewRow, PreviewDecision, ACTION_KEPT,
+    ACTION_PAUSED, ACTION_WOULD_ARCHIVE, KEPT_MANUAL, REASON_BACKLOG,
+    REASON_ELIGIBLE,
+};
 use super::file::{FilingFailure, FilingOutcome, FilingResult};
 use super::scan::WatchScan;
 use super::watch_apply::{WatchGoneOutcome, WatchThreadOutcome};
@@ -43,6 +48,71 @@ pub(crate) struct SyncProblem {
 }
 
 /// The document `bob gmail sync` prints, plus the flags the printer needs.
+/// One task locator in an archive JSON row: path, line, and block id.
+/// Task prose never leaves the vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchiveTaskRef {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) block_id: Option<String>,
+}
+
+/// One archive preview row: `would_archive`, `kept`, or `paused`. Live
+/// `archived`, `let_go`, and `restored` rows arrive with the apply phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchiveRow {
+    pub(crate) thread_id: String,
+    pub(crate) note: String,
+    pub(crate) action: &'static str,
+    pub(crate) reason: &'static str,
+    pub(crate) messages: Vec<String>,
+    pub(crate) tasks: Vec<ArchiveTaskRef>,
+}
+
+impl ArchiveRow {
+    /// Map a preview row to its display action. A paused gate rewrites
+    /// every actionable row to `paused` with the gate reason: a paused
+    /// batch contains no mutation of any kind.
+    fn from_plan(plan: &ArchivePlan, row: &ArchivePreviewRow) -> Self {
+        let (action, reason) = match &plan.gate {
+            ArchiveGate::Open { .. } => match &row.decision {
+                PreviewDecision::Archive { .. } => (
+                    ACTION_WOULD_ARCHIVE,
+                    if row.historical {
+                        REASON_BACKLOG
+                    } else {
+                        REASON_ELIGIBLE
+                    },
+                ),
+                PreviewDecision::Kept { reason } => (ACTION_KEPT, *reason),
+            },
+            ArchiveGate::Paused { reason } => (ACTION_PAUSED, *reason),
+        };
+        ArchiveRow {
+            thread_id: row.key.thread_id().to_string(),
+            note: row.note.clone(),
+            action,
+            reason,
+            messages: row.messages(),
+            tasks: row
+                .tasks
+                .iter()
+                .map(|task| ArchiveTaskRef {
+                    path: task.path.clone(),
+                    line: task.line,
+                    block_id: task.block_id.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Manually archived threads stay human-silent: there is nothing to
+    /// confirm and nothing Bob did.
+    fn human_silent(&self) -> bool {
+        self.action == ACTION_KEPT && self.reason == KEPT_MANUAL
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SyncReport {
     pub(crate) ok: bool,
@@ -58,6 +128,12 @@ pub(crate) struct SyncReport {
     pub(crate) first_seen: bool,
     /// Guard or vault lock was busy: exit 0 with no human output.
     pub(crate) busy: bool,
+    /// Read-only archive preview rows (dry-run only until apply lands).
+    pub(crate) archive: Vec<ArchiveRow>,
+    /// Canonical digest over the previewed set, when any row is actionable.
+    pub(crate) archive_digest: Option<String>,
+    /// Archive planning was skipped with `-n` on an archive-enabled host.
+    pub(crate) archive_skipped: bool,
 }
 
 impl SyncReport {
@@ -76,6 +152,23 @@ impl SyncReport {
             awaiting: 0,
             first_seen: false,
             busy: true,
+            archive: Vec::new(),
+            archive_digest: None,
+            archive_skipped: false,
+        }
+    }
+
+    /// Attach a read-only dry-run archive preview. A paused gate fails the
+    /// run (exit 1) with its rows and digest, and never mutates.
+    pub(crate) fn attach_archive_preview(&mut self, plan: &ArchivePlan) {
+        self.archive = plan
+            .rows
+            .iter()
+            .map(|row| ArchiveRow::from_plan(plan, row))
+            .collect();
+        self.archive_digest = plan.digest.clone();
+        if plan.gate.is_paused() {
+            self.ok = false;
         }
     }
 
@@ -187,6 +280,9 @@ pub(crate) fn from_outcome(
         awaiting,
         first_seen,
         busy: outcome.busy,
+        archive: Vec::new(),
+        archive_digest: None,
+        archive_skipped: false,
     }
 }
 
@@ -238,10 +334,69 @@ pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
             }
         }
     }
+    // The archive preview prints in quiet mode too: a paused batch must
+    // explain its exit 1, and a dry-run preview is the explicitly
+    // requested output. Manually archived threads stay silent.
+    print_archive_preview(&styler, report, args.quiet);
     for warning in &report.warnings {
         eprintln!("{}", styler.dim(warning));
     }
     ui::flush_stdout();
+}
+
+fn print_archive_preview(styler: &Styler, report: &SyncReport, quiet: bool) {
+    let mut shown = false;
+    for row in &report.archive {
+        let Some(line) = archive_human_row(row) else {
+            continue;
+        };
+        shown = true;
+        let colored = match row.action {
+            ACTION_WOULD_ARCHIVE => styler.green(&line),
+            _ => styler.yellow(&line),
+        };
+        println!("  {colored}");
+    }
+    if let Some(digest) = &report.archive_digest {
+        shown = true;
+        println!("  {}", styler.dim(&format!("archive digest {digest}")));
+        if report.archive.iter().any(|row| row.action == ACTION_PAUSED) {
+            println!(
+                "  {}",
+                styler
+                    .dim(&format!("confirm with: bob gmail sync -c {digest}"))
+            );
+        }
+    }
+    if !shown && report.archive_skipped && !quiet {
+        println!("  {}", styler.dim("archive planning skipped (-n)"));
+    }
+}
+
+fn archive_human_row(row: &ArchiveRow) -> Option<String> {
+    if row.human_silent() {
+        return None;
+    }
+    let messages = if row.messages.len() == 1 {
+        "1 message".to_string()
+    } else {
+        format!("{} messages", row.messages.len())
+    };
+    match row.action {
+        ACTION_WOULD_ARCHIVE => Some(format!(
+            "✉ would archive {} → {} ({messages})",
+            row.thread_id, row.note
+        )),
+        ACTION_KEPT => Some(format!(
+            "✉ kept {} ({}) → {}",
+            row.thread_id, row.reason, row.note
+        )),
+        ACTION_PAUSED => Some(format!(
+            "⏸ paused {} ({}) → {}",
+            row.thread_id, row.reason, row.note
+        )),
+        _ => None,
+    }
 }
 
 fn json_document(report: &SyncReport) -> Value {
@@ -274,7 +429,27 @@ fn json_document(report: &SyncReport) -> Value {
             })
         })
         .collect();
-    json!({
+    let archive: Vec<Value> = report
+        .archive
+        .iter()
+        .map(|row| {
+            json!({
+                "thread_id": row.thread_id,
+                "note": row.note,
+                "action": row.action,
+                "reason": row.reason,
+                "messages": row.messages,
+                "tasks": row.tasks.iter().map(|task| {
+                    json!({
+                        "path": task.path,
+                        "line": task.line,
+                        "block_id": task.block_id,
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let mut document = json!({
         "schema_version": 1,
         "ok": report.ok,
         "dry_run": report.dry_run,
@@ -282,12 +457,22 @@ fn json_document(report: &SyncReport) -> Value {
         "results": results,
         "watch": report.watch.iter().map(watch_json).collect::<Vec<_>>(),
         "problems": problems,
+        "archive": archive,
         "summary": {
             "watching": report.watching,
             "awaiting": report.awaiting,
+            "archived": report
+                .archive
+                .iter()
+                .filter(|row| row.action == "archived")
+                .count(),
         },
         "warnings": report.warnings,
-    })
+    });
+    if let Some(digest) = &report.archive_digest {
+        document["archive_digest"] = json!(digest);
+    }
+    document
 }
 
 fn watch_json(row: &WatchThreadOutcome) -> Value {
@@ -635,6 +820,9 @@ mod tests {
             awaiting: 0,
             first_seen: false,
             busy: false,
+            archive: Vec::new(),
+            archive_digest: None,
+            archive_skipped: false,
         };
         let value = json_document(&report);
         assert_eq!(value["schema_version"], 1);
@@ -763,6 +951,9 @@ mod tests {
             awaiting: 0,
             first_seen: false,
             busy: false,
+            archive: Vec::new(),
+            archive_digest: None,
+            archive_skipped: false,
         };
         let one = header(&report);
         assert!(one.contains("watching 1 thread ·"), "{one}");
@@ -796,6 +987,9 @@ mod tests {
             awaiting: 0,
             first_seen: false,
             busy: false,
+            archive: Vec::new(),
+            archive_digest: None,
+            archive_skipped: false,
         };
         let text = with_nothing(&report, "header".into());
         assert!(text.ends_with("nothing new"), "{text}");
@@ -827,6 +1021,9 @@ mod tests {
             awaiting: 0,
             first_seen: false,
             busy: false,
+            archive: Vec::new(),
+            archive_digest: None,
+            archive_skipped: false,
         };
         let text = with_nothing(&report, "header".into());
         assert!(!text.contains("nothing new"), "{text}");

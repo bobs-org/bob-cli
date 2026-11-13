@@ -88,15 +88,36 @@ fn sync_command() -> ClapCommand {
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
+        .arg(sync_confirm_arg())
         .arg(dry_run_arg())
         .arg(save_format_arg())
         .arg(help_arg())
         .arg(sync_limit_arg())
+        .arg(sync_no_archive_arg())
         .arg(quiet_arg())
         .arg(retry_timeout_arg())
         .after_help(
-            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
+            "Examples:\n  bob gmail sync\n  bob gmail sync -l 5\n  bob gmail sync -l 0\n  bob gmail sync -d -f json\n  bob gmail sync -d -c 0123abcd\n  bob gmail sync -n\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob\n  BOB_CONFIG_FILE    Gmail config; defaults to ~/.config/bob/config.yml\n  BOB_GMAIL_GOG      overrides gmail.gog and gog on PATH",
         )
+}
+
+fn sync_confirm_arg() -> Arg {
+    Arg::new("confirm")
+        .long("confirm")
+        .short('c')
+        .value_name("DIGEST")
+        .help(
+            "Confirm the exact archive preview digest (required for backlog \
+             or oversized batches)",
+        )
+}
+
+fn sync_no_archive_arg() -> Arg {
+    Arg::new("no-archive")
+        .long("no-archive")
+        .short('n')
+        .action(ArgAction::SetTrue)
+        .help("Skip archive planning and archiving for this run")
 }
 
 fn sync_limit_arg() -> Arg {
@@ -841,9 +862,11 @@ impl AttachArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SyncArgs {
     pub bob_dir: Option<PathBuf>,
+    pub confirm: Option<String>,
     pub dry_run: bool,
     pub format: HumanFormat,
     pub limit: u32,
+    pub no_archive: bool,
     pub quiet: bool,
     pub retry_timeout: u32,
 }
@@ -852,12 +875,14 @@ impl SyncArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
             bob_dir: raw_bob_dir(matches),
+            confirm: matches.get_one::<String>("confirm").cloned(),
             dry_run: matches.get_flag("dry-run"),
             format: HumanFormat::from_matches(matches),
             limit: matches
                 .get_one::<u32>("limit")
                 .copied()
                 .unwrap_or(DEFAULT_LIMIT),
+            no_archive: matches.get_flag("no-archive"),
             quiet: matches.get_flag("quiet"),
             retry_timeout: matches
                 .get_one::<u32>("retry-timeout")
@@ -1277,11 +1302,14 @@ mod tests {
             "SYNC",
             "-b",
             "~/vault",
+            "-c",
+            "0123abcd",
             "-d",
             "-f",
             "json",
             "-l",
             "5",
+            "-n",
             "-q",
             "-r",
             "30",
@@ -1297,7 +1325,9 @@ mod tests {
         assert_eq!(sync, pull);
         assert_eq!(sync.limit, 5);
         assert_eq!(sync.retry_timeout, 30);
+        assert_eq!(sync.confirm.as_deref(), Some("0123abcd"));
         assert!(sync.dry_run);
+        assert!(sync.no_archive);
         assert!(sync.quiet);
         assert!(sync.format.is_json());
         assert_eq!(sync.bob_dir(), bob_env::home_dir().join("vault"));
@@ -1311,7 +1341,9 @@ mod tests {
         ));
         assert_eq!(args.limit, 50);
         assert_eq!(args.retry_timeout, 120);
+        assert_eq!(args.confirm, None);
         assert!(!args.dry_run);
+        assert!(!args.no_archive);
         assert!(!args.quiet);
         assert_eq!(args.format, HumanFormat::Human);
     }

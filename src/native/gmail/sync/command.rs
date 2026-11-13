@@ -8,6 +8,9 @@
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
 use super::{
+    archive_preview::{self, PreviewInput},
+    archive_scan::scan_archive_evidence,
+    archive_state::{ArchiveJournal, ArchiveLabelIdentity},
     discover::{self, select_candidates, validate_limit},
     enroll::{EnrollmentFold, EnrollmentOrigin, Membership},
     file::{self, FilingCandidate, FilingInput, FilingOutcome},
@@ -19,18 +22,19 @@ use super::{
         SystemSleeper,
     },
     scan,
+    watch_apply::{ACTION_BOUNCED, ACTION_LIFTED},
     watch_state::WatchJournal,
     ThreadKey,
 };
 use crate::native::{
-    env as bob_env,
+    config as bob_config, env as bob_env,
     gmail::{
         cli::SyncArgs,
         config::GmailConfig,
-        gog::Gog,
+        gog::{GmailLabel, Gog},
         note::index::MailIndex,
         policy::NeverSavePolicy,
-        resolve::{self, ResolvedIdentity},
+        resolve::{self, GmailRead, ResolvedIdentity},
         route::{self, RouteContext},
         save, ui, GmailError,
     },
@@ -426,7 +430,11 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     if !args.dry_run && !outcome.busy {
         health::record_success()?;
     }
-    Ok(finish_report(
+    // The filing projection's watch outcomes feed archive planning: threads
+    // with a newly applied incoming move hold for this run (C18). Clone
+    // before `finish_report` consumes the outcome.
+    let watch_threads = outcome.watch_threads.clone();
+    let mut report = finish_report(
         args.dry_run,
         outcome,
         extra_results,
@@ -434,7 +442,157 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         &watchers,
         &account,
         &enrollment,
-    ))
+    );
+    if args.dry_run {
+        attach_archive_dry_run(
+            &coordinator,
+            &config,
+            &vault,
+            &account,
+            &enrollment,
+            &index,
+            labels.as_ref(),
+            args,
+            &watch_threads,
+            &mut report,
+        )?;
+    }
+    Ok(report)
+}
+
+/// Read-only dry-run archive projection after the filing projection.
+/// No locks, no directories, no journal entries, no label creation: the
+/// planner only reads. Live application is the following phase's
+/// responsibility, so live runs skip this entirely. Needs no modify grant
+/// and ignores the writer pin.
+#[allow(clippy::too_many_arguments)]
+fn attach_archive_dry_run<R: GmailRead>(
+    reader: &R,
+    config: &GmailConfig,
+    vault: &Path,
+    account: &str,
+    enrollment: &EnrollmentFold,
+    index: &MailIndex,
+    labels: Option<&Vec<GmailLabel>>,
+    args: &SyncArgs,
+    watch_threads: &[super::watch_apply::WatchThreadOutcome],
+    report: &mut SyncReport,
+) -> Result<(), GmailError> {
+    if !config.archive_enabled() {
+        return Ok(());
+    }
+    if args.no_archive {
+        report.archive_skipped = true;
+        return Ok(());
+    }
+    let relations = match bob_config::load_relations_config(
+        &bob_config::config_path(),
+    ) {
+        Ok(relations) => relations,
+        Err(error) => {
+            report.warnings.push(format!(
+                    "skipped archive preview: could not read relations config: {error}"
+                ));
+            report.ok = false;
+            return Ok(());
+        }
+    };
+    let folder = Path::new(config.folder());
+    let scan = match scan_archive_evidence(vault, folder, index, &relations) {
+        Ok(scan) => scan,
+        Err(error) => {
+            report.warnings.push(format!(
+                "skipped archive preview: {}: {}",
+                error.kind(),
+                error.message(),
+            ));
+            report.ok = false;
+            return Ok(());
+        }
+    };
+    if !scan.scan_complete() {
+        report.warnings.push(
+            "skipped archive preview: the vault scan did not read every note"
+                .to_string(),
+        );
+    }
+    let journal = match ArchiveJournal::load(vault) {
+        Ok(journal) => journal,
+        Err(error) => {
+            report.warnings.push(format!(
+                "skipped archive preview: could not read the Gmail archive journal: {error}"
+            ));
+            report.ok = false;
+            return Ok(());
+        }
+    };
+    let Some(labels) = labels else {
+        report.warnings.push(
+            "skipped archive preview: the Gmail label list was unavailable"
+                .to_string(),
+        );
+        report.ok = false;
+        return Ok(());
+    };
+    let receipt = match ArchiveLabelIdentity::new(
+        config.archive_label(),
+        labels
+            .iter()
+            .find(|label| label.name == config.archive_label())
+            .map(|label| label.id.clone()),
+    ) {
+        Some(receipt) => receipt,
+        None => {
+            report.warnings.push(
+                "skipped archive preview: the archive receipt label is invalid"
+                    .to_string(),
+            );
+            report.ok = false;
+            return Ok(());
+        }
+    };
+    let mut suppressed = BTreeSet::new();
+    for outcome in watch_threads {
+        if outcome.action == ACTION_LIFTED || outcome.action == ACTION_BOUNCED {
+            suppressed.insert(outcome.key.clone());
+        }
+    }
+    let never_save = NeverSavePolicy::from_config(config);
+    let input = PreviewInput {
+        account,
+        enrollment,
+        scan: &scan,
+        journal: &journal,
+        suppressed: &suppressed,
+        policy: &never_save,
+        labels,
+        receipt_label: receipt,
+    };
+    match archive_preview::preview(
+        reader,
+        &input,
+        config,
+        args.confirm.as_deref(),
+    ) {
+        Ok(preview) => {
+            report.warnings.extend(preview.warnings);
+            if preview.failed || !preview.deferred.is_empty() {
+                report.ok = false;
+            }
+            if preview.plan.gate.is_paused()
+                && let archive_preview::ArchiveGate::Paused { reason } =
+                    &preview.plan.gate
+                && *reason == archive_preview::GATE_MISMATCH
+            {
+                report.warnings.push(
+                    "the confirmation digest does not match the current Gmail preview".to_string(),
+                );
+            }
+            report.attach_archive_preview(&preview.plan);
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 fn finish_report(

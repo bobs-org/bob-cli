@@ -38,6 +38,7 @@
 //! and deciding never write: the apply step owns durability and appends
 //! enrollment events only after the vault writes they describe are durable.
 
+pub(crate) mod archive_preview;
 /// Wired by the preview/apply phases; covered by unit tests until then.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod archive_scan;
