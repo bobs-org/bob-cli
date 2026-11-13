@@ -645,6 +645,50 @@ fn editor_empty_values_need_record_value() {
 }
 
 #[test]
+fn editor_keyless_bullets_need_record_field() {
+    // (a) trailing empty `- ` bullet after a complete field.
+    let trailing = editor_parse("@eat/ Ramen\n- location:: Clark\n- ");
+    assert_eq!(trailing.mode, EditorMode::RecordNote);
+    assert!(
+        trailing.needs.contains(&Need::RecordField),
+        "{:?}",
+        trailing.needs
+    );
+
+    // (b) partial `- ye` key bullet.
+    let partial = editor_parse("@eat/ Ramen\n- location:: Clark\n- ye");
+    assert_eq!(partial.mode, EditorMode::RecordNote);
+    assert!(
+        partial.needs.contains(&Need::RecordField),
+        "{:?}",
+        partial.needs
+    );
+
+    // (c) update item with a keyless bullet.
+    let update =
+        editor_parse("@eat/ninja_sushi Went back\n- status:: liked\n- ");
+    assert_eq!(update.mode, EditorMode::RecordUpdate);
+    assert!(
+        update.needs.contains(&Need::RecordField),
+        "{:?}",
+        update.needs
+    );
+
+    // (d) all first-level bullets complete: no field need.
+    let complete = editor_parse("@eat/ Ramen\n- location:: Clark");
+    assert_eq!(complete.mode, EditorMode::RecordNote);
+    assert!(
+        !complete.needs.contains(&Need::RecordField),
+        "{:?}",
+        complete.needs
+    );
+
+    // (e) non-record task dash bullets never need record fields.
+    let task = editor_parse("Buy milk @dev\n- foo");
+    assert!(!task.needs.contains(&Need::RecordField), "{:?}", task.needs);
+}
+
+#[test]
 fn record_claims_before_transfer() {
     // A `>` in the title stays title text; the record claims before the
     // transfer parser can split it.

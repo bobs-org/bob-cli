@@ -181,7 +181,7 @@ fn capture_complete_record_route_offers_new_restaurant() {
     assert_success(&output);
     let json = json_output(&output);
     assert_eq!(json["ok"], true);
-    assert_eq!(json["grammar"], 26);
+    assert_eq!(json["grammar"], 27);
     assert_eq!(json["context"], "route");
     let eat = json["candidates"]
         .as_array()

@@ -426,7 +426,7 @@ fn notebook_note_bullet_hash_is_empty_success_with_policy() {
         "notebook note detail opens no drawer"
     );
     // A route-only notebook list bullet opens the section menu, never
-    // the drawer menu (grammar 26 section bullets).
+    // the drawer menu (grammar 27 section bullets).
     let list = "@dev_tools\n- #fu";
     let bullet = completion_field_at_with(list, list.len(), Some(&policy))
         .expect("notebook list bullets open the section menu");

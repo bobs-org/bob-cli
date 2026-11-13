@@ -49,15 +49,16 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-/// Revision 26 adds notebook section bullets (`- #Section` in a route-only
-/// `@nb` list or `@parent^id@ %n` body). Revision 25 adds `@parent^id@ %n`
-/// notebook creation. Revision 24 restores the established notebook span
-/// labels with an additive `notebook` modifier. Revision 23 adds
-/// `#section^id` on every route and notebook list, global, and forced
-/// destination forms. Revision 22 makes sized `Nx` closes execute (see
-/// `sized_pomodoro_close.md`); older clients parse the size as literal
+/// Revision 27 adds the additive `record_field` need on record items with
+/// keyless first-level bullets. Revision 26 adds notebook section bullets
+/// (`- #Section` in a route-only `@nb` list or `@parent^id@ %n` body).
+/// Revision 25 adds `@parent^id@ %n` notebook creation. Revision 24 restores
+/// the established notebook span labels with an additive `notebook` modifier.
+/// Revision 23 adds `#section^id` on every route and notebook list, global,
+/// and forced destination forms. Revision 22 makes sized `Nx` closes execute
+/// (see `sized_pomodoro_close.md`); older clients parse the size as literal
 /// task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 26;
+pub(crate) const GRAMMAR_REVISION: u32 = 27;
 
 #[cfg(test)]
 mod tests;

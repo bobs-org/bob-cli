@@ -384,6 +384,9 @@ pub(crate) enum Need {
     TaskGoto,
     /// A record route with no title: name the record before capture.
     RecordTitle,
+    /// A record item has a first-level bullet with no `key::`: field-name
+    /// completion applies there.
+    RecordField,
     /// A record field with no value: fill it or drop the bullet.
     RecordValue,
     /// A notebook route needs a note body.
@@ -439,6 +442,7 @@ impl Need {
             Self::TaskLink => "task_link",
             Self::TaskGoto => "task_goto",
             Self::RecordTitle => "record_title",
+            Self::RecordField => "record_field",
             Self::RecordValue => "record_value",
             Self::NotebookNote => "notebook_note",
             Self::TaskParent => "task_parent",

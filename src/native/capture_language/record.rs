@@ -1529,9 +1529,10 @@ pub(super) fn claim_strict_record<'a>(
 }
 
 /// Editor view of a record claim: mode, needs, spans, and diagnostics.
-/// A bare route or an empty field value reports a need (still
-/// completable); every other refusal reports an error diagnostic with
-/// the strict code so both surfaces share one vocabulary.
+/// A bare route, an empty field value, or a keyless first-level bullet
+/// reports a need (still completable); every other refusal reports an
+/// error diagnostic with the strict code so both surfaces share one
+/// vocabulary.
 pub(crate) struct RecordEditorView {
     pub(crate) mode: EditorMode,
     pub(crate) body: String,
@@ -1541,15 +1542,46 @@ pub(crate) struct RecordEditorView {
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
+/// True when the item carries a first-level bullet whose body holds no
+/// `::`: an empty `- ` placeholder, a partial `- ye` key, or a note
+/// bullet. `capture-complete`'s `field_key_probe` owns exactly those
+/// cursors, so the editor advertises `record_field` there.
+fn item_has_keyless_first_level_bullet(item: &CaptureItem<'_>) -> bool {
+    for line in item.lines.iter().skip(1) {
+        let text = line.raw.text;
+        if text.trim().is_empty() {
+            continue;
+        }
+        if let Some((_, body)) = super::draft::strip_bullet_marker_at(text, 0) {
+            if body.trim().is_empty() {
+                return true;
+            }
+            if !body.contains("::") {
+                return true;
+            }
+        } else if super::draft::marker_only_placeholder_after_prefix(text, 0) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Build the editor view for a record claim. A bare route reports a
 /// `record_title` need with no diagnostic (still completable by typing
 /// a title); empty field values report `record_value` needs the same
-/// way. Every other refusal reports an error diagnostic with the
-/// strict code so both surfaces share one vocabulary.
-pub(crate) fn editor_view_for_claim(claim: &RecordClaim) -> RecordEditorView {
+/// way; a keyless first-level bullet reports `record_field` for both
+/// creates and updates. Every other refusal reports an error diagnostic
+/// with the strict code so both surfaces share one vocabulary.
+pub(crate) fn editor_view_for_claim(
+    claim: &RecordClaim,
+    has_keyless_bullet: bool,
+) -> RecordEditorView {
     match claim {
         RecordClaim::Note(intent) => {
             let mut needs = Vec::new();
+            if has_keyless_bullet {
+                needs.push(Need::RecordField);
+            }
             let mut spans = vec![Span {
                 start: intent.route_range.0,
                 end: intent.route_range.1,
@@ -1648,5 +1680,6 @@ pub(crate) fn claim_editor_record(
     options: &EditorParseOptions<'_>,
 ) -> Option<RecordEditorView> {
     let claim = classify_record_item(item, options.record_policy)?;
-    Some(editor_view_for_claim(&claim))
+    let has_keyless = item_has_keyless_first_level_bullet(item);
+    Some(editor_view_for_claim(&claim, has_keyless))
 }

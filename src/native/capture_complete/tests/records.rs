@@ -367,6 +367,21 @@ fn field_menu_lists_required_keys_first_on_a_fresh_dash() {
 }
 
 #[test]
+fn field_menu_after_a_field_excludes_the_typed_key() {
+    let vault = RecordVault::new("bob-cli-complete-record-after-field");
+    let raw = "Ramen Nagi @eat/\n- status:: liked\n- ";
+    let value = vault.complete(raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RecordField));
+    let Candidates::RecordField(rows) = &value.candidates else {
+        panic!("expected field candidates: {value:?}");
+    };
+    let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+    assert!(!keys.contains(&"status"), "status already typed: {keys:?}");
+    assert!(keys.contains(&"category"), "{keys:?}");
+    assert!(keys.contains(&"location"), "{keys:?}");
+}
+
+#[test]
 fn status_value_menu_offers_schema_choices() {
     let vault = RecordVault::new("bob-cli-complete-record-status");
     let raw = "Ramen Nagi @eat/\n- status:: ";

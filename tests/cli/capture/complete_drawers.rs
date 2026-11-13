@@ -115,7 +115,7 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
     let draft = "Postgres 17 minimum @foo+bar#";
     let json = complete(&temp, &vault, draft);
 
-    assert_eq!(json["grammar"], 26);
+    assert_eq!(json["grammar"], 27);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["context"], "drawer");
     assert_eq!(json["initial_selection"], "none");
@@ -428,7 +428,7 @@ fn bullet_menu_json_pins_the_target_the_bare_titles_and_the_continuation() {
     let draft = "@foo+bar\n- #";
     let json = complete(&temp, &vault, draft);
 
-    assert_eq!(json["grammar"], 26);
+    assert_eq!(json["grammar"], 27);
     assert_eq!(json["context"], "drawer");
     assert_eq!(json["initial_selection"], "none");
     assert_eq!(json["query"], "");
@@ -756,7 +756,7 @@ fn notebook_note_bullet_hash_opens_no_drawer_menu() {
         "Text @nb + - # returns no context: {json}"
     );
     // A route-only notebook list bullet opens the section menu, never
-    // the drawer menu (grammar 26 section bullets).
+    // the drawer menu (grammar 27 section bullets).
     let list = "@dev_tools\n- #fu";
     let json = complete_at(&temp, &vault, list, list.len());
     assert_eq!(json["context"], "notebook_section_bullet", "{json}");

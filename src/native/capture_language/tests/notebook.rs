@@ -157,8 +157,8 @@ fn assert_code(raw: &str, code: &str) {
 }
 
 #[test]
-fn grammar_revision_is_twenty_six() {
-    assert_eq!(GRAMMAR_REVISION, 26);
+fn grammar_revision_is_twenty_seven() {
+    assert_eq!(GRAMMAR_REVISION, 27);
 }
 
 #[test]

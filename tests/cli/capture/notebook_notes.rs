@@ -646,7 +646,7 @@ fn test_section_bullet_parse_needs_and_refusals() {
     };
 
     let bare = parse("@dev_tools\n- #");
-    assert_eq!(bare["grammar"], 26);
+    assert_eq!(bare["grammar"], 27);
     assert_eq!(bare["mode"], "incomplete");
     assert_eq!(bare["needs"], serde_json::json!(["section"]));
     assert!(bare["diagnostics"]
