@@ -11,6 +11,7 @@ pub(crate) mod layout;
 pub(crate) mod merge;
 pub(crate) mod parse;
 pub(crate) mod path;
+pub(crate) mod receipt;
 mod text;
 
 pub(crate) use layout::{message_time, thread_who};

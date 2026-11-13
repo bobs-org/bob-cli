@@ -697,7 +697,10 @@ After `messages`, Bob writes `turn` (`yours` when the newest counted message is
 theirs or a bounce, `theirs` when Bryan wrote last) and `turn_since` (that
 message's local time), omitting both when nobody has moved or the order is
 unknown. The root `mail.base` adds a Waiting for reply view of the
-`turn: theirs` notes.
+`turn: theirs` notes and an Archived by Bob view of the notes with a nonempty
+`gmail_archived`, newest first. An archived thread's note carries
+`gmail_archived` (its newest still-owned receipt's archive time) plus one
+managed banner line above the first card.
 Messages are inert content inside Bob's managed region, with user notes
 outside it. Tasks link to the mail note rather than copying its body.
 Local compose notes and Reply

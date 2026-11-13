@@ -383,11 +383,14 @@ omitted when nobody has made a move, when a message lacks `internalDate`, or
 when the newest message has no `SENT` label and no sender address. A changed
 turn counts as a refresh.
 
-`mail.base` has two table views. Mail lists every saved thread. Waiting for
+`mail.base` has three table views. Mail lists every saved thread. Waiting for
 reply lists the notes with `turn == "theirs"`, oldest `turn_since` first, with
-`title`, `who`, `turn_since`, and backlinks. A `mail.base` still byte-identical
-to the earlier one-view template is upgraded in the same write that creates or
-refreshes a mail note. Bob never touches a customized `mail.base`.
+`title`, `who`, `turn_since`, and backlinks. Archived by Bob lists the notes
+with a nonempty `gmail_archived`, newest `gmail_archived` first, with `title`,
+`who`, `gmail_archived`, and backlinks. A `mail.base` still byte-identical to
+either of the two earlier templates is upgraded in the same write that
+creates, refreshes, or archive-reconciles a mail note. Bob never touches a
+customized `mail.base`.
 
 The dry-run preview lists note paths, changed owned metadata field names,
 message-card identifiers, folding changes, and referenced or newly written
@@ -803,12 +806,22 @@ The Gmail receipt label records Bob-owned archives and supports crash
 recovery. A new reply or your manual Move to Inbox removes the receipt only;
 Bob then lets go (removing the receipt label) and never archives that close
 again. Reopening a task does not move mail: the report gives a typed restore
-hint, and restore stays manual: Move to Inbox in Gmail. There is no
-`bob gmail unarchive` command and no automatic restore; `restored` is a
-reserved action in `archive[]` and is never emitted there. Present no deferred surface as
-shipped: no `unarchive`, no `gmail_archived` field, no chips, and no
-notifications. Sync JSON includes a body-free `recent_archive` snapshot;
-there is no separate archive-history listing command.
+hint, and restore stays manual: Move to Inbox in Gmail.
+
+Each owned archive also materializes into its mail note. `gmail_archived`
+carries the newest still-owned receipt's archive time, and one banner line
+above the first card states that Bob archived the mail, its date, and how to
+move it back. The folded journal stays authoritative: reopening a task keeps
+the field and banner, a let-go clears both, and a later eligible sync repairs
+an interrupted local write without touching Gmail or the journal. Save,
+refresh, and rerender preserve the receipt; damaged or duplicated markers are
+refused instead of guessed.
+
+There is no `bob gmail unarchive` command and no automatic restore;
+`restored` is a reserved action in `archive[]` and is never emitted there.
+Chips and desktop notifications stay deferred. Sync JSON includes a body-free
+`recent_archive` snapshot; there is no separate archive-history listing
+command.
 
 Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
 historical backlog or a batch above `archive_max`, and `-n` to skip archive

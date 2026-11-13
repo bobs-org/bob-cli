@@ -9,7 +9,12 @@
 //! `invalid_grant` aborts. Filing commits already on disk are never rolled
 //! back; non-auth failures isolate to one thread and fail the run.
 
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::ErrorKind,
+    path::Path,
+};
 
 use super::{
     archive_preview::{
@@ -17,10 +22,10 @@ use super::{
         HOLD_UNRECONCILED, HOLD_UNRESOLVABLE, KEPT_CONSENT_REMOVED, KEPT_GONE,
         KEPT_MANUAL, KEPT_POLICY, KEPT_UNSAVED,
     },
-    archive_scan::{scan_archive_evidence, SavedIdSnapshot},
+    archive_scan::{scan_archive_evidence, ArchiveScan, SavedIdSnapshot},
     archive_state::{
-        ArchiveCloseGeneration, ArchiveJournal, ArchiveLabelIdentity,
-        ArchiveTerminalKind,
+        ArchiveCloseGeneration, ArchiveHistoryState, ArchiveJournal,
+        ArchiveLabelIdentity, ArchiveReceipt, ArchiveTerminalKind,
     },
     archive_transport::{
         resolve_existing_receipt_label, resolve_or_create_receipt_label,
@@ -523,6 +528,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 .to_string(),
         );
             append_paused_rows(&preview.plan, &mut outcome);
+            reconcile_receipt_notes(vault, &journal, &scan, &mut outcome);
             outcome.hints =
                 super::report::archive_restore_hints(&scan, &journal);
             return Ok(());
@@ -575,6 +581,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 &owned_before,
                 &mut outcome,
             )?;
+            reconcile_receipt_notes(vault, &journal, &scan, &mut outcome);
             outcome.hints =
                 super::report::archive_restore_hints(&scan, &journal);
             return Ok(());
@@ -619,6 +626,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 &owned_before,
                 &mut outcome,
             )?;
+            reconcile_receipt_notes(vault, &journal, &scan, &mut outcome);
             outcome.hints =
                 super::report::archive_restore_hints(&scan, &journal);
             return Ok(());
@@ -676,6 +684,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                     &owned_before,
                     &mut outcome,
                 )?;
+                reconcile_receipt_notes(vault, &journal, &scan, &mut outcome);
                 outcome.hints =
                     super::report::archive_restore_hints(&scan, &journal);
                 return Ok(());
@@ -712,6 +721,12 @@ pub(crate) fn apply_live<R: GmailRead>(
                         &owned_before,
                         &mut outcome,
                     )?;
+                    reconcile_receipt_notes(
+                        vault,
+                        &journal,
+                        &scan,
+                        &mut outcome,
+                    );
                     outcome.hints =
                         super::report::archive_restore_hints(&scan, &journal);
                     return Ok(());
@@ -1063,6 +1078,7 @@ pub(crate) fn apply_live<R: GmailRead>(
             &owned_before,
             &mut outcome,
         )?;
+        reconcile_receipt_notes(vault, &journal, &scan, &mut outcome);
 
         outcome.hints = super::report::archive_restore_hints(&scan, &journal);
 
@@ -1840,6 +1856,211 @@ fn release_owned<R: GmailRead>(
         }
     }
     Ok(())
+}
+
+/// Converge each scanned mail note to the folded journal: owned receipts
+/// gain the timestamp and banner, released notes lose them, and untouched
+/// hub templates upgrade. Pure-local repair: never touches Gmail or the
+/// journal, so a later eligible run heals a journal-success/note-write-failure
+/// crash without repeating the remote mutation or the terminal event.
+/// Unsafe histories are omitted from the projection source, so an unsafe fold
+/// never clears a banner it cannot verify. Task reopen alone retains the
+/// receipt; only let-go clears it.
+fn reconcile_receipt_notes(
+    vault: &Path,
+    journal: &ArchiveJournal,
+    scan: &ArchiveScan,
+    outcome: &mut LiveArchiveOutcome,
+) {
+    let history = journal.archive_history();
+    let mut newest: BTreeMap<ThreadKey, &ArchiveReceipt> = BTreeMap::new();
+    for record in &history {
+        if !matches!(record.state, ArchiveHistoryState::Archived) {
+            continue;
+        }
+        let replace = newest.get(&record.receipt.key).is_none_or(|prior| {
+            record.receipt.archived_at > prior.archived_at
+                || (record.receipt.archived_at == prior.archived_at
+                    && record.receipt.archive_event_id > prior.archive_event_id)
+        });
+        if replace {
+            newest.insert(record.receipt.key.clone(), &record.receipt);
+        }
+    }
+    let mut wrote_note = false;
+    for key in scan.threads() {
+        let Some(evidence) = scan.evidence(key) else {
+            continue;
+        };
+        let want = newest.get(key).map(|receipt| {
+            receipt
+                .archived_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+        });
+        let path = vault.join(&evidence.note);
+        if fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            outcome.warnings.push(format!(
+                "skipped Gmail receipt projection for {}: mail note is a symlink",
+                evidence.note,
+            ));
+            outcome.failed = true;
+            continue;
+        }
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                outcome.warnings.push(format!(
+                    "skipped Gmail receipt projection for {}: could not read the mail note: {error}",
+                    evidence.note,
+                ));
+                outcome.failed = true;
+                continue;
+            }
+        };
+        let needs_write = match crate::native::gmail::note::receipt::project(
+            &contents,
+            want.as_deref(),
+        ) {
+            Ok(None) => false,
+            Ok(Some(_)) => true,
+            Err(error) => {
+                outcome.warnings.push(format!(
+                        "skipped Gmail receipt projection for {}: {error}; will retry",
+                        evidence.note,
+                    ));
+                outcome.failed = true;
+                continue;
+            }
+        };
+        if !needs_write {
+            continue;
+        }
+        let Some(_lock) = acquire_thread_lock() else {
+            outcome.warnings.push(format!(
+                "skipped Gmail receipt projection for {}: vault lock busy; will retry",
+                evidence.note,
+            ));
+            outcome.failed = true;
+            continue;
+        };
+        // Re-read under the lock so an edit after the first read reconverges
+        // from current bytes instead of being overwritten.
+        let current = match fs::read_to_string(&path) {
+            Ok(current) => current,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                outcome.warnings.push(format!(
+                    "skipped Gmail receipt projection for {}: could not re-read the mail note: {error}",
+                    evidence.note,
+                ));
+                outcome.failed = true;
+                continue;
+            }
+        };
+        let converged = match crate::native::gmail::note::receipt::project(
+            &current,
+            want.as_deref(),
+        ) {
+            Ok(None) => continue,
+            Ok(Some(converged)) => converged,
+            Err(error) => {
+                outcome.warnings.push(format!(
+                        "skipped Gmail receipt projection for {}: {error}; will retry",
+                        evidence.note,
+                    ));
+                outcome.failed = true;
+                continue;
+            }
+        };
+        if let Err(error) = fs::write(&path, converged) {
+            outcome.warnings.push(format!(
+                "skipped Gmail receipt projection for {}: could not write the mail note: {error}",
+                evidence.note,
+            ));
+            outcome.failed = true;
+            continue;
+        }
+        wrote_note = true;
+    }
+    upgrade_receipt_hub(vault, wrote_note, outcome);
+}
+
+/// Upgrade an untouched `mail.base` to the receipts template after an
+/// eligible archive run. Customized hubs stay byte-identical; a missing hub
+/// is created only once this run materialized a receipt.
+fn upgrade_receipt_hub(
+    vault: &Path,
+    wrote_note: bool,
+    outcome: &mut LiveArchiveOutcome,
+) {
+    use crate::native::gmail::note::hub;
+
+    let target = vault.join("mail.base");
+    let existing = match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            outcome.warnings.push(
+                "skipped mail.base upgrade: mail.base is a symlink".to_string(),
+            );
+            outcome.failed = true;
+            return;
+        }
+        Ok(_) => match fs::read(&target) {
+            Ok(existing) => Some(existing),
+            Err(error) => {
+                outcome.warnings.push(format!(
+                    "skipped mail.base upgrade: could not read mail.base: {error}"
+                ));
+                outcome.failed = true;
+                return;
+            }
+        },
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            outcome.warnings.push(format!(
+                "skipped mail.base upgrade: could not inspect mail.base: {error}"
+            ));
+            outcome.failed = true;
+            return;
+        }
+    };
+    let upgraded = match existing {
+        Some(ref existing) => hub::upgrade(Path::new("mail.base"), existing),
+        None if wrote_note => Some(hub::MAIL_BASE),
+        None => None,
+    };
+    let Some(upgraded) = upgraded else {
+        return;
+    };
+    let Some(_lock) = acquire_thread_lock() else {
+        outcome.warnings.push(
+            "skipped mail.base upgrade: vault lock busy; will retry"
+                .to_string(),
+        );
+        outcome.failed = true;
+        return;
+    };
+    let unchanged = match fs::read(&target) {
+        Ok(current) => Some(current) == existing,
+        Err(error) if error.kind() == ErrorKind::NotFound => existing.is_none(),
+        Err(_) => false,
+    };
+    if !unchanged {
+        outcome.warnings.push(
+            "skipped mail.base upgrade: mail.base changed during the run; will retry"
+                .to_string(),
+        );
+        outcome.failed = true;
+        return;
+    }
+    if let Err(error) = fs::write(&target, upgraded) {
+        outcome.warnings.push(format!(
+            "skipped mail.base upgrade: could not write mail.base: {error}"
+        ));
+        outcome.failed = true;
+    }
 }
 
 #[cfg(test)]

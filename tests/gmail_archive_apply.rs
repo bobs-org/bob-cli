@@ -2229,3 +2229,302 @@ fn boundary_let_go_runs_while_backlog_gate_is_paused() {
 }
 
 const MESSAGE_C_BLANK: &str = "00000000000000e4";
+
+// --- Receipt lifecycle (bob-cli-kx.3.1.2) ---
+//
+// The folded journal is authoritative: sync converges `gmail_archived` plus
+// one banner span per owned note, clears both on let-go, retains both on
+// reopen, repairs interrupted local writes without remutating Gmail, and
+// never writes receipts on dry-run or skipped-archive runs.
+
+fn note_text(env: &GmailEnv, note: &str) -> String {
+    fs::read_to_string(env.vault().join(note)).expect("read mail note")
+}
+
+fn archived_stamp(text: &str) -> String {
+    text.lines()
+        .find_map(|line| line.strip_prefix("gmail_archived: "))
+        .expect("gmail_archived field")
+        .trim()
+        .to_string()
+}
+
+fn expected_banner(stamp: &str) -> String {
+    let date = stamp.split('T').next().unwrap_or(stamp);
+    format!(
+        "> \u{1f5c4}\u{fe0f} Archived by Bob on {date} \u{2014} to move it back, use Move to Inbox in Gmail."
+    )
+}
+
+fn downgrade_hub_to_previous(env: &GmailEnv) -> String {
+    let hub_v3 =
+        fs::read_to_string(env.vault().join("mail.base")).expect("mail.base");
+    assert!(hub_v3.contains("Archived by Bob"), "filing ships the view");
+    // The split consumes the newline that ends the previous template, so
+    // restore it: the shipped templates end with a trailing newline.
+    let hub_v2 = format!(
+        "{}\n",
+        hub_v3
+            .split("\n  - type: table\n    name: Archived by Bob")
+            .next()
+            .expect("previous template prefix")
+    );
+    fs::write(env.vault().join("mail.base"), &hub_v2).expect("downgrade hub");
+    hub_v3
+}
+
+#[test]
+fn receipt_lifecycle_materializes_banner_and_clears_on_let_go() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-receipt-lifecycle");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (note, _) = file_adopt(&env, &fake);
+    // Hostile task prose must never leak into the banner (C20).
+    let inbox = env.vault().join("gmail_inbox.md");
+    let text = fs::read_to_string(&inbox).expect("read task note");
+    fs::write(
+        &inbox,
+        text.replacen(
+            "- [ ] #task archive apply probe",
+            "- [ ] #task hostile <script>alert(1)</script>",
+            1,
+        ),
+    )
+    .expect("write hostile task text");
+    close_inbox_task(&env);
+    let hub_v3 = downgrade_hub_to_previous(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive the closed thread");
+    let after = note_text(&env, &note);
+    assert!(after.contains("gmail_archived: "), "field materializes");
+    let stamp = archived_stamp(&after);
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&stamp).is_ok(),
+        "field is a valid RFC3339 timestamp"
+    );
+    let banner = after
+        .lines()
+        .find(|line| line.contains("Archived by Bob"))
+        .expect("banner line")
+        .to_string();
+    assert_eq!(
+        banner,
+        expected_banner(&stamp),
+        "banner states only the date"
+    );
+    assert_eq!(
+        after.matches("bob:gmail:receipt:begin").count(),
+        1,
+        "exactly one banner span"
+    );
+    assert_eq!(
+        fs::read_to_string(env.vault().join("mail.base")).expect("hub"),
+        hub_v3,
+        "untouched template upgrades on the archive run"
+    );
+    fake.clear_calls();
+    let again =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&again, 0, "repeat sync converges");
+    assert_eq!(
+        note_text(&env, &note),
+        after,
+        "idempotent projection writes zero bytes"
+    );
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "converged run writes nothing remote"
+    );
+    // A customized hub stays byte-identical.
+    let custom = hub_v3.replace("Archived by Bob", "Archived by Me");
+    fs::write(env.vault().join("mail.base"), &custom).expect("customize hub");
+    let customized =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&customized, 0, "sync with a customized hub");
+    assert_eq!(
+        fs::read_to_string(env.vault().join("mail.base")).expect("hub"),
+        custom,
+        "customized hub is untouched"
+    );
+    fs::write(env.vault().join("mail.base"), &hub_v3).expect("restore hub");
+    // A new reply lets go and clears the projection (C9/C10).
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX"]),
+        ],
+    );
+    fake.clear_calls();
+    let returned =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&returned, 0, "reply releases the receipt");
+    assert_eq!(json_stdout(&returned)["archive"][0]["action"], "let_go");
+    let cleared = note_text(&env, &note);
+    assert!(
+        !cleared.contains("gmail_archived"),
+        "field clears on let-go"
+    );
+    assert!(
+        !cleared.contains("bob:gmail:receipt"),
+        "banner clears on let-go"
+    );
+    assert!(cleared.contains("^m-"), "cards survive clearing");
+}
+
+#[test]
+fn reopening_an_archived_task_retains_its_receipt_banner() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-reopen-retains");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive the closed thread");
+    let after = note_text(&env, &note);
+    assert!(after.contains("gmail_archived: "), "receipt materializes");
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID])],
+    );
+    set_inbox_task_status(&env, ' ');
+    fake.clear_calls();
+    let reopened =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&reopened, 0, "reopen keeps the receipt");
+    assert_eq!(
+        note_text(&env, &note),
+        after,
+        "reopen alone retains the projection"
+    );
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "reopen does not mutate Gmail"
+    );
+    assert_eq!(
+        json_stdout(&reopened)["archive_hints"][0]["kind"],
+        "restore_to_inbox"
+    );
+}
+
+#[test]
+fn interrupted_note_write_repairs_without_remutating() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-receipt-repair");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive the closed thread");
+    let after = note_text(&env, &note);
+    assert!(after.contains("gmail_archived: "), "receipt materializes");
+    let terminal_count = journal_text(&env).matches("gmail.archived").count();
+    assert_eq!(terminal_count, 1, "one durable archive event");
+    // Simulate journal-success/note-write-failure: strip the projection while
+    // the journal keeps ownership.
+    let mut stripped = String::new();
+    let mut skipping = false;
+    for line in after.lines() {
+        if line.trim() == "<!-- bob:gmail:receipt:begin v1 -->" {
+            skipping = true;
+            continue;
+        }
+        if line.trim() == "<!-- bob:gmail:receipt:end -->" {
+            skipping = false;
+            continue;
+        }
+        if skipping || line.starts_with("gmail_archived:") {
+            continue;
+        }
+        stripped.push_str(line);
+        stripped.push('\n');
+    }
+    fs::write(env.vault().join(&note), &stripped).expect("strip receipt");
+    assert!(!note_text(&env, &note).contains("gmail_archived"));
+    fake.clear_calls();
+    let healed =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&healed, 0, "repair run converges");
+    assert_eq!(
+        note_text(&env, &note),
+        after,
+        "projection restores byte-identical"
+    );
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "repair never remutates Gmail"
+    );
+    assert_eq!(
+        journal_text(&env).matches("gmail.archived").count(),
+        terminal_count,
+        "repair appends no terminal event"
+    );
+}
+
+#[test]
+fn dry_run_and_skipped_archive_write_no_receipt_bytes() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-receipt-dry-run");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    downgrade_hub_to_previous(&env);
+    let before = note_text(&env, &note);
+    assert!(!before.contains("gmail_archived"));
+    let dry = run_gmail(&env, &fake, &["sync", "-d", "-l", "0", "-r", "0"]);
+    assert_exit(&dry, 0, "dry-run previews without writing");
+    assert_eq!(note_text(&env, &note), before, "dry-run writes no receipts");
+    assert!(
+        !fs::read_to_string(env.vault().join("mail.base"))
+            .expect("hub")
+            .contains("Archived by Bob"),
+        "dry-run upgrades no templates"
+    );
+    assert!(remote_write_calls(&fake).is_empty());
+    let skipped = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-n", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&skipped, 0, "skipped archive run stays quiet");
+    assert_eq!(
+        json_stdout(&skipped)["archive_skipped"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        note_text(&env, &note),
+        before,
+        "skipped archive writes no receipts"
+    );
+}

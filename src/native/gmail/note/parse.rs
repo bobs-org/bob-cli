@@ -388,7 +388,7 @@ fn parse_message_marker(line: &str) -> Option<String> {
     Some(id.to_ascii_lowercase())
 }
 
-fn scalar(frontmatter: &Value, key: &str) -> Option<String> {
+pub(crate) fn scalar(frontmatter: &Value, key: &str) -> Option<String> {
     let value = frontmatter
         .as_mapping()?
         .get(Value::String(key.to_string()))?;
@@ -406,7 +406,7 @@ fn set(mapping: &mut Mapping, key: &str, value: Value) {
 /// Set `key` in place when present, or insert it right after `after` (at the
 /// end when `after` is absent). `None` removes the key and keeps the order of
 /// every other key.
-fn set_optional_after(
+pub(crate) fn set_optional_after(
     mapping: &mut Mapping,
     key: &str,
     value: Option<Value>,
