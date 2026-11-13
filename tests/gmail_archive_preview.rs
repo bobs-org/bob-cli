@@ -272,6 +272,9 @@ fn dry_run_pauses_backlog_and_confirms_with_the_digest() {
     assert_exit(&paused, 1, "unconfirmed backlog pauses");
     let value = json_stdout(&paused);
     assert_eq!(value["dry_run"], true);
+    assert_eq!(value["archive_enabled"], true);
+    assert_eq!(value["archive_label"], "bob/closed");
+    assert_eq!(value["archive_max"], 10);
     let archive = value["archive"].as_array().expect("archive rows");
     assert_eq!(archive.len(), 1);
     assert_eq!(archive[0]["thread_id"], WATCH_THREAD);

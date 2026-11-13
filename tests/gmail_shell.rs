@@ -1033,6 +1033,54 @@ fn doctor_reports_the_modify_scope_without_mislabeling_it_as_readonly() {
 }
 
 #[test]
+fn doctor_reports_archive_configuration_counts_and_grant() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-archive-on");
+    env.write_journal_rules();
+    env.write_config(&format!(
+        "timezone: America/New_York\ngmail:\n  account: {ACCOUNT}\n  writer: test-host\n  sync:\n    archive: on\n"
+    ));
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "doctor archive on");
+    let doc = json_stdout(&output);
+    let archive = check(&doc, "archive");
+    assert_eq!(archive["status"], "ok");
+    let summary = archive["summary"].as_str().unwrap_or_default();
+    assert!(summary.contains("on"), "{summary}");
+    assert!(summary.contains("receipt bob/closed"), "{summary}");
+    assert!(summary.contains("limit 10"), "{summary}");
+    assert!(
+        summary.contains("this week 0 archived · 0 kept"),
+        "{summary}"
+    );
+    assert!(summary.contains("modify grant granted"), "{summary}");
+    assert_eq!(check(&doc, "scopes")["summary"], "readonly+modify");
+}
+
+#[test]
+fn doctor_warns_when_archive_mode_lacks_modify_consent() {
+    let env = GmailEnv::new("bob-cli-gmail-doctor-archive-grant");
+    env.write_journal_rules();
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  sync:\n    archive: on\n"
+    ));
+    let fake = FakeGog::new(&env, "gog");
+    let output = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_success(&output, "doctor archive without modify");
+    let doc = json_stdout(&output);
+    let archive = check(&doc, "archive");
+    assert_eq!(archive["status"], "warn");
+    assert!(archive["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("modify grant missing"));
+    assert!(archive["fix"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("bob gmail login -s modify"));
+}
+
+#[test]
 fn configured_gmail_gog_is_used_without_the_environment_override() {
     let env = GmailEnv::new("bob-cli-gmail-configured-gog");
     let fake = FakeGog::new(&env, "gog");

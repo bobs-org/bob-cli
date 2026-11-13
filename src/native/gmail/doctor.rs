@@ -39,6 +39,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 "thread_ids",
                 "scopes",
                 "config",
+                "archive",
                 "routes",
                 "writer",
                 "sync",
@@ -225,12 +226,16 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         }
     }
 
+    let mut granted_scopes = None;
     match (gog.as_ref(), selected_account.as_deref()) {
         (Some(gog), Some(email)) => match gog.accounts(Some(CLIENT)) {
             Ok(entries) => {
                 let entry = entries
                     .iter()
                     .find(|entry| entry.email.eq_ignore_ascii_case(email));
+                if let Some(entry) = entry {
+                    granted_scopes = Some(entry.scopes.clone());
+                }
                 let scopes = entry
                     .map(|entry| entry.scopes.as_slice())
                     .unwrap_or_default();
@@ -309,6 +314,12 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     // The label audit needs a token that refreshes; a failed token row
     // already says why, so routes skips instead of repeating it.
     checks.push(config_check(&config));
+    checks.push(archive_check(
+        &bob_dir,
+        &config,
+        selected_account.as_deref(),
+        granted_scopes.as_deref(),
+    ));
     checks.push(routes_check(
         gog.as_ref().filter(|_| token_ok),
         selected_account.as_deref(),
@@ -361,6 +372,138 @@ fn config_check(config: &GmailConfig) -> Check {
         ),
         fix: None,
     }
+}
+
+/// Archive setup, consent, and distinct terminal outcomes for this local
+/// calendar week. Counts use the configured timezone and remain available
+/// even when no account or token can be resolved.
+fn archive_check(
+    bob_dir: &Path,
+    config: &GmailConfig,
+    account: Option<&str>,
+    granted_scopes: Option<&[String]>,
+) -> Check {
+    let settings = format!(
+        "{} · receipt {} · limit {}",
+        if config.archive_enabled() {
+            "on"
+        } else {
+            "off"
+        },
+        config.archive_label(),
+        config.archive_max(),
+    );
+    let (counts, journal_warning) =
+        match super::sync::archive_state::ArchiveJournal::load(bob_dir) {
+            Ok(journal) => {
+                let counts =
+                    journal.counts_since(account, archive_week_start());
+                let warning = (!journal.warnings().is_empty())
+                    .then_some("archive journal has malformed or unsafe state");
+                (counts, warning)
+            }
+            Err(_) => (
+                Default::default(),
+                Some("archive journal could not be read"),
+            ),
+        };
+    let account_scope = if account.is_none() {
+        " · counts cover all accounts"
+    } else {
+        ""
+    };
+    let summary = format!(
+        "{settings} · this week {} archived · {} kept{account_scope}",
+        counts.archived, counts.kept,
+    );
+    if let Some(warning) = journal_warning {
+        return Check {
+            id: "archive",
+            status: CheckStatus::Warn,
+            summary: format!("{summary} · {warning}"),
+            fix: Some(
+                "inspect .bob/gmail/<host>.jsonl; unsafe archive state is held"
+                    .to_string(),
+            ),
+        };
+    }
+    let Some(account) = account else {
+        return Check {
+            id: "archive",
+            status: CheckStatus::Skip,
+            summary: format!("{summary} · skipped: no account"),
+            fix: None,
+        };
+    };
+    let Some(scopes) = granted_scopes else {
+        return Check {
+            id: "archive",
+            status: CheckStatus::Skip,
+            summary: format!("{summary} · skipped: granted scopes unavailable"),
+            fix: None,
+        };
+    };
+    let has_modify = scopes.iter().any(|scope| {
+        scope == super::config::MODIFY_SCOPE || scope.contains("gmail.modify")
+    });
+    if config.archive_enabled() && !has_modify {
+        return Check {
+            id: "archive",
+            status: CheckStatus::Warn,
+            summary: format!("{summary} · modify grant missing for {account}"),
+            fix: Some(
+                "run `bob gmail login -s modify` on the approved archive host"
+                    .to_string(),
+            ),
+        };
+    }
+    Check {
+        id: "archive",
+        status: CheckStatus::Ok,
+        summary: format!(
+            "{summary} · modify grant {}",
+            if has_modify {
+                "granted"
+            } else {
+                "not required"
+            },
+        ),
+        fix: None,
+    }
+}
+
+/// Monday at midnight in Bob's configured timezone, as a fixed-offset
+/// instant for comparison with journal timestamps.
+fn archive_week_start() -> chrono::DateTime<chrono::FixedOffset> {
+    use chrono::{Datelike, LocalResult, TimeZone};
+
+    let timezone =
+        crate::native::env::configured_timezone().unwrap_or(chrono_tz::UTC);
+    let now = super::save::current_utc().with_timezone(&timezone);
+    let monday = now.date_naive()
+        - chrono::Duration::days(i64::from(
+            now.weekday().num_days_from_monday(),
+        ));
+    let midnight = monday
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid local time");
+    let start = match timezone.from_local_datetime(&midnight) {
+        LocalResult::Single(start) => start,
+        LocalResult::Ambiguous(first, second) => first.min(second),
+        LocalResult::None => (1..=180)
+            .find_map(|minute| {
+                let local = midnight + chrono::Duration::minutes(minute);
+                match timezone.from_local_datetime(&local) {
+                    LocalResult::Single(start) => Some(start),
+                    LocalResult::Ambiguous(first, second) => {
+                        Some(first.min(second))
+                    }
+                    LocalResult::None => None,
+                }
+            })
+            .unwrap_or(now),
+    };
+    start.fixed_offset()
 }
 
 /// Warn-only audit of every account label under a configured route prefix:

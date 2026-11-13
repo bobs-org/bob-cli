@@ -4,6 +4,29 @@
 //! Every live run must keep durable filings when archive setup or per-thread
 //! work fails, isolate non-auth failures, abort on `invalid_grant`, create
 //! no labels for paused batches, and converge crashes without reclaiming.
+//!
+//! Core conformance audit (C1-C20):
+//! C1 `live_archives_a_fresh_close_and_repeats_as_noop`; C2
+//! `cancelled_linker_is_positive_archive_evidence`; C3/C4/C5
+//! `archive_scan::{open_linkers_veto_including_open_rows_in_done,
+//! no_linkers_means_no_evidence,positive_closed_covers_cancelled_uppercase_and_done}`;
+//! C6/C7 `archive_preview::{remote_verdict_keeps_unsaved_consent_and_policy,
+//! remote_verdict_holds_unresolvable_and_manual_or_reconcile}`; C8
+//! `live_keeps_unsaved_inbox_mail_without_mutation`; C9/C10
+//! `new_reply_lets_go_and_preserves_inbox` / `manual_move_to_inbox_lets_go_without_removing_inbox`;
+//! C11 `reopening_an_archived_task_reports_a_restore_hint_without_writing`;
+//! C12/C13 `archive_preview::gate_requires_backlog_and_burst_confirmation` /
+//! `gmail_archive_preview::dry_run_pauses_backlog_and_confirms_with_the_digest`;
+//! C14 `live_reconciles_after_remote_success_and_journal_failure_without_remutating`;
+//! C15 `archive_preview::remote_verdict_keeps_unsaved_consent_and_policy`;
+//! C16 `live_missing_modify_grant_is_setup_with_login_hint` plus the dry-run
+//! cases in `gmail_archive_preview`; C17/C18
+//! `archive_preview::{local_verdict_holds_merge_and_identity_evidence,
+//! local_verdict_suppresses_same_run_incoming_moves}`; C19
+//! `gmail_archive_preview::dry_run_pauses_backlog_and_confirms_with_the_digest`
+//! and `cli::sync_accepts_confirm_no_archive_and_preserves_pull`; C20
+//! `archive_reports_and_journals_never_echo_hostile_task_text` and the
+//! body-free terminal tests in `archive_state`.
 
 mod gmail_support;
 
@@ -172,15 +195,25 @@ fn file_adopt(env: &GmailEnv, fake: &FakeGog) -> (String, String) {
 }
 
 fn close_inbox_task(env: &GmailEnv) {
+    set_inbox_task_status(env, 'x');
+}
+
+fn set_inbox_task_status(env: &GmailEnv, status: char) {
     let inbox = env.vault().join("gmail_inbox.md");
     let text = fs::read_to_string(&inbox).expect("read inbox");
-    fs::write(&inbox, text.replacen("- [ ] #task", "- [x] #task", 1))
-        .expect("close inbox task");
+    let task = text
+        .lines()
+        .find(|line| line.starts_with("- [") && line.contains("#task"))
+        .expect("inbox task row");
+    let replacement = format!("- [{status}]{}", &task[5..]);
+    fs::write(&inbox, text.replacen(task, &replacement, 1))
+        .expect("update inbox task status");
 }
 
 #[test]
 fn live_archives_a_fresh_close_and_repeats_as_noop() {
     let env = GmailEnv::new("bob-cli-gmail-archive-apply-fresh");
+    env.write_journal_rules();
     write_archive_config(&env);
     write_task_settings(&env);
     let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
@@ -223,6 +256,19 @@ fn live_archives_a_fresh_close_and_repeats_as_noop() {
             .any(|call| call.contains(&"gmail.labels.create".to_string())),
         "existing receipt needs no label creation"
     );
+    let doctor = run_gmail(&env, &fake, &["doctor", "-f", "json"]);
+    assert_exit(&doctor, 0, "doctor after archive");
+    let doctor_json = json_stdout(&doctor);
+    let archive_check = doctor_json["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "archive")
+        .expect("archive doctor row");
+    assert!(archive_check["summary"]
+        .as_str()
+        .unwrap()
+        .contains("this week 1 archived · 0 kept"));
     fake.clear_calls();
     let again =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
@@ -472,7 +518,8 @@ fn live_missing_modify_grant_is_setup_with_login_hint() {
 }
 
 #[test]
-fn live_reconciles_a_crashed_archive_without_remutating() {
+fn live_reconciles_after_remote_success_and_journal_failure_without_remutating()
+{
     let env = GmailEnv::new("bob-cli-gmail-archive-apply-recover");
     write_archive_config(&env);
     write_task_settings(&env);
@@ -484,14 +531,219 @@ fn live_reconciles_a_crashed_archive_without_remutating() {
     );
     let (_note, _) = file_adopt(&env, &fake);
     close_inbox_task(&env);
-    let archived =
+    fake.make_archive_journal_readonly_after_batch();
+    let interrupted =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
-    assert_exit(&archived, 0, "first archive succeeds");
-    assert!(journal_has(&env, "gmail.archived"));
+    assert_exit(&interrupted, 1, "journal append fails after remote success");
+    assert!(
+        !journal_has(&env, "gmail.archived"),
+        "the failed local append did not claim ownership"
+    );
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec![RECEIPT_ID.to_string(), ENROLLMENT_ID.to_string()],
+        "the remote archive succeeded before the journal failure"
+    );
+    let journal = env.vault().join(".bob/gmail/test-host.jsonl");
+    let mut permissions = fs::metadata(&journal)
+        .expect("journal metadata")
+        .permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&journal, permissions).expect("restore journal writes");
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID])],
+    );
     fake.clear_calls();
     let again =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
-    assert_exit(&again, 0, "owned archive without INBOX stays quiet");
-    assert!(remote_write_calls(&fake).is_empty());
+    assert_exit(&again, 0, "receipt evidence reconciles the archive");
+    let value = json_stdout(&again);
+    assert_eq!(value["archive"][0]["action"], "archived", "{value}");
+    assert_eq!(value["archive"][0]["reason"], "recovered");
+    assert!(journal_text(&env).contains("\"recovered\":true"));
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "recovery does not mutate"
+    );
     let _ = THREAD_B;
+}
+
+#[test]
+fn cancelled_linker_is_positive_archive_evidence() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-cancelled");
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    set_inbox_task_status(&env, '-');
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "cancelled task is a positive close");
+    assert_eq!(json_stdout(&archived)["archive"][0]["action"], "archived");
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec![RECEIPT_ID.to_string(), ENROLLMENT_ID.to_string()]
+    );
+}
+
+#[test]
+fn new_reply_lets_go_and_preserves_inbox() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-reply-let-go");
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive the closed thread");
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX"]),
+        ],
+    );
+    fake.clear_calls();
+    let returned =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&returned, 0, "new reply releases Bob's receipt");
+    let value = json_stdout(&returned);
+    assert_eq!(value["archive"][0]["action"], "let_go");
+    assert_eq!(value["archive"][0]["reason"], "replied");
+    assert_eq!(fake.message_labels(MESSAGE_A), vec![ENROLLMENT_ID]);
+    assert_eq!(fake.message_labels(MESSAGE_B), vec!["INBOX"]);
+    assert!(journal_has(&env, "gmail.let_go"));
+    fake.clear_calls();
+    let again =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&again, 0, "the released close stays consumed");
+    assert!(remote_write_calls(&fake).is_empty());
+}
+
+#[test]
+fn manual_move_to_inbox_lets_go_without_removing_inbox() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-manual-let-go");
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive the closed thread");
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(
+            MESSAGE_A,
+            &["INBOX", RECEIPT_ID, ENROLLMENT_ID],
+        )],
+    );
+    fake.clear_calls();
+    let returned =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&returned, 0, "manual return releases Bob's receipt");
+    let value = json_stdout(&returned);
+    assert_eq!(value["archive"][0]["action"], "let_go");
+    assert_eq!(value["archive"][0]["reason"], "manual_return");
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec!["INBOX".to_string(), ENROLLMENT_ID.to_string()]
+    );
+    assert!(journal_has(&env, "gmail.let_go"));
+}
+
+#[test]
+fn reopening_an_archived_task_reports_a_restore_hint_without_writing() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-reopen-hint");
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "archive the closed thread");
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &[RECEIPT_ID, ENROLLMENT_ID])],
+    );
+    set_inbox_task_status(&env, ' ');
+    fake.clear_calls();
+    let reopened =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&reopened, 0, "reopened task receives a hint");
+    let value = json_stdout(&reopened);
+    assert_eq!(value["archive_hints"][0]["kind"], "restore_to_inbox");
+    assert_eq!(value["archive_hints"][0]["thread_id"], THREAD_A);
+    assert!(value["archive_hints"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Move it to Inbox"));
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "reopen does not mutate Gmail"
+    );
+    let human = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0"]);
+    assert_exit(&human, 0, "human reopen hint");
+    assert!(stdout(&human).contains("move it to Inbox"));
+    assert!(remote_write_calls(&fake).is_empty());
+}
+
+#[test]
+fn archive_reports_and_journals_never_echo_hostile_task_text() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-hostile-text");
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    let inbox = env.vault().join("gmail_inbox.md");
+    let text = fs::read_to_string(&inbox).expect("read task note");
+    let hostile = "PRIVATE TASK TEXT \u{1b}[31m\u{1b}[2J";
+    let replacement = format!("- [ ] #task {hostile}");
+    fs::write(
+        &inbox,
+        text.replacen("- [ ] #task archive apply probe", &replacement, 1),
+    )
+    .expect("write hostile task text");
+    close_inbox_task(&env);
+
+    let preview = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-d"]);
+    assert_exit(&preview, 0, "human archive preview");
+    assert!(!stdout(&preview).contains(hostile));
+    assert!(!stdout(&preview).contains('\u{1b}'));
+
+    let archived =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&archived, 0, "JSON archive report");
+    let report = stdout(&archived);
+    assert!(!report.contains(hostile));
+    assert!(!report.contains("PRIVATE TASK TEXT"));
+    assert!(!journal_text(&env).contains("PRIVATE TASK TEXT"));
 }

@@ -1619,7 +1619,35 @@ if op == "batch_modify":
         current.update(add_labels)
         messages[message_id]["labelIds"] = sorted(current)
     state["messages"] = messages
+    # Gmail thread reads and message reads expose the same message labels.
+    # Keep both fake views in sync so a later poll does not see stale Inbox
+    # membership after an earlier batch modification.
+    for envelope in (state.get("threads") or {}).values():
+        thread = envelope.get("thread") or envelope
+        for message in thread.get("messages") or []:
+            if message.get("id") in ids:
+                current = set(message.get("labelIds") or [])
+                current.difference_update(remove_labels)
+                current.update(add_labels)
+                message["labelIds"] = sorted(current)
+    if isinstance(state.get("thread"), dict):
+        thread = state["thread"].get("thread") or state["thread"]
+        for message in thread.get("messages") or []:
+            if message.get("id") in ids:
+                current = set(message.get("labelIds") or [])
+                current.difference_update(remove_labels)
+                current.update(add_labels)
+                message["labelIds"] = sorted(current)
+    journal_failure = bool(
+        state.pop("archive_journal_readonly_after_batch", False)
+    )
     save_state(state)
+    if journal_failure:
+        vault = os.environ.get("BOB_DIR")
+        journal_dir = Path(vault) / ".bob" / "gmail" if vault else None
+        if journal_dir and journal_dir.is_dir():
+            for journal_path in journal_dir.glob("*.jsonl"):
+                journal_path.chmod(0o444)
     dump({
         "modified": ids,
         "count": len(ids),

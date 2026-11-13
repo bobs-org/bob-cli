@@ -461,6 +461,11 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         &account,
         &enrollment,
     );
+    report.set_archive_config(
+        config.archive_enabled(),
+        config.archive_label(),
+        config.archive_max(),
+    );
     if args.dry_run {
         attach_archive_dry_run(
             &coordinator,
@@ -485,6 +490,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             live.warnings,
             live.failed,
             deferred_empty,
+            live.hints,
         );
         if !deferred_empty {
             // Deferred archive fetches fail the run without losing filings.
@@ -560,6 +566,7 @@ fn attach_archive_dry_run<R: GmailRead>(
             return Ok(());
         }
     };
+    report.archive_hints = report::archive_restore_hints(&scan, &journal);
     let Some(labels) = labels else {
         report.warnings.push(
             "skipped archive preview: the Gmail label list was unavailable"

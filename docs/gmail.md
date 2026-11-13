@@ -56,7 +56,7 @@ bob gmail attach NOTE N [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|jso
 bob gmail doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail draft NOTE [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail link NOTE... [-a|--all] [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
-bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose]
+bob gmail login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual] [-s|--scope readonly|compose|modify]
 bob gmail logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
 bob gmail new [-b|--bob-dir DIR] [-B|--bcc LIST] [-c|--cc LIST] [-f|--format human|json] [-s|--subject TEXT] [-t|--to LIST]
 bob gmail peek URL|ID [-f|--format human|json]
@@ -64,7 +64,7 @@ bob gmail reply NOTE [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json]
 bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--dry-run] [-f|--format human|json] [-P|--parent ROUTE] [-q|--quiet] [-R|--rerender]
 bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 bob gmail send NOTE [-b|--bob-dir DIR] [-c|--confirm DIGEST] [-d|--dry-run] [-f|--format human|json]
-bob gmail sync [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-l|--limit N] [-q|--quiet] [-r|--retry-timeout SECS]
+bob gmail sync [-b|--bob-dir DIR] [-c|--confirm DIGEST] [-d|--dry-run] [-f|--format human|json] [-l|--limit N] [-n|--no-archive] [-q|--quiet] [-r|--retry-timeout SECS]
 ```
 
 Running `bob gmail` with no subcommand lists saved threads, exactly like the
@@ -183,6 +183,9 @@ gmail:
     inbox: gmail_inbox.md # unrouted threads and route problems; falls back to pull.inbox
     route_prefixes: ["#", "+"] # quote them; absent or [] = no-prefix mode
     reply_wait_days: 3 # integer >= 1; calendar days after your send
+    archive: off # off | on; opt in to one-shot archive after all linking tasks close
+    archive_label: bob/closed # receipt label; defaults to <resolved sync label>/closed
+    archive_max: 10 # positive integer; larger batches require -c DIGEST
   timeout_secs: 60
   writer: mac-host # optional; the one host label allowed to write
 ```
@@ -246,6 +249,13 @@ gmail:
 - `sync.reply_wait_days` must be an integer of at least 1. Default 3. It counts
   calendar days from your send to the awaiting-reply nudge date. Changing it
   never reschedules existing holds.
+- `sync.archive` is `off` (default) or `on`. When enabled, the approved writer
+  can archive enrolled Gmail messages after every linking task is positively
+  closed. `sync.archive_label` names the receipt label and defaults to the
+  resolved enrollment label plus `/closed`; Bob creates it on the first
+  approved archive run. It cannot equal or alias the enrollment label.
+  `sync.archive_max` is a positive limit (default 10); larger eligible sets
+  pause as a whole until confirmed with the preview digest.
 - `signature` is `gmail` (default) or `none`; remote Gmail drafts include the
   account's Gmail signature or omit it. The stored-draft preview shows the result.
 - `timeout_secs` must be an integer greater than 0. Default 60.
@@ -282,15 +292,17 @@ the writer note.
    sign-in when `BOB_GMAIL_BROWSER` is set, or when a desktop session is
    available. SSH and headless sessions use the paste flow. `-m` always selects
    paste. Login requests `--gmail-scope readonly`. `-s compose` also requests
-   `https://www.googleapis.com/auth/gmail.compose` through `--extra-scopes`
-   (for the Mac only); the docs say plainly that this scope also permits
-   sending. The gate is the preview/confirm step plus keeping that grant off
-   agent hosts. A saved read-only grant does not satisfy `-s compose`: Bob
-   says it is signing in again to add compose and runs a fresh consent. The
-   sign-in prompt names both permissions to allow, "Read your email messages"
-   and "Manage drafts and send emails".
+   `https://www.googleapis.com/auth/gmail.compose`; Google notes that this
+   permits sending, and Bob still requires its separate draft preview and
+   confirmation. `-s modify` requests Gmail's broader modify scope on the
+   approved writer. Google may allow more than Bob uses: Bob's archive path is
+   fenced to adding the configured receipt label and removing `INBOX` from
+   saved message IDs; it cannot permanently delete mail. Moving a thread back
+   to Inbox is always explicit. A saved narrower grant does not satisfy a
+   broader requested scope, so Bob signs in again for fresh consent.
 3. **Check.** Bob runs one Gmail search page with `max=1` to confirm the grant
-   and reports the granted scopes (`readonly` or `readonly+compose`). With
+   and reports the granted scopes (`readonly`, `readonly+compose`, or the
+   granted modify combination). With
    `-s compose`, a consent that leaves compose unticked fails with
    `compose_not_granted` (exit 1); the read-only grant is kept. The title,
    summary, and compose note follow the access requested and granted, so a
@@ -733,9 +745,57 @@ for waiting (default 120 seconds): guard contention, retry backoff, and
 vault-lock waits. Ordinary pacing (the 200 ms minimum gap between Gmail
 requests) always applies, including at `-r 0`, and never consumes the budget.
 `-r 0` means one attempt per operation with no contention, backoff, or
-lock-wait sleep. The label stays in Gmail: sync uses read-only access and
-never unlabels, archives, marks read, or changes a message. `pull` remains a
+lock-wait sleep. By default, sync leaves Gmail unchanged and uses read-only
+access. The opt-in archive path below is the only message-label mutation:
+it removes `INBOX` and adds the receipt label to exact saved message IDs.
+It never marks read, deletes, or changes unrelated labels. `pull` remains a
 hidden alias with the same behaviour.
+
+### Archive on close
+
+Archiving is off until `gmail.sync.archive: on` is set and the approved
+writer has the Gmail modify grant from `bob gmail login -s modify`. The
+Google grant is broad; Bob's implementation uses an exact command fence for
+message label changes and does not send or permanently delete mail. Compose
+still follows its separate draft and confirmation workflow.
+
+Archive eligibility requires an enrolled thread that still has its Gmail
+enrollment label, at least one linking task closed as `[x]`, `[X]`, or `[-]`,
+and no open or unknown linking task. The strict scan includes `done/`, holds
+merge-retired sources for review, and refuses incomplete or ambiguous mail
+evidence. The first live run after enabling records the baseline; only a later
+observed open-to-closed transition archives automatically. A thread already
+closed at the baseline is historical backlog and needs a matching preview
+digest. Reopening and closing entirely between sync observations cannot be
+detected.
+
+Bob freezes the message IDs already saved in the mail note. If an Inbox reply
+is present but unsaved, the whole thread stays in Inbox and one `kept`
+outcome is recorded. Removing the enrollment label is a per-thread opt-out;
+Bob reports that case in JSON without a human row. If you already archived a
+thread yourself, Bob does nothing and adds no receipt. Spam, Trash, Drafts,
+missing mail, and configured `never_save` cases are held. A merge-retired
+source is held for review instead of being treated as finished.
+
+The Gmail receipt label records Bob-owned archives and supports crash
+recovery. A new reply or your manual Move to Inbox removes the receipt only;
+Bob then lets go and never archives that close again. Reopening a task does
+not move mail: the report gives a typed restore hint, and you can move the
+thread to Inbox yourself. This core release has no `bob gmail unarchive`
+command or automatic restore.
+
+Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
+historical backlog or a batch above `archive_max`, and `-n` to skip archive
+planning for one run. A pause shows every candidate thread and the digest,
+archives none, and exits 1. A supplied digest that no longer matches the
+current saved IDs, labels, or tasks makes no archive writes. Archive failures
+do not undo completed filing or watch work; `invalid_grant` stops remaining
+Gmail mutations. `-q` still shows archive and let-go rows because those
+changes matter to the Inbox.
+
+The journal at `.bob/gmail/<host>.jsonl` records body-free enablement,
+observations, close generations, and terminal outcomes. No task prose,
+subject, body, or token is stored there.
 
 A thread whose routing label does not resolve is still filed to the inbox
 with a managed `GMAIL ROUTE` child that names the offending label, the
@@ -944,10 +1004,15 @@ config, the writer pin, and journal readability. Rows look like
 - `thread_ids`: IDs-only `threads.list` of the sync-label query
   (`label:<label>`), or `in:inbox` when sync is disabled. Skipped when there
   is no account or the token row failed.
-- `scopes`: `readonly` or `readonly+compose`.
+- `scopes`: the granted `readonly`, `compose`, and `modify` combination.
+- `archive`: on/off, resolved receipt label, `archive_max`, and distinct
+  archived and kept outcomes since Monday midnight in the configured
+  timezone. A missing modify grant while archive mode is on shows the login
+  hint. The row stays visible as skipped when the account or grant cannot be
+  checked.
 - `config`: folder, body mode, the sync label and inbox after fallbacks
   (`sync disabled` when the label is empty), the route prefixes (`none` in
-  no-prefix mode), and the reply wait in days.
+  no-prefix mode), the reply wait in days, and archive settings.
 - `routes`: a warning, never a failure. It reads the account's label list once
   and lists every label under a configured prefix that doesn't resolve, one
   `label → kind · hint` line each. When all resolve it shows the routing-label
@@ -974,9 +1039,9 @@ Any logged-in host may read Gmail. Save, sync, and attachment writes run only
 on `gmail.writer` when that key is set; the docs recommend the Mac. On the Mac,
 cron runs `bob gmail sync -q` hourly at `:07`; see
 [Mac scheduled maintenance](vault-git-sync.md#mac-scheduled-maintenance). Agent
-hosts stay read-only:
-the compose scope is granted only on the Mac. `doctor` reports the writer pin
-and the current host. Sync dry-run (`-d`) is allowed on a non-writer host.
+hosts stay read-only: grant modify only to the approved writer. `doctor`
+reports granted scopes, archive state, the writer pin, and the current host.
+Sync dry-run (`-d`) is allowed on a non-writer host.
 
 Live sync holds a host-local per-account guard at
 `$XDG_STATE_HOME/bob/gmail/sync-<digest>.lock`. Each live run records
@@ -1006,9 +1071,13 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 [Writing and sending](#writing-and-sending) describe the compose documents.
 `bob gmail sync -f json` prints the schema-1 sync document (`ok`,
 `dry_run`, `pulled`, `results`, `warnings`, `watch`, `problems`, and
-`summary`). `watch[]` and `summary.{watching,awaiting}` are specified under
+`summary`) plus additive `archive[]`, `archive_hints[]`, `archive_enabled`,
+`archive_label`, and `archive_max`. Archive rows contain exact sorted message
+IDs and task path/line/block-ID locators, never task text. Paused and dry-run
+confirmations add `archive_digest`. Reopen advice is a typed hint, not a watch
+action. `watch[]` and `summary.{watching,awaiting}` are specified under
 [Watch](#watch). See [JSON outputs](reference/json-outputs.md) for the field
-list, statuses, and which counts include route-problem rows.
+list and status contract.
 
 ## Security
 
@@ -1024,6 +1093,10 @@ list, statuses, and which counts include route-problem rows.
   `--wrap-untrusted`.
 - `gmail.compose` also permits sending. Bob never sends without a Gmail draft
   plus a digest-bound confirmation, and keeps that grant off agent hosts.
+- `gmail.modify` is broader than label archiving. Bob requests it only for the
+  approved writer and fences the archive path to the receipt/`INBOX` label
+  pair; sync does not use it to send, delete, mark read, or modify other
+  labels.
 - Tests use a fake gog and temp vaults. Committed fixtures are synthetic.
 
 ## Environment

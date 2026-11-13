@@ -39,7 +39,7 @@ use crate::native::{
         policy::NeverSavePolicy,
         resolve::{self, GmailRead},
         sync::{
-            report::{ArchiveRow, ArchiveTaskRef},
+            report::{ArchiveHint, ArchiveRow, ArchiveTaskRef},
             watch_apply::WatchThreadOutcome,
         },
         GmailError,
@@ -64,6 +64,7 @@ pub(crate) struct LiveArchiveOutcome {
     pub(crate) rows: Vec<ArchiveRow>,
     pub(crate) digest: Option<String>,
     pub(crate) warnings: Vec<String>,
+    pub(crate) hints: Vec<ArchiveHint>,
     pub(crate) failed: bool,
     pub(crate) deferred: Vec<ThreadKey>,
     pub(crate) skipped_no_archive: bool,
@@ -258,6 +259,8 @@ pub(crate) fn apply_live<R: GmailRead>(
         outcome.deferred.extend(preview.deferred);
         outcome.digest.clone_from(&preview.plan.digest);
         if preview.plan.rows.is_empty() {
+            outcome.hints =
+                super::report::archive_restore_hints(&scan, &journal);
             return Ok(outcome);
         }
         if preview.plan.gate.is_paused() {
@@ -280,6 +283,8 @@ pub(crate) fn apply_live<R: GmailRead>(
                 });
             }
             outcome.failed = true;
+            outcome.hints =
+                super::report::archive_restore_hints(&scan, &journal);
             return Ok(outcome);
         }
         return Err(setup_missing_modify());
@@ -404,7 +409,43 @@ pub(crate) fn apply_live<R: GmailRead>(
     outcome.deferred.extend(preview.deferred);
     outcome.digest.clone_from(&preview.plan.digest);
 
+    if !preview.plan.gate.is_paused()
+        && let Some(enrollment_id) = labels
+            .iter()
+            .find(|label| label.name == config.sync_label().unwrap_or_default())
+            .map(|label| label.id.as_str())
+    {
+        reconcile_ready_receipts(
+            reader,
+            vault,
+            &host,
+            account,
+            &scan,
+            &mut journal,
+            &receipt_identity,
+            enrollment_id,
+            &policy,
+            &mut outcome,
+        )?;
+    }
+
     if preview.plan.rows.is_empty() {
+        // Let-go is driven by previously owned receipts, independent of
+        // whether this run has a new close to preview. A reply or manual
+        // Inbox move must release its receipt on an otherwise idle sync.
+        let owned_before: Vec<super::archive_state::ArchiveReceipt> =
+            journal.owned_receipts().cloned().collect();
+        release_owned(
+            vault,
+            &host,
+            reader,
+            gog,
+            account,
+            &mut journal,
+            &owned_before,
+            &mut outcome,
+        )?;
+        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
         return Ok(outcome);
     }
 
@@ -432,6 +473,7 @@ pub(crate) fn apply_live<R: GmailRead>(
             });
         }
         outcome.failed = true;
+        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
         return Ok(outcome);
     }
 
@@ -572,7 +614,7 @@ pub(crate) fn apply_live<R: GmailRead>(
             evidence,
             &thread,
             &enrollment_id,
-            &close.label,
+            &receipt_identity,
             &policy,
         );
         match verdict {
@@ -596,6 +638,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                         &thread,
                         evidence,
                         &close,
+                        &receipt_identity,
                         &mut journal,
                         &mut outcome,
                     )?;
@@ -657,6 +700,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                             &journal,
                             &row.key,
                             &close,
+                            &receipt_identity,
                             &archive_ids,
                             false,
                             &mut outcome,
@@ -695,6 +739,8 @@ pub(crate) fn apply_live<R: GmailRead>(
         &mut outcome,
     )?;
 
+    outcome.hints = super::report::archive_restore_hints(&scan, &journal);
+
     Ok(outcome)
 }
 
@@ -703,6 +749,87 @@ fn gate_reason(gate: &archive_preview::ArchiveGate) -> &'static str {
         archive_preview::ArchiveGate::Open { .. } => "eligible",
         archive_preview::ArchiveGate::Paused { reason } => reason,
     }
+}
+
+/// Recover a remote archive whose terminal journal append failed. The
+/// read-only preview deliberately omits an `unreconciled` hold from its
+/// actionable rows, so check unconsumed closes once more at the live apply
+/// boundary before returning an otherwise empty report.
+#[allow(clippy::too_many_arguments)]
+fn reconcile_ready_receipts<R: GmailRead>(
+    reader: &R,
+    vault: &Path,
+    host: &str,
+    account: &str,
+    scan: &super::archive_scan::ArchiveScan,
+    journal: &mut ArchiveJournal,
+    receipt_label: &ArchiveLabelIdentity,
+    enrollment_id: &str,
+    policy: &NeverSavePolicy,
+    outcome: &mut LiveArchiveOutcome,
+) -> Result<(), GmailError> {
+    let mut pending = Vec::new();
+    for key in scan.threads() {
+        let (Some(evidence), Some(close)) =
+            (scan.evidence(key), journal.unconsumed_close(key))
+        else {
+            continue;
+        };
+        pending.push((evidence.clone(), close.clone()));
+    }
+
+    for (evidence, close) in pending {
+        let thread =
+            match reader.thread_metadata(account, close.key.thread_id()) {
+                Ok(thread) => thread,
+                Err(error) => {
+                    if is_auth_abort(&error) {
+                        return Err(error);
+                    }
+                    outcome.warnings.push(format!(
+                        "skipped Gmail thread {}: {}: {}",
+                        close.key.thread_id(),
+                        error.kind(),
+                        error.message(),
+                    ));
+                    outcome.failed = true;
+                    continue;
+                }
+            };
+        match archive_preview::remote_verdict(
+            reader,
+            account,
+            &evidence,
+            &thread,
+            enrollment_id,
+            receipt_label,
+            policy,
+        ) {
+            archive_preview::RemoteVerdict::Held {
+                reason: HOLD_UNRECONCILED,
+                ..
+            } => reconcile_recovered(
+                vault,
+                host,
+                &thread,
+                &evidence,
+                &close,
+                receipt_label,
+                journal,
+                outcome,
+            )?,
+            archive_preview::RemoteVerdict::Held { reason, warning } => {
+                if let Some(warning) = warning {
+                    outcome.warnings.push(warning);
+                }
+                if reason == archive_preview::HOLD_FETCH_FAILED {
+                    outcome.failed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Persist enablement and open observations. Returns true when anything was
@@ -923,6 +1050,7 @@ fn append_archived(
     journal: &ArchiveJournal,
     key: &ThreadKey,
     close: &super::archive_state::ArchiveCloseGeneration,
+    receipt_label: &ArchiveLabelIdentity,
     message_ids: &[String],
     recovered: bool,
     outcome: &mut LiveArchiveOutcome,
@@ -932,7 +1060,7 @@ fn append_archived(
         &close.generation,
         ArchiveTerminalKind::Archived {
             message_ids: message_ids.to_vec(),
-            label: close.label.clone(),
+            label: receipt_label.clone(),
             recovered,
         },
     ) else {
@@ -978,6 +1106,7 @@ fn reconcile_recovered(
     thread: &crate::native::gmail::model::GmailThread,
     evidence: &super::archive_scan::ArchiveThreadEvidence,
     close: &super::archive_state::ArchiveCloseGeneration,
+    receipt_label: &ArchiveLabelIdentity,
     journal: &mut ArchiveJournal,
     outcome: &mut LiveArchiveOutcome,
 ) -> Result<(), GmailError> {
@@ -987,8 +1116,8 @@ fn reconcile_recovered(
         .filter(|message| {
             evidence.saved_ids.binary_search(&message.id).is_ok()
                 && message.label_ids.iter().any(|label| {
-                    close.label.id.as_ref().is_some_and(|id| label == id)
-                        || label == &close.label.name
+                    receipt_label.id.as_ref().is_some_and(|id| label == id)
+                        || label == &receipt_label.name
                 })
         })
         .map(|message| message.id.clone())
@@ -1003,7 +1132,7 @@ fn reconcile_recovered(
         &close.generation,
         ArchiveTerminalKind::Archived {
             message_ids: recovered.clone(),
-            label: close.label.clone(),
+            label: receipt_label.clone(),
             recovered: true,
         },
     ) else {

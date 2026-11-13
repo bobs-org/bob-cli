@@ -11,7 +11,8 @@ This guide files the original conversation you choose on your phone into
 Bob. Apply `bob` plus one `#/note` routing label to that conversation in
 Gmail, then Bob saves it as a mail note and links one task from the area or
 project named by the routing label, or from the Gmail inbox when none or an
-invalid one is present. Bob never archives, marks read, or removes labels.
+invalid one is present. By default, Bob leaves Gmail labels and Inbox state
+unchanged. Archive-on-close is an optional feature described below.
 
 ## Before you start
 
@@ -59,6 +60,22 @@ label, the resolver's explanation, and its hint; the first such filing exits
 1. Review the tasks there and route them as usual. Syncing again is
 idempotent; existing tasks are not duplicated. The Gmail label stays in
 place, so you can keep using it as a filing marker.
+
+## Optional: archive after every task closes
+
+Archive-on-close is off by default. To enable it, set
+`gmail.sync.archive: on` and obtain the Gmail modify grant with
+`bob gmail login -s modify` on the approved writer. That Google grant is
+broad, but Bob's archive path only adds the configured receipt label and
+removes `INBOX` from message IDs already saved to the mail note. It does not
+send or permanently delete mail.
+
+Bob archives only after it has observed the thread being watched and later
+sees every linking task positively closed. Existing closed tasks are treated
+as backlog and require a digest-confirmed preview. Reopening a task does not
+restore mail automatically; move the conversation to Inbox yourself if you
+want it back. See [Bob Gmail: archive on close](../gmail.md#archive-on-close)
+for the confirmation, reports, holds, and journal details.
 
 Change `gmail.sync.inbox` or `gmail.sync.label` in the Gmail config when you
 want another inbox file or label. See [Bob Gmail](../gmail.md#sync) for the

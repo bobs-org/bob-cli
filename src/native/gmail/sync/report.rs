@@ -9,9 +9,11 @@ use serde_json::{json, Value};
 
 use super::archive_preview::{
     ArchiveGate, ArchivePlan, ArchivePreviewRow, PreviewDecision, ACTION_KEPT,
-    ACTION_PAUSED, ACTION_WOULD_ARCHIVE, KEPT_MANUAL, REASON_BACKLOG,
-    REASON_ELIGIBLE,
+    ACTION_PAUSED, ACTION_WOULD_ARCHIVE, KEPT_CONSENT_REMOVED, KEPT_MANUAL,
+    REASON_BACKLOG, REASON_ELIGIBLE,
 };
+use super::archive_scan::ArchiveScan;
+use super::archive_state::ArchiveJournal;
 use super::file::{FilingFailure, FilingOutcome, FilingResult};
 use super::scan::WatchScan;
 use super::watch_apply::{WatchGoneOutcome, WatchThreadOutcome};
@@ -55,6 +57,44 @@ pub(crate) struct ArchiveTaskRef {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) block_id: Option<String>,
+}
+
+/// Archive settings that clients should not need to re-read from config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchiveConfigSummary {
+    pub(crate) enabled: bool,
+    pub(crate) label: String,
+    pub(crate) max: u32,
+}
+
+/// A typed restore hint for an open task whose mail still has Bob's receipt.
+/// This core phase only advises the user; it does not provide an undo CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchiveHint {
+    pub(crate) kind: &'static str,
+    pub(crate) thread_id: String,
+    pub(crate) note: String,
+}
+
+pub(crate) fn archive_restore_hints(
+    scan: &ArchiveScan,
+    journal: &ArchiveJournal,
+) -> Vec<ArchiveHint> {
+    let mut hints = std::collections::BTreeMap::new();
+    for receipt in journal.owned_receipts() {
+        if let Some(evidence) = scan.evidence(&receipt.key)
+            && evidence.has_open()
+        {
+            hints
+                .entry(receipt.key.thread_id().to_string())
+                .or_insert_with(|| ArchiveHint {
+                    kind: "restore_to_inbox",
+                    thread_id: receipt.key.thread_id().to_string(),
+                    note: evidence.note.clone(),
+                });
+        }
+    }
+    hints.into_values().collect()
 }
 
 /// One archive preview row: `would_archive`, `kept`, or `paused`. Live
@@ -109,7 +149,8 @@ impl ArchiveRow {
     /// Manually archived threads stay human-silent: there is nothing to
     /// confirm and nothing Bob did.
     fn human_silent(&self) -> bool {
-        self.action == ACTION_KEPT && self.reason == KEPT_MANUAL
+        self.action == ACTION_KEPT
+            && matches!(self.reason, KEPT_MANUAL | KEPT_CONSENT_REMOVED)
     }
 }
 
@@ -132,6 +173,10 @@ pub(crate) struct SyncReport {
     pub(crate) archive: Vec<ArchiveRow>,
     /// Canonical digest over the previewed set, when any row is actionable.
     pub(crate) archive_digest: Option<String>,
+    /// Archive configuration projected for clients in schema 1.
+    pub(crate) archive_config: Option<ArchiveConfigSummary>,
+    /// Reopen advice stays separate from the established watch action list.
+    pub(crate) archive_hints: Vec<ArchiveHint>,
     /// Archive planning was skipped with `-n` on an archive-enabled host.
     pub(crate) archive_skipped: bool,
 }
@@ -154,8 +199,23 @@ impl SyncReport {
             busy: true,
             archive: Vec::new(),
             archive_digest: None,
+            archive_config: None,
+            archive_hints: Vec::new(),
             archive_skipped: false,
         }
+    }
+
+    pub(crate) fn set_archive_config(
+        &mut self,
+        enabled: bool,
+        label: &str,
+        max: u32,
+    ) {
+        self.archive_config = Some(ArchiveConfigSummary {
+            enabled,
+            label: label.to_string(),
+            max,
+        });
     }
 
     /// Attach a read-only dry-run archive preview. A paused gate fails the
@@ -183,8 +243,10 @@ impl SyncReport {
         warnings: Vec<String>,
         failed: bool,
         deferred_empty: bool,
+        hints: Vec<ArchiveHint>,
     ) {
         self.archive = rows;
+        self.archive_hints = hints;
         if self.archive_digest.is_none() {
             self.archive_digest = digest;
         }
@@ -305,6 +367,8 @@ pub(crate) fn from_outcome(
         busy: outcome.busy,
         archive: Vec::new(),
         archive_digest: None,
+        archive_config: None,
+        archive_hints: Vec::new(),
         archive_skipped: false,
     }
 }
@@ -379,6 +443,17 @@ fn print_archive_preview(styler: &Styler, report: &SyncReport, quiet: bool) {
             _ => styler.yellow(&line),
         };
         println!("  {colored}");
+    }
+    if !quiet {
+        for hint in &report.archive_hints {
+            println!(
+                "  {}",
+                styler.blue(&format!(
+                    "↩ reopened {} → {} (archived mail stays in Gmail; move it to Inbox to restore it)",
+                    hint.thread_id, hint.note
+                ))
+            );
+        }
     }
     if let Some(digest) = &report.archive_digest {
         shown = true;
@@ -493,6 +568,12 @@ fn json_document(report: &SyncReport) -> Value {
         "watch": report.watch.iter().map(watch_json).collect::<Vec<_>>(),
         "problems": problems,
         "archive": archive,
+        "archive_hints": report.archive_hints.iter().map(|hint| json!({
+            "kind": hint.kind,
+            "thread_id": hint.thread_id,
+            "note": hint.note,
+            "message": "Task reopened; archived mail stays in Gmail. Move it to Inbox in Gmail to restore it.",
+        })).collect::<Vec<_>>(),
         "summary": {
             "watching": report.watching,
             "awaiting": report.awaiting,
@@ -506,6 +587,11 @@ fn json_document(report: &SyncReport) -> Value {
     });
     if let Some(digest) = &report.archive_digest {
         document["archive_digest"] = json!(digest);
+    }
+    if let Some(config) = &report.archive_config {
+        document["archive_enabled"] = json!(config.enabled);
+        document["archive_label"] = json!(config.label);
+        document["archive_max"] = json!(config.max);
     }
     document
 }
@@ -733,6 +819,8 @@ fn with_nothing(report: &SyncReport, header: String) -> String {
         )
     }) || report.watch.iter().any(|row| row.action != "unchanged")
         || !report.gone.is_empty()
+        || report.archive.iter().any(|row| !row.human_silent())
+        || !report.archive_hints.is_empty()
     {
         header
     } else {
@@ -857,6 +945,8 @@ mod tests {
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
+            archive_config: None,
+            archive_hints: Vec::new(),
             archive_skipped: false,
         };
         let value = json_document(&report);
@@ -870,6 +960,116 @@ mod tests {
         assert_eq!(value["summary"]["watching"], 1);
         assert_eq!(value["summary"]["awaiting"], 0);
         assert!(value["problems"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn archive_json_is_additive_and_contains_only_ids_and_task_locators() {
+        let report = SyncReport {
+            ok: true,
+            dry_run: false,
+            pulled: 0,
+            results: Vec::new(),
+            watch: Vec::new(),
+            gone: Vec::new(),
+            problems: Vec::new(),
+            warnings: Vec::new(),
+            watching: 0,
+            awaiting: 0,
+            first_seen: false,
+            busy: false,
+            archive: vec![ArchiveRow {
+                thread_id: "aa01".into(),
+                note: "mail/2026/aa01.md".into(),
+                action: "archived",
+                reason: "eligible",
+                messages: vec!["00000000000000a0".into()],
+                tasks: vec![ArchiveTaskRef {
+                    path: "job.md".into(),
+                    line: 12,
+                    block_id: Some("follow-up".into()),
+                }],
+            }],
+            archive_digest: Some("abcd".into()),
+            archive_config: Some(ArchiveConfigSummary {
+                enabled: true,
+                label: "bob/closed".into(),
+                max: 10,
+            }),
+            archive_hints: vec![ArchiveHint {
+                kind: "restore_to_inbox",
+                thread_id: "bb02".into(),
+                note: "mail/2026/bb02.md".into(),
+            }],
+            archive_skipped: false,
+        };
+        let value = json_document(&report);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["archive_enabled"], true);
+        assert_eq!(value["archive_label"], "bob/closed");
+        assert_eq!(value["archive_max"], 10);
+        assert_eq!(value["archive_digest"], "abcd");
+        assert_eq!(value["archive"][0]["action"], "archived");
+        assert_eq!(
+            value["archive"][0]["messages"],
+            json!(["00000000000000a0"])
+        );
+        assert_eq!(value["archive"][0]["tasks"][0]["path"], "job.md");
+        assert_eq!(value["archive"][0]["tasks"][0]["line"], 12);
+        assert_eq!(value["archive"][0]["tasks"][0]["block_id"], "follow-up");
+        assert_eq!(value["archive_hints"][0]["kind"], "restore_to_inbox");
+        assert_eq!(value["summary"]["archived"], 1);
+    }
+
+    #[test]
+    fn archive_activity_breaks_quiet_and_safe_noop_rows_stay_silent() {
+        let manual = ArchiveRow {
+            thread_id: "aa01".into(),
+            note: "mail/2026/aa01.md".into(),
+            action: ACTION_KEPT,
+            reason: KEPT_MANUAL,
+            messages: Vec::new(),
+            tasks: Vec::new(),
+        };
+        let no_label = ArchiveRow {
+            reason: KEPT_CONSENT_REMOVED,
+            ..manual.clone()
+        };
+        let unsaved = ArchiveRow {
+            reason: "unsaved",
+            ..manual.clone()
+        };
+        assert_eq!(archive_human_row(&manual), None);
+        assert_eq!(archive_human_row(&no_label), None);
+        assert!(archive_human_row(&unsaved).is_some());
+
+        let quiet_report = SyncReport {
+            ok: true,
+            dry_run: false,
+            pulled: 0,
+            results: Vec::new(),
+            watch: Vec::new(),
+            gone: Vec::new(),
+            problems: Vec::new(),
+            warnings: Vec::new(),
+            watching: 0,
+            awaiting: 0,
+            first_seen: false,
+            busy: false,
+            archive: vec![ArchiveRow {
+                action: "let_go",
+                reason: "replied",
+                ..manual
+            }],
+            archive_digest: None,
+            archive_config: None,
+            archive_hints: Vec::new(),
+            archive_skipped: false,
+        };
+        assert!(!with_nothing(&quiet_report, "header".into())
+            .contains("nothing new"));
+        assert!(archive_human_row(&quiet_report.archive[0])
+            .unwrap()
+            .contains("back in inbox"));
     }
 
     #[test]
@@ -988,6 +1188,8 @@ mod tests {
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
+            archive_config: None,
+            archive_hints: Vec::new(),
             archive_skipped: false,
         };
         let one = header(&report);
@@ -1024,6 +1226,8 @@ mod tests {
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
+            archive_config: None,
+            archive_hints: Vec::new(),
             archive_skipped: false,
         };
         let text = with_nothing(&report, "header".into());
@@ -1058,6 +1262,8 @@ mod tests {
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
+            archive_config: None,
+            archive_hints: Vec::new(),
             archive_skipped: false,
         };
         let text = with_nothing(&report, "header".into());

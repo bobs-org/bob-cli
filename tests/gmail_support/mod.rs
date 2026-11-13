@@ -466,6 +466,19 @@ impl FakeGog {
             .expect("write fake batch race");
     }
 
+    /// Let the next successful archive mutation make the current Gmail
+    /// journal unwritable, reproducing a remote-success/local-append crash.
+    pub(crate) fn make_archive_journal_readonly_after_batch(&self) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["archive_journal_readonly_after_batch"] =
+            serde_json::Value::Bool(true);
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write archive journal failure injection");
+    }
+
     /// Make the next create of this exact name lose a first-use race. The
     /// concurrent label appears in `labels.list`, while create returns an
     /// already-exists error.

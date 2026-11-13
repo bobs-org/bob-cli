@@ -303,6 +303,11 @@ const TABLE: &[Entry] = &[
         arg: "query",
         kind: Kind::FreeText,
     },
+    Entry {
+        path: &["gmail", "sync"],
+        arg: "confirm",
+        kind: Kind::FreeText,
+    },
     // `bob task move` selects vault notes by stem/path, and task selectors
     // remain literal values because they are resolved against SOURCE.
     Entry {

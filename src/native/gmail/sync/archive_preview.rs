@@ -784,7 +784,13 @@ pub(crate) fn preview<R: GmailRead>(
                 };
                 let receipt = close
                     .as_ref()
-                    .map(|close| close.label.clone())
+                    .map(|close| {
+                        if close.label.id.is_some() {
+                            close.label.clone()
+                        } else {
+                            input.receipt_label.clone()
+                        }
+                    })
                     .unwrap_or_else(|| input.receipt_label.clone());
                 match remote_verdict(
                     reader,
