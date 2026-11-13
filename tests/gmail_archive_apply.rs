@@ -11,15 +11,20 @@
 //! `archive_scan::{open_linkers_veto_including_open_rows_in_done,
 //! no_linkers_means_no_evidence,positive_closed_covers_cancelled_uppercase_and_done}`;
 //! C6/C7 `archive_preview::{remote_verdict_keeps_unsaved_consent_and_policy,
-//! remote_verdict_holds_unresolvable_and_manual_or_reconcile}`; C8
+//! remote_verdict_holds_unresolvable_and_manual_or_reconcile}` plus
+//! `boundary_fresh_close_unresolvable_preview_fails_without_writes` and
+//! `boundary_unresolvable_journaled_close_fails_live_and_preview`; C8
 //! `live_keeps_unsaved_inbox_mail_without_mutation`; C9/C10
 //! `new_reply_lets_go_and_preserves_inbox` / `manual_move_to_inbox_lets_go_without_removing_inbox`;
 //! C11 `reopening_an_archived_task_reports_a_restore_hint_without_writing`;
 //! C12/C13 `archive_preview::gate_requires_backlog_and_burst_confirmation` /
 //! `gmail_archive_preview::dry_run_pauses_backlog_and_confirms_with_the_digest`;
-//! C14 `live_reconciles_after_remote_success_and_journal_failure_without_remutating`;
+//! C14 `live_reconciles_after_remote_success_and_journal_failure_without_remutating` /
+//! `boundary_journal_failure_keeps_prior_row_and_recovers_the_later_write`;
 //! C15 `archive_preview::remote_verdict_keeps_unsaved_consent_and_policy`;
-//! C16 `live_missing_modify_grant_is_setup_with_login_hint` plus the dry-run
+//! C16 `live_missing_modify_grant_is_setup_with_login_hint` plus
+//! `boundary_invalid_grant_keeps_same_run_archive_and_stops_later_writes` and
+//! `boundary_invalid_grant_human_report_keeps_same_run_archive`, and the dry-run
 //! cases in `gmail_archive_preview`; C17/C18
 //! `archive_preview::{local_verdict_holds_merge_and_identity_evidence,
 //! local_verdict_suppresses_same_run_incoming_moves}`; C19
@@ -27,6 +32,10 @@
 //! and `cli::sync_accepts_confirm_no_archive_and_preserves_pull`; C20
 //! `archive_reports_and_journals_never_echo_hostile_task_text` and the
 //! body-free terminal tests in `archive_state`.
+//! Mutation-boundary faults use actual fake-gog transitions:
+//! `boundary_reopened_between_planning_and_mutation_holds_without_writing`,
+//! `boundary_new_unreadable_note_between_plan_and_revalidation_holds`, and
+//! `boundary_planned_kept_turning_archivable_is_held`.
 //!
 //! Surfaces (section 4): `report::{live_success_omits_digest_in_json_and_hides_quiet_leak,
 //! dry_run_and_paused_runs_keep_digest,
@@ -50,8 +59,11 @@ use sha2::{Digest, Sha256};
 
 const THREAD_A: &str = "0123456789abcdef";
 const THREAD_B: &str = "aaaaaaaaaaaaaaaa";
+const THREAD_D: &str = "ddddddddddddddd0";
 const MESSAGE_A: &str = "00000000000000a0";
 const MESSAGE_B: &str = "00000000000000b1";
+const MESSAGE_C: &str = "00000000000000c2";
+const MESSAGE_D: &str = "00000000000000d3";
 const ENROLLMENT_ID: &str = "Label_9";
 const RECEIPT_ID: &str = "Label_10";
 
@@ -1198,15 +1210,25 @@ fn boundary_reopened_between_planning_and_mutation_holds_without_writing() {
     let (_note, _link) = file_adopt_thread(&env, &fake, THREAD_R);
     set_inbox_task_status(&env, 'x');
     fake.clear_calls();
-    unsafe {
-        std::env::set_var("BOB_GMAIL_ARCHIVE_TEST_REOPEN_THREAD", THREAD_R);
-    }
+    let inbox = env.vault().join("gmail_inbox.md");
+    let reopened = fs::read_to_string(&inbox)
+        .expect("read closed task")
+        .replacen("- [x]", "- [ ]", 1);
+    fake.write_vault_before_metadata_read(
+        THREAD_R,
+        1,
+        &inbox,
+        reopened.as_bytes(),
+    );
     let held =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
-    unsafe {
-        std::env::remove_var("BOB_GMAIL_ARCHIVE_TEST_REOPEN_THREAD");
-    }
     assert_exit(&held, 1, "reopened evidence holds the run");
+    assert!(
+        fs::read_to_string(&inbox)
+            .expect("read reopened task")
+            .contains("- [ ]"),
+        "fake transport changed the real synthetic task row"
+    );
     let value = json_stdout(&held);
     assert!(
         value["archive"].as_array().expect("archive").is_empty(),
@@ -1220,6 +1242,68 @@ fn boundary_reopened_between_planning_and_mutation_holds_without_writing() {
         remote_write_calls(&fake).is_empty(),
         "held evidence writes nothing"
     );
+}
+
+#[test]
+fn boundary_new_unreadable_note_between_plan_and_revalidation_holds() {
+    const THREAD_U: &str = "cccccccccccccccd";
+    const MESSAGE_U: &str = "cccccccccccccccd";
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-incomplete-scan");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_threads(
+        &fake,
+        vec![(
+            THREAD_U,
+            vec![thread_message_in(
+                THREAD_U,
+                MESSAGE_U,
+                &["INBOX", ENROLLMENT_ID],
+            )],
+        )],
+    );
+    file_adopt_thread(&env, &fake, THREAD_U);
+    close_inbox_task(&env);
+    let late_note = env.vault().join("late-unreadable-note.md");
+    fake.write_vault_before_metadata_read(
+        THREAD_U,
+        1,
+        &late_note,
+        &[0xff, 0xfe, b'\n'],
+    );
+
+    let held =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(
+        &held,
+        1,
+        "an incomplete fresh vault scan holds archive mutation",
+    );
+    let value = json_stdout(&held);
+    assert_eq!(
+        value["ok"], false,
+        "incomplete evidence fails the run: {value}"
+    );
+    assert!(
+        value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|warning| warning.contains("vault scan became incomplete")),
+        "the body-free warning identifies the incomplete revalidation: {value}"
+    );
+    assert!(value["archive"].as_array().unwrap().is_empty());
+    assert!(!journal_has(&env, "gmail.archived"));
+    assert!(!journal_has(&env, "gmail.kept"));
+    assert!(
+        remote_write_calls(&fake).is_empty(),
+        "the incomplete scan issues no message-label mutation"
+    );
+    assert!(env.vault().join("gmail_inbox.md").is_file());
 }
 
 #[test]
@@ -1459,22 +1543,38 @@ fn boundary_planned_kept_turning_archivable_is_held() {
             ],
         )],
     );
-    // Preview plans Kept for the unsaved reply. The seam simulates the reply
-    // disappearing between planning and mutation, so the fresh verdict turns
-    // archivable: the planned-decision gate must hold without widening.
-    unsafe {
-        std::env::set_var("BOB_GMAIL_ARCHIVE_TEST_FORCE_ARCHIVABLE", THREAD_K);
-    }
+    // Preview plans Kept for the unsaved reply. The fake Gmail transport then
+    // removes that reply before the boundary metadata read, so the real fresh
+    // verdict turns archivable and the planned-decision gate must hold.
+    fake.replace_thread_before_metadata_read(
+        THREAD_K,
+        2,
+        json!({"thread": {
+            "id": THREAD_K,
+            "historyId": "2",
+            "messages": [thread_message_in(
+                THREAD_K,
+                MESSAGE_K,
+                &["INBOX", ENROLLMENT_ID],
+            )],
+        }}),
+    );
     let held =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
-    unsafe {
-        std::env::remove_var("BOB_GMAIL_ARCHIVE_TEST_FORCE_ARCHIVABLE");
-    }
     assert_exit(&held, 1, "upgrade after planning is held");
     let value = json_stdout(&held);
     assert!(
         value["archive"].as_array().expect("archive").is_empty(),
         "held upgrade reports no terminal row: {value}"
+    );
+    assert!(
+        value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|warning| warning.contains("archivable after planning")),
+        "the real remote transition reached the planned-decision gate: {value}"
     );
     assert!(remote_write_calls(&fake).is_empty());
     assert!(!journal_has(&env, "gmail.archived"));
@@ -1600,14 +1700,171 @@ fn boundary_two_threads_where_one_batch_fails_isolates() {
 }
 
 #[test]
-fn boundary_invalid_grant_on_second_thread_aborts_later_writes() {
-    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-invalid-grant");
+fn boundary_journal_failure_keeps_prior_row_and_recovers_the_later_write() {
+    const THREAD_C: &str = "bbbbbbbbbbbbbbbb";
+    const MESSAGE_C: &str = "bbbbbbbbbbbbbbbb";
+    let env = GmailEnv::new("bob-cli-gmail-archive-boundary-journal-partial");
     env.write_journal_rules();
     write_archive_config(&env);
     write_task_settings(&env);
     let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
     seed_labels(&fake, true);
-    // Run 1: archive THREAD_A to create an owned receipt.
+    file_adopt_two(&env, &fake, THREAD_A, MESSAGE_A, THREAD_C, MESSAGE_C);
+    close_all_inbox_tasks(&env);
+    fake.clear_calls();
+    fake.make_archive_journal_readonly_after_batch_number(2);
+
+    let failed =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&failed, 1, "second journal append failure fails the run");
+    let value = json_stdout(&failed);
+    let rows = value["archive"].as_array().expect("partial rows");
+    assert_eq!(rows.len(), 1, "earlier journaled archive remains: {value}");
+    assert_eq!(rows[0]["thread_id"], THREAD_A);
+    assert_eq!(value["summary"]["archived"], 1);
+    assert_eq!(value["archive_error"]["kind"], "journal");
+    assert_eq!(
+        journal_text(&env).matches("gmail.archived").count(),
+        1,
+        "the unjournaled second write is not reported as a terminal event"
+    );
+    assert_eq!(fake.message_labels(MESSAGE_A).len(), 2);
+    assert_eq!(fake.message_labels(MESSAGE_C).len(), 2);
+
+    // The remote success without its append is reconciled on the next run.
+    for entry in fs::read_dir(env.vault().join(".bob/gmail"))
+        .expect("list archive journal")
+        .flatten()
+    {
+        let mut permissions = fs::metadata(entry.path())
+            .expect("journal metadata")
+            .permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(entry.path(), permissions)
+            .expect("restore journal write access");
+    }
+    fake.clear_calls();
+    let recovered =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&recovered, 0, "later run reconciles remote archive success");
+    let recovered_value = json_stdout(&recovered);
+    assert_eq!(recovered_value["archive"].as_array().unwrap().len(), 1);
+    assert_eq!(recovered_value["archive"][0]["thread_id"], THREAD_C);
+    assert_eq!(recovered_value["archive"][0]["reason"], "recovered");
+    assert!(remote_write_calls(&fake).is_empty());
+}
+
+#[test]
+fn boundary_fresh_close_unresolvable_preview_fails_without_writes() {
+    const WRONG_THREAD: &str = "eeeeeeeeeeeeeeee";
+    let env =
+        GmailEnv::new("bob-cli-gmail-archive-boundary-unresolvable-fresh");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    fake.replace_thread_before_metadata_read(
+        THREAD_A,
+        1,
+        json!({"thread": {
+            "id": WRONG_THREAD,
+            "historyId": "2",
+            "messages": [thread_message_in(
+                WRONG_THREAD,
+                MESSAGE_A,
+                &["INBOX", ENROLLMENT_ID],
+            )],
+        }}),
+    );
+
+    let held =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&held, 1, "an unresolvable fresh close fails the preview");
+    let value = json_stdout(&held);
+    assert_eq!(value["ok"], false);
+    assert!(value["archive"].as_array().unwrap().is_empty());
+    assert!(value["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|warning| warning.contains("unresolvable")));
+    assert!(!journal_has(&env, "gmail.archive_closed"));
+    assert!(!journal_has(&env, "gmail.archived"));
+    assert!(remote_write_calls(&fake).is_empty());
+}
+
+#[test]
+fn boundary_unresolvable_journaled_close_fails_live_and_preview() {
+    const WRONG_THREAD: &str = "eeeeeeeeeeeeeeee";
+    let env =
+        GmailEnv::new("bob-cli-gmail-archive-boundary-unresolvable-journaled");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    fake.replace_thread_before_metadata_read(
+        THREAD_A,
+        2,
+        json!({"thread": {
+            "id": WRONG_THREAD,
+            "historyId": "2",
+            "messages": [thread_message_in(
+                WRONG_THREAD,
+                MESSAGE_A,
+                &["INBOX", ENROLLMENT_ID],
+            )],
+        }}),
+    );
+
+    let boundary =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(
+        &boundary,
+        1,
+        "unresolvable identity fails the live boundary",
+    );
+    assert!(journal_has(&env, "gmail.archive_closed"));
+    assert!(!journal_has(&env, "gmail.archived"));
+    assert!(remote_write_calls(&fake).is_empty());
+
+    fake.clear_calls();
+    let preview =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&preview, 1, "the persisted close remains failed in preview");
+    let value = json_stdout(&preview);
+    assert_eq!(value["ok"], false);
+    assert!(value["archive"].as_array().unwrap().is_empty());
+    assert!(value["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|warning| warning.contains("unresolvable")));
+    assert!(remote_write_calls(&fake).is_empty());
+}
+
+fn partial_archive_auth_fixture(prefix: &str) -> (GmailEnv, FakeGog) {
+    let env = GmailEnv::new(prefix);
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
     seed_thread_and_messages(
         &fake,
         vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
@@ -1616,13 +1873,62 @@ fn boundary_invalid_grant_on_second_thread_aborts_later_writes() {
     close_inbox_task(&env);
     let first =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
-    assert_exit(&first, 0, "first archive succeeds");
-    assert!(journal_has(&env, "gmail.archived"));
-    // Run 2: THREAD_B needs archiving; THREAD_A needs let-go via a reply.
-    // THREAD_B's metadata fetch fails with invalid_grant, aborting before
-    // any later write (including let-go and label creation).
-    const THREAD_D: &str = "ddddddddddddddd0";
-    const MESSAGE_D: &str = "ddddddddddddddd0";
+    assert_exit(&first, 0, "seed an already-owned receipt");
+
+    seed_threads(
+        &fake,
+        vec![
+            (
+                THREAD_A,
+                vec![thread_message_in(
+                    THREAD_A,
+                    MESSAGE_A,
+                    &[RECEIPT_ID, ENROLLMENT_ID],
+                )],
+            ),
+            (
+                THREAD_B,
+                vec![thread_message_in(
+                    THREAD_B,
+                    MESSAGE_C,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+            (
+                THREAD_D,
+                vec![thread_message_in(
+                    THREAD_D,
+                    MESSAGE_D,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+        ],
+    );
+    let mut links = Vec::new();
+    for thread_id in [THREAD_B, THREAD_D] {
+        let saved = run_gmail(&env, &fake, &["save", thread_id, "-f", "json"]);
+        assert_eq!(saved.status.code(), Some(0), "save {thread_id}");
+        links.push(
+            json_stdout(&saved)["link"]
+                .as_str()
+                .expect("saved link")
+                .to_string(),
+        );
+    }
+    let inbox = env.vault().join("gmail_inbox.md");
+    let tasks = links
+        .iter()
+        .map(|link| format!("- [ ] #task archive apply probe {link}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&inbox, format!("#task archive apply probe\n\n{tasks}\n"))
+        .expect("write two new task linkers");
+    let adopted =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&adopted, 0, "adopt and observe the two open linkers");
+
+    // Give the previously owned thread a reply only after baseline adoption,
+    // so the abort must prevent its later let-go cleanup.
     seed_threads(
         &fake,
         vec![
@@ -1642,6 +1948,14 @@ fn boundary_invalid_grant_on_second_thread_aborts_later_writes() {
                 ],
             ),
             (
+                THREAD_B,
+                vec![thread_message_in(
+                    THREAD_B,
+                    MESSAGE_C,
+                    &["INBOX", ENROLLMENT_ID],
+                )],
+            ),
+            (
                 THREAD_D,
                 vec![thread_message_in(
                     THREAD_D,
@@ -1651,52 +1965,94 @@ fn boundary_invalid_grant_on_second_thread_aborts_later_writes() {
             ),
         ],
     );
-    // Adopt THREAD_D (save + link + close) without disturbing THREAD_A's note.
-    let saved = run_gmail(&env, &fake, &["save", THREAD_D, "-f", "json"]);
-    assert_eq!(saved.status.code(), Some(0), "save second thread");
-    let link = json_stdout(&saved)["link"]
-        .as_str()
-        .expect("link")
-        .to_string();
-    let inbox = env.vault().join("gmail_inbox.md");
-    let mut text = fs::read_to_string(&inbox).expect("read inbox");
-    text.push_str(&format!("\n- [ ] #task archive apply probe {link}\n"));
-    fs::write(&inbox, &text).expect("add second task");
-    // Adopt with -n to skip archive (and let-go), preserving A's let-go for
-    // the final aborted run.
-    let adopted = run_gmail(
-        &env,
-        &fake,
-        &["sync", "-l", "0", "-r", "0", "-n", "-f", "json"],
-    );
-    assert_exit(&adopted, 0, "adopt second thread without archiving");
-    // Close the second thread's task (last task row).
-    let text = fs::read_to_string(&inbox).expect("read inbox");
-    // Close only the newly added (last) open row.
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    if let Some(pos) = lines.iter().rposition(|l| l.starts_with("- [ ]")) {
-        lines[pos] = lines[pos].replacen("- [ ]", "- [x]", 1);
-    }
-    fs::write(&inbox, lines.join("\n") + "\n").expect("close second task");
-    fake.set_thread_fail(THREAD_D, "invalid_grant: expired", 1);
+    close_all_inbox_tasks(&env);
     fake.clear_calls();
+    (env, fake)
+}
+
+#[test]
+fn boundary_invalid_grant_keeps_same_run_archive_and_stops_later_writes() {
+    let (env, fake) = partial_archive_auth_fixture(
+        "bob-cli-gmail-archive-boundary-invalid-grant-json",
+    );
+    fake.fail_metadata_read(THREAD_D, 2, "invalid_grant: expired", 1);
+
     let aborted =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
-    assert_exit(&aborted, 1, "invalid_grant aborts the run");
-    // First thread's filing and archive from run 1 are kept.
-    assert!(journal_has(&env, "gmail.archived"));
-    assert!(env.vault().join("gmail_inbox.md").is_file());
-    // The abort happens before release_owned, so A's pending let-go never runs.
-    assert!(!journal_has(&env, "gmail.let_go"), "abort stops let-go");
-    // No let-go was recorded for THREAD_A in the aborted run (would need a
-    // second journal entry); the abort stopped later writes.
-    let writes = remote_write_calls(&fake);
-    assert!(
-        writes
-            .iter()
-            .all(|call| !call.contains(&"gmail.labels.create".to_string())),
-        "no label creation after the abort: {writes:?}"
+    assert_exit(
+        &aborted,
+        2,
+        "archive authentication failure uses setup exit 2",
     );
+    let value = json_stdout(&aborted);
+    let rows = value["archive"].as_array().expect("partial archive rows");
+    assert_eq!(rows.len(), 1, "same-run success remains visible: {value}");
+    assert_eq!(rows[0]["thread_id"], THREAD_B);
+    assert_eq!(rows[0]["action"], "archived");
+    assert_eq!(value["summary"]["archived"], 1);
+    assert_eq!(value["archive_error"]["kind"], "invalid_grant");
+    assert!(value["archive_error"]["hint"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("bob gmail login -s modify"));
+    assert!(journal_has(&env, "gmail.archived"));
+    assert!(
+        env.vault()
+            .join(rows[0]["note"].as_str().unwrap())
+            .is_file(),
+        "the successful row still points to its durably filed note"
+    );
+    assert!(!journal_has(&env, "gmail.let_go"));
+    assert_eq!(
+        fake.message_labels(MESSAGE_C),
+        vec![RECEIPT_ID.to_string(), ENROLLMENT_ID.to_string()],
+        "the first thread's mutation and journal both remain"
+    );
+    assert_eq!(
+        fake.message_labels(MESSAGE_D),
+        vec!["INBOX".to_string(), ENROLLMENT_ID.to_string()],
+        "the auth-failed thread is untouched"
+    );
+    assert_eq!(
+        fake.message_labels(MESSAGE_A),
+        vec![RECEIPT_ID.to_string(), ENROLLMENT_ID.to_string()],
+        "the prior receipt is not released after the abort"
+    );
+    let writes = remote_write_calls(&fake);
+    assert_eq!(writes.len(), 1, "only the earlier thread wrote: {writes:?}");
+    assert!(writes[0].contains(&"gmail.batch.modify".to_string()));
+    assert!(!writes[0].contains(&"gmail.labels.create".to_string()));
+}
+
+#[test]
+fn boundary_invalid_grant_human_report_keeps_same_run_archive() {
+    let (env, fake) = partial_archive_auth_fixture(
+        "bob-cli-gmail-archive-boundary-invalid-grant-human",
+    );
+    fake.fail_metadata_read(THREAD_D, 2, "invalid_grant: expired", 1);
+
+    let aborted = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0"]);
+    assert_exit(&aborted, 2, "human archive auth failure uses exit 2");
+    let report = stdout(&aborted);
+    assert!(
+        report.contains(THREAD_B),
+        "the successful row remains: {report}"
+    );
+    assert!(
+        report.contains("archived"),
+        "the success action remains: {report}"
+    );
+    let errors = stderr(&aborted);
+    assert!(
+        errors.contains("invalid_grant"),
+        "the auth error is reported: {errors}"
+    );
+    assert!(
+        errors.contains("bob gmail login -s modify"),
+        "the modify login hint remains visible: {errors}"
+    );
+    assert_eq!(fake.message_labels(MESSAGE_C).len(), 2);
+    assert!(!journal_has(&env, "gmail.let_go"));
 }
 
 #[test]

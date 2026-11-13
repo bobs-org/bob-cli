@@ -185,17 +185,6 @@ impl GmailEnv {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null");
-        // Forward archive boundary fault-injection seams. The harness clears
-        // the environment, so test-only `BOB_GMAIL_ARCHIVE_TEST_*` vars set
-        // via `std::env::set_var` must be explicitly passed through.
-        for key in [
-            "BOB_GMAIL_ARCHIVE_TEST_REOPEN_THREAD",
-            "BOB_GMAIL_ARCHIVE_TEST_FORCE_ARCHIVABLE",
-        ] {
-            if let Some(value) = std::env::var_os(key) {
-                command.env(key, value);
-            }
-        }
         command
     }
 
@@ -409,6 +398,98 @@ impl FakeGog {
             .expect("write fake thread failure");
     }
 
+    fn set_metadata_thread_hook(
+        &self,
+        thread_id: &str,
+        occurrence: u32,
+        action: serde_json::Value,
+    ) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !state
+            .get("metadata_thread_get_counts")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["metadata_thread_get_counts"] = serde_json::json!({});
+        }
+        state["metadata_thread_get_counts"][thread_id] =
+            serde_json::Value::from(0);
+        if !state
+            .get("metadata_thread_hooks")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            state["metadata_thread_hooks"] = serde_json::json!({});
+        }
+        state["metadata_thread_hooks"][thread_id] = serde_json::json!({
+            "occurrence": occurrence,
+            "action": action,
+            "fired": false,
+        });
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write metadata thread hook");
+    }
+
+    /// Change one synthetic vault file before a selected metadata response.
+    /// This exercises the real post-plan archive rescan without process-wide
+    /// environment variables or production-only shortcuts.
+    pub(crate) fn write_vault_before_metadata_read(
+        &self,
+        thread_id: &str,
+        occurrence: u32,
+        path: &Path,
+        bytes: &[u8],
+    ) {
+        self.set_metadata_thread_hook(
+            thread_id,
+            occurrence,
+            serde_json::json!({
+                "type": "write_file",
+                "path": path,
+                "bytes": bytes,
+            }),
+        );
+    }
+
+    /// Replace a synthetic Gmail thread immediately before its selected
+    /// metadata response, modeling a real remote state transition.
+    pub(crate) fn replace_thread_before_metadata_read(
+        &self,
+        thread_id: &str,
+        occurrence: u32,
+        replacement: serde_json::Value,
+    ) {
+        self.set_metadata_thread_hook(
+            thread_id,
+            occurrence,
+            serde_json::json!({
+                "type": "replace_thread",
+                "thread": replacement,
+            }),
+        );
+    }
+
+    /// Fail one selected metadata request, after earlier planning reads have
+    /// succeeded.
+    pub(crate) fn fail_metadata_read(
+        &self,
+        thread_id: &str,
+        occurrence: u32,
+        stderr: &str,
+        code: i32,
+    ) {
+        self.set_metadata_thread_hook(
+            thread_id,
+            occurrence,
+            serde_json::json!({
+                "type": "fail",
+                "stderr": stderr,
+                "code": code,
+            }),
+        );
+    }
+
     /// Fail a hydrated thread read after metadata has already succeeded.
     pub(crate) fn set_thread_full_fail(
         &self,
@@ -480,12 +561,21 @@ impl FakeGog {
     /// Let the next successful archive mutation make the current Gmail
     /// journal unwritable, reproducing a remote-success/local-append crash.
     pub(crate) fn make_archive_journal_readonly_after_batch(&self) {
+        self.make_archive_journal_readonly_after_batch_number(1);
+    }
+
+    /// Make the Gmail journal unwritable after the selected successful batch
+    /// write, allowing tests to retain an earlier same-run journaled row.
+    pub(crate) fn make_archive_journal_readonly_after_batch_number(
+        &self,
+        occurrence: u32,
+    ) {
         let mut state: serde_json::Value = fs::read(&self.state)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_else(|| serde_json::json!({}));
         state["archive_journal_readonly_after_batch"] =
-            serde_json::Value::Bool(true);
+            serde_json::json!({"remaining": occurrence});
         fs::write(&self.state, serde_json::to_vec(&state).unwrap())
             .expect("write archive journal failure injection");
     }

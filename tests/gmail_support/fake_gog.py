@@ -1345,6 +1345,34 @@ if op == "thread_get":
     per_fail = (state.get("thread_fail") or {}).get(hex_id)
     if isinstance(per_fail, dict):
         fail(per_fail.get("stderr") or "gog failed", int(per_fail.get("code") or 1))
+    if "--full" not in args:
+        counts = state.setdefault("metadata_thread_get_counts", {})
+        counts[hex_id] = int(counts.get(hex_id) or 0) + 1
+        hook = (state.get("metadata_thread_hooks") or {}).get(hex_id)
+        if (
+            isinstance(hook, dict)
+            and not hook.get("fired")
+            and counts[hex_id] == int(hook.get("occurrence") or 0)
+        ):
+            hook["fired"] = True
+            action = hook.get("action") or {}
+            action_type = action.get("type")
+            if action_type == "write_file":
+                target = Path(action.get("path") or "")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(bytes(action.get("bytes") or []))
+            elif action_type == "replace_thread":
+                state.setdefault("threads", {})[hex_id] = action.get("thread")
+            elif action_type == "fail":
+                save_state(state)
+                fail(
+                    action.get("stderr") or "gog failed",
+                    int(action.get("code") or 1),
+                )
+            else:
+                save_state(state)
+                fail("fake gog: invalid metadata thread hook", 2)
+        save_state(state)
     per_threads = state.get("threads") or {}
     if hex_id in per_threads:
         dump(per_threads[hex_id])
@@ -1638,9 +1666,18 @@ if op == "batch_modify":
                 current.difference_update(remove_labels)
                 current.update(add_labels)
                 message["labelIds"] = sorted(current)
-    journal_failure = bool(
-        state.pop("archive_journal_readonly_after_batch", False)
-    )
+    journal_hook = state.get("archive_journal_readonly_after_batch", False)
+    if isinstance(journal_hook, dict):
+        remaining = int(journal_hook.get("remaining") or 0)
+        journal_failure = remaining <= 1
+        if journal_failure:
+            state.pop("archive_journal_readonly_after_batch", None)
+        else:
+            journal_hook["remaining"] = remaining - 1
+    else:
+        journal_failure = bool(
+            state.pop("archive_journal_readonly_after_batch", False)
+        )
     save_state(state)
     if journal_failure:
         vault = os.environ.get("BOB_DIR")

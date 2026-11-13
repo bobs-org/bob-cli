@@ -70,6 +70,9 @@ pub(crate) struct LiveArchiveOutcome {
     pub(crate) failed: bool,
     pub(crate) deferred: Vec<ThreadKey>,
     pub(crate) skipped_no_archive: bool,
+    /// Fatal setup/auth/journal error, kept beside successful rows from this
+    /// run so the report never loses durable partial progress.
+    pub(crate) error: Option<GmailError>,
 }
 
 /// Check the isolated `bob-gmail` modify grant for one account.
@@ -164,7 +167,8 @@ fn fresh_matches_close(
 
 /// Run the live archive phase. Filing commits are already durable; this
 /// function never rolls them back. Non-auth per-thread failures isolate and
-/// fail the run; `invalid_grant` aborts remaining mutations via `Err`.
+/// fail the run; `invalid_grant` aborts remaining mutations while retaining
+/// successful rows already accumulated in the returned outcome.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_live<R: GmailRead>(
     reader: &R,
@@ -175,126 +179,307 @@ pub(crate) fn apply_live<R: GmailRead>(
     args: &SyncArgs,
     watch_threads: &[WatchThreadOutcome],
     saved_id_snapshot: &SavedIdSnapshot,
-) -> Result<LiveArchiveOutcome, GmailError> {
+) -> LiveArchiveOutcome {
     let mut outcome = LiveArchiveOutcome::default();
     if !config.archive_enabled() {
-        return Ok(outcome);
+        return outcome;
     }
     if args.no_archive {
         outcome.skipped_no_archive = true;
-        return Ok(outcome);
+        return outcome;
     }
     if args.dry_run {
-        return Ok(outcome);
+        return outcome;
     }
 
-    let host = vault_sync::hostname_slug();
-    let mut enrollment = match EnrollmentFold::load(vault) {
-        Ok(fold) => fold,
-        Err(error) => {
-            outcome.warnings.push(format!(
+    let result = (|| -> Result<(), GmailError> {
+        let host = vault_sync::hostname_slug();
+        let mut enrollment = match EnrollmentFold::load(vault) {
+            Ok(fold) => fold,
+            Err(error) => {
+                outcome.warnings.push(format!(
                 "skipped archive apply: could not read the Gmail enrollment journal: {error}"
             ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-    let mut index = match resolve::scan_index(
-        vault,
-        Path::new(config.folder()),
-        config.link_label(),
-    ) {
-        Ok(index) => index,
-        Err(error) => {
-            outcome.warnings.push(format!(
-                "skipped archive apply: {}: {}",
-                error.kind(),
-                error.message(),
-            ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-    let relations = match bob_config::load_relations_config(
-        &bob_config::config_path(),
-    ) {
-        Ok(relations) => relations,
-        Err(error) => {
-            outcome.warnings.push(format!(
+                outcome.failed = true;
+                return Ok(());
+            }
+        };
+        let mut index = match resolve::scan_index(
+            vault,
+            Path::new(config.folder()),
+            config.link_label(),
+        ) {
+            Ok(index) => index,
+            Err(error) => {
+                outcome.warnings.push(format!(
+                    "skipped archive apply: {}: {}",
+                    error.kind(),
+                    error.message(),
+                ));
+                outcome.failed = true;
+                return Ok(());
+            }
+        };
+        let relations = match bob_config::load_relations_config(
+            &bob_config::config_path(),
+        ) {
+            Ok(relations) => relations,
+            Err(error) => {
+                outcome.warnings.push(format!(
                 "skipped archive apply: could not read relations config: {error}"
             ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-    let mut scan = match scan_archive_evidence(
-        vault,
-        Path::new(config.folder()),
-        &index,
-        &relations,
-    ) {
-        Ok(scan) => scan,
-        Err(error) => {
-            outcome.warnings.push(format!(
-                "skipped archive apply: {}: {}",
-                error.kind(),
-                error.message(),
-            ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-    scan = scan.with_saved_id_snapshot(saved_id_snapshot);
-    let mut journal = match ArchiveJournal::load(vault) {
-        Ok(journal) => journal,
-        Err(error) => {
-            outcome.warnings.push(format!(
+                outcome.failed = true;
+                return Ok(());
+            }
+        };
+        let mut scan = match scan_archive_evidence(
+            vault,
+            Path::new(config.folder()),
+            &index,
+            &relations,
+        ) {
+            Ok(scan) => scan,
+            Err(error) => {
+                outcome.warnings.push(format!(
+                    "skipped archive apply: {}: {}",
+                    error.kind(),
+                    error.message(),
+                ));
+                outcome.failed = true;
+                return Ok(());
+            }
+        };
+        scan = scan.with_saved_id_snapshot(saved_id_snapshot);
+        let mut journal = match ArchiveJournal::load(vault) {
+            Ok(journal) => journal,
+            Err(error) => {
+                outcome.warnings.push(format!(
                 "skipped archive apply: could not read the Gmail archive journal: {error}"
             ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-
-    // Labels first: planning needs the enrollment and receipt identities
-    // before any baseline decision.
-    let initial_labels = match discover::fetch_labels_once(reader, account) {
-        Ok(labels) => labels,
-        Err(error) => {
-            if is_auth_abort(&error) {
-                return Err(error);
+                outcome.failed = true;
+                return Ok(());
             }
-            outcome.warnings.push(format!(
-                "skipped archive apply: Gmail label list failed: {}: {}",
-                error.kind(),
-                error.message(),
-            ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-    // Baseline observations require the modify grant. Read-only live runs
-    // never append enablement/open state, preserving first-enable backlog
-    // semantics for later preview and dry-run checks. A missing grant with
-    // any archivable evidence is a setup error even before enablement,
-    // while filing-only runs with open tasks stay quiet.
-    if !has_modify_grant(gog, account)? {
-        if scan.threads().any(|key| {
-            scan.evidence(key)
-                .is_some_and(|evidence| scan.archivable(evidence))
-        }) {
+        };
+
+        // Labels first: planning needs the enrollment and receipt identities
+        // before any baseline decision.
+        let initial_labels = match discover::fetch_labels_once(reader, account)
+        {
+            Ok(labels) => labels,
+            Err(error) => {
+                if is_auth_abort(&error) {
+                    return Err(error);
+                }
+                outcome.warnings.push(format!(
+                    "skipped archive apply: Gmail label list failed: {}: {}",
+                    error.kind(),
+                    error.message(),
+                ));
+                outcome.failed = true;
+                return Ok(());
+            }
+        };
+        // Baseline observations require the modify grant. Read-only live runs
+        // never append enablement/open state, preserving first-enable backlog
+        // semantics for later preview and dry-run checks. A missing grant with
+        // any archivable evidence is a setup error even before enablement,
+        // while filing-only runs with open tasks stay quiet.
+        if !has_modify_grant(gog, account)? {
+            if scan.threads().any(|key| {
+                scan.evidence(key)
+                    .is_some_and(|evidence| scan.archivable(evidence))
+            }) {
+                return Err(setup_missing_modify());
+            }
+            let receipt_identity = match ArchiveLabelIdentity::new(
+                config.archive_label(),
+                initial_labels
+                    .iter()
+                    .find(|label| label.name == config.archive_label())
+                    .map(|label| label.id.clone()),
+            ) {
+                Some(identity) => identity,
+                None => return Ok(()),
+            };
+            let mut suppressed = BTreeSet::new();
+            for thread in watch_threads {
+                if thread.action == ACTION_LIFTED
+                    || thread.action == ACTION_BOUNCED
+                {
+                    suppressed.insert(thread.key.clone());
+                }
+            }
+            let policy = NeverSavePolicy::from_config(config);
+            let input = PreviewInput {
+                account,
+                enrollment: &enrollment,
+                scan: &scan,
+                journal: &journal,
+                suppressed: &suppressed,
+                policy: &policy,
+                labels: &initial_labels,
+                receipt_label: receipt_identity,
+            };
+            let preview = archive_preview::preview(
+                reader,
+                &input,
+                config,
+                args.confirm.as_deref(),
+            )?;
+            outcome.warnings.extend(preview.warnings);
+            if preview.failed {
+                outcome.failed = true;
+            }
+            outcome.deferred.extend(preview.deferred);
+            outcome.digest.clone_from(&preview.plan.digest);
+            if matches!(
+                &preview.plan.gate,
+                archive_preview::ArchiveGate::Paused { reason }
+                    if *reason == archive_preview::GATE_MISMATCH
+            ) {
+                outcome.warnings.push(
+                "the confirmation digest does not match the current Gmail preview".to_string(),
+            );
+                append_paused_rows(&preview.plan, &mut outcome);
+                outcome.hints =
+                    super::report::archive_restore_hints(&scan, &journal);
+                return Ok(());
+            }
+            if preview.plan.rows.is_empty() {
+                outcome.hints =
+                    super::report::archive_restore_hints(&scan, &journal);
+                return Ok(());
+            }
+            if preview.plan.gate.is_paused() {
+                for row in &preview.plan.rows {
+                    outcome.rows.push(ArchiveRow {
+                        thread_id: row.key.thread_id().to_string(),
+                        note: row.note.clone(),
+                        action: ACTION_PAUSED_LIVE,
+                        reason: gate_reason(&preview.plan.gate),
+                        decision: planned_decision(&row.decision),
+                        messages: row.messages(),
+                        tasks: row
+                            .tasks
+                            .iter()
+                            .map(|task| ArchiveTaskRef {
+                                path: task.path.clone(),
+                                line: task.line,
+                                block_id: task.block_id.clone(),
+                            })
+                            .collect(),
+                    });
+                }
+                outcome.failed = true;
+                outcome.hints =
+                    super::report::archive_restore_hints(&scan, &journal);
+                return Ok(());
+            }
             return Err(setup_missing_modify());
         }
+
+        // Baseline: enablement plus open observations. Transitions only; an
+        // unchanged hourly run appends nothing.
+        if ensure_baseline(
+            vault,
+            &host,
+            config,
+            account,
+            &initial_labels,
+            &scan,
+            &mut journal,
+        )? {
+            enrollment = match EnrollmentFold::load(vault) {
+                Ok(fold) => fold,
+                Err(error) => {
+                    outcome.warnings.push(format!(
+                    "skipped archive apply: could not re-read enrollment: {error}"
+                ));
+                    outcome.failed = true;
+                    return Ok(());
+                }
+            };
+            index = match resolve::scan_index(
+                vault,
+                Path::new(config.folder()),
+                config.link_label(),
+            ) {
+                Ok(index) => index,
+                Err(error) => {
+                    outcome.warnings.push(format!(
+                        "skipped archive apply: {}: {}",
+                        error.kind(),
+                        error.message(),
+                    ));
+                    outcome.failed = true;
+                    return Ok(());
+                }
+            };
+            scan = match scan_archive_evidence(
+                vault,
+                Path::new(config.folder()),
+                &index,
+                &relations,
+            ) {
+                Ok(scan) => scan,
+                Err(error) => {
+                    outcome.warnings.push(format!(
+                        "skipped archive apply: {}: {}",
+                        error.kind(),
+                        error.message(),
+                    ));
+                    outcome.failed = true;
+                    return Ok(());
+                }
+            };
+            scan = scan.with_saved_id_snapshot(saved_id_snapshot);
+        }
+        if !scan.scan_complete() {
+            outcome.warnings.push(
+                "skipped archive apply: the vault scan did not read every note"
+                    .to_string(),
+            );
+            outcome.failed = true;
+            return Ok(());
+        }
+
+        let labels = match discover::fetch_labels_once(reader, account) {
+            Ok(labels) => labels,
+            Err(error) => {
+                if is_auth_abort(&error) {
+                    return Err(error);
+                }
+                outcome.warnings.push(format!(
+                    "skipped archive apply: Gmail label list failed: {}: {}",
+                    error.kind(),
+                    error.message(),
+                ));
+                outcome.failed = true;
+                return Ok(());
+            }
+        };
         let receipt_identity = match ArchiveLabelIdentity::new(
             config.archive_label(),
-            initial_labels
+            labels
                 .iter()
                 .find(|label| label.name == config.archive_label())
                 .map(|label| label.id.clone()),
         ) {
             Some(identity) => identity,
-            None => return Ok(outcome),
+            None => {
+                outcome.warnings.push(
+                "skipped archive apply: the archive receipt label is invalid"
+                    .to_string(),
+            );
+                outcome.failed = true;
+                return Ok(());
+            }
         };
+        let enrollment_label = unique_named_enrollment_label(
+            &labels,
+            config.sync_label().unwrap_or_default(),
+        );
+
         let mut suppressed = BTreeSet::new();
         for thread in watch_threads {
             if thread.action == ACTION_LIFTED || thread.action == ACTION_BOUNCED
@@ -310,8 +495,8 @@ pub(crate) fn apply_live<R: GmailRead>(
             journal: &journal,
             suppressed: &suppressed,
             policy: &policy,
-            labels: &initial_labels,
-            receipt_label: receipt_identity,
+            labels: &labels,
+            receipt_label: receipt_identity.clone(),
         };
         let preview = archive_preview::preview(
             reader,
@@ -325,24 +510,81 @@ pub(crate) fn apply_live<R: GmailRead>(
         }
         outcome.deferred.extend(preview.deferred);
         outcome.digest.clone_from(&preview.plan.digest);
+
+        // A supplied digest mismatch is a hard no-write result, even when the
+        // plan would otherwise be ungated or contains no actionable rows.
         if matches!(
             &preview.plan.gate,
             archive_preview::ArchiveGate::Paused { reason }
                 if *reason == archive_preview::GATE_MISMATCH
         ) {
             outcome.warnings.push(
-                "the confirmation digest does not match the current Gmail preview".to_string(),
-            );
+            "the confirmation digest does not match the current Gmail preview"
+                .to_string(),
+        );
             append_paused_rows(&preview.plan, &mut outcome);
             outcome.hints =
                 super::report::archive_restore_hints(&scan, &journal);
-            return Ok(outcome);
+            return Ok(());
         }
+
+        // Previously owned receipts only, captured before any recovery or close
+        // persistence in this run: newly archived or reconciled threads in this
+        // run must not let go immediately on stale reads. Let-go converges next
+        // run.
+        let owned_before_snapshot: Vec<super::archive_state::ArchiveReceipt> =
+            journal.owned_receipts().cloned().collect();
+        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
+
+        if !preview.plan.gate.is_paused()
+            && let Some(enrollment_id) = labels
+                .iter()
+                .find(|label| {
+                    label.name == config.sync_label().unwrap_or_default()
+                })
+                .map(|label| label.id.as_str())
+        {
+            reconcile_ready_receipts(
+                reader,
+                vault,
+                &host,
+                account,
+                &scan,
+                &mut journal,
+                &receipt_identity,
+                enrollment_id,
+                &policy,
+                &mut outcome,
+            )?;
+        }
+
         if preview.plan.rows.is_empty() {
+            // Let-go is driven by previously owned receipts, independent of
+            // whether this run has a new close to preview. A reply or manual
+            // Inbox move must release its receipt on an otherwise idle sync.
+            let owned_before = owned_before_snapshot.clone();
+            release_owned(
+                vault,
+                &host,
+                reader,
+                gog,
+                account,
+                &labels,
+                enrollment_label.as_ref(),
+                &mut journal,
+                &owned_before,
+                &mut outcome,
+            )?;
             outcome.hints =
                 super::report::archive_restore_hints(&scan, &journal);
-            return Ok(outcome);
+            return Ok(());
         }
+
+        // Paused batches create no labels and append no terminal outcomes beyond
+        // the baseline observations already recorded above. Every preview row,
+        // whether archive or kept, reports the gate reason while paused. Let-go
+        // still runs on every enabled live run with the modify grant, including
+        // paused runs; `invalid_grant` still aborts.
         if preview.plan.gate.is_paused() {
             for row in &preview.plan.rows {
                 outcome.rows.push(ArchiveRow {
@@ -364,292 +606,6 @@ pub(crate) fn apply_live<R: GmailRead>(
                 });
             }
             outcome.failed = true;
-            outcome.hints =
-                super::report::archive_restore_hints(&scan, &journal);
-            return Ok(outcome);
-        }
-        return Err(setup_missing_modify());
-    }
-
-    // Baseline: enablement plus open observations. Transitions only; an
-    // unchanged hourly run appends nothing.
-    if ensure_baseline(
-        vault,
-        &host,
-        config,
-        account,
-        &initial_labels,
-        &scan,
-        &mut journal,
-    )? {
-        enrollment = match EnrollmentFold::load(vault) {
-            Ok(fold) => fold,
-            Err(error) => {
-                outcome.warnings.push(format!(
-                    "skipped archive apply: could not re-read enrollment: {error}"
-                ));
-                outcome.failed = true;
-                return Ok(outcome);
-            }
-        };
-        index = match resolve::scan_index(
-            vault,
-            Path::new(config.folder()),
-            config.link_label(),
-        ) {
-            Ok(index) => index,
-            Err(error) => {
-                outcome.warnings.push(format!(
-                    "skipped archive apply: {}: {}",
-                    error.kind(),
-                    error.message(),
-                ));
-                outcome.failed = true;
-                return Ok(outcome);
-            }
-        };
-        scan = match scan_archive_evidence(
-            vault,
-            Path::new(config.folder()),
-            &index,
-            &relations,
-        ) {
-            Ok(scan) => scan,
-            Err(error) => {
-                outcome.warnings.push(format!(
-                    "skipped archive apply: {}: {}",
-                    error.kind(),
-                    error.message(),
-                ));
-                outcome.failed = true;
-                return Ok(outcome);
-            }
-        };
-        scan = scan.with_saved_id_snapshot(saved_id_snapshot);
-    }
-    if !scan.scan_complete() {
-        outcome.warnings.push(
-            "skipped archive apply: the vault scan did not read every note"
-                .to_string(),
-        );
-        outcome.failed = true;
-        return Ok(outcome);
-    }
-
-    let labels = match discover::fetch_labels_once(reader, account) {
-        Ok(labels) => labels,
-        Err(error) => {
-            if is_auth_abort(&error) {
-                return Err(error);
-            }
-            outcome.warnings.push(format!(
-                "skipped archive apply: Gmail label list failed: {}: {}",
-                error.kind(),
-                error.message(),
-            ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-    let receipt_identity = match ArchiveLabelIdentity::new(
-        config.archive_label(),
-        labels
-            .iter()
-            .find(|label| label.name == config.archive_label())
-            .map(|label| label.id.clone()),
-    ) {
-        Some(identity) => identity,
-        None => {
-            outcome.warnings.push(
-                "skipped archive apply: the archive receipt label is invalid"
-                    .to_string(),
-            );
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-    let enrollment_label = unique_named_enrollment_label(
-        &labels,
-        config.sync_label().unwrap_or_default(),
-    );
-
-    let mut suppressed = BTreeSet::new();
-    for thread in watch_threads {
-        if thread.action == ACTION_LIFTED || thread.action == ACTION_BOUNCED {
-            suppressed.insert(thread.key.clone());
-        }
-    }
-    let policy = NeverSavePolicy::from_config(config);
-    let input = PreviewInput {
-        account,
-        enrollment: &enrollment,
-        scan: &scan,
-        journal: &journal,
-        suppressed: &suppressed,
-        policy: &policy,
-        labels: &labels,
-        receipt_label: receipt_identity.clone(),
-    };
-    let preview = archive_preview::preview(
-        reader,
-        &input,
-        config,
-        args.confirm.as_deref(),
-    )?;
-    outcome.warnings.extend(preview.warnings);
-    if preview.failed {
-        outcome.failed = true;
-    }
-    outcome.deferred.extend(preview.deferred);
-    outcome.digest.clone_from(&preview.plan.digest);
-
-    // A supplied digest mismatch is a hard no-write result, even when the
-    // plan would otherwise be ungated or contains no actionable rows.
-    if matches!(
-        &preview.plan.gate,
-        archive_preview::ArchiveGate::Paused { reason }
-            if *reason == archive_preview::GATE_MISMATCH
-    ) {
-        outcome.warnings.push(
-            "the confirmation digest does not match the current Gmail preview"
-                .to_string(),
-        );
-        append_paused_rows(&preview.plan, &mut outcome);
-        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
-        return Ok(outcome);
-    }
-
-    // Previously owned receipts only, captured before any recovery or close
-    // persistence in this run: newly archived or reconciled threads in this
-    // run must not let go immediately on stale reads. Let-go converges next
-    // run.
-    let owned_before_snapshot: Vec<super::archive_state::ArchiveReceipt> =
-        journal.owned_receipts().cloned().collect();
-
-    if !preview.plan.gate.is_paused()
-        && let Some(enrollment_id) = labels
-            .iter()
-            .find(|label| label.name == config.sync_label().unwrap_or_default())
-            .map(|label| label.id.as_str())
-    {
-        reconcile_ready_receipts(
-            reader,
-            vault,
-            &host,
-            account,
-            &scan,
-            &mut journal,
-            &receipt_identity,
-            enrollment_id,
-            &policy,
-            &mut outcome,
-        )?;
-    }
-
-    if preview.plan.rows.is_empty() {
-        // Let-go is driven by previously owned receipts, independent of
-        // whether this run has a new close to preview. A reply or manual
-        // Inbox move must release its receipt on an otherwise idle sync.
-        let owned_before = owned_before_snapshot.clone();
-        release_owned(
-            vault,
-            &host,
-            reader,
-            gog,
-            account,
-            &labels,
-            enrollment_label.as_ref(),
-            &mut journal,
-            &owned_before,
-            &mut outcome,
-        )?;
-        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
-        return Ok(outcome);
-    }
-
-    // Paused batches create no labels and append no terminal outcomes beyond
-    // the baseline observations already recorded above. Every preview row,
-    // whether archive or kept, reports the gate reason while paused. Let-go
-    // still runs on every enabled live run with the modify grant, including
-    // paused runs; `invalid_grant` still aborts.
-    if preview.plan.gate.is_paused() {
-        for row in &preview.plan.rows {
-            outcome.rows.push(ArchiveRow {
-                thread_id: row.key.thread_id().to_string(),
-                note: row.note.clone(),
-                action: ACTION_PAUSED_LIVE,
-                reason: gate_reason(&preview.plan.gate),
-                decision: planned_decision(&row.decision),
-                messages: row.messages(),
-                tasks: row
-                    .tasks
-                    .iter()
-                    .map(|task| ArchiveTaskRef {
-                        path: task.path.clone(),
-                        line: task.line,
-                        block_id: task.block_id.clone(),
-                    })
-                    .collect(),
-            });
-        }
-        outcome.failed = true;
-        let owned_before = owned_before_snapshot.clone();
-        release_owned(
-            vault,
-            &host,
-            reader,
-            gog,
-            account,
-            &labels,
-            enrollment_label.as_ref(),
-            &mut journal,
-            &owned_before,
-            &mut outcome,
-        )?;
-        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
-        return Ok(outcome);
-    }
-
-    // The gate is open: persist close generations, then mutate. The modify
-    // grant was verified before baseline observations were recorded.
-    persist_closes(
-        vault,
-        &host,
-        config,
-        &scan,
-        &mut journal,
-        &preview.plan.rows,
-        args.confirm.as_deref(),
-        &mut outcome,
-    )?;
-    // Reload after close persistence so terminal planning sees fresh folds.
-    journal = match ArchiveJournal::load(vault) {
-        Ok(journal) => journal,
-        Err(error) => {
-            outcome.warnings.push(format!(
-                "skipped archive mutations: could not re-read the archive journal: {error}"
-            ));
-            outcome.failed = true;
-            return Ok(outcome);
-        }
-    };
-
-    // Honor the planned decision set: resolve or create the receipt label
-    // only when at least one row is planned Archive. A fresh upgrade from
-    // Kept to Archive never widens a digest-confirmed batch.
-    let needs_receipt = preview
-        .plan
-        .rows
-        .iter()
-        .any(|row| matches!(row.decision, PreviewDecision::Archive { .. }));
-    let enrollment_label = match enrollment_label {
-        Some(label) => label,
-        None => {
-            outcome.warnings.push(format!(
-                "skipped archive mutations: Gmail enrollment label {:?} is missing or ambiguous",
-                config.sync_label().unwrap_or_default(),
-            ));
-            outcome.failed = true;
             let owned_before = owned_before_snapshot.clone();
             release_owned(
                 vault,
@@ -658,33 +614,54 @@ pub(crate) fn apply_live<R: GmailRead>(
                 gog,
                 account,
                 &labels,
-                None,
+                enrollment_label.as_ref(),
                 &mut journal,
                 &owned_before,
                 &mut outcome,
             )?;
             outcome.hints =
                 super::report::archive_restore_hints(&scan, &journal);
-            return Ok(outcome);
+            return Ok(());
         }
-    };
-    let (receipt, resolved_receipt_identity) = if needs_receipt {
-        let receipt = match resolve_or_create_receipt_label(
-            gog,
-            account,
-            config.archive_label(),
-            &enrollment_label,
-        ) {
-            Ok(receipt) => receipt,
+
+        // The gate is open: persist close generations, then mutate. The modify
+        // grant was verified before baseline observations were recorded.
+        persist_closes(
+            vault,
+            &host,
+            config,
+            &scan,
+            &mut journal,
+            &preview.plan.rows,
+            args.confirm.as_deref(),
+            &mut outcome,
+        )?;
+        // Reload after close persistence so terminal planning sees fresh folds.
+        journal = match ArchiveJournal::load(vault) {
+            Ok(journal) => journal,
             Err(error) => {
-                if is_auth_abort(&error) {
-                    return Err(error);
-                }
                 outcome.warnings.push(format!(
-                    "skipped archive mutations: {}: {}",
-                    error.kind(),
-                    error.message(),
-                ));
+                "skipped archive mutations: could not re-read the archive journal: {error}"
+            ));
+                outcome.failed = true;
+                return Ok(());
+            }
+        };
+
+        // Honor the planned decision set: resolve or create the receipt label
+        // only when at least one row is planned Archive. A fresh upgrade from
+        // Kept to Archive never widens a digest-confirmed batch.
+        let needs_receipt =
+            preview.plan.rows.iter().any(|row| {
+                matches!(row.decision, PreviewDecision::Archive { .. })
+            });
+        let enrollment_label = match enrollment_label {
+            Some(label) => label,
+            None => {
+                outcome.warnings.push(format!(
+                "skipped archive mutations: Gmail enrollment label {:?} is missing or ambiguous",
+                config.sync_label().unwrap_or_default(),
+            ));
                 outcome.failed = true;
                 let owned_before = owned_before_snapshot.clone();
                 release_owned(
@@ -694,341 +671,195 @@ pub(crate) fn apply_live<R: GmailRead>(
                     gog,
                     account,
                     &labels,
-                    Some(&enrollment_label),
+                    None,
                     &mut journal,
                     &owned_before,
                     &mut outcome,
                 )?;
                 outcome.hints =
                     super::report::archive_restore_hints(&scan, &journal);
-                return Ok(outcome);
+                return Ok(());
             }
         };
-        let resolved = ArchiveLabelIdentity::new(
-            receipt.name(),
-            Some(receipt.id().to_string()),
-        )
-        .ok_or_else(|| {
-            GmailError::runtime(
-                "archive_label",
-                "resolved Gmail receipt label has an invalid identity"
-                    .to_string(),
+        let (receipt, resolved_receipt_identity) = if needs_receipt {
+            let receipt = match resolve_or_create_receipt_label(
+                gog,
+                account,
+                config.archive_label(),
+                &enrollment_label,
+            ) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    if is_auth_abort(&error) {
+                        return Err(error);
+                    }
+                    outcome.warnings.push(format!(
+                        "skipped archive mutations: {}: {}",
+                        error.kind(),
+                        error.message(),
+                    ));
+                    outcome.failed = true;
+                    let owned_before = owned_before_snapshot.clone();
+                    release_owned(
+                        vault,
+                        &host,
+                        reader,
+                        gog,
+                        account,
+                        &labels,
+                        Some(&enrollment_label),
+                        &mut journal,
+                        &owned_before,
+                        &mut outcome,
+                    )?;
+                    outcome.hints =
+                        super::report::archive_restore_hints(&scan, &journal);
+                    return Ok(());
+                }
+            };
+            let resolved = ArchiveLabelIdentity::new(
+                receipt.name(),
+                Some(receipt.id().to_string()),
             )
-        })?;
-        (Some(receipt), Some(resolved))
-    } else {
-        (None, None)
-    };
+            .ok_or_else(|| {
+                GmailError::runtime(
+                    "archive_label",
+                    "resolved Gmail receipt label has an invalid identity"
+                        .to_string(),
+                )
+            })?;
+            (Some(receipt), Some(resolved))
+        } else {
+            (None, None)
+        };
 
-    let enrollment_id = enrollment_label.id.clone();
-    // Previously owned receipts only: newly archived threads in this run must
-    // not let go immediately on stale reads. Let-go converges next run.
-    // Reuse the pre-recovery snapshot so reconciled receipts also converge
-    // next run.
-    let owned_before = owned_before_snapshot.clone();
-    // Per-thread isolation: acquire the vault maintenance lock with a bounded
-    // wait, re-read that thread's note and linking task files through the
-    // archive scan rules, compare against the frozen close, then issue that
-    // thread's single batch write and release the lock. Never hold the lock
-    // across more than one thread's write. Never expand the frozen IDs.
-    for row in &preview.plan.rows {
-        let Some(_thread_lock) = acquire_thread_lock() else {
-            outcome.warnings.push(format!(
-                "skipped Gmail thread {}: vault lock busy; work is held",
-                row.key.thread_id(),
-            ));
-            outcome.failed = true;
-            continue;
-        };
-        // Test seam for the reopened-between-planning-and-mutation fault
-        // test: when set, simulate an external reopen after planning so the
-        // revalidation below holds without mutating.
-        if std::env::var("BOB_GMAIL_ARCHIVE_TEST_REOPEN_THREAD")
-            .is_ok_and(|id| id == row.key.thread_id())
-        {
-            outcome.warnings.push(format!(
+        let enrollment_id = enrollment_label.id.clone();
+        // Previously owned receipts only: newly archived threads in this run must
+        // not let go immediately on stale reads. Let-go converges next run.
+        // Reuse the pre-recovery snapshot so reconciled receipts also converge
+        // next run.
+        let owned_before = owned_before_snapshot.clone();
+        // Per-thread isolation: acquire the vault maintenance lock with a bounded
+        // wait, re-read that thread's note and linking task files through the
+        // archive scan rules, compare against the frozen close, then issue that
+        // thread's single batch write and release the lock. Never hold the lock
+        // across more than one thread's write. Never expand the frozen IDs.
+        for row in &preview.plan.rows {
+            let Some(_thread_lock) = acquire_thread_lock() else {
+                outcome.warnings.push(format!(
+                    "skipped Gmail thread {}: vault lock busy; work is held",
+                    row.key.thread_id(),
+                ));
+                outcome.failed = true;
+                continue;
+            };
+            // Re-read vault evidence under the lock; the loop never trusts the
+            // pre-plan scan for the mutation decision.
+            let fresh_scan = (|| {
+                let fresh_index = resolve::scan_index(
+                    vault,
+                    Path::new(config.folder()),
+                    config.link_label(),
+                )
+                .ok()?;
+                scan_archive_evidence(
+                    vault,
+                    Path::new(config.folder()),
+                    &fresh_index,
+                    &relations,
+                )
+                .ok()
+            })();
+            let Some(fresh_scan) = fresh_scan else {
+                outcome.warnings.push(format!(
                 "skipped Gmail thread {}: archive evidence changed before mutation",
                 row.key.thread_id(),
             ));
-            outcome.failed = true;
-            continue;
-        }
-        // Re-read vault evidence under the lock; the loop never trusts the
-        // pre-plan scan for the mutation decision.
-        let fresh_evidence = (|| {
-            let fresh_index = resolve::scan_index(
-                vault,
-                Path::new(config.folder()),
-                config.link_label(),
-            )
-            .ok()?;
-            let fresh_scan = scan_archive_evidence(
-                vault,
-                Path::new(config.folder()),
-                &fresh_index,
-                &relations,
-            )
-            .ok()?;
-            fresh_scan.evidence(&row.key).cloned()
-        })();
-        let Some(fresh_evidence) = fresh_evidence else {
-            outcome.warnings.push(format!(
+                outcome.failed = true;
+                continue;
+            };
+            if !fresh_scan.scan_complete() {
+                outcome.warnings.push(format!(
+                "skipped Gmail thread {}: archive vault scan became incomplete before mutation; work is held",
+                row.key.thread_id(),
+            ));
+                outcome.failed = true;
+                continue;
+            }
+            let Some(fresh_evidence) = fresh_scan.evidence(&row.key).cloned()
+            else {
+                outcome.warnings.push(format!(
                 "skipped Gmail thread {}: archive evidence changed before mutation",
                 row.key.thread_id(),
             ));
-            outcome.failed = true;
-            continue;
-        };
-        let Some(close) = journal.unconsumed_close(&row.key).cloned() else {
-            outcome.warnings.push(format!(
-                "skipped Gmail thread {}: archive close is no longer open",
-                row.key.thread_id(),
-            ));
-            continue;
-        };
-        // The plan and the persisted close must agree on frozen evidence.
-        // Current scan IDs may grow after the close; those new Inbox messages
-        // stay unsaved and never widen its archive set.
-        if close.saved_ids != row.saved_ids
-            || close.note != row.note
-            || close.tasks != row.tasks
-            || fresh_evidence
-                .note_fingerprint
-                .as_deref()
-                .unwrap_or_default()
-                != row.note_fingerprint
-        {
-            outcome.warnings.push(format!(
+                outcome.failed = true;
+                continue;
+            };
+            let Some(close) = journal.unconsumed_close(&row.key).cloned()
+            else {
+                outcome.warnings.push(format!(
+                    "skipped Gmail thread {}: archive close is no longer open",
+                    row.key.thread_id(),
+                ));
+                continue;
+            };
+            // The plan and the persisted close must agree on frozen evidence.
+            // Current scan IDs may grow after the close; those new Inbox messages
+            // stay unsaved and never widen its archive set.
+            if close.saved_ids != row.saved_ids
+                || close.note != row.note
+                || close.tasks != row.tasks
+                || fresh_evidence
+                    .note_fingerprint
+                    .as_deref()
+                    .unwrap_or_default()
+                    != row.note_fingerprint
+            {
+                outcome.warnings.push(format!(
                 "skipped Gmail thread {}: archive evidence changed before mutation",
                 row.key.thread_id(),
             ));
-            outcome.failed = true;
-            continue;
-        };
-        if close.generation != row.generation.as_deref().unwrap_or_default()
-            && !row.historical
-        {
-            outcome.warnings.push(format!(
+                outcome.failed = true;
+                continue;
+            };
+            if close.generation != row.generation.as_deref().unwrap_or_default()
+                && !row.historical
+            {
+                outcome.warnings.push(format!(
                 "skipped Gmail thread {}: archive close changed before mutation",
                 row.key.thread_id(),
             ));
-            outcome.failed = true;
-            continue;
-        }
-        if !fresh_matches_close(&fresh_evidence, &close) {
-            outcome.warnings.push(format!(
+                outcome.failed = true;
+                continue;
+            }
+            if !fresh_matches_close(&fresh_evidence, &close) {
+                outcome.warnings.push(format!(
                 "skipped Gmail thread {}: archive evidence changed before mutation",
                 row.key.thread_id(),
             ));
-            outcome.failed = true;
-            continue;
-        }
-        let thread = match reader.thread_metadata(account, row.key.thread_id())
-        {
-            Ok(thread) => thread,
-            Err(error) => {
-                if is_auth_abort(&error) {
-                    return Err(error);
-                }
-                if error.kind() == "not_found" {
-                    append_kept(
-                        vault,
-                        &host,
-                        &journal,
-                        &row.key,
-                        &close,
-                        KEPT_GONE,
-                        &mut outcome,
-                    )?;
-                    journal = ArchiveJournal::load(vault).unwrap_or(journal);
-                    continue;
-                }
-                outcome.warnings.push(format!(
-                    "skipped Gmail thread {}: {}: {}",
-                    row.key.thread_id(),
-                    error.kind(),
-                    error.message(),
-                ));
                 outcome.failed = true;
-                outcome.deferred.push(row.key.clone());
                 continue;
             }
-        };
-        let effective_receipt =
-            resolved_receipt_identity.as_ref().unwrap_or(&close.label);
-        let mut verdict = archive_preview::remote_verdict_for_saved_ids(
-            reader,
-            account,
-            &fresh_evidence,
-            &close.saved_ids,
-            &thread,
-            &enrollment_id,
-            effective_receipt,
-            &policy,
-        )?;
-        // Test seam for the planned-Kept-turns-archivable fault test: when
-        // set, simulate a fresh upgrade to archivable after planning so the
-        // planned-decision gate holds without widening the batch.
-        if std::env::var("BOB_GMAIL_ARCHIVE_TEST_FORCE_ARCHIVABLE")
-            .is_ok_and(|id| id == row.key.thread_id())
-            && matches!(verdict, archive_preview::RemoteVerdict::Kept { .. })
-        {
-            let mut ids = close.saved_ids.clone();
-            ids.sort();
-            ids.dedup();
-            verdict =
-                archive_preview::RemoteVerdict::Archive { archive_ids: ids };
-        }
-        let planned_archive =
-            matches!(row.decision, PreviewDecision::Archive { .. });
-        match verdict {
-            archive_preview::RemoteVerdict::Kept { reason } => {
-                append_kept(
-                    vault,
-                    &host,
-                    &journal,
-                    &row.key,
-                    &close,
-                    reason,
-                    &mut outcome,
-                )?;
-                journal = ArchiveJournal::load(vault).unwrap_or(journal);
-            }
-            archive_preview::RemoteVerdict::Held { reason, warning } => {
-                if reason == HOLD_UNRECONCILED {
-                    reconcile_recovered(
-                        vault,
-                        &host,
-                        &thread,
-                        &close,
-                        effective_receipt,
-                        &mut journal,
-                        &mut outcome,
-                    )?;
-                } else {
-                    if let Some(warning) = warning {
-                        outcome.warnings.push(warning);
-                    }
-                    if reason == HOLD_FETCH_FAILED
-                        || reason == HOLD_UNRESOLVABLE
-                    {
-                        outcome.failed = true;
-                    }
-                }
-            }
-            archive_preview::RemoteVerdict::Archive { archive_ids } => {
-                // Honor the planned decision set: a row planned Kept or Held
-                // whose fresh verdict became Archive is held for the next run.
-                // This never widens a digest-confirmed batch and never exceeds
-                // archive_max. A fresh downgrade is still honored above.
-                if !planned_archive {
-                    outcome.warnings.push(format!(
-                        "skipped Gmail thread {}: archive evidence changed to archivable after planning; work is held",
-                        row.key.thread_id(),
-                    ));
-                    outcome.failed = true;
-                    continue;
-                }
-                let (Some(live_receipt), Some(resolved_id)) =
-                    (receipt.as_ref(), resolved_receipt_identity.as_ref())
-                else {
-                    outcome.warnings.push(format!(
-                        "skipped Gmail thread {}: archive receipt is not resolved; work is held",
-                        row.key.thread_id(),
-                    ));
-                    outcome.failed = true;
-                    continue;
-                };
-                if archive_ids.len() > 1000 {
-                    outcome.warnings.push(format!(
-                        "skipped Gmail thread {}: more than 1,000 messages cannot archive in one call",
-                        row.key.thread_id(),
-                    ));
-                    outcome.failed = true;
-                    continue;
-                }
-                if archive_ids.is_empty() {
-                    continue;
-                }
-                let states = match message_states(&thread, &archive_ids) {
-                    Some(states) => states,
-                    None => {
-                        outcome.warnings.push(format!(
-                            "skipped Gmail thread {}: fresh Gmail metadata is missing an archived message",
-                            row.key.thread_id(),
-                        ));
-                        outcome.failed = true;
-                        continue;
-                    }
-                };
-                let diff =
-                    match super::archive_transport::LabelDiff::for_messages(
-                        LabelOperation::Archive,
-                        live_receipt,
-                        &states,
-                    ) {
-                        Ok(diff) => diff,
-                        Err(error) => {
-                            outcome.warnings.push(format!(
-                                "skipped Gmail thread {}: {}: {}",
-                                row.key.thread_id(),
-                                error.kind(),
-                                error.message(),
-                            ));
-                            outcome.failed = true;
-                            continue;
-                        }
-                    };
-                // Journal-before-mutate: plan the terminal event with the
-                // same IDs and label the write will use. A `None` plan holds
-                // without writing.
-                let planned = journal.event_for_terminal(
-                    &row.key,
-                    &close.generation,
-                    super::archive_state::ArchiveTerminalKind::Archived {
-                        message_ids: archive_ids.clone(),
-                        label: resolved_id.clone(),
-                        recovered: false,
-                    },
-                );
-                let Some(planned) = planned else {
-                    outcome.warnings.push(format!(
-                        "skipped Gmail thread {}: archive close is no longer plannable; work is held",
-                        row.key.thread_id(),
-                    ));
-                    outcome.failed = true;
-                    continue;
-                };
-                match gog.archive_batch_modify(account, &diff) {
-                    Ok(_) => {
-                        ArchiveJournal::append(vault, &host, &planned)
-                            .map_err(|error| {
-                                GmailError::runtime(
-                                    "journal",
-                                    format!(
-                                        "could not append the Gmail archive journal: {error}"
-                                    ),
-                                )
-                            })?;
-                        journal =
-                            ArchiveJournal::load(vault).unwrap_or(journal);
-                        outcome.rows.push(ArchiveRow {
-                            thread_id: row.key.thread_id().to_string(),
-                            note: close.note.clone(),
-                            action: ACTION_ARCHIVED,
-                            reason: if close.historical {
-                                "backlog"
-                            } else {
-                                "eligible"
-                            },
-                            decision: "would_archive".to_string(),
-                            messages: archive_ids,
-                            tasks: task_refs(&close.tasks),
-                        });
-                    }
+            let thread =
+                match reader.thread_metadata(account, row.key.thread_id()) {
+                    Ok(thread) => thread,
                     Err(error) => {
                         if is_auth_abort(&error) {
                             return Err(error);
+                        }
+                        if error.kind() == "not_found" {
+                            append_kept(
+                                vault,
+                                &host,
+                                &journal,
+                                &row.key,
+                                &close,
+                                KEPT_GONE,
+                                &mut outcome,
+                            )?;
+                            journal =
+                                ArchiveJournal::load(vault).unwrap_or(journal);
+                            continue;
                         }
                         outcome.warnings.push(format!(
                             "skipped Gmail thread {}: {}: {}",
@@ -1037,31 +868,210 @@ pub(crate) fn apply_live<R: GmailRead>(
                             error.message(),
                         ));
                         outcome.failed = true;
+                        outcome.deferred.push(row.key.clone());
+                        continue;
+                    }
+                };
+            let effective_receipt =
+                resolved_receipt_identity.as_ref().unwrap_or(&close.label);
+            let verdict = archive_preview::remote_verdict_for_saved_ids(
+                reader,
+                account,
+                &fresh_evidence,
+                &close.saved_ids,
+                &thread,
+                &enrollment_id,
+                effective_receipt,
+                &policy,
+            )?;
+            let planned_archive =
+                matches!(row.decision, PreviewDecision::Archive { .. });
+            match verdict {
+                archive_preview::RemoteVerdict::Kept { reason } => {
+                    append_kept(
+                        vault,
+                        &host,
+                        &journal,
+                        &row.key,
+                        &close,
+                        reason,
+                        &mut outcome,
+                    )?;
+                    journal = ArchiveJournal::load(vault).unwrap_or(journal);
+                }
+                archive_preview::RemoteVerdict::Held { reason, warning } => {
+                    if reason == HOLD_UNRECONCILED {
+                        reconcile_recovered(
+                            vault,
+                            &host,
+                            &thread,
+                            &close,
+                            effective_receipt,
+                            &mut journal,
+                            &mut outcome,
+                        )?;
+                    } else {
+                        if let Some(warning) = warning {
+                            outcome.warnings.push(warning);
+                        }
+                        if reason == HOLD_FETCH_FAILED
+                            || reason == HOLD_UNRESOLVABLE
+                        {
+                            outcome.failed = true;
+                        }
+                    }
+                }
+                archive_preview::RemoteVerdict::Archive { archive_ids } => {
+                    // Honor the planned decision set: a row planned Kept or Held
+                    // whose fresh verdict became Archive is held for the next run.
+                    // This never widens a digest-confirmed batch and never exceeds
+                    // archive_max. A fresh downgrade is still honored above.
+                    if !planned_archive {
+                        outcome.warnings.push(format!(
+                        "skipped Gmail thread {}: archive evidence changed to archivable after planning; work is held",
+                        row.key.thread_id(),
+                    ));
+                        outcome.failed = true;
+                        continue;
+                    }
+                    let (Some(live_receipt), Some(resolved_id)) =
+                        (receipt.as_ref(), resolved_receipt_identity.as_ref())
+                    else {
+                        outcome.warnings.push(format!(
+                        "skipped Gmail thread {}: archive receipt is not resolved; work is held",
+                        row.key.thread_id(),
+                    ));
+                        outcome.failed = true;
+                        continue;
+                    };
+                    if archive_ids.len() > 1000 {
+                        outcome.warnings.push(format!(
+                        "skipped Gmail thread {}: more than 1,000 messages cannot archive in one call",
+                        row.key.thread_id(),
+                    ));
+                        outcome.failed = true;
+                        continue;
+                    }
+                    if archive_ids.is_empty() {
+                        continue;
+                    }
+                    let states = match message_states(&thread, &archive_ids) {
+                        Some(states) => states,
+                        None => {
+                            outcome.warnings.push(format!(
+                            "skipped Gmail thread {}: fresh Gmail metadata is missing an archived message",
+                            row.key.thread_id(),
+                        ));
+                            outcome.failed = true;
+                            continue;
+                        }
+                    };
+                    let diff =
+                        match super::archive_transport::LabelDiff::for_messages(
+                            LabelOperation::Archive,
+                            live_receipt,
+                            &states,
+                        ) {
+                            Ok(diff) => diff,
+                            Err(error) => {
+                                outcome.warnings.push(format!(
+                                    "skipped Gmail thread {}: {}: {}",
+                                    row.key.thread_id(),
+                                    error.kind(),
+                                    error.message(),
+                                ));
+                                outcome.failed = true;
+                                continue;
+                            }
+                        };
+                    // Journal-before-mutate: plan the terminal event with the
+                    // same IDs and label the write will use. A `None` plan holds
+                    // without writing.
+                    let planned = journal.event_for_terminal(
+                        &row.key,
+                        &close.generation,
+                        super::archive_state::ArchiveTerminalKind::Archived {
+                            message_ids: archive_ids.clone(),
+                            label: resolved_id.clone(),
+                            recovered: false,
+                        },
+                    );
+                    let Some(planned) = planned else {
+                        outcome.warnings.push(format!(
+                        "skipped Gmail thread {}: archive close is no longer plannable; work is held",
+                        row.key.thread_id(),
+                    ));
+                        outcome.failed = true;
+                        continue;
+                    };
+                    match gog.archive_batch_modify(account, &diff) {
+                        Ok(_) => {
+                            ArchiveJournal::append(vault, &host, &planned)
+                            .map_err(|error| {
+                                GmailError::runtime(
+                                    "journal",
+                                    format!(
+                                        "could not append the Gmail archive journal: {error}"
+                                    ),
+                                )
+                            })?;
+                            journal =
+                                ArchiveJournal::load(vault).unwrap_or(journal);
+                            outcome.rows.push(ArchiveRow {
+                                thread_id: row.key.thread_id().to_string(),
+                                note: close.note.clone(),
+                                action: ACTION_ARCHIVED,
+                                reason: if close.historical {
+                                    "backlog"
+                                } else {
+                                    "eligible"
+                                },
+                                decision: "would_archive".to_string(),
+                                messages: archive_ids,
+                                tasks: task_refs(&close.tasks),
+                            });
+                        }
+                        Err(error) => {
+                            if is_auth_abort(&error) {
+                                return Err(error);
+                            }
+                            outcome.warnings.push(format!(
+                                "skipped Gmail thread {}: {}: {}",
+                                row.key.thread_id(),
+                                error.kind(),
+                                error.message(),
+                            ));
+                            outcome.failed = true;
+                        }
                     }
                 }
             }
         }
+
+        // Ownership release: previously owned archives with a new Inbox reply or
+        // manual Inbox return let go exactly once. Reopening alone never cleans
+        // up; only live INBOX membership does.
+        release_owned(
+            vault,
+            &host,
+            reader,
+            gog,
+            account,
+            &labels,
+            Some(&enrollment_label),
+            &mut journal,
+            &owned_before,
+            &mut outcome,
+        )?;
+
+        outcome.hints = super::report::archive_restore_hints(&scan, &journal);
+
+        Ok(())
+    })();
+    if let Err(error) = result {
+        outcome.error = Some(error);
     }
-
-    // Ownership release: previously owned archives with a new Inbox reply or
-    // manual Inbox return let go exactly once. Reopening alone never cleans
-    // up; only live INBOX membership does.
-    release_owned(
-        vault,
-        &host,
-        reader,
-        gog,
-        account,
-        &labels,
-        Some(&enrollment_label),
-        &mut journal,
-        &owned_before,
-        &mut outcome,
-    )?;
-
-    outcome.hints = super::report::archive_restore_hints(&scan, &journal);
-
-    Ok(outcome)
+    outcome
 }
 
 fn gate_reason(gate: &archive_preview::ArchiveGate) -> &'static str {

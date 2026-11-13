@@ -870,7 +870,9 @@ pub(crate) fn preview<R: GmailRead>(
                         if let Some(warning) = warning {
                             warnings.push(warning);
                         }
-                        if reason == HOLD_FETCH_FAILED {
+                        if reason == HOLD_FETCH_FAILED
+                            || reason == HOLD_UNRESOLVABLE
+                        {
                             failed = true;
                         }
                     }

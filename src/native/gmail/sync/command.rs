@@ -476,7 +476,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             None
         } else if let Some(snapshot) = saved_id_snapshot.as_ref() {
             let watch_snapshot = outcome.watch_threads.clone();
-            match archive_apply::apply_live(
+            let mut live = archive_apply::apply_live(
                 &coordinator,
                 &gog,
                 &config,
@@ -485,13 +485,11 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 args,
                 &watch_snapshot,
                 snapshot,
-            ) {
-                Ok(live) => Some(live),
-                Err(error) => {
-                    archive_error = Some(error);
-                    None
-                }
+            );
+            if let Some(error) = live.error.take() {
+                archive_error = Some(normalize_archive_error(error));
             }
+            Some(live)
         } else {
             archive_skip_warning = Some(
                 "skipped Gmail archive writes: no complete pre-hydration saved-ID snapshot is available".to_string(),
@@ -567,6 +565,19 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         report.attach_archive_error(error);
     }
     Ok(report)
+}
+
+/// Archive authentication failures use the sync contract's setup/auth exit
+/// code while keeping Google's other command contracts unchanged.
+fn normalize_archive_error(error: GmailError) -> GmailError {
+    if error.kind() != "invalid_grant" {
+        return error;
+    }
+    GmailError::setup("invalid_grant", error.message().to_string())
+        .with_hint(
+            "run `bob gmail login -s modify` on the approved archive host",
+        )
+        .with_warnings(error.warnings().to_vec())
 }
 
 fn capture_archive_saved_ids(

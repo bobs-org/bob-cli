@@ -636,19 +636,70 @@ mod tests {
         .is_err());
     }
 
+    #[test]
+    fn label_diff_boundary_memberships_preserve_inbox_and_unrelated_labels() {
+        let receipt = receipt();
+        let initial = vec![
+            message("a1", &["INBOX", "Label_1", "Label_42", "odd,\\literal"]),
+            message("b2", &["INBOX", "Label_1", "odd,\\literal"]),
+            message("c3", &["Label_1", "Label_42", "odd,\\literal"]),
+            message("d4", &["Label_1", "odd,\\literal"]),
+        ];
+        for operation in [
+            LabelOperation::Archive,
+            LabelOperation::Restore,
+            LabelOperation::LetGo,
+        ] {
+            let mut after = initial.clone();
+            let diff = LabelDiff::for_messages(operation, &receipt, &after)
+                .expect("valid boundary label sets");
+            apply_all(&mut after, &diff);
+            for (before, changed) in initial.iter().zip(&after) {
+                if operation == LabelOperation::LetGo {
+                    assert_eq!(
+                        before.label_ids.contains("INBOX"),
+                        changed.label_ids.contains("INBOX"),
+                        "let-go preserves Inbox membership"
+                    );
+                }
+                assert_eq!(
+                    before.label_ids.contains("Label_1"),
+                    changed.label_ids.contains("Label_1"),
+                    "{operation:?} preserves enrollment"
+                );
+                assert_eq!(
+                    before.label_ids.contains("odd,\\literal"),
+                    changed.label_ids.contains("odd,\\literal"),
+                    "{operation:?} preserves unrelated literal labels"
+                );
+            }
+            assert!(LabelDiff::for_messages(operation, &receipt, &after)
+                .expect("idempotent diff")
+                .is_empty());
+        }
+    }
+
     proptest! {
         #[test]
         fn label_diff_properties_hold_for_independent_message_labels(
             cases in prop::collection::vec(
-                ("[0-9a-f]{1,16}", prop::collection::btree_set(arbitrary_label_id(), 0..8)),
+                (
+                    "[0-9a-f]{1,16}",
+                    any::<bool>(),
+                    any::<bool>(),
+                    any::<bool>(),
+                    prop::collection::btree_set(arbitrary_label_id(), 0..8),
+                ),
                 1..7,
             ),
-            label_suffix in 1u16..10000,
+            label_suffix in 2u16..10000,
             name_suffix in arbitrary_label_id(),
         ) {
-            let ids: BTreeSet<_> = cases.iter().map(|(id, _)| id).collect();
+            let ids: BTreeSet<_> = cases.iter().map(|(id, _, _, _, _)| id).collect();
             prop_assume!(ids.len() == cases.len());
 
+            // Start outside the enrollment ID by construction. Alias
+            // rejection stays covered separately above.
             let receipt = ReceiptLabel::new(
                 &GmailLabel {
                     id: format!("Label_{label_suffix}"),
@@ -661,9 +712,21 @@ mod tests {
                     kind: Some("user".to_string()),
                 },
             ).unwrap();
-            let initial: Vec<_> = cases.iter().map(|(id, labels)| MessageLabelState {
-                message_id: id.clone(),
-                label_ids: labels.clone(),
+            let initial: Vec<_> = cases.iter().map(|(id, inbox, has_receipt, enrollment, labels)| {
+                let mut label_ids = labels.clone();
+                if *inbox {
+                    label_ids.insert("INBOX".to_string());
+                }
+                if *has_receipt {
+                    label_ids.insert(receipt.id().to_string());
+                }
+                if *enrollment {
+                    label_ids.insert("Label_1".to_string());
+                }
+                MessageLabelState {
+                    message_id: id.clone(),
+                    label_ids,
+                }
             }).collect();
 
             for operation in [LabelOperation::Archive, LabelOperation::Restore, LabelOperation::LetGo] {
