@@ -160,7 +160,7 @@ fn fresh_matches_close(
     }
     if fresh.has_open()
         || fresh.has_unknown()
-        || fresh.merge_hold
+        || fresh.merge_unresolved()
         || fresh.identity_uncertain
         || !fresh.issues.is_empty()
         || !fresh.mail_complete()
@@ -331,6 +331,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 config,
                 args.confirm.as_deref(),
             )?;
+            append_review_rows(&preview, true, &mut outcome);
             outcome.warnings.extend(preview.warnings);
             if preview.failed {
                 outcome.failed = true;
@@ -373,6 +374,8 @@ pub(crate) fn apply_live<R: GmailRead>(
                                 block_id: task.block_id.clone(),
                             })
                             .collect(),
+                        first_seen: false,
+                        hint: None,
                     });
                 }
                 outcome.failed = true;
@@ -509,6 +512,7 @@ pub(crate) fn apply_live<R: GmailRead>(
             config,
             args.confirm.as_deref(),
         )?;
+        append_review_rows(&preview, true, &mut outcome);
         outcome.warnings.extend(preview.warnings);
         if preview.failed {
             outcome.failed = true;
@@ -610,6 +614,8 @@ pub(crate) fn apply_live<R: GmailRead>(
                             block_id: task.block_id.clone(),
                         })
                         .collect(),
+                    first_seen: false,
+                    hint: None,
                 });
             }
             outcome.failed = true;
@@ -1044,6 +1050,8 @@ pub(crate) fn apply_live<R: GmailRead>(
                                 decision: "would_archive".to_string(),
                                 messages: archive_ids,
                                 tasks: task_refs(&close.tasks),
+                                first_seen: false,
+                                hint: None,
                             });
                         }
                         Err(error) => {
@@ -1117,6 +1125,35 @@ fn task_refs(
         .collect()
 }
 
+fn append_review_rows(
+    preview: &archive_preview::PreviewReport,
+    persist: bool,
+    outcome: &mut LiveArchiveOutcome,
+) {
+    let (seen, _) = super::health::archive_review_state();
+    let rows = ArchiveRow::from_reviews(&preview.reviews, &seen);
+    if rows.iter().any(|row| row.first_seen) {
+        outcome.failed = true;
+    }
+    outcome.rows.extend(rows);
+    if persist {
+        let keys: BTreeSet<String> = preview
+            .reviews
+            .iter()
+            .map(archive_preview::review_sight_key)
+            .collect();
+        if let Err(error) =
+            super::health::record_archive_reviews(&keys, keys.len() as u32)
+        {
+            outcome.warnings.push(format!(
+                "could not record archive review state: {}",
+                error.message()
+            ));
+            outcome.failed = true;
+        }
+    }
+}
+
 fn append_paused_rows(
     plan: &archive_preview::ArchivePlan,
     outcome: &mut LiveArchiveOutcome,
@@ -1139,6 +1176,8 @@ fn append_paused_rows(
                     block_id: task.block_id.clone(),
                 })
                 .collect(),
+            first_seen: false,
+            hint: None,
         });
     }
     outcome.failed = true;
@@ -1441,6 +1480,8 @@ fn append_kept(
         decision: format!("kept:{kept}"),
         messages,
         tasks: task_refs(&close.tasks),
+        first_seen: false,
+        hint: None,
     });
     Ok(())
 }
@@ -1558,6 +1599,8 @@ fn reconcile_recovered(
         decision: "would_archive".to_string(),
         messages: recovered,
         tasks: task_refs(&close.tasks),
+        first_seen: false,
+        hint: None,
     });
     Ok(())
 }
@@ -1731,6 +1774,8 @@ fn release_owned<R: GmailRead>(
                 tasks: recorded
                     .map(|close| task_refs(&close.tasks))
                     .unwrap_or_default(),
+                first_seen: false,
+                hint: None,
             });
             continue;
         }
@@ -1831,6 +1876,8 @@ fn release_owned<R: GmailRead>(
                     tasks: recorded
                         .map(|close| task_refs(&close.tasks))
                         .unwrap_or_default(),
+                    first_seen: false,
+                    hint: None,
                 });
             }
             Err(error) => {
@@ -2065,7 +2112,7 @@ mod tests {
                 classify_archive_status, ArchiveIssue, ArchiveLinkTask,
                 ArchiveScan, ArchiveThreadEvidence,
             },
-            archive_state::ArchiveDisposition,
+            archive_state::{ArchiveDisposition, ArchiveTaskLocator},
             scan::LinkPlacement,
         },
     };
@@ -2087,11 +2134,12 @@ mod tests {
                 placement: LinkPlacement::TaskLine,
                 in_done: false,
                 merge_retired: false,
+                via_merge: false,
                 from_duplicate_note: false,
             }],
             saved_ids,
             note_fingerprint: Some(format!("sha256:{}", "a".repeat(64))),
-            merge_hold: false,
+            merge_unresolved: None,
             identity_uncertain: false,
             issues: Vec::<ArchiveIssue>::new(),
         }
@@ -2196,5 +2244,30 @@ mod tests {
         assert_eq!(journal.owned_receipts().count(), 1);
         assert_eq!(journal.unconsumed_close(&reclosed.key), None);
         assert_eq!(outcome.warnings.len(), 0);
+    }
+
+    #[test]
+    fn via_merge_target_change_mismatches_a_frozen_close() {
+        let mut closed = evidence('x', vec!["aa01".to_string()]);
+        closed.tasks[0].via_merge = true;
+        let close = ArchiveCloseGeneration {
+            key: closed.key.clone(),
+            generation: "gen".into(),
+            enable_epoch: "epoch".into(),
+            note: closed.note.clone(),
+            tasks: closed.tasks.iter().map(ArchiveTaskLocator::from).collect(),
+            saved_ids: closed.saved_ids.clone(),
+            note_fingerprint: closed.note_fingerprint.clone().unwrap(),
+            label: ArchiveLabelIdentity::new("bob/closed", None).unwrap(),
+            historical: false,
+            confirmation_digest: None,
+            opened_by: None,
+            closed_at: None,
+        };
+        assert!(fresh_matches_close(&closed, &close));
+        let mut flipped = closed.clone();
+        flipped.tasks[0].status = ' ';
+        flipped.tasks[0].class = classify_archive_status(' ');
+        assert!(!fresh_matches_close(&flipped, &close));
     }
 }

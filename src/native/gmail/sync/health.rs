@@ -114,6 +114,12 @@ pub(crate) struct SyncState {
     /// success. Old files still parse via the default.
     #[serde(default)]
     pub(crate) skipping_since: Option<String>,
+    /// First-sight keys for archive review holds: thread, reason, locators.
+    #[serde(default)]
+    pub(crate) archive_review_seen: Vec<String>,
+    /// Open archive-review count from the last live run.
+    #[serde(default)]
+    pub(crate) archive_review_count: u32,
 }
 
 impl HealthEvent {
@@ -237,6 +243,33 @@ fn now_rfc3339() -> String {
 pub(crate) fn record_attempt() -> Result<(), GmailError> {
     let mut state = load_state().unwrap_or_default();
     state.last_attempt_at = Some(now_rfc3339());
+    write_state(&state).map_err(|error| {
+        GmailError::runtime(
+            "sync_state",
+            format!("could not write Gmail sync state: {error}"),
+        )
+    })
+}
+
+/// Seen archive-review keys and the last live run's open review count.
+pub(crate) fn archive_review_state() -> (BTreeSet<String>, u32) {
+    match load_state() {
+        Ok(state) => (
+            state.archive_review_seen.into_iter().collect(),
+            state.archive_review_count,
+        ),
+        Err(_) => (BTreeSet::new(), 0),
+    }
+}
+
+/// Persist this live run's archive-review keys and open count.
+pub(crate) fn record_archive_reviews(
+    seen: &BTreeSet<String>,
+    count: u32,
+) -> Result<(), GmailError> {
+    let mut state = load_state().unwrap_or_default();
+    state.archive_review_seen = seen.iter().cloned().collect();
+    state.archive_review_count = count;
     write_state(&state).map_err(|error| {
         GmailError::runtime(
             "sync_state",
@@ -1187,6 +1220,18 @@ mod tests {
         assert!(message.contains("3 h"), "{message}");
         assert!(message.contains(&old), "{message}");
         assert!(message.contains("bob gmail doctor"), "{message}");
+    }
+
+    #[test]
+    fn archive_review_state_round_trips_seen_keys_and_count() {
+        let (_temp, _env) = isolated_state("gmail-archive-review");
+        assert_eq!(archive_review_state(), (BTreeSet::new(), 0));
+        let keys =
+            BTreeSet::from(["aa11|merge_unresolved|job.md:7".to_string()]);
+        record_archive_reviews(&keys, 1).unwrap();
+        assert_eq!(archive_review_state(), (keys.clone(), 1));
+        record_archive_reviews(&BTreeSet::new(), 0).unwrap();
+        assert_eq!(archive_review_state(), (BTreeSet::new(), 0));
     }
 
     #[test]

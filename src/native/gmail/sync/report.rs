@@ -5,12 +5,15 @@
 //! `problems`, and `summary`. Consumers of scan and apply outcomes use
 //! those structs directly rather than parsing this document.
 
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 
 use super::archive_preview::{
-    ArchiveGate, ArchivePlan, ArchivePreviewRow, PreviewDecision, ACTION_KEPT,
-    ACTION_PAUSED, ACTION_WOULD_ARCHIVE, KEPT_CONSENT_REMOVED, KEPT_MANUAL,
-    REASON_BACKLOG, REASON_ELIGIBLE,
+    review_sight_key, ArchiveGate, ArchivePlan, ArchivePreviewRow,
+    ArchiveReview, PreviewDecision, ACTION_KEPT, ACTION_PAUSED, ACTION_REVIEW,
+    ACTION_WOULD_ARCHIVE, KEPT_CONSENT_REMOVED, KEPT_MANUAL, REASON_BACKLOG,
+    REASON_ELIGIBLE,
 };
 use super::archive_projection::RecentArchiveSnapshot;
 use super::archive_scan::ArchiveScan;
@@ -114,6 +117,10 @@ pub(crate) struct ArchiveRow {
     pub(crate) decision: String,
     pub(crate) messages: Vec<String>,
     pub(crate) tasks: Vec<ArchiveTaskRef>,
+    /// First sighting of this review hold; ignored for other actions.
+    pub(crate) first_seen: bool,
+    /// Typed review hint; absent on mutation rows.
+    pub(crate) hint: Option<String>,
 }
 
 fn preview_decision(row: &ArchivePreviewRow) -> String {
@@ -160,6 +167,48 @@ impl ArchiveRow {
                     block_id: task.block_id.clone(),
                 })
                 .collect(),
+            first_seen: false,
+            hint: None,
+        }
+    }
+
+    /// Map preview reviews onto JSON rows, marking first-seen keys.
+    pub(crate) fn from_reviews(
+        reviews: &[ArchiveReview],
+        seen: &BTreeSet<String>,
+    ) -> Vec<Self> {
+        reviews
+            .iter()
+            .map(|review| {
+                let key = review_sight_key(review);
+                Self::from_review(review, !seen.contains(&key))
+            })
+            .collect()
+    }
+
+    /// A non-actionable review hold. Never digest-bound.
+    pub(crate) fn from_review(
+        review: &ArchiveReview,
+        first_seen: bool,
+    ) -> Self {
+        ArchiveRow {
+            thread_id: review.key.thread_id().to_string(),
+            note: review.note.clone(),
+            action: ACTION_REVIEW,
+            reason: review.reason,
+            decision: String::new(),
+            messages: Vec::new(),
+            tasks: review
+                .tasks
+                .iter()
+                .map(|task| ArchiveTaskRef {
+                    path: task.path.clone(),
+                    line: task.line,
+                    block_id: task.block_id.clone(),
+                })
+                .collect(),
+            first_seen,
+            hint: Some(review.hint.clone()),
         }
     }
 
@@ -259,6 +308,26 @@ impl SyncReport {
         }
     }
 
+    /// Append review holds. First-seen rows fail the run and add a warning.
+    pub(crate) fn attach_archive_reviews(&mut self, rows: Vec<ArchiveRow>) {
+        for row in &rows {
+            if row.action == ACTION_REVIEW && row.first_seen {
+                self.ok = false;
+                self.first_seen = true;
+                let mut warning = format!(
+                    "held Gmail thread {} for review: {}",
+                    row.thread_id, row.reason
+                );
+                if let Some(hint) = &row.hint {
+                    warning.push_str(": ");
+                    warning.push_str(hint);
+                }
+                self.warnings.push(warning);
+            }
+        }
+        self.archive.extend(rows);
+    }
+
     /// Attach a live archive apply outcome. Filing results are already in
     /// the report; archive rows, digest, warnings, and failure state join
     /// them. A paused batch or any isolated failure fails the run without
@@ -281,7 +350,27 @@ impl SyncReport {
         }
         self.warnings.extend(warnings);
         let paused = self.archive.iter().any(|row| row.action == "paused");
-        if failed || paused || !deferred_empty {
+        let review_first_seen = self
+            .archive
+            .iter()
+            .any(|row| row.action == ACTION_REVIEW && row.first_seen);
+        if review_first_seen {
+            self.first_seen = true;
+            for row in &self.archive {
+                if row.action == ACTION_REVIEW && row.first_seen {
+                    let mut warning = format!(
+                        "held Gmail thread {} for review: {}",
+                        row.thread_id, row.reason
+                    );
+                    if let Some(hint) = &row.hint {
+                        warning.push_str(": ");
+                        warning.push_str(hint);
+                    }
+                    self.warnings.push(warning);
+                }
+            }
+        }
+        if failed || paused || !deferred_empty || review_first_seen {
             self.ok = false;
         }
     }
@@ -483,7 +572,7 @@ pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
 fn print_archive_preview(styler: &Styler, report: &SyncReport, quiet: bool) {
     let mut shown = false;
     for row in &report.archive {
-        let Some(line) = archive_human_row(row) else {
+        let Some(line) = archive_preview_line(row, quiet) else {
             continue;
         };
         shown = true;
@@ -524,6 +613,15 @@ fn print_archive_preview(styler: &Styler, report: &SyncReport, quiet: bool) {
     if !shown && report.archive_skipped && !quiet {
         println!("  {}", styler.dim("archive planning skipped (-n)"));
     }
+}
+
+/// Later review holds stay JSON-visible; quiet runs hide them after the
+/// first sighting already printed.
+fn archive_preview_line(row: &ArchiveRow, quiet: bool) -> Option<String> {
+    if row.action == ACTION_REVIEW && !row.first_seen && quiet {
+        return None;
+    }
+    archive_human_row(row)
 }
 
 fn archive_human_row(row: &ArchiveRow) -> Option<String> {
@@ -592,6 +690,25 @@ fn archive_human_row(row: &ArchiveRow) -> Option<String> {
                 ))
             }
         }
+        ACTION_REVIEW => {
+            let hint = row
+                .hint
+                .as_deref()
+                .filter(|hint| !hint.is_empty())
+                .map(|hint| format!(" — {hint}"))
+                .unwrap_or_default();
+            if dest.is_empty() {
+                Some(format!(
+                    "⚠ review {} ({}){hint}",
+                    row.thread_id, row.reason,
+                ))
+            } else {
+                Some(format!(
+                    "⚠ review {} ({}){dest}{hint}",
+                    row.thread_id, row.reason,
+                ))
+            }
+        }
         _ => None,
     }
 }
@@ -630,7 +747,7 @@ fn json_document(report: &SyncReport) -> Value {
         .archive
         .iter()
         .map(|row| {
-            json!({
+            let mut value = json!({
                 "thread_id": row.thread_id,
                 "note": row.note,
                 "action": row.action,
@@ -644,7 +761,14 @@ fn json_document(report: &SyncReport) -> Value {
                         "block_id": task.block_id,
                     })
                 }).collect::<Vec<_>>(),
-            })
+            });
+            if row.action == ACTION_REVIEW {
+                value["first_seen"] = json!(row.first_seen);
+                if let Some(hint) = &row.hint {
+                    value["hint"] = json!(hint);
+                }
+            }
+            value
         })
         .collect();
     let mut document = json!({
@@ -1111,6 +1235,8 @@ mod tests {
                     line: 12,
                     block_id: Some("follow-up".into()),
                 }],
+                first_seen: false,
+                hint: None,
             }],
             archive_digest: Some("abcd".into()),
             archive_config: Some(ArchiveConfigSummary {
@@ -1159,6 +1285,8 @@ mod tests {
             decision: format!("kept:{KEPT_MANUAL}"),
             messages: Vec::new(),
             tasks: Vec::new(),
+            first_seen: false,
+            hint: None,
         };
         let no_label = ArchiveRow {
             reason: KEPT_CONSENT_REMOVED,
@@ -1203,6 +1331,104 @@ mod tests {
         assert!(archive_human_row(&quiet_report.archive[0])
             .unwrap()
             .contains("back in inbox"));
+    }
+
+    #[test]
+    fn review_rows_alert_once_and_stay_out_of_the_archived_count() {
+        let review = ArchiveReview {
+            key: ThreadKey::new("me@example.com", "aa01").unwrap(),
+            note: "mail/2026/aa01.md".into(),
+            reason: "merge_unresolved",
+            tasks: vec![super::super::archive_state::ArchiveTaskLocator {
+                path: "job.md".into(),
+                line: 7,
+                block_id: Some("src".into()),
+                status: '-',
+            }],
+            hint: "fix or remove the merged-into link on job.md:7 (missing_note); or archive the thread by hand"
+                .into(),
+        };
+        let empty = BTreeSet::new();
+        let first = ArchiveRow::from_reviews(&[review.clone()], &empty);
+        assert_eq!(first.len(), 1);
+        assert!(first[0].first_seen);
+        assert_eq!(first[0].action, ACTION_REVIEW);
+        let line = archive_human_row(&first[0]).expect("review prints");
+        assert!(line.contains("⚠ review aa01"), "{line}");
+        assert!(line.contains("merge_unresolved"), "{line}");
+        assert!(line.contains("job.md:7"), "{line}");
+        assert!(archive_preview_line(&first[0], true).is_some());
+
+        let mut report = SyncReport {
+            ok: true,
+            dry_run: true,
+            pulled: 0,
+            results: Vec::new(),
+            watch: Vec::new(),
+            gone: Vec::new(),
+            problems: Vec::new(),
+            warnings: Vec::new(),
+            watching: 0,
+            awaiting: 0,
+            first_seen: false,
+            busy: false,
+            archive: Vec::new(),
+            archive_digest: Some("abcd".into()),
+            archive_config: None,
+            archive_hints: Vec::new(),
+            archive_skipped: false,
+            archive_error: None,
+            recent_archive: None,
+        };
+        report.attach_archive_reviews(first.clone());
+        assert!(!report.ok);
+        assert!(report.first_seen);
+        assert!(report.warnings.iter().any(|warning| {
+            warning.contains("held Gmail thread aa01 for review")
+        }));
+
+        let seen = BTreeSet::from([review_sight_key(&review)]);
+        let later = ArchiveRow::from_reviews(&[review], &seen);
+        assert!(!later[0].first_seen);
+        assert!(archive_preview_line(&later[0], true).is_none());
+        assert!(archive_preview_line(&later[0], false).is_some());
+
+        let mut later_report = SyncReport {
+            ok: true,
+            first_seen: false,
+            ..report.clone()
+        };
+        later_report.archive.clear();
+        later_report.warnings.clear();
+        later_report.attach_archive_reviews(later.clone());
+        assert!(later_report.ok);
+        assert!(!later_report.first_seen);
+        assert!(later_report.warnings.is_empty());
+
+        later_report.archive_digest = Some("abcd".into());
+        let value = json_document(&later_report);
+        assert_eq!(value["archive"][0]["action"], "review");
+        assert_eq!(value["archive"][0]["first_seen"], false);
+        assert_eq!(
+            value["archive"][0]["hint"],
+            "fix or remove the merged-into link on job.md:7 (missing_note); or archive the thread by hand"
+        );
+        assert_eq!(value["summary"]["archived"], 0);
+        assert_eq!(value["archive_digest"], "abcd");
+        assert!(value["archive"][0].get("first_seen").is_some());
+        let archived_json = json_document(&SyncReport {
+            archive: vec![ArchiveRow {
+                action: "archived",
+                reason: "eligible",
+                decision: "would_archive".to_string(),
+                first_seen: false,
+                hint: None,
+                ..first[0].clone()
+            }],
+            ..later_report
+        });
+        assert!(archived_json["archive"][0].get("first_seen").is_none());
+        assert!(archived_json["archive"][0].get("hint").is_none());
     }
 
     #[test]
@@ -1765,6 +1991,8 @@ mod tests {
                 line: 12,
                 block_id: Some("follow-up".into()),
             }],
+            first_seen: false,
+            hint: None,
         }
     }
 

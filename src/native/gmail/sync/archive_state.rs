@@ -1342,7 +1342,7 @@ fn close_from_evidence(
         || evidence.has_open()
         || evidence.has_unknown()
         || evidence.positive_closed().is_empty()
-        || evidence.merge_hold
+        || evidence.merge_unresolved()
         || evidence.identity_uncertain
         || !valid_label(&label)
     {
@@ -1401,7 +1401,7 @@ fn valid_observation_evidence(evidence: &ArchiveThreadEvidence) -> bool {
             .is_some_and(valid_digest)
         && valid_ids(&evidence.saved_ids)
         && !evidence.identity_uncertain
-        && !evidence.merge_hold
+        && !evidence.merge_unresolved()
         && evidence
             .tasks
             .iter()
@@ -1971,11 +1971,12 @@ mod tests {
                 placement: LinkPlacement::TaskLine,
                 in_done: false,
                 merge_retired: false,
+                via_merge: false,
                 from_duplicate_note: false,
             }],
             saved_ids: vec!["aa01".to_string(), "bb02".to_string()],
             note_fingerprint: Some(format!("sha256:{}", "a".repeat(64))),
-            merge_hold: false,
+            merge_unresolved: None,
             identity_uncertain: false,
             issues: Vec::<ArchiveIssue>::new(),
         }
@@ -2191,6 +2192,23 @@ mod tests {
             state.project(&incomplete_scan, &open),
             ArchiveDisposition::Held
         ));
+    }
+
+    #[test]
+    fn via_merge_open_target_records_an_open_observation() {
+        let (mut state, mut events, receipt_label) = enabled();
+        let mut open = evidence(key(), ' ');
+        open.tasks[0].via_merge = true;
+        let open_scan = scan(open.clone());
+        let open_event = state.event_for_open(&open_scan, &open).unwrap();
+        push(&mut events, &open_event, "athena", 2);
+        state = ArchiveJournal::from_events(events, Vec::new());
+        let mut closed = evidence(key(), 'x');
+        closed.tasks[0].via_merge = true;
+        let closed_scan = scan(closed.clone());
+        assert!(state
+            .event_for_close(&closed_scan, &closed, receipt_label)
+            .is_some());
     }
 
     #[test]

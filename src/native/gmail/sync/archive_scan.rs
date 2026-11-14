@@ -20,9 +20,11 @@
 //!   veto all-closed inference instead of vanishing.
 //! - Merge-retired sources (a `merged into` relation edge from
 //!   `relations.merge_labels`, or a dated `📥 merged into
-//!   [[note#Heading]]` entry under a `❌ **CANCEL LOG**` header) hold
-//!   their thread for review: the cancellation proves a merge, not task
-//!   completion. Only configured merge effects count, never prose
+//!   [[note#Heading]]` entry under a `❌ **CANCEL LOG**` header) are
+//!   followed to their resolved target through the shared relation
+//!   resolver. The target's status decides archive evidence. A section
+//!   tombstone counts as a closed cancel. Unresolved merges hold the
+//!   thread for review. Only configured merge effects count, never prose
 //!   substrings.
 //! - Saved message IDs are parsed from the validated managed mail-note
 //!   cards and frozen with a note fingerprint for later revalidation.
@@ -32,14 +34,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use sha2::{Digest, Sha256};
 
 use super::scan::{
-    fenced_lines, lower_stem, scan_note_tasks, DroppedKind, DroppedMailLink,
-    LinkPlacement, MailLinks, OPEN_STATUSES,
+    fenced_lines, lower_stem, parse_task_row, scan_note_tasks, DroppedKind,
+    DroppedMailLink, LinkPlacement, MailLinks, OPEN_STATUSES,
 };
 use super::{
     super::{
@@ -49,11 +51,20 @@ use super::{
     ThreadKey,
 };
 use crate::native::{
+    collect_done::trailing_block_id_in_line,
     config::relations::RelationsConfig,
     done_archive, is_always_excluded_note_directory_name, markdown,
     relation_labels::relation_label_key,
     task_dependencies::blocks as blocks_mod,
-    task_relations::{parse as relation_parse, LinksLine, RelationEntryKind},
+    task_relations::{
+        parse as relation_parse,
+        resolve::{
+            resolve_relation_entry, resolve_relation_target_path,
+            RelationResolveError, RelationResolveIndex, RelationTargetKind,
+        },
+        LinksLine, RelationEntry, RelationEntryKind,
+    },
+    vault_links::{LinkResolution, NoteIndex},
 };
 
 /// Statuses that prove a task closed for archive: done or cancelled.
@@ -62,6 +73,9 @@ pub(crate) const POSITIVE_CLOSED: [char; 3] = ['x', 'X', '-'];
 /// Section-merge provenance marker, `📥 merged into [[note#Heading]]`,
 /// matched only inside Cancel Log children, never in prose.
 const SECTION_MERGE_MARK: &str = "📥 merged into [[";
+
+/// Follow at most this many merge hops; a longer chain is unresolved.
+const MERGE_FOLLOW_DEPTH: u8 = 8;
 
 /// How one linking task's box reads for archive evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +96,59 @@ pub(crate) fn classify_archive_status(status: char) -> ArchiveTaskClass {
         ArchiveTaskClass::Open
     } else {
         ArchiveTaskClass::Unknown
+    }
+}
+
+/// Why a merge-retired source could not become an effective linker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MergeUnresolvedKind {
+    MissingNote,
+    MissingBlock,
+    AmbiguousBasename,
+    NonTask,
+    SelfEdge,
+    Cycle,
+    DepthCap,
+}
+
+impl MergeUnresolvedKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingNote => "missing_note",
+            Self::MissingBlock => "missing_block",
+            Self::AmbiguousBasename => "ambiguous_basename",
+            Self::NonTask => "target_not_task",
+            Self::SelfEdge => "self_relation",
+            Self::Cycle => "cycle",
+            Self::DepthCap => "depth_cap",
+        }
+    }
+}
+
+/// One unresolved merge edge that holds its thread for review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MergeUnresolved {
+    pub(crate) source_path: String,
+    pub(crate) source_line: usize,
+    pub(crate) source_block_id: Option<String>,
+    /// Raw LINKS target text (`[[note#^id]]`).
+    pub(crate) target: String,
+    pub(crate) kind: MergeUnresolvedKind,
+}
+
+impl MergeUnresolved {
+    fn new(
+        source: &ArchiveLinkTask,
+        target: String,
+        kind: MergeUnresolvedKind,
+    ) -> Self {
+        Self {
+            source_path: source.path.clone(),
+            source_line: source.line,
+            source_block_id: source.block_id.clone(),
+            target,
+            kind,
+        }
     }
 }
 
@@ -106,6 +173,8 @@ pub(crate) struct ArchiveLinkTask {
     pub(crate) in_done: bool,
     /// Whether the row carries merge-retired provenance.
     pub(crate) merge_retired: bool,
+    /// Whether this linker entered only by following a merge edge.
+    pub(crate) via_merge: bool,
     /// Whether the link resolved only to a duplicated mail-note identity.
     pub(crate) from_duplicate_note: bool,
 }
@@ -170,8 +239,8 @@ pub(crate) struct ArchiveThreadEvidence {
     pub(crate) saved_ids: Vec<String>,
     /// `sha256:` hex of the mail-note bytes the IDs were parsed from.
     pub(crate) note_fingerprint: Option<String>,
-    /// At least one linker carries merge-retired provenance.
-    pub(crate) merge_hold: bool,
+    /// An unresolved merge edge, after following configured merge labels.
+    pub(crate) merge_unresolved: Option<MergeUnresolved>,
     /// An ambiguous basename link may name this thread's note.
     pub(crate) identity_uncertain: bool,
     /// Mail-note refusals: completion is unprovable while non-empty.
@@ -207,6 +276,11 @@ impl ArchiveThreadEvidence {
         self.issues.is_empty()
             && self.note_fingerprint.is_some()
             && !self.saved_ids.is_empty()
+    }
+
+    /// Whether a merge-retired source could not resolve to a target task.
+    pub(crate) fn merge_unresolved(&self) -> bool {
+        self.merge_unresolved.is_some()
     }
 }
 
@@ -343,15 +417,15 @@ impl ArchiveScan {
 
     /// Whether one thread's evidence proves all-closed completion: at
     /// least one positively closed linker, no open or unknown linker, no
-    /// merge hold, no identity doubt, complete mail-note evidence with
-    /// saved IDs, and a fully read vault.
+    /// unresolved merge, no identity doubt, complete mail-note evidence
+    /// with saved IDs, and a fully read vault.
     pub(crate) fn archivable(&self, evidence: &ArchiveThreadEvidence) -> bool {
         self.scan_complete()
             && !evidence.tasks.is_empty()
             && !evidence.has_open()
             && !evidence.has_unknown()
             && !evidence.positive_closed().is_empty()
-            && !evidence.merge_hold
+            && !evidence.merge_unresolved()
             && !evidence.identity_uncertain
             && evidence.mail_complete()
     }
@@ -386,6 +460,8 @@ pub(crate) fn scan_archive_evidence(
     visit_archive_notes(vault, mail_folder, &mut notes, &mut incomplete_reads)?;
     notes.sort();
 
+    let resolve_index = ScanRelationIndex::from_notes(&notes, &merge_keys);
+
     let mut tasks_by_thread: BTreeMap<ThreadKey, Vec<ArchiveLinkTask>> =
         BTreeMap::new();
     let mut dropped_ambiguous: Vec<DroppedMailLink> = Vec::new();
@@ -405,16 +481,10 @@ pub(crate) fn scan_archive_evidence(
             continue;
         }
         let in_done = done_archive::is_archive_path(Path::new(relative));
-        let mut task_lines: BTreeSet<usize> = BTreeSet::new();
-        for task in &found {
-            task_lines.insert(task.line);
-        }
-        for link in &dropped {
-            task_lines.insert(link.line);
-        }
-        let retired = merge_retired_lines(text, &task_lines, &merge_keys);
         for task in found {
-            let line_retired = retired.contains(&task.line);
+            let line_retired = resolve_index
+                .task_at(&task.path, task.line)
+                .is_some_and(|snapshot| snapshot.provenance.is_some());
             for target in &task.targets {
                 tasks_by_thread.entry(target.key.clone()).or_default().push(
                     ArchiveLinkTask {
@@ -427,6 +497,7 @@ pub(crate) fn scan_archive_evidence(
                         placement: target.placement,
                         in_done,
                         merge_retired: line_retired,
+                        via_merge: false,
                         from_duplicate_note: false,
                     },
                 );
@@ -435,7 +506,9 @@ pub(crate) fn scan_archive_evidence(
         for link in dropped {
             match link.kind.clone() {
                 DroppedKind::Duplicate(key) => {
-                    let line_retired = retired.contains(&link.line);
+                    let line_retired = resolve_index
+                        .task_at(&link.path, link.line)
+                        .is_some_and(|snapshot| snapshot.provenance.is_some());
                     tasks_by_thread.entry(key).or_default().push(
                         ArchiveLinkTask {
                             path: link.path.clone(),
@@ -447,6 +520,7 @@ pub(crate) fn scan_archive_evidence(
                             placement: link.placement,
                             in_done,
                             merge_retired: line_retired,
+                            via_merge: false,
                             from_duplicate_note: true,
                         },
                     );
@@ -466,7 +540,8 @@ pub(crate) fn scan_archive_evidence(
         linkers.sort_by(|left, right| {
             left.path.cmp(&right.path).then(left.line.cmp(&right.line))
         });
-        let merge_hold = linkers.iter().any(|task| task.merge_retired);
+        let (tasks, merge_unresolved) =
+            effective_linkers(linkers, &resolve_index);
         let (note, saved_ids, note_fingerprint, mut issues) =
             mail_note_evidence(vault, index, &key);
         if ambiguous_stems
@@ -481,10 +556,10 @@ pub(crate) fn scan_archive_evidence(
             ArchiveThreadEvidence {
                 key,
                 note,
-                tasks: linkers,
+                tasks,
                 saved_ids,
                 note_fingerprint,
-                merge_hold,
+                merge_unresolved,
                 identity_uncertain: issues.iter().any(|issue| {
                     matches!(issue, ArchiveIssue::IdentityUncertain { .. })
                 }),
@@ -585,47 +660,379 @@ fn mail_note_evidence(
     (note, saved_ids, Some(fingerprint), Vec::new())
 }
 
-/// 1-based task-row lines carrying merge-retired provenance: a LINKS
-/// child with a configured merge label, or a Cancel Log child with the
-/// canonical section-merge marker. Both reuse the parsers the merge
-/// writer is checked against; prose is never scanned.
-fn merge_retired_lines(
-    text: &str,
-    task_lines: &BTreeSet<usize>,
-    merge_keys: &BTreeSet<String>,
-) -> BTreeSet<usize> {
-    if task_lines.is_empty() || merge_keys.is_empty() {
-        return BTreeSet::new();
-    }
-    let lines: Vec<&str> = text
-        .split_inclusive('\n')
-        .map(|line| markdown::split_line_ending(line).0)
-        .collect();
-    let body_start = markdown::strictly_closed_frontmatter_end(&lines)
-        .map_or(0, |end| end + 1);
-    let fenced = fenced_lines(&lines, body_start);
-    task_lines
-        .iter()
-        .filter(|line| {
-            let Some(index) = line.checked_sub(1) else {
-                return false;
-            };
-            task_line_is_merge_retired(&lines, &fenced, index, merge_keys)
-        })
-        .copied()
-        .collect()
+/// Merge-retired provenance on one task row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MergeProvenance {
+    Relation(Vec<RelationEntry>),
+    Section,
 }
 
-/// Whether one 0-based task-row line carries merge-retired provenance.
-fn task_line_is_merge_retired(
+/// One vault task the merge follower can land on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskSnapshot {
+    path: String,
+    line: usize,
+    text: String,
+    block_id: Option<String>,
+    status: char,
+    class: ArchiveTaskClass,
+    in_done: bool,
+    provenance: Option<MergeProvenance>,
+}
+
+/// In-memory relation index over the notes the archive scan already read.
+struct ScanRelationIndex {
+    notes: NoteIndex,
+    archive_paths: BTreeSet<PathBuf>,
+    by_line: BTreeMap<(String, usize), TaskSnapshot>,
+    by_id: BTreeMap<(PathBuf, String), TaskSnapshot>,
+    ids: BTreeSet<(PathBuf, String)>,
+}
+
+impl ScanRelationIndex {
+    fn from_notes(
+        notes: &[(String, String)],
+        merge_keys: &BTreeSet<String>,
+    ) -> Self {
+        let paths: Vec<PathBuf> =
+            notes.iter().map(|(path, _)| PathBuf::from(path)).collect();
+        let archive_paths: BTreeSet<PathBuf> = paths
+            .iter()
+            .filter(|path| done_archive::is_archive_path(path))
+            .cloned()
+            .collect();
+        let mut by_line = BTreeMap::new();
+        let mut by_id = BTreeMap::new();
+        let mut ids = BTreeSet::new();
+        for (relative, text) in notes {
+            let in_done = done_archive::is_archive_path(Path::new(relative));
+            let note_path = PathBuf::from(relative);
+            let lines: Vec<&str> = text
+                .split_inclusive('\n')
+                .map(|line| markdown::split_line_ending(line).0)
+                .collect();
+            let body_start = markdown::strictly_closed_frontmatter_end(&lines)
+                .map_or(0, |end| end + 1);
+            let fenced = fenced_lines(&lines, body_start);
+            for (index, line) in lines.iter().enumerate() {
+                if index < body_start || fenced.contains(&index) {
+                    continue;
+                }
+                if let Some(block_id) = trailing_block_id_in_line(line) {
+                    ids.insert((note_path.clone(), block_id));
+                }
+                let Some(task) = parse_task_row(line) else {
+                    continue;
+                };
+                let snapshot = TaskSnapshot {
+                    path: relative.clone(),
+                    line: index + 1,
+                    text: (*line).to_string(),
+                    block_id: trailing_block_id_in_line(line),
+                    status: task.status,
+                    class: classify_archive_status(task.status),
+                    in_done,
+                    provenance: line_merge_provenance(
+                        &lines, &fenced, index, merge_keys,
+                    ),
+                };
+                if let Some(block_id) = snapshot.block_id.clone() {
+                    by_id.insert(
+                        (note_path.clone(), block_id),
+                        snapshot.clone(),
+                    );
+                }
+                by_line.insert((relative.clone(), index + 1), snapshot);
+            }
+        }
+        Self {
+            notes: NoteIndex::from_paths(paths),
+            archive_paths,
+            by_line,
+            by_id,
+            ids,
+        }
+    }
+
+    fn task_at(&self, path: &str, line: usize) -> Option<&TaskSnapshot> {
+        self.by_line.get(&(path.to_string(), line))
+    }
+
+    fn task_id(&self, path: &Path, block_id: &str) -> Option<&TaskSnapshot> {
+        self.by_id.get(&(path.to_path_buf(), block_id.to_string()))
+    }
+}
+
+impl RelationResolveIndex for ScanRelationIndex {
+    fn resolve_note_path(
+        &self,
+        source_path: &Path,
+        target: &str,
+    ) -> Option<PathBuf> {
+        resolve_relation_target_path(source_path, target, &self.notes, |path| {
+            self.archive_paths.contains(path)
+        })
+    }
+
+    fn target_kind(&self, path: &Path, block_id: &str) -> RelationTargetKind {
+        if self
+            .by_id
+            .contains_key(&(path.to_path_buf(), block_id.to_string()))
+        {
+            RelationTargetKind::Task
+        } else if self
+            .ids
+            .contains(&(path.to_path_buf(), block_id.to_string()))
+        {
+            RelationTargetKind::NonTask
+        } else {
+            RelationTargetKind::Missing
+        }
+    }
+}
+
+/// Replace relation-merged sources with their resolved targets. Section
+/// tombstones stay as closed cancels. The first unresolved edge holds the
+/// thread.
+fn effective_linkers(
+    linkers: Vec<ArchiveLinkTask>,
+    index: &ScanRelationIndex,
+) -> (Vec<ArchiveLinkTask>, Option<MergeUnresolved>) {
+    let originals: BTreeMap<(String, usize), ArchiveLinkTask> = linkers
+        .iter()
+        .map(|task| ((task.path.clone(), task.line), task.clone()))
+        .collect();
+    let mut result: Vec<ArchiveLinkTask> = Vec::new();
+    let mut seen: BTreeSet<(String, usize)> = BTreeSet::new();
+    let mut unresolved: Option<MergeUnresolved> = None;
+
+    let mut insert = |task: ArchiveLinkTask| {
+        if seen.insert((task.path.clone(), task.line)) {
+            result.push(task);
+        }
+    };
+
+    for linker in &linkers {
+        match index
+            .task_at(&linker.path, linker.line)
+            .and_then(|snapshot| snapshot.provenance.clone())
+        {
+            Some(MergeProvenance::Section) => {
+                insert(section_closed_linker(linker));
+            }
+            Some(MergeProvenance::Relation(entries)) => {
+                for entry in entries {
+                    match follow_merge(
+                        linker,
+                        &entry,
+                        index,
+                        &originals,
+                        0,
+                        &mut Vec::new(),
+                    ) {
+                        Ok(target) => insert(target),
+                        Err(error) => {
+                            if unresolved.is_none() {
+                                unresolved = Some(error);
+                            }
+                        }
+                    }
+                }
+            }
+            None => insert(linker.clone()),
+        }
+    }
+
+    result.sort_by(|left, right| {
+        left.path.cmp(&right.path).then(left.line.cmp(&right.line))
+    });
+    (result, unresolved)
+}
+
+fn section_closed_linker(source: &ArchiveLinkTask) -> ArchiveLinkTask {
+    let mut task = source.clone();
+    task.class = ArchiveTaskClass::ClosedPositive;
+    if !POSITIVE_CLOSED.contains(&task.status) {
+        task.status = '-';
+    }
+    task.via_merge = false;
+    task
+}
+
+fn follow_merge(
+    source: &ArchiveLinkTask,
+    entry: &RelationEntry,
+    index: &ScanRelationIndex,
+    originals: &BTreeMap<(String, usize), ArchiveLinkTask>,
+    depth: u8,
+    stack: &mut Vec<(String, String)>,
+) -> Result<ArchiveLinkTask, MergeUnresolved> {
+    if depth >= MERGE_FOLLOW_DEPTH {
+        return Err(MergeUnresolved::new(
+            source,
+            entry.canonical_text(),
+            MergeUnresolvedKind::DepthCap,
+        ));
+    }
+    let source_path = Path::new(&source.path);
+    match resolve_relation_entry(
+        source_path,
+        source.block_id.as_deref(),
+        entry,
+        index,
+    ) {
+        Ok((path, block_id)) => {
+            let identity = (slashes(&path), block_id.clone());
+            if stack.iter().any(|seen| seen == &identity) {
+                return Err(MergeUnresolved::new(
+                    source,
+                    entry.canonical_text(),
+                    MergeUnresolvedKind::Cycle,
+                ));
+            }
+            let Some(snapshot) = index.task_id(&path, &block_id) else {
+                return Err(MergeUnresolved::new(
+                    source,
+                    entry.canonical_text(),
+                    MergeUnresolvedKind::MissingBlock,
+                ));
+            };
+            if let Some(original) =
+                originals.get(&(snapshot.path.clone(), snapshot.line))
+            {
+                match &snapshot.provenance {
+                    Some(MergeProvenance::Relation(entries)) => {
+                        stack.push(identity);
+                        let mut last = None;
+                        for nested in entries {
+                            last = Some(follow_merge(
+                                original,
+                                nested,
+                                index,
+                                originals,
+                                depth + 1,
+                                stack,
+                            )?);
+                        }
+                        stack.pop();
+                        last.ok_or_else(|| {
+                            MergeUnresolved::new(
+                                source,
+                                entry.canonical_text(),
+                                MergeUnresolvedKind::MissingBlock,
+                            )
+                        })
+                    }
+                    Some(MergeProvenance::Section) => {
+                        Ok(section_closed_linker(original))
+                    }
+                    None => Ok(original.clone()),
+                }
+            } else {
+                match &snapshot.provenance {
+                    Some(MergeProvenance::Relation(entries)) => {
+                        stack.push(identity);
+                        let via = linker_from_snapshot(snapshot, true);
+                        let mut last = None;
+                        for nested in entries {
+                            last = Some(follow_merge(
+                                &via,
+                                nested,
+                                index,
+                                originals,
+                                depth + 1,
+                                stack,
+                            )?);
+                        }
+                        stack.pop();
+                        last.ok_or_else(|| {
+                            MergeUnresolved::new(
+                                source,
+                                entry.canonical_text(),
+                                MergeUnresolvedKind::MissingBlock,
+                            )
+                        })
+                    }
+                    Some(MergeProvenance::Section) => {
+                        Ok(section_closed_linker(&linker_from_snapshot(
+                            snapshot, true,
+                        )))
+                    }
+                    None => Ok(linker_from_snapshot(snapshot, true)),
+                }
+            }
+        }
+        Err(RelationResolveError::SelfRelation) => Err(MergeUnresolved::new(
+            source,
+            entry.canonical_text(),
+            MergeUnresolvedKind::SelfEdge,
+        )),
+        Err(RelationResolveError::TargetNotTask) => Err(MergeUnresolved::new(
+            source,
+            entry.canonical_text(),
+            MergeUnresolvedKind::NonTask,
+        )),
+        Err(RelationResolveError::Unresolved) => Err(MergeUnresolved::new(
+            source,
+            entry.canonical_text(),
+            classify_unresolved(source_path, entry, index),
+        )),
+    }
+}
+
+fn linker_from_snapshot(
+    snapshot: &TaskSnapshot,
+    via_merge: bool,
+) -> ArchiveLinkTask {
+    ArchiveLinkTask {
+        path: snapshot.path.clone(),
+        line: snapshot.line,
+        text: snapshot.text.clone(),
+        block_id: snapshot.block_id.clone(),
+        status: snapshot.status,
+        class: snapshot.class,
+        placement: LinkPlacement::TaskLine,
+        in_done: snapshot.in_done,
+        merge_retired: snapshot.provenance.is_some(),
+        via_merge,
+        from_duplicate_note: false,
+    }
+}
+
+fn classify_unresolved(
+    source_path: &Path,
+    entry: &RelationEntry,
+    index: &ScanRelationIndex,
+) -> MergeUnresolvedKind {
+    if entry.target.is_empty() {
+        return MergeUnresolvedKind::MissingBlock;
+    }
+    match index
+        .notes
+        .resolve_detailed(Some(source_path), &entry.target)
+    {
+        LinkResolution::Ambiguous => MergeUnresolvedKind::AmbiguousBasename,
+        LinkResolution::Missing => MergeUnresolvedKind::MissingNote,
+        LinkResolution::Found(path) => {
+            match index.target_kind(&path, &entry.block_id) {
+                RelationTargetKind::NonTask => MergeUnresolvedKind::NonTask,
+                RelationTargetKind::Task | RelationTargetKind::Missing => {
+                    MergeUnresolvedKind::MissingBlock
+                }
+            }
+        }
+    }
+}
+
+/// LINKS merge-label entries, else a Cancel Log section tombstone.
+fn line_merge_provenance(
     lines: &[&str],
     fenced: &BTreeSet<usize>,
     task_index: usize,
     merge_keys: &BTreeSet<String>,
-) -> bool {
-    if lines.get(task_index).is_none() {
-        return false;
-    }
+) -> Option<MergeProvenance> {
+    lines.get(task_index)?;
+    let mut relation_entries = Vec::new();
     for child in relation_parse::links_children_of(lines, fenced, task_index) {
         let LinksLine::Accepted { entries, .. } = &child.parsed else {
             continue;
@@ -637,14 +1044,13 @@ fn task_line_is_merge_retired(
             if entry.label.as_ref().is_some_and(|label| {
                 merge_keys.contains(&relation_label_key(label))
             }) {
-                return true;
+                relation_entries.push(entry.clone());
             }
         }
     }
-    // Section tombstones are dated entries beneath a direct-child
-    // `❌ **CANCEL LOG**` header
-    // (`- *2026-11-03* — 📥 merged into [[note#Heading]]`); a matching
-    // marker in a prose child or a fenced block is never provenance.
+    if !relation_entries.is_empty() {
+        return Some(MergeProvenance::Relation(relation_entries));
+    }
     for header in blocks_mod::direct_child_lines(lines, fenced, task_index) {
         if !lines
             .get(header)
@@ -657,11 +1063,11 @@ fn task_line_is_merge_retired(
                 .get(entry)
                 .is_some_and(|line| line.contains(SECTION_MERGE_MARK))
             {
-                return true;
+                return Some(MergeProvenance::Section);
             }
         }
     }
-    false
+    None
 }
 
 /// Every Markdown note the archive scan reads: like
@@ -952,7 +1358,7 @@ mod tests {
         assert_eq!(found.positive_closed().len(), 2);
         assert!(!found.has_open());
         assert!(!found.has_unknown());
-        assert!(!found.merge_hold);
+        assert!(!found.merge_unresolved());
         assert!(!found.identity_uncertain);
         assert!(found.issues.is_empty());
         assert!(found.mail_complete());
@@ -1320,37 +1726,41 @@ mod tests {
     }
 
     #[test]
-    fn configured_merge_labels_hold_retired_sources() {
+    fn configured_merge_labels_follow_a_closed_target() {
         let mut vault = Vault::new();
         vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
         vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
         vault.write(
             "job.md",
             "- [-] #task Retired [[mail/2026/lease]] ^src\n\
-             \t- 🪢 **LINKS:** My Merge [[other#^x]]\n\
+             \t- 🪢 **LINKS:** My Merge [[job#^dst]]\n\
+             - [x] #task Target [[mail/2026/lease]] ^dst\n\
              - [x] #task Plain [[mail/2026/quote]] ^plain\n\
              \t- 🪢 **LINKS:** [[other#^y]]\n",
         );
         let relations = relations_with_merge(&["My Merge"]);
         let scan = vault.scan_with(&relations);
-        let held = evidence(&scan, THREAD);
-        assert_eq!(held.positive_closed().len(), 1);
-        assert!(!held.has_open());
-        assert!(held.merge_hold);
-        assert!(held.tasks[0].merge_retired);
-        assert!(!scan.archivable(held));
-        // A label-less LINKS edge is not merge provenance.
+        let followed = evidence(&scan, THREAD);
+        assert!(!followed.merge_unresolved());
+        assert!(!followed.has_open());
+        assert_eq!(followed.positive_closed().len(), 1);
+        assert_eq!(followed.tasks[0].block_id.as_deref(), Some("dst"));
+        assert!(scan.archivable(followed));
         let plain = evidence(&scan, OTHER);
-        assert!(!plain.merge_hold);
+        assert!(!plain.merge_unresolved());
         assert!(!plain.tasks[0].merge_retired);
         assert!(scan.archivable(plain));
-        // Without the configured label, the same edge does not hold.
+        // Without the configured label, the custom edge is not provenance
+        // and the retired source stays an effective closed linker.
         let unconfigured = vault.scan();
-        assert!(!evidence(&unconfigured, THREAD).merge_hold);
+        let raw = evidence(&unconfigured, THREAD);
+        assert!(!raw.merge_unresolved());
+        assert_eq!(raw.tasks.len(), 2);
+        assert!(unconfigured.archivable(raw));
     }
 
     #[test]
-    fn fallback_merged_into_and_section_tombstones_hold() {
+    fn missing_merge_target_is_unresolved_and_section_tombstones_close() {
         let mut vault = Vault::new();
         vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
         vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
@@ -1377,35 +1787,235 @@ mod tests {
              \t\t```\n",
         );
         let scan = vault.scan();
-        // The default fallback label holds even with no configured merges,
-        // and the hold needs no resolvable merge target.
         let fallback = evidence(&scan, THREAD);
-        assert!(fallback.merge_hold);
+        assert!(fallback.merge_unresolved());
+        assert_eq!(
+            fallback.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::MissingNote)
+        );
         assert!(!scan.archivable(fallback));
         let section = evidence(&scan, OTHER);
-        assert!(section.merge_hold);
-        assert!(!scan.archivable(section));
-        // Prose and fenced markers are never provenance.
+        assert!(!section.merge_unresolved());
+        assert_eq!(section.positive_closed().len(), 1);
+        assert!(scan.archivable(section));
         let prose = evidence(&scan, THIRD);
         assert_eq!(prose.tasks.len(), 2);
-        assert!(!prose.merge_hold);
+        assert!(!prose.merge_unresolved());
         assert!(scan.archivable(prose));
     }
 
     #[test]
-    fn merge_hold_covers_open_sources_too() {
+    fn closed_via_merge_target_archives_without_linking_the_mail() {
         let mut vault = Vault::new();
         vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
         vault.write(
             "job.md",
-            "- [ ] #task Open with a merge edge [[mail/2026/lease]]\n\
-             \t- 🪢 **LINKS:** merged into [[dest#^dst]]\n",
+            "- [-] #task Retired [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^dst]]\n\
+             - [x] #task Target without a mail link ^dst\n",
         );
         let scan = vault.scan();
         let found = evidence(&scan, THREAD);
-        assert!(found.merge_hold);
+        assert!(!found.merge_unresolved());
+        assert_eq!(found.tasks.len(), 1);
+        assert!(found.tasks[0].via_merge);
+        assert_eq!(found.tasks[0].block_id.as_deref(), Some("dst"));
+        assert!(scan.archivable(found));
+    }
+
+    #[test]
+    fn open_merge_target_is_watching() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.write(
+            "job.md",
+            "- [-] #task Retired [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^dst]]\n\
+             - [ ] #task Open target ^dst\n",
+        );
+        let scan = vault.scan();
+        let found = evidence(&scan, THREAD);
+        assert!(!found.merge_unresolved());
         assert!(found.has_open());
         assert!(!scan.archivable(found));
+    }
+
+    #[test]
+    fn done_merge_target_archives() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.write(
+            "job.md",
+            "- [-] #task Retired [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[old#^dst]]\n",
+        );
+        vault.write(
+            "done/old.md",
+            "- [x] #task Archived target [[mail/2026/lease]] ^dst\n",
+        );
+        let scan = vault.scan();
+        let found = evidence(&scan, THREAD);
+        assert!(!found.merge_unresolved());
+        assert!(found.tasks.iter().any(|task| task.in_done));
+        assert!(scan.archivable(found));
+    }
+
+    #[test]
+    fn merge_chain_follows_to_the_final_target() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.write(
+            "job.md",
+            "- [-] #task Source [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^mid]]\n\
+             - [-] #task Mid ^mid\n\
+             \t- 🪢 **LINKS:** merged into [[job#^dst]]\n\
+             - [x] #task Final [[mail/2026/lease]] ^dst\n",
+        );
+        let scan = vault.scan();
+        let found = evidence(&scan, THREAD);
+        assert!(!found.merge_unresolved());
+        assert_eq!(found.tasks.len(), 1);
+        assert_eq!(found.tasks[0].block_id.as_deref(), Some("dst"));
+        assert!(scan.archivable(found));
+    }
+
+    #[test]
+    fn merge_cycle_is_unresolved() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.write(
+            "job.md",
+            "- [-] #task Left [[mail/2026/lease]] ^left\n\
+             \t- 🪢 **LINKS:** merged into [[job#^right]]\n\
+             - [-] #task Right ^right\n\
+             \t- 🪢 **LINKS:** merged into [[job#^left]]\n",
+        );
+        let scan = vault.scan();
+        let found = evidence(&scan, THREAD);
+        assert_eq!(
+            found.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::Cycle)
+        );
+        assert!(!scan.archivable(found));
+    }
+
+    #[test]
+    fn merge_self_edge_and_non_task_are_unresolved() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
+        vault.write(
+            "job.md",
+            "- [-] #task Self [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^src]]\n\
+             - [-] #task Non task [[mail/2026/quote]] ^from\n\
+             \t- 🪢 **LINKS:** merged into [[job#^note]]\n\
+             A paragraph ^note\n",
+        );
+        let scan = vault.scan();
+        let self_edge = evidence(&scan, THREAD);
+        assert_eq!(
+            self_edge.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::SelfEdge)
+        );
+        let non_task = evidence(&scan, OTHER);
+        assert_eq!(
+            non_task.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::NonTask)
+        );
+    }
+
+    #[test]
+    fn merge_depth_cap_is_unresolved_and_eight_hops_resolve() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
+        let mut allowed = String::new();
+        for hop in 0..8 {
+            let next = hop + 1;
+            let link = if hop == 0 { " [[mail/2026/lease]]" } else { "" };
+            allowed.push_str(&format!(
+                "- [-] #task Hop{hop}{link} ^s{hop}\n\
+                 \t- 🪢 **LINKS:** merged into [[job#^s{next}]]\n"
+            ));
+        }
+        allowed.push_str("- [x] #task Final ^s8\n");
+        vault.write("job.md", &allowed);
+        let mut capped = String::new();
+        for hop in 0..9 {
+            let next = hop + 1;
+            let link = if hop == 0 { " [[mail/2026/quote]]" } else { "" };
+            capped.push_str(&format!(
+                "- [-] #task Cap{hop}{link} ^c{hop}\n\
+                 \t- 🪢 **LINKS:** merged into [[deep#^c{next}]]\n"
+            ));
+        }
+        capped.push_str("- [x] #task Too deep ^c9\n");
+        vault.write("deep.md", &capped);
+        let scan = vault.scan();
+        let followed = evidence(&scan, THREAD);
+        assert!(!followed.merge_unresolved());
+        assert_eq!(followed.tasks[0].block_id.as_deref(), Some("s8"));
+        assert!(scan.archivable(followed));
+        let held = evidence(&scan, OTHER);
+        assert_eq!(
+            held.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::DepthCap)
+        );
+        assert!(!scan.archivable(held));
+    }
+
+    #[test]
+    fn missing_block_and_ambiguous_basename_are_unresolved() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
+        vault.write("areas/dest.md", "- [x] #task Area dest ^x\n");
+        vault.write("projects/dest.md", "- [x] #task Project dest ^x\n");
+        vault.write(
+            "job.md",
+            "- [-] #task Missing block [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^gone]]\n\
+             - [-] #task Ambiguous [[mail/2026/quote]] ^amb\n\
+             \t- 🪢 **LINKS:** merged into [[dest#^x]]\n",
+        );
+        let scan = vault.scan();
+        let missing = evidence(&scan, THREAD);
+        assert_eq!(
+            missing.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::MissingBlock)
+        );
+        let ambiguous = evidence(&scan, OTHER);
+        assert_eq!(
+            ambiguous.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::AmbiguousBasename)
+        );
+    }
+
+    #[test]
+    fn live_and_done_sources_merged_into_a_closed_mail_linker_archive() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
+        vault.write(
+            "job.md",
+            "- [-] #task Live source [[mail/2026/lease]] ^live\n\
+             \t- 🪢 **LINKS:** merged into [[job#^dst]]\n\
+             - [x] #task Shared target [[mail/2026/lease]] [[mail/2026/quote]] ^dst\n",
+        );
+        vault.write(
+            "done/old.md",
+            "- [-] #task Done source [[mail/2026/quote]] ^done\n\
+             \t- 🪢 **LINKS:** merged into [[job#^dst]]\n",
+        );
+        let scan = vault.scan();
+        let live = evidence(&scan, THREAD);
+        assert!(!live.merge_unresolved());
+        assert!(scan.archivable(live));
+        let archived = evidence(&scan, OTHER);
+        assert!(!archived.merge_unresolved());
+        assert!(scan.archivable(archived));
     }
 
     #[test]

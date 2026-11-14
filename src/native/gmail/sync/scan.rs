@@ -505,9 +505,9 @@ pub(crate) fn fenced_lines(lines: &[&str], start: usize) -> BTreeSet<usize> {
     fenced
 }
 
-struct TaskRow {
-    width: usize,
-    status: char,
+pub(crate) struct TaskRow {
+    pub(crate) width: usize,
+    pub(crate) status: char,
 }
 
 /// An open `- [s] … #task …` row.
@@ -518,7 +518,7 @@ fn parse_open_task(line: &str) -> Option<TaskRow> {
 /// Any `- [s] … #task …` row, whatever the box holds. The archive scan
 /// keeps unknown statuses so they veto all-closed inference instead of
 /// vanishing like a closed row.
-fn parse_task_row(line: &str) -> Option<TaskRow> {
+pub(crate) fn parse_task_row(line: &str) -> Option<TaskRow> {
     let indentation_end = line
         .find(|character: char| !character.is_whitespace())
         .unwrap_or(line.len());

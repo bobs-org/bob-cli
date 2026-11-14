@@ -130,6 +130,8 @@ mod tests {
                     decision: "would_archive".to_string(),
                     messages: vec!["m".to_string()],
                     tasks: Vec::new(),
+                    first_seen: false,
+                    hint: None,
                 })
                 .collect(),
             archive_digest: None,
@@ -178,6 +180,8 @@ mod tests {
             decision: "would_archive".to_string(),
             messages: vec!["m".to_string()],
             tasks: Vec::new(),
+            first_seen: false,
+            hint: None,
         });
         assert_eq!(
             archived_thread_ids(&report),

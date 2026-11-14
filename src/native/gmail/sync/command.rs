@@ -18,7 +18,7 @@ use super::{
     file::{self, FilingCandidate, FilingInput, FilingOutcome},
     guard::{self, GuardAttempt},
     health,
-    report::{self, SyncReport, SyncResult},
+    report::{self, ArchiveRow, SyncReport, SyncResult},
     retry::{
         is_auth_abort, CoordinatedRead, SharedBudget, SystemClock,
         SystemSleeper,
@@ -789,6 +789,11 @@ fn attach_archive_dry_run<R: GmailRead>(
                 );
             }
             report.attach_archive_preview(&preview.plan);
+            let (seen, _) = health::archive_review_state();
+            report.attach_archive_reviews(ArchiveRow::from_reviews(
+                &preview.reviews,
+                &seen,
+            ));
         }
         Err(error) => return Err(error),
     }

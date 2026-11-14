@@ -412,9 +412,10 @@ fn archive_check(
     } else {
         ""
     };
+    let (_, review_count) = health::archive_review_state();
     let summary = format!(
-        "{settings} · this week {} archived · {} kept{account_scope}",
-        counts.archived, counts.kept,
+        "{settings} · this week {} archived · {} kept · {} held for review{account_scope}",
+        counts.archived, counts.kept, review_count,
     );
     let modify_missing = match (account, granted_scopes) {
         (Some(acct), Some(scopes)) => {
@@ -894,5 +895,44 @@ fn finish(args: &DoctorArgs, host: &str, checks: Vec<Check>) -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::{config as bob_config, env::TestEnvGuard};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn archive_check_reports_held_for_review_from_last_live_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let _env = TestEnvGuard::set(&[(
+            "XDG_STATE_HOME",
+            Some(temp.path().as_os_str()),
+        )]);
+        let keys =
+            BTreeSet::from(["aa11|merge_unresolved|job.md:7".to_string()]);
+        health::record_archive_reviews(&keys, 1).unwrap();
+        let config = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                archive: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .expect("archive config resolves");
+        let vault = tempfile::tempdir().unwrap();
+        let check = archive_check(
+            vault.path(),
+            &config,
+            Some("me@example.com"),
+            Some(&[crate::native::gmail::config::MODIFY_SCOPE.to_string()]),
+        );
+        assert!(
+            check.summary.contains("1 held for review"),
+            "{}",
+            check.summary
+        );
     }
 }

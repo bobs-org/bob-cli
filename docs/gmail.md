@@ -784,8 +784,13 @@ still follows its separate draft and confirmation workflow.
 Archive eligibility requires an enrolled thread that still has its Gmail
 enrollment label, at least one linking task closed as `[x]`, `[X]`, or `[-]`,
 and no open or unknown linking task. The strict scan includes `done/`,
-refuses incomplete or ambiguous mail evidence, and holds merge-retired
-sources for review with no human row. The baseline needs a live run on the
+refuses incomplete or ambiguous mail evidence, and follows merge-retired
+sources to their target: the target's status decides, a Cancel Log section
+tombstone counts as a closed cancel, and an unresolved merge (missing note
+or block, ambiguous basename, non-task, self-edge, cycle, or depth cap)
+holds the thread as a `review` row. A thread that never recorded an open
+observation (for example, merged before enablement) archives through the
+existing backlog `-d` / `-c` path. The baseline needs a live run on the
 writer that has the modify grant: the first such run after enabling records
 enablement and open observations; only a later observed open-to-closed
 transition archives automatically. A thread already closed at the baseline is
@@ -802,8 +807,11 @@ Removing the enrollment label is a per-thread opt-out; Bob reports that case
 in JSON without a human row. If you already archived a thread yourself, Bob
 records one `kept` (`manual`) that consumes the close and adds no receipt.
 Policy exclusions (Spam, Trash, Drafts, `never_save`) and gone mail are a
-one-time `kept` that consumes the close; they are not held. Merge holds stay
-silent.
+one-time `kept` that consumes the close; they are not held. Unresolved
+merges, unknown checkbox statuses, and unprovable mail-note identity emit a
+`review` row: the first sighting of that thread, reason, and source locators
+prints even under `-q`, warns, and exits 1; later runs keep the JSON and
+non-quiet human row and exit 0.
 
 The Gmail receipt label records Bob-owned archives and supports crash
 recovery. A new reply or your manual Move to Inbox removes the receipt only;
@@ -881,7 +889,8 @@ exits 1. A supplied digest that no longer matches the current saved IDs,
 labels, or tasks makes no archive writes. Archive failures do not undo
 completed filing or watch work; `invalid_grant` stops remaining Gmail
 mutations. `-q` still shows archive and let-go rows because those changes
-matter to the Inbox, but it never prints the digest for a live successful run.
+matter to the Inbox, and it prints a first-seen `review` hold the same way,
+but it never prints the digest for a live successful run.
 
 The journal at `.bob/gmail/<host>.jsonl` records body-free enablement,
 observations, close generations, and terminal outcomes. No task prose,
@@ -893,10 +902,12 @@ subject, body, or token is stored there. Events are `gmail.archive_enabled`
 label identity, and matching `archive_event_id`).
 Reasons are `eligible`, `backlog`, `unsaved`, `consent_removed`, `policy`,
 `gone`, `manual`, `replied`, `manual_return`, and `recovered`. Actions are
-`would_archive`, `archived`, `kept`, `let_go`, `paused`, and reserved
-`restored`. Hints name the missing-modify grant and the confirm digest;
-errors are typed `{kind, message, hint?}` with exit 2 for setup (`modify_grant`)
-and auth, and exit 1 for paused, `confirm_mismatch`, and archive failure.
+`would_archive`, `archived`, `kept`, `let_go`, `paused`, `review`, and reserved
+`restored`. Review rows never enter the digest, gate, or burst count. Hints
+name the missing-modify grant, the confirm digest, and how to clear a review
+hold; errors are typed `{kind, message, hint?}` with exit 2 for setup
+(`modify_grant`) and auth, and exit 1 for paused, `confirm_mismatch`, a
+first-seen review, and archive failure.
 
 A thread whose routing label does not resolve is still filed to the inbox
 with a managed `GMAIL ROUTE` child that names the offending label, the
@@ -1119,9 +1130,10 @@ config, the writer pin, and journal readability. Rows look like
 - `scopes`: the granted `readonly`, `compose`, and `modify` combination.
 - `archive`: on/off, resolved receipt label, `archive_max`, and distinct
   archived and kept outcomes since Monday midnight in the configured
-  timezone. A missing modify grant while archive mode is on shows the login
-  hint even when the journal also warns; the row stays visible as skipped
-  when the account or grant cannot be checked.
+  timezone, plus `N held for review` from the last live run. A missing
+  modify grant while archive mode is on shows the login hint even when the
+  journal also warns; the row stays visible as skipped when the account or
+  grant cannot be checked.
 - `config`: folder, body mode, the sync label and inbox after fallbacks
   (`sync disabled` when the label is empty), the route prefixes (`none` in
   no-prefix mode), and the reply wait in days.
@@ -1189,7 +1201,8 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 `summary`) plus additive `archive[]`, `archive_hints[]`, `archive_enabled`,
 `archive_label`, `archive_max`, and `archive_skipped`. Archive rows carry
 `thread_id`, `note`, `action`, `reason`, `decision`, exact sorted message IDs,
-and task path/line/block-ID locators, never task text. Only dry-run and paused
+and task path/line/block-ID locators, never task text. Review rows also carry
+`first_seen` and a typed `hint`. Only dry-run and paused
 runs add `archive_digest`. `recent_archive` carries `since` (RFC3339 start
 of the previous local calendar day in the configured timezone), a distinct
 thread `count`, and one latest `items[]` row per thread. Each row has

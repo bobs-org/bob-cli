@@ -52,7 +52,7 @@ pub(crate) const HOLD_WATCHING: &str = "watching";
 /// A thread carries an unknown checkbox status, vetoing all-closed inference.
 pub(crate) const HOLD_UNKNOWN: &str = "unknown";
 /// A thread links a merge-retired source and holds for review.
-pub(crate) const HOLD_MERGE: &str = "merge_hold";
+pub(crate) const HOLD_MERGE: &str = "merge_unresolved";
 /// Mail-note evidence cannot prove completion (missing, unreadable,
 /// damaged, mismatched, duplicated, or ambiguous identity).
 pub(crate) const HOLD_IDENTITY: &str = "identity";
@@ -96,6 +96,8 @@ pub(crate) const ACTION_WOULD_ARCHIVE: &str = "would_archive";
 pub(crate) const ACTION_KEPT: &str = "kept";
 /// A gated row: no mutation until the preview is confirmed.
 pub(crate) const ACTION_PAUSED: &str = "paused";
+/// A hold that needs Bryan's action: never digest-bound or burst-counted.
+pub(crate) const ACTION_REVIEW: &str = "review";
 /// A fresh close, archivable without confirmation when under the limit.
 pub(crate) const REASON_ELIGIBLE: &str = "eligible";
 /// A confirmed historical-backlog row.
@@ -173,6 +175,16 @@ pub(crate) struct ArchivePlan {
     pub gate: ArchiveGate,
 }
 
+/// One non-actionable hold that needs Bryan's review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArchiveReview {
+    pub key: ThreadKey,
+    pub note: String,
+    pub reason: &'static str,
+    pub tasks: Vec<ArchiveTaskLocator>,
+    pub hint: String,
+}
+
 /// Everything one `preview` call folds.
 pub(crate) struct PreviewInput<'a> {
     pub account: &'a str,
@@ -189,6 +201,7 @@ pub(crate) struct PreviewInput<'a> {
 /// A finished preview plus the body-free warnings it produced.
 pub(crate) struct PreviewReport {
     pub plan: ArchivePlan,
+    pub reviews: Vec<ArchiveReview>,
     pub warnings: Vec<String>,
     /// True when a per-thread fetch failed or deferred: the previewed set
     /// is incomplete, so the run reports unsuccessful without writing.
@@ -262,7 +275,7 @@ pub(crate) fn local_verdict(
 /// Map a journal `Held` disposition to its ordered first-failure reason.
 /// Mirrors `ArchiveJournal::project` without duplicating its fold: unsafe
 /// journal state first, then scan completeness, then open tasks, then
-/// unknown boxes, then merge holds, then mail-note identity.
+/// unknown boxes, then unresolved merges, then mail-note identity.
 fn held_reason(
     scan: &ArchiveScan,
     journal: &ArchiveJournal,
@@ -276,7 +289,7 @@ fn held_reason(
         HOLD_WATCHING
     } else if evidence.has_unknown() {
         HOLD_UNKNOWN
-    } else if evidence.merge_hold {
+    } else if evidence.merge_unresolved() {
         HOLD_MERGE
     } else if evidence.identity_uncertain
         || !evidence.issues.is_empty()
@@ -906,12 +919,141 @@ pub(crate) fn preview<R: GmailRead>(
         confirm,
         digest.as_deref().unwrap_or_default(),
     );
+    let reviews = collect_reviews(&local, input.scan);
     Ok(PreviewReport {
         plan: ArchivePlan { rows, digest, gate },
+        reviews,
         warnings,
         failed,
         deferred,
     })
+}
+
+/// Holds that persist silently with no doctor row and need Bryan's action.
+fn is_review_hold(reason: &str) -> bool {
+    matches!(reason, HOLD_MERGE | HOLD_UNKNOWN | HOLD_IDENTITY)
+}
+
+fn collect_reviews(
+    local: &[(ThreadKey, LocalVerdict)],
+    scan: &ArchiveScan,
+) -> Vec<ArchiveReview> {
+    let mut reviews = Vec::new();
+    for (key, verdict) in local {
+        let LocalVerdict::Held { reason, .. } = verdict else {
+            continue;
+        };
+        if !is_review_hold(reason) {
+            continue;
+        }
+        let Some(evidence) = scan.evidence(key) else {
+            continue;
+        };
+        reviews.push(ArchiveReview {
+            key: key.clone(),
+            note: evidence.note.clone(),
+            reason,
+            tasks: review_tasks(evidence, reason),
+            hint: review_hint(evidence, reason),
+        });
+    }
+    reviews.sort_by(|left, right| left.key.cmp(&right.key));
+    reviews
+}
+
+fn review_tasks(
+    evidence: &ArchiveThreadEvidence,
+    reason: &str,
+) -> Vec<ArchiveTaskLocator> {
+    let mut tasks = match reason {
+        HOLD_MERGE => evidence
+            .merge_unresolved
+            .as_ref()
+            .map(|hold| {
+                vec![ArchiveTaskLocator {
+                    path: hold.source_path.clone(),
+                    line: hold.source_line,
+                    block_id: hold.source_block_id.clone(),
+                    status: evidence
+                        .tasks
+                        .iter()
+                        .find(|task| {
+                            task.path == hold.source_path
+                                && task.line == hold.source_line
+                        })
+                        .map(|task| task.status)
+                        .unwrap_or('-'),
+                }]
+            })
+            .unwrap_or_default(),
+        HOLD_UNKNOWN => evidence
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.class == super::archive_scan::ArchiveTaskClass::Unknown
+            })
+            .map(ArchiveTaskLocator::from)
+            .collect(),
+        _ => evidence
+            .tasks
+            .iter()
+            .map(ArchiveTaskLocator::from)
+            .collect(),
+    };
+    tasks.sort();
+    tasks.dedup();
+    tasks
+}
+
+fn review_hint(evidence: &ArchiveThreadEvidence, reason: &str) -> String {
+    match reason {
+        HOLD_MERGE => {
+            if let Some(hold) = &evidence.merge_unresolved {
+                format!(
+                    "fix or remove the merged-into link on {}:{} ({}); or archive the thread by hand",
+                    hold.source_path,
+                    hold.source_line,
+                    hold.kind.as_str()
+                )
+            } else {
+                "fix or remove the merged-into link, or archive the thread by hand"
+                    .to_string()
+            }
+        }
+        HOLD_UNKNOWN => {
+            if let Some(task) = evidence.tasks.iter().find(|task| {
+                task.class == super::archive_scan::ArchiveTaskClass::Unknown
+            }) {
+                format!(
+                    "set a known checkbox status on {}:{}, or archive the thread by hand",
+                    task.path, task.line
+                )
+            } else {
+                "set a known checkbox status, or archive the thread by hand"
+                    .to_string()
+            }
+        }
+        HOLD_IDENTITY => format!(
+            "repair the mail-note identity for {}, or archive the thread by hand",
+            evidence.note
+        ),
+        _ => "archive the thread by hand".to_string(),
+    }
+}
+
+/// Body-free first-sight key: thread, reason, and source locators.
+pub(crate) fn review_sight_key(review: &ArchiveReview) -> String {
+    let locators: Vec<String> = review
+        .tasks
+        .iter()
+        .map(|task| format!("{}:{}", task.path, task.line))
+        .collect();
+    format!(
+        "{}|{}|{}",
+        review.key.thread_id(),
+        review.reason,
+        locators.join(",")
+    )
 }
 
 /// Build a preview row from local evidence and its remote decision.
@@ -950,7 +1092,8 @@ fn row_for(
 #[cfg(test)]
 mod tests {
     use super::super::archive_scan::{
-        classify_archive_status, ArchiveLinkTask,
+        classify_archive_status, ArchiveLinkTask, MergeUnresolved,
+        MergeUnresolvedKind,
     };
     use super::super::scan::LinkPlacement;
     use super::*;
@@ -984,6 +1127,7 @@ mod tests {
             placement: LinkPlacement::TaskLine,
             in_done: false,
             merge_retired: false,
+            via_merge: false,
             from_duplicate_note: false,
         }
     }
@@ -998,7 +1142,7 @@ mod tests {
             tasks,
             saved_ids: vec!["aa01".to_string(), "bb02".to_string()],
             note_fingerprint: Some(format!("sha256:{}", "a".repeat(64))),
-            merge_hold: false,
+            merge_unresolved: None,
             identity_uncertain: false,
             issues: Vec::new(),
         }
@@ -1326,7 +1470,13 @@ mod tests {
         let suppressed = BTreeSet::new();
 
         let mut merged = closed_evidence("aa11");
-        merged.merge_hold = true;
+        merged.merge_unresolved = Some(MergeUnresolved {
+            source_path: "Projects/Job.md".to_string(),
+            source_line: 7,
+            source_block_id: Some("task-7".to_string()),
+            target: "[[gone#^nope]]".to_string(),
+            kind: MergeUnresolvedKind::MissingNote,
+        });
         assert_eq!(
             local_verdict(
                 ACCOUNT,
@@ -1940,6 +2090,7 @@ mod tests {
         assert_eq!(report.plan.gate, ArchiveGate::Open { confirmed: false });
         let digest = report.plan.digest.clone().expect("digest binds rows");
         assert_eq!(digest.len(), 64);
+        assert!(report.reviews.is_empty());
         // A re-read of the same semantic state confirms.
         let again = preview(
             &reader,
@@ -1988,6 +2139,76 @@ mod tests {
         .expect("confirmed preview reads");
         assert_eq!(confirmed.plan.gate, ArchiveGate::Open { confirmed: true });
         assert_eq!(confirmed.plan.rows.len(), 1);
+    }
+
+    #[test]
+    fn merge_unresolved_reviews_stay_out_of_the_digest() {
+        let temp = tempfile::tempdir().unwrap();
+        enroll(temp.path(), &["aa11"]);
+        let enrollment = EnrollmentFold::load(temp.path()).unwrap();
+        let mut merged = closed_evidence("aa11");
+        merged.merge_unresolved = Some(MergeUnresolved {
+            source_path: "Projects/Job.md".to_string(),
+            source_line: 7,
+            source_block_id: Some("task-7".to_string()),
+            target: "[[gone#^nope]]".to_string(),
+            kind: MergeUnresolvedKind::MissingNote,
+        });
+        let scan = ArchiveScan::test_scan(merged, true);
+        let journal = journal_with(temp.path(), &[]);
+        let suppressed = BTreeSet::new();
+        let policy = NeverSavePolicy::for_test(&[], &[]);
+        let labels = labels();
+        let report = preview(
+            &StubRead::ok(archived_thread()),
+            &input(&enrollment, &scan, &journal, &suppressed, &policy, &labels),
+            &config_on(),
+            None,
+        )
+        .expect("preview reads");
+        assert!(report.plan.rows.is_empty());
+        assert!(report.plan.digest.is_none());
+        assert_eq!(report.reviews.len(), 1);
+        assert_eq!(report.reviews[0].reason, HOLD_MERGE);
+        assert!(
+            report.reviews[0].hint.contains("Projects/Job.md:7"),
+            "{}",
+            report.reviews[0].hint
+        );
+    }
+
+    #[test]
+    fn collect_reviews_covers_silent_holds_and_skips_watching() {
+        let merged = {
+            let mut evidence = closed_evidence("aa11");
+            evidence.merge_unresolved = Some(MergeUnresolved {
+                source_path: "Projects/Job.md".to_string(),
+                source_line: 7,
+                source_block_id: Some("task-7".to_string()),
+                target: "[[gone#^nope]]".to_string(),
+                kind: MergeUnresolvedKind::MissingNote,
+            });
+            evidence
+        };
+        let unknown = evidence_for(key("aa11"), vec![task('~')]);
+        let mut identity = closed_evidence("aa11");
+        identity.identity_uncertain = true;
+        let watching = evidence_for(key("aa11"), vec![task(' ')]);
+
+        let reviews = |evidence: ArchiveThreadEvidence,
+                       reason: &'static str| {
+            let key = evidence.key.clone();
+            let scan = ArchiveScan::test_scan(evidence, true);
+            collect_reviews(
+                &[(key.clone(), LocalVerdict::Held { key, reason })],
+                &scan,
+            )
+        };
+
+        assert_eq!(reviews(merged, HOLD_MERGE)[0].reason, HOLD_MERGE);
+        assert_eq!(reviews(unknown, HOLD_UNKNOWN)[0].reason, HOLD_UNKNOWN);
+        assert_eq!(reviews(identity, HOLD_IDENTITY)[0].reason, HOLD_IDENTITY);
+        assert!(reviews(watching, HOLD_WATCHING).is_empty());
     }
 
     #[test]
