@@ -1029,7 +1029,10 @@ mod tests {
             "sync",
         ));
         assert_eq!(combined.last_n_days.as_deref(), Some("3"));
-        assert_eq!(combined.days, ["today", "tomorrow"]);
+        // An explicit `-D` replaces the `today` default at parse time; today
+        // is still synced because `-n N` always ends today (see
+        // `sync::tests::last_n_days_with_explicit_day_still_syncs_today`).
+        assert_eq!(combined.days, ["tomorrow"]);
 
         let absent = SyncArgs::from_matches(&sub_matches_for(
             &["bob gcal", "sync"],

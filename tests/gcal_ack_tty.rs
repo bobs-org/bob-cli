@@ -73,21 +73,36 @@ fn attrs_of(fd: i32) -> TermAttrs {
     }
 }
 
+/// The slave device path of an unlocked PTY master.
+///
+/// libc exposes `ptsname_r` only on Linux-like targets; macOS answers the
+/// same question with the `TIOCPTYGNAME` ioctl into a 128-byte buffer.
+fn pty_slave_path(fd: i32) -> String {
+    let mut name = [0 as libc::c_char; 128];
+    // SAFETY: `name` is a writable 128-byte buffer, the size both calls
+    // require; the return code is asserted before the buffer is read.
+    #[cfg(target_os = "macos")]
+    let rc = unsafe {
+        libc::ioctl(fd, libc::TIOCPTYGNAME as libc::c_ulong, name.as_mut_ptr())
+    };
+    // SAFETY: as above.
+    #[cfg(not(target_os = "macos"))]
+    let rc = unsafe { libc::ptsname_r(fd, name.as_mut_ptr(), name.len()) };
+    assert_eq!(rc, 0, "pty slave name");
+    // SAFETY: on success both calls leave a NUL-terminated path in `name`.
+    unsafe { CStr::from_ptr(name.as_ptr()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn open_master() -> (fs::File, String) {
-    // SAFETY: the master fd is owned by the returned File; the slave path
-    // is a fresh NUL-terminated buffer filled by ptsname_r.
+    // SAFETY: the master fd is owned by the returned File.
     unsafe {
         let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
         assert!(fd >= 0, "posix_openpt");
         assert_eq!(libc::grantpt(fd), 0, "grantpt");
         assert_eq!(libc::unlockpt(fd), 0, "unlockpt");
-        let mut name = vec![0 as libc::c_char; 128];
-        assert_eq!(
-            libc::ptsname_r(fd, name.as_mut_ptr(), name.len()),
-            0,
-            "ptsname_r"
-        );
-        let path = CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned();
+        let path = pty_slave_path(fd);
         (fs::File::from_raw_fd(fd), path)
     }
 }

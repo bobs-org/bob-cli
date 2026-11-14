@@ -2880,6 +2880,23 @@ mod resolve_days_tests {
     }
 
     #[test]
+    fn last_n_days_with_explicit_day_still_syncs_today() {
+        // `bob gcal sync -n 3 -D tomorrow` parses to days == ["tomorrow"]
+        // (the explicit -D replaces the `today` default), yet today stays
+        // selected because the last-N window always ends today.
+        let today = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        assert_eq!(
+            resolve_days(&args(&["tomorrow"], Some("3")), today).unwrap(),
+            [
+                NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 10, 29).unwrap(),
+                today,
+                NaiveDate::from_ymd_opt(2026, 10, 31).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
     fn invalid_last_n_days_has_structured_setup_error_and_hint() {
         let today = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
         for value in ["0", "-1", "abc", "367"] {
