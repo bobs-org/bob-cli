@@ -154,8 +154,20 @@ fn fresh_matches_close(
         .map(super::archive_state::ArchiveTaskLocator::from)
         .collect();
     locators.sort();
-    locators.dedup();
-    if locators != close.tasks {
+    let mut frozen = close.tasks.clone();
+    frozen.sort();
+    if locators.len() != frozen.len()
+        || !locators.iter().all(|fresh| {
+            let Some(index) = frozen
+                .iter()
+                .position(|saved| same_task_identity(fresh, saved))
+            else {
+                return false;
+            };
+            frozen.remove(index);
+            true
+        })
+    {
         return false;
     }
     if fresh.has_open()
@@ -168,6 +180,26 @@ fn fresh_matches_close(
         return false;
     }
     true
+}
+
+/// Compare a task by its stable identity. Older frozen locators have no row
+/// hash, so rows without block IDs retain the line-based legacy comparison.
+fn same_task_identity(
+    fresh: &super::archive_state::ArchiveTaskLocator,
+    saved: &super::archive_state::ArchiveTaskLocator,
+) -> bool {
+    if fresh.path != saved.path || fresh.status != saved.status {
+        return false;
+    }
+    match (&fresh.block_id, &saved.block_id) {
+        (Some(left), Some(right)) => left == right,
+        (None, None) => match (&fresh.row_hash, &saved.row_hash) {
+            (Some(left), Some(right)) => left == right,
+            (_, None) => fresh.line == saved.line,
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// Run the live archive phase. Filing commits are already durable; this
@@ -2265,9 +2297,33 @@ mod tests {
             closed_at: None,
         };
         assert!(fresh_matches_close(&closed, &close));
+        let mut shifted = closed.clone();
+        shifted.tasks[0].line += 15;
+        assert!(fresh_matches_close(&shifted, &close));
         let mut flipped = closed.clone();
         flipped.tasks[0].status = ' ';
         flipped.tasks[0].class = classify_archive_status(' ');
         assert!(!fresh_matches_close(&flipped, &close));
+
+        let mut text_identified = evidence('x', vec!["aa01".to_string()]);
+        text_identified.tasks[0].block_id = None;
+        let mut text_close = close.clone();
+        text_close.tasks = text_identified
+            .tasks
+            .iter()
+            .map(ArchiveTaskLocator::from)
+            .collect();
+        let mut text_shifted = text_identified.clone();
+        text_shifted.tasks[0].line += 9;
+        assert!(fresh_matches_close(&text_shifted, &text_close));
+        text_shifted.tasks[0].text.push_str(" edited");
+        assert!(!fresh_matches_close(&text_shifted, &text_close));
+
+        let mut legacy_close = text_close;
+        legacy_close.tasks[0].row_hash = None;
+        let mut legacy_same_line = text_identified;
+        assert!(fresh_matches_close(&legacy_same_line, &legacy_close));
+        legacy_same_line.tasks[0].line += 1;
+        assert!(!fresh_matches_close(&legacy_same_line, &legacy_close));
     }
 }

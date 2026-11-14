@@ -60,6 +60,8 @@ pub(crate) struct ArchiveTaskLocator {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) block_id: Option<String>,
+    /// Hash of the task row when it has no stable block ID. Never store row prose.
+    pub(crate) row_hash: Option<String>,
     pub(crate) status: char,
 }
 
@@ -69,6 +71,10 @@ impl From<&ArchiveLinkTask> for ArchiveTaskLocator {
             path: task.path.clone(),
             line: task.line,
             block_id: task.block_id.clone(),
+            row_hash: task
+                .block_id
+                .is_none()
+                .then(|| hex::encode(Sha256::digest(task.text.as_bytes()))),
             status: task.status,
         }
     }
@@ -1427,12 +1433,16 @@ fn task_values(tasks: &[ArchiveTaskLocator]) -> Vec<Value> {
     tasks
         .iter()
         .map(|task| {
-            json!({
+            let mut value = json!({
                 "path": task.path,
                 "line": task.line,
                 "block_id": task.block_id,
                 "status": task.status.to_string(),
-            })
+            });
+            if let Some(row_hash) = &task.row_hash {
+                value["row_hash"] = json!(row_hash);
+            }
+            value
         })
         .collect()
 }
@@ -1868,6 +1878,15 @@ fn parse_task_locators(value: &Value) -> Option<Vec<ArchiveTaskLocator>> {
             Value::String(block_id) => Some(block_id.clone()),
             _ => return None,
         };
+        // Legacy archive events predate row hashes. Keep them readable; their
+        // line remains the conservative identity fallback until a new close.
+        let row_hash = match object.get("row_hash") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(row_hash)) if valid_row_hash(row_hash) => {
+                Some(row_hash.clone())
+            }
+            _ => return None,
+        };
         let status = object.get("status")?.as_str()?;
         let mut chars = status.chars();
         let status = chars.next()?;
@@ -1879,6 +1898,7 @@ fn parse_task_locators(value: &Value) -> Option<Vec<ArchiveTaskLocator>> {
                     || id.len() > 256
                     || id.chars().any(char::is_control)
             })
+            || (block_id.is_some() && row_hash.is_some())
         {
             return None;
         }
@@ -1886,6 +1906,7 @@ fn parse_task_locators(value: &Value) -> Option<Vec<ArchiveTaskLocator>> {
             path,
             line,
             block_id,
+            row_hash,
             status,
         });
     }
@@ -1893,6 +1914,13 @@ fn parse_task_locators(value: &Value) -> Option<Vec<ArchiveTaskLocator>> {
     tasks.sort();
     tasks.dedup();
     (tasks == original).then_some(tasks)
+}
+
+fn valid_row_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn terminal_record_order(
@@ -1936,6 +1964,21 @@ fn ensure_gmail_journals_readable(vault: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_locator_parser_accepts_legacy_rows_without_hashes() {
+        let legacy = json!([{
+            "path": "Projects/Task.md",
+            "line": 4,
+            "block_id": null,
+            "status": "x"
+        }]);
+        let parsed =
+            parse_task_locators(&legacy).expect("legacy locator parses");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].row_hash, None);
+        assert_eq!(parsed[0].line, 4);
+    }
     use crate::native::gmail::note::index::{MailIndex, MailIndexEntry};
     use crate::native::gmail::sync::{
         archive_scan::{classify_archive_status, ArchiveIssue},

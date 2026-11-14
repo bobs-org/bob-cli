@@ -45,7 +45,7 @@ use crate::native::gmail::{
 /// The archive action bound into every preview digest.
 const DIGEST_ACTION: &str = "archive";
 /// Digest document version; bump when the bound fields change.
-const DIGEST_VERSION: u32 = 1;
+const DIGEST_VERSION: u32 = 2;
 
 /// A thread is still watched: at least one linking task is open.
 pub(crate) const HOLD_WATCHING: &str = "watching";
@@ -549,12 +549,12 @@ struct DigestThread<'a> {
 }
 
 /// One task locator of the canonical digest document. Task prose never
-/// enters the digest: path, line, block id, and box status bind the row.
+/// enters the digest: path, stable block ID or row hash, and box status bind the row.
 #[derive(Serialize)]
 struct DigestTask<'a> {
     path: &'a str,
-    line: usize,
     block_id: Option<&'a str>,
+    row_hash: Option<&'a str>,
     status: String,
 }
 
@@ -598,16 +598,17 @@ pub(crate) fn plan_digest(
                 .iter()
                 .map(|task| DigestTask {
                     path: task.path.as_str(),
-                    line: task.line,
                     block_id: task.block_id.as_deref(),
+                    row_hash: task.row_hash.as_deref(),
                     status: task.status.to_string(),
                 })
                 .collect();
             tasks.sort_by(|left, right| {
-                (left.path, left.line, left.block_id).cmp(&(
+                (left.path, left.block_id, left.row_hash, &left.status).cmp(&(
                     right.path,
-                    right.line,
                     right.block_id,
+                    right.row_hash,
+                    &right.status,
                 ))
             });
             let (archive_ids, decision) = match &row.decision {
@@ -970,20 +971,19 @@ fn review_tasks(
             .merge_unresolved
             .as_ref()
             .map(|hold| {
-                vec![ArchiveTaskLocator {
-                    path: hold.source_path.clone(),
-                    line: hold.source_line,
-                    block_id: hold.source_block_id.clone(),
-                    status: evidence
-                        .tasks
-                        .iter()
-                        .find(|task| {
-                            task.path == hold.source_path
-                                && task.line == hold.source_line
-                        })
-                        .map(|task| task.status)
-                        .unwrap_or('-'),
-                }]
+                let source = evidence.tasks.iter().find(|task| {
+                    task.path == hold.source_path
+                        && task.line == hold.source_line
+                });
+                vec![source.map(ArchiveTaskLocator::from).unwrap_or_else(
+                    || ArchiveTaskLocator {
+                        path: hold.source_path.clone(),
+                        line: hold.source_line,
+                        block_id: hold.source_block_id.clone(),
+                        row_hash: None,
+                        status: '-',
+                    },
+                )]
             })
             .unwrap_or_default(),
         HOLD_UNKNOWN => evidence
@@ -1900,6 +1900,7 @@ mod tests {
                 path: "Projects/Job.md".to_string(),
                 line: 7,
                 block_id: Some("task-7".to_string()),
+                row_hash: None,
                 status: 'x',
             }],
             saved_ids: vec!["cc03".to_string()],
@@ -1918,6 +1919,7 @@ mod tests {
                 path: "Projects/Job.md".to_string(),
                 line: 3,
                 block_id: None,
+                row_hash: Some("a".repeat(64)),
                 status: 'x',
             }],
             saved_ids: vec!["aa01".to_string()],
@@ -1942,6 +1944,10 @@ mod tests {
         let forward = digest(&[left.clone(), right.clone()]);
         assert_eq!(forward.len(), 64);
         assert_eq!(digest(&[right.clone(), left.clone()]), forward);
+
+        let mut shifted = left.clone();
+        shifted.tasks[0].line += 20;
+        assert_eq!(digest(&[shifted, right.clone()]), forward);
 
         let mut changed = left.clone();
         changed.saved_ids = vec!["zz99".to_string()];

@@ -1343,6 +1343,7 @@ mod tests {
                 path: "job.md".into(),
                 line: 7,
                 block_id: Some("src".into()),
+                row_hash: None,
                 status: '-',
             }],
             hint: "fix or remove the merged-into link on job.md:7 (missing_note); or archive the thread by hand"
