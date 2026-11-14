@@ -373,7 +373,8 @@ list -p` and writes nothing, so athena never creates period notes.
 requested period and its typical-history window. It does not create notes. The
 report is the source for both the stats strip and the parts table; clients use
 the supplied display strings, labels, review states, and catalogs without
-recomputing them.
+recomputing them. A read-only Bank Badge follows each period Stats Strip for
+the same period when it has counted money or waiting rows.
 
 The schema-1 JSON object has these top-level members:
 

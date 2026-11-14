@@ -58,6 +58,12 @@ per-note Ready cap and `## Tasks` status grouping. `offclock: true|false` sets t
 Each area or project also lists its descendant albums in a machine-owned `## Albums`
 catalog maintained by `bob albums sync`, beside the `## Notebooks` catalog.
 
+### Bank Badge {#bank-badge}
+
+*Aliases: bank chip, daily bank chip.*
+
+A read-only money summary that follows one [Day Strip](#day-strip) or [Stats Strip](#stats-strip) and covers exactly that strip's period: a day, ISO week, quarter, ISO week-year, or all time over the bank's own history. bob supplies the counted totals, waiting [Bank Row](#bank-row)s, and coverage from `bob bank report`. In counts `income` and `refund` inflows; Out counts outflows except transfers and cash-account rows. Each side appears only above $0.00, and the badge hides when both sides and period waiting are zero. In uses a `+` and green ink, Out uses body ink, and waiting uses warning ink. The chrome tints green only when In exceeds Out; otherwise it is neutral for counted money or amber for waiting without money. Color never carries meaning alone, and the badge names partial coverage. Its tooltip includes exact cents, excluded money, largest outflows, waiting, and coverage. Click, Enter, or Space opens the oldest waiting row, a day heading, the single [Bank Month Note](#bank-month-note), or `bank.md`; it never creates a note or writes the vault. `stats.bank_badge` (alias `stats.bank_chip`) controls every host. The badge is not a Stats metric, not a `bob-bank` card, and does not appear in `bob-period-parts`.
+
 ### Bank Month Note {#bank-month-note}
 
 *Aliases: bank month, month note.*
@@ -239,6 +245,8 @@ owns every value, and it never writes the note. `## Pomodoros` no longer
 repeats its total. Facts and the bars open the [Stats Dash](#stats-dash) with the day
 pinned. "Day stats" in UI copy (`Toggle Day stats`, `stats.day_strip`).
 Not the [Morning GTD Review Footer](#morning-gtd-review-footer).
+
+A [Bank Badge](#bank-badge) may follow this strip for the same day.
 
 ### Event Ack {#event-ack}
 
@@ -715,6 +723,8 @@ pinned. bob owns every value, and the strip never writes the note.
 
 Not the parts table (`bob-period-parts`), the [Stats Dash](#stats-dash), `bob stats` terminal
 output, or the [Morning GTD Review Footer](#morning-gtd-review-footer).
+
+A [Bank Badge](#bank-badge) follows each Stats Strip for the same period.
 
 ### Successor Offer {#successor-offer}
 

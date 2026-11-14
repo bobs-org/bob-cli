@@ -453,7 +453,8 @@ grouped by day, oldest first. `-a` shows all rows, and `-m` limits the
 output to one month.
 
 `report` explains one period with exact cents. Week boundaries are ISO,
-Monday first. `report -D` yields one day: that is the daily chip's data.
+Monday first. `report -D` yields one day, including the data used by a
+daily Bank Badge.
 `-p` reports any stats-strip period instead: a day, an ISO week, a
 quarter, an ISO week-year, or all time over the bank's own history.
 When the bank's tracked history or import coverage falls short of the
@@ -500,6 +501,42 @@ wait for acknowledgment; rows originally matched to typed entries stay ticked.
 An inflow with a spending category (for example, a restaurant refund
 tagged `dining`) is counted as unclassified in, and `check` gives the
 info hint `bank_inflow_category`: "use refund or income".
+
+## Bank badge
+
+A Bank Badge follows a Day or Stats Strip and summarizes exactly that
+strip's period: one day, ISO week, ISO quarter, ISO week-year, or all time
+over the bank's tracked history. The plugin reads `bob bank report`; the
+badge never writes the vault and is not a Stats fact or one of the
+`bob-bank` cards. It does not appear in `bob-period-parts`.
+
+| Report state | Badge |
+| --- | --- |
+| No counted money and no waiting rows | Hidden, with no added space |
+| In and/or Out above $0.00 | Show each present side only; In has a `+` sign |
+| No money but period waiting rows | Show the waiting count |
+| Partial coverage | Name the tracked start and, for a closed period, any short imported-through date |
+
+In counts `income` and `refund` inflows. Out counts outflows except
+transfers and cash-account rows. Waiting counts only rows in the badge's
+period. Day and week amounts show exact cents; quarter, year, and all-time
+amounts show whole dollars rounded half-up, except nonzero amounts under
+$1 retain cents. The tooltip keeps exact cents, excluded money, largest
+outflows, waiting, and coverage.
+
+In amounts use green ink, Out uses normal text, and waiting uses warning
+ink. The chrome is green only when In exceeds Out; otherwise it is neutral
+when money is shown, or warning-toned for waiting-only badges. It is never
+red or magenta, and words and signs carry the meaning without color.
+
+Activation opens the oldest waiting row when one exists. Otherwise, day
+and week badges open the first day with counted money; quarter, year, and
+all-time badges open the only month note when there is exactly one, and
+otherwise open `bank.md`. This is read-only; it never creates a note.
+
+`stats.bank_badge` in `~/.config/bob/config.yml` controls all badge hosts
+and defaults to `true`. The permanent `stats.bank_chip` alias is used only
+when `stats.bank_badge` is not a boolean.
 
 ## Account status
 

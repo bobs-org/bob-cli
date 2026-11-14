@@ -1463,7 +1463,8 @@ with the `.bob-plan` badges directly after it, in Live Preview and
 Reading view. It summarizes that note's date, called D below. Daily
 notes without a `bob-plan` block show no automatic strip. The last painted
 bar is the strip's last line, so it reads as
-the separator above the badges. `## Pomodoros` carries no total; the
+the separator above the badges. A read-only Bank Badge follows the strip
+for the same day when it has counted money or waiting rows. `## Pomodoros` carries no total; the
 strip repeats it, so the heading stays bare.
 
 Line 1 holds five facts (`worked`, `reviewed`, `done`, `created`,
@@ -1690,6 +1691,8 @@ Day stats bars` command set one view for every Day strip on the device; the
 view is remembered on this device. Period strips keep their own chart view
 and the `Cycle period stats charts` command, independent of the Day preference.
 `stats.day_strip` and `Toggle Day stats` still govern the automatic Day strip.
+`stats.bank_badge` (default `true`, with `stats.bank_chip` as an alias)
+controls the Bank Badge after every Day and period strip, including fences.
 Opening or refreshing a strip never changes note bytes and never appends
 journal events.
 
