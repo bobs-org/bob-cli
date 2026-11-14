@@ -18,12 +18,20 @@ use std::{
 use chrono::{DateTime, Utc};
 
 use super::{
+    archive_scan::scan_archive_evidence,
     enroll::{
         self, AdoptionIntent, CandidateDecision, EnrollmentEvent,
         EnrollmentFold, EnrollmentOrigin, FiledVia, Membership,
     },
-    health::{self, HealthAction, HealthConfig, HealthEvent},
+    health::{
+        self, HealthAction, HealthConfig, HealthEvent, ReopenActivityState,
+    },
     hold,
+    reopen::ReopenBatch,
+    reopen_plan::{
+        self, ReopenCandidateOutcome, ReopenDisposition, ReopenPlanContext,
+        ReopenPlanInput, ReopenTargetIdentity,
+    },
     retry::{Clock, SharedBudget, Sleeper},
     scan::{self, LinkPlacement, WatchScan, WatchTarget, WatchingTask},
     watch::{PreparedWatch, WatchFailure},
@@ -74,6 +82,44 @@ struct RecoveryData {
     /// loads with an empty list.
     #[serde(default)]
     watch: Vec<RecoveryWatch>,
+    /// Body-free reply-reopen transaction receipts. Older files omit it.
+    #[serde(default)]
+    reopen: Vec<RecoveryReopen>,
+}
+
+/// Recovery state for one exact counted reply. `pending_tasks` remains true
+/// until the coalesced mail/task postimages are durable; afterward recovery
+/// only completes the marker and never reopens the task a second time.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RecoveryReopen {
+    account: String,
+    thread_id: String,
+    message_id: String,
+    internal_date: i64,
+    effect: String,
+    #[serde(default)]
+    pending_tasks: bool,
+    #[serde(default = "default_true")]
+    pending_marker: bool,
+    #[serde(default)]
+    target: Option<RecoveryReopenTarget>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RecoveryReopenTarget {
+    path: String,
+    #[serde(default)]
+    line: usize,
+    #[serde(default)]
+    block_id: Option<String>,
+    #[serde(default)]
+    restored: bool,
+    #[serde(default)]
+    postimage_sha256: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// One owned path as sync wrote it, with the SHA-256 of its bytes. Replay
@@ -153,6 +199,44 @@ pub(crate) fn recovery_presence(
         }
         Ok(_) => RecoveryPresence::Unreadable,
     }
+}
+
+/// Reply threads whose local task postimages still need transaction replay.
+/// A marker-only receipt has `pending_tasks = false` and needs no Gmail read.
+pub(crate) fn reopen_recovery_thread_ids(
+    vault: &Path,
+    account: &str,
+) -> BTreeSet<String> {
+    load_recovery(vault, account)
+        .ok()
+        .into_iter()
+        .flat_map(|data| data.reopen)
+        .filter(|item| {
+            item.account.eq_ignore_ascii_case(account) && item.pending_tasks
+        })
+        .filter_map(|item| ThreadKey::new(&item.account, &item.thread_id))
+        .map(|key| key.thread_id().to_string())
+        .collect()
+}
+
+/// Reply threads whose postimages are already durable and only their marker
+/// remains. They must be replayed locally without hydrating the thread again.
+pub(crate) fn reopen_marker_thread_ids(
+    vault: &Path,
+    account: &str,
+) -> BTreeSet<String> {
+    load_recovery(vault, account)
+        .ok()
+        .into_iter()
+        .flat_map(|data| data.reopen)
+        .filter(|item| {
+            item.account.eq_ignore_ascii_case(account)
+                && !item.pending_tasks
+                && item.pending_marker
+        })
+        .filter_map(|item| ThreadKey::new(&item.account, &item.thread_id))
+        .map(|key| key.thread_id().to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -310,7 +394,8 @@ fn persist_recovery(
 ) -> bool {
     let empty = data.threads.is_empty()
         && data.commit_paths.is_empty()
-        && data.watch.is_empty();
+        && data.watch.is_empty()
+        && data.reopen.is_empty();
     let result = if empty {
         clear_recovery(vault, account)
     } else {
@@ -480,6 +565,9 @@ pub(crate) struct FilingInput<'a> {
     pub(crate) watch_failures: Vec<WatchFailure>,
     /// Threads whose metadata reads deferred when the retry budget gave up.
     pub(crate) watch_deferred: Vec<ThreadKey>,
+    /// Closed-thread activity candidates and their proposed account cursor.
+    /// `None` means `gmail.sync.reopen` is off.
+    pub(crate) reopen_batch: Option<ReopenBatch>,
     /// Calendar-day wait for hold nudges. Read from Gmail config by the
     /// command; tests pass the default.
     pub(crate) reply_wait_days: u32,
@@ -544,6 +632,10 @@ pub(crate) struct FilingOutcome {
     /// First-time gone reports; they are warning/human rows, not `watch[]`
     /// actions because the public watch action set has no `gone` value.
     pub(crate) watch_gone: Vec<WatchGoneOutcome>,
+    /// Typed reply-reopen results for the report layer.
+    pub(crate) reopen_outcomes: Vec<ReopenCandidateOutcome>,
+    /// Proposed host-local cursor and whether the complete search can settle.
+    pub(crate) reopen_activity: Option<(ReopenActivityState, bool)>,
     /// Threads whose health warning/refile touched the vault this run
     /// (SetWarning, ClearWarning, or Refile that staged bytes). Used for the
     /// commit subject so warning-only and refile-only runs count.
@@ -577,6 +669,9 @@ struct AttemptPlan {
     watch_turns: Vec<crate::native::gmail::sync::watch_state::AppliedTurn>,
     watch_gone: Vec<ThreadKey>,
     watch_pending: Vec<RecoveryWatch>,
+    reopen_pending: Vec<RecoveryReopen>,
+    reopen_activity: Option<(ReopenActivityState, bool)>,
+    reopen_retry_ids: Vec<ThreadKey>,
     health_events: Vec<HealthEvent>,
 }
 
@@ -643,6 +738,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             input.watches,
             input.watch_failures,
             input.watch_deferred,
+            input.reopen_batch,
             input.reply_wait_days,
             input.health.as_ref(),
             &watch_journal,
@@ -708,7 +804,10 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
     let mut watches = input.watches;
     let mut watch_failures = input.watch_failures;
     let mut watch_deferred = input.watch_deferred;
+    let mut reopen_batch = input.reopen_batch;
     let reply_wait_days = input.reply_wait_days;
+    let mut stale_reopen_activity: Option<(ReopenActivityState, bool)> = None;
+    let mut stale_reopen_outcomes = Vec::new();
     // Watch keys for deferral when a stale-line retry drops watch work.
     let watch_keys: Vec<ThreadKey> = watches
         .iter()
@@ -757,6 +856,11 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
         } else {
             watch_keys.clone()
         };
+        let attempt_reopens = if attempt == 0 {
+            reopen_batch.take()
+        } else {
+            None
+        };
 
         let plan = build_attempt(
             input.vault,
@@ -776,6 +880,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             attempt_watches,
             attempt_failures,
             attempt_deferred,
+            attempt_reopens,
             reply_wait_days,
             input.health.as_ref(),
             &watch_journal,
@@ -793,6 +898,11 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             Ok(mut outcome) => {
                 outcome.failed |= pre_failed;
                 outcome.warnings.extend(pre_warnings);
+                if let Some((activity, ready)) = stale_reopen_activity.take() {
+                    outcome.reopen_activity = Some((activity, ready));
+                    outcome.reopen_outcomes.append(&mut stale_reopen_outcomes);
+                    outcome.failed = true;
+                }
                 refresh_watch_membership(
                     input.vault,
                     input.mail_folder,
@@ -804,6 +914,34 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             Err((error, plan))
                 if error.kind() == "note_changed" && attempt == 0 =>
             {
+                if let Some((mut activity, ready)) =
+                    plan.reopen_activity.clone()
+                {
+                    for key in &plan.reopen_retry_ids {
+                        activity
+                            .retry_thread_ids
+                            .insert(key.thread_id().to_string());
+                    }
+                    for mut reopen in plan.outcome.reopen_outcomes.clone() {
+                        if reopen.pending_marker
+                            || reopen.disposition != ReopenDisposition::NoOp
+                        {
+                            activity
+                                .retry_thread_ids
+                                .insert(reopen.key.thread_id().to_string());
+                            reopen.disposition =
+                                ReopenDisposition::TransientDeferred;
+                            reopen.reason = "snapshot_changed".to_string();
+                            reopen.hint = Some(
+                                "the vault changed during apply; retry the reply".to_string(),
+                            );
+                            reopen.pending_marker = false;
+                            reopen.target = None;
+                            stale_reopen_outcomes.push(reopen);
+                        }
+                    }
+                    stale_reopen_activity = Some((activity, ready));
+                }
                 candidates = plan.into_retry_candidates();
             }
             Err((error, plan)) if error.kind() == "note_changed" => {
@@ -818,6 +956,10 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
                     .retain(|result| !outcome.deferred.contains(&result.key));
                 outcome.failed = true;
                 outcome.changed = false;
+                if let Some((activity, ready)) = stale_reopen_activity.take() {
+                    outcome.reopen_activity = Some((activity, ready));
+                    outcome.reopen_outcomes.append(&mut stale_reopen_outcomes);
+                }
                 outcome.warnings.push(
                     "vault files changed again during filing; remaining threads were deferred".to_string(),
                 );
@@ -840,6 +982,37 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
     unreachable!("the filing retry loop returns after its bounded attempts")
 }
 
+fn defer_reopen(
+    outcome: &mut FilingOutcome,
+    activity: &mut Option<(ReopenActivityState, bool)>,
+    retry_ids: &mut Vec<ThreadKey>,
+    key: &ThreadKey,
+    kind: &str,
+    message: &str,
+) {
+    outcome.failed = true;
+    outcome.failures.push(FilingFailure {
+        key: key.clone(),
+        kind: kind.to_string(),
+        message: message.to_string(),
+    });
+    outcome.warnings.push(format!(
+        "deferred Gmail reply reopening for {}: {message}",
+        key.thread_id()
+    ));
+    if !outcome.deferred.contains(key) {
+        outcome.deferred.push(key.clone());
+    }
+    if !retry_ids.contains(key) {
+        retry_ids.push(key.clone());
+    }
+    if let Some((activity, _)) = activity {
+        activity
+            .retry_thread_ids
+            .insert(key.thread_id().to_string());
+    }
+}
+
 fn build_attempt(
     vault: &Path,
     mail_folder: &Path,
@@ -858,6 +1031,7 @@ fn build_attempt(
     mut watches: Vec<PreparedWatch>,
     watch_failures: Vec<WatchFailure>,
     watch_deferred: Vec<ThreadKey>,
+    reopen_batch: Option<ReopenBatch>,
     reply_wait_days: u32,
     health: Option<&HealthConfig>,
     watch_journal: &WatchJournal,
@@ -963,6 +1137,149 @@ fn build_attempt(
             ),
             CandidateDecision::File => {
                 outcome.deferred.push(intent.key.clone());
+            }
+        }
+    }
+
+    let mut reopen_inputs = Vec::new();
+    let mut reopen_activity = None;
+    let mut reopen_retry_ids = Vec::new();
+    if let Some(batch) = reopen_batch {
+        reopen_activity =
+            Some((batch.proposed_activity.clone(), batch.search_complete));
+        outcome.warnings.extend(batch.warnings);
+        outcome.failed |= !batch.search_complete;
+        for failure in batch.failures {
+            outcome.failed = true;
+            outcome.failures.push(FilingFailure {
+                key: failure.key.clone(),
+                kind: failure.kind.clone(),
+                message: failure.message.clone(),
+            });
+            outcome.warnings.push(format!(
+                "could not prepare Gmail reply reopening for {}: {}: {}",
+                failure.key.thread_id(),
+                failure.kind,
+                failure.message
+            ));
+        }
+        for key in batch.deferred {
+            if !outcome.deferred.contains(&key) {
+                outcome.deferred.push(key.clone());
+            }
+            reopen_retry_ids.push(key);
+        }
+
+        let archive = (|| {
+            let relations = crate::native::config::load_relations_config(
+                &crate::native::config::config_path(),
+            )
+            .map_err(|error| error.to_string())?;
+            scan_archive_evidence(vault, mail_folder, index, &relations)
+                .map_err(|error| {
+                    format!("{}: {}", error.kind(), error.message())
+                })
+        })();
+        match archive {
+            Ok(archive) if archive.scan_complete() => {
+                for candidate in batch.candidates {
+                    let key = candidate.key.clone();
+                    let Some(evidence) = archive.evidence(&key) else {
+                        defer_reopen(
+                            &mut outcome,
+                            &mut reopen_activity,
+                            &mut reopen_retry_ids,
+                            &key,
+                            "stale_evidence",
+                            "the closed task evidence changed before apply",
+                        );
+                        continue;
+                    };
+                    if !archive.archivable(evidence) {
+                        defer_reopen(
+                            &mut outcome,
+                            &mut reopen_activity,
+                            &mut reopen_retry_ids,
+                            &key,
+                            "stale_evidence",
+                            "the thread no longer has complete closed-task evidence",
+                        );
+                        continue;
+                    }
+                    let identity = &candidate.save.confirmed.identity;
+                    let has_message =
+                        candidate.save.confirmed.thread.messages.iter().any(
+                            |message| {
+                                message
+                                    .id
+                                    .eq_ignore_ascii_case(&candidate.message_id)
+                            },
+                        );
+                    if !identity.account.eq_ignore_ascii_case(key.account())
+                        || !identity
+                            .thread_id
+                            .eq_ignore_ascii_case(key.thread_id())
+                        || !has_message
+                    {
+                        defer_reopen(
+                            &mut outcome,
+                            &mut reopen_activity,
+                            &mut reopen_retry_ids,
+                            &key,
+                            "identity_changed",
+                            "the prepared reply identity changed before apply",
+                        );
+                        continue;
+                    }
+                    let mut plan_input = ReopenPlanInput::from(&candidate);
+                    plan_input.evidence = evidence.clone();
+                    let key_tuple = key.index_key();
+                    if works.contains_key(&key_tuple) {
+                        defer_reopen(
+                            &mut outcome,
+                            &mut reopen_activity,
+                            &mut reopen_retry_ids,
+                            &key,
+                            "duplicate_work",
+                            "the same Gmail thread already has a save in this transaction",
+                        );
+                        continue;
+                    }
+                    works.insert(key_tuple, candidate.save);
+                    reopen_inputs.push(plan_input);
+                }
+            }
+            Ok(_) => {
+                outcome.failed = true;
+                outcome.warnings.push(
+                    "closed-thread evidence became incomplete before apply; reopening work is held".to_string(),
+                );
+                for candidate in batch.candidates {
+                    defer_reopen(
+                        &mut outcome,
+                        &mut reopen_activity,
+                        &mut reopen_retry_ids,
+                        &candidate.key,
+                        "incomplete_evidence",
+                        "the vault scan became incomplete before apply",
+                    );
+                }
+            }
+            Err(error) => {
+                outcome.failed = true;
+                outcome.warnings.push(format!(
+                    "could not revalidate closed-thread evidence: {error}"
+                ));
+                for candidate in batch.candidates {
+                    defer_reopen(
+                        &mut outcome,
+                        &mut reopen_activity,
+                        &mut reopen_retry_ids,
+                        &candidate.key,
+                        "evidence_unavailable",
+                        "closed-task evidence could not be revalidated",
+                    );
+                }
             }
         }
     }
@@ -1339,6 +1656,18 @@ fn build_attempt(
             }
         }
     }
+    let reopen_pending = apply_reopen_plan(
+        vault,
+        timezone,
+        watchers,
+        &plans,
+        &mut staged,
+        &mut task_commit_paths,
+        reopen_inputs,
+        &mut reopen_activity,
+        &mut reopen_retry_ids,
+        &mut outcome,
+    );
     apply_born_held(
         vault,
         timezone,
@@ -1368,6 +1697,7 @@ fn build_attempt(
     );
     outcome.watch_threads = watch_plan.outcomes;
     outcome.watch_gone = watch_plan.gone;
+    outcome.reopen_activity = reopen_activity;
     for key in &watch_deferred {
         if !outcome.deferred.contains(key) {
             outcome.deferred.push(key.clone());
@@ -1387,6 +1717,7 @@ fn build_attempt(
         || !health_events.is_empty();
     outcome.applied = true;
 
+    let reopen_activity = outcome.reopen_activity.clone();
     Ok(AttemptPlan {
         outcome,
         works,
@@ -1399,8 +1730,226 @@ fn build_attempt(
         watch_turns: watch_plan.receipts.turns,
         watch_gone: watch_plan.receipts.gone,
         watch_pending: watch_plan.pending,
+        reopen_pending,
+        reopen_activity,
+        reopen_retry_ids,
         health_events,
     })
+}
+
+fn apply_reopen_plan(
+    vault: &Path,
+    timezone: chrono_tz::Tz,
+    watchers: &WatchScan,
+    saves: &[StagedSaveNote],
+    staged: &mut Vec<StagedTextFile>,
+    task_commit_paths: &mut Vec<PathBuf>,
+    inputs: Vec<ReopenPlanInput>,
+    activity: &mut Option<(ReopenActivityState, bool)>,
+    retry_ids: &mut Vec<ThreadKey>,
+    outcome: &mut FilingOutcome,
+) -> Vec<RecoveryReopen> {
+    let mut valid = Vec::new();
+    for input in inputs {
+        let saved = saves.iter().any(|save| {
+            save.account.eq_ignore_ascii_case(input.key.account())
+                && save.thread_id.eq_ignore_ascii_case(input.key.thread_id())
+                && crate::native::gmail::note::parse::parse(&save.updated)
+                    .is_ok_and(|parsed| {
+                        parsed.cards.iter().any(|card| {
+                            card.id.eq_ignore_ascii_case(&input.message_id)
+                        })
+                    })
+        });
+        if saved {
+            valid.push(input);
+        } else {
+            defer_reopen(
+                outcome,
+                activity,
+                retry_ids,
+                &input.key,
+                "message_not_saved",
+                "the exact reply card was not staged in the managed mail note",
+            );
+        }
+    }
+    if valid.is_empty() {
+        return Vec::new();
+    }
+
+    let snapshot = match load_reopen_snapshot(vault, staged) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            for input in &valid {
+                defer_reopen(
+                    outcome,
+                    activity,
+                    retry_ids,
+                    &input.key,
+                    "snapshot_unavailable",
+                    &error,
+                );
+            }
+            return Vec::new();
+        }
+    };
+    let original_notes = snapshot.notes.clone();
+    let (blocked_ok, blocked_reason) = hold::blocked_status_for_hold(vault);
+    let today = bob_env::current_datetime().date();
+    let today_identities = watchers
+        .tasks()
+        .iter()
+        .filter_map(|task| {
+            task.block_id
+                .as_ref()
+                .map(|id| (task.path.clone(), id.clone()))
+        })
+        .collect();
+    let plan = reopen_plan::plan_reopens(
+        snapshot,
+        &valid,
+        &ReopenPlanContext {
+            timezone,
+            today,
+            blocked_ok,
+            blocked_reason,
+            today_identities,
+        },
+    );
+    let mut pending = Vec::new();
+    for (input, mut result) in valid.iter().zip(plan.outcomes) {
+        match result.disposition {
+            ReopenDisposition::TransientDeferred => {
+                defer_reopen(
+                    outcome,
+                    activity,
+                    retry_ids,
+                    &input.key,
+                    &result.reason,
+                    result.hint.as_deref().unwrap_or(
+                        "the task changed before reply reopening completed",
+                    ),
+                );
+            }
+            ReopenDisposition::PermanentRefusal => {
+                // A deterministic refusal still consumes this exact reply
+                // once its mail card is durable; the user gets one manual
+                // restore/reopen hint rather than a warning on every poll.
+                result.pending_marker = true;
+                outcome.failed = true;
+                outcome.failures.push(FilingFailure {
+                    key: input.key.clone(),
+                    kind: result.reason.clone(),
+                    message: result.hint.clone().unwrap_or_else(|| {
+                        "Gmail cannot reopen this task shape".to_string()
+                    }),
+                });
+                outcome.warnings.push(format!(
+                    "could not reopen Gmail-linked task for {}: {}{}",
+                    input.key.thread_id(),
+                    result.reason,
+                    result
+                        .hint
+                        .as_deref()
+                        .map(|hint| format!(" — {hint}"))
+                        .unwrap_or_default()
+                ));
+            }
+            ReopenDisposition::Applied | ReopenDisposition::NoOp => {}
+        }
+
+        if result.pending_marker {
+            let target = result
+                .target
+                .as_ref()
+                .map(|target| recovery_reopen_target(target, &plan.snapshot));
+            pending.push(RecoveryReopen {
+                account: input.key.account().to_string(),
+                thread_id: input.key.thread_id().to_string(),
+                message_id: input.message_id.to_ascii_lowercase(),
+                internal_date: input.message_at.timestamp_millis(),
+                effect: if input.bounced { "bounced" } else { "lift" }
+                    .to_string(),
+                pending_tasks: true,
+                pending_marker: true,
+                target,
+            });
+        }
+        outcome.reopen_outcomes.push(result);
+    }
+
+    for (relative, updated) in &plan.snapshot.notes {
+        if original_notes.get(relative) == Some(updated) {
+            continue;
+        }
+        let target = vault.join(relative);
+        write_overlay(
+            staged,
+            task_commit_paths,
+            &target,
+            &save::path_to_slashes(relative),
+            updated.clone(),
+        );
+    }
+    pending
+}
+
+fn recovery_reopen_target(
+    target: &ReopenTargetIdentity,
+    snapshot: &VaultSnapshot,
+) -> RecoveryReopenTarget {
+    let postimage_sha256 = snapshot
+        .notes
+        .get(Path::new(&target.path))
+        .map(|text| save::sha256(text.as_bytes()));
+    RecoveryReopenTarget {
+        path: target.path.clone(),
+        line: target.line,
+        block_id: target.block_id.clone(),
+        restored: target.restored,
+        postimage_sha256,
+    }
+}
+
+fn load_reopen_snapshot(
+    vault: &Path,
+    staged: &[StagedTextFile],
+) -> Result<VaultSnapshot, String> {
+    let paths = crate::native::collect_done::link_repair_markdown_files(vault)
+        .map_err(|error| format!("could not enumerate task notes: {error}"))?;
+    let mut notes = BTreeMap::new();
+    for path in paths {
+        let relative = path
+            .strip_prefix(vault)
+            .map_err(|error| format!("task note escaped the vault: {error}"))?
+            .to_path_buf();
+        let bytes = fs::read(&path).map_err(|error| {
+            format!("could not read {}: {error}", relative.display())
+        })?;
+        let contents = String::from_utf8(bytes).map_err(|_| {
+            format!("{} is not valid UTF-8", relative.display())
+        })?;
+        notes.insert(relative, contents);
+    }
+    for file in staged {
+        if !file
+            .target
+            .extension()
+            .is_some_and(|extension| extension == "md")
+        {
+            continue;
+        }
+        let relative = file
+            .target
+            .strip_prefix(vault)
+            .map_err(|error| {
+                format!("staged task note escaped the vault: {error}")
+            })?
+            .to_path_buf();
+        notes.insert(relative, file.updated_target.clone());
+    }
+    Ok(VaultSnapshot::from_notes(notes))
 }
 
 /// Newly filed rows are born held when their thread is outgoing-last.
@@ -1948,6 +2497,85 @@ fn write_overlay(
     }
 }
 
+fn dedup_reopen_pending(
+    pending: impl IntoIterator<Item = RecoveryReopen>,
+) -> Vec<RecoveryReopen> {
+    let mut by_key: BTreeMap<(String, String, String), RecoveryReopen> =
+        BTreeMap::new();
+    for mut item in pending {
+        item.account.make_ascii_lowercase();
+        item.thread_id.make_ascii_lowercase();
+        item.message_id.make_ascii_lowercase();
+        let key = (
+            item.account.clone(),
+            item.thread_id.clone(),
+            item.message_id.clone(),
+        );
+        match by_key.get_mut(&key) {
+            Some(existing) => {
+                // Once the postimages are durable, that fact wins over an
+                // older prewrite intent. Keep the newest concrete locator.
+                existing.pending_tasks &= item.pending_tasks;
+                existing.pending_marker |= item.pending_marker;
+                if item.target.is_some() {
+                    existing.target = item.target;
+                }
+                existing.effect = item.effect;
+                existing.internal_date = item.internal_date;
+            }
+            None => {
+                by_key.insert(key, item);
+            }
+        }
+    }
+    by_key.into_values().collect()
+}
+
+fn reopen_after_durable_writes(
+    recovery: &RecoveryData,
+    plan: &AttemptPlan,
+) -> Vec<RecoveryReopen> {
+    dedup_reopen_pending(recovery.reopen.iter().cloned().chain(
+        plan.reopen_pending.iter().cloned().map(|mut item| {
+            item.pending_tasks = false;
+            item
+        }),
+    ))
+}
+
+fn same_reopen(left: &RecoveryReopen, right: &RecoveryReopen) -> bool {
+    left.account.eq_ignore_ascii_case(&right.account)
+        && left.thread_id.eq_ignore_ascii_case(&right.thread_id)
+        && left.message_id.eq_ignore_ascii_case(&right.message_id)
+}
+
+fn applied_reopen_turn(
+    receipt: &RecoveryReopen,
+) -> Option<super::watch_state::AppliedTurn> {
+    let key = ThreadKey::new(&receipt.account, &receipt.thread_id)?;
+    let effect = match receipt.effect.as_str() {
+        "lift" => super::watch_state::AppliedEffect::Lift,
+        "bounced" => super::watch_state::AppliedEffect::Bounced,
+        _ => return None,
+    };
+    if receipt.message_id.is_empty()
+        || !receipt
+            .message_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || receipt.internal_date < 0
+    {
+        return None;
+    }
+    Some(super::watch_state::AppliedTurn {
+        key,
+        message_id: receipt.message_id.to_ascii_lowercase(),
+        internal_date: receipt.internal_date,
+        turn: crate::native::gmail::turn::Turn::Yours,
+        effect,
+    })
+}
+
 fn persist_attempt(
     vault: &Path,
     account: &str,
@@ -1973,6 +2601,38 @@ fn persist_attempt(
             Ok(paths) => paths,
             Err(error) => return Err((error, plan)),
         };
+    // Persist the exact reply and target intent before any mail/task bytes
+    // change. Recovery can then replan an unapplied candidate or finish only
+    // the marker after its postimages have landed.
+    if !plan.reopen_pending.is_empty() {
+        let reopen = dedup_reopen_pending(
+            recovery
+                .reopen
+                .iter()
+                .cloned()
+                .chain(plan.reopen_pending.iter().cloned()),
+        );
+        let persisted = persist_recovery(
+            &mut plan.outcome,
+            vault,
+            account,
+            &RecoveryData {
+                threads: recovery.threads.clone(),
+                commit_paths: recovery.commit_paths.clone(),
+                watch: recovery.watch.clone(),
+                reopen,
+            },
+        );
+        if !persisted {
+            return Err((
+                GmailError::runtime(
+                    "sync_recovery",
+                    "could not persist Gmail reply-reopen recovery evidence before writes".to_string(),
+                ),
+                plan,
+            ));
+        }
+    }
     let created_images = match save::write_prepared_batch(
         vault,
         &plan.works,
@@ -1983,6 +2643,23 @@ fn persist_attempt(
         Err(error) => {
             // A failed text batch must remove only images this attempt
             // created, preserving the save transaction's rollback rule.
+            if !plan.reopen_pending.is_empty() {
+                let cleared = persist_recovery(
+                    &mut plan.outcome,
+                    vault,
+                    account,
+                    recovery,
+                );
+                if !cleared {
+                    return Err((
+                        GmailError::runtime(
+                            "sync_recovery",
+                            "the vault batch failed and its reply-reopen intent could not be cleared".to_string(),
+                        ),
+                        plan,
+                    ));
+                }
+            }
             return Err((error, plan));
         }
     };
@@ -2091,6 +2768,7 @@ fn persist_attempt(
                     threads,
                     commit_paths: commit_hashes,
                     watch,
+                    reopen: reopen_after_durable_writes(recovery, &plan),
                 },
             )
             .err();
@@ -2109,6 +2787,37 @@ fn persist_attempt(
                 plan,
             ));
         }
+    }
+
+    // Checkpoint that the coalesced postimages have landed before any reply
+    // marker can advance. If this write fails, the prewrite intent remains
+    // and retries can detect the exact log without reopening a reclosed row.
+    let mut reopen_pending = reopen_after_durable_writes(recovery, &plan);
+    let mut reopen_checkpoint_ok = true;
+    if !reopen_pending.is_empty() {
+        let watch = dedup_watch_pending(
+            recovery
+                .watch
+                .iter()
+                .cloned()
+                .chain(plan.watch_pending.iter().cloned())
+                .chain(
+                    plan.watch_turns
+                        .iter()
+                        .map(|turn| recovery_watch_for_turn(turn, false)),
+                ),
+        );
+        reopen_checkpoint_ok = persist_recovery(
+            &mut plan.outcome,
+            vault,
+            account,
+            &RecoveryData {
+                threads: recovery.threads.clone(),
+                commit_paths: Vec::new(),
+                watch,
+                reopen: reopen_pending.clone(),
+            },
+        );
     }
 
     let host = vault_sync::hostname_slug();
@@ -2301,37 +3010,40 @@ fn persist_attempt(
         });
     }
 
-    let persist_journal =
-        |outcome: &mut FilingOutcome, works: &[JournalWork]| -> bool {
-            let threads: Vec<RecoveryThread> = works
+    let persist_journal = |outcome: &mut FilingOutcome,
+                           works: &[JournalWork],
+                           reopen: &[RecoveryReopen]|
+     -> bool {
+        let threads: Vec<RecoveryThread> = works
+            .iter()
+            .filter(|work| {
+                work.thread.pending_save
+                    || !work.thread.pending_origins.is_empty()
+                    || work.thread.pending_enrollment
+            })
+            .map(|work| work.thread.clone())
+            .collect();
+        // Preserve both prior watch evidence and this run's deferred
+        // turns so a filing journal failure never drops watch work.
+        let watch = dedup_watch_pending(
+            recovery
+                .watch
                 .iter()
-                .filter(|work| {
-                    work.thread.pending_save
-                        || !work.thread.pending_origins.is_empty()
-                        || work.thread.pending_enrollment
-                })
-                .map(|work| work.thread.clone())
-                .collect();
-            // Preserve both prior watch evidence and this run's deferred
-            // turns so a filing journal failure never drops watch work.
-            let watch = dedup_watch_pending(
-                recovery
-                    .watch
-                    .iter()
-                    .cloned()
-                    .chain(plan.watch_pending.iter().cloned()),
-            );
-            persist_recovery(
-                outcome,
-                vault,
-                account,
-                &RecoveryData {
-                    threads,
-                    commit_paths: Vec::new(),
-                    watch,
-                },
-            )
-        };
+                .cloned()
+                .chain(plan.watch_pending.iter().cloned()),
+        );
+        persist_recovery(
+            outcome,
+            vault,
+            account,
+            &RecoveryData {
+                threads,
+                commit_paths: Vec::new(),
+                watch,
+                reopen: reopen.to_vec(),
+            },
+        )
+    };
 
     // Save events first. A failure keeps the save and origin stages pending
     // and blocks that thread's enrollment until a replay succeeds. A
@@ -2357,7 +3069,8 @@ fn persist_attempt(
             )
         {
             works[index].thread.pending_save = false;
-            checkpoint_ok = persist_journal(&mut plan.outcome, &works);
+            checkpoint_ok =
+                persist_journal(&mut plan.outcome, &works, &reopen_pending);
             continue;
         }
         let result = save::append_save_event(
@@ -2374,7 +3087,8 @@ fn persist_attempt(
             continue;
         }
         works[index].thread.pending_save = false;
-        checkpoint_ok = persist_journal(&mut plan.outcome, &works);
+        checkpoint_ok =
+            persist_journal(&mut plan.outcome, &works, &reopen_pending);
     }
     // Origin events next, only for threads whose save stage is done.
     // Checkpoint each successful origin separately so a later interruption
@@ -2397,7 +3111,11 @@ fn persist_attempt(
                 {
                     pending.remove(pos);
                     works[index].thread.pending_origins = pending.clone();
-                    checkpoint_ok = persist_journal(&mut plan.outcome, &works);
+                    checkpoint_ok = persist_journal(
+                        &mut plan.outcome,
+                        &works,
+                        &reopen_pending,
+                    );
                     if !checkpoint_ok {
                         break;
                     }
@@ -2419,8 +3137,11 @@ fn persist_attempt(
                     Ok(_) => {
                         pending.remove(pos);
                         works[index].thread.pending_origins = pending.clone();
-                        checkpoint_ok =
-                            persist_journal(&mut plan.outcome, &works);
+                        checkpoint_ok = persist_journal(
+                            &mut plan.outcome,
+                            &works,
+                            &reopen_pending,
+                        );
                         if !checkpoint_ok {
                             break;
                         }
@@ -2465,7 +3186,8 @@ fn persist_attempt(
                 && fold.is_enrolled(&works[index].key)
             {
                 works[index].thread.pending_enrollment = false;
-                checkpoint_ok = persist_journal(&mut plan.outcome, &works);
+                checkpoint_ok =
+                    persist_journal(&mut plan.outcome, &works, &reopen_pending);
                 continue;
             }
             if let Err(error) =
@@ -2481,7 +3203,8 @@ fn persist_attempt(
                 continue;
             }
             works[index].thread.pending_enrollment = false;
-            checkpoint_ok = persist_journal(&mut plan.outcome, &works);
+            checkpoint_ok =
+                persist_journal(&mut plan.outcome, &works, &reopen_pending);
         }
     }
     // Surface recovered threads in this run's outcome so counts, watch
@@ -2529,6 +3252,146 @@ fn persist_attempt(
     plan.outcome
         .results
         .sort_by(|left, right| left.key.cmp(&right.key));
+
+    // Reply markers follow durable mail/task/restore postimages. The
+    // recovery receipt is body-free and remains until the marker is safely
+    // recorded, so a retry never reopens a task that was reclosed meanwhile.
+    if reopen_checkpoint_ok {
+        let mut fresh = match WatchJournal::load(vault) {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                plan.outcome.failed = true;
+                plan.outcome.warnings.push(format!(
+                    "could not read Gmail reply markers before recovery: {error}"
+                ));
+                reopen_checkpoint_ok = false;
+                WatchJournal::default()
+            }
+        };
+        if reopen_checkpoint_ok {
+            for receipt in reopen_pending.clone() {
+                if receipt.pending_tasks {
+                    plan.outcome.failed = true;
+                    if let Some(key) =
+                        ThreadKey::new(&receipt.account, &receipt.thread_id)
+                    {
+                        if !plan.outcome.deferred.contains(&key) {
+                            plan.outcome.deferred.push(key.clone());
+                        }
+                        if let Some((activity, _)) =
+                            plan.reopen_activity.as_mut()
+                        {
+                            activity
+                                .retry_thread_ids
+                                .insert(key.thread_id().to_string());
+                        }
+                    }
+                    continue;
+                }
+                if !receipt.pending_marker {
+                    continue;
+                }
+                let Some(turn) = applied_reopen_turn(&receipt) else {
+                    plan.outcome.failed = true;
+                    plan.outcome.warnings.push(
+                    "skipped stored reply-reopen recovery with an invalid identity or effect".to_string(),
+                );
+                    continue;
+                };
+                if fresh.marker(&turn.key).is_some_and(|marker| {
+                    (marker.internal_date, marker.message_id.as_str())
+                        >= (turn.internal_date, turn.message_id.as_str())
+                }) {
+                    let mut remaining = reopen_pending.clone();
+                    remaining.retain(|item| !same_reopen(item, &receipt));
+                    if persist_journal(&mut plan.outcome, &works, &remaining) {
+                        reopen_pending = remaining;
+                    }
+                    continue;
+                }
+                if let Err(error) =
+                    WatchJournal::append_turn(vault, &host, &turn)
+                {
+                    plan.outcome.failed = true;
+                    plan.outcome.warnings.push(format!(
+                        "could not append Gmail reply marker for {}: {error}",
+                        turn.key.thread_id()
+                    ));
+                    if let Some((activity, _)) = plan.reopen_activity.as_mut() {
+                        activity
+                            .retry_thread_ids
+                            .insert(turn.key.thread_id().to_string());
+                    }
+                    if !plan.outcome.deferred.contains(&turn.key) {
+                        plan.outcome.deferred.push(turn.key);
+                    }
+                    reopen_checkpoint_ok = false;
+                    continue;
+                }
+                fresh = match WatchJournal::load(vault) {
+                    Ok(fresh) => fresh,
+                    Err(error) => {
+                        plan.outcome.failed = true;
+                        plan.outcome.warnings.push(format!(
+                        "could not reread Gmail reply markers after append: {error}"
+                    ));
+                        reopen_checkpoint_ok = false;
+                        WatchJournal::default()
+                    }
+                };
+                let mut remaining = reopen_pending.clone();
+                remaining.retain(|item| !same_reopen(item, &receipt));
+                if persist_journal(&mut plan.outcome, &works, &remaining) {
+                    reopen_pending = remaining;
+                } else {
+                    if let Some((activity, _)) = plan.reopen_activity.as_mut() {
+                        activity
+                            .retry_thread_ids
+                            .insert(turn.key.thread_id().to_string());
+                    }
+                    if !plan.outcome.deferred.contains(&turn.key) {
+                        plan.outcome.deferred.push(turn.key);
+                    }
+                }
+                if !reopen_checkpoint_ok {
+                    break;
+                }
+            }
+        }
+    } else {
+        for receipt in &reopen_pending {
+            if let Some(key) =
+                ThreadKey::new(&receipt.account, &receipt.thread_id)
+            {
+                if let Some((activity, _)) = plan.reopen_activity.as_mut() {
+                    activity
+                        .retry_thread_ids
+                        .insert(key.thread_id().to_string());
+                }
+                if !plan.outcome.deferred.contains(&key) {
+                    plan.outcome.deferred.push(key);
+                }
+            }
+        }
+    }
+    if let Some((mut activity, search_complete)) = plan.reopen_activity.take() {
+        for key in &plan.reopen_retry_ids {
+            activity
+                .retry_thread_ids
+                .insert(key.thread_id().to_string());
+        }
+        for receipt in &reopen_pending {
+            if let Some(key) =
+                ThreadKey::new(&receipt.account, &receipt.thread_id)
+            {
+                activity
+                    .retry_thread_ids
+                    .insert(key.thread_id().to_string());
+            }
+        }
+        plan.outcome.reopen_activity =
+            Some((activity, search_complete && reopen_checkpoint_ok));
+    }
 
     // Watch markers follow durable note/task writes and the scoped commit.
     // A running-task hold has no task write and never advances its marker;
@@ -2592,6 +3455,7 @@ fn persist_attempt(
                             .cloned()
                             .chain(watch_pending.iter().cloned()),
                     ),
+                    reopen: reopen_pending.clone(),
                 },
             );
             continue;
@@ -2622,6 +3486,7 @@ fn persist_attempt(
                             .cloned()
                             .chain(watch_pending.iter().cloned()),
                     ),
+                    reopen: reopen_pending.clone(),
                 },
             );
             if !watch_checkpoint_ok {
@@ -2667,6 +3532,7 @@ fn persist_attempt(
                             .cloned()
                             .chain(watch_pending.iter().cloned()),
                     ),
+                    reopen: reopen_pending.clone(),
                 },
             );
             let _ = error;
@@ -2696,6 +3562,7 @@ fn persist_attempt(
                             .cloned()
                             .chain(watch_pending.iter().cloned()),
                     ),
+                    reopen: reopen_pending.clone(),
                 },
             );
         }
@@ -2753,10 +3620,11 @@ fn persist_attempt(
                 threads,
                 commit_paths: Vec::new(),
                 watch,
+                reopen: reopen_pending.clone(),
             },
         );
     } else {
-        let _ = persist_journal(&mut plan.outcome, &works);
+        let _ = persist_journal(&mut plan.outcome, &works, &reopen_pending);
     }
     let _ = checkpoint_ok;
     let _ = watch_checkpoint_ok;
@@ -3900,6 +4768,7 @@ mod tests {
                 watches: Vec::new(),
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
+                reopen_batch: None,
                 reply_wait_days: 3,
                 health: None,
             },
@@ -4228,6 +5097,7 @@ mod tests {
                 watches: Vec::new(),
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
+                reopen_batch: None,
                 reply_wait_days: 3,
                 health: None,
             },
@@ -4347,6 +5217,7 @@ mod tests {
                 watches: Vec::new(),
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
+                reopen_batch: None,
                 reply_wait_days: 3,
                 health: None,
             },
@@ -4534,6 +5405,7 @@ mod tests {
                 watches: Vec::new(),
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
+                reopen_batch: None,
                 reply_wait_days: 3,
                 health: None,
             },
@@ -4619,6 +5491,7 @@ mod tests {
                 watches: Vec::new(),
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
+                reopen_batch: None,
                 reply_wait_days: 3,
                 health: None,
             },
@@ -5581,6 +6454,7 @@ mod tests {
                 watches,
                 watch_failures: Vec::new(),
                 watch_deferred: Vec::new(),
+                reopen_batch: None,
                 reply_wait_days: 3,
                 health: None,
             },

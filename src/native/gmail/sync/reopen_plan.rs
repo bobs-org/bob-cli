@@ -214,6 +214,31 @@ fn plan_one(
         Err(outcome) => return finish(candidate, outcome, None, Vec::new()),
     };
 
+    // A crash or marker-write failure can leave the task's exact REOPEN LOG
+    // entry durable while the marker is still pending. This applies to a
+    // task Bryan has since re-closed too: finish the marker without opening
+    // the task a second time.
+    if snapshot.notes.get(&located.path).is_some_and(|contents| {
+        log_has_message_card(
+            contents,
+            located.line_index,
+            &mail_stem(&candidate.evidence.note),
+            &candidate.message_id,
+        )
+    }) {
+        return finish(
+            candidate,
+            (ReopenDisposition::NoOp, "already_logged", None, true),
+            Some(ReopenTargetIdentity {
+                path: slash(&located.path),
+                line: located.line_index + 1,
+                block_id: located.block_id.clone(),
+                restored: located.in_done,
+            }),
+            Vec::new(),
+        );
+    }
+
     if POSITIVE_CLOSED.contains(&located.status) {
         apply_closed(snapshot, candidate, ctx, selected, located, relocations)
     } else if super::scan::OPEN_STATUSES.contains(&located.status) {

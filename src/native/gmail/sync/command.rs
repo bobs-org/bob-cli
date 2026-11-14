@@ -11,7 +11,7 @@ use super::{
     archive_apply, archive_notify,
     archive_preview::{self, PreviewInput},
     archive_projection,
-    archive_scan::{scan_archive_evidence, SavedIdSnapshot},
+    archive_scan::{scan_archive_evidence, ArchiveScan, SavedIdSnapshot},
     archive_state::{ArchiveJournal, ArchiveLabelIdentity},
     discover::{self, select_candidates, validate_limit},
     enroll::{EnrollmentFold, EnrollmentOrigin, Membership},
@@ -93,6 +93,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     gog.require_version()?;
     let account = resolve::resolve_account(&gog, None, config.account())?;
     let timezone = bob_env::configured_timezone().unwrap_or(chrono_tz::UTC);
+    let run_started_at = save::current_utc();
     let budget =
         SharedBudget::new(Duration::from_secs(u64::from(args.retry_timeout)));
     let sleeper = SystemSleeper;
@@ -146,6 +147,110 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     let mut warnings = Vec::new();
     warnings.extend(enrollment.warnings().iter().cloned());
     warnings.extend(watchers.warnings().iter().cloned());
+    let never_save = NeverSavePolicy::from_config(&config);
+    let mut has_run_failure = false;
+
+    // Closed-thread evidence must be frozen before watch preparation hydrates
+    // any mail notes. Reply reopening runs even when archive writes are off
+    // and when the normal discovery limit is zero.
+    let mut reopen_batch = None;
+    let mut reopen_suppressed_threads = BTreeSet::new();
+    if config.reopen_enabled() {
+        match capture_reopen_scan(&vault, folder, &index) {
+            Ok(archive_scan) => {
+                let closed_keys: BTreeSet<_> =
+                    super::reopen::eligible_closed_threads(
+                        &account,
+                        &enrollment,
+                        &archive_scan,
+                    )
+                    .into_keys()
+                    .filter_map(|thread_id| {
+                        ThreadKey::new(&account, &thread_id)
+                    })
+                    .collect();
+                match WatchJournal::load(&vault) {
+                    Ok(watch_journal) => {
+                        let mut activity =
+                            health::reopen_activity_state(&account);
+                        let recovery_keys =
+                            file::reopen_recovery_thread_ids(&vault, &account);
+                        let marker_keys =
+                            file::reopen_marker_thread_ids(&vault, &account);
+                        reopen_suppressed_threads.extend(
+                            recovery_keys
+                                .iter()
+                                .chain(marker_keys.iter())
+                                .filter_map(|thread_id| {
+                                    ThreadKey::new(&account, thread_id)
+                                }),
+                        );
+                        activity.retry_thread_ids.retain(|thread_id| {
+                            !marker_keys.contains(thread_id)
+                        });
+                        let batch = super::reopen::prepare_reopens(
+                            &coordinator,
+                            &account,
+                            &enrollment,
+                            &archive_scan,
+                            &activity,
+                            &index,
+                            &watch_journal,
+                            config.body(),
+                            &never_save,
+                            run_started_at,
+                            &recovery_keys,
+                        );
+                        if batch.aborted {
+                            return Err(coordinator.auth_abort().unwrap_or_else(
+                                || {
+                                    GmailError::runtime(
+                                        "deferred",
+                                        "closed-thread activity preparation stopped".to_string(),
+                                    )
+                                },
+                            ));
+                        }
+                        reopen_suppressed_threads.extend(
+                            batch
+                                .candidates
+                                .iter()
+                                .map(|candidate| candidate.key.clone()),
+                        );
+                        reopen_suppressed_threads.extend(
+                            batch
+                                .failures
+                                .iter()
+                                .map(|failure| failure.key.clone()),
+                        );
+                        reopen_suppressed_threads
+                            .extend(batch.deferred.iter().cloned());
+                        if !batch.search_complete {
+                            reopen_suppressed_threads
+                                .extend(closed_keys.iter().cloned());
+                        }
+                        has_run_failure |= !batch.search_complete
+                            || !batch.failures.is_empty()
+                            || !batch.deferred.is_empty();
+                        reopen_batch = Some(batch);
+                    }
+                    Err(error) => {
+                        warnings.push(format!(
+                            "could not read the Gmail watch journal for reply reopening: {error}"
+                        ));
+                        reopen_suppressed_threads.extend(closed_keys);
+                        has_run_failure = true;
+                    }
+                }
+            }
+            Err(error) => {
+                warnings.push(format!(
+                    "could not prepare closed-thread reply reopening: {error}"
+                ));
+                has_run_failure = true;
+            }
+        }
+    }
 
     // Freeze validated saved IDs before watch preparation can hydrate the
     // managed mail cards. IDs introduced by this run stay unsaved until the
@@ -161,7 +266,6 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         };
 
     let mut discovered_ids = Vec::new();
-    let mut has_run_failure = false;
     if args.limit > 0 {
         match discover::discover_ids(&coordinator, &account, label) {
             Err(error) if is_auth_abort(&error) => {
@@ -207,7 +311,6 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         extra_results.push(enrolled_row(&key, &enrollment, &index));
     }
 
-    let never_save = NeverSavePolicy::from_config(&config);
     let mut filing_candidates = Vec::new();
     let mut known_metadata = std::collections::BTreeMap::new();
     let mut fetch_deferred_keys: Vec<ThreadKey> = Vec::new();
@@ -403,6 +506,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
     let mut outcome = if filing_candidates.is_empty()
         && adoptions.is_empty()
         && !needs_recovery
+        && reopen_batch.is_none()
         && watches.is_empty()
         && watch_failures.is_empty()
         && watch_deferred.is_empty()
@@ -428,6 +532,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 watches,
                 watch_failures,
                 watch_deferred,
+                reopen_batch,
                 reply_wait_days: config.reply_wait_days(),
                 health,
             },
@@ -445,6 +550,13 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         outcome.deferred.dedup();
     }
     if !args.dry_run
+        && !outcome.busy
+        && let Some((activity, ready)) = outcome.reopen_activity.take()
+        && ready
+    {
+        health::record_reopen_activity_state(&account, &activity)?;
+    }
+    if !args.dry_run
         && outcome.busy
         && let Some(message) = health::note_busy_skip("the vault lock")?
     {
@@ -457,6 +569,14 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         || !outcome.failures.is_empty()
         || !outcome.deferred.is_empty()
         || extra_results.iter().any(|row| row.status == "problem");
+    reopen_suppressed_threads.extend(
+        outcome
+            .reopen_outcomes
+            .iter()
+            .filter(|row| row.pending_marker)
+            .map(|row| row.key.clone()),
+    );
+    let reopened_threads = reopen_suppressed_threads;
     let recovery_incomplete = !args.dry_run
         && !matches!(
             file::recovery_presence(&vault, &account),
@@ -492,6 +612,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                 &account,
                 args,
                 &watch_snapshot,
+                &reopened_threads,
                 snapshot,
             );
             if let Some(error) = live.error.take() {
@@ -543,6 +664,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
             labels.as_ref(),
             args,
             &watch_threads,
+            &reopened_threads,
             saved_id_snapshot.as_ref(),
             saved_id_snapshot_error.as_deref(),
             &mut report,
@@ -637,6 +759,19 @@ fn capture_archive_saved_ids(
     Ok(snapshot)
 }
 
+fn capture_reopen_scan(
+    vault: &Path,
+    folder: &Path,
+    index: &MailIndex,
+) -> Result<ArchiveScan, String> {
+    let relations = bob_config::load_relations_config(
+        &bob_config::config_path(),
+    )
+    .map_err(|error| format!("could not read relations config: {error}"))?;
+    scan_archive_evidence(vault, folder, index, &relations)
+        .map_err(|error| format!("{}: {}", error.kind(), error.message()))
+}
+
 /// Read-only dry-run archive projection after the filing projection.
 /// No locks, no directories, no journal entries, no label creation: the
 /// planner only reads. Live application is the following phase's
@@ -653,6 +788,7 @@ fn attach_archive_dry_run<R: GmailRead>(
     labels: Option<&Vec<GmailLabel>>,
     args: &SyncArgs,
     watch_threads: &[super::watch_apply::WatchThreadOutcome],
+    reopened_threads: &BTreeSet<ThreadKey>,
     saved_id_snapshot: Option<&SavedIdSnapshot>,
     saved_id_snapshot_error: Option<&str>,
     report: &mut SyncReport,
@@ -757,6 +893,7 @@ fn attach_archive_dry_run<R: GmailRead>(
             suppressed.insert(outcome.key.clone());
         }
     }
+    suppressed.extend(reopened_threads.iter().cloned());
     let never_save = NeverSavePolicy::from_config(config);
     let input = PreviewInput {
         account,

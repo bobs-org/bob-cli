@@ -155,6 +155,7 @@ pub(crate) fn prepare_reopens<R: GmailRead>(
     body_mode: GmailBodyMode,
     never_save: &NeverSavePolicy,
     run_started_at: DateTime<Utc>,
+    recovery_thread_ids: &BTreeSet<String>,
 ) -> ReopenBatch {
     let mut batch = ReopenBatch {
         candidates: Vec::new(),
@@ -176,7 +177,28 @@ pub(crate) fn prepare_reopens<R: GmailRead>(
         return batch;
     }
 
-    let eligible = eligible_closed_threads(account, enrollment, archive);
+    let mut eligible = eligible_closed_threads(account, enrollment, archive);
+    // A durable transaction receipt can outlive the closed-task evidence:
+    // the task may already be open after a write whose marker still needs
+    // recovery. Permit those exact account-scoped IDs through preparation;
+    // the planner still revalidates the current row and exact log card.
+    for thread_id in recovery_thread_ids
+        .iter()
+        .filter_map(|id| normalize_thread_id(id))
+    {
+        let Some(key) = ThreadKey::new(account, &thread_id) else {
+            continue;
+        };
+        let Some(evidence) = archive.evidence(&key) else {
+            continue;
+        };
+        if evidence.mail_complete()
+            && !evidence.merge_unresolved()
+            && !evidence.identity_uncertain
+        {
+            eligible.insert(thread_id, evidence.clone());
+        }
+    }
     let search = search_activity(reader, account, activity, run_started_at);
     batch.warnings.extend(search.warnings);
     batch.search_complete = search.complete;
@@ -188,6 +210,12 @@ pub(crate) fn prepare_reopens<R: GmailRead>(
     let mut selected_ids: BTreeSet<String> =
         search.ids.intersection(&eligible_ids).cloned().collect();
     selected_ids.extend(old_retries.intersection(&eligible_ids).cloned());
+    selected_ids.extend(
+        recovery_thread_ids
+            .iter()
+            .filter_map(|id| normalize_thread_id(id))
+            .filter(|id| eligible_ids.contains(id)),
+    );
 
     // A revoked grant stops all later reads. Existing retries remain queued;
     // the unchanged cursor will also rediscover any activity hits next run.
@@ -209,7 +237,11 @@ pub(crate) fn prepare_reopens<R: GmailRead>(
                     ThreadKey::new(account, thread_id)
                         .expect("archive scan thread IDs are valid"),
                     evidence.clone(),
-                    old_retries.contains(thread_id),
+                    old_retries.contains(thread_id)
+                        || recovery_thread_ids.iter().any(|id| {
+                            normalize_thread_id(id).as_deref()
+                                == Some(thread_id.as_str())
+                        }),
                 )
             })
         })
@@ -834,6 +866,7 @@ mod tests {
             GmailBodyMode::Headers,
             &NeverSavePolicy::default(),
             started(),
+            &BTreeSet::new(),
         )
     }
 
@@ -1161,6 +1194,7 @@ mod tests {
             GmailBodyMode::Headers,
             &NeverSavePolicy::default(),
             started(),
+            &BTreeSet::new(),
         );
         assert_eq!(batch.candidates.len(), 1);
         assert_eq!(batch.candidates[0].message_id, "reply1");
@@ -1194,6 +1228,7 @@ mod tests {
             GmailBodyMode::Headers,
             &NeverSavePolicy::default(),
             started(),
+            &BTreeSet::new(),
         );
         assert_eq!(batch.candidates.len(), 1);
         assert_eq!(batch.candidates[0].message_id, "bounce1");
@@ -1225,6 +1260,7 @@ mod tests {
             GmailBodyMode::Headers,
             &NeverSavePolicy::for_test(&["blocked@example.com"], &[]),
             started(),
+            &BTreeSet::new(),
         );
         assert!(batch.candidates.is_empty());
         assert_eq!(batch.failures[0].kind, "never_save");
@@ -1270,6 +1306,7 @@ mod tests {
             GmailBodyMode::Full,
             &NeverSavePolicy::default(),
             started(),
+            &BTreeSet::new(),
         );
         assert!(batch.candidates.is_empty());
         assert_eq!(batch.failures[0].kind, "network");

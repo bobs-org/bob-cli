@@ -215,6 +215,7 @@ pub(crate) fn apply_live<R: GmailRead>(
     account: &str,
     args: &SyncArgs,
     watch_threads: &[WatchThreadOutcome],
+    reopened_threads: &BTreeSet<ThreadKey>,
     saved_id_snapshot: &SavedIdSnapshot,
 ) -> LiveArchiveOutcome {
     let mut outcome = LiveArchiveOutcome::default();
@@ -346,6 +347,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                     suppressed.insert(thread.key.clone());
                 }
             }
+            suppressed.extend(reopened_threads.iter().cloned());
             let policy = NeverSavePolicy::from_config(config);
             let input = PreviewInput {
                 account,
@@ -527,6 +529,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 suppressed.insert(thread.key.clone());
             }
         }
+        suppressed.extend(reopened_threads.iter().cloned());
         let policy = NeverSavePolicy::from_config(config);
         let input = PreviewInput {
             account,

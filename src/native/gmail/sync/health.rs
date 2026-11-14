@@ -307,7 +307,12 @@ pub(crate) fn record_reopen_activity_state(
                 .to_string(),
         ));
     };
-    let mut state = load_state().unwrap_or_default();
+    let mut state = load_state().map_err(|message| {
+        GmailError::runtime(
+            "sync_state",
+            format!("could not read Gmail sync state: {message}"),
+        )
+    })?;
     let mut activity = activity.clone();
     if activity
         .high_water_at

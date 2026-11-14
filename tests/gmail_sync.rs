@@ -81,11 +81,20 @@ fn threads_list_page_tokens(fake: &FakeGog) -> Vec<Option<String>> {
                 .map(|pair| {
                     let params: Value = serde_json::from_str(&pair[1])
                         .expect("threads.list --params is JSON");
-                    params
-                        .get("pageToken")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
+                    if params["q"]
+                        .as_str()
+                        .is_some_and(|query| query.starts_with("after:"))
+                    {
+                        return None;
+                    }
+                    Some(
+                        params
+                            .get("pageToken")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    )
                 })
+                .flatten()
         })
         .collect()
 }
@@ -450,7 +459,13 @@ fn sync_creates_an_inbox_and_is_idempotent_by_thread_id() {
     assert!(first_json["problems"].as_array().unwrap().is_empty());
     assert_eq!(first_json["summary"]["watching"], 1);
     assert_eq!(first_json["summary"]["awaiting"], 0);
-    assert_eq!(threads_list_queries(&fake), ["label:bob"]);
+    assert_eq!(
+        threads_list_queries(&fake)
+            .into_iter()
+            .filter(|query| !query.starts_with("after:"))
+            .collect::<Vec<_>>(),
+        ["label:bob"]
+    );
 
     let inbox = fs::read_to_string(env.vault().join("gmail_inbox.md"))
         .expect("sync creates the configured inbox");
@@ -1100,7 +1115,13 @@ fn sync_pages_threads_list_by_page_token() {
     let value = json_stdout(&output);
     assert_eq!(value["ok"], true);
     assert_eq!(value["pulled"], 2);
-    assert_eq!(threads_list_queries(&fake), ["label:bob", "label:bob"]);
+    assert_eq!(
+        threads_list_queries(&fake)
+            .into_iter()
+            .filter(|query| !query.starts_with("after:"))
+            .collect::<Vec<_>>(),
+        ["label:bob", "label:bob"]
+    );
     assert_eq!(
         threads_list_page_tokens(&fake),
         [None, Some("page-2".to_string())]
@@ -1239,7 +1260,13 @@ fn sync_adopts_without_search_presence_and_in_watch_only_mode() {
             1
         );
         if limit == "0" {
-            assert!(!fake.called_with(&["gmail.users.threads.list"]));
+            assert!(
+                threads_list_queries(&fake)
+                    .iter()
+                    .all(|query| query.starts_with("after:")),
+                "watch-only mode has no label-discovery query: {:?}",
+                threads_list_queries(&fake)
+            );
         }
         let calls = fake.calls();
         let adopted_fetches: Vec<_> = calls
@@ -1466,6 +1493,285 @@ fn enrolled_tasks_close_delete_reopen_move_and_survive_label_removal() {
             .count(),
         1
     );
+}
+
+#[test]
+fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
+    let env = GmailEnv::new("bob-cli-gmail-reopen-reply");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let first = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&first, "initial filing for reply reopen");
+    assert_eq!(json_stdout(&first)["pulled"], 1);
+
+    let inbox = env.vault().join("gmail_inbox.md");
+    let contents = fs::read_to_string(&inbox).expect("filed task");
+    fs::write(&inbox, contents.replacen("- [ ] #task", "- [x] #task", 1))
+        .expect("close enrolled task");
+
+    let mut original = watch_message_for(
+        WATCH_THREAD,
+        "1111111111111111",
+        1_793_908_800_000,
+        "Ada <ada@example.com>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    original["payload"]["headers"][2]["value"] = json!("Pull sample");
+    original["payload"]["headers"][3]["value"] =
+        json!("<message@example.test>");
+    original["snippet"] = json!("hello");
+    let mut reply = watch_message_for(
+        WATCH_THREAD,
+        "2222222222222222",
+        1_793_909_100_000,
+        "Ada <ada@example.com>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    reply["payload"]["headers"][2]["value"] = json!("Re: Pull sample");
+    fake.set_thread(
+        json!({
+            "thread": {
+                "id": WATCH_THREAD,
+                "historyId": "3",
+                "messages": [original, reply]
+            }
+        }),
+        json!({}),
+    );
+    fake.set_activity_search_pages(json!([{
+        "threads": [{"id": WATCH_THREAD}]
+    }]));
+
+    let before_dry_run = snapshot_tree(env.vault(), false);
+    let dry_run = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "--dry-run", "-f", "json"],
+    );
+    assert_success(&dry_run, "dry-run closed-thread reply reopen");
+    assert_eq!(snapshot_tree(env.vault(), false), before_dry_run);
+    assert!(
+        fake.called_with(&["gmail.users.threads.list"]),
+        "reopen activity is searched independently from label discovery"
+    );
+    let still_closed = fs::read_to_string(&inbox).expect("closed task remains");
+    assert!(still_closed.contains("- [x] #task"));
+    assert!(!still_closed.contains("📬 **REOPEN LOG**"));
+
+    let live =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_success(&live, "live closed-thread reply reopen");
+    let reopened = fs::read_to_string(&inbox).expect("reopened task note");
+    assert!(reopened.contains("- [ ] #task"), "{reopened}");
+    assert!(reopened.contains("📬 **REOPEN LOG**"), "{reopened}");
+    assert!(
+        reopened.contains("#^m-2222222222222222|"),
+        "the log links the exact counted reply: {reopened}"
+    );
+    assert_eq!(reopened.matches("#^m-2222222222222222|").count(), 1);
+
+    let retry =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_success(&retry, "idempotent reply-reopen retry");
+    let retried = fs::read_to_string(&inbox).expect("task after retry");
+    assert_eq!(retried.matches("📬 **REOPEN LOG**").count(), 1);
+    assert_eq!(retried.matches("#^m-2222222222222222|").count(), 1);
+}
+
+#[test]
+fn reopen_off_skips_activity_search_and_keeps_the_closed_task() {
+    let env = GmailEnv::new("bob-cli-gmail-reopen-off");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let first = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&first, "initial filing before reopen is disabled");
+    let inbox = env.vault().join("gmail_inbox.md");
+    let contents = fs::read_to_string(&inbox).expect("filed task");
+    fs::write(&inbox, contents.replacen("- [ ] #task", "- [x] #task", 1))
+        .expect("close enrolled task");
+
+    let mut original = watch_message_for(
+        WATCH_THREAD,
+        "1111111111111111",
+        1_793_908_800_000,
+        "Ada <ada@example.com>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    original["payload"]["headers"][2]["value"] = json!("Pull sample");
+    original["payload"]["headers"][3]["value"] =
+        json!("<message@example.test>");
+    let reply = watch_message_for(
+        WATCH_THREAD,
+        "2222222222222222",
+        1_793_909_100_000,
+        "Ada <ada@example.com>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    fake.set_thread(
+        json!({
+            "thread": {
+                "id": WATCH_THREAD,
+                "historyId": "3",
+                "messages": [original, reply]
+            }
+        }),
+        json!({}),
+    );
+    fake.set_activity_search_pages(json!([{
+        "threads": [{"id": WATCH_THREAD}]
+    }]));
+    env.write_config(&format!(
+        "gmail:\n  account: {ACCOUNT}\n  writer: {HOST}\n  sync:\n    reopen: off\n"
+    ));
+
+    let state_path = env.root().join("state/bob/gmail/sync-state.json");
+    let before: Value = serde_json::from_slice(
+        &fs::read(&state_path).expect("prior activity state exists"),
+    )
+    .expect("prior activity state parses");
+    let before_activity = before["reopen_activity"].clone();
+    fake.clear_calls();
+    let off =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_success(&off, "sync with reply reopening disabled");
+    assert!(
+        threads_list_queries(&fake)
+            .iter()
+            .all(|query| !query.starts_with("after:")),
+        "reopen=off must skip the activity query: {:?}",
+        threads_list_queries(&fake)
+    );
+    let after: Value = serde_json::from_slice(
+        &fs::read(&state_path).expect("sync state remains readable"),
+    )
+    .expect("sync state parses");
+    assert_eq!(after["reopen_activity"], before_activity);
+    let still_closed = fs::read_to_string(&inbox).expect("closed task note");
+    assert!(still_closed.contains("- [x] #task"), "{still_closed}");
+    assert!(!still_closed.contains("📬 **REOPEN LOG**"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn failed_reply_marker_retries_without_reopening_a_reclosed_task() {
+    use std::os::unix::fs::symlink;
+
+    let env = GmailEnv::new("bob-cli-gmail-reopen-marker-recovery");
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let first = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&first, "initial filing before marker recovery");
+    let inbox = env.vault().join("gmail_inbox.md");
+    let contents = fs::read_to_string(&inbox).expect("filed task");
+    fs::write(&inbox, contents.replacen("- [ ] #task", "- [x] #task", 1))
+        .expect("close enrolled task");
+
+    let mut original = watch_message_for(
+        WATCH_THREAD,
+        "1111111111111111",
+        1_793_908_800_000,
+        "Ada <ada@example.com>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    original["payload"]["headers"][2]["value"] = json!("Pull sample");
+    original["payload"]["headers"][3]["value"] =
+        json!("<message@example.test>");
+    let reply = watch_message_for(
+        WATCH_THREAD,
+        "2222222222222222",
+        1_793_909_100_000,
+        "Ada <ada@example.com>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    fake.set_thread(
+        json!({
+            "thread": {
+                "id": WATCH_THREAD,
+                "historyId": "3",
+                "messages": [original, reply]
+            }
+        }),
+        json!({}),
+    );
+    fake.set_activity_search_pages(json!([{
+        "threads": [{"id": WATCH_THREAD}]
+    }]));
+
+    // Keep the enrollment evidence readable from the backup host file while
+    // making the current host's append fail after the task postimage lands.
+    let journal_dir = env.vault().join(".bob/gmail");
+    let host_journal = fs::read_dir(&journal_dir)
+        .expect("Gmail journal directory")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .expect("current host journal");
+    let backup = journal_dir.join("reply-marker-backup.jsonl");
+    fs::rename(&host_journal, &backup).expect("preserve enrollment events");
+    symlink("/proc/self/status", &host_journal)
+        .expect("install an append-failing journal target");
+
+    let failed_marker =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_eq!(
+        failed_marker.status.code(),
+        Some(1),
+        "marker append failure is reported:\n{}\n{}",
+        stdout(&failed_marker),
+        stderr(&failed_marker)
+    );
+    let opened = fs::read_to_string(&inbox).expect("task postimage landed");
+    assert!(opened.contains("- [ ] #task"), "{opened}");
+    assert!(opened.contains("📬 **REOPEN LOG**"), "{opened}");
+    let recovery_dir = env.root().join("state/bob/gmail");
+    let receipt = fs::read_dir(&recovery_dir)
+        .expect("recovery state directory")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name().is_some_and(|name| {
+                name.to_string_lossy().starts_with("sync-recovery-")
+            })
+        })
+        .expect("pending marker recovery receipt");
+    let recovery: Value = serde_json::from_slice(
+        &fs::read(&receipt).expect("read marker recovery receipt"),
+    )
+    .expect("marker receipt parses");
+    assert_eq!(recovery["reopen"][0]["pending_tasks"], false);
+    assert_eq!(recovery["reopen"][0]["pending_marker"], true);
+
+    fs::write(&inbox, opened.replacen("- [ ] #task", "- [x] #task", 1))
+        .expect("reclose task before marker replay");
+    fs::remove_file(&host_journal).expect("remove failing journal link");
+    fs::rename(&backup, &host_journal).expect("restore readable host journal");
+    let recovered =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_success(&recovered, "marker-only reply recovery");
+    let closed_again = fs::read_to_string(&inbox).expect("reclosed task");
+    assert!(closed_again.contains("- [x] #task"), "{closed_again}");
+    assert_eq!(closed_again.matches("📬 **REOPEN LOG**").count(), 1);
+    assert_eq!(closed_again.matches("#^m-2222222222222222|").count(), 1);
+    let journal = fs::read_to_string(&host_journal).expect("recovered journal");
+    assert_eq!(
+        journal
+            .lines()
+            .filter(|line| {
+                line.contains("\"kind\":\"gmail.turn\"")
+                    && line.contains(WATCH_THREAD)
+                    && line.contains("2222222222222222")
+            })
+            .count(),
+        1,
+        "the reply marker is appended once"
+    );
+    assert!(!receipt.exists(), "marker receipt was cleared after append");
 }
 
 #[test]
