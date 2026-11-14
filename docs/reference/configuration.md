@@ -355,6 +355,8 @@ See [Gmail configuration](../gmail.md#configuration) and
 | `stats.hide` | Sequence of nonempty metric IDs | `[]` | Hides metrics from lists and default selection, without disabling their evaluation. |
 | `stats.since` | ISO date `YYYY-MM-DD` | Unset | Global lower bound for inferred metric start dates. |
 | `stats.metrics` | Mapping from ID to metric definition | `{}` | Adds or replaces a metric; supported kinds and fields follow the nested table below. |
+| `stats.bank_badge` | Boolean | `true` | Badge gate. |
+| `stats.bank_chip` | Boolean | Unset | Alias when badge unset. |
 
 Each `stats.metrics.<id>` entry uses `label` plus `kind`. The supported kinds
 are `pomodoro`, `tasks`, `checklist`, `field`, `journal`, and `formula`.
@@ -364,8 +366,7 @@ accept `field`, `source`, and `unit`; journal entries accept `select` and
 `tiers`; formulas accept `expr` and `unit`. Kind-specific requirements and
 allowed values are defined in the [stats configuration contract](../stats.md#stats-config).
 
-Metric definitions are checked individually. A malformed definition warns and
-does not prevent unrelated metrics from loading. Unknown top-level keys are
+Malformed definitions warn without blocking other metrics. Unknown top-level keys are
 ignored by the current section parsers.
 
 ## `BOB_*` environment variables

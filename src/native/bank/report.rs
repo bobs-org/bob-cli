@@ -357,7 +357,7 @@ pub(crate) fn build(
         by_date.entry(row.date).or_default().push(row.clone());
     }
     let mut days = Vec::new();
-    if !summary {
+    if !summary && period.start <= period.end {
         let mut cursor = period.start;
         loop {
             let rows = by_date.remove(&cursor).unwrap_or_default();

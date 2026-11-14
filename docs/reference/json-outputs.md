@@ -193,7 +193,7 @@ See [capture JSON](../capture.md#input-stdin-and-json-output).
 
 ### Bank reports {#bank-reports}
 
-`schema_version: 1`; [Bank JSON](../bank.md#json).
+`schema_version: 1`; [Bank JSON](../bank.md#json) with `day`/`week`/`quarter`/`iso_year`/`all_time` periods, `-s` empty `days`, plus `coverage`/`navigation`.
 
 ### Session edits and successor offers
 

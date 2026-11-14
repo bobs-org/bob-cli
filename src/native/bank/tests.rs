@@ -1552,3 +1552,69 @@ fn ack_ticks_ids_day_and_reports_unknown() {
     assert_eq!(repeat.already.len(), 1);
     assert!(repeat.unknown.is_empty());
 }
+
+#[test]
+fn reversed_all_time_interval_produces_no_days() {
+    let _guard = guard();
+    let future_start =
+        NaiveDate::from_ymd_opt(2027, 1, 1).expect("future start");
+    let config = super::config::BankConfig {
+        accounts: vec![super::config::Account {
+            alias: "checking".to_owned(),
+            label: "WF Checking".to_owned(),
+            kind: super::config::AccountKind::Checking,
+            start: Some(future_start),
+        }],
+        categories: Vec::new(),
+        rules: Vec::new(),
+        stale_after: 10,
+    };
+    let rows: Vec<super::model::BankRow> = Vec::new();
+    // Pure bound first: a future-only account with no rows reverses the
+    // all-time interval, so the regression must prove the bound before the
+    // old non-summary path could allocate millions of days.
+    let period = super::report::all_time_period(Some(&config), &rows, today());
+    assert!(
+        period.start > period.end,
+        "start {} end {}",
+        period.start,
+        period.end
+    );
+    let headings = HashMap::new();
+    let journal = super::journal::JournalSnapshot::default();
+    let full = super::report::build(
+        rows.clone(),
+        today(),
+        super::report::Period {
+            kind: period.kind.clone(),
+            key: period.key.clone(),
+            start: period.start,
+            end: period.end,
+            label: period.label.clone(),
+            so_far: period.so_far,
+        },
+        Some(&config),
+        Vec::new(),
+        Vec::new(),
+        "checking".to_owned(),
+        &headings,
+        &journal,
+        false,
+    );
+    assert!(full.days.is_empty());
+    let summary = super::report::build(
+        rows,
+        today(),
+        period,
+        Some(&config),
+        Vec::new(),
+        Vec::new(),
+        "checking".to_owned(),
+        &headings,
+        &journal,
+        true,
+    );
+    assert!(summary.days.is_empty());
+    assert_eq!(full.totals.out_cents, summary.totals.out_cents);
+    assert_eq!(full.totals.in_cents, summary.totals.in_cents);
+}
