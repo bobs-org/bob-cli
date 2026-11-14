@@ -18,7 +18,7 @@ pub(crate) use diff::{color_diff, unified_diff};
 pub(crate) use region::{
     bare_text, canonical_callout, canonical_head, owned_regions, plan_host,
     plan_host_region, EditState, HostOutcome, HostRegionPlan, LegacySpec,
-    OwnedRegion, Placement, RegionDamage, RegionSpec, ALBUMS,
+    OwnedRegion, Placement, RegionDamage, RegionSpec, ALBUMS, AREAS,
     GENERATED_CATALOGS, LEGACY_BEGIN_MARKER, LEGACY_END_MARKER, NOTEBOOKS,
     PROJECTS,
 };

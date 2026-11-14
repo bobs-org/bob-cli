@@ -29,6 +29,10 @@ pub(crate) enum Placement<'a> {
     /// Immediately before the first real `##` heading after the frontmatter,
     /// else at EOF.
     BeforeFirstH2,
+    /// At the end of an existing `## {section}` (before the next heading of
+    /// level 2 or less). When the section runs to EOF, at EOF. Otherwise
+    /// the same as [`Self::BeforeFirstH2`].
+    AfterSectionThenFirstH2(&'a str),
 }
 
 /// Legacy v1 begin/end HTML markers. Notebooks only.
@@ -82,11 +86,22 @@ pub(crate) const ALBUMS: RegionSpec<'static> = RegionSpec {
 };
 
 /// The direct-child project catalog spec: `[!projects]`, `## Projects`,
-/// before the first H2 on its first write, with strict malformed-opener
-/// handling.
+/// at the end of an existing `## Areas` section on its first write, else
+/// before the first H2, with strict malformed-opener handling.
 pub(crate) const PROJECTS: RegionSpec<'static> = RegionSpec {
     callout: "projects",
     heading: "Projects",
+    head_title: None,
+    placement: Placement::AfterSectionThenFirstH2("Areas"),
+    legacy: None,
+    strict_bare: true,
+};
+
+/// The sub-area catalog spec: `[!areas]`, `## Areas`, before the first H2
+/// on its first write, with strict malformed-opener handling.
+pub(crate) const AREAS: RegionSpec<'static> = RegionSpec {
+    callout: "areas",
+    heading: "Areas",
     head_title: None,
     placement: Placement::BeforeFirstH2,
     legacy: None,
@@ -96,7 +111,7 @@ pub(crate) const PROJECTS: RegionSpec<'static> = RegionSpec {
 /// Every Bob-owned catalog heading that capture and task-container code must
 /// protect as structural.
 pub(crate) const GENERATED_CATALOGS: &[RegionSpec<'static>] =
-    &[NOTEBOOKS, ALBUMS, PROJECTS];
+    &[AREAS, NOTEBOOKS, ALBUMS, PROJECTS];
 
 /// Why a host's managed region cannot be edited safely.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -602,7 +617,11 @@ pub(crate) fn plan_host(
         ([], true) => HostOutcome::Nothing,
         ([], false) => HostOutcome::Update {
             state: EditState::Missing,
-            after: apply(text, insertion(spec, &scanned, callout)),
+            after: apply(
+                text,
+                adopted_insert(spec, &scanned, callout)
+                    .unwrap_or_else(|| insertion(spec, &scanned, callout)),
+            ),
         },
         ([(start, end, _)], false) => {
             let range = scanned.line_byte_range(*start, *end);
@@ -705,8 +724,58 @@ fn insertion(
                 None => scanned.first_tasks_heading(),
             }
         }
+        Placement::AfterSectionThenFirstH2(section) => {
+            match scanned.section_end(section) {
+                Some(end) if end < scanned.lines.len() => Some(end),
+                Some(_) => None, // section runs to EOF
+                None => scanned.first_h2(),
+            }
+        }
     };
     insert_at(spec, scanned, callout, at)
+}
+
+/// First write into an existing authored `## {heading}` section: only the
+/// callout is inserted at the end of that section, after its last non-blank
+/// line, separated by one blank line (and one blank line before any
+/// following content). The first matching H2 wins; fenced and frontmatter
+/// headings are ignored.
+fn adopted_insert(
+    spec: &RegionSpec<'_>,
+    scanned: &Scanned<'_>,
+    callout: &[String],
+) -> Option<(Range<usize>, String)> {
+    let (heading, _) = scanned.headings().find(|(heading, title)| {
+        heading.level == 2 && *title == spec.heading
+    })?;
+    let section_end = scanned.section_end(spec.heading)?;
+    let mut anchor = heading.index;
+    for index in ((heading.index + 1)..section_end).rev() {
+        if !scanned.lines[index].is_blank() {
+            anchor = index;
+            break;
+        }
+    }
+    let gap_start = scanned.lines[anchor].end;
+    let gap_end = scanned
+        .lines
+        .get(section_end)
+        .map_or(scanned.text.len(), |line| line.start);
+    if gap_start > gap_end {
+        return None;
+    }
+    let eol = scanned.eol;
+    let body = bare_text(callout, eol);
+    let replacement = if section_end < scanned.lines.len() {
+        format!("{eol}{body}{eol}")
+    } else if scanned.text[..gap_start].ends_with('\n') {
+        format!("{eol}{body}")
+    } else if scanned.text.is_empty() {
+        body
+    } else {
+        format!("{eol}{eol}{body}")
+    };
+    Some((gap_start..gap_end, replacement))
 }
 
 /// First write: immediately before `index`, else at EOF separated by one
@@ -1033,5 +1102,297 @@ mod tests {
         assert!(after.contains("> [!records] 104 restaurants · 🔖 11 to try\n"));
         assert!(!after.contains("> [!records]-"));
         assert_eq!(plan_host(&RECORDS, &after, &rows), HostOutcome::Current);
+    }
+
+    fn areas_rows() -> Vec<String> {
+        canonical_callout(
+            &AREAS,
+            &[">".to_string(), "> - **[[body]]**".to_string()],
+        )
+    }
+
+    fn notebooks_rows() -> Vec<String> {
+        canonical_callout(
+            &NOTEBOOKS,
+            &[">".to_string(), "> - **[[a|A]]**".to_string()],
+        )
+    }
+
+    fn projects_rows() -> Vec<String> {
+        canonical_callout(
+            &PROJECTS,
+            &[">".to_string(), "> - **[[kid]]** — Kid.".to_string()],
+        )
+    }
+
+    #[test]
+    fn areas_first_then_projects_lands_after_areas() {
+        let base = "---\n---\n\n# Host\n\nIntro.\n";
+        let (_, after_areas) = update(plan_host(&AREAS, base, &areas_rows()));
+        assert!(after_areas.contains("## Areas"), "{after_areas}");
+        let (_, after) =
+            update(plan_host(&PROJECTS, &after_areas, &projects_rows()));
+        let areas_at = after.find("## Areas").expect("areas heading");
+        let projects_at = after.find("## Projects").expect("projects heading");
+        assert!(areas_at < projects_at, "{after}");
+        assert_eq!(after.matches("## Areas").count(), 1, "{after}");
+        assert_eq!(after.matches("## Projects").count(), 1, "{after}");
+        assert!(after.contains("> [!areas]"), "{after}");
+        assert!(after.contains("> [!projects]"), "{after}");
+        assert_eq!(
+            plan_host(&AREAS, &after, &areas_rows()),
+            HostOutcome::Current
+        );
+        assert_eq!(
+            plan_host(&PROJECTS, &after, &projects_rows()),
+            HostOutcome::Current
+        );
+    }
+
+    #[test]
+    fn projects_first_then_areas_lands_before_projects() {
+        let base = "---\n---\n\n# Host\n\nIntro.\n";
+        let (_, after_projects) =
+            update(plan_host(&PROJECTS, base, &projects_rows()));
+        assert!(after_projects.contains("## Projects"), "{after_projects}");
+        let (_, after) =
+            update(plan_host(&AREAS, &after_projects, &areas_rows()));
+        let areas_at = after.find("## Areas").expect("areas heading");
+        let projects_at = after.find("## Projects").expect("projects heading");
+        assert!(areas_at < projects_at, "{after}");
+        assert_eq!(after.matches("## Areas").count(), 1, "{after}");
+        assert_eq!(after.matches("## Projects").count(), 1, "{after}");
+    }
+
+    #[test]
+    fn authored_overview_stays_above_both_catalogs() {
+        let text = "---\n---\n\n# Host\n\n## Overview\n\nProse.\n\n## Areas\n\nAreas prose.\n\n## Projects\n\nProjects prose.\n";
+        let (_, after_areas) = update(plan_host(&AREAS, text, &areas_rows()));
+        assert_eq!(after_areas.matches("## Areas").count(), 1, "{after_areas}");
+        assert!(
+            after_areas.contains("Areas prose.\n\n> [!areas]"),
+            "{after_areas}"
+        );
+        let (_, after) =
+            update(plan_host(&PROJECTS, &after_areas, &projects_rows()));
+        let overview_at = after.find("## Overview").expect("overview");
+        let areas_at = after.find("## Areas").expect("areas");
+        let projects_at = after.find("## Projects").expect("projects");
+        assert!(overview_at < areas_at && areas_at < projects_at, "{after}");
+        assert!(
+            after.contains("Projects prose.\n\n> [!projects]"),
+            "{after}"
+        );
+    }
+
+    #[test]
+    fn moved_current_region_gets_no_edit() {
+        // First-write order is Areas then Projects, but a moved note with the
+        // reverse order and current bytes is still Current.
+        let projects = projects_rows();
+        let areas = areas_rows();
+        let areas_bare = areas.join("\n");
+        let projects_bare = projects.join("\n");
+        let text = format!(
+            "---\n---\n\n# Host\n\n## Projects\n\n{projects_bare}\n\n## Areas\n\n{areas_bare}\n"
+        );
+        assert_eq!(plan_host(&AREAS, &text, &areas), HostOutcome::Current);
+        assert_eq!(
+            plan_host(&PROJECTS, &text, &projects),
+            HostOutcome::Current
+        );
+    }
+
+    #[test]
+    fn areas_section_to_eof_makes_projects_append_after_it() {
+        let areas = areas_rows();
+        let text = format!("---\n---\n\n# Host\n\n{}", block(&AREAS, &areas));
+        let (_, after) = update(plan_host(&PROJECTS, &text, &projects_rows()));
+        let areas_at = after.find("## Areas").expect("areas");
+        let projects_at = after.find("## Projects").expect("projects");
+        assert!(areas_at < projects_at, "{after}");
+        assert!(
+            after.ends_with(&block(&PROJECTS, &projects_rows())),
+            "{after}"
+        );
+    }
+
+    #[test]
+    fn heading_adoption_with_prose_for_all_families() {
+        for (spec, rows) in [
+            (&AREAS, areas_rows()),
+            (&NOTEBOOKS, notebooks_rows()),
+            (&PROJECTS, projects_rows()),
+        ] {
+            let text = format!(
+                "---\n---\n\n# Host\n\n## {}\n\nProse.\n\n## Next\n\nMore.\n",
+                spec.heading
+            );
+            let (state, after) = update(plan_host(spec, &text, &rows));
+            assert_eq!(state, EditState::Missing, "{}", spec.heading);
+            assert_eq!(
+                after.matches(&format!("## {}", spec.heading)).count(),
+                1,
+                "{after}"
+            );
+            assert!(
+                after.contains(&format!("Prose.\n\n{}", rows.join("\n"))),
+                "{after}"
+            );
+            assert!(after.contains("## Next"), "{after}");
+            let areas_at = after.find(&format!("## {}", spec.heading)).unwrap();
+            let next_at = after.find("## Next").unwrap();
+            let callout_at =
+                after.find(&format!("[!{}]", spec.callout)).unwrap();
+            assert!(areas_at < callout_at && callout_at < next_at, "{after}");
+            assert_eq!(plan_host(spec, &after, &rows), HostOutcome::Current);
+        }
+    }
+
+    #[test]
+    fn heading_adoption_empty_heading_for_all_families() {
+        for (spec, rows) in [
+            (&AREAS, areas_rows()),
+            (&NOTEBOOKS, notebooks_rows()),
+            (&PROJECTS, projects_rows()),
+        ] {
+            let text = format!(
+                "---\n---\n\n# Host\n\n## {}\n\n## Next\n\nMore.\n",
+                spec.heading
+            );
+            let (_, after) = update(plan_host(spec, &text, &rows));
+            assert_eq!(
+                after.matches(&format!("## {}", spec.heading)).count(),
+                1,
+                "{after}"
+            );
+            assert!(
+                after.contains(&format!(
+                    "## {}\n\n{}",
+                    spec.heading,
+                    rows.join("\n")
+                )),
+                "{after}"
+            );
+            assert_eq!(plan_host(spec, &after, &rows), HostOutcome::Current);
+        }
+    }
+
+    #[test]
+    fn heading_adoption_adjacent_h2_for_all_families() {
+        for (spec, rows) in [
+            (&AREAS, areas_rows()),
+            (&NOTEBOOKS, notebooks_rows()),
+            (&PROJECTS, projects_rows()),
+        ] {
+            let text = format!(
+                "---\n---\n\n# Host\n\n## {}\n## Next\n\nMore.\n",
+                spec.heading
+            );
+            let (_, after) = update(plan_host(spec, &text, &rows));
+            assert_eq!(
+                after.matches(&format!("## {}", spec.heading)).count(),
+                1,
+                "{after}"
+            );
+            assert!(
+                after.contains(&format!(
+                    "## {}\n\n{}\n\n## Next",
+                    spec.heading,
+                    rows.join("\n")
+                )),
+                "{after}"
+            );
+            assert_eq!(plan_host(spec, &after, &rows), HostOutcome::Current);
+        }
+    }
+
+    #[test]
+    fn heading_adoption_eof_without_final_newline() {
+        for (spec, rows) in [
+            (&AREAS, areas_rows()),
+            (&NOTEBOOKS, notebooks_rows()),
+            (&PROJECTS, projects_rows()),
+        ] {
+            let text =
+                format!("---\n---\n\n# Host\n\n## {}\n\nProse.", spec.heading);
+            assert!(!text.ends_with('\n'));
+            let (_, after) = update(plan_host(spec, &text, &rows));
+            assert!(
+                after.contains(&format!("Prose.\n\n{}", rows.join("\n"))),
+                "{after}"
+            );
+            assert!(after.ends_with('\n'), "{after}");
+            assert_eq!(plan_host(spec, &after, &rows), HostOutcome::Current);
+        }
+    }
+
+    #[test]
+    fn heading_adoption_crlf_with_bom() {
+        for (spec, rows) in [
+            (&AREAS, areas_rows()),
+            (&NOTEBOOKS, notebooks_rows()),
+            (&PROJECTS, projects_rows()),
+        ] {
+            let text = format!(
+                "\u{feff}---\r\n---\r\n\r\n# Host\r\n\r\n## {}\r\n\r\nProse.\r\n",
+                spec.heading
+            );
+            let (_, after) = update(plan_host(spec, &text, &rows));
+            assert!(after.starts_with("\u{feff}---\r\n"), "{after:?}");
+            assert!(!after.replace("\r\n", "").contains('\n'), "{after:?}");
+            assert_eq!(
+                after.matches(&format!("## {}", spec.heading)).count(),
+                1,
+                "{after:?}"
+            );
+            assert_eq!(plan_host(spec, &after, &rows), HostOutcome::Current);
+        }
+    }
+
+    #[test]
+    fn heading_adoption_ignores_fenced_heading() {
+        let text = "---\n---\n\n```md\n## Areas\n```\n\n## Ideas\n\nProse.\n";
+        let rows = areas_rows();
+        let (_, after) = update(plan_host(&AREAS, text, &rows));
+        assert!(after.contains("```md\n## Areas\n```"), "{after}");
+        assert!(after.contains("## Areas\n\n> [!areas]"), "{after}");
+        // One fenced example plus one real inserted heading.
+        assert_eq!(after.matches("## Areas").count(), 2, "{after}");
+        let real_at = after.find("## Areas\n\n> [!areas]").unwrap();
+        let ideas_at = after.find("## Ideas").unwrap();
+        assert!(real_at < ideas_at, "{after}");
+        assert_eq!(plan_host(&AREAS, &after, &rows), HostOutcome::Current);
+    }
+
+    #[test]
+    fn heading_adoption_first_of_two_headings_wins() {
+        let text =
+            "---\n---\n\n# Host\n\n## Areas\n\nFirst.\n\n## Areas\n\nSecond.\n";
+        let rows = areas_rows();
+        let (_, after) = update(plan_host(&AREAS, text, &rows));
+        assert_eq!(after.matches("## Areas").count(), 2, "{after}");
+        assert_eq!(after.matches("> [!areas]").count(), 1, "{after}");
+        let first = after.find("First.").unwrap();
+        let callout = after.find("> [!areas]").unwrap();
+        let second_heading = after.match_indices("## Areas").nth(1).unwrap().0;
+        assert!(first < callout && callout < second_heading, "{after}");
+        assert!(after.contains("Second.\n"), "{after}");
+    }
+
+    #[test]
+    fn malformed_areas_callout_is_damaged_but_lookalike_is_authored() {
+        let malformed =
+            "---\n---\n\n# Fun\n\n## Areas\n\n> [!areas\n> - partial\n";
+        assert!(matches!(
+            plan_host(&AREAS, malformed, &areas_rows()),
+            HostOutcome::Damaged(RegionDamage { line: 8, .. })
+        ));
+
+        let authored = "---\n---\n\n# Fun\n\n> [!areas-card]\n> authored\n";
+        assert!(matches!(
+            plan_host(&AREAS, authored, &areas_rows()),
+            HostOutcome::Update { .. }
+        ));
     }
 }

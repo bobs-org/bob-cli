@@ -584,6 +584,13 @@ pub(super) fn reject_generated_catalog_selector(
     let headings = markdown_headings(&lines);
     let specifications = [
         (
+            &crate::native::host_catalog::AREAS,
+            "`## Areas` is the generated sub-area catalog (written by \
+             `bob areas sync`) and is not a section target; pick another \
+             section, or capture into one of its areas",
+            "areas_section_generated",
+        ),
+        (
             &crate::native::host_catalog::NOTEBOOKS,
             "`## Notebooks` is the generated notebook catalog (written by \
              `bob notebooks sync`) and is not a section target; pick another \

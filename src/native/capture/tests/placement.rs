@@ -1399,6 +1399,89 @@ fn explicit_projects_selector_refuses_instead_of_falling_through() {
     .expect("fenced example is not a generated heading");
 }
 
+const GENERATED_AREAS: &str = concat!(
+    "# Body\n",
+    "\n",
+    "## Areas\n",
+    "\n",
+    "> [!areas]\n",
+    ">\n",
+    "> - **[[child]]**\n",
+    "\n",
+    "## Ideas\n",
+    "\n",
+    "- one\n",
+);
+
+#[test]
+fn generated_areas_section_is_never_completed_or_a_bullet_target() {
+    let titles: Vec<String> =
+        super::super::section_completion_rows(GENERATED_AREAS, "")
+            .into_iter()
+            .map(|row| row.title)
+            .collect();
+    assert_eq!(titles, vec!["Body".to_string(), "Ideas".to_string()]);
+    let headings: Vec<String> =
+        super::super::non_tasks_section_headings(GENERATED_AREAS)
+            .into_iter()
+            .map(|heading| heading.title)
+            .collect();
+    assert_eq!(headings, vec!["Body".to_string(), "Ideas".to_string()]);
+
+    let (updated, _) = super::super::insert_bullet_line(
+        GENERATED_AREAS,
+        BULLET,
+        Some("Ideas"),
+        false,
+    );
+    assert!(updated.contains(&format!("- one\n{BULLET}")), "{updated}");
+    let callout = "> [!areas]\n>\n> - **[[child]]**\n";
+    assert!(updated.contains(callout), "{updated}");
+    assert!(!updated
+        .split(callout)
+        .nth(1)
+        .unwrap_or("")
+        .starts_with(BULLET));
+}
+
+#[test]
+fn explicit_areas_selector_refuses_instead_of_falling_through() {
+    for (selector, exact) in [
+        ("areas", false),
+        ("Areas", true),
+        ("area", false),
+        ("ar", false),
+    ] {
+        let error = super::super::reject_generated_catalog_selector(
+            GENERATED_AREAS,
+            Some(selector),
+            exact,
+        )
+        .expect_err(selector);
+        assert!(error.message.contains("generated sub-area catalog"));
+        assert!(error.message.contains("bob areas sync"), "{selector}");
+        assert_eq!(error.code.as_deref(), Some("areas_section_generated"));
+    }
+    for (contents, selector) in [
+        (GENERATED_AREAS, Some("Ideas")),
+        (GENERATED_AREAS, Some("zzz")),
+        (GENERATED_AREAS, None),
+        ("## Ideas\n", Some("areas")),
+    ] {
+        super::super::reject_generated_catalog_selector(
+            contents, selector, false,
+        )
+        .expect("not refused");
+    }
+    let fenced = "```md\n## Areas\n> [!areas]\n```\n## Ideas\n";
+    super::super::reject_generated_catalog_selector(
+        fenced,
+        Some("areas"),
+        false,
+    )
+    .expect("fenced example is not a generated heading");
+}
+
 #[test]
 fn heading_matches_bullet_selector_is_raw_or_identity() {
     assert!(super::super::heading_matches_bullet_selector(
