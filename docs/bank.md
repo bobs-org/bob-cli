@@ -17,7 +17,7 @@ bob bank ack [ID...] [-b DIR] [-D DAY] [-d] [-f human|json]
 bob bank check [-b DIR] [-f human|json]
 bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
 bob bank import [FILE...] [-a ALIAS] [-b DIR] [-d] [-F] [-f human|json]
-bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-w WEEK] [-y YEAR]
+bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-w WEEK] [-y YEAR]
 ```
 
 - Every long option has a short alias; options stay alphabetical.
@@ -39,8 +39,16 @@ bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-w WEEK] [-y YEAR]
   Git, no sync, no journal append.
 - `-D` takes `today`, `yesterday`, `tomorrow`, or `YYYY-MM-DD`.
   `-m` takes `YYYY-MM`, `-w` takes `YYYY-Www` (ISO, Monday first), and
-  `-y` takes `YYYY`. `report` takes at most one period and defaults to
-  the current month. `report -D` yields one day.
+  `-y` takes `YYYY` (calendar year). `-p` takes one stats-strip period:
+  `YYYY-MM-DD`, `GGGG-Www`, `GGGG-Qn`, `GGGG` (ISO week-year, as on
+  period notes), `all`, `last-week`, `last-quarter`, `last-year`, or a
+  period-note path. `-p 2026` is the ISO week-year; `-y 2026` is
+  January–December. `report` takes at most one of
+  `-D`/`-m`/`-p`/`-w`/`-y` and defaults to the current month.
+  `report -D` yields one day; `report -p all` spans the bank's own
+  history, from the earliest account `start` or row date through the
+  later of today and the latest row date. `-s` omits per-day rows;
+  totals, breakdown, waiting, coverage, and navigation remain.
 - `BOB_NOW` overrides "today" everywhere.
 
 ## Files
@@ -446,6 +454,11 @@ output to one month.
 
 `report` explains one period with exact cents. Week boundaries are ISO,
 Monday first. `report -D` yields one day: that is the daily chip's data.
+`-p` reports any stats-strip period instead: a day, an ISO week, a
+quarter, an ISO week-year, or all time over the bank's own history.
+When the bank's tracked history or import coverage falls short of the
+period, human output adds one line such as
+`Tracked since Nov 11 · imported through Nov 13`.
 Human output shows bars and a heat strip, and never depends on terminal
 width. Amounts are tabular and right-aligned with explicit signs;
 inflows are green and outflows are neutral, because spending is not an
@@ -571,13 +584,24 @@ suggested. Each `categories[]` entry is
   `days[] {date, heading, path, line, rows[]}`, and
   `counts {rows, waiting, flagged}`.
 - `report` adds `period {kind, key, start, end, label, so_far, note}`,
-  `totals {out_cents, in_cents, net_cents, refund_cents,
-  transfer_out_cents, transfer_in_cents, cash_out_cents,
+  where `kind` is `day`, `week`, `month`, `year` (calendar, `-y` only),
+  `quarter`, `iso_year`, or `all_time`. The `key` is the canonical id
+  (`2026-Q4`, `2026`, `all_time`); `so_far` means the period holds
+  today. It also adds `totals {out_cents, in_cents, net_cents,
+  refund_cents, transfer_out_cents, transfer_in_cents, cash_out_cents,
   cash_traced_cents, unclassified_out_cents, unclassified_in_cents}`,
   `breakdown[] {key, emoji, label, out_cents, share, rows}`,
   `days[] {date, heading, path, line, out_cents, in_cents, rows,
-  waiting, flagged}` (every day of the period, including empty ones),
-  and `waiting {period, all, oldest}` plus `flagged`.
+  waiting, flagged}` (every day of the period, including empty ones;
+  `-s` reports `"days": []` with totals intact),
+  `waiting {period, all, oldest}` plus `flagged`,
+  `coverage {tracked_since, imported_through, start, through, complete}`
+  (dates are `YYYY-MM-DD` or `null`; `through` is always a date), and
+  `navigation {waiting {path, line, date}, first {path, line, date},
+  months[]}` (`waiting` is the oldest waiting row in the period,
+  `first` the day heading of the earliest counted-money day, `months`
+  the vault-relative month notes holding the period's rows; each target
+  is `null` when absent).
 - `check` adds `findings[] {code, severity, path, line, message, hint}`.
 - `ensure` adds `{path, line, day, created_note, created_heading}`.
 - `ack` prints the envelope `ok`, `dry_run`, `changed`,

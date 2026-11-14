@@ -235,8 +235,29 @@ pub(crate) fn print_report(report: &super::report::BankReport) {
         render_amount(report.totals.refund_cents),
         render_amount(-report.totals.cash_traced_cents),
     );
+    print_coverage(report);
     println!();
     print_heat_strip(report, &styler);
+}
+
+fn print_coverage(report: &super::report::BankReport) {
+    if report.coverage.complete {
+        return;
+    }
+    let mut parts = Vec::new();
+    if let Some(tracked) = report.coverage.tracked_since
+        && tracked > report.period.start
+    {
+        parts.push(format!("Tracked since {}", tracked.format("%b %-d")));
+    }
+    if let Some(imported) = report.coverage.imported_through
+        && imported < report.period.end
+    {
+        parts.push(format!("imported through {}", imported.format("%b %-d")));
+    }
+    if !parts.is_empty() {
+        println!("{}", parts.join(" · "));
+    }
 }
 
 fn share_bar(share: f64) -> String {

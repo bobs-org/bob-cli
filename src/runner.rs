@@ -393,7 +393,7 @@ const BANK_MEMBERS: &[Member] = &[
     },
     Member {
         name: "report",
-        about: "Report bank totals for a day, week, month, or year",
+        about: "Report bank totals for a day, week, month, quarter, year, or all time",
         leaf: Leaf {
             native_command: NativeCommand::BankReport,
             script_command: None,

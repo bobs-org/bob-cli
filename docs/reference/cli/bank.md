@@ -21,7 +21,7 @@ Commands:
   ensure  Ensure the month note and day heading exist
   import  Import posted bank transactions
   list    List waiting bank rows (default)
-  report  Report bank totals for a day, week, month, or year
+  report  Report bank totals for a day, week, month, quarter, year, or all time
 
 Options:
   -h, --help  Print help
@@ -230,10 +230,10 @@ See docs/bank.md for the bank contract.
 
 ## bob bank report
 
-Report bank totals for a day, week, month, or year
+Report bank totals for a day, week, month, quarter, year, or all time
 
 ```text title="bob bank report --help"
-Every total is computed from rows at read time; rows on cash-kind accounts and rows with [cat:: transfer] are kept apart. Takes at most one period and defaults to the current month. `-D` yields one day. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.
+Every total is computed from rows at read time; rows on cash-kind accounts and rows with [cat:: transfer] are kept apart. Takes at most one of -D/--day, -m/--month, -p/--period, -w/--week, -y/--year and defaults to the current month. `-D` yields one day; `-p` reports one stats-strip period (a day, an ISO week, a quarter, an ISO week-year, or all time over the bank's own history). `-p 2026` is the ISO week-year; `-y 2026` is the calendar year. `-s` omits per-day rows. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.
 
 Usage: bob bank report [OPTIONS]
 
@@ -253,6 +253,12 @@ Options:
   -m, --month <MONTH>
           Limit to one month: YYYY-MM
 
+  -p, --period <PERIOD>
+          Report one stats-strip period: YYYY-MM-DD, GGGG-Www, GGGG-Qn, GGGG (ISO week-year), all, last-week, last-quarter, last-year, or a period-note path
+
+  -s, --summary
+          Omit per-day rows; totals, breakdown, waiting, coverage, and navigation remain
+
   -w, --week <WEEK>
           Report one ISO week: YYYY-Www (Monday first)
 
@@ -267,6 +273,8 @@ Examples:
   bob bank report -m 2026-11
   bob bank report -w 2026-W46 -f json
   bob bank report -D 2026-11-14
+  bob bank report -p 2026-Q4 -s -f json
+  bob bank report -p all -s
 
 See docs/bank.md for the totals contract.
 ```

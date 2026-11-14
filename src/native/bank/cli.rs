@@ -99,18 +99,20 @@ pub(crate) fn build_cli_list() -> ClapCommand {
 
 pub(crate) fn build_cli_report() -> ClapCommand {
     ClapCommand::new("bob bank report")
-        .about("Report bank totals for a day, week, month, or year")
+        .about("Report bank totals for a day, week, month, quarter, year, or all time")
         .long_about(
-            "Every total is computed from rows at read time; rows on cash-kind accounts and rows with [cat:: transfer] are kept apart. Takes at most one period and defaults to the current month. `-D` yields one day. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.",
+            "Every total is computed from rows at read time; rows on cash-kind accounts and rows with [cat:: transfer] are kept apart. Takes at most one of -D/--day, -m/--month, -p/--period, -w/--week, -y/--year and defaults to the current month. `-D` yields one day; `-p` reports one stats-strip period (a day, an ISO week, a quarter, an ISO week-year, or all time over the bank's own history). `-p 2026` is the ISO week-year; `-y 2026` is the calendar year. `-s` omits per-day rows. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.",
         )
         .after_help(
-            "Examples:\n  bob bank report\n  bob bank report -m 2026-11\n  bob bank report -w 2026-W46 -f json\n  bob bank report -D 2026-11-14\n\nSee docs/bank.md for the totals contract.",
+            "Examples:\n  bob bank report\n  bob bank report -m 2026-11\n  bob bank report -w 2026-W46 -f json\n  bob bank report -D 2026-11-14\n  bob bank report -p 2026-Q4 -s -f json\n  bob bank report -p all -s\n\nSee docs/bank.md for the totals contract.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
         .arg(day_arg())
         .arg(format_arg())
         .arg(month_arg())
+        .arg(period_arg())
+        .arg(summary_arg())
         .arg(week_arg())
         .arg(year_arg())
         .arg(help_arg())
@@ -243,6 +245,23 @@ fn year_arg() -> Arg {
         .value_name("YEAR")
         .value_parser(OsStringValueParser::new())
         .help("Report one year: YYYY")
+}
+
+fn period_arg() -> Arg {
+    Arg::new("period")
+        .long("period")
+        .short('p')
+        .value_name("PERIOD")
+        .value_parser(OsStringValueParser::new())
+        .help("Report one stats-strip period: YYYY-MM-DD, GGGG-Www, GGGG-Qn, GGGG (ISO week-year), all, last-week, last-quarter, last-year, or a period-note path")
+}
+
+fn summary_arg() -> Arg {
+    Arg::new("summary")
+        .long("summary")
+        .short('s')
+        .action(ArgAction::SetTrue)
+        .help("Omit per-day rows; totals, breakdown, waiting, coverage, and navigation remain")
 }
 
 fn day_arg() -> Arg {
@@ -590,11 +609,14 @@ fn execute_report(matches: &ArgMatches) -> i32 {
     let month = opt_string(matches, "month");
     let week = opt_string(matches, "week");
     let year = opt_string(matches, "year");
-    let period = match report::resolve_period(
+    let period_arg = opt_string(matches, "period");
+    let summary = matches.get_flag("summary");
+    let mut period = match report::resolve_period(
         day.as_deref(),
         month.as_deref(),
         week.as_deref(),
         year.as_deref(),
+        period_arg.as_deref(),
         today,
     ) {
         Ok(period) => period,
@@ -634,6 +656,9 @@ fn execute_report(matches: &ArgMatches) -> i32 {
     let journal = super::journal::load(&bob_dir).unwrap_or_default();
     let rows =
         super::model::collect_rows(&scan, config.as_ref(), Some(&journal));
+    if period.kind == report::PeriodKind::AllTime {
+        period = report::all_time_period(config.as_ref(), &rows, today);
+    }
     let accounts = config
         .as_ref()
         .map(|config| {
@@ -650,6 +675,8 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         accounts,
         default_alias,
         &heading_lines,
+        &journal,
+        summary,
     );
     if json {
         println!("{}", report::to_json(&built));

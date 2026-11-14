@@ -23,6 +23,9 @@ pub(crate) enum PeriodKind {
     Week,
     Month,
     Year,
+    Quarter,
+    IsoYear,
+    AllTime,
 }
 
 impl PeriodKind {
@@ -32,6 +35,9 @@ impl PeriodKind {
             Self::Week => "week",
             Self::Month => "month",
             Self::Year => "year",
+            Self::Quarter => "quarter",
+            Self::IsoYear => "iso_year",
+            Self::AllTime => "all_time",
         }
     }
 }
@@ -70,6 +76,29 @@ pub(crate) struct ReportDay {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct Coverage {
+    pub(crate) tracked_since: Option<NaiveDate>,
+    pub(crate) imported_through: Option<NaiveDate>,
+    pub(crate) start: Option<NaiveDate>,
+    pub(crate) through: NaiveDate,
+    pub(crate) complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NavTarget {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) date: NaiveDate,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Navigation {
+    pub(crate) waiting: Option<NavTarget>,
+    pub(crate) first: Option<NavTarget>,
+    pub(crate) months: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct BankReport {
     pub(crate) today: NaiveDate,
     pub(crate) period: Period,
@@ -83,6 +112,8 @@ pub(crate) struct BankReport {
     pub(crate) categories: Vec<super::config::Category>,
     pub(crate) accounts: Vec<super::config::AccountStatus>,
     pub(crate) default_alias: String,
+    pub(crate) coverage: Coverage,
+    pub(crate) navigation: Navigation,
 }
 
 pub(crate) fn resolve_period(
@@ -90,6 +121,7 @@ pub(crate) fn resolve_period(
     month: Option<&str>,
     week: Option<&str>,
     year: Option<&str>,
+    period: Option<&str>,
     today: NaiveDate,
 ) -> Result<Period, String> {
     let selected = [
@@ -97,13 +129,14 @@ pub(crate) fn resolve_period(
         month.is_some(),
         week.is_some(),
         year.is_some(),
+        period.is_some(),
     ]
     .iter()
     .filter(|present| **present)
     .count();
     if selected > 1 {
         return Err(
-            "pass at most one of -D/--day, -m/--month, -w/--week, -y/--year"
+            "pass at most one of -D/--day, -m/--month, -p/--period, -w/--week, -y/--year"
                 .to_owned(),
         );
     }
@@ -148,6 +181,9 @@ pub(crate) fn resolve_period(
             so_far: start <= today && today <= end,
         });
     }
+    if let Some(raw) = period {
+        return resolve_stats_strip_period(raw, today);
+    }
     let month = match month {
         Some(raw) => parse_month_arg(raw)?,
         None => YearMonth {
@@ -167,6 +203,124 @@ pub(crate) fn resolve_period(
     })
 }
 
+/// Resolve `-p/--period`: a day form goes through `resolve_day` (identical
+/// to `-D`), and every other form goes through the periods calendar
+/// (`PeriodId::resolve`). `-p 2026` is the ISO week-year; `-y 2026` stays
+/// the calendar year. All time is provisional here (today to today) and is
+/// finalized by `all_time_period` once rows are loaded.
+fn resolve_stats_strip_period(
+    raw: &str,
+    today: NaiveDate,
+) -> Result<Period, String> {
+    use crate::native::periods::{calendar::PeriodId, labels::range_label};
+    if let Ok(date) = resolve_day(raw, today) {
+        return Ok(Period {
+            kind: PeriodKind::Day,
+            key: date.format("%Y-%m-%d").to_string(),
+            start: date,
+            end: date,
+            label: render_day_heading(date)
+                .trim_start_matches('#')
+                .trim()
+                .to_owned(),
+            so_far: date == today,
+        });
+    }
+    let id = PeriodId::resolve(raw, today)?;
+    match id {
+        PeriodId::Week { .. } => {
+            let (start, end) = id
+                .start()
+                .zip(id.end())
+                .ok_or_else(|| format!("invalid period {raw:?}"))?;
+            Ok(Period {
+                kind: PeriodKind::Week,
+                key: id.to_string(),
+                start,
+                end,
+                label: format!(
+                    "{} – {}",
+                    start.format("%b %-d"),
+                    end.format("%b %-d, %Y")
+                ),
+                so_far: start <= today && today <= end,
+            })
+        }
+        PeriodId::Quarter { .. } => {
+            let (start, end) = id
+                .start()
+                .zip(id.end())
+                .ok_or_else(|| format!("invalid period {raw:?}"))?;
+            Ok(Period {
+                kind: PeriodKind::Quarter,
+                key: id.to_string(),
+                start,
+                end,
+                label: format!("{id} · {}", range_label(start, end)),
+                so_far: start <= today && today <= end,
+            })
+        }
+        PeriodId::Year(year) => {
+            let (start, end) = id
+                .start()
+                .zip(id.end())
+                .ok_or_else(|| format!("invalid period {raw:?}"))?;
+            Ok(Period {
+                kind: PeriodKind::IsoYear,
+                key: format!("{year:04}"),
+                start,
+                end,
+                label: format!("{id} · {}", range_label(start, end)),
+                so_far: start <= today && today <= end,
+            })
+        }
+        PeriodId::AllTime => Ok(Period {
+            kind: PeriodKind::AllTime,
+            key: "all_time".to_owned(),
+            start: today,
+            end: today,
+            label: "All time".to_owned(),
+            so_far: true,
+        }),
+    }
+}
+
+/// Finalize an all-time period over the bank's own history: it starts at
+/// the earliest `start` of a non-cash account or the earliest row date,
+/// whichever is earlier (today when neither exists), and ends at the later
+/// of today and the latest row date, so no row is ever excluded.
+pub(crate) fn all_time_period(
+    config: Option<&BankConfig>,
+    rows: &[BankRow],
+    today: NaiveDate,
+) -> Period {
+    let mut earliest: Option<NaiveDate> = None;
+    if let Some(config) = config {
+        for account in &config.accounts {
+            if account.kind.importable()
+                && let Some(start) = account.start
+            {
+                earliest = Some(earliest.map_or(start, |date| date.min(start)));
+            }
+        }
+    }
+    let mut latest: Option<NaiveDate> = None;
+    for row in rows {
+        earliest = Some(earliest.map_or(row.date, |date| date.min(row.date)));
+        latest = Some(latest.map_or(row.date, |date| date.max(row.date)));
+    }
+    let start = earliest.unwrap_or(today);
+    let end = latest.map_or(today, |date| date.max(today));
+    Period {
+        kind: PeriodKind::AllTime,
+        key: "all_time".to_owned(),
+        start,
+        end,
+        label: format!("All time · since {}", start.format("%b %-d, %Y")),
+        so_far: start <= today && today <= end,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     all_rows: Vec<BankRow>,
@@ -177,6 +331,8 @@ pub(crate) fn build(
     accounts: Vec<super::config::AccountStatus>,
     default_alias: String,
     heading_lines: &HashMap<(String, NaiveDate), (String, usize)>,
+    journal: &super::journal::JournalSnapshot,
+    summary: bool,
 ) -> BankReport {
     let waiting_all = all_rows.iter().filter(|row| !row.acknowledged).count();
     let waiting_oldest = all_rows
@@ -184,6 +340,7 @@ pub(crate) fn build(
         .filter(|row| !row.acknowledged)
         .map(|row| row.date)
         .min();
+    let coverage = coverage_for(&period, config, journal, &all_rows);
     let period_rows: Vec<BankRow> = all_rows
         .into_iter()
         .filter(|row| row.date >= period.start && row.date <= period.end)
@@ -193,69 +350,51 @@ pub(crate) fn build(
     let flagged = period_rows.iter().filter(|row| row.flagged).count();
     let waiting_period =
         period_rows.iter().filter(|row| !row.acknowledged).count();
+    let navigation = navigation_for(&period_rows, config, heading_lines);
 
     let mut by_date: BTreeMap<NaiveDate, Vec<BankRow>> = BTreeMap::new();
     for row in &period_rows {
         by_date.entry(row.date).or_default().push(row.clone());
     }
     let mut days = Vec::new();
-    let mut cursor = period.start;
-    while cursor <= period.end {
-        let rows = by_date.remove(&cursor).unwrap_or_default();
-        let month = month_of(cursor);
-        let path = month_path(month);
-        let (heading_path, line) = heading_lines
-            .get(&(path.clone(), cursor))
-            .cloned()
-            .or_else(|| rows.first().map(|row| (row.path.clone(), row.line)))
-            .unwrap_or_else(|| (path.clone(), 1));
-        let heading = rows
-            .first()
-            .map(|row| row.heading.clone())
-            .unwrap_or_else(|| render_day_heading(cursor));
-        let mut out_cents = 0i64;
-        let mut in_cents = 0i64;
-        let mut waiting = 0usize;
-        let mut flagged_count = 0usize;
-        for row in &rows {
-            let kind = config.and_then(|config| {
-                config.account(&row.account).map(|account| account.kind)
+    if !summary {
+        let mut cursor = period.start;
+        loop {
+            let rows = by_date.remove(&cursor).unwrap_or_default();
+            let month = month_of(cursor);
+            let path = month_path(month);
+            let (heading_path, line) = heading_lines
+                .get(&(path.clone(), cursor))
+                .cloned()
+                .or_else(|| {
+                    rows.first().map(|row| (row.path.clone(), row.line))
+                })
+                .unwrap_or_else(|| (path.clone(), 1));
+            let heading = rows
+                .first()
+                .map(|row| row.heading.clone())
+                .unwrap_or_else(|| render_day_heading(cursor));
+            // Day out/in run through the same accounting path as totals.
+            let day_totals = compute_totals(&rows, config);
+            days.push(ReportDay {
+                date: cursor,
+                heading,
+                path: heading_path,
+                line,
+                out_cents: day_totals.out_cents,
+                in_cents: day_totals.in_cents,
+                rows,
+                waiting: day_totals.waiting,
+                flagged: day_totals.flagged,
             });
-            if kind == Some(AccountKind::Cash)
-                || row.category.as_deref() == Some("transfer")
-                || row.cents == 0
-            {
-                // Day out/in follow the same keep-apart rules as totals:
-                // cash-account and transfer rows never land in day out/in.
-            } else if row.cents < 0 {
-                out_cents += -row.cents;
-            } else if row.category.as_deref() == Some("income")
-                || row.category.as_deref() == Some("refund")
-            {
-                in_cents += row.cents;
+            if cursor == period.end {
+                break;
             }
-            if !row.acknowledged {
-                waiting += 1;
-            }
-            if row.flagged {
-                flagged_count += 1;
-            }
+            let Some(next) = cursor.succ_opt() else {
+                break;
+            };
+            cursor = next;
         }
-        days.push(ReportDay {
-            date: cursor,
-            heading,
-            path: heading_path,
-            line,
-            out_cents,
-            in_cents,
-            rows,
-            waiting,
-            flagged: flagged_count,
-        });
-        let Some(next) = cursor.succ_opt() else {
-            break;
-        };
-        cursor = next;
     }
 
     BankReport {
@@ -271,6 +410,153 @@ pub(crate) fn build(
         categories,
         accounts,
         default_alias,
+        coverage,
+        navigation,
+    }
+}
+
+/// Whether a row carries counted money: it lands in `in_cents` or
+/// `out_cents` under `compute_totals`.
+fn is_counted_money(row: &BankRow, config: Option<&BankConfig>) -> bool {
+    if row.cents == 0 {
+        return false;
+    }
+    let kind = config.and_then(|config| {
+        config.account(&row.account).map(|account| account.kind)
+    });
+    if kind == Some(AccountKind::Cash)
+        || row.category.as_deref() == Some("transfer")
+    {
+        return false;
+    }
+    if row.cents < 0 {
+        return true;
+    }
+    matches!(row.category.as_deref(), Some("income") | Some("refund"))
+}
+
+fn coverage_for(
+    period: &Period,
+    config: Option<&BankConfig>,
+    journal: &super::journal::JournalSnapshot,
+    all_rows: &[BankRow],
+) -> Coverage {
+    let tracked_since = {
+        let mut earliest: Option<NaiveDate> = None;
+        if let Some(config) = config {
+            for account in &config.accounts {
+                if account.kind.importable()
+                    && let Some(start) = account.start
+                {
+                    earliest =
+                        Some(earliest.map_or(start, |date| date.min(start)));
+                }
+            }
+        }
+        match earliest {
+            Some(date) => Some(date),
+            None => all_rows.iter().map(|row| row.date).min(),
+        }
+    };
+    let imported_through = {
+        let mut through: Option<NaiveDate> = None;
+        let mut importable = false;
+        if let Some(config) = config {
+            for account in &config.accounts {
+                if !account.kind.importable() {
+                    continue;
+                }
+                importable = true;
+                let Some(start) = account.start else {
+                    continue;
+                };
+                let latest_end = journal
+                    .imports
+                    .iter()
+                    .filter(|event| event.account == account.alias)
+                    .map(|event| event.end)
+                    .max();
+                let account_through =
+                    latest_end.or_else(|| start.pred_opt()).unwrap_or(start);
+                through =
+                    Some(through.map_or(account_through, |date| {
+                        date.min(account_through)
+                    }));
+            }
+        }
+        if importable {
+            through
+        } else {
+            None
+        }
+    };
+    let start = match tracked_since {
+        Some(tracked) if tracked <= period.end => {
+            Some(tracked.max(period.start))
+        }
+        _ => None,
+    };
+    let through = match imported_through {
+        Some(imported) => imported.min(period.end),
+        None => period.end,
+    };
+    let complete = tracked_since.is_none_or(|tracked| tracked <= period.start)
+        && imported_through.is_none_or(|imported| imported >= period.end);
+    Coverage {
+        tracked_since,
+        imported_through,
+        start,
+        through,
+        complete,
+    }
+}
+
+fn navigation_for(
+    period_rows: &[BankRow],
+    config: Option<&BankConfig>,
+    heading_lines: &HashMap<(String, NaiveDate), (String, usize)>,
+) -> Navigation {
+    let waiting = period_rows
+        .iter()
+        .filter(|row| !row.acknowledged)
+        .min_by(|left, right| {
+            (left.date, &left.path, left.line).cmp(&(
+                right.date,
+                &right.path,
+                right.line,
+            ))
+        })
+        .map(|row| NavTarget {
+            path: row.path.clone(),
+            line: row.line,
+            date: row.date,
+        });
+    let first_date = period_rows
+        .iter()
+        .filter(|row| is_counted_money(row, config))
+        .map(|row| row.date)
+        .min();
+    let first = first_date.map(|date| {
+        let (path, line) = heading_lines
+            .get(&(month_path(month_of(date)), date))
+            .cloned()
+            .or_else(|| {
+                period_rows
+                    .iter()
+                    .find(|row| row.date == date)
+                    .map(|row| (row.path.clone(), row.line))
+            })
+            .unwrap_or_else(|| (month_path(month_of(date)), 1));
+        NavTarget { path, line, date }
+    });
+    let mut months_set = std::collections::BTreeSet::new();
+    for row in period_rows {
+        months_set.insert(month_path(month_of(row.date)));
+    }
+    Navigation {
+        waiting,
+        first,
+        months: months_set.into_iter().collect(),
     }
 }
 
@@ -394,6 +680,24 @@ fn share_of(part: i64, total: i64) -> f64 {
     }
 }
 
+fn option_date(value: Option<NaiveDate>) -> Value {
+    match value {
+        Some(date) => Value::String(date.format("%Y-%m-%d").to_string()),
+        None => Value::Null,
+    }
+}
+
+fn nav_target_json(target: &Option<NavTarget>) -> Value {
+    match target {
+        Some(target) => json!({
+            "path": target.path,
+            "line": target.line,
+            "date": target.date.format("%Y-%m-%d").to_string(),
+        }),
+        None => Value::Null,
+    }
+}
+
 pub(crate) fn to_json(report: &BankReport) -> Value {
     json!({
         "ok": true,
@@ -445,7 +749,19 @@ pub(crate) fn to_json(report: &BankReport) -> Value {
         "waiting": {
             "period": report.waiting_period,
             "all": report.waiting_all,
-            "oldest": report.waiting_oldest.map(|date| date.format("%Y-%m-%d").to_string()),
+            "oldest": option_date(report.waiting_oldest),
+        },
+        "coverage": {
+            "tracked_since": option_date(report.coverage.tracked_since),
+            "imported_through": option_date(report.coverage.imported_through),
+            "start": option_date(report.coverage.start),
+            "through": report.coverage.through.format("%Y-%m-%d").to_string(),
+            "complete": report.coverage.complete,
+        },
+        "navigation": {
+            "waiting": nav_target_json(&report.navigation.waiting),
+            "first": nav_target_json(&report.navigation.first),
+            "months": report.navigation.months,
         },
         "flagged": report.flagged,
     })
