@@ -366,6 +366,30 @@ project to `status: wip`. A project note may set optional `root: true` to
 become its own root parent for Stats grouping; see
 [R2 — Root parent](../pomodoro-homes.md#r2-root-parent).
 
+Each area or project with direct child projects has a generated callout
+under `## Projects`. Membership comes from each child's scalar `parent:`
+link; `root: true` does not remove a child from the catalog.
+
+```markdown
+## Projects
+
+> [!projects]
+>
+> - **[[work_intake_flow]]** — Ship the intake flow
+> - 🗓️ **[[work_rollout]]** — Deploy the release
+> - **Closed**
+>   - ✅ **[[work_pilot]]** — Complete the pilot
+```
+
+Open rows sort A–Z; closed rows sort newest closure first. State glyphs
+are absent for ready, 🗓️ for scheduled, ⛓️ for blocked, ⚠️ for an invalid
+or missing `^prj`, ✅ for done, and ❌ for canceled. Bob owns the callout;
+the heading and surrounding prose remain authored content.
+`bob projects list` reports catalog drift. `bob projects sync` repairs
+healthy catalogs and lifecycle fields together in one guarded commit;
+damaged catalogs are refused. Creating a project through capture also
+updates its parent's catalog in the same write.
+
 Contract: [Project Task Sync](../projects.md),
 [Project Note](glossary.md#project-note),
 [Project Task](glossary.md#project-task).

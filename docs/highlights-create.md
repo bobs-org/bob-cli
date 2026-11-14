@@ -118,6 +118,11 @@ Status glyphs are open ○, next ◉, in progress ◐, blocked ⊘, done ✓, an
 canceled ⊗. Chips show priority, `sched`, `repeats`, `ref`, and `moved N×`
 metadata, along with `Keep` and `quote` links where available.
 
+Generated Projects catalogs retain open child links and criteria in snapshots.
+Scheduled, blocked, and warning children show `scheduled`, `blocked`, and
+`needs ^prj` chips. Closed catalog rows are omitted, including with `-C`;
+an all-closed catalog disappears. `-M` uses the plain Markdown renderer.
+
 Note snapshot and research-report Markdown PDFs use a clean text layer: ragged
 right, no hyphenation, `Ligatures=NoCommon` for serif, sans, and mono fonts,
 and no Type 3 body fonts. Snapshots render through pandoc and XeLaTeX because

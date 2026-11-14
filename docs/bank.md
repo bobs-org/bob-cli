@@ -434,7 +434,7 @@ action. It respects `NO_COLOR` and pipes. Usage errors exit 2.
 
 ### Current limits
 
-Out of scope: plugin UI, subscriptions, historical `@BANK` migration,
+Out of scope: subscriptions, historical `@BANK` migration,
 feeds, budgets, pending transactions, and multi-currency accounting. CSV
 is a fallback profile with no cross-format fuzzy identity inference.
 

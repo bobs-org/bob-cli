@@ -164,10 +164,10 @@ bob gcal sync
 
 The preview prints the exact unified diff of the plan and writes nothing.
 The write adds a `## Events` section above `## Pomodoros`, one row per
-accepted event in time order, plus a `() — MEET` placeholder carrying a link
-per unended meeting. Meetings that already ended arrive as `[ ]` rows with no
-link; later meetings arrive `[*]` and linked. Run `bob gcal sync` again to
-confirm the second run is byte-identical and appends nothing, then
+accepted event in time order. Meetings whose buffered spans ended arrive `[x]`, linked under closed
+`MEET` sessions; ongoing and future meetings arrive `[*]`, linked under an
+open `MEET` entry. Run `bob gcal sync` again to
+confirm it creates no duplicate rows or links, then
 `bob gcal doctor` to see the `last sync` check go green.
 
 ## 5. Remove the grant

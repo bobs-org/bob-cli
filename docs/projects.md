@@ -24,6 +24,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 ## Contents
 
 - [Commands](#commands)
+- [JSON report](#json-report)
 - [Project notes](#project-notes)
 - [External names (`project_name_aliases`)](#external-names-project_name_aliases)
 - [The `^prj` task](#the-prj-task)
@@ -273,6 +274,7 @@ For a valid project date `P`, the ordinary-task contract is:
 | Done, canceled, or unknown/custom | Remove `#hide` only |
 | `^prj`, `P` in the future | Force exactly one `#hide`; keep or write `[scheduled:: P]` |
 | `^prj`, `P` due/past | Normal surfacing rule (rows above): remove `#hide` when there are no unhidden open tasks and no open sub-projects, add it back otherwise; keep the inline date |
+
 - Hosts and membership: a host is any area or project note with at least one
   direct child project. A child scalar `parent:` resolves by exact
   vault-relative path, then unique case-insensitive basename; list-form,
@@ -290,7 +292,9 @@ For a valid project date `P`, the ordinary-task contract is:
   block IDs, Keep links, and Markdown openers stripped; the tail is omitted
   when empty, placeholder, or equal to the stem.
 - Order: open rows first A–Z by stem (path tie-break); then `**Closed**` newest
-  first by closure date, undated last A–Z. A state change never moves a row.
+  first by closure date, undated last A–Z. Changes among open states keep
+  that alphabetical position; closing or reopening moves the row between
+  the open and Closed groups.
 - Closed history is derived: every closed direct child appears. A hand-deleted
   closed row returns on the next sync.
 - Warning children count as open: an otherwise empty parent with a warning row

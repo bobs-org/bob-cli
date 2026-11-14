@@ -321,7 +321,7 @@ store left under `~/Library/Application Support/gogcli` is not read. Rerun
 | `gmail.account` | String containing `@` | Optional when the isolated `bob-gmail` bucket holds exactly one unique email, else when gog as a whole holds exactly one | Account identity; `bob gmail login -a` can override it for that invocation. Commands prefer the Bob bucket before gog's default accounts. |
 | `gmail.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to write; `doctor` compares it to vault-sync's hostname slug. |
 | `gmail.body` | `full` or `headers` | `full` | `save` keeps full bodies or headers plus snippet; `doctor` reports the mode. |
-| `gmail.folder` | Nonempty string | `mail` | Vault folder for mail notes. |
+| `gmail.folder` | Nonempty relative path without parent segments | `mail` | Vault folder for mail notes. |
 | `gmail.link_label` | String containing `{subject}` | `✉️ {subject} · {who}` | Link label template used by save and sync. |
 | `gmail.never_save.from` | Sequence of strings | `[]` | Addresses or `@domains` that `save` refuses. |
 | `gmail.never_save.labels` | Sequence of strings | `[]` | Gmail label names that `save` refuses. |
@@ -332,18 +332,18 @@ store left under `~/Library/Application Support/gogcli` is not read. Rerun
 | `gmail.sync.label` | String or unset | `gmail.pull.label`, then `bob` | Enrollment label; an empty string disables sync. |
 | `gmail.sync.reply_wait_days` | Integer at least 1 | `3` | Calendar days from your send to the awaiting-reply nudge date; changing it never reschedules existing holds. |
 | `gmail.sync.route_prefixes` | Sequence of distinct quoted strings without `/` or whitespace | `[]` (no-prefix mode) | A user label `<prefix>/<note>` routes a thread to that area or project note; `[]` routes by any label that names one. |
+| `gmail.sync.archive` | `off` or `on`; booleans are rejected | `off` | Archive enrolled messages after all linking tasks close; requires enabled sync and the writer's modify grant. |
+| `gmail.sync.archive_label` | Nonempty, non-reserved Gmail label distinct from enrollment | `<resolved sync label>/closed` | Receipt label for Bob-owned archives; renaming re-baselines observation. |
+| `gmail.sync.archive_max` | Integer, 1–4294967295 | `10` | Larger eligible batches require `sync -c DIGEST` from a preview. |
 | `gmail.gog` | Absolute executable path; a leading `~/` is expanded | `gog` on `PATH`, then standard install locations | Configured gog executable for Gmail. |
 | `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
-A missing `gmail:` block uses those defaults. Unknown keys are ignored. A
-wrong-typed value is a setup error (exit 2) that names the key and never
-breaks other config loaders. Every gog child gets `XDG_CONFIG_HOME` set to
-Bob's config root: the non-empty value from Bob's environment after `~/`
-expansion, or `$HOME/.config`. gog therefore uses `<root>/gogcli`; a macOS
-store left under `~/Library/Application Support/gogcli` is not read. Rerun
-`bob gmail login` or move the `gogcli` directory into the configured root.
-`BOB_GMAIL_GOG` overrides `gmail.gog` and `gog` on `PATH`. See the
-[Bob Gmail contract](../gmail.md#configuration).
+A missing `gmail:` block uses these defaults; unknown keys are ignored.
+Wrong types exit 2 with the key, without breaking other loaders. Gmail uses
+the [same gog config root as Calendar](#gcal); login or moving the `gogcli`
+directory there makes credentials available. `BOB_GMAIL_GOG` overrides `gmail.gog` and `PATH`.
+See [Gmail configuration](../gmail.md#configuration) and
+[archive eligibility and undo](../gmail.md#archive-on-close).
 
 ### `stats`
 
@@ -462,22 +462,11 @@ See [`bob completion`](cli/completion.md), [plugin deployment](../plugins.md),
 the [Obsidian plugins reference](plugins/index.md), and the
 [plugin deployment guide](../develop/plugins/deployment.md).
 
-To install plugins, name the checkout you mean and list its plugin ids in
-`plugins.sync` — `bob plugins sync` deploys only those ids and exits 2 when
-the list is missing. Bare `bob plugins sync`
-resolves `--repo`, then `BOB_PLUGINS_DIR`, then
-`~/projects/github/bobs-org/bob-plugins`; a bare sync from inside a different
-bob-plugins checkout refuses before any pull or copy. From the checkout you
-want to deploy, preview then copy with that same `--repo`:
-
-```bash
-bob plugins list --repo "$PWD" --no-pull
-bob plugins sync --repo "$PWD" --dry-run --no-pull
-```
-
-`--repo "$PWD"` requires the current directory to be that bob-plugins
-checkout. Enable the copied plugins in Obsidian afterward. Do not run a live
-deploy from this documentation.
+Plugin source precedence is `--repo`, enclosing bob-plugins checkout,
+`BOB_PLUGINS_DIR`, then `~/projects/github/bobs-org/bob-plugins`.
+`--no-pull` skips the default repository refresh. `plugins.sync` controls
+which ids deploy; a missing list exits 2. Sync copies files without enabling
+plugins in Obsidian. See [plugin deployment](../plugins.md#sync).
 
 ## Other runtime environment
 

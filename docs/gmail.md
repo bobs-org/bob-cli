@@ -37,6 +37,8 @@ fake executable.
 - [Search](#search)
 - [Peek](#peek)
 - [Sync](#sync)
+- [Archive on close](#archive-on-close)
+- [Explicit undo](#explicit-undo)
 - [Watch](#watch)
 - [Attachments](#attachments)
 - [Try it](#try-it)
@@ -65,6 +67,7 @@ bob gmail save URL|ID|NOTE... [-b|--bob-dir DIR] [-B|--body full|headers] [-d|--
 bob gmail search [QUERY] [-f|--format table|json] [-l|--limit N]
 bob gmail send NOTE [-b|--bob-dir DIR] [-c|--confirm DIGEST] [-d|--dry-run] [-f|--format human|json]
 bob gmail sync [-b|--bob-dir DIR] [-c|--confirm DIGEST] [-d|--dry-run] [-f|--format human|json] [-l|--limit N] [-n|--no-archive] [-q|--quiet] [-r|--retry-timeout SECS]
+bob gmail unarchive NOTE|THREAD... [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
 Running `bob gmail` with no subcommand lists saved threads, exactly like the

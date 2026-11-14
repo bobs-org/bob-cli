@@ -70,8 +70,8 @@ ready-to-paste snippet when the list is missing.
 bob plugins sync --repo ~/projects/github/bobs-org/bob-plugins --bob-dir "$BOB_DIR"
 ```
 
-Pass `--repo` with the checkout path every time: a bare sync run from inside
-a different checkout refuses rather than deploying the wrong source. Sync
+Pass `--repo` to select that checkout explicitly; otherwise sync prefers an
+enclosing bob-plugins checkout over the environment or default path. Sync
 copies plugin assets into the vault. It does not enable plugins in Obsidian
 and does not create dashboard notes; enable **Bob Ledger Tools** and
 **Bob Navigation Hotkeys** by hand and open notes by hand. See the mounted
