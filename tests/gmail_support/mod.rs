@@ -315,6 +315,18 @@ impl FakeGog {
             .expect("write fake search pages");
     }
 
+    /// Set paged responses specifically for `after:... -from:me` activity
+    /// discovery without consuming the enrollment-label search pages.
+    pub(crate) fn set_activity_search_pages(&self, pages: serde_json::Value) {
+        let mut state: serde_json::Value = fs::read(&self.state)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        state["activity_search_pages"] = pages;
+        fs::write(&self.state, serde_json::to_vec(&state).unwrap())
+            .expect("write fake activity search pages");
+    }
+
     /// Fail the next `remaining` calls for `operation`, then succeed. Used
     /// for bounded-backoff and partial-success tests.
     pub(crate) fn set_transient_failure(

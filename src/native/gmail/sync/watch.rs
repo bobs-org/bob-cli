@@ -398,7 +398,7 @@ fn thread_label_ids(thread: &GmailThread) -> BTreeSet<String> {
         .collect()
 }
 
-fn is_trashed(thread: &GmailThread) -> bool {
+pub(crate) fn is_trashed(thread: &GmailThread) -> bool {
     !thread.messages.is_empty()
         && thread.messages.iter().all(|message| {
             message

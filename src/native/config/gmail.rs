@@ -66,6 +66,8 @@ pub(crate) struct GmailSyncSettings {
     pub(crate) reply_wait_days: Option<u32>,
     /// `None` when unset or null; otherwise whether archive is enabled.
     pub(crate) archive: Option<bool>,
+    /// `None` when unset or null; otherwise whether reply reopening is enabled.
+    pub(crate) reopen: Option<bool>,
     /// `None` when unset or null; otherwise the receipt label name.
     pub(crate) archive_label: Option<String>,
     /// `None` when unset or null; otherwise a positive burst limit.
@@ -398,6 +400,7 @@ fn parse_sync(
         route_prefixes: parse_route_prefixes(get("route_prefixes"), path)?,
         reply_wait_days: parse_reply_wait_days(get("reply_wait_days"), path)?,
         archive: parse_archive_mode(get("archive"), path)?,
+        reopen: parse_reopen_mode(get("reopen"), path)?,
         archive_label: parse_archive_label(get("archive_label"), path)?,
         archive_max: parse_archive_max(get("archive_max"), path)?,
     }))
@@ -417,6 +420,31 @@ fn parse_archive_mode(
     let invalid = || {
         ConfigError::Invalid(format!(
             "gmail.sync.archive in {} must be 'off' or 'on'; got {}",
+            path.display(),
+            render_scalar(&value)
+        ))
+    };
+    match &value {
+        serde_yaml::Value::String(value) if value == "off" => Ok(Some(false)),
+        serde_yaml::Value::String(value) if value == "on" => Ok(Some(true)),
+        _ => Err(invalid()),
+    }
+}
+
+/// `gmail.sync.reopen` accepts only the explicit strings `off` and `on`.
+fn parse_reopen_mode(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<bool>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let invalid = || {
+        ConfigError::Invalid(format!(
+            "gmail.sync.reopen in {} must be 'off' or 'on'; got {}",
             path.display(),
             render_scalar(&value)
         ))
@@ -715,7 +743,7 @@ mod tests {
     #[test]
     fn parses_the_sync_block() {
         let settings = parse(
-            "gmail:\n  sync:\n    label: bob\n    inbox: gmail_inbox.md\n    route_prefixes: [\"#\", \"+\"]\n    reply_wait_days: 5\n",
+            "gmail:\n  sync:\n    label: bob\n    inbox: gmail_inbox.md\n    route_prefixes: [\"#\", \"+\"]\n    reply_wait_days: 5\n    reopen: on\n",
         )
         .expect("sync block");
         assert_eq!(
@@ -726,6 +754,7 @@ mod tests {
                 route_prefixes: Some(vec!["#".to_string(), "+".to_string()]),
                 reply_wait_days: Some(5),
                 archive: None,
+                reopen: Some(true),
                 archive_label: None,
                 archive_max: None,
             })
@@ -753,6 +782,31 @@ mod tests {
         assert_eq!(sync.archive, Some(false));
         assert_eq!(sync.archive_label, None);
         assert_eq!(sync.archive_max, None);
+    }
+
+    #[test]
+    fn parses_strict_reopen_settings() {
+        assert_eq!(
+            parse("gmail:\n  sync:\n    reopen: off\n")
+                .unwrap()
+                .sync
+                .unwrap()
+                .reopen,
+            Some(false)
+        );
+        assert_eq!(
+            parse("gmail:\n  sync:\n    reopen:\n")
+                .unwrap()
+                .sync
+                .unwrap()
+                .reopen,
+            None
+        );
+        for value in ["true", "yes", "enabled", "'ON'", "1"] {
+            let text = format!("gmail:\n  sync:\n    reopen: {value}\n");
+            let error = parse(&text).expect_err(&text);
+            assert!(error.message().contains("gmail.sync.reopen"), "{error}");
+        }
     }
 
     #[test]

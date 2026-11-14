@@ -38,6 +38,67 @@ fn seeded(fake: &FakeGog) {
     }));
 }
 
+fn threads_list_args(query: &str) -> Vec<String> {
+    let params = json!({
+        "userId": "me",
+        "q": query,
+        "maxResults": 500,
+        "fields": "threads/id,nextPageToken,resultSizeEstimate"
+    });
+    vec![
+        "--no-input".into(),
+        "--json".into(),
+        "--readonly".into(),
+        "--client".into(),
+        "bob-gmail".into(),
+        "--account".into(),
+        "you@example.com".into(),
+        "--enable-commands".into(),
+        "api.call,api.gmail.users.threads.list".into(),
+        "api".into(),
+        "call".into(),
+        "gmail".into(),
+        "v1".into(),
+        "gmail.users.threads.list".into(),
+        "--params".into(),
+        serde_json::to_string(&params).unwrap(),
+        "--scope".into(),
+        "https://www.googleapis.com/auth/gmail.readonly".into(),
+        "--no-cache".into(),
+    ]
+}
+
+#[test]
+fn activity_search_pages_are_separate_from_label_discovery_pages() {
+    let env = GmailEnv::new("bob-cli-gmail-transport-activity-pages");
+    let fake = FakeGog::new(&env, "transport");
+    fake.set_search_pages(json!([{"threads": [{"id": "aaaaaaaaaaaaaaaa"}]}]));
+    fake.set_activity_search_pages(
+        json!([{"threads": [{"id": "bbbbbbbbbbbbbbbb"}]}]),
+    );
+
+    let activity = fake.invoke(
+        &threads_list_args("after:1793907900 -from:me")
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+    assert!(activity.status.success(), "{}", stderr(&activity));
+    assert_eq!(
+        json_stdout(&activity)["threads"][0]["id"],
+        "bbbbbbbbbbbbbbbb"
+    );
+
+    let label = fake.invoke(
+        &threads_list_args("label:bob")
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+    assert!(label.status.success(), "{}", stderr(&label));
+    assert_eq!(json_stdout(&label)["threads"][0]["id"], "aaaaaaaaaaaaaaaa");
+}
+
 #[test]
 fn batch_modify_is_one_explicit_message_call_and_preserves_other_labels() {
     let env = GmailEnv::new("bob-cli-gmail-transport-batch");

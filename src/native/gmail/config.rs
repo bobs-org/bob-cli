@@ -40,6 +40,7 @@ pub(crate) struct GmailConfig {
     route_prefixes: Vec<String>,
     reply_wait_days: u32,
     archive_enabled: bool,
+    reopen_enabled: bool,
     archive_label: String,
     archive_max: u32,
     gog: Option<PathBuf>,
@@ -138,6 +139,7 @@ impl GmailConfig {
             None => Some(DEFAULT_SYNC_LABEL.to_string()),
         };
         let archive_enabled = sync.archive.unwrap_or(false);
+        let reopen_enabled = sync.reopen.unwrap_or(true);
         if archive_enabled && sync_label.is_none() {
             return Err(GmailError::setup(
                 "config",
@@ -177,6 +179,7 @@ impl GmailConfig {
                 .reply_wait_days
                 .unwrap_or(DEFAULT_REPLY_WAIT_DAYS),
             archive_enabled,
+            reopen_enabled,
             archive_label,
             archive_max: sync.archive_max.unwrap_or(DEFAULT_ARCHIVE_MAX),
             gog: settings.gog,
@@ -250,6 +253,11 @@ impl GmailConfig {
 
     pub(crate) fn archive_enabled(&self) -> bool {
         self.archive_enabled
+    }
+
+    #[allow(dead_code)] // Wired by the closed-reply transaction phase.
+    pub(crate) fn reopen_enabled(&self) -> bool {
+        self.reopen_enabled
     }
 
     pub(crate) fn archive_label(&self) -> &str {
@@ -425,6 +433,7 @@ mod tests {
         assert!(config.route_prefixes().is_empty(), "no-prefix mode");
         assert_eq!(config.reply_wait_days(), 3);
         assert!(!config.archive_enabled());
+        assert!(config.reopen_enabled());
         assert_eq!(config.archive_label(), "bob/closed");
         assert_eq!(config.archive_max(), 10);
     }
@@ -630,6 +639,22 @@ mod tests {
         .expect("resolves");
         assert_eq!(config.route_prefixes(), ["#", "+"]);
         assert_eq!(config.reply_wait_days(), 7);
+    }
+
+    #[test]
+    fn reopen_defaults_on_and_can_be_disabled() {
+        assert!(GmailConfig::from_settings(settings())
+            .expect("defaults")
+            .reopen_enabled());
+        let config = GmailConfig::from_settings(bob_config::GmailSettings {
+            sync: Some(bob_config::GmailSyncSettings {
+                reopen: Some(false),
+                ..Default::default()
+            }),
+            ..settings()
+        })
+        .expect("off setting");
+        assert!(!config.reopen_enabled());
     }
 
     #[test]

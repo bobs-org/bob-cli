@@ -109,6 +109,16 @@ pub(crate) struct EnrollmentFold {
 }
 
 impl EnrollmentFold {
+    #[cfg(test)]
+    pub(crate) fn test_with_keys(
+        keys: impl IntoIterator<Item = ThreadKey>,
+    ) -> Self {
+        Self {
+            by_thread: keys.into_iter().map(|key| (key, Vec::new())).collect(),
+            warnings: Vec::new(),
+        }
+    }
+
     /// Fold `.bob/gmail/*.jsonl` across every host. Malformed lines and
     /// enrollment events without a valid identity are skipped with bounded
     /// warnings; other `gmail.*` kinds are ignored.

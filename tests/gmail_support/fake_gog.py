@@ -477,7 +477,13 @@ def matching_rfc_thread_ids(query: str) -> list[str]:
 
 
 def serve_threads_list(query: str, page: str | None) -> None:
-    search_pages = state.get("search_pages")
+    # Closed-thread reply discovery has its own fixture pool. Keeping it
+    # separate prevents activity tests from consuming or changing the label
+    # discovery pages used by existing sync tests.
+    is_activity_query = query.startswith("after:") and "-from:me" in query
+    search_pages = state.get(
+        "activity_search_pages" if is_activity_query else "search_pages"
+    )
     if isinstance(search_pages, list) and search_pages:
         if page is None:
             dump_ids_list_page(search_pages[0] or {})

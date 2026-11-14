@@ -120,6 +120,19 @@ pub(crate) struct SyncState {
     /// Open archive-review count from the last live run.
     #[serde(default)]
     pub(crate) archive_review_count: u32,
+    /// Per-account recent-activity cursors used to discover replies on
+    /// already-closed Gmail threads.
+    #[serde(default)]
+    pub(crate) reopen_activity: BTreeMap<String, ReopenActivityState>,
+}
+
+/// Account-scoped activity high-water mark and body-free retry thread IDs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ReopenActivityState {
+    #[serde(default)]
+    pub(crate) high_water_at: Option<String>,
+    #[serde(default)]
+    pub(crate) retry_thread_ids: BTreeSet<String>,
 }
 
 impl HealthEvent {
@@ -233,6 +246,89 @@ fn write_state(state: &SyncState) -> io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+#[allow(dead_code)] // Used by closed-reply state accessors below.
+fn normalize_account(account: &str) -> Option<String> {
+    let account = account.trim();
+    (!account.is_empty()).then(|| account.to_ascii_lowercase())
+}
+
+#[allow(dead_code)] // Used by closed-reply state accessors below.
+fn normalize_activity_thread_id(thread_id: &str) -> Option<String> {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty()
+        || thread_id.len() > 128
+        || !thread_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(thread_id.to_ascii_lowercase())
+}
+
+/// Load the normalized activity state for one account. Old state files and
+/// invalid hand-edited retry IDs safely behave as empty activity state.
+#[allow(dead_code)] // Wired by the closed-reply preparation phase.
+pub(crate) fn reopen_activity_state(account: &str) -> ReopenActivityState {
+    let Some(account) = normalize_account(account) else {
+        return ReopenActivityState::default();
+    };
+    let mut activity = load_state()
+        .ok()
+        .and_then(|state| state.reopen_activity.get(&account).cloned())
+        .unwrap_or_default();
+    if activity
+        .high_water_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .is_none()
+    {
+        activity.high_water_at = None;
+    }
+    activity.retry_thread_ids = activity
+        .retry_thread_ids
+        .iter()
+        .filter_map(|thread_id| normalize_activity_thread_id(thread_id))
+        .collect();
+    activity
+}
+
+/// Atomically settle proposed activity state after a live sync transaction.
+/// Preparation and dry-runs only compute this value; they never call here.
+#[allow(dead_code)] // Called only after live closed-reply transaction settlement.
+pub(crate) fn record_reopen_activity_state(
+    account: &str,
+    activity: &ReopenActivityState,
+) -> Result<(), GmailError> {
+    let Some(account) = normalize_account(account) else {
+        return Err(GmailError::runtime(
+            "sync_state",
+            "could not write Gmail activity state for an empty account"
+                .to_string(),
+        ));
+    };
+    let mut state = load_state().unwrap_or_default();
+    let mut activity = activity.clone();
+    if activity
+        .high_water_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .is_none()
+    {
+        activity.high_water_at = None;
+    }
+    activity.retry_thread_ids = activity
+        .retry_thread_ids
+        .iter()
+        .filter_map(|thread_id| normalize_activity_thread_id(thread_id))
+        .collect();
+    state.reopen_activity.insert(account, activity);
+    write_state(&state).map_err(|error| {
+        GmailError::runtime(
+            "sync_state",
+            format!("could not write Gmail sync state: {error}"),
+        )
+    })
 }
 
 fn now_rfc3339() -> String {
@@ -1232,6 +1328,63 @@ mod tests {
         assert_eq!(archive_review_state(), (keys.clone(), 1));
         record_archive_reviews(&BTreeSet::new(), 0).unwrap();
         assert_eq!(archive_review_state(), (BTreeSet::new(), 0));
+    }
+
+    #[test]
+    fn older_sync_state_deserializes_without_activity_fields() {
+        let state: SyncState = serde_json::from_str(
+            r#"{"last_success_at":"2026-11-01T00:00:00Z","archive_review_count":2}"#,
+        )
+        .expect("older state remains readable");
+        assert_eq!(state.archive_review_count, 2);
+        assert!(state.reopen_activity.is_empty());
+    }
+
+    #[test]
+    fn activity_state_is_account_scoped_validated_and_preserved_by_health_writers(
+    ) {
+        let (_temp, _env) = isolated_state("gmail-reopen-activity");
+        let other = ReopenActivityState {
+            high_water_at: Some("2026-11-01T00:00:00Z".into()),
+            retry_thread_ids: BTreeSet::from(["aabb".into()]),
+        };
+        record_reopen_activity_state("Other@Example.com", &other)
+            .expect("write other account");
+        record_reopen_activity_state(
+            " ME@example.com ",
+            &ReopenActivityState {
+                high_water_at: Some("2026-11-02T00:00:00Z".into()),
+                retry_thread_ids: BTreeSet::from([
+                    "AABB".into(),
+                    "not-hex".into(),
+                    format!("{}0", "a".repeat(128)),
+                ]),
+            },
+        )
+        .expect("write current account");
+
+        assert_eq!(
+            reopen_activity_state("me@example.com").retry_thread_ids,
+            BTreeSet::from(["aabb".into()])
+        );
+        assert_eq!(reopen_activity_state("OTHER@example.com"), other);
+
+        let keys = BTreeSet::from(["review-key".to_string()]);
+        record_archive_reviews(&keys, 1).expect("archive review write");
+        record_attempt().expect("attempt write");
+        record_success().expect("success write");
+        let state = load_state().expect("preserved state");
+        assert_eq!(state.archive_review_seen, ["review-key"]);
+        assert_eq!(state.archive_review_count, 1);
+        assert_eq!(state.reopen_activity.len(), 2);
+        assert_eq!(
+            state.reopen_activity["me@example.com"].retry_thread_ids,
+            BTreeSet::from(["aabb".into()])
+        );
+        assert_eq!(
+            state.reopen_activity["other@example.com"].retry_thread_ids,
+            BTreeSet::from(["aabb".into()])
+        );
     }
 
     #[test]
