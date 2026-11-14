@@ -16,3 +16,5 @@ owns every value, and it never writes the note. `## Pomodoros` no longer
 repeats its total. Facts and the bars open the [[stats-dash]] with the day
 pinned. "Day stats" in UI copy (`Toggle Day stats`, `stats.day_strip`).
 Not the [[morning-gtd-review-footer]].
+
+A [[bank-badge]] may follow this strip for the same day.

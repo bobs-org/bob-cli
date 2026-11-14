@@ -33,3 +33,5 @@ pinned. bob owns every value, and the strip never writes the note.
 
 Not the parts table (`bob-period-parts`), the [[stats-dash]], `bob stats` terminal
 output, or the [[morning-gtd-review-footer]].
+
+A [[bank-badge]] follows each Stats Strip for the same period.

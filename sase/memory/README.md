@@ -108,8 +108,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 
 - Kind: memory web descriptor
 - Description: No description set.
-- Lines: 36
-- Approx. tokens: 566
+- Lines: 37
+- Approx. tokens: 569
 
 ### `sase/memory/task_types.md`
 
@@ -170,8 +170,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Core notes: 1
 - Reference notes: 5
 - Web descriptor notes: 3
-- Total lines: 857
-- Total approx. tokens: 12382
+- Total lines: 858
+- Total approx. tokens: 12385
 
 ## Commands
 
