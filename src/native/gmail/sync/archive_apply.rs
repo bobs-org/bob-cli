@@ -1244,25 +1244,17 @@ fn ensure_baseline(
             .map(|label| label.id.clone());
     let configured_label =
         ArchiveLabelIdentity::new(config.archive_label(), configured_label_id);
-    if let Some(label) = configured_label {
-        let needs_enablement = match journal.enablement(account) {
-            Some((_, current)) => current.name != label.name,
-            None => !journal.is_enabled(account),
-        };
-        if needs_enablement
-            && let Some(event) =
-                journal.event_for_enablement(account, true, label)
-        {
-            ArchiveJournal::append(vault, host, &event).map_err(|error| {
-                GmailError::runtime(
-                    "journal",
-                    format!(
-                        "could not append the Gmail archive journal: {error}"
-                    ),
-                )
-            })?;
-            appended = true;
-        }
+    if let Some(label) = configured_label
+        && journal.needs_enablement(account, &label)
+        && let Some(event) = journal.event_for_enablement(account, true, label)
+    {
+        ArchiveJournal::append(vault, host, &event).map_err(|error| {
+            GmailError::runtime(
+                "journal",
+                format!("could not append the Gmail archive journal: {error}"),
+            )
+        })?;
+        appended = true;
     }
     if appended {
         *journal = ArchiveJournal::load(vault).map_err(|error| {

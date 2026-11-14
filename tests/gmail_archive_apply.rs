@@ -282,6 +282,102 @@ fn file_adopt(env: &GmailEnv, fake: &FakeGog) -> (String, String) {
     (note, link)
 }
 
+/// Journal a first enablement whose receipt label had no Gmail id yet: the
+/// label does not exist until the first archive creates it.
+fn seed_enablement_without_receipt_id(env: &GmailEnv) {
+    let journal_dir = env.vault().join(".bob/gmail");
+    fs::create_dir_all(&journal_dir).expect("journal dir");
+    let label = json!({"name": "bob/closed", "id": Value::Null});
+    let epoch = {
+        use sha2::{Digest, Sha256};
+        format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                serde_json::to_vec(&json!({
+                    "purpose": "gmail.archive.epoch",
+                    "account": ACCOUNT,
+                    "previous_change_id": Value::Null,
+                    "label": label,
+                }))
+                .unwrap()
+            ))
+        )
+    };
+    let change = {
+        use sha2::{Digest, Sha256};
+        format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                serde_json::to_vec(&json!({
+                    "purpose": "gmail.archive.enablement",
+                    "account": ACCOUNT,
+                    "enabled": true,
+                    "epoch": epoch,
+                    "previous_change_id": Value::Null,
+                    "label": label,
+                }))
+                .unwrap()
+            ))
+        )
+    };
+    fs::write(
+        journal_dir.join("athena.jsonl"),
+        serde_json::to_string(&json!({
+            "v": 1,
+            "ts": "2026-01-05T09:00:00-05:00",
+            "host": "athena",
+            "kind": "gmail.archive_enabled",
+            "value": {
+                "account": ACCOUNT,
+                "enabled": true,
+                "epoch": epoch,
+                "change_id": change,
+                "previous_change_id": Value::Null,
+                "label": label,
+            },
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .expect("seed enablement");
+}
+
+/// Save and link THREAD_A without archive observations, so its first
+/// observed close is a historical backlog: the adopting sync skips archive
+/// with `-n`.
+fn adopt_without_archive_observations(env: &GmailEnv, fake: &FakeGog) {
+    let saved = run_gmail(env, fake, &["save", THREAD_A, "-f", "json"]);
+    assert_eq!(
+        saved.status.code(),
+        Some(0),
+        "save the watched mail note:\n{}\n{}",
+        stdout(&saved),
+        stderr(&saved)
+    );
+    let link = json_stdout(&saved)["link"]
+        .as_str()
+        .expect("saved link")
+        .to_string();
+    let inbox = env.vault().join("gmail_inbox.md");
+    fs::write(
+        &inbox,
+        format!("#task archive apply probe {link}\n\n- [ ] #task archive apply probe {link}\n"),
+    )
+    .expect("write inbox task");
+    let adopted = run_gmail(
+        env,
+        fake,
+        &["sync", "-l", "0", "-r", "0", "-n", "-f", "json"],
+    );
+    assert_eq!(
+        adopted.status.code(),
+        Some(0),
+        "adopt without archive observations:\n{}\n{}",
+        stdout(&adopted),
+        stderr(&adopted)
+    );
+}
+
 fn close_inbox_task(env: &GmailEnv) {
     set_inbox_task_status(env, 'x');
 }
@@ -632,93 +728,8 @@ fn live_pauses_backlog_without_confirm_and_creates_no_labels() {
         &fake,
         vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
     );
-    let journal_dir = env.vault().join(".bob/gmail");
-    fs::create_dir_all(&journal_dir).expect("journal dir");
-    let label = json!({"name": "bob/closed", "id": Value::Null});
-    let epoch = {
-        use sha2::{Digest, Sha256};
-        format!(
-            "sha256:{}",
-            hex::encode(Sha256::digest(
-                serde_json::to_vec(&json!({
-                    "purpose": "gmail.archive.epoch",
-                    "account": ACCOUNT,
-                    "previous_change_id": Value::Null,
-                    "label": label,
-                }))
-                .unwrap()
-            ))
-        )
-    };
-    let change = {
-        use sha2::{Digest, Sha256};
-        format!(
-            "sha256:{}",
-            hex::encode(Sha256::digest(
-                serde_json::to_vec(&json!({
-                    "purpose": "gmail.archive.enablement",
-                    "account": ACCOUNT,
-                    "enabled": true,
-                    "epoch": epoch,
-                    "previous_change_id": Value::Null,
-                    "label": label,
-                }))
-                .unwrap()
-            ))
-        )
-    };
-    fs::write(
-        journal_dir.join("athena.jsonl"),
-        serde_json::to_string(&json!({
-            "v": 1,
-            "ts": "2026-01-05T09:00:00-05:00",
-            "host": "athena",
-            "kind": "gmail.archive_enabled",
-            "value": {
-                "account": ACCOUNT,
-                "enabled": true,
-                "epoch": epoch,
-                "change_id": change,
-                "previous_change_id": Value::Null,
-                "label": label,
-            },
-        }))
-        .unwrap()
-            + "\n",
-    )
-    .expect("seed enablement");
-    // Adopt without archive observations so the first observed close is a
-    // historical backlog: the initial live sync skips archive with `-n`.
-    let saved = run_gmail(&env, &fake, &["save", THREAD_A, "-f", "json"]);
-    assert_eq!(
-        saved.status.code(),
-        Some(0),
-        "save the watched mail note:\n{}\n{}",
-        stdout(&saved),
-        stderr(&saved)
-    );
-    let link = json_stdout(&saved)["link"]
-        .as_str()
-        .expect("saved link")
-        .to_string();
-    let inbox = env.vault().join("gmail_inbox.md");
-    fs::write(
-        &inbox,
-        format!("#task archive apply probe {link}\n\n- [ ] #task archive apply probe {link}\n"),
-    )
-    .expect("write inbox task");
-    let adopted = run_gmail(
-        &env,
-        &fake,
-        &["sync", "-l", "0", "-r", "0", "-n", "-f", "json"],
-    );
-    assert_eq!(
-        adopted.status.code(),
-        Some(0),
-        "adopt without archive observations:\n{}\n{}",
-        stdout(&adopted),
-        stderr(&adopted)
-    );
+    seed_enablement_without_receipt_id(&env);
+    adopt_without_archive_observations(&env, &fake);
     close_inbox_task(&env);
     fake.clear_calls();
     let paused =
@@ -750,6 +761,76 @@ fn live_pauses_backlog_without_confirm_and_creates_no_labels() {
         journal_has(&env, "gmail.archived"),
         "confirmed backlog archives"
     );
+}
+
+#[test]
+fn confirmed_kept_backlog_stays_consumed_after_the_receipt_label_appears() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-apply-kept-backlog");
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, false);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    seed_enablement_without_receipt_id(&env);
+    adopt_without_archive_observations(&env, &fake);
+    close_inbox_task(&env);
+    // An unsaved Inbox reply makes the confirmed backlog row a keep.
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX", ENROLLMENT_ID]),
+        ],
+    );
+    fake.set_messages(json!({
+        MESSAGE_A: {"threadId": THREAD_A, "labelIds": ["INBOX", ENROLLMENT_ID]},
+        MESSAGE_B: {"threadId": THREAD_A, "labelIds": ["INBOX", ENROLLMENT_ID]},
+    }));
+    let paused =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_exit(&paused, 1, "unconfirmed backlog pauses");
+    let digest = json_stdout(&paused)["archive_digest"]
+        .as_str()
+        .expect("digest")
+        .to_string();
+    let confirmed = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-c", &digest, "-f", "json"],
+    );
+    assert_exit(&confirmed, 0, "matching digest confirms the backlog");
+    let value = json_stdout(&confirmed);
+    assert_eq!(value["archive"][0]["action"], "kept");
+    assert_eq!(value["archive"][0]["reason"], "unsaved");
+    assert!(journal_has(&env, "gmail.kept"), "kept consumes the close");
+
+    // Another thread's archive creates the receipt label, so its Gmail id
+    // now resolves. Live and dry-run alike keep the journaled epoch: the
+    // consumed keep never comes back as an unconfirmed backlog.
+    seed_labels(&fake, true);
+    for (args, label) in [
+        (
+            &["sync", "-l", "0", "-r", "0", "-d", "-f", "json"][..],
+            "post-confirm dry-run is clean",
+        ),
+        (
+            &["sync", "-l", "0", "-r", "0", "-f", "json"][..],
+            "post-confirm live run is clean",
+        ),
+    ] {
+        let run = run_gmail(&env, &fake, args);
+        assert_exit(&run, 0, label);
+        let value = json_stdout(&run);
+        assert!(
+            value["archive"]
+                .as_array()
+                .is_none_or(|rows| rows.is_empty()),
+            "{label}: {value}"
+        );
+    }
 }
 
 #[test]

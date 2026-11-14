@@ -408,6 +408,21 @@ impl ArchiveJournal {
             .then_some((current.epoch.as_str(), &current.label))
     }
 
+    /// Whether enabling `label` starts a new epoch. Only a disabled account
+    /// or a renamed receipt label re-baselines: the receipt label's Gmail id
+    /// is often unknown at first enable (the label is created by the first
+    /// archive), and resolving it later must keep the frozen epoch. Live
+    /// baselines and dry-run projections share this rule so `-d` digests
+    /// keep matching the live `-c` plan.
+    pub(crate) fn needs_enablement(
+        &self,
+        account: &str,
+        label: &ArchiveLabelIdentity,
+    ) -> bool {
+        self.enablement(account)
+            .is_none_or(|(_, current)| current.name != label.name)
+    }
+
     /// Current close generation for a thread, if it belongs to the active
     /// enablement epoch and has not been consumed.
     pub(crate) fn unconsumed_close(
@@ -559,8 +574,9 @@ impl ArchiveJournal {
         scan: &ArchiveScan,
     ) -> Self {
         let mut projected = self.clone();
-        if let Some(event) =
-            projected.event_for_enablement(account, true, label)
+        if projected.needs_enablement(account, &label)
+            && let Some(event) =
+                projected.event_for_enablement(account, true, label)
         {
             projected.apply_projected_observation(&event);
         }
@@ -2067,6 +2083,63 @@ mod tests {
         assert!(close.historical);
         assert_eq!(close.confirmation_digest.as_deref(), Some(digest.as_str()));
         assert!(!needs_record);
+    }
+
+    #[test]
+    fn dry_run_baseline_keeps_the_epoch_once_the_receipt_label_id_resolves() {
+        // First enable journals the receipt label before Gmail has created
+        // it (no id); the confirmed backlog run then creates the label.
+        let (mut state, mut events, receipt_label) = enabled();
+        let closed = evidence(key(), 'x');
+        let closed_scan = scan(closed.clone());
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let confirmed = state
+            .event_for_confirmed_backlog(
+                &closed_scan,
+                &closed,
+                receipt_label,
+                &digest,
+            )
+            .unwrap();
+        push(&mut events, &confirmed, "athena", 2);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+        let ArchiveDisposition::Ready { close, .. } =
+            state.project(&closed_scan, &closed)
+        else {
+            panic!("confirmed backlog should become ready")
+        };
+        let kept = terminal_event(
+            &state,
+            &close,
+            ArchiveTerminalKind::Kept {
+                reason: "unsaved".to_string(),
+            },
+        );
+        push(&mut events, &kept, "athena", 3);
+        state = ArchiveJournal::from_events(events, Vec::new());
+        let epoch = state.enablement(ACCOUNT).unwrap().0.to_string();
+
+        let resolved = label("bob/closed", Some("Label_1"));
+        assert!(!state.needs_enablement(ACCOUNT, &resolved));
+        let projected = state.project_baseline(ACCOUNT, resolved, &closed_scan);
+        assert_eq!(projected.enablement(ACCOUNT).unwrap().0, epoch);
+        assert!(matches!(
+            projected.project(&closed_scan, &closed),
+            ArchiveDisposition::Consumed {
+                outcome: ArchiveTerminalKind::Kept { .. },
+                ..
+            }
+        ));
+
+        // A renamed receipt label still re-baselines, live and dry-run alike.
+        let renamed = label("bob/done", Some("Label_2"));
+        assert!(state.needs_enablement(ACCOUNT, &renamed));
+        let projected = state.project_baseline(ACCOUNT, renamed, &closed_scan);
+        assert_ne!(projected.enablement(ACCOUNT).unwrap().0, epoch);
+        assert_eq!(
+            projected.project(&closed_scan, &closed),
+            ArchiveDisposition::HistoricalBacklog
+        );
     }
 
     #[test]
