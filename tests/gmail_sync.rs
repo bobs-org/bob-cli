@@ -22,6 +22,31 @@ fn assert_success(output: &std::process::Output, label: &str) {
     );
 }
 
+/// Take an exclusive flock that this test released moments ago.
+///
+/// Another test thread may fork between this test closing its previous
+/// guard and the forked child's exec; until that exec closes the inherited
+/// descriptor the old lock stays held, so a single `try_lock_exclusive`
+/// can fail with `WouldBlock` under load. Retry for a bounded window
+/// instead of blocking forever.
+fn relock_exclusive(file: &fs::File, label: &str) {
+    use fs2::FileExt;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => return,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => panic!("{label}: {error:?}"),
+        }
+    }
+}
+
 fn write_area(env: &GmailEnv, route: &str) {
     fs::write(
         env.vault().join(format!("{route}.md")),
@@ -2010,7 +2035,7 @@ fn live_sync_records_success_and_stale_busy_skip_exits_1() {
         .write(true)
         .open(&lock_path)
         .expect("open guard");
-    guard.try_lock_exclusive().expect("hold sync guard");
+    relock_exclusive(&guard, "hold sync guard");
     let output = run_gmail(&env, &fake, &["sync", "-f", "json", "-r", "0"]);
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
     let text = format!("{}{}", stdout(&output), stderr(&output));

@@ -473,6 +473,13 @@ const TABLE: &[Entry] = &[
         arg: "week",
         kind: Kind::FreeText,
     },
+    // `bob bank report -p` takes a stats-strip period id or a period-note
+    // path, like `bob periods show`.
+    Entry {
+        path: &["bank", "report"],
+        arg: "period",
+        kind: Kind::VaultNote,
+    },
     // `bob gcal login -c` stores a Desktop-app OAuth client JSON.
     Entry {
         path: &[],

@@ -2841,23 +2841,43 @@ fn run_session(
 mod session_tests {
     use super::*;
 
+    /// The slave device path of an unlocked PTY master.
+    ///
+    /// libc exposes `ptsname_r` only on Linux-like targets; macOS answers
+    /// the same question with the `TIOCPTYGNAME` ioctl into a 128-byte
+    /// buffer.
+    fn pty_slave_path(master: i32) -> String {
+        let mut name = [0 as libc::c_char; 128];
+        // SAFETY: `name` is a writable 128-byte buffer, the size both calls
+        // require; the return code is asserted before the buffer is read.
+        #[cfg(target_os = "macos")]
+        let rc = unsafe {
+            libc::ioctl(
+                master,
+                libc::TIOCPTYGNAME as libc::c_ulong,
+                name.as_mut_ptr(),
+            )
+        };
+        // SAFETY: as above.
+        #[cfg(not(target_os = "macos"))]
+        let rc =
+            unsafe { libc::ptsname_r(master, name.as_mut_ptr(), name.len()) };
+        assert_eq!(rc, 0, "pty slave name");
+        // SAFETY: on success both calls leave a NUL-terminated path in `name`.
+        unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
     fn open_pty_pair() -> (i32, i32) {
         // SAFETY: the master fd is closed by the caller; the slave path is
-        // a fresh buffer filled by ptsname_r.
+        // a fresh NUL-terminated string from pty_slave_path.
         unsafe {
             let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             assert!(master >= 0, "posix_openpt");
             assert_eq!(libc::grantpt(master), 0, "grantpt");
             assert_eq!(libc::unlockpt(master), 0, "unlockpt");
-            let mut name = vec![0 as libc::c_char; 128];
-            assert_eq!(
-                libc::ptsname_r(master, name.as_mut_ptr(), name.len()),
-                0,
-                "ptsname_r"
-            );
-            let path = std::ffi::CStr::from_ptr(name.as_ptr())
-                .to_string_lossy()
-                .into_owned();
+            let path = pty_slave_path(master);
             let path = std::ffi::CString::new(path).expect("slave path");
             let slave =
                 libc::open(path.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
