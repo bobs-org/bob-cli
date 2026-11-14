@@ -8,13 +8,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{Datelike, Days, NaiveDate, NaiveDateTime, Weekday};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Weekday};
 use clap::ArgMatches;
 use serde_json::{json, Map, Value};
 
+pub(crate) use super::children::Span;
 use super::{
     calendar::{weeks_in_year, PeriodId, PeriodState},
-    charts, labels, note,
+    charts,
+    children::{
+        child_specs, column_specs, dates_between, day_caption, group_specs,
+        period_bounds, weekday, weeks_between, ChildSpec,
+    },
+    labels, note,
 };
 use crate::native::{
     config::{self, load_stats_config, load_theme_sources_from},
@@ -98,12 +104,6 @@ impl ShowError {
             }
         })
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Span {
-    pub(crate) start: NaiveDate,
-    pub(crate) end: NaiveDate,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1136,14 +1136,6 @@ fn percent(value: i64, total: i64) -> String {
     format!("{}%", rounded)
 }
 
-#[derive(Debug, Clone)]
-struct PartSpec {
-    id: Option<PeriodId>,
-    day: Option<NaiveDate>,
-    span: Span,
-    group: Option<String>,
-}
-
 fn build_parts(
     vault: &Path,
     id: PeriodId,
@@ -1184,115 +1176,9 @@ fn build_parts(
     Ok((columns, children, groups))
 }
 
-fn column_specs(id: PeriodId, span: Span) -> Vec<PartSpec> {
-    match id {
-        PeriodId::Week { .. } => dates_between(span)
-            .into_iter()
-            .map(|day| PartSpec {
-                id: None,
-                day: Some(day),
-                span: Span {
-                    start: day,
-                    end: day,
-                },
-                group: None,
-            })
-            .collect(),
-        PeriodId::Quarter { .. } | PeriodId::Year(_) => {
-            let weeks = weeks_between(span);
-            weeks
-                .into_iter()
-                .map(|week| {
-                    let group = if matches!(id, PeriodId::Year(_)) {
-                        Some(format!(
-                            "Q{}",
-                            match week {
-                                PeriodId::Week { week, .. } =>
-                                    super::calendar::quarter_of_week(week),
-                                _ => 1,
-                            }
-                        ))
-                    } else {
-                        None
-                    };
-                    PartSpec {
-                        id: Some(week),
-                        day: None,
-                        span: clip_span(
-                            Span {
-                                start: week.start().unwrap(),
-                                end: week.end().unwrap(),
-                            },
-                            span,
-                        ),
-                        group,
-                    }
-                })
-                .collect()
-        }
-        PeriodId::AllTime => quarters_between(span)
-            .into_iter()
-            .map(|quarter| PartSpec {
-                id: Some(quarter),
-                day: None,
-                span: clip_span(
-                    Span {
-                        start: quarter.start().unwrap(),
-                        end: quarter.end().unwrap(),
-                    },
-                    span,
-                ),
-                group: Some(format!("{}", quarter_year(quarter))),
-            })
-            .collect(),
-    }
-}
-
-fn child_specs(id: PeriodId, span: Span) -> Vec<PartSpec> {
-    match id {
-        PeriodId::Week { .. } => column_specs(id, span),
-        PeriodId::Quarter { .. } => column_specs(id, span),
-        PeriodId::Year(year) => (1..=4)
-            .filter_map(|quarter| {
-                let id = PeriodId::Quarter { year, quarter };
-                let qspan = period_bounds(id)?;
-                Some(PartSpec {
-                    id: Some(id),
-                    day: None,
-                    span: clip_span(qspan, span),
-                    group: None,
-                })
-            })
-            .collect(),
-        PeriodId::AllTime => {
-            let first_year = PeriodId::year_for_date(span.start);
-            let last_year = PeriodId::year_for_date(span.end);
-            let (PeriodId::Year(first), PeriodId::Year(last)) =
-                (first_year, last_year)
-            else {
-                return Vec::new();
-            };
-            (first..=last)
-                .map(|year| {
-                    let id = PeriodId::Year(year);
-                    PartSpec {
-                        id: Some(id),
-                        day: None,
-                        span: clip_span(
-                            period_bounds(id).unwrap_or(span),
-                            span,
-                        ),
-                        group: None,
-                    }
-                })
-                .collect()
-        }
-    }
-}
-
 fn build_column(
     vault: &Path,
-    spec: PartSpec,
+    spec: ChildSpec,
     observed_end: Option<NaiveDate>,
     today: NaiveDate,
     daily: &DailyMetrics,
@@ -1306,7 +1192,7 @@ fn build_column(
         if state == PeriodState::Future {
             return Ok(json!({
                 "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon),
-                "caption": format!("{} {}", weekday(day), day.day()), "path": path, "exists": path_exists,
+                "caption": day_caption(day), "path": path, "exists": path_exists,
                 "start": date_text(day), "end": date_text(day), "state": "future", "partial": null,
                 "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": null,
             }));
@@ -1318,7 +1204,7 @@ fn build_column(
         let closeout = closeout_for_day(day, daily, today);
         return Ok(json!({
             "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon),
-            "caption": format!("{} {}", weekday(day), day.day()), "path": path, "exists": path_exists,
+            "caption": day_caption(day), "path": path, "exists": path_exists,
             "start": date_text(day), "end": date_text(day), "state": state_name(state), "partial": null,
             "worked": worked.as_ref().map(worked_column), "stack": worked.as_ref().map(|value| stack_value(value, homes)).unwrap_or_default(),
             "stacks": worked.as_ref().map(|value| charts::stacks_json(period_charts, &value.parts)).unwrap_or_else(charts::empty_stacks),
@@ -1374,7 +1260,7 @@ fn build_column(
 
 fn build_child(
     vault: &Path,
-    spec: PartSpec,
+    spec: ChildSpec,
     observed_end: Option<NaiveDate>,
     today: NaiveDate,
     daily: &DailyMetrics,
@@ -1639,51 +1525,19 @@ fn build_groups(
     today: NaiveDate,
     daily: &DailyMetrics,
 ) -> Vec<Value> {
-    match id {
-        PeriodId::Year(year) => (1..=4)
-            .map(|quarter| {
-                let child_id = PeriodId::Quarter { year, quarter };
-                let span = clip_span(
-                    period_bounds(child_id).unwrap_or(parent_span),
-                    parent_span,
-                );
-                group_row(
-                    format!("Q{quarter}"),
-                    format!("Q{quarter}"),
-                    span,
-                    observed_end,
-                    today,
-                    daily,
-                )
-            })
-            .collect(),
-        PeriodId::AllTime => {
-            let (PeriodId::Year(first), PeriodId::Year(last)) = (
-                PeriodId::year_for_date(parent_span.start),
-                PeriodId::year_for_date(parent_span.end),
-            ) else {
-                return Vec::new();
-            };
-            (first..=last)
-                .map(|year| {
-                    let child_id = PeriodId::Year(year);
-                    let span = clip_span(
-                        period_bounds(child_id).unwrap_or(parent_span),
-                        parent_span,
-                    );
-                    group_row(
-                        year.to_string(),
-                        year.to_string(),
-                        span,
-                        observed_end,
-                        today,
-                        daily,
-                    )
-                })
-                .collect()
-        }
-        _ => Vec::new(),
-    }
+    group_specs(id, parent_span)
+        .into_iter()
+        .map(|group| {
+            group_row(
+                group.caption.clone(),
+                group.caption,
+                group.span,
+                observed_end,
+                today,
+                daily,
+            )
+        })
+        .collect()
 }
 
 fn group_row(
@@ -1709,7 +1563,7 @@ fn group_row(
 fn empty_future_columns(id: PeriodId, span: Span) -> Vec<Value> {
     column_specs(id, span).into_iter().map(|spec| {
         if let Some(day) = spec.day {
-            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": format!("{} {}", weekday(day), day.day()), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
+            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": day_caption(day), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
         } else {
             let child = spec.id.expect("period spec id");
             json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "caption": labels::short_label(child), "path": child.path().to_string_lossy(), "exists": false, "start": date_text(spec.span.start), "end": date_text(spec.span.end), "state": "future", "partial": false, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
@@ -1770,70 +1624,6 @@ fn coverage_value(
         PeriodState::Closed => String::new(),
     };
     json!({ "tracked_days": tracked, "elapsed_days": elapsed, "total_days": span_days(span), "display": display })
-}
-
-fn dates_between(span: Span) -> Vec<NaiveDate> {
-    if span.start > span.end {
-        return Vec::new();
-    }
-    let mut dates = Vec::new();
-    let mut date = span.start;
-    loop {
-        dates.push(date);
-        if date == span.end {
-            break;
-        }
-        let Some(next) = date.succ_opt() else {
-            break;
-        };
-        date = next;
-    }
-    dates
-}
-
-fn weeks_between(span: Span) -> Vec<PeriodId> {
-    let Some(mut date) = PeriodId::week_for_date(span.start).start() else {
-        return Vec::new();
-    };
-    let mut weeks = Vec::new();
-    while date <= span.end {
-        weeks.push(PeriodId::week_for_date(date));
-        let Some(next) = date.checked_add_days(Days::new(7)) else {
-            break;
-        };
-        date = next;
-    }
-    weeks
-}
-
-fn quarters_between(span: Span) -> Vec<PeriodId> {
-    let mut cursor = PeriodId::quarter_for_date(span.start);
-    let mut quarters = Vec::new();
-    loop {
-        if cursor.start().is_some_and(|start| start > span.end) {
-            break;
-        }
-        quarters.push(cursor);
-        let Some(next) = cursor.next() else {
-            break;
-        };
-        cursor = next;
-    }
-    quarters
-}
-
-fn period_bounds(id: PeriodId) -> Option<Span> {
-    Some(Span {
-        start: id.start()?,
-        end: id.end()?,
-    })
-}
-
-fn clip_span(inner: Span, outer: Span) -> Span {
-    Span {
-        start: inner.start.max(outer.start),
-        end: inner.end.min(outer.end),
-    }
 }
 
 fn observed_span(span: Span, observed_end: Option<NaiveDate>) -> Span {
@@ -1921,13 +1711,6 @@ fn id_year(id: PeriodId) -> i32 {
     }
 }
 
-fn quarter_year(id: PeriodId) -> i32 {
-    match id {
-        PeriodId::Quarter { year, .. } => year,
-        _ => 0,
-    }
-}
-
 fn link_value(vault: &Path, id: PeriodId, label: &str) -> Value {
     let path = id.path();
     json!({ "id": id.to_string(), "path": path.to_string_lossy(), "label": label, "exists": vault.join(path).is_file() })
@@ -1973,18 +1756,6 @@ fn week_coverage_label(id: PeriodId) -> String {
     match id {
         PeriodId::Week { week, .. } => format!("W{week:02}"),
         _ => labels::short_label(id),
-    }
-}
-
-fn weekday(date: NaiveDate) -> &'static str {
-    match date.weekday() {
-        Weekday::Mon => "Mon",
-        Weekday::Tue => "Tue",
-        Weekday::Wed => "Wed",
-        Weekday::Thu => "Thu",
-        Weekday::Fri => "Fri",
-        Weekday::Sat => "Sat",
-        Weekday::Sun => "Sun",
     }
 }
 

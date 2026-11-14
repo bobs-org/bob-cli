@@ -114,6 +114,9 @@ pub(crate) struct BankReport {
     pub(crate) default_alias: String,
     pub(crate) coverage: Coverage,
     pub(crate) navigation: Navigation,
+    /// The `-c` aggregate: `None` without `-c`; with `-c`, `Some(None)`
+    /// only when all time spans more than 64 ISO years (JSON `null`).
+    pub(crate) charts: Option<Option<super::charts::Charts>>,
 }
 
 pub(crate) fn resolve_period(
@@ -333,6 +336,7 @@ pub(crate) fn build(
     heading_lines: &HashMap<(String, NaiveDate), (String, usize)>,
     journal: &super::journal::JournalSnapshot,
     summary: bool,
+    charts: bool,
 ) -> BankReport {
     let waiting_all = all_rows.iter().filter(|row| !row.acknowledged).count();
     let waiting_oldest = all_rows
@@ -351,6 +355,17 @@ pub(crate) fn build(
     let waiting_period =
         period_rows.iter().filter(|row| !row.acknowledged).count();
     let navigation = navigation_for(&period_rows, config, heading_lines);
+    let charts = charts.then(|| {
+        super::charts::build(
+            &period,
+            &period_rows,
+            config,
+            &breakdown,
+            &coverage,
+            heading_lines,
+            today,
+        )
+    });
 
     let mut by_date: BTreeMap<NaiveDate, Vec<BankRow>> = BTreeMap::new();
     for row in &period_rows {
@@ -412,7 +427,20 @@ pub(crate) fn build(
         default_alias,
         coverage,
         navigation,
+        charts,
     }
+}
+
+/// The rows dated inside `[start, end]`, in their original order.
+pub(super) fn rows_in_span(
+    rows: &[BankRow],
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Vec<BankRow> {
+    rows.iter()
+        .filter(|row| row.date >= start && row.date <= end)
+        .cloned()
+        .collect()
 }
 
 /// Whether a row carries counted money: it lands in `in_cents` or
@@ -560,7 +588,7 @@ fn navigation_for(
     }
 }
 
-fn breakdown_for(
+pub(super) fn breakdown_for(
     rows: &[BankRow],
     config: Option<&BankConfig>,
 ) -> Vec<BreakdownEntry> {
@@ -672,7 +700,7 @@ fn breakdown_for(
     ordered
 }
 
-fn share_of(part: i64, total: i64) -> f64 {
+pub(super) fn share_of(part: i64, total: i64) -> f64 {
     if total <= 0 {
         0.0
     } else {
@@ -699,7 +727,7 @@ fn nav_target_json(target: &Option<NavTarget>) -> Value {
 }
 
 pub(crate) fn to_json(report: &BankReport) -> Value {
-    json!({
+    let mut value = json!({
         "ok": true,
         "schema_version": SCHEMA_VERSION,
         "today": report.today.format("%Y-%m-%d").to_string(),
@@ -764,5 +792,10 @@ pub(crate) fn to_json(report: &BankReport) -> Value {
             "months": report.navigation.months,
         },
         "flagged": report.flagged,
-    })
+    });
+    if let Some(charts) = &report.charts {
+        value["charts"] =
+            charts.as_ref().map_or(Value::Null, super::charts::to_json);
+    }
+    value
 }

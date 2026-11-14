@@ -8,7 +8,8 @@ use clap::{
 };
 
 use super::{
-    ack, check, dates, ensure, import_run, list, output, report, scan, status,
+    ack, charts, check, dates, ensure, import_run, list, output, report, scan,
+    status,
 };
 use crate::native::env as bob_env;
 
@@ -101,13 +102,14 @@ pub(crate) fn build_cli_report() -> ClapCommand {
     ClapCommand::new("bob bank report")
         .about("Report bank totals for a day, week, month, quarter, year, or all time")
         .long_about(
-            "Every total is computed from rows at read time; rows on cash-kind accounts and rows with [cat:: transfer] are kept apart. Takes at most one of -D/--day, -m/--month, -p/--period, -w/--week, -y/--year and defaults to the current month. `-D` yields one day; `-p` reports one stats-strip period (a day, an ISO week, a quarter, an ISO week-year, or all time over the bank's own history). `-p 2026` is the ISO week-year; `-y 2026` is the calendar year. `-s` omits per-day rows. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.",
+            "Every total is computed from rows at read time; rows on cash-kind accounts and rows with [cat:: transfer] are kept apart. Takes at most one of -D/--day, -m/--month, -p/--period, -w/--week, -y/--year and defaults to the current month. `-D` yields one day; `-p` reports one stats-strip period (a day, an ISO week, a quarter, an ISO week-year, or all time over the bank's own history). `-p 2026` is the ISO week-year; `-y 2026` is the calendar year. `-s` omits per-day rows. `-c` adds `charts`, the child-period cashflow and category aggregate on the period's Stats Strip axis (days of a week, weeks of a quarter or ISO week-year, quarters of all time); it needs `-w` or a `-p` week, quarter, ISO week-year, or all, and exits 2 otherwise. This command is read-only. With no bank.md and no bank/ folder, prints a teaching empty state and exits 0.",
         )
         .after_help(
-            "Examples:\n  bob bank report\n  bob bank report -m 2026-11\n  bob bank report -w 2026-W46 -f json\n  bob bank report -D 2026-11-14\n  bob bank report -p 2026-Q4 -s -f json\n  bob bank report -p all -s\n\nSee docs/bank.md for the totals contract.",
+            "Examples:\n  bob bank report\n  bob bank report -m 2026-11\n  bob bank report -w 2026-W46 -f json\n  bob bank report -D 2026-11-14\n  bob bank report -p 2026-Q4 -s -f json\n  bob bank report -p 2026-Q4 -s -c -f json\n  bob bank report -p all -s\n\nSee docs/bank.md for the totals contract.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
+        .arg(charts_arg())
         .arg(day_arg())
         .arg(format_arg())
         .arg(month_arg())
@@ -254,6 +256,14 @@ fn period_arg() -> Arg {
         .value_name("PERIOD")
         .value_parser(OsStringValueParser::new())
         .help("Report one stats-strip period: YYYY-MM-DD, GGGG-Www, GGGG-Qn, GGGG (ISO week-year), all, last-week, last-quarter, last-year, or a period-note path")
+}
+
+fn charts_arg() -> Arg {
+    Arg::new("charts")
+        .long("charts")
+        .short('c')
+        .action(ArgAction::SetTrue)
+        .help("Add the child-period cashflow and category chart aggregate")
 }
 
 fn summary_arg() -> Arg {
@@ -611,6 +621,7 @@ fn execute_report(matches: &ArgMatches) -> i32 {
     let year = opt_string(matches, "year");
     let period_arg = opt_string(matches, "period");
     let summary = matches.get_flag("summary");
+    let with_charts = matches.get_flag("charts");
     let mut period = match report::resolve_period(
         day.as_deref(),
         month.as_deref(),
@@ -625,6 +636,15 @@ fn execute_report(matches: &ArgMatches) -> i32 {
             return 2;
         }
     };
+    if with_charts && charts::period_id_for(&period).is_none() {
+        report_option_error(
+            "bob bank report",
+            json,
+            today,
+            charts::PERIOD_ERROR,
+        );
+        return 2;
+    }
     let config = match load_config(&scan) {
         Ok((config, _)) => Some(config),
         Err(message) => {
@@ -677,6 +697,7 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         &heading_lines,
         &journal,
         summary,
+        with_charts,
     );
     if json {
         println!("{}", report::to_json(&built));

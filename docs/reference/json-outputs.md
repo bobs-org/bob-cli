@@ -194,6 +194,7 @@ See [capture JSON](../capture.md#input-stdin-and-json-output).
 ### Bank reports {#bank-reports}
 
 `schema_version: 1`; [Bank JSON](../bank.md#json) with `day`/`week`/`quarter`/`iso_year`/`all_time` periods, `-s` empty `days`, plus `coverage`/`navigation`.
+`report -c` adds `charts {version, granularity, buckets[], groups[], categories}` for week, quarter, ISO-year, and all-time periods; see [Report charts](../bank.md#report-charts).
 
 ### Session edits and successor offers
 

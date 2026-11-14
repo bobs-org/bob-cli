@@ -535,6 +535,7 @@ fn report_periods_and_breakdown() {
         &headings,
         &super::journal::JournalSnapshot::default(),
         false,
+        false,
     );
     // Breakdown is declared order, then cash, then unclassified.
     let keys: Vec<&str> = built
@@ -648,6 +649,7 @@ fn place_report(
         headings,
         journal,
         summary,
+        false,
     )
 }
 
@@ -1600,6 +1602,7 @@ fn reversed_all_time_interval_produces_no_days() {
         &headings,
         &journal,
         false,
+        false,
     );
     assert!(full.days.is_empty());
     let summary = super::report::build(
@@ -1613,6 +1616,7 @@ fn reversed_all_time_interval_produces_no_days() {
         &headings,
         &journal,
         true,
+        false,
     );
     assert!(summary.days.is_empty());
     assert_eq!(full.totals.out_cents, summary.totals.out_cents);

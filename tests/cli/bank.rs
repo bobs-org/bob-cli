@@ -664,3 +664,185 @@ fn import_writes_shared_suggestion_and_points_next_at_the_walk() {
     assert_eq!(atm["suggestion"]["source"], "bank");
     assert_eq!(atm["category"], atm["suggestion"]["category"]);
 }
+
+const CHARTS_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
+
+const CHARTS_MONTH: &str = "---\nparent: \"[[bank]]\"\ntype: \"[[bank_month]]\"\nmonth: 2026-11\ncreated: 2026-11-12T07:30:00-05:00\n---\n\n# 🏦 November 2026\n\n```bob-bank\nview: month\n```\n\n## Wed Nov 11\n\n- [x] $13.71 Smashburger [cat:: dining]\n- [x] +$15.00 Refund [cat:: refund]\n- [x] $100.00 Card payment [cat:: transfer]\n\n## Thu Nov 12\n\n- [ ] $61.20 ShopRite [cat:: groceries]\n- [x] +$1,250.00 Payroll [cat:: income]\n";
+
+fn charts_vault() -> (TempDir, PathBuf) {
+    let temp = TempDir::new("bob-cli-bank-charts");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(vault.join("bank")).expect("bank folder");
+    write_file(&vault.join("bank.md"), CHARTS_HUB);
+    write_file(&vault.join("bank/2026-11.md"), CHARTS_MONTH);
+    (temp, vault)
+}
+
+fn run_charts(vault: &Path, args: &[&str]) -> Output {
+    bob_command()
+        .arg("bank")
+        .args(args)
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", NOW)
+        .env("TZ", "UTC")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob bank report")
+}
+
+#[test]
+fn report_charts_aggregate_rides_the_strip_axis() {
+    let (_temp, vault) = charts_vault();
+    let charted = run_charts(
+        &vault,
+        &["report", "-p", "2026-W46", "-s", "-c", "-f", "json"],
+    );
+    assert_success(&charted);
+    let mut payload = json(&charted);
+    assert_eq!(payload["days"], serde_json::json!([]));
+    let charts = payload.as_object_mut().unwrap().remove("charts").unwrap();
+    assert_eq!(charts["version"], 1);
+    assert_eq!(charts["granularity"], "day");
+    let buckets = charts["buckets"].as_array().unwrap();
+    let ids: Vec<&str> = buckets
+        .iter()
+        .map(|bucket| bucket["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "2026-11-09",
+            "2026-11-10",
+            "2026-11-11",
+            "2026-11-12",
+            "2026-11-13",
+            "2026-11-14",
+            "2026-11-15"
+        ]
+    );
+    assert_eq!(buckets[2]["label"], "Wed 11");
+    assert_eq!(buckets[2]["out_cents"], 1371);
+    assert_eq!(buckets[2]["in_cents"], 1500);
+    assert_eq!(buckets[2]["rows"], 3);
+    assert_eq!(buckets[3]["out_cents"], 6120);
+    assert_eq!(buckets[3]["in_cents"], 125_000);
+    assert_eq!(buckets[3]["waiting"], 1);
+    assert_eq!(buckets[3]["so_far"], true);
+    // Never imported: every elapsed day is awaiting import, later days are
+    // future, and the money stays.
+    assert_eq!(buckets[3]["state"], "awaiting_import");
+    assert_eq!(buckets[4]["state"], "future");
+    // Day targets are the month note's day headings, or null.
+    let heading_line = CHARTS_MONTH
+        .lines()
+        .position(|line| line == "## Wed Nov 11")
+        .unwrap()
+        + 1;
+    assert_eq!(buckets[2]["target"]["path"], "bank/2026-11.md");
+    assert_eq!(buckets[2]["target"]["line"], heading_line);
+    assert!(buckets[0]["target"].is_null());
+    let out: i64 = buckets
+        .iter()
+        .map(|bucket| bucket["out_cents"].as_i64().unwrap())
+        .sum();
+    assert_eq!(out, payload["totals"]["out_cents"].as_i64().unwrap());
+    assert_eq!(charts["categories"]["series"][0]["key"], "groceries");
+    assert!(charts["categories"]["rest"].is_null());
+
+    // Without -c the payload is the same minus the charts key, and -w
+    // charts the same week as -p.
+    let plain = json(&run_charts(
+        &vault,
+        &["report", "-p", "2026-W46", "-s", "-f", "json"],
+    ));
+    assert!(plain.get("charts").is_none());
+    assert_eq!(payload, plain);
+    let week = json(&run_charts(
+        &vault,
+        &["report", "-w", "2026-W46", "-c", "-f", "json"],
+    ));
+    assert_eq!(week["charts"]["buckets"], charts["buckets"]);
+    assert_eq!(week["days"].as_array().unwrap().len(), 7);
+
+    let quarter = json(&run_charts(
+        &vault,
+        &["report", "-p", "2026-Q4", "-s", "-c", "-f", "json"],
+    ));
+    assert_eq!(quarter["charts"]["granularity"], "week");
+    assert_eq!(quarter["charts"]["buckets"].as_array().unwrap().len(), 14);
+    assert_eq!(quarter["charts"]["buckets"][6]["id"], "2026-W46");
+    assert_eq!(
+        quarter["charts"]["buckets"][6]["target"],
+        serde_json::json!({"path": "2026/2026-W46.md", "line": 1})
+    );
+    let year = json(&run_charts(
+        &vault,
+        &["report", "-p", "2026", "-s", "-c", "-f", "json"],
+    ));
+    assert_eq!(year["charts"]["buckets"].as_array().unwrap().len(), 53);
+    assert_eq!(year["charts"]["groups"].as_array().unwrap().len(), 4);
+    let all = json(&run_charts(
+        &vault,
+        &["report", "-p", "all", "-s", "-c", "-f", "json"],
+    ));
+    assert_eq!(all["charts"]["granularity"], "quarter");
+    assert_eq!(all["charts"]["buckets"][0]["id"], "2026-Q4");
+    assert_eq!(all["charts"]["buckets"][0]["start"], "2026-11-01");
+
+    let human = run_charts(&vault, &["report", "-w", "2026-W46", "-c"]);
+    assert_success(&human);
+    assert_stdout_has_no_ansi(&human);
+    let text = stdout(&human);
+    assert_text_order(
+        &text,
+        &["By day", "Mon 9", "Wed 11", "Thu 12", "Sun 15"],
+    );
+    let today = text
+        .lines()
+        .find(|line| line.starts_with("Thu 12"))
+        .unwrap();
+    assert!(today.contains("+$1,250.00"), "{text}");
+    assert!(today.contains("$61.20"), "{text}");
+    assert!(today.contains("1 waiting"), "{text}");
+    assert!(today.contains("so far · not imported yet"), "{text}");
+    let friday = text
+        .lines()
+        .find(|line| line.starts_with("Fri 13"))
+        .unwrap();
+    assert!(friday.ends_with("future"), "{text}");
+}
+
+#[test]
+fn report_charts_refuses_periods_without_children() {
+    let (_temp, vault) = charts_vault();
+    let message =
+        "-c/--charts needs a week, quarter, ISO year, or all-time period (-w or -p)";
+    for args in [
+        ["report", "-c"].as_slice(),
+        ["report", "-c", "-m", "2026-11"].as_slice(),
+        ["report", "-c", "-D", "today"].as_slice(),
+        ["report", "-c", "-y", "2026"].as_slice(),
+        ["report", "-c", "-p", "2026-11-12"].as_slice(),
+    ] {
+        let human = run_charts(&vault, args);
+        assert_eq!(human.status.code(), Some(2), "{}", format_output(&human));
+        assert!(stdout(&human).is_empty(), "{}", format_output(&human));
+        assert!(
+            stderr(&human).contains(&format!("bob bank report: {message}")),
+            "{}",
+            format_output(&human)
+        );
+        let mut json_args = args.to_vec();
+        json_args.extend(["-f", "json"]);
+        let refused = run_charts(&vault, &json_args);
+        assert_eq!(
+            refused.status.code(),
+            Some(2),
+            "{}",
+            format_output(&refused)
+        );
+        let payload = json(&refused);
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["error"], message);
+    }
+}

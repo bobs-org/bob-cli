@@ -460,6 +460,14 @@ quarter, an ISO week-year, or all time over the bank's own history.
 When the bank's tracked history or import coverage falls short of the
 period, human output adds one line such as
 `Tracked since Nov 11 · imported through Nov 13`.
+`-c` adds the child-period chart aggregate described in
+[Report charts](#report-charts) for a week (`-w`, or `-p` with a week), a
+quarter, an ISO week-year, or all time. Human output then ends with one
+aligned line per child period (label, In, Out, waiting count, and state
+words such as `not imported yet`, `not tracked`, `partly covered`, and
+`so far`), followed by the ISO year's quarters or all time's years. Any
+other period exits 2 with
+`-c/--charts needs a week, quarter, ISO year, or all-time period (-w or -p)`.
 Human output shows bars and a heat strip, and never depends on terminal
 width. Amounts are tabular and right-aligned with explicit signs;
 inflows are green and outflows are neutral, because spending is not an
@@ -638,7 +646,8 @@ suggested. Each `categories[]` entry is
   months[]}` (`waiting` is the oldest waiting row in the period,
   `first` the day heading of the earliest counted-money day, `months`
   the vault-relative month notes holding the period's rows; each target
-  is `null` when absent).
+  is `null` when absent). With `-c` it also adds `charts`; see
+  [Report charts](#report-charts).
 - `check` adds `findings[] {code, severity, path, line, message, hint}`.
 - `ensure` adds `{path, line, day, created_note, created_heading}`.
 - `ack` prints the envelope `ok`, `dry_run`, `changed`,
@@ -684,5 +693,126 @@ Shared objects:
   "findings": []
 }
 ```
+
+### Report charts
+
+`report -c` adds `charts`: the period's money split into its Stats Strip
+child periods, with coverage states and a folded category series, so a
+client draws cashflow and category charts without adding cents itself.
+
+- `-c` needs a week (`-w`, or `-p` with a week), a quarter, an ISO
+  week-year, or all time. With `-D`, `-m`, `-y`, the default month, or a
+  `-p` day, `report` exits 2 before reading rows (`ok: false` under
+  `-f json`) with
+  `-c/--charts needs a week, quarter, ISO year, or all-time period (-w or -p)`.
+- Without `-c`, the output has no `charts` key and is otherwise identical.
+  With `-c`, `-s` still reports `"days": []`, and the teaching empty state
+  is unchanged.
+
+```json
+{
+  "charts": {
+    "version": 1,
+    "granularity": "day",
+    "buckets": [
+      {
+        "id": "2026-11-11", "kind": "day", "label": "Wed 11",
+        "start": "2026-11-11", "end": "2026-11-11", "group": null,
+        "so_far": false, "state": "awaiting_import",
+        "in_cents": 0, "out_cents": 24977, "net_cents": -24977,
+        "waiting": 7, "rows": 7,
+        "top_out": [
+          { "key": "groceries", "emoji": "🛒", "label": "Groceries", "out_cents": 14210 }
+        ],
+        "target": { "path": "bank/2026-11.md", "line": 12 }
+      }
+    ],
+    "groups": [],
+    "categories": {
+      "limit": 5,
+      "series": [
+        { "key": "groceries", "emoji": "🛒", "label": "Groceries", "kind": "category",
+          "out_cents": 14210, "share": 0.569, "rows": 3 }
+      ],
+      "rest": { "count": 2, "out_cents": 2320, "share": 0.093, "rows": 2 }
+    }
+  }
+}
+```
+
+**Children.** The buckets are the period's Stats Strip columns, from the
+same periods-calendar partition as `bob periods show`.
+
+| Period | `granularity` | Buckets | `group` | `groups[]` |
+| --- | --- | --- | --- | --- |
+| ISO week | `day` | 7 days | `null` | `[]` |
+| Quarter | `week` | 13 or 14 ISO weeks | `null` | `[]` |
+| ISO week-year | `week` | 52 or 53 ISO weeks | `Q1`–`Q4` | The 4 quarters |
+| All time | `quarter` | Quarters of the bank's history | ISO year | The ISO years |
+| All time over 64 quarters | `year` | ISO years | `null` | `[]` |
+
+- A bucket's `id` and `label` equal the matching `bob periods show`
+  `columns[].id` and `columns[].caption` (`2026-11-11` and `Wed 11`,
+  `2026-W46` and `W46`, `2026-Q4` and `Q4`, `2026` and `2026`). `kind` is
+  `day`, `week`, `quarter`, or `year`. `start` and `end` are clipped to
+  `period`.
+- All time uses the report's own bank-history span (the `period` above),
+  not the daily-note span. Past 64 ISO years, `charts` is `null` and the
+  command still exits 0. An empty or reversed span, such as a history whose
+  only account starts in the future, has `buckets: []` and `groups: []`.
+- `groups[]` entries use the bucket shape with `group: null`; a group's
+  `label` is the caption its buckets name in `group`.
+
+**Money.** Each bucket and group applies the [Totals](#totals) rules to the
+rows dated inside its span. `in_cents`, `out_cents`, and `net_cents`
+(`in_cents − out_cents`) match how `totals` counts, so transfers,
+cash-account rows, and uncategorized inflows stay outside In and Out.
+`rows` counts every bank row in the span, and `waiting` counts its `[ ]`
+rows. `top_out[]` holds up to three `{key, emoji, label, out_cents}`
+breakdown entries for the span, largest first, ties broken by `key`.
+
+**Targets.** A day bucket targets its day heading in the bank month note,
+or is `null` when that heading does not exist. Week, quarter, and year
+buckets and groups target line 1 of the period note (for example
+`{"path": "2026/2026-W46.md", "line": 1}`), whether or not the note exists.
+
+**States.** For a span `[s, e]`, with today `T`,
+`coverage.tracked_since` `TS`, and `coverage.imported_through` `IT`, the
+first matching rule wins. `so_far` is `s ≤ T ≤ e`.
+
+| `state` | Rule |
+| --- | --- |
+| `future` | `s > T` |
+| `untracked` | `TS` exists and `e < TS` |
+| `awaiting_import` | `IT` exists and `s > IT` |
+| `partial` | `TS` exists and `s < TS`, or `IT` exists and `IT < min(e, T)` |
+| `tracked` | Otherwise |
+
+A state never zeroes money: a bucket's money is whatever its rows say.
+
+**Categories.** `categories` folds the period's `breakdown[]`.
+
+1. Entries rank by `out_cents` descending, then `key`.
+2. Nonzero `cash` and `unclassified` entries are pinned.
+3. `series[]` holds the pinned entries plus the top `limit` (5) minus
+   pinned other entries, in rank order. When exactly one other entry is
+   left over, it joins `series` instead of becoming `1 more`.
+4. Everything else folds into `rest {count, out_cents, share, rows}`,
+   where `share` is its fraction of Out; `rest` is `null` when nothing
+   folds.
+
+Each series entry is `{key, emoji, label, kind, out_cents, share, rows}`,
+with bob's breakdown `share`; `kind` is `category`, `cash`, or
+`unclassified`.
+
+**Invariants.**
+
+- Bucket ids are unique, and there are at most 64 buckets.
+- Buckets tile `[period.start, period.end]` exactly, with no gap or
+  overlap; so do non-empty `groups[]`.
+- Every bucket and group has `net_cents == in_cents − out_cents`.
+- Buckets, and non-empty groups, sum to `totals.in_cents`,
+  `totals.out_cents`, `waiting.period`, and the period's row count.
+- `series[]` plus `rest` sum to `totals.out_cents`.
 
 See [JSON outputs](reference/json-outputs.md#bank-reports).

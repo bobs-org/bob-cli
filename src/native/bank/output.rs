@@ -5,11 +5,12 @@ use std::collections::BTreeMap;
 use chrono::{Datelike, NaiveDate};
 
 use super::{
+    charts::{Bucket, Charts},
     check::{CheckReport, Finding, Severity},
     grammar::{render_amount, render_day_heading},
     model::BankRow,
 };
-use crate::native::style::Styler;
+use crate::native::style::{display_width, pad_right, Styler};
 
 pub(crate) fn print_check(report: &CheckReport) {
     let styler = Styler::detect();
@@ -238,6 +239,123 @@ pub(crate) fn print_report(report: &super::report::BankReport) {
     print_coverage(report);
     println!();
     print_heat_strip(report, &styler);
+    if let Some(charts) = &report.charts {
+        print_charts(charts.as_ref(), &styler);
+    }
+}
+
+/// The `-c` aggregate as one aligned line per bucket (then per group):
+/// label, In, Out, waiting, and state words. In is green, waiting is
+/// yellow, and non-tracked state words are dim.
+///
+/// `print_report` already ends with a blank line, and the month heat strip
+/// never prints for a `-c` period, so the table starts right away.
+fn print_charts(charts: Option<&Charts>, styler: &Styler) {
+    let Some(charts) = charts else {
+        println!(
+            "{}",
+            styler.dim("Charts · history spans more than 64 ISO years")
+        );
+        return;
+    };
+    if charts.buckets.is_empty() {
+        println!("{}", styler.dim("Charts · no history to chart yet"));
+        return;
+    }
+    print_bucket_table(
+        &format!("By {}", charts.granularity.as_str()),
+        &charts.buckets,
+        styler,
+    );
+    if let Some(first) = charts.groups.first() {
+        println!();
+        print_bucket_table(
+            &format!("By {}", first.kind.as_str()),
+            &charts.groups,
+            styler,
+        );
+    }
+}
+
+fn print_bucket_table(title: &str, buckets: &[Bucket], styler: &Styler) {
+    let amount = |cents: i64| {
+        if cents == 0 {
+            "–".to_owned()
+        } else {
+            render_amount(cents)
+        }
+    };
+    let ins: Vec<String> = buckets
+        .iter()
+        .map(|bucket| amount(bucket.in_cents))
+        .collect();
+    let outs: Vec<String> = buckets
+        .iter()
+        .map(|bucket| amount(-bucket.out_cents))
+        .collect();
+    let waits: Vec<String> = buckets
+        .iter()
+        .map(|bucket| match bucket.waiting {
+            0 => String::new(),
+            count => format!("{count} waiting"),
+        })
+        .collect();
+    let label_width = buckets
+        .iter()
+        .map(|bucket| display_width(&bucket.label))
+        .chain([display_width(title)])
+        .max()
+        .unwrap_or(0);
+    let width = |cells: &[String], header: &str| {
+        cells
+            .iter()
+            .map(|cell| display_width(cell))
+            .chain([display_width(header)])
+            .max()
+            .unwrap_or(0)
+    };
+    let in_width = width(&ins, "In");
+    let out_width = width(&outs, "Out");
+    let wait_width = width(&waits, "");
+    println!(
+        "{}  {}  {}",
+        styler.bold(&pad_right(title, label_width)),
+        pad_left("In", in_width),
+        pad_left("Out", out_width),
+    );
+    for (index, bucket) in buckets.iter().enumerate() {
+        let in_cell = pad_left(&ins[index], in_width);
+        let in_cell = if bucket.in_cents == 0 {
+            in_cell
+        } else {
+            styler.green(&in_cell)
+        };
+        let wait_cell = pad_right(&waits[index], wait_width);
+        let wait_cell = if bucket.waiting == 0 {
+            wait_cell
+        } else {
+            styler.yellow(&wait_cell)
+        };
+        let mut words = Vec::new();
+        if bucket.so_far {
+            words.push("so far".to_owned());
+        }
+        if let Some(state) = bucket.state.words() {
+            words.push(styler.dim(state));
+        }
+        let line = format!(
+            "{}  {in_cell}  {}  {wait_cell}  {}",
+            pad_right(&bucket.label, label_width),
+            pad_left(&outs[index], out_width),
+            words.join(" · "),
+        );
+        println!("{}", line.trim_end());
+    }
+}
+
+fn pad_left(text: &str, width: usize) -> String {
+    let padding = width.saturating_sub(display_width(text));
+    format!("{}{text}", " ".repeat(padding))
 }
 
 fn print_coverage(report: &super::report::BankReport) {
