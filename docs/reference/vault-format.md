@@ -366,9 +366,11 @@ project to `status: wip`. A project note may set optional `root: true` to
 become its own root parent for Stats grouping; see
 [R2 — Root parent](../pomodoro-homes.md#r2-root-parent).
 
-Each area or project with direct child projects has a generated callout
-under `## Projects`. Membership comes from each child's scalar `parent:`
-link; `root: true` does not remove a child from the catalog.
+`bob projects sync` generates a callout under `## Projects` for each area
+or project with direct child projects. Membership comes from each child's
+single `parent:` wikilink, such as `parent: "[[work]]"`; `root: true` does
+not remove a child from the catalog. Notes under `done/` or excluded
+directories do not participate.
 
 ```markdown
 ## Projects
@@ -381,14 +383,18 @@ link; `root: true` does not remove a child from the catalog.
 >   - ✅ **[[work_pilot]]** — Complete the pilot
 ```
 
-Open rows sort A–Z; closed rows sort newest closure first. State glyphs
-are absent for ready, 🗓️ for scheduled, ⛓️ for blocked, ⚠️ for an invalid
-or missing `^prj`, ✅ for done, and ❌ for canceled. Bob owns the callout;
-the heading and surrounding prose remain authored content.
-`bob projects list` reports catalog drift. `bob projects sync` repairs
-healthy catalogs and lifecycle fields together in one guarded commit;
-damaged catalogs are refused. Creating a project through capture also
-updates its parent's catalog in the same write.
+Open rows sort A–Z by filename without `.md`, ignoring case; closed rows
+sort newest closure first, with undated rows last. State glyphs are absent
+for ready, 🗓️ for scheduled, ⛓️ for blocked, ⚠️ for an active project
+without a valid `^prj`, ✅ for done, and ❌ for canceled. When available,
+the cleaned `^prj` completion criterion follows the link. Bob owns the
+callout; the heading and surrounding prose remain authored content.
+`bob projects list` reports missing, stale, or damaged catalogs.
+`bob projects sync` updates catalogs and lifecycle fields in one guarded
+commit. Damaged callouts are left untouched and reported with exit 1;
+other safe edits can still commit. Creating a project through capture also
+updates its parent's catalog in the same transaction. See
+[Projects catalogs](../projects.md#projects-catalogs).
 
 Contract: [Project Task Sync](../projects.md),
 [Project Note](glossary.md#project-note),

@@ -159,16 +159,20 @@ the account's primary calendar.
 
 ```bash
 bob gcal sync -d
+```
+
+Review the preview's diff, then write:
+
+```bash
 bob gcal sync
 ```
 
-The preview prints the exact unified diff of the plan and writes nothing.
-The write adds a `## Events` section above `## Pomodoros`, one row per
-accepted event in time order. Meetings whose buffered spans ended arrive `[x]`, linked under closed
-`MEET` sessions; ongoing and future meetings arrive `[*]`, linked under an
-open `MEET` entry. Run `bob gcal sync` again to
-confirm it creates no duplicate rows or links, then
-`bob gcal doctor` to see the `last sync` check go green.
+The write adds `## Events` above `## Pomodoros`, with accepted events in
+time order. Meetings that ended, including any after-meeting buffer,
+arrive completed (`[x]`) under
+closed `MEET` sessions; others arrive Next (`[*]`) under an open `MEET`
+entry. Run `bob gcal sync` again to confirm it creates no duplicate rows or
+links, then `bob gcal doctor` to see `last sync` go green.
 
 ## 5. Remove the grant
 

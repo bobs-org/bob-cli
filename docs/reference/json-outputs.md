@@ -183,8 +183,12 @@ sets `one_off: true`.
 | `bob projects list` | `-f json` | Projects, catalogs, findings, and counts | `schema_version: 1` | [Projects](../projects.md#json-report) |
 | `bob projects sync` | `-f json` | Lifecycle and catalog events, changes, findings, commit, sync, and warnings; dry runs include diffs | `schema_version: 1` | [Projects](../projects.md#commands) |
 
-Project creation through capture optionally adds `project_note.parent_catalog`
-with `path` and `action: "written" | "updated"`; an unchanged catalog omits it.
+Project creation through capture includes `project_note.parent_catalog` when
+the parent's catalog needs an edit. `path` is the parent's vault-relative
+Markdown path; `action` is `"written"` for a missing catalog or `"updated"`
+for an existing catalog. An unchanged catalog omits the field.
+These values also appear in dry runs: `dry_run: true` means the
+edit is only planned, even when `action` says `"written"`.
 See [capture JSON](../capture.md#input-stdin-and-json-output).
 
 ### Bank reports {#bank-reports}

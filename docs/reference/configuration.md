@@ -332,16 +332,17 @@ store left under `~/Library/Application Support/gogcli` is not read. Rerun
 | `gmail.sync.label` | String or unset | `gmail.pull.label`, then `bob` | Enrollment label; an empty string disables sync. |
 | `gmail.sync.reply_wait_days` | Integer at least 1 | `3` | Calendar days from your send to the awaiting-reply nudge date; changing it never reschedules existing holds. |
 | `gmail.sync.route_prefixes` | Sequence of distinct quoted strings without `/` or whitespace | `[]` (no-prefix mode) | A user label `<prefix>/<note>` routes a thread to that area or project note; `[]` routes by any label that names one. |
-| `gmail.sync.archive` | `off` or `on`; booleans are rejected | `off` | Archive enrolled messages after all linking tasks close; requires enabled sync and the writer's modify grant. |
-| `gmail.sync.archive_label` | Nonempty, non-reserved Gmail label distinct from enrollment | `<resolved sync label>/closed` | Receipt label for Bob-owned archives; renaming re-baselines observation. |
-| `gmail.sync.archive_max` | Integer, 1–4294967295 | `10` | Larger eligible batches require `sync -c DIGEST` from a preview. |
+| `gmail.sync.archive` | `off` or `on`; booleans are rejected | `off` | Sync archives saved messages in enrolled threads after observing open tasks and later finding every linking task closed; requires enabled sync and the writer's modify grant. |
+| `gmail.sync.archive_label` | Nonempty, non-reserved Gmail label distinct from enrollment | `<sync label>/closed`; `bob/closed` if sync is disabled | Receipt for Bob-owned archives. Changing it resets observations; already-closed threads need confirmation. |
+| `gmail.sync.archive_max` | Integer, 1–4294967295 | `10` | Maximum threads per run without confirmation. Larger batches and already-closed backlog need `bob gmail sync -c DIGEST` from a `-d` preview. |
 | `gmail.gog` | Absolute executable path; a leading `~/` is expanded | `gog` on `PATH`, then standard install locations | Configured gog executable for Gmail. |
 | `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
-A missing `gmail:` block uses these defaults; unknown keys are ignored.
-Wrong types exit 2 with the key, without breaking other loaders. Gmail uses
-the [same gog config root as Calendar](#gcal); login or moving the `gogcli`
-directory there makes credentials available. `BOB_GMAIL_GOG` overrides `gmail.gog` and `PATH`.
+Missing `gmail:` uses defaults; unknown keys are ignored. Wrong types exit
+2 with the key, without affecting other loaders. Gmail shares
+[Calendar's gog config root](#gcal); `bob gmail login` or moving an existing
+Gmail `gogcli` store there supplies credentials.
+`BOB_GMAIL_GOG` overrides `gmail.gog` and `gog` on `PATH`.
 See [Gmail configuration](../gmail.md#configuration) and
 [archive eligibility and undo](../gmail.md#archive-on-close).
 

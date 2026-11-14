@@ -118,10 +118,13 @@ Status glyphs are open ○, next ◉, in progress ◐, blocked ⊘, done ✓, an
 canceled ⊗. Chips show priority, `sched`, `repeats`, `ref`, and `moved N×`
 metadata, along with `Keep` and `quote` links where available.
 
-Generated Projects catalogs retain open child links and criteria in snapshots.
-Scheduled, blocked, and warning children show `scheduled`, `blocked`, and
-`needs ^prj` chips. Closed catalog rows are omitted, including with `-C`;
-an all-closed catalog disappears. `-M` uses the plain Markdown renderer.
+In area and project snapshots, generated `## Projects` catalogs retain
+links to open child projects and their completion criteria. Scheduled,
+blocked, and warning rows show `scheduled`, `blocked`, and `needs ^prj`
+chips; the warning means the child has no valid project task. Done and
+canceled catalog rows are omitted even with `-C/--closed`, which restores
+closed tasks, not catalog rows. A catalog with no open rows is omitted from
+the PDF. `-M/--plain` bypasses this catalog filtering and chip conversion.
 
 Note snapshot and research-report Markdown PDFs use a clean text layer: ragged
 right, no hyphenation, `Ligatures=NoCommon` for serif, sans, and mono fonts,
