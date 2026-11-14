@@ -374,7 +374,9 @@ requested period and its typical-history window. It does not create notes. The
 report is the source for both the stats strip and the parts table; clients use
 the supplied display strings, labels, review states, and catalogs without
 recomputing them. A read-only Bank Badge follows each period Stats Strip for
-the same period when it has counted money or waiting rows.
+the same period when it has counted money or waiting rows. A Bank Period Charts
+panel follows the badge on week, quarter, ISO-year, and all-time notes when
+`stats.bank_period` is on; see [Bank period charts](bank.md#bank-period-charts).
 
 The schema-1 JSON object has these top-level members:
 

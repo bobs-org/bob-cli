@@ -1693,6 +1693,9 @@ and the `Cycle period stats charts` command, independent of the Day preference.
 `stats.day_strip` and `Toggle Day stats` still govern the automatic Day strip.
 `stats.bank_badge` (default `true`, with `stats.bank_chip` as an alias)
 controls the Bank Badge after every Day and period strip, including fences.
+`stats.bank_period` (default `true`) independently gates the Bank Period Charts
+panel that follows the badge on period strips; see
+[Bank period charts](bank.md#bank-period-charts).
 Opening or refreshing a strip never changes note bytes and never appends
 journal events.
 

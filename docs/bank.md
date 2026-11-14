@@ -546,6 +546,70 @@ otherwise open `bank.md`. This is read-only; it never creates a note.
 and defaults to `true`. The permanent `stats.bank_chip` alias is used only
 when `stats.bank_badge` is not a boolean.
 
+## Bank period charts
+
+A Bank Period Charts panel follows the Bank Badge on week, quarter, ISO
+week-year, and all-time period notes, after that period's Stats Strip. It
+never appears on daily notes, `bob-period-parts`, embeds, hover popovers, or
+mobile. The plugin reads `bob bank report -p <id> -s -c`; the panel never
+writes the vault and is not a Stats fact or one of the `bob-bank` cards.
+
+The panel shows two charts and an optional quiet line:
+
+- **In / Out**: when money moved, on the strip's own child-period axis —
+  days of a week, weeks of a quarter or ISO year, quarters (or years past
+  64 quarters) of all time. ISO years group weeks into quarters, and all
+  time groups quarters into years.
+- **Out by category**: where Out went, as ranked bars with the top 5 and
+  an `N more` row. The plugin never adds money: bob folds the categories
+  and supplies group totals.
+- **Not counted**: a muted line naming only nonzero parts — transfers,
+  unclassified inflows, traced cash, and (only when `stats.bank_badge` is
+  off) the waiting count and coverage text.
+
+One zero line runs through every cashflow chart. In hangs above it in
+green; Out hangs below it in a neutral fill, so money never looks like the
+upward Worked columns above it. Week notes draw In as markers above the
+line; longer periods draw mirrored bars on one shared $/px scale. Only the
+largest Out bucket (and, on mirrored charts, the largest In bucket) gets a
+direct amount label. Every coverage state is also spelled out in words in
+the tooltip, the readout, and the table twin: `not imported yet`
+(`awaiting_import`), `not tracked` (`untracked`), `partly covered`
+(`partial`), `so far`, and future stubs.
+
+| Report state | Panel |
+| --- | --- |
+| Host gated off (config off, future period, not yet visible) | Nothing, and no bob spawn |
+| Teaching empty | Hidden |
+| Older bob refusing `-c`, or a bad `charts` payload | Hidden, plus one `console.warn` per session; the badge is unaffected |
+| `charts` missing, undecodable, or for another period | One muted `Bank charts unavailable` line |
+| No counted money and no waiting rows | Hidden, with no added space |
+| No money but waiting rows, with `stats.bank_badge` on | Hidden |
+| No money but waiting rows, with `stats.bank_badge` off | One quiet waiting line |
+| Counted money | Header, the available charts, and the Not-counted line when it has parts |
+
+A cashflow chart with fewer than 2 buckets is omitted, and an empty
+category series is omitted; when only one chart is available it shows alone
+and the view switch hides. The header holds a collapse disclosure
+(`BANK CHARTS`), a view glyph cycling Both → In / Out → Categories, and a
+readout naming the hovered or focused bucket. The per-device view and
+collapse live under the `bob-ledger-tools-bank-period-view` localStorage
+key. The cashflow axis is one roving tab stop (Arrow Left/Right, Home/End;
+Enter, Space, or click activates; Escape clears the readout), and each
+chart has a visually hidden table twin so no value hides behind hover.
+
+Activation is read-only and never creates a note. Day buckets open the
+month note at the day heading; period buckets open the child note, or show
+`No note for <id> yet` when it does not exist. Category rows and the
+Not-counted parts are inert, except the waiting link.
+
+`stats.bank_period` in `~/.config/bob/config.yml` gates every period host
+and defaults to `true`, independently of `stats.bank_badge`. Nothing is
+written to notes, `bob periods brief`, `bob stats`, or Mac surfaces.
+
+See [Report charts](#report-charts) for the `charts` contract and
+[JSON outputs](reference/json-outputs.md#bank-reports).
+
 ## Account status
 
 The first QFX ledger balance at or after an account's `start` anchors its
