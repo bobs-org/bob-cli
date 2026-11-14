@@ -42,7 +42,7 @@ number, and `&&` never deletes after a refused import.
   ledger balance $12,345.67 as of Nov 14 · ✓ balanced
   → bank/2026-11.md  +9 rows, 23 IDs
 Committed bank: import 9 rows (checking).
-Next: file the 9 waiting rows — Ctrl+Enter on each in bank/2026-11.md (or bob bank to list them).
+Next: file the 9 waiting rows in bank/2026-11.md — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them).
 ```
 
 Import writes new rows unchecked, matches typed rows by account, exact
@@ -54,7 +54,9 @@ In last week's note, write one line: what surprised you?
 
 ## 2. File each waiting row with one key
 
-In the month note, Ctrl+Enter on a waiting row opens the Category card.
+In the month note, `]b` jumps to the oldest waiting row (`[b` takes the
+newest), and each `]b` steps to the next one. Ctrl+Enter on a waiting row
+opens the Category card.
 Bob's suggestion is highlighted: ↵ (or a second Ctrl+Enter) accepts it, a
 letter picks another category, Space files the row with no category, and
 Esc cancels. Each filing ticks the row and writes `[cat:: key]` in one
@@ -104,7 +106,8 @@ Today's daily note keeps its quiet chip,
 Import fills the days you skipped. Bulk paths stay tick-only and never set
 a category: acknowledge a whole day with `bob bank ack -D YYYY-MM-DD` or
 **Bank: acknowledge this day**, or click waiting checkboxes. Then walk the
-month with the card and fix stragglers with **Bank: set category**. Then:
+rows with `]b` — `]B` / `[B` jump whole days, which covers the multi-month
+catch-up — and fix stragglers with **Bank: set category**. Then:
 
 ```bash
 bob bank check

@@ -646,7 +646,7 @@ fn import_writes_shared_suggestion_and_points_next_at_the_walk() {
     let text = stdout(&imported);
     assert!(
         text.contains(
-            "Next: file the 2 waiting rows — Ctrl+Enter on each in bank/2026-11.md (or bob bank to list them)."
+            "Next: file the 2 waiting rows in bank/2026-11.md — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them)."
         ),
         "{text}"
     );

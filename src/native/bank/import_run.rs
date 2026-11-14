@@ -1214,16 +1214,21 @@ fn format_walk_next(
     month: Option<&str>,
     extra: usize,
 ) -> String {
-    let noun = if waiting == 1 { "row" } else { "rows" };
     let month = month.unwrap_or("YYYY-MM");
     let extra = match extra {
         0 => String::new(),
         1 => " and 1 more month".to_owned(),
         n => format!(" and {n} more months"),
     };
-    format!(
-        "Next: file the {waiting} waiting {noun} — Ctrl+Enter on each in bank/{month}.md{extra} (or bob bank to list them)."
-    )
+    if waiting == 1 {
+        format!(
+            "Next: file the 1 waiting row in bank/{month}.md{extra} — ]b jumps to it, Ctrl+Enter files it (or bob bank to list it)."
+        )
+    } else {
+        format!(
+            "Next: file the {waiting} waiting rows in bank/{month}.md{extra} — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them)."
+        )
+    }
 }
 
 /// The run's single frozen instant: wall time in Bob's configured zone (the
@@ -1258,15 +1263,15 @@ mod tests {
     fn walk_next_names_oldest_month_and_extra_months() {
         assert_eq!(
             super::format_walk_next(31, Some("2026-11"), 0),
-            "Next: file the 31 waiting rows — Ctrl+Enter on each in bank/2026-11.md (or bob bank to list them)."
+            "Next: file the 31 waiting rows in bank/2026-11.md — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them)."
         );
         assert_eq!(
             super::format_walk_next(1, Some("2026-10"), 1),
-            "Next: file the 1 waiting row — Ctrl+Enter on each in bank/2026-10.md and 1 more month (or bob bank to list them)."
+            "Next: file the 1 waiting row in bank/2026-10.md and 1 more month — ]b jumps to it, Ctrl+Enter files it (or bob bank to list it)."
         );
         assert_eq!(
             super::format_walk_next(4, Some("2026-09"), 2),
-            "Next: file the 4 waiting rows — Ctrl+Enter on each in bank/2026-09.md and 2 more months (or bob bank to list them)."
+            "Next: file the 4 waiting rows in bank/2026-09.md and 2 more months — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them)."
         );
     }
 

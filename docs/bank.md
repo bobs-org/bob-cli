@@ -202,6 +202,13 @@ checklist line.
 
 Historical `@BANK` `total:` lines are never rows.
 
+## Walking bank rows
+
+`]b` / `[b` step waiting rows oldest-first across every bank month (all rows
+once nothing waits); `]B` / `[B` jump to the first row of the next /
+previous day that has rows in the active scope. See the Bank walk section in
+the [Bob Navigation Hotkeys reference](../reference/plugins/bob-navigation-hotkeys.md#bank-walk).
+
 ## Ownership
 
 bob writes a row once. After that, bob makes only two edits to a row:
@@ -309,8 +316,10 @@ cross months.
 
 When import writes waiting rows, the human `Next:` line points at the
 walk and names the oldest month that still has waiting rows:
-`Next: file the N waiting rows — Ctrl+Enter on each in bank/YYYY-MM.md (or bob bank to list them).`
-Several waiting months add `and K more months`. JSON is unchanged.
+`Next: file the N waiting rows in bank/YYYY-MM.md — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them).`
+Several waiting months add `and K more months`; one waiting row reads
+`Next: file the 1 waiting row in bank/YYYY-MM.md — ]b jumps to it, Ctrl+Enter files it (or bob bank to list it).`
+JSON is unchanged.
 
 ### Naming
 
