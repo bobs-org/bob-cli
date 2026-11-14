@@ -7,12 +7,18 @@
 //! Randomize insertions and reasons live here too; see [`randomize_reason`]
 //! and [`plan_entry_insertion`].
 
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 
-use super::capture::{
-    dominant_indent_unit, first_child_indentation, leading_spaces_or_tabs_len,
-    line_spans, nearest_shallower_list_item_parent,
-    parse_managed_task_log_marker, LineSpan, ManagedTaskLogKind,
+use super::{
+    capture::{
+        dominant_indent_unit, first_child_indentation,
+        leading_spaces_or_tabs_len, line_spans,
+        nearest_shallower_list_item_parent, parse_managed_task_log_marker,
+        LineSpan, ManagedTaskLogKind,
+    },
+    markdown,
 };
 
 /// `SCHEDULE_LOG_EMOJI` + `SCHEDULE_LOG_LABEL` in main.js. The calendar emoji
@@ -135,6 +141,31 @@ pub(crate) fn plan_entry_insertion(
     task_line_index: usize,
     entry: &str,
 ) -> (String, LogInsertion) {
+    plan_named_log_entry_insertion(
+        contents,
+        task_line_index,
+        entry,
+        MARKER_TEXT,
+        |line| {
+            parse_managed_task_log_marker(line)
+                == Some(ManagedTaskLogKind::Schedule)
+        },
+        false,
+    )
+}
+
+/// Insert one managed-log `entry` under a direct-child marker, newest first.
+/// Nested markers never match. When `skip_fenced` is set, fenced lookalikes
+/// are ignored too. Callers keep their own marker grammar so existing
+/// Schedule Log output stays byte-identical.
+pub(crate) fn plan_named_log_entry_insertion(
+    contents: &str,
+    task_line_index: usize,
+    entry: &str,
+    marker_text: &str,
+    is_marker: impl Fn(&str) -> bool,
+    skip_fenced: bool,
+) -> (String, LogInsertion) {
     let lines = line_spans(contents);
     let Some(task_line) = lines.get(task_line_index) else {
         return (contents.to_string(), LogInsertion::Created);
@@ -145,13 +176,23 @@ pub(crate) fn plan_entry_insertion(
     let task_end_line = child_block_end_line(&lines, task_line_index);
     let task_end_offset = lines[task_end_line].end;
     let indent_unit = dominant_indent_unit(&lines).unwrap_or("\t").to_string();
+    let fenced = if skip_fenced {
+        let logical: Vec<&str> = lines.iter().map(|line| line.text).collect();
+        markdown::fenced_lines(&logical, 0..logical.len())
+    } else {
+        BTreeSet::new()
+    };
 
-    if let Some(marker_line_index) =
-        find_schedule_marker(&lines, task_line_index, task_end_line)
-    {
-        let marker_text = lines[marker_line_index].text;
-        let marker_indent_len = leading_spaces_or_tabs_len(marker_text);
-        let marker_indentation = marker_text[..marker_indent_len].to_string();
+    if let Some(marker_line_index) = find_named_marker(
+        &lines,
+        task_line_index,
+        task_end_line,
+        &is_marker,
+        &fenced,
+    ) {
+        let marker_line = lines[marker_line_index].text;
+        let marker_indent_len = leading_spaces_or_tabs_len(marker_line);
+        let marker_indentation = marker_line[..marker_indent_len].to_string();
         let marker_end_line = child_block_end_line(&lines, marker_line_index);
         let marker_end_offset = lines[marker_end_line].end;
         let entry_indent = first_child_indentation(
@@ -174,24 +215,23 @@ pub(crate) fn plan_entry_insertion(
         &task_indentation,
     )
     .unwrap_or_else(|| format!("{task_indentation}{indent_unit}"));
-    let marker_line = format!("{child_indent}- {MARKER_TEXT}");
+    let marker_line = format!("{child_indent}- {marker_text}");
     let entry_line = format!("{child_indent}{indent_unit}- {entry}");
     let block = format!("{marker_line}\n{entry_line}");
     let updated = insert_line_after(contents, &lines, task_end_line, &block);
     (updated, LogInsertion::Created)
 }
 
-/// First direct-child Schedule Log marker under the task, in the style of
-/// `capture_work_log::find_work_marker`. Work and Rotten markers never match,
-/// so schedule entries are never filed under another log's marker.
-fn find_schedule_marker(
+fn find_named_marker(
     lines: &[LineSpan<'_>],
     task_line_index: usize,
     task_end_line: usize,
+    is_marker: impl Fn(&str) -> bool,
+    fenced: &BTreeSet<usize>,
 ) -> Option<usize> {
     (task_line_index + 1..=task_end_line).find(|&index| {
-        parse_managed_task_log_marker(lines[index].text)
-            == Some(ManagedTaskLogKind::Schedule)
+        !fenced.contains(&index)
+            && is_marker(lines[index].text)
             && nearest_shallower_list_item_parent(lines, index)
                 == Some(task_line_index)
     })

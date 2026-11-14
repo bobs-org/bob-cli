@@ -58,6 +58,9 @@ pub(crate) mod hold;
 /// Preparation for counted activity on already-closed Gmail threads.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod reopen;
+/// Pure local reopen planner over staged vault snapshots.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod reopen_plan;
 pub(crate) mod report;
 pub(crate) mod retry;
 pub(crate) mod scan;

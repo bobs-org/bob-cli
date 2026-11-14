@@ -45,6 +45,8 @@ pub(crate) struct PreparedReopenCandidate {
     pub(crate) message_at: DateTime<Utc>,
     /// Inert single-line sender text for the eventual reopen log.
     pub(crate) sender: String,
+    /// True when the counted activity was a bounce rather than a reply.
+    pub(crate) bounced: bool,
     /// Frozen effective-linker evidence for the local planner to recheck.
     pub(crate) evidence: ArchiveThreadEvidence,
     /// Body-bearing saved-note preparation; never serialize or log this.
@@ -585,6 +587,7 @@ fn prepare_one<R: GmailRead>(
         message_id,
         message_at,
         sender,
+        bounced: matches!(folded.net, Net::Bounced),
         evidence: evidence.clone(),
         save,
     })

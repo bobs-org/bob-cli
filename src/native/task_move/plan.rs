@@ -85,12 +85,12 @@ pub(crate) struct MoveRequest {
     /// Restore an archived task: the source may live under done/ (the
     /// destination still may not), an empty destination resolves to the
     /// archive's bound source through the pairing resolver, and recurring
-    /// occurrences plus merge tombstones are refused. Only
-    /// `bob task restore` sets this; `bob task move`, inbox routing, and
+    /// occurrences plus merge tombstones are refused. `bob task restore`
+    /// and Gmail reply-reopen set this; `bob task move`, inbox routing, and
     /// capture keep refusing every done/ path.
     pub(crate) restore: bool,
-    /// Reopen each restored root (`[ ]` plus close-field removal). Only
-    /// `bob task restore --reopen` sets this.
+    /// Reopen each restored root (`[ ]` plus close-field removal).
+    /// `bob task restore --reopen` and Gmail reply-reopen set this.
     pub(crate) reopen: bool,
 }
 
@@ -1323,18 +1323,24 @@ fn task_block_has_merge_tombstone(
         })
 }
 
-/// Reopen one moved fragment's root line: checkbox back to `[ ]` with the
-/// managed `[completion::]`/`[cancelled::]` close fields removed. Children
-/// keep their bytes; only the root row is retouched.
+/// Reopen one task root line: checkbox back to `[ ]` with the managed
+/// `[completion::]`/`[cancelled::]` close fields removed. Unrelated
+/// fields stay. Restore fragments and Gmail reply-reopen share this.
+pub(crate) fn reopen_task_root_line(line: &str) -> String {
+    let opened =
+        set_task_line_status(line, ' ').unwrap_or_else(|| line.to_string());
+    remove_cancelled_fields(&remove_completion_fields(&opened))
+}
+
+/// Reopen one moved fragment's root line. Children keep their bytes;
+/// only the root row is retouched.
 fn reopen_fragment_root(fragment: &str) -> String {
     let mut pieces = fragment.split_inclusive('\n');
     let Some(first) = pieces.next() else {
         return fragment.to_string();
     };
     let (content, ending) = split_line_ending(first);
-    let opened = set_task_line_status(content, ' ')
-        .unwrap_or_else(|| content.to_string());
-    let stripped = remove_cancelled_fields(&remove_completion_fields(&opened));
+    let stripped = reopen_task_root_line(content);
     let mut reopened = String::with_capacity(fragment.len());
     reopened.push_str(&stripped);
     reopened.push_str(ending);

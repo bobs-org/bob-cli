@@ -365,6 +365,148 @@ pub(crate) fn apply_lift(line: &str, req: &LiftRequest<'_>) -> LiftOutcome {
     }
 }
 
+/// Inputs for [`apply_reopen_lift`]. The line is already open (`[ ]`)
+/// after the shared reopen helper; this only lifts the awaiting hold and
+/// applies remaining-blocker / Ready-unblocked rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReopenLiftRequest<'a> {
+    pub(crate) today: NaiveDate,
+    pub(crate) scope: &'a UnblockScope,
+    pub(crate) blocked_ok: bool,
+    pub(crate) blocked_reason: Option<String>,
+}
+
+/// Result of [`apply_reopen_lift`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReopenLiftOutcome {
+    pub(crate) line: String,
+    pub(crate) changed: bool,
+    pub(crate) lifted: bool,
+    pub(crate) unblocked_written: bool,
+    /// The checkbox was set to `[?]` because another blocker remains.
+    pub(crate) blocked_checkbox: bool,
+    /// Remaining blockers could not flip to `[?]` because Blocked status
+    /// validation failed; reconcile should repair the row.
+    pub(crate) blocker_warning: Option<String>,
+}
+
+/// After a closed Gmail Task has been reopened to `[ ]`:
+///
+/// 1. Remove exact `#awaiting_reply` and only then its `[scheduled::]`.
+///    A schedule stays when the tag is absent.
+/// 2. Remaining `dependsOn`, `#prj_is_blocked`, or a future schedule
+///    become `[?]` when Blocked validation allows it; otherwise the box
+///    stays `[ ]` and the caller warns for reconcile. No `[unblocked::]`
+///    while another blocker remains.
+/// 3. A blocker-free Ready row uses [`mark_unblocked`] with the caller's
+///    WRITE-skip scope.
+pub(crate) fn apply_reopen_lift(
+    line: &str,
+    req: &ReopenLiftRequest<'_>,
+) -> ReopenLiftOutcome {
+    let (body, cr) = split_cr(line);
+    let original = body.to_string();
+    let held = has_exact_tag(body, AWAITING_TAG);
+    let mut working = original.clone();
+    if held {
+        working = remove_exact_token_all(&working, AWAITING_TAG);
+        working = remove_all_scheduled(&working);
+    }
+
+    let has_blockers = remaining_blockers(&working, req.today);
+    let mut blocked_checkbox = false;
+    let mut blocker_warning = None;
+    let Some((_, status)) = checkbox_at(&working) else {
+        let changed = working != original;
+        return ReopenLiftOutcome {
+            line: with_cr(working, line, changed, cr),
+            changed,
+            lifted: held,
+            unblocked_written: false,
+            blocked_checkbox: false,
+            blocker_warning: None,
+        };
+    };
+
+    if has_blockers {
+        if status == ' '
+            && let Some((at, _)) = checkbox_at(&working)
+        {
+            if req.blocked_ok {
+                working = set_checkbox_at(&working, at, '?');
+                blocked_checkbox = true;
+            } else {
+                blocker_warning =
+                    Some(req.blocked_reason.clone().unwrap_or_else(|| {
+                        "Tasks Blocked status is not a single compatible '?' \
+                         status; leaving the checkbox unchanged"
+                            .to_string()
+                    }));
+            }
+        }
+        let changed = working != original;
+        return ReopenLiftOutcome {
+            line: with_cr(working, line, changed, cr),
+            changed,
+            lifted: held,
+            unblocked_written: false,
+            blocked_checkbox,
+            blocker_warning,
+        };
+    }
+
+    if matches!(status, '*' | '/' | '?') {
+        let changed = working != original;
+        return ReopenLiftOutcome {
+            line: with_cr(working, line, changed, cr),
+            changed,
+            lifted: held,
+            unblocked_written: false,
+            blocked_checkbox: false,
+            blocker_warning: None,
+        };
+    }
+
+    if let Some(marked) = mark_unblocked(&working, req.today, status, req.scope)
+    {
+        let out = if cr { format!("{marked}\r") } else { marked };
+        return ReopenLiftOutcome {
+            changed: out != line,
+            line: out,
+            lifted: held,
+            unblocked_written: true,
+            blocked_checkbox: false,
+            blocker_warning: None,
+        };
+    }
+
+    let changed = working != original;
+    ReopenLiftOutcome {
+        line: with_cr(working, line, changed, cr),
+        changed,
+        lifted: held,
+        unblocked_written: false,
+        blocked_checkbox: false,
+        blocker_warning: None,
+    }
+}
+
+fn remaining_blockers(line: &str, today: NaiveDate) -> bool {
+    !task_fields::inline_fields(line, "dependsOn").is_empty()
+        || has_exact_tag(line, PRJ_TAG)
+        || has_future_scheduled(line, today)
+}
+
+fn with_cr(working: String, original: &str, changed: bool, cr: bool) -> String {
+    if changed && cr {
+        format!("{working}\r")
+    } else if changed {
+        working
+    } else {
+        original.to_string()
+    }
+}
+
 /// Freshness scope for one lift row, mirroring the project-close helper:
 /// recurring rows, hidden rows, canonical daily notes, and Today-linked
 /// rows never take `[unblocked::]`.

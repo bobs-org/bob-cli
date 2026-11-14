@@ -16,8 +16,8 @@ pub(crate) use command::{build_cli, run};
 pub(crate) use plan::load_vault_snapshot;
 pub(crate) use plan::{
     list_task_move_destinations, movable_roots, plan_task_move,
-    resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot, MovePlacement,
-    MovePlan, MoveRecord, MoveRequest, MoveSelector, PlanError, TaskCandidate,
-    TaskMoveDestination, VaultSnapshot,
+    reopen_task_root_line, resolve_movable, IdCollisionPolicy, Ineligible,
+    MovableRoot, MovePlacement, MovePlan, MoveRecord, MoveRequest,
+    MoveSelector, PlanError, TaskCandidate, TaskMoveDestination, VaultSnapshot,
 };
 pub(crate) use restore::{build_cli as build_restore_cli, run as run_restore};
