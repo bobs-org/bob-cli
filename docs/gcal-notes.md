@@ -19,7 +19,7 @@ instances as well. See [External event acknowledgements](gcal-acks.md).
 
 List, show, preview, write, clear, editor, and Google-description adoption are
 available in `bob gcal note`. Bob Mac Capture ships an
-[Event notes](../reference/mac-capture/event-notes.md) surface for the
+[Event notes](reference/mac-capture/event-notes.md) surface for the
 same contract: open any capture draft with Command-E and pick the event.
 
 ## Contents

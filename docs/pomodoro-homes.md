@@ -80,7 +80,7 @@ value is silently off. The key is ignored on every non-project note.
 A **leaf project** is a project note that is not its own root parent
 (see [Leaf projects](projects.md#leaf-projects) and
 [Keep-moving offers](task-dependencies.md#1215-keep-moving-offers-leaf-projects)).
-It changes no blocking, Sub-projects lines, Ready caps, review tiers,
+It changes no blocking, Projects catalogs, Ready caps, review tiers,
 capture routing, plan budget, or `bob projects` output, with one
 workflow effect: a `root: true` project is never a leaf, so it never
 gets keep-moving offers.

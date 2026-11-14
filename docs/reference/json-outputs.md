@@ -14,10 +14,9 @@ stdout `schema_version` counts.
 
 JSON goes to stdout, warnings and chatter to stderr; usage errors exit 2.
 
-Envelopes vary by family (details in rows below):
-
-- Versioned helpers print `ok: true` plus a payload; many carry `schema_version`.
-- Capture-helper errors are often `{"ok":false,"error":"…"}` without one.
+Versioned helpers return payloads with `ok: true` (often including
+`schema_version`); capture-helper errors may instead return
+`{"ok":false,"error":"…"}` without a version.
 
 `…` marks omissions.
 
@@ -190,7 +189,7 @@ sets `one_off: true`.
 
 ### Session edits and successor offers
 
-Capture results are unversioned, including these per-item session payloads:
+Per-item session payloads are unversioned:
 
 | Operation | Payload |
 | --- | --- |
@@ -198,26 +197,24 @@ Capture results are unversioned, including these per-item session payloads:
 | `=/` split | `kind: "pomodoro_split"`, with `pomodoro_split: {path, entry_line, before, after, base, created, stayed_links}`; `created[]` contains `type`, `line`, `name`, and `moved_links` |
 | `=*` merge | `kind: "pomodoro_merge"`, with `pomodoro_merge: {path, entry_line, before, after, source_role, explicit?, absorbed}`; `source_role` is `current`, `next_up`, or `named`, `explicit` is the equivalent fully named token when an implied choice round-trips, and `absorbed[]` contains `name`, `role` (`named` or `next`), `from_line`, `moved_lines`, and `dropped_duplicates` |
 
-Both return batch-level `pomodoro_blocks`.
-Survivors show line changes, including removed lines. Removed
-entries carry `removed: true`, previous lines `change: "removed"`. Parse reports modes
-`pomodoro_split` and `pomodoro_merge`; a dest-less merge is complete, while
-a trailing `#` still needs `pomodoro_merge_dest`.
+Both return batch `pomodoro_blocks`; survivors show line changes, removed
+entries carry `removed: true`, and previous lines use `change: "removed"`.
+Parse modes are `pomodoro_split` and `pomodoro_merge`; a dest-less merge is
+complete, while a trailing `#` still needs `pomodoro_merge_dest`.
 See [split](../capture.md#splitting-a-merged-pomodoro) and
 [merge](../capture.md#merging-pomodoros).
 
-Managed Done results carry `keep_moving` beside `unblocked`, with
-`keep_moving_folds` counting hidden, blocked, and future-scheduled candidates.
-Offers are eligible Pending, Next, and Ready residents of a leaf project
-whose last Task Link in today's open Pomodoros was closed. A leaf project
-is a subproject with a different root parent; it may itself have subprojects.
-No dependency on the completed task is required. Offers join batch `pull_in`
-choices and link only when picked.
+Managed Done results include `keep_moving` beside `unblocked`;
+`keep_moving_folds` counts hidden, blocked, and future-scheduled candidates.
+Offers cover Pending, Next, and Ready residents of leaf projects whose last
+Task Link today was closed. A leaf project is a subproject with a different
+root parent (and may have subprojects); no dependency on the completed task is
+required. Offers join batch `pull_in` and link only when picked.
 See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
-Relation successors point through a configured relation (such as `starts after`)
-to a task just completed or parked Pending without a link under today's open
-Pomodoros. They require explicit selection. Fields:
+Relation successors connect a completed or parked Pending task, without a
+Task Link today, through a configured relation (such as `starts after`).
+Selection is explicit. Fields:
 
 | Location | Fields |
 | --- | --- |
@@ -228,20 +225,18 @@ Pomodoros. They require explicit selection. Fields:
 | Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; optional `groups[]` and `copy: {title, capsule, glyph}` |
 | `pull_in.groups[]` | `group`, optional `project` or note-pull `note`, `copy: {title, why?, tag?, fold?, glyph}`, and optional `folded` counts; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, and `event` |
 
-Group order follows offer numbering: hand-offs, relations, projects,
-finished projects, then keep-moving, then note pulls in draft-item order. Clients use Bob's supplied display text
-in `copy`.
-`offer_count` counts selectable rows, including relation successors and note-pull rows;
-held rows are not selectable. Empty `groups` and absent copy are omitted.
-Note-pull empty refusals use `nothing_to_pull_in` with the `note_pull` fold payload; missing source notes use `pull_note_missing`. The flat `offers` list appears on a `pull_in_choice_required` refusal;
-successful results keep the rows on their owning capture items.
+Groups follow offer order: hand-offs, relations, projects, finished projects,
+keep-moving, then draft-ordered note pulls. `copy` uses Bob's display text.
+`offer_count` counts selectable rows (including relation successors and note pulls),
+not held rows. Empty `groups` and absent `copy` are omitted. Note-pull refusals
+use `nothing_to_pull_in` with `note_pull` fold data or `pull_note_missing`; only
+`pull_in_choice_required` includes flat `offers`. Success keeps rows on their
+owning capture items.
 
-Later batch items can remove an offer by
-linking, completing, blocking, or dropping its task, or by re-linking a
-parked predecessor. A picked relation successor appears in `task_blocks`
-with `relation_successor` in `roles[]`; its added Pomodoro line has
-`reason: "relation"`. See the
-[successor JSON contract](../task-dependencies.md#125-reporting-model)
+Later batch items can remove an offer by linking, completing, blocking, or
+dropping its task, or re-linking a parked predecessor. A picked relation
+successor appears in `task_blocks` with `relation_successor` in `roles[]`; its
+Pomodoro line has `reason: "relation"`. See the [successor JSON contract](../task-dependencies.md#125-reporting-model)
 and [relation events](../task-dependencies.md#1218-relation-successors-starts-after).
 
 ### Move-choice results
@@ -306,30 +301,25 @@ strings in `copy`; `then` is a string or `null`. Example:
 }
 ```
 
-Rows follow shared movable-root eligibility in parent order.
-Every listed row field is always present, with `null` where it does not apply.
-They include ID-less and `#hide` roots, excluding `^prj`, closed/nested tasks,
-and the template placeholder. `open_count` is the number of
-listed movable roots. `n` is the 1-based position among all rows, including
-rows that are locked or disabled, so answer numbers never shift around them.
-An identified row's key is `path#^id`; an ID-less
-row uses `path@<sha8>[~k]`. `mint` is Bob's collision-free suggested block ID
-for an ID-less row and is null otherwise. It avoids the parent's IDs, IDs
-authored in the new note, `prj`, and every other row's suggestion. At execution,
-Bob uses that suggestion if still free or chooses the next free suffix, also
-avoiding descendants of moved blocks; a collision with an imported descendant
-refuses with `move_task_id_collision`. The key is stable for the row and is the
-preferred answer form for editor clients.
+Rows follow shared movable-root eligibility in parent order. Every field is
+present (`null` when inapplicable). Rows include ID-less and `#hide` roots but
+exclude `^prj`, closed or nested tasks, and the template placeholder.
+`open_count` counts movable roots; `n` is the 1-based position across all rows,
+including locked and disabled rows, so answer numbers stay stable. Keys are
+`path#^id`, or `path@<sha8>[~k]` for ID-less rows. `mint` is null for identified
+rows; otherwise it suggests an ID avoiding parent IDs, IDs authored in the new
+note, `prj`, other suggestions, and moved-block descendants. At execution Bob
+uses the suggestion if free or chooses the next suffix; an imported-descendant
+collision refuses with `move_task_id_collision`. The stable key is the preferred
+editor answer.
 
-Each enabled, unlocked row has `^` and `:` choices with a Bob-authored
-`consequence` and `adds_link`. Disabled and locked rows have no choices.
-`locked` is null or `{sigil, item_line}` when an explicit move in this draft
-already moves that row from the same parent. `disabled_reason` is Bob-authored.
-A row also carries its task text, status, section, source line, hidden and
-scheduled state, and today's Pomodoro chip (or null). After an answer, the slot
-has `answered: true`, the moved and
-linked counts, and every row's `answer` as `^`, `:`, or null. Dry-run JSON
-matches the real-run JSON apart from `dry_run`.
+Enabled, unlocked rows have `^` and `:` choices with Bob-authored
+`consequence` and `adds_link`; locked or disabled rows have none. `locked` is
+null or `{sigil, item_line}` for a same-parent explicit move in the draft;
+`disabled_reason` is Bob-authored. Rows include task text, status, section,
+source line, hidden and scheduled state, and today's Pomodoro chip (or null).
+After an answer, the slot has `answered: true`, moved and linked counts, and each
+row's `answer` (`^`, `:`, or null). Dry-run matches real JSON except `dry_run`.
 
 `name_needs_link` is true on the create form when the item has a `#name`, no
 other `:` link exists, and that name needs a link; the offer form defers this
@@ -337,13 +327,13 @@ check. Under a `:` seal, `then` says `Then: choose today's links for N new
 tasks` when offers remain; otherwise it is null. `copy.slot` names the
 neighboring roots, or says `first` or `last` at an edge.
 
-Repeatable `-m, --move-in` values union their selections. Bare numbers and
-keys mean move (`^`); a leading `:` means move and link. `all` selects every
-enabled, unlocked row as a move, and `none` selects no rows. There is no
-`:all`. Numbers resolve against the rows rebuilt from the staged parent at
-execution. Successful choice moves add `via: "choice"` to
-`project_note.moved_tasks[]`, with `draft_range` set to the `^^` range; authored
-moves retain `via: "bullet"`. Choice rows are never added to successor offers.
+Repeatable `-m, --move-in` values union selections: bare numbers or keys mean
+move (`^`), and a leading `:` means move and link. `all` moves every enabled,
+unlocked row; `none` moves none. `:all` is invalid. Numbers resolve against
+rows rebuilt from the staged parent at execution. Choice moves add
+`via: "choice"` to `project_note.moved_tasks[]`, with `draft_range` set to the
+`^^` range; authored moves keep `via: "bullet"`. Choice rows never become
+successor offers.
 
 These write-free refusals follow Pomodoro-override, lexical, and move-bullet
 refusals, before `pull_in_choice_required` and `inbox_route_choice_required`:
@@ -358,10 +348,9 @@ refusals, before `pull_in_choice_required` and `inbox_route_choice_required`:
 | `move_choice_refused` | The answer selects a locked or disabled row |
 | `unused_project_note_pomodoro` | A required `#name` has no link after applying the answers |
 
-Exit codes follow the corresponding pull-in and inbox-route refusals. The
-human unanswered preview prints every row, even above 20 rows, with its number,
-status, title, ID or suggested ID, and consequence or lock/disabled reason,
-then a `choose with -m ...` hint.
+Exit codes match the pull-in and inbox-route refusals. Unanswered previews show
+every row, even above 20, with number, status, title, ID or suggestion, and its
+consequence or lock/disabled reason, then `choose with -m ...`.
 
 ### Inbox-routing results
 
@@ -564,8 +553,7 @@ no `--format json` or `--json` flag.
 
 ## Other structured formats
 
-These are public but are not JSON. They use their own flags on the same
-commands.
+These public non-JSON formats use their own flags.
 
 | Format | Command and flag | Shape |
 | --- | --- | --- |

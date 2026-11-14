@@ -223,14 +223,14 @@ not-a-line for the others' lines (LK19, MC15).
   - ❌ **CANCEL LOG**        (first, if present)
   - ⛓️ **DEPENDS ON:** …     upstream
   - 🧱 **BLOCKS:** …         downstream
-  - 🧩 **Sub-projects:** …   structure (^prj only)
+  - 🧩 **Sub-projects:** …   legacy row; sync retires it into the host catalog
   - 🪢 **LINKS:** …          what T relates to (authored)
   - 🪢 **LINKED FROM:** …    what relates to T (generated)
   - user children, 🗓️ SCHEDULE LOG, 🛠️ WORK LOG …
 ```
 
 - **Slots.** LINKS goes after the last direct-child subtree of Cancel
-  Log, Depends-On, BLOCKS, or Sub-projects. Otherwise it is the first
+  Log, Depends-On, BLOCKS, or a legacy Sub-projects row. Otherwise it is the first
   direct child (the second after a first-child Cancel Log). LINKED
   FROM goes after the LINKS subtree when one exists, otherwise in the
   LINKS slot.
@@ -238,10 +238,8 @@ not-a-line for the others' lines (LK19, MC15).
     indent plus one tab.
   - Preserve CRLF and the final-newline state.
 - **Existing lines are never moved.** A Depends-On, BLOCKS, or
-  Sub-projects line inserted later lands in its own earlier slot, so
-  the order still reads upstream, downstream, structure, out, then
-  in. `bob projects sync`'s anchor rule (after Depends-On and BLOCKS)
-  is unchanged.
+  Legacy Sub-projects rows stay in place and can anchor LINKS. Sync
+  retires them into the separate host catalog; it never writes a new row.
 - **LINKS order is authored.** New entries are appended. Re-linking an
   existing target with a different label relabels it in place; with
   the same label it is a no-op.
@@ -685,7 +683,7 @@ warns, in the same wording pattern.
 | LW4 | re-add T with a new label | relabeled in place; order kept |
 | LW5 | remove the only entry | line deleted |
 | LW6 | remove a middle entry | line rewritten; the others keep their order |
-| LW7 | Cancel Log, Depends-On (nested child), BLOCKS, Sub-projects present | LINKS after the Sub-projects subtree; LINKED FROM right after LINKS |
+| LW7 | Cancel Log, Depends-On (nested child), BLOCKS, and a legacy Sub-projects row | LINKS after the legacy subtree; LINKED FROM right after LINKS |
 | LW8 | no managed children; user child and Schedule Log present | LINKS first; existing children untouched |
 | LW9 | two LINKS lines | merged into the first (append, first label wins); the second deleted |
 | LW10 | malformed LINKS line | authored write refused: "its LINKS line is malformed"; nothing written |
@@ -1828,7 +1826,7 @@ same vectors.
   note prose, headings, and Pomodoro ledger rows, because Pomodoros
   are not `#task` lines.
 - **M2 Edge lines.** A link on, or anywhere under, a Depends-On,
-  BLOCKS, Sub-projects, LINKS, or LINKED FROM child is not a mention.
+  BLOCKS, legacy Sub-projects, LINKS, or LINKED FROM child is not a mention.
   This applies to every parse verdict except not-a-line, so malformed
   rows are excluded too. This rule also prevents feedback loops.
   Cancel, Schedule, Work, and Rotten Log headers and their entries

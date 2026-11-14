@@ -70,7 +70,7 @@ def _query_text(raw: object) -> str:
 
 
 def missing_token_queries(page: str, cases: list[dict[str, object]]) -> list[str]:
-    """Spellings whose exact query is missing at the indexed heading."""
+    """Spellings missing from the literal beginning of a query at the heading."""
 
     covered: dict[str, set[str]] = {}
     for item in cases:
@@ -84,7 +84,10 @@ def missing_token_queries(page: str, cases: list[dict[str, object]]) -> list[str
     for spellings, anchor in _token_index_rows(page):
         present = covered.get(anchor, set())
         for spelling in spellings:
-            if spelling not in present:
+            if not any(
+                query == spelling or query.startswith(f"{spelling} ")
+                for query in present
+            ):
                 missing.append(f"{spelling!r} at #{anchor}")
     return missing
 
@@ -137,3 +140,11 @@ def test_unrelated_query_at_the_heading_does_not_cover_the_token() -> None:
         },
     ]
     assert missing_token_queries(page, cases) == []
+
+    cases = [
+        {
+            "query": "+query and context",
+            "location": "/reference/capture-syntax/#plus-parent-picker",
+        }
+    ]
+    assert missing_token_queries(page, cases) == ["'+prep' at #plus-parent-picker"]

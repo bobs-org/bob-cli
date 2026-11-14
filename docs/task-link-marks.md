@@ -78,13 +78,13 @@ A link gets a ring only when **all** of these hold:
      text after the closing `%%` are ordinary prose, and only a line that lies wholly
      inside the comment is inert.
 4. **It is not on a managed edge row.** Depends-On, BLOCKS, LINKS, LINKED FROM, and
-   Sub-projects rows (any `mentionIsEdgeLine` verdict except not-a-line) get no ring.
+   Legacy Sub-projects rows (any `mentionIsEdgeLine` verdict except not-a-line) get no ring.
    Chips own those rows. When chips are toggled off, or the cursor reveals the raw
    text, the row is meant to read raw. Recognition is by managed-label syntax and
    structure, never by a label word alone:
    - In source, a line that starts, after an optional list marker, checkbox, and
      managed glyph (`⛓️ 🔗 🪢 🧱 🚧 🧩`), with a bold managed label (`**DEPENDS ON:**`,
-     `**LINKS**:`, `**Sub-projects**`; labels are case-sensitive) is a managed row,
+     `**LINKS**:`, `**Sub-projects**` (legacy); labels are case-sensitive) is a managed row,
      malformed or not. A line with no list marker needs a glyph. A label word later in
      the line, or outside bold, does not make a managed row.
    - In rendered views, a list item whose own content leads with a bold managed label
@@ -338,7 +338,7 @@ ring goes.
 | TC2 | inside a fenced code block | no |
 | TC3 | inside a multi-line `%% … %%` comment | no |
 | TC4 | frontmatter | no |
-| TC5 | `⛓️ **DEPENDS ON:** [[#^a]]`, and the same for BLOCKS, LINKS, LINKED FROM, and Sub-projects rows (malformed included) | no |
+| TC5 | `⛓️ **DEPENDS ON:** [[#^a]]`, and the same for BLOCKS, LINKS, LINKED FROM, and legacy Sub-projects rows (malformed included) | no |
 | TC6 | a `#task` line whose title mentions `[[bob#^fix]]` | yes |
 | TC7 | a Cancel, Schedule, Work, or Rotten Log entry | yes |
 | TC8 | a daily-note ledger row whose body is `[[bob#^fix]]`, `🍅 [[bob#^fix]]`, `~~[[bob#^fix]]~~`, `🍅 ~~[[bob#^fix]]~~`, or `[[bob#^fix]] #` | no (`ledger_rows = skip`) |
@@ -353,7 +353,7 @@ ring goes.
 | TC17 | prose after a fenced block whose content held a lone `%%` | yes |
 | TC18 | a multi-line comment: text before the opening `%%` and after the closing `%%` on their own lines; lines wholly inside | yes; no |
 | TC19 | ordinary prose beginning with a managed-label word: `Links worth reading: [[bob#^fix]]`, `- Links worth reading: …`, `Review **LINKS** in …`, or `**LINKS:** …` with no list marker or glyph | yes |
-| TC20 | a rendered list item that leads with a bold managed label (`DEPENDS ON:`, `BLOCKS:`, `LINKS:`, `LINKED FROM:`, `Sub-projects:`), with or without a glyph, checkbox, or loose-list paragraph; and a rendered list item `Links worth reading: …` | no; yes |
+| TC20 | a rendered list item that leads with a bold managed label (`DEPENDS ON:`, `BLOCKS:`, `LINKS:`, `LINKED FROM:`, legacy `Sub-projects:`), with or without a glyph, checkbox, or loose-list paragraph; and a rendered list item `Links worth reading: …` | no; yes |
 
 **TR — resolve and state.** Each row gives a target line, or a situation, and its
 result.

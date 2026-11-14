@@ -53,7 +53,6 @@ source, then deploy that checkout into the demo vault:
 git clone https://github.com/bobs-org/bob-plugins.git ~/projects/github/bobs-org/bob-plugins
 ```
 
-<!-- tutorial-test: skip plugin allowlist needs a plugin source checkout -->
 ```yaml
 plugins:
   sync:

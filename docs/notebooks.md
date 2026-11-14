@@ -268,7 +268,7 @@ naming, the picker icon and parent rules, and Create notebook here.
   protection: `@body#albums` refuses with `albums_section_generated`.
 - The generated `## Projects` catalog uses the same protection:
   `@body#projects` refuses with `projects_section_generated`.
-- `bob projects sync` never lists a notebook on a Sub-projects line.
+- `bob projects sync` never lists a notebook in a host `## Projects` catalog; legacy marker readers remain for old notes.
 
 ## Sync
 

@@ -7,15 +7,12 @@ pub(crate) const BLOCKED_GLYPH: &str = "⛓️";
 pub(crate) const WARNING_GLYPH: &str = "⚠️";
 pub(crate) const DONE_GLYPH: &str = "✅";
 pub(crate) const CANCELED_GLYPH: &str = "❌";
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const CLOSED_GROUP_LABEL: &str = "**Closed**";
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const ROW_SEPARATOR: &str = " — ";
 
 /// Render one catalog row: `> - [glyph ]**[[link]]**[ — criterion]`.
 /// Closed-group indentation is applied by the planner; every row parses
 /// back through [`parse_catalog`] to the same key and state.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn render_row(
     link_inner: &str,
     state: CatalogRowState,
@@ -67,11 +64,9 @@ pub(crate) struct CatalogRow {
     /// Lowercased last path segment of the note target, without heading.
     pub(crate) key: String,
     /// The first wikilink's path target, before its alias (including a heading).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) link_target: String,
     pub(crate) state: CatalogRowState,
     /// 1-based physical line in the source note.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) line: usize,
 }
 

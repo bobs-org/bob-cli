@@ -1108,7 +1108,7 @@ Two triggers run sync on the writer:
 - On demand (`bob gcal sync`, including via `bob gcal sync -D tomorrow`).
 - Bob Ledger Tools runs `bob gcal sync -q -f json` once when today's daily
   note is created in Obsidian
-  ([Calendar Events](reference/plugins/bob-ledger-tools.md#calendar-events)).
+  ([Calendar Events](reference/plugins/calendar-events.md)).
 
 There is no periodic sync, so invitations accepted later in the day land
 on the next run.

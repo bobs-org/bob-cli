@@ -162,6 +162,8 @@
   location: /reference/capture-syntax/#plus-ensure-next
 - query: "@route+block-id!"
   location: /reference/capture-syntax/#plus-toggle
+- query: "- #Section selects a heading"
+  location: /reference/capture-syntax/#drawer-bullets
 - query: "- #drawer with nested notes"
   location: /reference/capture-syntax/#drawer-bullets
 - query: "%n"

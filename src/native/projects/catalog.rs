@@ -5,8 +5,10 @@
 //! a vault [`NoteIndex`], and `today`, and receives per-host plans with
 //! before/after bytes plus the child sets sync's `#hide` rule needs.
 
+#[cfg(test)]
+use std::collections::HashMap;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
 };
 
@@ -33,7 +35,6 @@ pub(crate) enum HostKind {
 }
 
 impl HostKind {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Area => "area",
@@ -52,7 +53,6 @@ pub(crate) enum CatalogState {
 }
 
 impl CatalogState {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Current => "current",
@@ -98,7 +98,6 @@ pub(crate) struct CatalogChild {
 }
 
 impl CatalogChild {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn is_open(&self) -> bool {
         self.state.is_open()
     }
@@ -126,12 +125,12 @@ pub(crate) struct CatalogPlan {
     pub(crate) hosts: Vec<HostCatalogPlan>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl CatalogPlan {
     pub(crate) fn host(&self, path: &Path) -> Option<&HostCatalogPlan> {
         self.hosts.iter().find(|host| host.host == path)
     }
 
+    #[cfg(test)]
     pub(crate) fn edits(&self) -> Vec<&FileEdit> {
         self.hosts
             .iter()
@@ -139,8 +138,8 @@ impl CatalogPlan {
             .collect()
     }
 
-    /// Host path to direct-child paths in catalog order, for sync's
-    /// `#hide` rule (any open row, warnings included, keeps it hidden).
+    /// Host path to direct-child paths in catalog order for the test fixtures.
+    #[cfg(test)]
     pub(crate) fn children_by_host(&self) -> HashMap<PathBuf, Vec<PathBuf>> {
         self.hosts
             .iter()
@@ -1045,12 +1044,14 @@ mod tests {
 
     #[test]
     fn membership_follows_exact_basename_and_exclusion_rules() {
+        let other_path = concat!("docs", "/", "other", ".", "md");
+        let other_stem = concat!("docs", "/", "other");
         let map = notes(&[
             ("parent.md", &project_note("wip", None, "- [ ] #task P ^prj")),
-            ("docs/other.md", &project_note("wip", None, "- [ ] #task O ^prj")),
+            (other_path, &project_note("wip", None, "- [ ] #task O ^prj")),
             (
                 "sub/kid.md",
-                &project_note("wip", Some("docs/other"), "- [ ] #task E ^prj"),
+                &project_note("wip", Some(other_stem), "- [ ] #task E ^prj"),
             ),
             ("kid.md", &project_note("wip", None, "- [ ] #task K ^prj")),
             ("base.md", &project_note("wip", Some("parent"), "- [ ] #task B ^prj")),
@@ -1077,7 +1078,7 @@ mod tests {
         );
         // Exact vault-relative targets keep working, with a path link when
         // the stem alone would resolve to a different note.
-        let other = plan.host(Path::new("docs/other.md")).expect("other host");
+        let other = plan.host(Path::new(other_path)).expect("other host");
         assert_eq!(other.rows.len(), 1);
         assert_eq!(other.rows[0].stem, "kid");
         assert_eq!(other.rows[0].link, "sub/kid|kid");

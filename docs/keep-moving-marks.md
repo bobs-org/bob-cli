@@ -278,7 +278,7 @@ The leaf rule and LP1–LP17 are defined in [task-dependencies.md §12.17](task-
 Unless a row says otherwise: today's daily note has an open Pomodoro and a live
 link to X (`Reply to Luzern ^luzern`) in N, `job_email_recruiters.md`; N has an
 open, unblocked `^prj` task and parent `job_2026`, a project under the `job`
-area whose Sub-projects marker lists N.
+area whose `## Projects` catalog lists N.
 
 | # | Situation | Mark |
 | --- | --- | --- |

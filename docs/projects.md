@@ -218,8 +218,8 @@ Task statuses follow the Tasks plugin convention:
   link `^prj` as Next (`docs/task-dependencies.md` §12.10). They use the
   same surface predicate through one shared helper (recognition,
   plannability, schedule, and the recounted effective-unhidden count),
-  except sub-projects are read from the marker line rather than child
-  notes' `parent:`. Closing a sub-project's `^prj` that leaves its
+  except child membership comes from the Projects catalog, with legacy
+  marker fallback, rather than child notes' `parent:`. Closing a sub-project's `^prj` that leaves its
   parent with no open work pulls the parent's `^prj` in as Next
   (§12.10 trigger (c)). Sync agrees with that state: a later run reports no
   change for that project.
@@ -351,7 +351,7 @@ criteria. The date remains inline; conversion does not write schedule frontmatte
 Invalid or duplicate schedule fields stop creation with a focused notice. The
 source task's managed Depends-On line moves to be the first child of `^prj`, with
 same-note links rebased to the source note. It is not copied into `## Tasks`, and
-the machine-owned Sub-projects child is skipped on reverse conversion. A blocked
+a legacy Sub-projects child is skipped on reverse conversion. A blocked
 source (`[?]`) is accepted and seeds a Ready project unless a carried open
 prerequisite or a future inline date still blocks it. If the new project is
 blocked, its open residents are tagged `#prj_is_blocked` and their live links
@@ -452,7 +452,7 @@ single task in the parent note's `## Tasks` section. Its inline `scheduled`
 date stays on the restored task. The Depends-On line becomes the restored
 task's first child, with links re-formed relative to the parent note. Ordinary
 tasks, qualifying section bullets, and other `^prj` children — including
-managed schedule and work logs — come back after it; the generated Sub-projects
+managed schedule and work logs — come back after it; a legacy Sub-projects
 child and its subtree are omitted. A block ID is derived from the project note
 name. Inbound `#^prj` links are repointed at the restored task and the project
 note is moved to the trash. Content outside that expected format fails with a
@@ -1420,26 +1420,17 @@ bob projects list --bob-dir /tmp/bob-vault
 bob projects sync --dry-run --bob-dir /tmp/bob-vault
 ```
 
-Typical action output:
+Typical action output (the exact rows depend on the vault):
 
 ```text
-  ok sase_blog  status: wip -> done  ^prj task checked
-  ok bob        removed #hide from ^prj  no non-hidden open tasks or open sub-projects
-  ok athena     added #hide to ^prj  project has open sub-projects
-  ok athena     added [[sase_blog]] to ^prj  open sub-project
-  ok athena     updated [[sase_blog]] on ^prj  sub-project completed
-  ok athena     updated [[old_plan]] on ^prj  sub-project canceled
-  ok athena     removed [[old_child]] from ^prj  no longer a sub-project
-  ok athena     added 🗓️ [[future_child]] to ^prj  sub-project scheduled in future
-  ok athena     removed 🗓️ [[due_child]] from ^prj  sub-project no longer scheduled in future
-  ok athena     updated sub-projects on ^prj  canonical format
-  ok roadmap    hoisted scheduled 2026-07-16 onto ^prj  leftover frontmatter
-  ok roadmap    scheduled 4 tasks 2026-07-16  ^prj scheduled is future
-  ok roadmap    removed #hide from 4 tasks  task schedules replace #hide
+  ok sase_blog  would set status: wip -> done  ^prj task checked
+  ok bob        would remove #hide from ^prj  no non-hidden open tasks or open sub-projects
+  ok athena     would add #hide to ^prj  project has open sub-projects
+  ok roadmap    would hoist scheduled 2026-07-16 onto ^prj  leftover frontmatter
+  ok roadmap    would schedule 4 tasks 2026-07-16  ^prj scheduled is future
+  ok roadmap    would write projects catalog
+  ok old_roadmap  would retire Sub-projects line
   hint: run `bob task reconcile` to reconcile derived [?] Blocked markers
-  warning outlive  active project has no ^prj task  add `- [ ] #task #prj <completion criteria> #hide ^prj`
-
-11 projects - 1 status updated - 9 ^prj edited - 4 task schedules updated - 1 warnings - 1 schedules hoisted
 ```
 
 Schedule propagation is reported once per project rather than once per task.
