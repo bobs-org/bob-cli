@@ -2627,6 +2627,7 @@ mod tests {
             NativeCommand::AlbumsUpdate,
             NativeCommand::AreasCheck,
             NativeCommand::AreasList,
+            NativeCommand::AreasSync,
             NativeCommand::AttachmentsImport,
             NativeCommand::AttachmentsOrigin,
             NativeCommand::BankAck,

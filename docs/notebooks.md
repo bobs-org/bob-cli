@@ -235,7 +235,10 @@ naming, the picker icon and parent rules, and Create notebook here.
   other note is never touched.
 - **First write.** The whole block goes immediately before the first real
   `## Tasks` heading, or at the end of the note after one blank line.
-  Frontmatter and fenced examples never count as headings or callouts.
+  Frontmatter and fenced examples never count as headings or callouts. A
+  host with no owned region but a real `## Notebooks` heading adopts it: the
+  first write adds only the callout at the end of that section, never a
+  second heading, and the first such heading wins.
 - **Later writes.** Only the callout lines change, wherever the block was
   moved; moving it never makes it stale. A UTF-8 BOM, LF or CRLF line endings,
   and every other byte survive. A current callout produces no edit.
@@ -267,7 +270,9 @@ naming, the picker icon and parent rules, and Create notebook here.
   shared region engine (`[!albums]` after `## Notebooks`) and the same
   protection: `@body#albums` refuses with `albums_section_generated`.
 - The generated `## Projects` catalog uses the same protection:
-  `@body#projects` refuses with `projects_section_generated`.
+  `@body#projects` refuses with `projects_section_generated`, and the
+  generated `## Areas` catalog refuses `@love#areas` with
+  `areas_section_generated` (see [Areas](areas.md)).
 - `bob projects sync` never lists a notebook in a host `## Projects` catalog; legacy marker readers remain for old notes.
 
 ## Sync

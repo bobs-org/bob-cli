@@ -86,7 +86,9 @@ record:
   alias and facets escape active Markdown.
   Empty albums keep a teaching index (`No restaurants yet` / `Name @eat/`).
   First write inserts `## Records` before the first real H2 (or at EOF);
-  later writes patch only the callout. `list` and `check` report
+  an authored `## Records` heading with no owned region is adopted, so only
+  the callout is added at the end of its section. Later writes patch only
+  the callout. `list` and `check` report
   `index.state` as `current`, `missing`, `stale`, or `damaged` and never
   write. Missing and stale indexes warn `album_index_stale` with
   `bob albums sync`; region damage or incomplete inputs error
@@ -100,8 +102,9 @@ record:
   `> - <emoji> **[[stem|Title]]** — <summary>`; missing emoji or summary is
   omitted. Counts, dates, freshness, peeks, and colors are never written.
   First insertion lands at the end of an existing `## Notebooks` section,
-  otherwise before the first real `## Tasks`, otherwise at EOF. Later edits
-  stay at the existing callout. Empty subtrees delete the callout and remove
+  otherwise before the first real `## Tasks`, otherwise at EOF; an authored
+  `## Albums` heading with no owned region is adopted instead of duplicated.
+  Later edits stay at the existing callout. Empty subtrees delete the callout and remove
   the heading only when its section is then blank. `list` and `check` report
   `catalogs[].state` as `current`, `missing`, `stale`, or `damaged`. Missing
   and stale warn `album_catalog_stale` with `bob albums sync`; damage errors

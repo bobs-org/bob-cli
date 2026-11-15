@@ -306,6 +306,13 @@ area or project note's `## Projects` section.
   closed row returns on the next sync.
 - Warning children count as open: an otherwise empty parent with a warning row
   keeps its `^prj` hidden.
+- First write: the block goes at the end of an existing `## Areas` section,
+  else immediately before the first real H2, else at EOF, so section order
+  never depends on which catalog came first. A host with no owned region but
+  a real (unfenced, after frontmatter) `## Projects` heading adopts it: the
+  first write adds only the callout at the end of that section and never
+  duplicates the heading; the first such heading wins. Later writes patch
+  only the callout, wherever it was moved.
 - Ownership and damage: bob owns exactly the `> [!projects]` callout lines;
   Bryan owns the `## Projects` heading and every other byte. A malformed
   `> [!projects` opener refuses that host with `projects_catalog_damaged`,
