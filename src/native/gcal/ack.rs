@@ -2902,12 +2902,28 @@ mod session_tests {
         }
     }
 
+    // XNU sets PENDIN (retype pending input, kernel-owned) in c_lflag
+    // whenever a tty switches from non-canonical to canonical mode, so a
+    // raw-guarded session that restores exactly what it saved still reads back
+    // with PENDIN set. Production RawGuard keeps restoring the saved bytes
+    // verbatim; only this test comparison masks the kernel-owned bit.
     fn same_settings(left: &libc::termios, right: &libc::termios) -> bool {
+        const PENDIN_MASK: libc::tcflag_t = !(libc::PENDIN as libc::tcflag_t);
         left.c_iflag == right.c_iflag
             && left.c_oflag == right.c_oflag
             && left.c_cflag == right.c_cflag
-            && left.c_lflag == right.c_lflag
+            && (left.c_lflag & PENDIN_MASK) == (right.c_lflag & PENDIN_MASK)
             && left.c_cc == right.c_cc
+    }
+
+    fn settings_diff(left: &libc::termios, right: &libc::termios) -> String {
+        format!(
+            "iflag^={:#x} oflag^={:#x} cflag^={:#x} lflag^={:#x}",
+            (left.c_iflag ^ right.c_iflag) as u64,
+            (left.c_oflag ^ right.c_oflag) as u64,
+            (left.c_cflag ^ right.c_cflag) as u64,
+            (left.c_lflag ^ right.c_lflag) as u64,
+        )
     }
 
     #[test]
@@ -2944,21 +2960,33 @@ mod session_tests {
             assert!(!same_settings(&before, &raw), "raw mode differs");
             assert_eq!(raw.c_lflag & libc::ICANON, 0);
             guard.suspend();
-            assert!(
-                same_settings(&before, &termios_of(slave)),
-                "suspend restores cooked mode"
-            );
+            {
+                let after = termios_of(slave);
+                assert!(
+                    same_settings(&before, &after),
+                    "suspend restores cooked mode: {}",
+                    settings_diff(&before, &after)
+                );
+            }
             guard.resume();
             assert_eq!(termios_of(slave).c_lflag & libc::ICANON, 0);
         }
-        assert!(
-            same_settings(&before, &termios_of(slave)),
-            "drop restores the exact settings"
-        );
-        assert!(
-            same_settings(&before, &termios_of(master)),
-            "master and slave share the line settings"
-        );
+        {
+            let after = termios_of(slave);
+            assert!(
+                same_settings(&before, &after),
+                "drop restores the exact settings: {}",
+                settings_diff(&before, &after)
+            );
+        }
+        {
+            let peer = termios_of(master);
+            assert!(
+                same_settings(&before, &peer),
+                "master and slave share the line settings: {}",
+                settings_diff(&before, &peer)
+            );
+        }
         close_fd(master);
         close_fd(slave);
     }
@@ -2973,10 +3001,14 @@ mod session_tests {
             panic!("simulated session failure");
         });
         assert!(result.is_err());
-        assert!(
-            same_settings(&before, &termios_of(slave)),
-            "unwind still restores the terminal"
-        );
+        {
+            let after = termios_of(slave);
+            assert!(
+                same_settings(&before, &after),
+                "unwind still restores the terminal: {}",
+                settings_diff(&before, &after)
+            );
+        }
         close_fd(master);
         close_fd(slave);
     }

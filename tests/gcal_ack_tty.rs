@@ -63,11 +63,16 @@ fn attrs_of(fd: i32) -> TermAttrs {
     unsafe {
         let mut raw: libc::termios = std::mem::zeroed();
         assert_eq!(libc::tcgetattr(fd, &mut raw), 0, "tcgetattr");
+        // XNU sets PENDIN (retype pending input, kernel-owned) in c_lflag
+        // whenever a tty switches from non-canonical to canonical mode, so a
+        // raw-guarded session that restores exactly what it saved still reads
+        // back with PENDIN set. It carries no session state, so mask it here.
+        let lflag = (raw.c_lflag as u64) & !(libc::PENDIN as u64);
         TermAttrs {
             iflag: raw.c_iflag as u64,
             oflag: raw.c_oflag as u64,
             cflag: raw.c_cflag as u64,
-            lflag: raw.c_lflag as u64,
+            lflag,
             cc: raw.c_cc.to_vec(),
         }
     }
@@ -177,6 +182,9 @@ impl PtyChild {
         self.master.write_all(bytes).expect("write to pty");
     }
 
+    /// Read the line settings from the master side. Valid once the slave has
+    /// been opened (the parent primes it in `spawn_pty_mode`), on macOS and
+    /// Linux alike.
     fn attrs(&self) -> TermAttrs {
         attrs_of(self.fd())
     }
@@ -264,8 +272,22 @@ fn spawn_pty_mode(
     colored: bool,
 ) -> PtyChild {
     let (master, slave_path) = open_master();
-    let before = attrs_of(master.as_raw_fd());
     let slave_c = CString::new(slave_path).expect("slave path");
+    // On macOS, tcgetattr on a PTY master fails with ENOTTY until the slave
+    // has been opened at least once, so open the slave here in the parent and
+    // read the baseline from it. The fd stays open across fork (see below):
+    // fully closing the slave before the child reopens it makes master reads
+    // return EIO, which PtyChild::pump would mistake for a gone child.
+    // SAFETY: opens the freshly unlocked slave path with no controlling
+    // terminal; the fd is asserted valid and closed exactly once per branch.
+    let slave_init = unsafe {
+        libc::open(
+            slave_c.as_ptr(),
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+        )
+    };
+    assert!(slave_init >= 0, "open pty slave in parent");
+    let before = attrs_of(slave_init);
     let bob_c = CString::new(BOB_BIN).expect("bob path");
     let argv_owned: Vec<CString> = ["bob", "gcal"]
         .into_iter()
@@ -316,8 +338,12 @@ fn spawn_pty_mode(
             // Opening the slave as a session leader without O_NOCTTY
             // acquires it as the controlling terminal, so the child is the
             // foreground process group and cooked-mode Ctrl-C reaches it.
+            // The parent's priming slave fd stays open until this open
+            // succeeds so the master never observes a fully-closed slave
+            // (EIO) on either platform.
             let slave =
                 libc::open(slave_c.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC);
+            libc::close(slave_init);
             if slave < 0 {
                 libc::_exit(127);
             }
@@ -336,6 +362,11 @@ fn spawn_pty_mode(
             libc::execv(bob_c.as_ptr(), argv_ptrs.as_ptr());
             libc::_exit(127);
         }
+    }
+    // SAFETY: the priming slave fd is owned by the parent past fork and is
+    // closed exactly once here; the child closed its own copy above.
+    unsafe {
+        libc::close(slave_init);
     }
     for (key, old) in saved {
         // SAFETY: restores the pre-fork process environment.
