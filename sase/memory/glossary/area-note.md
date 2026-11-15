@@ -17,4 +17,5 @@ per-note Ready cap and `## Tasks` status grouping. `offclock: true|false` sets t
 Each area or project also lists its descendant albums in a machine-owned `## Albums`
 catalog maintained by `bob albums sync`, beside the `## Notebooks` catalog.
 The root area note and every area with sub-areas also list their descendant areas in a
-machine-owned, nested `## Areas` catalog maintained by `bob areas sync`.
+machine-owned, nested `## Areas` catalog maintained by `bob areas sync`. An area may
+also carry an optional one-line `summary:`, shown after its link in the catalog.
