@@ -101,7 +101,10 @@ fn occurrence_off_clock(
     );
     let mut spans = BTreeMap::new();
     spans.insert("time".to_string(), span_hash(time_label));
-    spans.insert("title".to_string(), span_hash(&render::escape_title(title)));
+    spans.insert(
+        "title".to_string(),
+        span_hash(&render::row_title(None, title)),
+    );
     spans.insert("badges".to_string(), span_hash(&badges));
     let end_min = end_min_from_label(time_label, start_min);
     PlannedOccurrence {
@@ -111,6 +114,7 @@ fn occurrence_off_clock(
         series_id: None,
         note: None,
         id_hint: title.to_string(),
+        mark: None,
         task,
         time_label: time_label.to_string(),
         title: title.to_string(),
@@ -2669,7 +2673,7 @@ fn untouched_mid_line_title_tags_rewrite_once() {
     occ.id_hint = old_title.to_string();
     occ.spans.insert(
         "title".to_string(),
-        span_hash(&render::escape_title(old_title)),
+        span_hash(&render::row_title(occ.mark.as_deref(), old_title)),
     );
     let plan = run_with_journal(&contents, vec![occ], &journal);
     let row = row_line(&plan.contents, &block_id);

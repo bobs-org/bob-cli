@@ -5242,6 +5242,21 @@ fn all_day_event(id: &str, title: &str) -> Value {
     })
 }
 
+fn birthday_event(id: &str, title: &str) -> Value {
+    json!({
+        "id": id,
+        "summary": title,
+        "start": {"date": "2026-10-30"},
+        "end": {"date": "2026-10-31"},
+        "status": "confirmed",
+        "eventType": "default",
+        "transparency": "transparent",
+        "organizer": {"self": true},
+        "attendees": [],
+        "htmlLink": format!("https://www.google.com/calendar/event?eid={id}"),
+    })
+}
+
 fn calendar_list_call_count(fake: &FakeGog) -> usize {
     fake.calls()
         .iter()
@@ -5440,5 +5455,369 @@ fn same_event_id_on_two_calendars_keeps_independent_rows() {
             "shared".to_string()
         )),
         "{keys:?}"
+    );
+}
+
+#[test]
+fn marked_birthday_row_is_born_marked_and_idempotent() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-marked-born");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for("primary", &events_envelope(vec![]));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![birthday_event("ava1", "Ava's Birthday")]),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let expected = "- **all day** 🎂 Ava's Birthday \
+        [📅](https://www.google.com/calendar/event?eid=ava1)";
+    assert!(note.contains(expected), "{note}");
+    // Context row: no checkbox, no task tag, no MEET, no root.
+    let row = note
+        .lines()
+        .find(|line| line.contains("Ava's Birthday"))
+        .expect("ava row");
+    assert!(row.starts_with("- **all day** 🎂 "), "{row}");
+    assert!(!row.contains("#task"), "{row}");
+    assert!(!row.contains("[root::"), "{row}");
+    assert!(!row.contains("[type::"), "{row}");
+    // Directly under the stamp: first row of the Events section.
+    let events_at = note.find("## Events").expect("Events section");
+    let pomodoros_at = note.find("## Pomodoros").expect("Pomodoros");
+    let section_rows: Vec<&str> = note[events_at..pomodoros_at]
+        .lines()
+        .filter(|line| line.starts_with("- "))
+        .collect();
+    assert_eq!(section_rows.len(), 1, "{note}");
+    assert_eq!(*section_rows[0], *row, "{note}");
+
+    let second = sync_output(&env, &fake, &[]);
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    assert_eq!(today_note(&env), note, "rerun is idempotent");
+    assert!(stdout(&second).contains("unchanged"), "{}", stdout(&second));
+}
+
+#[test]
+fn marked_multi_day_row_keeps_qualifier_after_the_mark() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-marked-multiday");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for("primary", &events_envelope(vec![]));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![json!({
+            "id": "trip1",
+            "summary": "Trip",
+            "start": {"date": "2026-10-30"},
+            "end": {"date": "2026-11-01"},
+            "status": "confirmed",
+            "eventType": "default",
+            "transparency": "transparent",
+            "organizer": {"self": true},
+            "attendees": [],
+            "htmlLink": "https://www.google.com/calendar/event?eid=trip1",
+        })]),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(
+        note.contains(
+            "- **all day** 🎂 Trip · *day 1 of 2* \
+             [📅](https://www.google.com/calendar/event?eid=trip1)"
+        ),
+        "{note}"
+    );
+}
+
+#[test]
+fn marked_timed_event_mints_block_id_from_the_bare_title() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-marked-timed");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for("primary", &events_envelope(vec![]));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![json!({
+            "id": "dawn1",
+            "summary": "Dawn patrol",
+            "start": {"dateTime": "2026-10-30T07:00:00-04:00"},
+            "end": {"dateTime": "2026-10-30T08:00:00-04:00"},
+            "status": "confirmed",
+            "eventType": "default",
+            "organizer": {"self": true},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+            "htmlLink": "https://www.google.com/calendar/event?eid=dawn1",
+        })]),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("Dawn patrol"))
+        .expect("dawn row");
+    // Marked Event Task with the block id minted from the bare title.
+    // 07:00 is past at the 12:00 test clock, so the row is born done.
+    assert!(
+        row.starts_with("- [x] #task **0700-0800** 🎂 Dawn patrol "),
+        "{row}"
+    );
+    assert!(row.ends_with("^dawn-patrol"), "{row}");
+    assert!(!row.contains("^🎂"), "{row}");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
+}
+
+#[test]
+fn marked_route_hint_strips_and_roots_from_the_bare_title() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-marked-route");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for("primary", &events_envelope(vec![]));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![json!({
+            "id": "dentist1",
+            "summary": "Dentist @body",
+            "start": {"dateTime": "2026-10-30T18:30:00-04:00"},
+            "end": {"dateTime": "2026-10-30T19:00:00-04:00"},
+            "status": "confirmed",
+            "eventType": "default",
+            "organizer": {"self": true},
+            "attendees": [{"self": true, "responseStatus": "accepted"}],
+            "htmlLink": "https://www.google.com/calendar/event?eid=dentist1",
+        })]),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("Dentist"))
+        .expect("dentist row");
+    assert!(row.contains("🎂 Dentist "), "{row}");
+    assert!(!row.contains("@body"), "{row}");
+    assert!(row.contains("[root:: body]"), "{row}");
+    assert!(row.ends_with("^dentist"), "{row}");
+}
+
+#[test]
+fn mark_change_updates_untouched_rows_in_place() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-mark-change");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for("primary", &events_envelope(vec![]));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![birthday_event("ava1", "Ava's Birthday")]),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(
+        today_note(&env).contains("🎂 Ava's Birthday"),
+        "{}",
+        today_note(&env)
+    );
+
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🦄",
+    ));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(note.contains("🦄 Ava's Birthday"), "{note}");
+    assert!(!note.contains("🎂 Ava's Birthday"), "{note}");
+    assert_eq!(
+        note.lines()
+            .filter(|line| line.contains("Ava's Birthday"))
+            .count(),
+        1,
+        "{note}"
+    );
+}
+
+#[test]
+fn adding_a_marked_calendar_leaves_primary_rows_byte_identical() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-marked-no-churn");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    // Single-calendar baseline: only primary syncs.
+    fake.events_json_for(
+        "primary",
+        &events_envelope(vec![simple_event(
+            "standup",
+            "Standup",
+            "2026-10-30T09:00:00-04:00",
+            "2026-10-30T09:30:00-04:00",
+        )]),
+    );
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![]),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let baseline = today_note(&env);
+    let baseline_row = baseline
+        .lines()
+        .find(|line| line.contains("Standup"))
+        .expect("standup row")
+        .to_string();
+
+    // Add the marked Birthdays calendar; the primary row must not churn.
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![birthday_event("ava1", "Ava's Birthday")]),
+    );
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("Standup"))
+        .expect("standup row");
+    assert_eq!(row, baseline_row, "primary row is byte-identical");
+    assert!(note.contains("🎂 Ava's Birthday"), "{note}");
+}
+
+#[test]
+fn hand_edited_marked_title_is_kept_and_reported_once() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-marked-kept");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for("primary", &events_envelope(vec![]));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![birthday_event("ava1", "Ava's Birthday")]),
+    );
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let edited =
+        today_note(&env).replace("🎂 Ava's Birthday", "🎂 Ava's PARTY");
+    fs::write(env.vault().join("2026/20261030.md"), &edited)
+        .expect("hand edit");
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(combined.contains("kept your edit to title"), "{combined}");
+    assert!(
+        today_note(&env).contains("🎂 Ava's PARTY"),
+        "{}",
+        today_note(&env)
+    );
+
+    let rerun = sync_output(&env, &fake, &[]);
+    assert_eq!(rerun.status.code(), Some(0), "{}", stderr(&rerun));
+    let rerun_combined = format!("{}{}", stdout(&rerun), stderr(&rerun));
+    assert!(
+        !rerun_combined.contains("kept your edit"),
+        "{rerun_combined}"
+    );
+}
+
+#[test]
+fn primary_rows_stay_unmarked_with_a_marked_calendar_configured() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-primary-no-mark");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for(
+        "primary",
+        &events_envelope(vec![simple_event(
+            "standup",
+            "Standup",
+            "2026-10-30T09:00:00-04:00",
+            "2026-10-30T09:30:00-04:00",
+        )]),
+    );
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![]),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("Standup"))
+        .expect("standup row");
+    assert!(!row.contains('🎂'), "{row}");
+    assert!(row.contains("**0900-0930** Standup "), "{row}");
+}
+
+#[test]
+fn distinct_event_ids_on_one_marked_calendar_give_distinct_rows() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-marked-instances");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for("primary", &events_envelope(vec![]));
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![
+            birthday_event("ava_20261030", "Ava's Birthday"),
+            birthday_event("ava_20271114", "Ava's Birthday"),
+        ]),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert_eq!(
+        note.lines()
+            .filter(|line| line.contains("🎂 Ava's Birthday"))
+            .count(),
+        2,
+        "{note}"
     );
 }

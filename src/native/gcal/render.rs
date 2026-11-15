@@ -22,6 +22,9 @@ use crate::native::{
 pub(crate) struct TaskRowInput<'a> {
     pub time_label: &'a str,
     pub title: &'a str,
+    /// Calendar mark for non-primary rows; rendered at the front of the
+    /// Google-owned title span. `None` leaves the title unmarked.
+    pub mark: Option<&'a str>,
     pub html_link: Option<&'a str>,
     pub join_link: Option<&'a str>,
     pub location: Option<&'a str>,
@@ -41,6 +44,9 @@ pub(crate) struct TaskRowInput<'a> {
 pub(crate) struct ContextRowInput<'a> {
     pub time_label: &'a str,
     pub title: &'a str,
+    /// Calendar mark for non-primary rows; rendered at the front of the
+    /// Google-owned title span. `None` leaves the title unmarked.
+    pub mark: Option<&'a str>,
     pub html_link: Option<&'a str>,
     pub qualifier: Option<&'a str>,
 }
@@ -56,7 +62,7 @@ pub(crate) fn render_task_row(
     let mut row = format!(
         "- [{status}] #task **{}** {}",
         input.time_label,
-        escape_title(input.title),
+        row_title(input.mark, input.title),
     );
     row.push_str(&badges(input.html_link, input.join_link, input.location));
     append_clock_tag(&mut row, &input.clock_tag);
@@ -150,8 +156,11 @@ fn strip_bracket_field(suffix: &mut String, key: &str) {
 /// Render `- **all day** title [· qualifier] [📅](…)` (or the timed span
 /// form for a timed Maybe or free event).
 pub(crate) fn render_context_row(input: &ContextRowInput<'_>) -> String {
-    let mut row =
-        format!("- **{}** {}", input.time_label, escape_title(input.title),);
+    let mut row = format!(
+        "- **{}** {}",
+        input.time_label,
+        row_title(input.mark, input.title),
+    );
     if let Some(qualifier) = input.qualifier {
         row.push_str(" · *");
         row.push_str(qualifier);
@@ -161,6 +170,25 @@ pub(crate) fn render_context_row(input: &ContextRowInput<'_>) -> String {
         row.push_str(&calendar_badge(link));
     }
     row
+}
+
+/// Escape a calendar title: collapse control and Unicode whitespace to
+/// a single space so a summary cannot forge daily-note lines, then the
+/// shared task-line escaper and the gcal pass (Tasks emoji, priority
+/// emojis, mid-line `#tags`, `[[` / `](` sequences, leading markers).
+///
+/// One Google-owned title span: the calendar mark at the front, then
+/// the escaped title. The mark itself is never escaped because config
+/// validation already rejected ASCII, whitespace, and control. An empty
+/// escaped title leaves the bare mark; no mark leaves the escaped title.
+pub(crate) fn row_title(mark: Option<&str>, title: &str) -> String {
+    let escaped = escape_title(title);
+    let mark = mark.map(str::trim).filter(|mark| !mark.is_empty());
+    match (mark, escaped.is_empty()) {
+        (None, _) => escaped,
+        (Some(mark), true) => mark.to_string(),
+        (Some(mark), false) => format!("{mark} {escaped}"),
+    }
 }
 
 /// Escape a calendar title: collapse control and Unicode whitespace to
@@ -381,6 +409,7 @@ mod tests {
         TaskRowInput {
             time_label: "0800-0830",
             title,
+            mark: None,
             html_link: Some("https://www.google.com/calendar/event?eid=1"),
             join_link: None,
             location: None,
@@ -457,6 +486,7 @@ mod tests {
         let row = render_context_row(&ContextRowInput {
             time_label: "all day",
             title: "School holiday",
+            mark: None,
             html_link: Some("https://www.google.com/calendar/event?eid=2"),
             qualifier: None,
         });
@@ -468,6 +498,7 @@ mod tests {
         let row = render_context_row(&ContextRowInput {
             time_label: "0915-1000",
             title: "Toddler class",
+            mark: None,
             html_link: None,
             qualifier: Some("maybe"),
         });
@@ -598,6 +629,7 @@ mod tests {
             &TaskRowInput {
                 time_label: "1830-1900",
                 title: "Party",
+                mark: None,
                 html_link: Some("https://www.google.com/calendar/event?eid=7"),
                 join_link: None,
                 location: None,
@@ -665,6 +697,7 @@ mod tests {
                 clock_tag: ClockTag::None,
                 time_label: "0800-0830",
                 title: "Dentist",
+                mark: None,
                 status: '*',
                 unacked: false,
             },
@@ -678,6 +711,7 @@ mod tests {
         let context = render_context_row(&ContextRowInput {
             time_label: "all day",
             title: "Holiday",
+            mark: None,
             html_link: Some(html),
             qualifier: None,
         });
@@ -782,6 +816,63 @@ mod tests {
                 "#off [root:: love] [type:: MEET]  [completion:: 2026-11-04] ^swings"
             ),
             "{rerouted}"
+        );
+    }
+
+    #[test]
+    fn row_title_prefixes_the_mark_without_escaping_it() {
+        assert_eq!(row_title(None, "Standup"), "Standup");
+        assert_eq!(
+            row_title(Some("🎂"), "Ava's Birthday"),
+            "🎂 Ava's Birthday"
+        );
+        assert_eq!(row_title(Some("🎂"), ""), "🎂");
+        assert_eq!(row_title(Some(""), "Standup"), "Standup");
+        // The mark stays literal while the title is escaped.
+        assert_eq!(
+            row_title(Some("🎂"), "Party 📅 2026-10-30"),
+            format!("🎂 {}", escape_title("Party 📅 2026-10-30")),
+        );
+        assert!(row_title(Some("🎂"), "Party").starts_with("🎂 "));
+    }
+
+    #[test]
+    fn marked_rows_render_the_mark_at_the_front_of_the_title_span() {
+        let task = render_task_row(
+            &TaskRowInput {
+                time_label: "0700-0800",
+                title: "Dawn patrol",
+                mark: Some("🎂"),
+                html_link: Some(
+                    "https://www.google.com/calendar/event?eid=dawn",
+                ),
+                join_link: None,
+                location: None,
+                root: Some("body"),
+                needs_type: false,
+                buffer: EventBuffer::default(),
+                clock_tag: ClockTag::None,
+                status: ' ',
+                unacked: false,
+            },
+            "dawn-patrol",
+        );
+        assert!(
+            task.contains("**0700-0800** 🎂 Dawn patrol [📅]("),
+            "{task}"
+        );
+        assert!(task.ends_with(" ^dawn-patrol"), "{task}");
+        let context = render_context_row(&ContextRowInput {
+            time_label: "all day",
+            title: "Ava's Birthday",
+            mark: Some("🎂"),
+            html_link: Some("https://www.google.com/calendar/event?eid=ava"),
+            qualifier: None,
+        });
+        assert_eq!(
+            context,
+            "- **all day** 🎂 Ava's Birthday \
+             [📅](https://www.google.com/calendar/event?eid=ava)",
         );
     }
 }

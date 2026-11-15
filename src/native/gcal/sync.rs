@@ -983,11 +983,19 @@ pub(super) fn build_occurrences<S: HomeSource>(
             task.then_some(&event.event.clock_tag),
             buffer,
         );
+        // The title span hashes the marked span (`mark` + escaped
+        // bare title). Block ids, the `needs_meet_type` probe,
+        // `@route` stripping, and similar-task probes stay on the bare
+        // `event.title`.
+        let mark = event.calendar.mark.clone();
         let mut spans = BTreeMap::new();
         spans.insert("time".to_string(), journal::span_hash(&time_label));
         spans.insert(
             "title".to_string(),
-            journal::span_hash(&render::escape_title(&event.event.title)),
+            journal::span_hash(&render::row_title(
+                mark.as_deref(),
+                &event.event.title,
+            )),
         );
         spans.insert("badges".to_string(), journal::span_hash(&badges));
         let qualifier = if task {
@@ -1062,6 +1070,7 @@ pub(super) fn build_occurrences<S: HomeSource>(
                 want_unacked,
                 ack_seen: event.event.ack_seen(),
                 id_hint: event.event.title.clone(),
+                mark,
                 task,
                 time_label,
                 title: event.event.title.clone(),

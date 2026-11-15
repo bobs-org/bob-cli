@@ -50,9 +50,7 @@ use super::{
         row_untouched, split_row_spans, status_char, strip_unacked_tag,
         AbsentVerdict, KeptNotice, LearnedSeries, LifecycleItem,
     },
-    render::{
-        escape_title, render_context_row, render_task_row, ContextRowInput,
-    },
+    render::{render_context_row, render_task_row, row_title, ContextRowInput},
     reset::DayReset,
     root::RootSourceKind,
     stamp::{self, Stamp},
@@ -70,6 +68,11 @@ pub(crate) struct PlannedOccurrence {
     pub note: Option<super::journal::NoteProvenance>,
     /// Bare title for block-id minting.
     pub id_hint: String,
+    /// Calendar mark for non-primary rows; rendered at the front of the
+    /// Google-owned title span. `None` leaves the row unmarked. The
+    /// journal title span hashes the marked span; block ids, probes,
+    /// and `@route` stripping stay on the bare `title`.
+    pub mark: Option<String>,
     pub task: bool,
     pub time_label: String,
     pub title: String,
@@ -1247,7 +1250,10 @@ fn apply_span_updates(
     }
     let fresh = [
         ("time", occurrence.time_label.clone()),
-        ("title", escape_title(&occurrence.title)),
+        (
+            "title",
+            row_title(occurrence.mark.as_deref(), &occurrence.title),
+        ),
         ("badges", fresh_badges),
     ];
     let mut edited: Vec<&str> = Vec::new();
@@ -2194,6 +2200,7 @@ pub(super) fn render_occurrence(
             &super::render::TaskRowInput {
                 time_label: &occurrence.time_label,
                 title: &occurrence.title,
+                mark: occurrence.mark.as_deref(),
                 html_link: occurrence.html_link.as_deref(),
                 join_link: occurrence.join_link.as_deref(),
                 location: occurrence.location.as_deref(),
@@ -2218,6 +2225,7 @@ pub(super) fn render_occurrence(
         render_context_row(&ContextRowInput {
             time_label: &occurrence.time_label,
             title: &occurrence.title,
+            mark: occurrence.mark.as_deref(),
             html_link: occurrence.html_link.as_deref(),
             qualifier: occurrence.qualifier.as_deref(),
         })

@@ -34,7 +34,6 @@ pub(crate) struct SyncedCalendar {
     #[allow(dead_code)]
     pub google_id: String,
     name: String,
-    #[allow(dead_code)]
     pub mark: Option<String>,
     #[allow(dead_code)]
     pub primary: bool,

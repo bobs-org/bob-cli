@@ -717,7 +717,16 @@ immediately after the heading gap:
 
 *↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*
 - [x] #task **0800-0830** Product interview [📅](…) [📹](…) [root:: job]  [completion:: 2026-10-30] ^product-interview
+- **all day** 🎂 Ava's Birthday [📅](…)
 ```
+
+Rows from a non-primary calendar start their Google-owned title span with
+that calendar's configured mark (`🎂` above). The mark sits inside the title
+span, ahead of the escaped title, so a multi-day row keeps its qualifier
+after the title (`- **all day** 🎂 Trip · *day 1 of 2* [📅](…)`) and a timed
+row keeps its Event Task shape (`- [ ] #task **0700-0800** 🎂 Dawn patrol
+[📅](…) [root:: body] ^dawn-patrol`). Block IDs are minted from the bare
+title, without the mark.
 
 The source is `*↻ synced <when> · [<account>](<day-url>)*`. `<when>` is `HH:MM`
 in Bob's timezone when the run happened on the note's own day, otherwise
@@ -750,6 +759,7 @@ account, or set `gcal.account` to the stamp's account.
 | --- | --- | --- |
 | Checkbox | You | Never changed, except cancelling an untouched task (see below) |
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
+| Calendar mark | Your config | Part of the Google-owned title span; follows config while the title is untouched |
 | `#off` / `#on` (deprecated Google aliases `#offclock`, `#off-clock`, `#untracked`) | your private note, then Google, until you edit it | Follows Google's explicit tag while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
 | `[buffer::]` | your private note, then Google, until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
 | Description bullets (buffer reasons included) | your private note, then Google, until you edit it | Rewritten in place while they still match what Bob last wrote; your edit, nested note, or deletion makes them yours, reported once only if Google later changes |

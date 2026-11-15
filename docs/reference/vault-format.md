@@ -617,7 +617,10 @@ also accepts deprecated `#offclock`, `#off-clock`, and `#untracked`), then
 `[buffer:: -30m +15m]` for buffered events (each
 side omitted when zero; no field without buffers), then `[root::]`, then
 `[type:: MEET]` only when needed, then a `^block-id` minted from the bare
-title and unique within the note. When the Google event has a human
+title (without any calendar mark) and unique within the note. A row from a
+non-primary calendar starts its Google-owned title span with that calendar's
+configured mark (`- **all day** 🎂 Ava's Birthday [📅](…)`); primary rows are
+unmarked. When the Google event has a human
 description, sync writes it as flat first-child bullets under the row (see
 [Description bullets](../gcal.md#description-bullets)), led by `↤`/`↦`
 buffer-reason bullets. The buffer widens
