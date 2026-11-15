@@ -134,6 +134,7 @@ mod vault_merge_union;
 mod vault_rewrite;
 mod vault_sync;
 mod vault_task_loss;
+pub(crate) mod yaml_spans;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {

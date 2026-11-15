@@ -5,6 +5,8 @@ pub(crate) mod charts;
 pub(crate) mod check;
 pub(crate) mod cli;
 pub(crate) mod config;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod config_spans;
 pub(crate) mod dates;
 pub(crate) mod ensure;
 pub(crate) mod grammar;

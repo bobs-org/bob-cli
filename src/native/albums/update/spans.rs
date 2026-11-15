@@ -17,6 +17,11 @@ use super::{
     ops::{self, ApplyInputs, OpError, OpOutcome},
     protocol::{Op, Restoration, RestoreSpan},
 };
+use crate::native::yaml_spans::{
+    self, blank_or_comment, first_content_indent, gap_after_colon,
+    has_yaml_feature, indentation, join_lines, parse_key, render_scalar,
+    split_comment, split_lines, whitespace_before_comment, yaml_text, Line,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpanError {
@@ -46,12 +51,6 @@ pub(crate) struct SchemaSpanEdit {
     pub(crate) changed: bool,
     /// Reverse-ordered semantic operations with byte restoration metadata.
     pub(crate) inverse_ops: Vec<RestoredOp>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Line {
-    text: String,
-    ending: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,58 +268,6 @@ fn document(markdown: &str) -> Result<Document, SpanError> {
     })
 }
 
-fn split_lines(text: &str) -> Vec<Line> {
-    let bytes = text.as_bytes();
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\n' {
-            let end = index + 1;
-            let raw = &text[start..end];
-            let (content, ending) =
-                if let Some(content) = raw.strip_suffix("\r\n") {
-                    (content, "\r\n")
-                } else {
-                    (
-                        raw.strip_suffix('\n').expect("line ends with newline"),
-                        "\n",
-                    )
-                };
-            lines.push(Line {
-                text: content.to_owned(),
-                ending: ending.to_owned(),
-            });
-            start = end;
-        }
-        index += 1;
-    }
-    if start < text.len() {
-        lines.push(Line {
-            text: text[start..].to_owned(),
-            ending: String::new(),
-        });
-    }
-    lines
-}
-
-fn join_lines(lines: &[Line]) -> String {
-    let mut out = String::new();
-    for line in lines {
-        out.push_str(&line.text);
-        out.push_str(&line.ending);
-    }
-    out
-}
-
-fn yaml_text(lines: &[Line]) -> String {
-    lines
-        .iter()
-        .map(|line| line.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn validate_root_spans(
     document: &Document,
     root: &Mapping,
@@ -506,60 +453,6 @@ fn block_entries(
     Ok(entries)
 }
 
-fn parse_key(line: &str, indent: usize) -> Option<(String, usize)> {
-    let colon = mapping_colon(line, indent)?;
-    let key_text = line[indent..colon].trim();
-    if key_text.is_empty() {
-        return None;
-    }
-    let key: YamlValue = serde_yaml::from_str(key_text).ok()?;
-    Some((key.as_str()?.to_owned(), colon))
-}
-
-fn mapping_colon(line: &str, indent: usize) -> Option<usize> {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut flow = 0isize;
-    let bytes = line.as_bytes();
-    for index in indent..bytes.len() {
-        let byte = bytes[index];
-        if let Some(current) = quote {
-            if current == b'"' && escaped {
-                escaped = false;
-            } else if current == b'"' && byte == b'\\' {
-                escaped = true;
-            } else if current == b'\''
-                && byte == b'\''
-                && bytes.get(index + 1) == Some(&b'\'')
-            {
-                // YAML single-quoted doubled quote.
-                continue;
-            } else if byte == current {
-                quote = None;
-            }
-            continue;
-        }
-        match byte {
-            b'"' | b'\'' => quote = Some(byte),
-            b'{' | b'[' => flow += 1,
-            b'}' | b']' => flow -= 1,
-            b'#' if index == indent
-                || bytes[index - 1].is_ascii_whitespace() =>
-            {
-                return None;
-            }
-            b':' if flow == 0
-                && (index + 1 == bytes.len()
-                    || bytes[index + 1].is_ascii_whitespace()) =>
-            {
-                return Some(index);
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 fn line_value(
     lines: &[Line],
     entry: &Entry,
@@ -570,186 +463,30 @@ fn line_value(
     Ok((value.trim().to_owned(), comment.to_owned()))
 }
 
-fn split_comment(value: &str) -> (&str, &str) {
-    let bytes = value.as_bytes();
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, byte) in bytes.iter().copied().enumerate() {
-        if let Some(current) = quote {
-            if current == b'"' && escaped {
-                escaped = false;
-            } else if current == b'"' && byte == b'\\' {
-                escaped = true;
-            } else if current == b'\''
-                && byte == b'\''
-                && bytes.get(index + 1) == Some(&b'\'')
-            {
-                continue;
-            } else if byte == current {
-                quote = None;
-            }
-        } else if byte == b'"' || byte == b'\'' {
-            quote = Some(byte);
-        } else if byte == b'#'
-            && (index == 0 || bytes[index - 1].is_ascii_whitespace())
-        {
-            return (&value[..index], &value[index..]);
-        }
-    }
-    (value, "")
-}
-
-fn first_content_indent(
-    lines: &[Line],
-    start: usize,
-    end: usize,
-) -> Option<usize> {
-    (start..end.min(lines.len())).find_map(|index| {
-        let line = &lines[index].text;
-        (!blank_or_comment(line)).then(|| indentation(line))
-    })
-}
-
-fn blank_or_comment(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.is_empty() || trimmed.starts_with('#')
-}
-
-fn indentation(line: &str) -> usize {
-    line.len() - line.trim_start_matches([' ', '\t']).len()
-}
-
-fn has_yaml_feature(lines: &[Line]) -> bool {
-    let mut quote = None;
-    let mut escaped = false;
-    for line in lines {
-        let bytes = line.text.as_bytes();
-        for (index, byte) in bytes.iter().copied().enumerate() {
-            if let Some(current) = quote {
-                if current == b'"' && escaped {
-                    escaped = false;
-                } else if current == b'"' && byte == b'\\' {
-                    escaped = true;
-                } else if byte == current {
-                    quote = None;
-                }
-                continue;
-            }
-            if byte == b'"' || byte == b'\'' {
-                quote = Some(byte);
-                continue;
-            }
-            if byte == b'#'
-                && (index == 0 || bytes[index - 1].is_ascii_whitespace())
-            {
-                break;
-            }
-            if matches!(byte, b'&' | b'*' | b'!')
-                && (index == 0
-                    || bytes[index - 1].is_ascii_whitespace()
-                    || matches!(
-                        bytes[index - 1],
-                        b'[' | b'{' | b',' | b':' | b'-'
-                    ))
-                && bytes.get(index + 1).is_some_and(|next| {
-                    !next.is_ascii_whitespace() && *next != b'#'
-                })
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 fn validate_flow_map_keys(
     flow: &str,
     path: &str,
     line: usize,
 ) -> Result<(), SpanError> {
-    let mut stack = Vec::<FlowFrame>::new();
-    let bytes = flow.as_bytes();
-    let mut index = 0;
-    let mut quote = None;
-    let mut escaped = false;
-    let mut key_start = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if let Some(current) = quote {
-            if current == b'"' && escaped {
-                escaped = false;
-            } else if current == b'"' && byte == b'\\' {
-                escaped = true;
-            } else if byte == current {
-                quote = None;
+    yaml_spans::validate_flow_map_keys(flow).map_err(|err| {
+        let message = match err {
+            yaml_spans::FlowMapError::UnresolvableKey => {
+                "flow mapping has a key that cannot be resolved safely"
             }
-            index += 1;
-            continue;
-        }
-        if byte == b'"' || byte == b'\'' {
-            quote = Some(byte);
-            index += 1;
-            continue;
-        }
-        match byte {
-            b'{' => {
-                stack.push(FlowFrame::Map(HashSet::new(), true));
-                key_start = index + 1;
+            yaml_spans::FlowMapError::DuplicateKey => {
+                "duplicate key in flow YAML cannot be edited safely"
             }
-            b'[' => stack.push(FlowFrame::Sequence),
-            b'}' | b']' => {
-                stack.pop();
+            yaml_spans::FlowMapError::CommentInside => {
+                "comments inside a flow value cannot be preserved safely"
             }
-            b',' => {
-                if let Some(FlowFrame::Map(_, expecting_key)) = stack.last_mut()
-                {
-                    *expecting_key = true;
-                    key_start = index + 1;
-                }
-            }
-            b':' => {
-                if let Some(FlowFrame::Map(keys, expecting_key)) =
-                    stack.last_mut()
-                    && *expecting_key
-                {
-                    let raw = flow[key_start..index].trim();
-                    let key: YamlValue = serde_yaml::from_str(raw).map_err(|_| {
-                        error(
-                            "unsupported_yaml",
-                            "flow mapping has a key that cannot be resolved safely",
-                            Some(line),
-                            Some(path.to_owned()),
-                        )
-                    })?;
-                    if !keys.insert(key) {
-                        return Err(error(
-                            "unsupported_yaml",
-                            "duplicate key in flow YAML cannot be edited safely",
-                            Some(line),
-                            Some(path.to_owned()),
-                        ));
-                    }
-                    *expecting_key = false;
-                }
-            }
-            b'#' if index == 0 || bytes[index - 1].is_ascii_whitespace() => {
-                return Err(error(
-                    "unsupported_yaml",
-                    "comments inside a flow value cannot be preserved safely",
-                    Some(line),
-                    Some(path.to_owned()),
-                ));
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    Ok(())
-}
-
-enum FlowFrame {
-    Map(HashSet<YamlValue>, bool),
-    Sequence,
+        };
+        error(
+            "unsupported_yaml",
+            message,
+            Some(line),
+            Some(path.to_owned()),
+        )
+    })
 }
 
 fn patch_record_mapping(
@@ -1281,38 +1018,6 @@ fn is_nonempty_container(value: &YamlValue) -> bool {
         YamlValue::Sequence(sequence) => !sequence.is_empty(),
         _ => false,
     }
-}
-
-fn render_scalar(value: &YamlValue) -> String {
-    match value {
-        YamlValue::Null => "null".to_owned(),
-        YamlValue::Bool(value) => value.to_string(),
-        YamlValue::Number(value) => value.to_string(),
-        YamlValue::String(value) => {
-            crate::native::records::yaml_string_scalar(value)
-        }
-        YamlValue::Sequence(_) => "[]".to_owned(),
-        YamlValue::Mapping(_) => "{}".to_owned(),
-        YamlValue::Tagged(tagged) => render_scalar(&tagged.value),
-    }
-}
-
-fn gap_after_colon(after: &str) -> &str {
-    let (value, _) = split_comment(after);
-    let gap = value.len() - value.trim_start().len();
-    if gap == 0 {
-        " "
-    } else {
-        &value[..gap]
-    }
-}
-
-fn whitespace_before_comment(after: &str) -> &str {
-    let (value, comment) = split_comment(after);
-    if comment.is_empty() {
-        return "";
-    }
-    &value[value.trim_end().len()..]
 }
 
 fn exact_span(
