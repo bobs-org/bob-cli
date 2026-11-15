@@ -789,6 +789,15 @@ pub(crate) fn derive_title(
     aliases_first: Option<&str>,
     stem: &str,
 ) -> String {
+    derive_title_and_titled(body, aliases_first, stem).0
+}
+
+/// Derive a display title and whether it came from an explicit H1 or alias.
+pub(crate) fn derive_title_and_titled(
+    body: &str,
+    aliases_first: Option<&str>,
+    stem: &str,
+) -> (String, bool) {
     let body_start = rules::body_start_line(body);
     let lines: Vec<&str> = rules::physical_lines(body);
     let mut fence = None;
@@ -814,16 +823,16 @@ pub(crate) fn derive_title(
         if let Some(title) = parse_h1(line) {
             let cleaned = clean_h1(&title);
             if !cleaned.is_empty() {
-                return cleaned;
+                return (cleaned, true);
             }
         }
     }
     if let Some(alias) = aliases_first
         && !alias.trim().is_empty()
     {
-        return alias.trim().to_string();
+        return (alias.trim().to_string(), true);
     }
-    humanize_stem(stem)
+    (humanize_stem(stem), false)
 }
 
 fn parse_h1(line: &str) -> Option<String> {

@@ -2,7 +2,8 @@
 //!
 //! One sorted discovery pass indexes every included note, reads its
 //! frontmatter facts, and retains original bytes for notebooks, areas, albums,
-//! and projects (the notes catalogs and records indexes read or rewrite).
+//! projects, and every possible `[[area]]` root (the catalogs and records
+//! indexes read or rewrite).
 //! Analysis then runs on the snapshot alone, so a caller can overlay staged
 //! files (a new notebook, a changed host) and plan catalogs without touching
 //! the filesystem.
@@ -216,6 +217,7 @@ impl SnapshotFile {
     ) -> Self {
         let slash = display_slash(relative);
         let stem = stem_of(relative);
+        let is_area_root_name = stem.eq_ignore_ascii_case("area");
         let Some(frontmatter) = parse_frontmatter(&contents) else {
             // No frontmatter: an untyped note without facts, still indexed.
             return Self {
@@ -231,7 +233,7 @@ impl SnapshotFile {
                     aliases_first: None,
                 },
                 header: "---\n---\n".to_string(),
-                contents: None,
+                contents: is_area_root_name.then_some(contents),
             };
         };
         let kind = classify_kind(&frontmatter, record_ids);
@@ -240,13 +242,14 @@ impl SnapshotFile {
             frontmatter_value(&frontmatter, "summary").map(str::to_string);
         let aliases_first = first_alias(&contents);
         let header = reconstruct_header(&frontmatter);
-        let retain = matches!(
-            kind,
-            LiteKind::Notebook
-                | LiteKind::Album
-                | LiteKind::Area
-                | LiteKind::Project { .. }
-        );
+        let retain = is_area_root_name
+            || matches!(
+                kind,
+                LiteKind::Notebook
+                    | LiteKind::Album
+                    | LiteKind::Area
+                    | LiteKind::Project { .. }
+            );
         Self {
             lite: NoteFactsLite {
                 relative: relative.to_path_buf(),

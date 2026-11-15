@@ -16,6 +16,7 @@ pub(crate) fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
 }
 
 pub(crate) mod albums;
+pub(crate) mod areas;
 mod articles;
 pub(crate) mod attachments;
 pub(crate) mod bank;
