@@ -151,9 +151,27 @@ names the next command.
 bob gcal calendars
 ```
 
-The table shows id, name, access role, colour, whether Bob will sync it,
-and the mapped root. Put those ids under `gcal.calendars`. `primary` matches
-the account's primary calendar.
+The table shows each calendar's id, name, access role, colour, whether Bob
+will sync it, its mark, and the mapped root. Select calendars by id, not by
+name. `primary` matches the account's primary calendar and stays unmarked.
+
+To sync another calendar, add its id and a unique short emoji mark. The mark
+appears at the start of its event titles; keep the primary calendar unmarked.
+For example, add Birthdays like this:
+
+```yaml
+gcal:
+  calendars:
+    - id: primary
+    - id: <Birthdays calendar id from `bob gcal calendars>` # Birthdays
+      mark: 🎂
+```
+
+Preview the calendar set and its rows before writing them:
+
+```bash
+bob gcal sync -d
+```
 
 ## 4. Preview, then run the first sync
 
