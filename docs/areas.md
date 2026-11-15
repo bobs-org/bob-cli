@@ -142,6 +142,7 @@ between `albums` and `articles`. Bare `bob areas` defaults to the read-only
 ```text
 bob areas [list] [-b DIR] [-f human|json]
 bob areas check [-b DIR] [-f human|json]
+bob areas sync [-b DIR] [-d] [-f human|json]
 ```
 
 - Every long option has a short alias; options stay alphabetical.
@@ -157,6 +158,27 @@ bob areas check [-b DIR] [-f human|json]
 | --- | --- |
 | `list` | 0 |
 | `check` | 1 on any error (including a damaged catalog), else 0 |
+| `sync` | 1 on any damaged catalog or write failure, else 0 |
+
+## Sync
+
+`bob areas sync` repairs every generated `## Areas` catalog in one guarded
+transaction. A real run takes the shared vault lock, pre-syncs, plans from
+one complete snapshot and refuses a partial scan, installs preimage-guarded
+edits through `host_catalog::txn`, verifies by re-planning, then makes one
+scoped commit `areas: sync catalogs (N notes)` and post-syncs. `-d` prints
+colored diffs and writes nothing. A no-op run commits nothing.
+
+A malformed `> [!areas` opener is damage: that host is left byte-identical
+and reported, while healthy hosts still apply.
+
+## Nightly
+
+Nightly runs the `areas` step immediately before `projects`, giving the
+order: vault-sync, task archive, articles, period notes, areas, projects,
+notebooks, albums, vault-sync. The step repairs generated area catalogs and
+makes one `areas: sync catalogs (N notes)` commit only when a catalog
+changed; a failure here never stops the final sync.
 
 Human `list` prints `Areas · N areas · M catalogs`, the tree rooted at the
 root's stem drawn with `├─ └─ │` connectors, then unplaced areas. Each row

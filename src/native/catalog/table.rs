@@ -805,6 +805,19 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         fixed: JSON,
+        preview: Some(DRY_RUN),
+        ..syncs(
+            "areas-sync",
+            &["areas", "sync"],
+            "Sync area catalogs",
+            &["areas", "sync", "catalog", "repair"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            120,
+        )
+    },
+    Row {
+        fixed: JSON,
         slots: &[("ROOT", "notebook-root"), ("root", "notebook-root")],
         ..reads(
             "notebooks-list",
@@ -842,7 +855,7 @@ pub(crate) const ENTRIES: &[Row] = &[
     Row {
         confirm: Some(
             "Run nightly maintenance (vault-sync, task archive, articles, \
-             period notes, notebooks, vault-sync). Athena's timer already runs this.",
+             period notes, areas, projects, notebooks, albums, vault-sync). Athena's timer already runs this.",
         ),
         invalidates: &["tasks"],
         ..syncs(

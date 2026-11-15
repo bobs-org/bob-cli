@@ -493,6 +493,14 @@ const AREAS_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "sync",
+        about: "Write every generated area catalog",
+        leaf: Leaf {
+            native_command: NativeCommand::AreasSync,
+            script_command: None,
+        },
+    },
 ];
 
 const AREAS_AFTER_HELP: &str = "\
@@ -503,6 +511,8 @@ Examples:
   bob areas list -f json          Area tree as JSON
   bob areas check                 Lint areas against the contract
   bob areas check -f json         Findings as JSON
+  bob areas sync -d               Preview catalog changes as diffs
+  bob areas sync                  Write every generated catalog
 
 See docs/areas.md for the area catalog contract.
 Run 'bob areas <command> --help' for more information on a command.";
@@ -1056,13 +1066,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "areas",
-        about: "Inspect area notes",
+        about: "Inspect or maintain area notes",
         section: Section::Vault,
         target: Target::Group(Group {
             members: AREAS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob areas` runs the read-only list. `list` shows the colored area tree with hues, titles, summaries, and project/Today chips. `check` lints areas against the contract and reports catalog state.",
+                "Bare `bob areas` runs the read-only list. `list` shows the colored area tree with hues, titles, summaries, and project/Today chips. `check` lints areas against the contract and reports catalog state. `sync` repairs every generated `## Areas` catalog (`-d` previews diffs) in one guarded commit.",
             ),
             after_help: AREAS_AFTER_HELP,
             usage: "bob areas [COMMAND]",
@@ -1093,7 +1103,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "nightly",
-        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, projects, notebooks, albums, vault-sync",
+        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, vault-sync",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,

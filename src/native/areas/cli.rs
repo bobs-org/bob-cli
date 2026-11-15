@@ -7,7 +7,7 @@ use clap::{
     Command as ClapCommand,
 };
 
-use super::report;
+use super::{report, sync};
 use crate::native::env as bob_env;
 
 const COMMAND_NAME: &str = "bob areas";
@@ -48,6 +48,18 @@ pub(crate) fn run_check(args: Vec<OsString>) -> i32 {
     execute_check(&matches)
 }
 
+pub(crate) fn run_sync(args: Vec<OsString>) -> i32 {
+    let mut command = build_cli_sync();
+    let name = command.get_name().to_owned();
+    let matches = match command.try_get_matches_from_mut(
+        std::iter::once(OsString::from(name)).chain(args),
+    ) {
+        Ok(matches) => matches,
+        Err(error) => return print_clap_error(error),
+    };
+    execute_sync(&matches)
+}
+
 pub(crate) fn build_cli_list() -> ClapCommand {
     ClapCommand::new("bob areas list")
         .about("List the area tree (default)")
@@ -78,6 +90,22 @@ pub(crate) fn build_cli_check() -> ClapCommand {
         .arg(help_arg())
 }
 
+pub(crate) fn build_cli_sync() -> ClapCommand {
+    ClapCommand::new("bob areas sync")
+        .about("Write every generated area catalog")
+        .long_about(
+            "Repair the generated `## Areas` catalog in the root and in every area with sub-areas. A real run takes the shared vault lock, pre-syncs, rewrites only the bytes between each catalog's markers, and makes one scoped commit `areas: sync catalogs (N notes)`; a vault whose catalogs are current writes and commits nothing. `--dry-run` prints a unified diff per host and changes nothing. A damaged catalog (a malformed opener) is skipped and reported, while healthy hosts still apply, and the command exits 1.",
+        )
+        .after_help(
+            "Examples:\n  bob areas sync\n  bob areas sync -d\n  bob areas sync -f json\n\nSee docs/areas.md for the area catalog contract.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+}
+
 fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
@@ -95,6 +123,14 @@ fn format_arg() -> Arg {
         .default_value("human")
         .value_parser(["human", "json"])
         .help("Output format: human or json")
+}
+
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Print what would change as unified diffs; write nothing")
 }
 
 fn help_arg() -> Arg {
@@ -164,4 +200,21 @@ fn execute_check(matches: &ArgMatches) -> i32 {
     } else {
         0
     }
+}
+
+fn execute_sync(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let report = if dry_run {
+        sync::dry_run(&bob_dir)
+    } else {
+        sync::run_standalone(&bob_dir, json)
+    };
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        sync::print_human(&report);
+    }
+    report.exit_code()
 }

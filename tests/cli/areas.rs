@@ -59,10 +59,11 @@ fn areas_help_lists_list_and_check() {
             && help.contains("docs/areas.md")
             && help.contains("check")
             && help.contains("list")
+            && help.contains("sync")
             && help.contains("(default)"),
         "expected areas group help:\n{help}"
     );
-    assert_text_order(&help, &["\n  check ", "\n  list "]);
+    assert_text_order(&help, &["\n  check ", "\n  list ", "\n  sync "]);
 
     let list = bob_command()
         .args(["areas", "list", "--help"])
@@ -93,6 +94,31 @@ fn areas_help_lists_list_and_check() {
         check_help.contains("Exits 1 on any error finding")
             && check_help.contains("docs/areas.md"),
         "expected check help:\n{check_help}"
+    );
+
+    let sync = bob_command()
+        .args(["areas", "sync", "--help"])
+        .output()
+        .expect("run bob areas sync --help");
+    assert_success(&sync);
+    let sync_help = stdout(&sync);
+    assert!(
+        sync_help.contains("-b, --bob-dir")
+            && sync_help.contains("-d, --dry-run")
+            && sync_help.contains("-f, --format")
+            && sync_help.contains("-h, --help")
+            && sync_help.contains("docs/areas.md")
+            && sync_help.contains("areas: sync catalogs"),
+        "expected sync help:\n{sync_help}"
+    );
+    assert_text_order(
+        &sync_help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+        ],
     );
 }
 
@@ -308,4 +334,356 @@ fn areas_vault_bytes_unchanged_by_list_and_check() {
     for (path, contents) in before {
         assert_eq!(fs::read_to_string(&path).unwrap(), contents);
     }
+}
+
+// ---------------------------------------------------------------- sync
+
+fn sync_vault(temp: &TempDir, name: &str) -> PathBuf {
+    let (vault, _remote, _peer) = init_vault_sync_pair(temp);
+    let _ = name;
+    write_realistic_tree(&vault);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "areas fixture"]);
+    git_in(&vault, ["push", "-q"]);
+    vault
+}
+
+fn write_realistic_tree(vault: &Path) {
+    write_note(vault, "area.md", "# Area root\n");
+    for (stem, parent) in [
+        ("body", "area"),
+        ("cash", "area"),
+        ("bank", "cash"),
+        ("recur", "cash"),
+        ("dev", "area"),
+        ("gtd", "area"),
+        ("gtd_daily", "gtd"),
+        ("inbox", "gtd"),
+        ("gkeep_inbox", "inbox"),
+        ("gmail_inbox", "inbox"),
+        ("mac_inbox", "inbox"),
+        ("job", "area"),
+        ("love", "area"),
+        ("abby", "love"),
+        ("family", "love"),
+        ("fun", "love"),
+        ("kelly", "love"),
+        ("vacation", "love"),
+        ("meet", "area"),
+    ] {
+        write_note(vault, &format!("{stem}.md"), &area_note(parent, "", stem));
+    }
+}
+
+fn sync_run(
+    vault: &Path,
+    temp: &TempDir,
+    args: &[&str],
+) -> std::process::Output {
+    let home = temp.path().join("home-dir");
+    fs::create_dir_all(&home).expect("create home");
+    let mut command = bob_command();
+    command
+        .arg("areas")
+        .args(args)
+        .env("BOB_DIR", vault)
+        .env("NO_COLOR", "1")
+        .env("TZ", "UTC")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(temp))
+        .env("HOME", home)
+        .env("HOSTNAME", "Athena Test")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"));
+    command.output().expect("run bob areas")
+}
+
+fn sync_json(output: &std::process::Output) -> Value {
+    serde_json::from_str(stdout(output).trim()).unwrap_or_else(|error| {
+        panic!(
+            "one JSON envelope expected ({error}):\n{}",
+            format_output(output)
+        )
+    })
+}
+
+fn vault_head(vault: &Path) -> String {
+    stdout(&git_in(vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string()
+}
+
+fn vault_subject(vault: &Path) -> String {
+    stdout(&git_in(vault, ["log", "-1", "--format=%s"]))
+        .trim()
+        .to_string()
+}
+
+fn commits_since(vault: &Path, base: &str) -> usize {
+    stdout(&git_in(
+        vault,
+        ["rev-list", "--count", &format!("{base}..HEAD")],
+    ))
+    .trim()
+    .parse()
+    .expect("count")
+}
+
+fn read_note(vault: &Path, name: &str) -> String {
+    fs::read_to_string(vault.join(name)).expect("read note")
+}
+
+const SYNC_HOSTS: [&str; 5] =
+    ["area.md", "cash.md", "gtd.md", "inbox.md", "love.md"];
+
+#[test]
+fn areas_sync_writes_five_hosts_in_one_commit_then_noops() {
+    let temp = TempDir::new("areas-sync-once");
+    let vault = sync_vault(&temp, "areas-sync-once");
+    let base = vault_head(&vault);
+
+    let output = sync_run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_success(&output);
+    let payload = sync_json(&output);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["dry_run"], false);
+    assert_eq!(
+        payload["changed"],
+        serde_json::json!(SYNC_HOSTS),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        payload["commit"]["subject"],
+        "areas: sync catalogs (5 notes)"
+    );
+    assert_eq!(payload["sync"]["pre"], "ok");
+    assert_eq!(payload["sync"]["post"], "ok");
+    assert_eq!(commits_since(&vault, &base), 1, "one catalog commit");
+    assert_eq!(vault_subject(&vault), "areas: sync catalogs (5 notes)");
+
+    let area = read_note(&vault, "area.md");
+    for row in [
+        "> - **[[body]]**",
+        "> - **[[cash]]**",
+        ">   - **[[bank]]**",
+        ">   - **[[recur]]**",
+        "> - **[[love]]**",
+        ">   - **[[abby]]**",
+    ] {
+        assert!(area.contains(row), "area.md missing {row}:\n{area}");
+    }
+    let love = read_note(&vault, "love.md");
+    assert!(love.contains("## Areas"), "{love}");
+    assert!(love.contains("> [!areas]"), "{love}");
+    assert_eq!(
+        stdout(&git_in(
+            &vault,
+            ["show", "--name-only", "--format=", "HEAD"]
+        ))
+        .lines()
+        .collect::<Vec<_>>(),
+        SYNC_HOSTS
+    );
+
+    // The second run is a byte-for-byte no-op with no commit.
+    let files: Vec<(String, String)> = SYNC_HOSTS
+        .iter()
+        .map(|name| ((*name).to_string(), read_note(&vault, name)))
+        .collect();
+    let synced_head = vault_head(&vault);
+    let output = sync_run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_success(&output);
+    let payload = sync_json(&output);
+    assert_eq!(payload["changed"], serde_json::json!([]));
+    assert_eq!(payload["commit"], Value::Null);
+    assert_eq!(vault_head(&vault), synced_head);
+    for (name, before) in files {
+        assert_eq!(read_note(&vault, &name), before);
+    }
+    let text = stdout(&sync_run(&vault, &temp, &["sync"]));
+    assert!(text.contains("area catalogs are current"), "{text}");
+}
+
+#[test]
+fn areas_sync_dry_run_prints_diffs_and_writes_nothing() {
+    let temp = TempDir::new("areas-sync-dry");
+    let vault = sync_vault(&temp, "areas-sync-dry");
+    let head_before = vault_head(&vault);
+    let area_before = read_note(&vault, "area.md");
+
+    let output = sync_run(&vault, &temp, &["sync", "-d"]);
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("+++ b/area.md"), "{text}");
+    assert!(text.contains("> [!areas]"), "{text}");
+    assert!(text.contains("dry run: 5 catalogs would change"), "{text}");
+
+    let output = sync_run(&vault, &temp, &["sync", "--dry-run", "-f", "json"]);
+    assert_success(&output);
+    let payload = sync_json(&output);
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["commit"], Value::Null);
+    let changes = payload["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 5);
+    assert!(
+        changes[0]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+++ b/area.md"),
+        "{changes:?}"
+    );
+
+    assert_eq!(vault_head(&vault), head_before);
+    assert_eq!(read_note(&vault, "area.md"), area_before);
+    assert_eq!(stdout(&git_in(&vault, ["status", "--porcelain"])), "");
+}
+
+#[test]
+fn areas_sync_skips_damaged_host_and_applies_the_rest() {
+    let temp = TempDir::new("areas-sync-damaged");
+    let vault = sync_vault(&temp, "areas-sync-damaged");
+    let damaged = format!("{}\n> [!areas\n", read_note(&vault, "area.md"));
+    write_file(&vault.join("area.md"), &damaged);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "damage area"]);
+    let base = vault_head(&vault);
+
+    let output = sync_run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let payload = sync_json(&output);
+    assert_eq!(payload["ok"], false);
+    let finding = payload["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["code"] == "area_catalog_damaged")
+        .expect("damaged finding");
+    assert_eq!(finding["path"], "area.md");
+    assert_eq!(
+        read_note(&vault, "area.md"),
+        damaged,
+        "damaged host untouched"
+    );
+    assert_eq!(
+        payload["changed"],
+        serde_json::json!(["cash.md", "gtd.md", "inbox.md", "love.md"])
+    );
+    assert_eq!(commits_since(&vault, &base), 1);
+    assert_eq!(vault_subject(&vault), "areas: sync catalogs (4 notes)");
+
+    let output = sync_run(&vault, &temp, &["check", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn areas_sync_reparents_kelly_under_family_in_one_commit() {
+    let temp = TempDir::new("areas-sync-reparent");
+    let vault = sync_vault(&temp, "areas-sync-reparent");
+    assert_success(&sync_run(&vault, &temp, &["sync"]));
+
+    write_note(&vault, "kelly.md", &area_note("family", "", "kelly"));
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "reparent kelly"]);
+    let base = vault_head(&vault);
+    let output = sync_run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_success(&output);
+    let payload = sync_json(&output);
+    assert_eq!(
+        payload["changed"],
+        serde_json::json!(["area.md", "family.md", "love.md"])
+    );
+    assert_eq!(commits_since(&vault, &base), 1);
+    let family = read_note(&vault, "family.md");
+    assert!(family.contains("[[kelly]]"), "{family}");
+    let love = read_note(&vault, "love.md");
+    assert!(love.contains("[[family]]"), "{love}");
+    assert!(love.contains("[[kelly]]"), "{love}");
+}
+
+#[test]
+fn areas_and_projects_catalogs_share_one_section_order() {
+    for (name, first, second) in [
+        ("areas-first", "areas", "projects"),
+        ("projects-first", "projects", "areas"),
+    ] {
+        let temp = TempDir::new(name);
+        let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+        write_note(&vault, "area.md", "# Area root\n");
+        write_note(&vault, "cash.md", &area_note("area", "", "cash"));
+        write_note(&vault, "bank.md", &area_note("cash", "", "bank"));
+        write_note(
+            &vault,
+            "proj.md",
+            "---\ntype: \"[[project]]\"\nparent: \"[[cash]]\"\nstatus: wip\n---\n\n- [ ] #task Finish #prj ^prj\n",
+        );
+        git_in(&vault, ["add", "-A"]);
+        git_in(&vault, ["commit", "-q", "-m", "areas projects fixture"]);
+        git_in(&vault, ["push", "-q"]);
+
+        let home = temp.path().join("home-dir");
+        fs::create_dir_all(&home).expect("create home");
+        let run = |noun: &str| {
+            bob_command()
+                .arg(noun)
+                .arg("sync")
+                .env("BOB_DIR", &vault)
+                .env("NO_COLOR", "1")
+                .env("TZ", "UTC")
+                .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+                .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
+                .env("HOME", &home)
+                .env("HOSTNAME", "Athena Test")
+                .env("XDG_CACHE_HOME", temp.path().join("cache"))
+                .output()
+                .expect("run sync")
+        };
+        let first_out = run(first);
+        assert_success(&first_out);
+        let second_out = run(second);
+        assert_success(&second_out);
+        let cash = read_note(&vault, "cash.md");
+        let areas_at = cash.find("## Areas").expect("areas heading:\n{cash}");
+        let projects_at =
+            cash.find("## Projects").expect("projects heading:\n{cash}");
+        assert!(
+            areas_at < projects_at,
+            "## Areas must precede ## Projects in {name}:\n{cash}"
+        );
+        assert!(cash.contains("> [!areas]"), "{cash}");
+        assert!(cash.contains("> [!projects]"), "{cash}");
+    }
+}
+
+#[test]
+fn areas_nightly_runs_the_areas_step_before_projects() {
+    let temp = TempDir::new("areas-nightly");
+    let vault = sync_vault(&temp, "areas-nightly");
+    let home = temp.path().join("home-dir");
+    fs::create_dir_all(&home).expect("create home");
+    let output = bob_command()
+        .arg("nightly")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-06-02")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(&temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(&temp))
+        .env("HOME", home)
+        .env("HOSTNAME", "Athena Test")
+        .env("NO_COLOR", "1")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob nightly");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert_text_order(
+        &out,
+        &[
+            "step 5/9 · areas — Repair generated area catalogs",
+            "step 6/9 · projects",
+        ],
+    );
+    assert!(
+        out.contains("areas: sync catalogs (5 notes)")
+            || out.contains("synced 5 catalogs"),
+        "{out}"
+    );
 }

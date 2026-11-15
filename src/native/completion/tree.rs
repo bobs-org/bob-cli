@@ -41,6 +41,7 @@ impl NativeCommand {
                 crate::native::areas::build_cli_check()
             }
             NativeCommand::AreasList => crate::native::areas::build_cli_list(),
+            NativeCommand::AreasSync => crate::native::areas::build_cli_sync(),
             NativeCommand::AttachmentsImport => {
                 crate::native::attachments::cli::build_cli_import()
             }

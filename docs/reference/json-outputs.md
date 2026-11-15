@@ -49,7 +49,7 @@ bob plan -f json -b /path/to/synthetic-vault
 | `bob capture-parse` | `-f json` | Per-item modes, spans, diagnostics, and needs (`grammar: 27`). Notebook routes add `notebook_note` / `notebook_sub_note` / `notebook_create`, `notebook: true` span labels, and opaque bodies. Other modes cover Pomodoro timing, Gmail, records, transfers, moves, lists, note pulls, sections, relations, drawers, and merge-ins. | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
 | `bob capture-complete` | `-f json` | Completion contexts, candidates, ranges, picker state, selection, effects, and creation choices. Notebook routes add 📓 rows, H2 sections plus `notebook_section_create`, `destination_kind: "notebook"` on `^` fields, `item_kind: "note"` on `@nb+`, and a `%n` New notebook row. `-n` walks required fields; `-F` adds record-value assistance. | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
-| `bob capture-pomodoros` | `-f json` | Ledger entries, `warnings`, and `max_task_link_count`; Pomodoro rows include `start_token` when selectable and their slug is non-empty; `--tasks` adds task agendas, optional `events` calendar rows/hints, event chips, `off_clock` and deprecated `untracked` fields plus `clock_source` (`on_tag`\|`off_tag`\|`note`\|`invalid_note`\|`default`) and `clock_note` (deciding note path or null), completed off-clock totals, and buffer objects with occupied spans on buffered Event Tasks | `schema_version: 1` | [Capture](../capture.md), [Pomodoro homes](../pomodoro-homes.md) |
+| `bob capture-pomodoros` | `-f json` | Ledger entries, `warnings`, and `max_task_link_count`; Pomodoro rows include `start_token` when selectable and their slug is non-empty; `--tasks` adds task agendas, optional `events` calendar rows/hints, event chips, `off_clock` and deprecated `untracked` fields plus `clock_source` (`on_tag`\|`off_tag`\|`note`\|`invalid_note`\|`default`) and `clock_note` (note path or null), off-clock totals, and buffer objects with occupied spans on buffered Event Tasks | `schema_version: 1` | [Capture](../capture.md), [Pomodoro homes](../pomodoro-homes.md) |
 | `bob capture-related` | `-f json` | Similar tasks or same-folder records, UTF-8 draft anchors, actions, and already-linked tasks; `--query` ranks task titles with scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
 | `bob capture-rewrite` | `-f json` | `input`, rewritten `text`, `changed`, `cursor`, `rule` (`collapse_global_destination` for glued `@@route` triggers, plus the alias/absorption rules), `edits`, and optional forward `alias`; unchanged cursor requests add an object or `null` `sigil_alias_tip` | `schema_version: 1` | [Capture-rewrite contract](../capture.md#bob-capture-rewrite) |
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
@@ -94,8 +94,7 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status::
 ```
 
 Record items add `record_note` summaries; incomplete drafts include `draft`,
-`missing[]`, and `invalid[]`. Add `source`/`album`; targets enrich identity
-fields. Album-backed writes add top-level `album_files[]` (`path`, `state`,
+`missing[]`, `invalid[]`. Targets enrich identity fields. Album-backed writes add top-level `album_files[]` (`path`, `state`,
 `before`, `after`) whenever the records index changes; dry-run and commit
 share those bytes. `album_schema_invalid`, `record_discovery_incomplete`.
 
@@ -107,8 +106,8 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/n
 {"ok":true,"dry_run":true,"kind":"record_update","placement":"updated","relative_target":"eat/ninja_sushi.md","note_files":[{"path":"eat/ninja_sushi.md","action":"update","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed","before":"to_try","before_display":"🔖 To try"}],"markdown":"---\n…\n","lines":[{"text":"- 2026-10-20: Went back, still great","depth":0,"change":"added"}]}]}
 ```
 
-Lists are arrays; numbers stay numeric; dates, links, and URLs are strings.
-Empty optional fields omit values. See
+Lists are arrays; numbers stay numeric; dates, links, URLs are strings.
+Empty optionals omit values. See
 [Capture](../capture.md#record-notes).
 
 ```bash
@@ -148,8 +147,8 @@ and warn `pomodoro_past_trim`. Pinned runs add `segment` and `stack.pin`.
 Stale previews refuse `pomodoro_past_windows_changed`; `pomodoro_past_segment`
 lists tail/`~1…~N`/head rows.
 
-`relation_label` rows include `label`, `key`, `count`, `replacement`, optional
-`inverse`, and `hide_replacement` (`||`). A typed query row is first (`typed`,
+`relation_label` rows include `label`, `key`, `count`, `replacement`,
+`inverse`, `hide_replacement` (`||`). A typed query row is first (`typed`,
 `existing`, `hidden`; `inverse` per §10). Hidden labels drop unless typed
 exactly (`hidden: true`, `hidden_count`). A `||` probe keeps both pipes and
 sets `one_off: true`.
@@ -160,7 +159,7 @@ sets `one_off: true`.
 | --- | --- | --- | --- | --- |
 | `bob albums list` | `-f json` | Albums, groups, counts, issues, and owner `catalogs` | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
-| `bob albums sync` | `-f json` | Index entries, owner `catalogs`, and transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
+| `bob albums sync` | `-f json` | Index entries, owner `catalogs`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
 | `bob albums update` | `-f json` | `stem`, fingerprints, `inverse_ops` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
 
@@ -169,7 +168,8 @@ sets `one_off: true`.
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob areas list` | `-f json` | Area tree, catalogs, findings, counts | `schema_version: 1` | [Areas](../areas.md#json) |
-| `bob areas check` | `-f json` | Same report as list | `schema_version: 1` | [Areas](../areas.md#json) |
+| `bob areas check` | `-f json` | Same as list | `schema_version: 1` | [Areas](../areas.md#json) |
+| `bob areas sync` | `-f json` | Sync envelope | `schema_version: 1` | [Areas](../areas.md#sync) |
 
 ### Notebook reports {#notebook-reports}
 
@@ -184,7 +184,7 @@ sets `one_off: true`.
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob projects list` | `-f json` | Projects, catalogs, findings, and counts | `schema_version: 1` | [Projects](../projects.md#json-report) |
-| `bob projects sync` | `-f json` | Lifecycle and catalog events, changes, findings, commit, sync, and warnings; dry runs include diffs | `schema_version: 1` | [Projects](../projects.md#commands) |
+| `bob projects sync` | `-f json` | Lifecycle/catalog events, changes, findings, commit, sync, warnings; dry runs add diffs | `schema_version: 1` | [Projects](../projects.md#commands) |
 
 Capture may include `project_note.parent_catalog` (`path`, `action`) when the
 parent catalog changes; dry runs set `dry_run: true`. See
@@ -192,7 +192,7 @@ parent catalog changes; dry runs set `dry_run: true`. See
 
 ### Bank reports {#bank-reports}
 
-`schema_version: 1`; [Bank JSON](../bank.md#json) with `day`/`week`/`quarter`/`iso_year`/`all_time` periods, `-s` empty `days`, plus `coverage`/`navigation`.
+`schema_version: 1`; [Bank JSON](../bank.md#json) with `day`/`week`/`quarter`/`iso_year`/`all_time` periods, `-s` `days`, `coverage`/`navigation`.
 `report -c` adds [`charts`](../bank.md#report-charts) `{version, granularity, buckets[], groups[], categories}` for `week`/`quarter`/`iso_year`/`all_time` periods.
 
 ### Session edits and successor offers

@@ -49,6 +49,11 @@ const STEPS: &[Step] = &[
         run: run_period_notes_step,
     },
     Step {
+        name: "areas",
+        blurb: "Repair generated area catalogs",
+        run: run_areas_step,
+    },
+    Step {
         name: "projects",
         blurb: "Sync project lifecycles and sub-project catalogs",
         run: run_projects_step,
@@ -157,7 +162,7 @@ pub(crate) fn help_text() -> String {
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
-runs `vault-sync`, `task archive`, `articles`, `period notes`, `projects`, `notebooks`, `albums`, and `vault-sync` in order.
+runs `vault-sync`, `task archive`, `articles`, `period notes`, `areas`, `projects`, `notebooks`, `albums`, and `vault-sync` in order.
 
 workflow:
   1. acquire the shared Bob maintenance lock
@@ -165,10 +170,11 @@ workflow:
   3. run task archive against the vault
   4. report article notes that need formatting (write nothing)
   5. report period-note problems (write nothing)
-  6. sync project lifecycles and sub-project catalogs (one scoped commit when any changed)
-  7. repair generated notebook catalogs (one scoped commit when any changed)
-  8. repair generated album records indexes and owner catalogs (one scoped commit when any changed)
-  9. run vault-sync against the vault
+  6. repair generated area catalogs (one scoped commit when any changed)
+  7. sync project lifecycles and sub-project catalogs (one scoped commit when any changed)
+  8. repair generated notebook catalogs (one scoped commit when any changed)
+  9. repair generated album records indexes and owner catalogs (one scoped commit when any changed)
+  10. run vault-sync against the vault
 
 environment:
   BOB_DIR                        Bob vault root; defaults to ~/bob
@@ -200,6 +206,10 @@ fn run_articles_step(_child_env: &ChildEnv) -> i32 {
 
 fn run_period_notes_step(_child_env: &ChildEnv) -> i32 {
     super::periods::problems::nightly_check(&bob_env::bob_dir())
+}
+
+fn run_areas_step(child_env: &ChildEnv) -> i32 {
+    super::areas::sync::nightly_step(&bob_env::bob_dir(), child_env)
 }
 
 fn run_projects_step(child_env: &ChildEnv) -> i32 {

@@ -2947,6 +2947,36 @@ status: wip\n\
     }
 
     #[test]
+    fn areas_catalog_snapshot_projects_generically_with_nested_rows() {
+        let directory = vault(&[
+            ("cash.md", "# Cash\n"),
+            ("bank.md", "# Bank\n"),
+            (
+                "Host.md",
+                "---\n\
+type: [[area]]\n\
+parent: \"[[area]]\"\n\
+---\n\
+# Areas host\n\
+\n\
+## Areas\n\
+\n\
+> [!areas]\n\
+>\n\
+> - **[[cash]]** — Money and bills.\n\
+>   - **[[bank]]** — Reserve.\n",
+            ),
+        ]);
+        let projection = project_bob(&directory, "Host.md", false, true);
+        let output = markdown(&projection);
+        assert!(output.contains("# Areas"), "{output}");
+        assert!(output.contains("kind=\"areas\""), "{output}");
+        assert!(output.contains("cash"), "{output}");
+        assert!(output.contains("bank"), "{output}");
+        assert!(output.contains("Money and bills"), "{output}");
+    }
+
+    #[test]
     fn area_projection_keeps_blocked_ticklers_and_condenses_long_histories() {
         let mut area_note = String::from(
             "---\ntype: [[area]]\nparent: \"[[Portfolio|Portfolio Alpha]]\"\ncreated: 2026-09-30\n---\n# Area title\n\nIntro paragraph stays above sections.\n\n## Tasks\n### Blocked\n",

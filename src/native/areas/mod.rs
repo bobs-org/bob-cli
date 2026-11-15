@@ -5,6 +5,7 @@ pub(crate) mod cli;
 pub(crate) mod graph;
 pub(crate) mod output;
 pub(crate) mod report;
+pub(crate) mod sync;
 
 #[cfg(test)]
 mod tests;
@@ -15,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::native::notebooks::model::Severity;
 
-pub(crate) use cli::{build_cli_check, build_cli_list};
+pub(crate) use cli::{build_cli_check, build_cli_list, build_cli_sync};
 
 pub(crate) fn slash(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")

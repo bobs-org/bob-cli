@@ -1149,14 +1149,15 @@ fn nightly_has_eight_ordered_steps_and_syncs_catalogs_once() {
     assert_text_order(
         &out,
         &[
-            "step 1/8 · vault-sync",
-            "step 2/8 · task archive",
-            "step 3/8 · articles",
-            "step 4/8 · period notes",
-            "step 5/8 · projects — Sync project lifecycles and sub-project catalogs",
-            "step 6/8 · notebooks — Repair generated notebook catalogs",
-            "step 7/8 · albums — Repair generated records indexes and album catalogs",
-            "step 8/8 · vault-sync",
+            "step 1/9 · vault-sync",
+            "step 2/9 · task archive",
+            "step 3/9 · articles",
+            "step 4/9 · period notes",
+            "step 5/9 · areas — Repair generated area catalogs",
+            "step 6/9 · projects — Sync project lifecycles and sub-project catalogs",
+            "step 7/9 · notebooks — Repair generated notebook catalogs",
+            "step 8/9 · albums — Repair generated records indexes and album catalogs",
+            "step 9/9 · vault-sync",
             "All steps passed",
         ],
     );
@@ -1207,7 +1208,7 @@ fn nightly_still_publishes_after_a_notebooks_step_failure() {
     let out = stdout(&output);
     assert!(out.contains("\u{2717} notebooks"), "{out}");
     assert!(
-        out.contains("step 8/8") && out.contains("1 step failed"),
+        out.contains("step 9/9") && out.contains("1 step failed"),
         "{out}"
     );
     assert_eq!(

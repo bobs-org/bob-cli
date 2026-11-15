@@ -63,14 +63,15 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob albums list`](albums.md#bob-albums-list) | List albums grouped by root (default) |
 | [`bob albums sync`](albums.md#bob-albums-sync) | Repair generated records indexes and album catalogs |
 | [`bob albums update`](albums.md#bob-albums-update) | Update an album record schema through a guarded JSON envelope |
-| [`bob areas`](areas.md) | Inspect area notes |
+| [`bob areas`](areas.md) | Inspect or maintain area notes |
 | [`bob areas check`](areas.md#bob-areas-check) | Check areas against the contract |
 | [`bob areas list`](areas.md#bob-areas-list) | List the area tree (default) |
+| [`bob areas sync`](areas.md#bob-areas-sync) | Write every generated area catalog |
 | [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |
 | [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
 | [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image and file paths into the vault |
 | [`bob attachments origin`](attachments.md#bob-attachments-origin) | Show where a vault attachment came from |
-| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, projects, notebooks, albums, vault-sync |
+| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, vault-sync |
 | [`bob notebooks`](notebooks.md) | Inspect or maintain notebook notes |
 | [`bob notebooks check`](notebooks.md#bob-notebooks-check) | Check notebooks against the contract |
 | [`bob notebooks create`](notebooks.md#bob-notebooks-create) | Create a notebook and its catalog rows |
@@ -168,11 +169,11 @@ Tasks and projects:
 
 Vault:
   albums       Inspect album notes
-  areas        Inspect area notes
+  areas        Inspect or maintain area notes
   articles     Format and inspect article notes with bob-owned section numbers
   attachments  Copy files into the vault and show where copies came from
   nightly      Run nightly maintenance: vault-sync, task archive, articles,
-               period notes, projects, notebooks, albums, vault-sync
+               period notes, areas, projects, notebooks, albums, vault-sync
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault
