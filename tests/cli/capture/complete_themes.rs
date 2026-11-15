@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::{fs, path::Path, process::Command};
 
 fn command(root: &Path) -> Command {
-    let mut command = bob_command();
+    let mut command = bob_completion_command();
     command
         .env("BOB_DIR", root.join("vault"))
         .env("BOB_DAY_FILE", root.join("vault/2026/20261024.md"))

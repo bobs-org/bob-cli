@@ -15,9 +15,7 @@ use crate::native::{
     records::{
         catalog::RecordCatalog,
         context::{RecordContext, RecordKindResolution},
-        schema::{
-            FieldKind, RecordField, RecordScalar, RecordType, RecordValue,
-        },
+        schema::{FieldKind, RecordScalar, RecordType, RecordValue},
     },
 };
 
