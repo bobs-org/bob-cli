@@ -132,8 +132,8 @@ pub(crate) struct ReopenPlan {
 #[derive(Clone)]
 struct Relocation {
     path: PathBuf,
-    line_index: usize,
     block_id: Option<String>,
+    row_text: String,
     in_done: bool,
 }
 
@@ -159,18 +159,29 @@ pub(crate) fn plan_reopens(
         let outcome = plan_one(&mut snapshot, candidate, ctx, &mut relocations);
         outcomes.push(outcome);
     }
+    // Later candidates can insert log rows above an earlier target. Refresh
+    // every reported locator against the final overlay before returning it.
+    for (candidate, outcome) in candidates.iter().zip(&mut outcomes) {
+        let Some(selected) = select_newest_linker(&candidate.evidence).ok()
+        else {
+            continue;
+        };
+        let Some(target) = outcome.target.as_mut() else {
+            continue;
+        };
+        let Some(relocated) =
+            relocations.get(&(selected.path.clone(), selected.line))
+        else {
+            continue;
+        };
+        if let Ok(located) = located_at(&snapshot, relocated) {
+            target.path = slash(&located.path);
+            target.line = located.line_index + 1;
+            target.block_id = located.block_id;
+            target.restored = selected.in_done && !located.in_done;
+        }
+    }
     ReopenPlan { snapshot, outcomes }
-}
-
-/// Convenience wrapper for phase-1 [`PreparedReopenCandidate`] values.
-#[allow(dead_code)]
-pub(crate) fn plan_prepared_reopens(
-    snapshot: VaultSnapshot,
-    candidates: &[PreparedReopenCandidate],
-    ctx: &ReopenPlanContext,
-) -> ReopenPlan {
-    let inputs: Vec<_> = candidates.iter().map(ReopenPlanInput::from).collect();
-    plan_reopens(snapshot, &inputs, ctx)
 }
 
 fn plan_one(
@@ -183,7 +194,11 @@ fn plan_one(
         Ok(task) => task,
         Err(outcome) => return finish(candidate, outcome, None, Vec::new()),
     };
-    if is_recurring_task_line(&selected.text) {
+    let located = match locate_linker(snapshot, selected, relocations) {
+        Ok(located) => located,
+        Err(outcome) => return finish(candidate, outcome, None, Vec::new()),
+    };
+    if is_recurring_task_line(&located.text) {
         return finish(
             candidate,
             (
@@ -199,7 +214,7 @@ fn plan_one(
             Vec::new(),
         );
     }
-    if has_trailing_prj_anchor(&selected.text) {
+    if has_trailing_prj_anchor(&located.text) {
         return finish(
             candidate,
             (
@@ -215,7 +230,9 @@ fn plan_one(
             Vec::new(),
         );
     }
-    if message_before_close(candidate, selected, ctx.timezone) {
+    if POSITIVE_CLOSED.contains(&located.status)
+        && message_before_close(candidate, &located.text, ctx.timezone)
+    {
         return finish(
             candidate,
             (ReopenDisposition::NoOp, "message_before_close", None, false),
@@ -223,11 +240,6 @@ fn plan_one(
             Vec::new(),
         );
     }
-
-    let located = match locate_linker(snapshot, selected, relocations) {
-        Ok(located) => located,
-        Err(outcome) => return finish(candidate, outcome, None, Vec::new()),
-    };
 
     // A crash or marker-write failure can leave the task's exact REOPEN LOG
     // entry durable while the marker is still pending. This applies to a
@@ -539,6 +551,15 @@ fn edit_open_row(
         )
         .0;
     }
+    let row_text = line_spans(&working)
+        .get(line_index)
+        .map(|span| span.text.to_string())
+        .ok_or((
+            ReopenDisposition::TransientDeferred,
+            "stale_line",
+            Some("the selected task line is gone; retry".to_string()),
+            false,
+        ))?;
     snapshot.notes.insert(path.to_path_buf(), working);
     let identity = ReopenTargetIdentity {
         path: slash(path),
@@ -550,8 +571,8 @@ fn edit_open_row(
         (selected.path.clone(), selected.line),
         Relocation {
             path: path.to_path_buf(),
-            line_index,
             block_id,
+            row_text,
             in_done,
         },
     );
@@ -709,10 +730,10 @@ fn latest_close_date(line: &str) -> Option<NaiveDate> {
 
 fn message_before_close(
     candidate: &ReopenPlanInput,
-    selected: &ArchiveLinkTask,
+    row: &str,
     timezone: Tz,
 ) -> bool {
-    let Some(close) = latest_close_date(&selected.text) else {
+    let Some(close) = latest_close_date(row) else {
         return false;
     };
     let message_date =
@@ -747,21 +768,35 @@ fn locate_linker(
             false,
         ))?
     } else {
-        let index = selected.line.checked_sub(1).ok_or((
-            ReopenDisposition::TransientDeferred,
-            "stale_line",
-            Some("the selected task line is gone; retry".to_string()),
-            false,
-        ))?;
-        if index >= lines.len() {
-            return Err((
-                ReopenDisposition::TransientDeferred,
-                "stale_line",
-                Some("the selected task line is gone; retry".to_string()),
-                false,
-            ));
+        let matches: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, span)| {
+                (span.text == selected.text).then_some(index)
+            })
+            .collect();
+        match matches.as_slice() {
+            [index] => *index,
+            [] => {
+                return Err((
+                    ReopenDisposition::TransientDeferred,
+                    "stale_line",
+                    Some(
+                        "the selected id-less task identity is missing; retry"
+                            .to_string(),
+                    ),
+                    false,
+                ));
+            }
+            _ => {
+                return Err((
+                    ReopenDisposition::TransientDeferred,
+                    "stale_line",
+                    Some("the selected id-less task identity is ambiguous; retry".to_string()),
+                    false,
+                ));
+            }
         }
-        index
     };
     let text = lines[line_index].text.to_string();
     let Some(row) = parse_task_row(&text) else {
@@ -803,9 +838,45 @@ fn located_at(
         .ok_or_else(|| missing_note_outcome(&relocated.path))?;
     let lines = line_spans(contents);
     let line_index = if let Some(block_id) = relocated.block_id.as_deref() {
-        find_block_id_line(&lines, block_id).unwrap_or(relocated.line_index)
+        find_block_id_line(&lines, block_id).ok_or((
+            ReopenDisposition::TransientDeferred,
+            "stale_line",
+            Some(format!(
+                "task ^{block_id} disappeared from {}; retry",
+                relocated.path.display()
+            )),
+            false,
+        ))?
     } else {
-        relocated.line_index
+        let matches: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, span)| {
+                (span.text == relocated.row_text).then_some(index)
+            })
+            .collect();
+        match matches.as_slice() {
+            [index] => *index,
+            [] => {
+                return Err((
+                    ReopenDisposition::TransientDeferred,
+                    "stale_line",
+                    Some(
+                        "the relocated id-less task identity is missing; retry"
+                            .to_string(),
+                    ),
+                    false,
+                ));
+            }
+            _ => {
+                return Err((
+                    ReopenDisposition::TransientDeferred,
+                    "stale_line",
+                    Some("the relocated id-less task identity is ambiguous; retry".to_string()),
+                    false,
+                ));
+            }
+        }
     };
     let text = lines
         .get(line_index)
@@ -838,10 +909,13 @@ fn find_block_id_line(
     lines: &[crate::native::capture::LineSpan<'_>],
     block_id: &str,
 ) -> Option<usize> {
-    lines.iter().position(|span| {
-        collect_done::trailing_block_id_in_line(span.text).as_deref()
-            == Some(block_id)
-    })
+    let mut matches = lines.iter().enumerate().filter_map(|(index, span)| {
+        (collect_done::trailing_block_id_in_line(span.text).as_deref()
+            == Some(block_id))
+        .then_some(index)
+    });
+    let found = matches.next()?;
+    matches.next().is_none().then_some(found)
 }
 
 fn replace_logical_line(
@@ -916,9 +990,21 @@ fn log_has_message_card(
         return false;
     };
     let marker_end = child_block_end_line(&lines, marker);
-    let needle = format!("[[{stem}#^m-{message_id}");
+    let target = format!("[[{stem}#^m-{message_id}");
     (marker + 1..=marker_end).any(|index| {
-        !fenced.contains(&index) && lines[index].text.contains(&needle)
+        if fenced.contains(&index) {
+            return false;
+        }
+        let text = lines[index].text;
+        let mut offset = 0;
+        while let Some(found) = text[offset..].find(&target) {
+            let end = offset + found + target.len();
+            if text[end..].starts_with('|') || text[end..].starts_with("]]") {
+                return true;
+            }
+            offset = end;
+        }
+        false
     })
 }
 
@@ -1370,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn id_less_locator_uses_the_checked_line() {
+    fn id_less_locator_uses_unique_selected_row_identity() {
         let source = paired_source();
         let archive = paired_archive(
             "- [x] #task No id [[mail/aabbccdd]] [completion:: 2026-11-10] [fresh:: 2026-11-01]\n",
@@ -1839,11 +1925,8 @@ mod tests {
             )],
             &ctx(),
         );
-        assert_eq!(
-            plan.outcomes[0].disposition,
-            ReopenDisposition::TransientDeferred
-        );
-        assert_eq!(plan.outcomes[0].reason, "stale_line");
+        assert_eq!(plan.outcomes[0].disposition, ReopenDisposition::Applied);
+        assert_eq!(plan.outcomes[0].target.as_ref().unwrap().line, 3);
 
         let linker = closed_task("job.md", &job, "Closed", false);
         let plan = plan_reopens(
@@ -1935,5 +2018,111 @@ mod tests {
         );
         assert_eq!(plan.outcomes[0].reason, "recurring");
         assert_eq!(post(&plan, "job.md"), job);
+    }
+
+    #[test]
+    fn idless_overlay_targets_follow_row_identity_and_final_line_numbers() {
+        let first = "- [x] #task First [[mail/11111111]] [completion:: 2026-11-10] [fresh:: 2026-11-01]";
+        let unrelated =
+            "- [x] #task Unrelated [[mail/33333333]] [completion:: 2026-11-09]";
+        let second = "- [x] #task Second [[mail/22222222]] [completion:: 2026-11-10] [fresh:: 2026-11-01]";
+        let job = format!("## Tasks\n\n{first}\n{unrelated}\n{second}\n");
+        let first_link = closed_task("job.md", &job, "First", false);
+        let second_link = closed_task("job.md", &job, "Second", false);
+        let plan = plan_reopens(
+            snap(&[("job.md", job.as_str())]),
+            &[
+                candidate(
+                    "22222222",
+                    "2222aaaa",
+                    message_at(),
+                    "Bea",
+                    false,
+                    vec![second_link],
+                ),
+                candidate(
+                    "11111111",
+                    "1111aaaa",
+                    message_at(),
+                    "Ada",
+                    false,
+                    vec![first_link],
+                ),
+            ],
+            &ctx(),
+        );
+        let final_note = post(&plan, "job.md");
+        assert!(final_note.contains(unrelated), "{final_note}");
+        assert!(final_note.contains("- [ ] #task First"), "{final_note}");
+        assert!(final_note.contains("- [ ] #task Second"), "{final_note}");
+        for (outcome, expected) in
+            [(&plan.outcomes[0], "Second"), (&plan.outcomes[1], "First")]
+        {
+            let target = outcome.target.as_ref().expect("applied target");
+            let lines = line_spans(final_note);
+            let line = lines
+                .get(target.line - 1)
+                .expect("reported line remains present");
+            assert!(
+                line.text.contains(expected),
+                "{}: {}",
+                target.line,
+                line.text
+            );
+            assert_eq!(target.block_id, None);
+        }
+    }
+
+    #[test]
+    fn duplicate_idless_rows_and_disappeared_block_ids_defer_safely() {
+        let duplicate =
+            "- [x] #task Same [[mail/aabbccdd]] [completion:: 2026-11-10]";
+        let duplicate_note = format!("## Tasks\n\n{duplicate}\n{duplicate}\n");
+        let linker = closed_task("job.md", &duplicate_note, "Same", false);
+        let plan = plan_reopens(
+            snap(&[("job.md", duplicate_note.as_str())]),
+            &[candidate(
+                THREAD,
+                MESSAGE,
+                message_at(),
+                "Ada",
+                false,
+                vec![linker],
+            )],
+            &ctx(),
+        );
+        assert_eq!(
+            plan.outcomes[0].disposition,
+            ReopenDisposition::TransientDeferred
+        );
+        assert_eq!(post(&plan, "job.md"), duplicate_note);
+
+        let original = "## Tasks\n\n- [x] #task Selected [[mail/aabbccdd]] [completion:: 2026-11-10] ^expected\n";
+        let selected = closed_task("job.md", original, "Selected", false);
+        let changed = "## Tasks\n\n- [x] #task Other [[mail/other]] [completion:: 2026-11-10] ^other\n";
+        let plan = plan_reopens(
+            snap(&[("job.md", changed)]),
+            &[candidate(
+                THREAD,
+                MESSAGE,
+                message_at(),
+                "Ada",
+                false,
+                vec![selected],
+            )],
+            &ctx(),
+        );
+        assert_eq!(
+            plan.outcomes[0].disposition,
+            ReopenDisposition::TransientDeferred
+        );
+        assert_eq!(post(&plan, "job.md"), changed);
+    }
+
+    #[test]
+    fn exact_message_card_target_does_not_accept_an_id_prefix() {
+        let note = "- [x] #task Closed [[mail/aabbccdd]]\n  - 📬 **REOPEN LOG**\n    - *2026-11-14* — ✉️ reply from Ada · [[aabbccdd#^m-abc1|2026-11-14 10:00]]\n";
+        assert!(!log_has_message_card(note, 0, "aabbccdd", "abc"));
+        assert!(log_has_message_card(note, 0, "aabbccdd", "abc1"));
     }
 }

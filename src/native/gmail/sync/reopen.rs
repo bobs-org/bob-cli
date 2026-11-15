@@ -37,7 +37,6 @@ const ACTIVITY_BOOTSTRAP_DAYS: i64 = 14;
 
 /// One reply whose mail note has been hydrated and is ready for local task
 /// planning. `PreparedSave` deliberately keeps message bodies in memory only.
-#[allow(dead_code)] // Consumed by the local reopen planner in the next phase.
 pub(crate) struct PreparedReopenCandidate {
     pub(crate) key: ThreadKey,
     /// The exact newest counted message that caused the lift or bounce.

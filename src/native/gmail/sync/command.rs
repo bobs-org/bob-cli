@@ -171,8 +171,7 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                     .collect();
                 match WatchJournal::load(&vault) {
                     Ok(watch_journal) => {
-                        let mut activity =
-                            health::reopen_activity_state(&account);
+                        let activity = health::reopen_activity_state(&account);
                         let recovery_keys =
                             file::reopen_recovery_thread_ids(&vault, &account);
                         let marker_keys =
@@ -185,9 +184,6 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
                                     ThreadKey::new(&account, thread_id)
                                 }),
                         );
-                        activity.retry_thread_ids.retain(|thread_id| {
-                            !marker_keys.contains(thread_id)
-                        });
                         let batch = super::reopen::prepare_reopens(
                             &coordinator,
                             &account,

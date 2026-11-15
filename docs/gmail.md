@@ -1101,7 +1101,9 @@ without losing the reply.
 
 ### Reports
 
-Human watch rows use inert title and who from mail metadata:
+Human watch rows use the inert thread title. For `reopened`, `who` is the
+sender of the triggering reply from the message being processed (not the
+saved thread's original sender):
 
 | `action` | Human row |
 | --- | --- |
@@ -1265,6 +1267,7 @@ current `state: archived | let_go | restored`. This is archive history,
 including actions later undone, not the active-ownership list. Unavailable or
 unsafe journal history is `null` with a warning, never an empty snapshot.
 A successful reply reopen adds a `watch[]` row with `action: reopened`,
+`who` set to the triggering reply sender for `reason: replied`,
 `reason: replied | bounced`, and the touched task path/line/block-ID
 locators (restored locations included); the archive hint for the same
 thread stays a separate typed hint. The `restored` action stays reserved

@@ -1535,7 +1535,7 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
         WATCH_THREAD,
         "2222222222222222",
         1_793_909_100_000,
-        "Ada <ada@example.com>",
+        "Bea <bea@example.com>",
         ACCOUNT,
         &["INBOX", "Label_1"],
     );
@@ -1565,6 +1565,9 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
     let preview = reopened_watch_row(&json_stdout(&dry_run), WATCH_THREAD)
         .expect("dry-run previews the reopened watch row");
     assert_eq!(preview["reason"], "replied");
+    assert!(preview["who"]
+        .as_str()
+        .is_some_and(|who| who.starts_with("Bea")));
     assert!(
         preview["tasks"]
             .as_array()
@@ -1585,6 +1588,9 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
     let row = reopened_watch_row(&json_stdout(&live), WATCH_THREAD)
         .expect("live run reports the reopened watch row");
     assert_eq!(row["reason"], "replied");
+    assert!(row["who"]
+        .as_str()
+        .is_some_and(|who| who.starts_with("Bea")));
     assert!(
         row["note"]
             .as_str()
@@ -1600,6 +1606,7 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
     let reopened = fs::read_to_string(&inbox).expect("reopened task note");
     assert!(reopened.contains("- [ ] #task"), "{reopened}");
     assert!(reopened.contains("📬 **REOPEN LOG**"), "{reopened}");
+    assert!(reopened.contains("reply from Bea"), "{reopened}");
     assert!(
         reopened.contains("#^m-2222222222222222|"),
         "the log links the exact counted reply: {reopened}"
@@ -1616,6 +1623,55 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
     let retried = fs::read_to_string(&inbox).expect("task after retry");
     assert_eq!(retried.matches("📬 **REOPEN LOG**").count(), 1);
     assert_eq!(retried.matches("#^m-2222222222222222|").count(), 1);
+}
+
+#[test]
+fn reply_reopen_uses_today_ledger_membership_for_unblocked_skip() {
+    for (name, today_link, expected_unblocked) in
+        [("today", true, false), ("control", false, true)]
+    {
+        let (env, fake) = seed_closed_thread_with_reply(
+            &format!("bob-cli-gmail-reopen-today-{name}"),
+            "Bea <bea@example.com>",
+            |contents| {
+                let mut lines: Vec<String> =
+                    contents.lines().map(str::to_string).collect();
+                let task = lines
+                    .iter_mut()
+                    .find(|line| {
+                        line.contains("#task") && line.contains("[[mail/")
+                    })
+                    .expect("filed task row");
+                *task = task.replacen("- [ ]", "- [x]", 1).replace(
+                    "[created::2026-11-05]",
+                    "[created::2026-01-01] [fresh::2026-11-01]",
+                );
+                task.push_str(" ^today-target");
+                lines.join("\n") + "\n"
+            },
+        );
+        if today_link {
+            let day = env.vault().join("2026/20261105.md");
+            fs::create_dir_all(day.parent().unwrap()).expect("day directory");
+            fs::write(
+                &day,
+                "# 2026-11-05\n\n## Pomodoros\n\n- [ ] (**1200-1230** [t:: 30m]) Focus\n  - [[gmail_inbox#^today-target]]\n",
+            )
+            .expect("today Pomodoro task link");
+        }
+        let live = run_gmail(
+            &env,
+            &fake,
+            &["sync", "-l", "0", "-r", "0", "-f", "json"],
+        );
+        assert_success(&live, "reply reopen with Today ledger input");
+        let task = first_mail_task_line(&env.vault().join("gmail_inbox.md"));
+        assert_eq!(
+            task.contains("[unblocked:: 2026-11-05]"),
+            expected_unblocked,
+            "Today link={today_link}: {task}"
+        );
+    }
 }
 
 /// File one thread, close its task, then stage a counted reply for it.
@@ -1675,14 +1731,14 @@ fn seed_closed_thread_with_reply(
 fn reply_reopen_reports_human_and_quiet_news() {
     let (env, fake) = seed_closed_thread_with_reply(
         "bob-cli-gmail-reopen-human",
-        "Ada <ada@example.com>",
+        "Bea <bea@example.com>",
         |contents| contents.replacen("- [ ] #task", "- [x] #task", 1),
     );
     let human = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0"]);
     assert_success(&human, "live reply reopen in human mode");
     let out = stdout(&human);
     assert!(out.contains("✉ reopened"), "{out}");
-    assert!(out.contains("reply from Ada"), "{out}");
+    assert!(out.contains("reply from Bea"), "{out}");
     assert!(!out.contains("nothing new"), "{out}");
     let reopened = fs::read_to_string(env.vault().join("gmail_inbox.md"))
         .expect("reopened task note");
@@ -1947,8 +2003,17 @@ fn failed_reply_marker_retries_without_reopening_a_reclosed_task() {
     assert_eq!(recovery["reopen"][0]["pending_tasks"], false);
     assert_eq!(recovery["reopen"][0]["pending_marker"], true);
 
-    fs::write(&inbox, opened.replacen("- [ ] #task", "- [x] #task", 1))
-        .expect("reclose task before marker replay");
+    let edited_log = opened
+        .lines()
+        .filter(|line| {
+            !line.contains("📬 **REOPEN LOG**")
+                && !line.contains("#^m-2222222222222222|")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&inbox, edited_log.replacen("- [ ] #task", "- [x] #task", 1))
+        .expect("reclose task and delete its log before marker replay");
     fs::remove_file(&host_journal).expect("remove failing journal link");
     fs::rename(&backup, &host_journal).expect("restore readable host journal");
     let recovered =
@@ -1956,8 +2021,8 @@ fn failed_reply_marker_retries_without_reopening_a_reclosed_task() {
     assert_success(&recovered, "marker-only reply recovery");
     let closed_again = fs::read_to_string(&inbox).expect("reclosed task");
     assert!(closed_again.contains("- [x] #task"), "{closed_again}");
-    assert_eq!(closed_again.matches("📬 **REOPEN LOG**").count(), 1);
-    assert_eq!(closed_again.matches("#^m-2222222222222222|").count(), 1);
+    assert_eq!(closed_again.matches("📬 **REOPEN LOG**").count(), 0);
+    assert_eq!(closed_again.matches("#^m-2222222222222222|").count(), 0);
     let journal = fs::read_to_string(&host_journal).expect("recovered journal");
     assert_eq!(
         journal

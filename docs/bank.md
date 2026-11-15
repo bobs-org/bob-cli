@@ -207,7 +207,7 @@ Historical `@BANK` `total:` lines are never rows.
 `]b` / `[b` step waiting rows oldest-first across every bank month (all rows
 once nothing waits); `]B` / `[B` jump to the first row of the next /
 previous day that has rows in the active scope. See the Bank walk section in
-the [Bob Navigation Hotkeys reference](../reference/plugins/bob-navigation-hotkeys.md#bank-walk).
+the [Bob Navigation Hotkeys reference](reference/plugins/bob-navigation-hotkeys.md#bank-walk).
 
 ## Ownership
 

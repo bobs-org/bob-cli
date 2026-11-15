@@ -104,6 +104,19 @@ struct RecoveryReopen {
     pending_marker: bool,
     #[serde(default)]
     target: Option<RecoveryReopenTarget>,
+    /// Hash-only ownership proof for every mail/task/link-repair postimage in
+    /// the reopen transaction. Older receipts omit this and cannot prove a
+    /// pending write completed.
+    #[serde(default)]
+    owned_postimages: Vec<RecoveryReopenFile>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RecoveryReopenFile {
+    path: String,
+    #[serde(default)]
+    preimage_sha256: Option<String>,
+    postimage_sha256: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -213,7 +226,11 @@ pub(crate) fn reopen_recovery_thread_ids(
         .into_iter()
         .flat_map(|data| data.reopen)
         .filter(|item| {
-            item.account.eq_ignore_ascii_case(account) && item.pending_tasks
+            item.account.eq_ignore_ascii_case(account)
+                && item.pending_tasks
+                && item.pending_marker
+                && reopen_postimage_state(vault, item)
+                    == ReopenPostimageState::Unperformed
         })
         .filter_map(|item| ThreadKey::new(&item.account, &item.thread_id))
         .map(|key| key.thread_id().to_string())
@@ -232,8 +249,10 @@ pub(crate) fn reopen_marker_thread_ids(
         .flat_map(|data| data.reopen)
         .filter(|item| {
             item.account.eq_ignore_ascii_case(account)
-                && !item.pending_tasks
                 && item.pending_marker
+                && (!item.pending_tasks
+                    || reopen_postimage_state(vault, item)
+                        == ReopenPostimageState::Applied)
         })
         .filter_map(|item| ThreadKey::new(&item.account, &item.thread_id))
         .map(|key| key.thread_id().to_string())
@@ -744,6 +763,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             input.health.as_ref(),
             &watch_journal,
             &recovery.watch,
+            &recovery.reopen,
         )?;
         let mut invalid = 0usize;
         for thread in &recovery.threads {
@@ -886,6 +906,7 @@ pub(crate) fn apply<S: Sleeper, C: Clock>(
             input.health.as_ref(),
             &watch_journal,
             &recovery.watch,
+            &recovery.reopen,
         )?;
         match persist_attempt(
             input.vault,
@@ -1037,6 +1058,7 @@ fn build_attempt(
     health: Option<&HealthConfig>,
     watch_journal: &WatchJournal,
     pending_watch: &[RecoveryWatch],
+    pending_reopen: &[RecoveryReopen],
 ) -> Result<AttemptPlan, GmailError> {
     let membership =
         Membership::new(enrollment, watchers).with_in_flight(in_flight);
@@ -1185,6 +1207,53 @@ fn build_attempt(
             Ok(archive) if archive.scan_complete() => {
                 for candidate in batch.candidates {
                     let key = candidate.key.clone();
+                    let message_id = candidate.message_id.to_ascii_lowercase();
+                    let message_at = candidate.message_at.timestamp_millis();
+                    if watch_journal.marker(&key).is_some_and(|marker| {
+                        (marker.internal_date, marker.message_id.as_str())
+                            >= (message_at, message_id.as_str())
+                    }) {
+                        // A host may have consumed this M after preparation.
+                        // The fresh under-lock marker is authoritative.
+                        reopen_activity.as_mut().map(|(state, _)| {
+                            state.retry_thread_ids.remove(key.thread_id());
+                        });
+                        continue;
+                    }
+                    if let Some(receipt) = pending_reopen.iter().find(|item| {
+                        item.account.eq_ignore_ascii_case(key.account())
+                            && item
+                                .thread_id
+                                .eq_ignore_ascii_case(key.thread_id())
+                            && item.message_id.eq_ignore_ascii_case(&message_id)
+                            && item.pending_marker
+                    }) {
+                        if !receipt.pending_tasks {
+                            // This exact M already owns its durable task
+                            // transaction. Only local marker settlement may
+                            // remain; never let activity search reopen it.
+                            continue;
+                        }
+                        match reopen_postimage_state(vault, receipt) {
+                            ReopenPostimageState::Unperformed => {
+                                // Every owned path is still at its exact
+                                // preimage, so the failed write batch can be
+                                // safely replanned from fresh prepared data.
+                            }
+                            ReopenPostimageState::Applied => continue,
+                            ReopenPostimageState::PartialOrUnknown => {
+                                defer_reopen(
+                                    &mut outcome,
+                                    &mut reopen_activity,
+                                    &mut reopen_retry_ids,
+                                    &key,
+                                    "recovery_unproven",
+                                    "the recorded reply transaction is partial or its owned postimages changed; repair remains held",
+                                );
+                                continue;
+                            }
+                        }
+                    }
                     let Some(evidence) = archive.evidence(&key) else {
                         defer_reopen(
                             &mut outcome,
@@ -1237,11 +1306,13 @@ fn build_attempt(
                     if let Some(entry) = index.by_identity.get(&key.index_key())
                     {
                         plan_input.title = Some(entry.title.clone());
-                        plan_input.who = Some(entry.who.clone());
                         plan_input.note = Some(entry.path.clone());
                     } else {
                         plan_input.note = Some(evidence.note.clone());
                     }
+                    // The triggering M can be a newer reply from a different
+                    // sender than the saved thread's original mail-index row.
+                    plan_input.who = Some(candidate.sender.clone());
                     let key_tuple = key.index_key();
                     if works.contains_key(&key_tuple) {
                         defer_reopen(
@@ -1665,10 +1736,9 @@ fn build_attempt(
             }
         }
     }
-    let reopen_pending = apply_reopen_plan(
+    let mut reopen_pending = apply_reopen_plan(
         vault,
         timezone,
-        watchers,
         &plans,
         &mut staged,
         &mut task_commit_paths,
@@ -1704,6 +1774,7 @@ fn build_attempt(
         &mut outcome,
         &mut health_events,
     );
+    attach_reopen_postimages(vault, &staged, &plans, &mut reopen_pending);
     outcome.watch_threads = watch_plan.outcomes;
     outcome.watch_gone = watch_plan.gone;
     project_reopen_watch_rows(&mut outcome);
@@ -1788,7 +1859,6 @@ fn project_reopen_watch_rows(outcome: &mut FilingOutcome) {
 fn apply_reopen_plan(
     vault: &Path,
     timezone: chrono_tz::Tz,
-    watchers: &WatchScan,
     saves: &[StagedSaveNote],
     staged: &mut Vec<StagedTextFile>,
     task_commit_paths: &mut Vec<PathBuf>,
@@ -1845,15 +1915,11 @@ fn apply_reopen_plan(
     let original_notes = snapshot.notes.clone();
     let (blocked_ok, blocked_reason) = hold::blocked_status_for_hold(vault);
     let today = bob_env::current_datetime().date();
-    let today_identities = watchers
-        .tasks()
-        .iter()
-        .filter_map(|task| {
-            task.block_id
-                .as_ref()
-                .map(|id| (task.path.clone(), id.clone()))
-        })
-        .collect();
+    let today_identities = today_linked_task_identities(
+        vault,
+        &crate::native::pomodoro::day_file_for(vault),
+        &snapshot,
+    );
     let plan = reopen_plan::plan_reopens(
         snapshot,
         &valid,
@@ -1922,6 +1988,7 @@ fn apply_reopen_plan(
                 pending_tasks: true,
                 pending_marker: true,
                 target,
+                owned_postimages: Vec::new(),
             });
         }
         outcome.reopen_outcomes.push(result);
@@ -1943,6 +2010,79 @@ fn apply_reopen_plan(
     pending
 }
 
+/// Resolve the dedicated Task Links under today's open Pomodoros against the
+/// same staged note overlay used by reopening. Keep closed rows in the set:
+/// the selected target becomes open in this transaction, and freshness must
+/// still recognize that today's ledger already owns it.
+fn today_linked_task_identities(
+    vault: &Path,
+    configured_day_file: &Path,
+    snapshot: &VaultSnapshot,
+) -> BTreeSet<(String, String)> {
+    use crate::native::vault_links::VaultLinkResolver;
+
+    let day_file = configured_day_file.to_path_buf();
+    let day_file = if day_file.is_absolute() {
+        day_file
+    } else {
+        vault.join(day_file)
+    };
+    let Ok(day_relative) = day_file.strip_prefix(vault) else {
+        return BTreeSet::new();
+    };
+    let day_relative = day_relative.to_path_buf();
+    let Some(contents) = snapshot.notes.get(&day_relative) else {
+        return BTreeSet::new();
+    };
+    let resolver = VaultLinkResolver::new(vault);
+    let mut identities = BTreeSet::new();
+    for link in crate::native::plan_budget::today::today_links(contents) {
+        let target = link.target.trim();
+        let relative = if target.is_empty() {
+            Some(day_relative.clone())
+        } else {
+            resolver
+                .resolve(&day_file, target)
+                .path()
+                .map(Path::to_path_buf)
+        };
+        let Some(relative) = relative else {
+            continue;
+        };
+        let relative = if relative.is_absolute() {
+            let Ok(relative) = relative.strip_prefix(vault) else {
+                continue;
+            };
+            relative.to_path_buf()
+        } else {
+            relative
+        };
+        let Some(task_note) = snapshot.notes.get(&relative) else {
+            continue;
+        };
+        let matches = crate::native::capture::line_spans(task_note)
+            .iter()
+            .filter(|line| {
+                crate::native::collect_done::trailing_block_id_in_line(
+                    line.text,
+                )
+                .as_deref()
+                    == Some(link.block_id.as_str())
+                    && super::scan::parse_task_row(line.text).is_some()
+            })
+            .count();
+        if matches == 1 {
+            let path = relative
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            identities.insert((path, link.block_id));
+        }
+    }
+    identities
+}
+
 fn recovery_reopen_target(
     target: &ReopenTargetIdentity,
     snapshot: &VaultSnapshot,
@@ -1957,6 +2097,69 @@ fn recovery_reopen_target(
         block_id: target.block_id.clone(),
         restored: target.restored,
         postimage_sha256,
+    }
+}
+
+fn attach_reopen_postimages(
+    vault: &Path,
+    staged: &[StagedTextFile],
+    plans: &[StagedSaveNote],
+    pending: &mut [RecoveryReopen],
+) {
+    let mut files = BTreeMap::<String, RecoveryReopenFile>::new();
+    for plan in plans {
+        let Ok(relative) = plan.path.strip_prefix(vault) else {
+            continue;
+        };
+        let path = save::path_to_slashes(relative);
+        files.insert(
+            path.clone(),
+            RecoveryReopenFile {
+                path,
+                preimage_sha256: plan
+                    .original
+                    .as_deref()
+                    .map(|text| save::sha256(text.as_bytes())),
+                postimage_sha256: save::sha256(plan.updated.as_bytes()),
+            },
+        );
+    }
+    // Staged Markdown postimages include the selected task, restored source
+    // and destination notes, and every inbound-link repair in the same
+    // transaction. They override a save plan for the same path if another
+    // staged writer composed a later edit onto it.
+    for file in staged {
+        let Ok(relative) = file.target.strip_prefix(vault) else {
+            continue;
+        };
+        if !file
+            .target
+            .extension()
+            .is_some_and(|extension| extension == "md")
+        {
+            continue;
+        }
+        let path = save::path_to_slashes(relative);
+        files.insert(
+            path.clone(),
+            RecoveryReopenFile {
+                path,
+                preimage_sha256: file
+                    .target_existed
+                    .then(|| save::sha256(file.original_target.as_bytes())),
+                postimage_sha256: save::sha256(file.updated_target.as_bytes()),
+            },
+        );
+    }
+    let owned: Vec<_> = files.into_values().collect();
+    for receipt in pending {
+        receipt.owned_postimages = owned.clone();
+        if let Some(target) = receipt.target.as_mut()
+            && let Some(postimage) =
+                owned.iter().find(|file| file.path == target.path)
+        {
+            target.postimage_sha256 = Some(postimage.postimage_sha256.clone());
+        }
     }
 }
 
@@ -2568,6 +2771,9 @@ fn dedup_reopen_pending(
                 if item.target.is_some() {
                     existing.target = item.target;
                 }
+                if !item.owned_postimages.is_empty() {
+                    existing.owned_postimages = item.owned_postimages;
+                }
                 existing.effect = item.effect;
                 existing.internal_date = item.internal_date;
             }
@@ -2582,10 +2788,13 @@ fn dedup_reopen_pending(
 fn reopen_after_durable_writes(
     recovery: &RecoveryData,
     plan: &AttemptPlan,
+    transaction_committed: bool,
 ) -> Vec<RecoveryReopen> {
     dedup_reopen_pending(recovery.reopen.iter().cloned().chain(
         plan.reopen_pending.iter().cloned().map(|mut item| {
-            item.pending_tasks = false;
+            if transaction_committed {
+                item.pending_tasks = false;
+            }
             item
         }),
     ))
@@ -2595,6 +2804,64 @@ fn same_reopen(left: &RecoveryReopen, right: &RecoveryReopen) -> bool {
     left.account.eq_ignore_ascii_case(&right.account)
         && left.thread_id.eq_ignore_ascii_case(&right.thread_id)
         && left.message_id.eq_ignore_ascii_case(&right.message_id)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReopenPostimageState {
+    Applied,
+    Unperformed,
+    PartialOrUnknown,
+}
+
+/// Classify a pending receipt using both prewrite and postwrite hashes. A
+/// matching intent file alone is not evidence that the whole transaction
+/// landed, and any mixed or independently edited state is held for repair.
+fn reopen_postimage_state(
+    vault: &Path,
+    receipt: &RecoveryReopen,
+) -> ReopenPostimageState {
+    if receipt.owned_postimages.is_empty() {
+        return ReopenPostimageState::PartialOrUnknown;
+    }
+    let mut all_preimages = true;
+    let mut all_postimages = true;
+    for owned in &receipt.owned_postimages {
+        let path = vault.join(&owned.path);
+        let current = match fs::read(&path) {
+            Ok(bytes) => Some(save::sha256(&bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(_) => return ReopenPostimageState::PartialOrUnknown,
+        };
+        if current.as_deref() != Some(owned.postimage_sha256.as_str()) {
+            all_postimages = false;
+        }
+        if current != owned.preimage_sha256 {
+            all_preimages = false;
+        }
+    }
+    if let Some(target) = receipt
+        .target
+        .as_ref()
+        .and_then(|target| target.postimage_sha256.as_deref())
+    {
+        let target_path = receipt
+            .target
+            .as_ref()
+            .map(|target| vault.join(&target.path));
+        if target_path
+            .and_then(|path| fs::read(path).ok())
+            .is_none_or(|bytes| save::sha256(&bytes) != target)
+        {
+            all_postimages = false;
+        }
+    }
+    if all_postimages {
+        ReopenPostimageState::Applied
+    } else if all_preimages {
+        ReopenPostimageState::Unperformed
+    } else {
+        ReopenPostimageState::PartialOrUnknown
+    }
 }
 
 fn applied_reopen_turn(
@@ -2816,7 +3083,7 @@ fn persist_attempt(
                     threads,
                     commit_paths: commit_hashes,
                     watch,
-                    reopen: reopen_after_durable_writes(recovery, &plan),
+                    reopen: reopen_after_durable_writes(recovery, &plan, false),
                 },
             )
             .err();
@@ -2840,7 +3107,19 @@ fn persist_attempt(
     // Checkpoint that the coalesced postimages have landed before any reply
     // marker can advance. If this write fails, the prewrite intent remains
     // and retries can detect the exact log without reopening a reclosed row.
-    let mut reopen_pending = reopen_after_durable_writes(recovery, &plan);
+    let mut reopen_pending = reopen_after_durable_writes(recovery, &plan, true);
+    for receipt in &mut reopen_pending {
+        if receipt.pending_tasks
+            && reopen_postimage_state(vault, receipt)
+                == ReopenPostimageState::Applied
+        {
+            // This is the crash window after file writes and commit but before
+            // the pending_tasks checkpoint. Hash ownership proves the whole
+            // coalesced transaction landed, so marker-only settlement is now
+            // safe even if the task has since left the closed scan.
+            receipt.pending_tasks = false;
+        }
+    }
     let mut reopen_checkpoint_ok = true;
     if !reopen_pending.is_empty() {
         let watch = dedup_watch_pending(
@@ -3354,6 +3633,13 @@ fn persist_attempt(
                     remaining.retain(|item| !same_reopen(item, &receipt));
                     if persist_journal(&mut plan.outcome, &works, &remaining) {
                         reopen_pending = remaining;
+                        if let Some((activity, _)) =
+                            plan.reopen_activity.as_mut()
+                        {
+                            activity
+                                .retry_thread_ids
+                                .remove(turn.key.thread_id());
+                        }
                     }
                     continue;
                 }
@@ -3391,6 +3677,9 @@ fn persist_attempt(
                 remaining.retain(|item| !same_reopen(item, &receipt));
                 if persist_journal(&mut plan.outcome, &works, &remaining) {
                     reopen_pending = remaining;
+                    if let Some((activity, _)) = plan.reopen_activity.as_mut() {
+                        activity.retry_thread_ids.remove(turn.key.thread_id());
+                    }
                 } else {
                     if let Some((activity, _)) = plan.reopen_activity.as_mut() {
                         activity
@@ -4631,6 +4920,65 @@ mod tests {
             "test",
             "filing attempted an unexpected Gmail request".to_string(),
         )
+    }
+
+    #[test]
+    fn reopen_ownership_requires_complete_exact_postimages() {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        let path = vault.path().join("job.md");
+        let before = "closed task\n";
+        let after = "reopened task\n";
+        fs::write(&path, before).expect("write preimage");
+        let receipt = RecoveryReopen {
+            account: "me@example.com".into(),
+            thread_id: "aabb".into(),
+            message_id: "ccdd".into(),
+            internal_date: 1,
+            effect: "lift".into(),
+            pending_tasks: true,
+            pending_marker: true,
+            target: None,
+            owned_postimages: vec![RecoveryReopenFile {
+                path: "job.md".into(),
+                preimage_sha256: Some(save::sha256(before.as_bytes())),
+                postimage_sha256: save::sha256(after.as_bytes()),
+            }],
+        };
+        assert_eq!(
+            reopen_postimage_state(vault.path(), &receipt),
+            ReopenPostimageState::Unperformed
+        );
+        fs::write(&path, after).expect("write postimage");
+        assert_eq!(
+            reopen_postimage_state(vault.path(), &receipt),
+            ReopenPostimageState::Applied
+        );
+        fs::write(&path, "user edited task\n").expect("user edit");
+        assert_eq!(
+            reopen_postimage_state(vault.path(), &receipt),
+            ReopenPostimageState::PartialOrUnknown
+        );
+    }
+
+    #[test]
+    fn today_identities_come_from_open_pomodoro_links_not_watch_membership() {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        let _env = test_env(vault.path());
+        let daily = vault.path().join("2026/20261107.md");
+        let daily_note = "# Today\n\n## Pomodoros\n\n- [ ] (**0900-0930** [t:: 30m]) Focus\n  - [[job#^today]]\n";
+        let job = "## Tasks\n\n- [x] #task Today target [completion:: 2026-11-06] ^today\n- [ ] #task Unlinked ^other\n";
+        fs::create_dir_all(daily.parent().expect("daily parent"))
+            .expect("create day directory");
+        fs::write(&daily, daily_note).expect("write daily note");
+        fs::write(vault.path().join("job.md"), job).expect("write tasks");
+        let snapshot = VaultSnapshot::from_notes([
+            (PathBuf::from("2026/20261107.md"), daily_note.to_string()),
+            (PathBuf::from("job.md"), job.to_string()),
+        ]);
+        assert_eq!(
+            today_linked_task_identities(vault.path(), &daily, &snapshot),
+            BTreeSet::from([("job.md".into(), "today".into())])
+        );
     }
 
     struct NoSleep;

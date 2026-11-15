@@ -866,6 +866,11 @@ fn watch_json(row: &WatchThreadOutcome) -> Value {
     if let Some(reason) = &row.reason {
         value["reason"] = json!(reason);
     }
+    if row.action == ACTION_REOPENED
+        && let Some(who) = &row.who
+    {
+        value["who"] = json!(who);
+    }
     if let Some(nudge_on) = &row.nudge_on {
         value["nudge_on"] = json!(nudge_on);
     }
