@@ -662,8 +662,19 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         .map(|config| config.categories.clone())
         .unwrap_or_default();
     let journal = super::journal::load(&bob_dir).unwrap_or_default();
-    let rows =
+    let registry =
+        super::subscriptions::registry::SubscriptionRegistry::load(&bob_dir);
+    let subscription_warning =
+        super::subscriptions::projection::album_invalid_warning(&registry);
+    let mut rows =
         super::model::collect_rows(&scan, config.as_ref(), Some(&journal));
+    super::subscriptions::projection::enrich_rows(
+        &mut rows,
+        &registry,
+        &journal,
+        config.as_ref(),
+        today,
+    );
     let accounts = config
         .as_ref()
         .map(|config| {
@@ -693,8 +704,24 @@ fn execute_list(matches: &ArgMatches) -> i32 {
             .hub
             .as_ref()
             .and_then(|hub| super::config::config_fingerprint(&hub.contents)));
+        if let Some(warning) = subscription_warning.clone() {
+            payload["warnings"] = serde_json::json!([warning]);
+            payload["findings"] = serde_json::json!([{
+                "code": "bank_subscription_album_invalid",
+                "path": registry.album.as_ref().map(|album| album.path.as_str()).unwrap_or(""),
+                "line": serde_json::Value::Null,
+                "message": warning,
+            }]);
+            payload["issues"]["warnings"] = serde_json::json!(1);
+        } else {
+            payload["warnings"] = serde_json::json!([]);
+            payload["findings"] = serde_json::json!([]);
+        }
         println!("{payload}");
     } else {
+        if let Some(warning) = subscription_warning {
+            eprintln!("bob bank list: {warning}");
+        }
         output::print_list(&report, today);
     }
     0
@@ -793,8 +820,19 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         .map(|account| account.alias.clone())
         .unwrap_or_else(|| "checking".to_owned());
     let journal = super::journal::load(&bob_dir).unwrap_or_default();
-    let rows =
+    let registry =
+        super::subscriptions::registry::SubscriptionRegistry::load(&bob_dir);
+    let subscription_warning =
+        super::subscriptions::projection::album_invalid_warning(&registry);
+    let mut rows =
         super::model::collect_rows(&scan, config.as_ref(), Some(&journal));
+    super::subscriptions::projection::enrich_rows(
+        &mut rows,
+        &registry,
+        &journal,
+        config.as_ref(),
+        today,
+    );
     if period.kind == report::PeriodKind::AllTime {
         period = report::all_time_period(config.as_ref(), &rows, today);
     }
@@ -824,8 +862,24 @@ fn execute_report(matches: &ArgMatches) -> i32 {
             .hub
             .as_ref()
             .and_then(|hub| super::config::config_fingerprint(&hub.contents)));
+        if let Some(warning) = subscription_warning.clone() {
+            payload["warnings"] = serde_json::json!([warning]);
+            payload["findings"] = serde_json::json!([{
+                "code": "bank_subscription_album_invalid",
+                "path": registry.album.as_ref().map(|album| album.path.as_str()).unwrap_or(""),
+                "line": serde_json::Value::Null,
+                "message": warning,
+            }]);
+            payload["issues"]["warnings"] = serde_json::json!(1);
+        } else {
+            payload["warnings"] = serde_json::json!([]);
+            payload["findings"] = serde_json::json!([]);
+        }
         println!("{payload}");
     } else {
+        if let Some(warning) = subscription_warning {
+            eprintln!("bob bank report: {warning}");
+        }
         output::print_report(&built);
     }
     0

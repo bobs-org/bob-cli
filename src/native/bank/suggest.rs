@@ -1,7 +1,8 @@
 //! Read-time and import-time category suggestions.
 //!
 //! One function serves `list`/`report`/`import` row JSON and import's
-//! category tier. Tiers, highest first: rule, learned, bank built-in.
+//! category tier. Tiers, highest first: rule, subscription, learned,
+//! bank built-in.
 
 use std::collections::HashMap;
 
@@ -18,6 +19,7 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SuggestionSource {
     Rule,
+    Subscription,
     Learned,
     Bank,
 }
@@ -26,6 +28,7 @@ impl SuggestionSource {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Rule => "rule",
+            Self::Subscription => "subscription",
             Self::Learned => "learned",
             Self::Bank => "bank",
         }
@@ -83,10 +86,31 @@ pub(crate) fn suggest_category(
     query: &SuggestQuery<'_>,
     index: &LearnedIndex,
 ) -> Option<CategorySuggestion> {
+    suggest_with_subscription(config, query, index, None)
+}
+
+/// Subscription-aware suggestion: rule, then an attributed subscription
+/// category, then learned, then bank built-in. Already authored categories
+/// are handled by the caller; hidden or unknown subscription categories
+/// are never offered here.
+pub(crate) fn suggest_with_subscription(
+    config: &BankConfig,
+    query: &SuggestQuery<'_>,
+    index: &LearnedIndex,
+    subscription_category: Option<&str>,
+) -> Option<CategorySuggestion> {
     if let Some(category) = rule_category(config, query) {
         return Some(CategorySuggestion {
             category,
             source: SuggestionSource::Rule,
+        });
+    }
+    if let Some(category) = subscription_category
+        && is_offerable(config, category)
+    {
+        return Some(CategorySuggestion {
+            category: category.to_owned(),
+            source: SuggestionSource::Subscription,
         });
     }
     if let Some(category) = index.lookup(query.identities, query.skip) {
@@ -104,6 +128,35 @@ pub(crate) fn suggest_category(
             category,
             source: SuggestionSource::Bank,
         })
+}
+
+/// True when `key` names any declared bank category, including hidden keys.
+/// The outer import phase uses this for subscription fill-down, where hidden
+/// declared keys are allowed even though read-time suggestions hide them.
+#[allow(dead_code)]
+pub(crate) fn is_declared_category(config: &BankConfig, key: &str) -> bool {
+    config.category(key).is_some()
+}
+
+/// True when any bank rule matches `haystack` at read time, including rules
+/// that only set a payee or link. Rules with a 4+ digit run never match at
+/// read time because journal descriptions are digit-masked.
+pub(crate) fn has_read_time_rule_match(
+    config: &BankConfig,
+    haystack: &str,
+) -> bool {
+    if haystack.is_empty() {
+        return false;
+    }
+    for rule in &config.rules {
+        if has_long_digit_run(&rule.match_text) {
+            continue;
+        }
+        if contains_folded(haystack, &rule.match_text) {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn learned_index(
@@ -411,6 +464,9 @@ mod tests {
             id: id.map(str::to_owned),
             origin: "typed",
             suggestion: None,
+            subscription: None,
+            bank_recurring: false,
+            subscription_candidate: false,
         }
     }
 

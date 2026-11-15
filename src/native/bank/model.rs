@@ -11,6 +11,60 @@ use super::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SubscriptionPriceChange {
+    pub(crate) from_cents: i64,
+    pub(crate) to_cents: i64,
+    pub(crate) since: NaiveDate,
+}
+
+impl SubscriptionPriceChange {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "from_cents": self.from_cents,
+            "to_cents": self.to_cents,
+            "since": self.since.format("%Y-%m-%d").to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RowSubscription {
+    pub(crate) stem: String,
+    pub(crate) path: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) status_label: String,
+    pub(crate) cadence: String,
+    pub(crate) pricing: String,
+    pub(crate) amount_cents: i64,
+    pub(crate) source: String,
+    pub(crate) needle: Option<String>,
+    pub(crate) drift_cents: Option<i64>,
+    pub(crate) price_change: Option<SubscriptionPriceChange>,
+    pub(crate) state: String,
+}
+
+impl RowSubscription {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "stem": self.stem,
+            "path": self.path,
+            "title": self.title,
+            "status": self.status,
+            "status_label": self.status_label,
+            "cadence": self.cadence,
+            "pricing": self.pricing,
+            "amount_cents": self.amount_cents,
+            "source": self.source,
+            "needle": self.needle,
+            "drift_cents": self.drift_cents,
+            "price_change": self.price_change.as_ref().map(|change| change.to_json()),
+            "state": self.state,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BankRow {
     pub(crate) path: String,
     pub(crate) line: usize,
@@ -27,6 +81,9 @@ pub(crate) struct BankRow {
     pub(crate) id: Option<String>,
     pub(crate) origin: &'static str,
     pub(crate) suggestion: Option<super::suggest::CategorySuggestion>,
+    pub(crate) subscription: Option<RowSubscription>,
+    pub(crate) bank_recurring: bool,
+    pub(crate) subscription_candidate: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -107,6 +164,9 @@ pub(crate) fn collect_rows(
                     id: parsed.id.clone(),
                     origin,
                     suggestion: None,
+                    subscription: None,
+                    bank_recurring: false,
+                    subscription_candidate: false,
                 });
             }
         }
@@ -234,5 +294,8 @@ pub(crate) fn row_json(
         "id": row.id,
         "origin": row.origin,
         "suggestion": row.suggestion.as_ref().map(|suggestion| suggestion.to_json()),
+        "subscription": row.subscription.as_ref().map(|subscription| subscription.to_json()),
+        "bank_recurring": row.bank_recurring,
+        "subscription_candidate": row.subscription_candidate,
     })
 }

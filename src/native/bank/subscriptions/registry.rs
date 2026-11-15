@@ -193,6 +193,23 @@ impl SubscriptionRegistry {
         }
     }
 
+    /// Invalid snapshot without album details for a guarded import that
+    /// cannot resolve the subscription declaration. Imports proceed without
+    /// subscription facts with one bounded warning.
+    pub(crate) fn missing_invalid() -> Self {
+        Self::invalid(
+            None,
+            vec![SubscriptionDiagnostic {
+                code: "bank_subscription_album_invalid",
+                path: String::new(),
+                field: None,
+                message:
+                    "subscription album declaration is invalid or ambiguous"
+                        .to_owned(),
+            }],
+        )
+    }
+
     /// Read the noun-bound subscription album once for this invocation.
     /// Semantic record parsing is shared with `parse_subscription_snapshot`,
     /// which lets the import phase reuse the exact same parser on guarded bytes.

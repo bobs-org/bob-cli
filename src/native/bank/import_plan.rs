@@ -92,6 +92,16 @@ pub(crate) struct PlanInput<'a> {
     pub(crate) file_labels: Vec<String>,
     pub(crate) restaurants: Vec<RestaurantEntry>,
     pub(crate) restaurant_deps: Vec<ReadDep>,
+    /// Guarded subscription snapshot parsed from the exact captured bytes,
+    /// plus its record-byte dependencies for plan staleness.
+    pub(crate) subscriptions:
+        super::subscriptions::registry::SubscriptionRegistry,
+    pub(crate) subscription_deps: Vec<ReadDep>,
+    /// Bounded warning when the subscription declaration is invalid.
+    /// Imports proceed without subscription facts in that case.
+    pub(crate) subscription_warning: Option<String>,
+    /// Frozen today (`BOB_NOW` through the command clock) for ledger facts.
+    pub(crate) today: chrono::NaiveDate,
     /// Single frozen clock instant for this plan, RFC 3339 with an offset
     /// (`%Y-%m-%dT%H:%M:%S%:z`). New month notes copy it verbatim as their
     /// `created:` stamp; journal `ts` fields store the same instant in UTC.
@@ -1019,7 +1029,7 @@ impl<'a> Planner<'a> {
     }
 
     fn finish(
-        self,
+        mut self,
         input: &'a PlanInput<'a>,
         files: Vec<PlannedFile>,
         wrote_waiting: bool,
@@ -1106,6 +1116,16 @@ impl<'a> Planner<'a> {
             });
         }
         read_deps.extend(input.restaurant_deps.iter().cloned());
+        read_deps.extend(input.subscription_deps.iter().cloned());
+        let mut findings = std::mem::take(&mut self.findings);
+        if let Some(warning) = input.subscription_warning.clone() {
+            findings.push(PlanFinding {
+                code: "bank_import_subscriptions_unavailable",
+                path: String::new(),
+                line: None,
+                message: warning,
+            });
+        }
         BatchPlan {
             files,
             rows,
@@ -1114,7 +1134,7 @@ impl<'a> Planner<'a> {
             month_edits,
             journal_events,
             read_deps,
-            findings: self.findings,
+            findings,
             counts: self.counts,
             changed,
             waiting,
@@ -1189,6 +1209,9 @@ impl<'a> Planner<'a> {
                         id: parsed.id.clone(),
                         origin,
                         suggestion: None,
+                        subscription: None,
+                        bank_recurring: false,
+                        subscription_candidate: false,
                     });
                 }
             }
@@ -1211,6 +1234,23 @@ impl<'a> Planner<'a> {
         }
         if let Some(config) = input.config {
             suggest::attach_suggestions(&mut rows, config, input.journal);
+        }
+        {
+            use std::collections::HashMap;
+            let mut raw_descs: HashMap<String, String> = HashMap::new();
+            for event in &self.txn_events {
+                raw_descs
+                    .entry(event.id.clone())
+                    .or_insert_with(|| event.desc.clone());
+            }
+            super::subscriptions::projection::enrich_rows_with_raw(
+                &mut rows,
+                &input.subscriptions,
+                input.journal,
+                input.config,
+                input.today,
+                &raw_descs,
+            );
         }
         rows
     }
@@ -1329,6 +1369,9 @@ fn collect_planner_rows(
                         id: parsed.id.clone(),
                         origin: "typed",
                         suggestion: None,
+                        subscription: None,
+                        bank_recurring: false,
+                        subscription_candidate: false,
                     },
                     consumed: false,
                 });
@@ -1555,6 +1598,10 @@ mod tests {
             file_labels: labels.into_iter().map(str::to_owned).collect(),
             restaurants,
             restaurant_deps: Vec::new(),
+            subscriptions: crate::native::bank::subscriptions::registry::SubscriptionRegistry::missing(),
+            subscription_deps: Vec::new(),
+            subscription_warning: None,
+            today: nov(12),
             now_stamp: STAMP.to_owned(),
             host: "athena".to_owned(),
             force_restore: false,
@@ -1578,6 +1625,10 @@ mod tests {
             file_labels: Vec::new(),
             restaurants: Vec::new(),
             restaurant_deps: Vec::new(),
+            subscriptions: crate::native::bank::subscriptions::registry::SubscriptionRegistry::missing(),
+            subscription_deps: Vec::new(),
+            subscription_warning: None,
+            today: nov(12),
             now_stamp: STAMP.to_owned(),
             host: "athena".to_owned(),
             force_restore: true,
@@ -3024,6 +3075,10 @@ mod tests {
             file_labels: vec!["a.qfx".to_owned()],
             restaurants: Vec::new(),
             restaurant_deps: Vec::new(),
+            subscriptions: crate::native::bank::subscriptions::registry::SubscriptionRegistry::missing(),
+            subscription_deps: Vec::new(),
+            subscription_warning: None,
+            today: nov(12),
             now_stamp: STAMP.to_owned(),
             host: "athena".to_owned(),
             force_restore: false,
@@ -3163,6 +3218,10 @@ mod tests {
             file_labels: vec!["a.qfx".to_owned(), "b.qfx".to_owned()],
             restaurants: vec![restaurant("Smashburger", "smashburger")],
             restaurant_deps: vec![dep],
+            subscriptions: crate::native::bank::subscriptions::registry::SubscriptionRegistry::missing(),
+            subscription_deps: Vec::new(),
+            subscription_warning: None,
+            today: nov(12),
             now_stamp: STAMP.to_owned(),
             host: "apollo".to_owned(),
             force_restore: false,
@@ -3173,6 +3232,79 @@ mod tests {
         assert!(deps.contains(&"eat/smashburger.md"));
         // Extra labels fall back to source order without failing.
         assert_eq!(plan.files[0].file, "a.qfx");
+    }
+
+    #[test]
+    fn subscription_inputs_are_guarded_and_invalid_warns_once() {
+        let config = hub();
+        let scan = scan_with(vec![november(&[])]);
+        let journal = JournalSnapshot::default();
+        let dep = ReadDep {
+            path: "subs/tunely.md".to_owned(),
+            preimage: Some(b"note".to_vec()),
+        };
+        let plan = plan_batch(PlanInput {
+            config: Some(&config),
+            hub: ReadDep {
+                path: "bank.md".to_owned(),
+                preimage: Some(b"hub".to_vec()),
+            },
+            scan: &scan,
+            journal: &journal,
+            statements: two_txn_statements(),
+            file_labels: vec!["a.qfx".to_owned()],
+            restaurants: Vec::new(),
+            restaurant_deps: Vec::new(),
+            subscriptions: crate::native::bank::subscriptions::registry::SubscriptionRegistry::missing(),
+            subscription_deps: vec![dep],
+            subscription_warning: None,
+            today: nov(12),
+            now_stamp: STAMP.to_owned(),
+            host: "apollo".to_owned(),
+            force_restore: false,
+        })
+        .expect("plan");
+        let deps: Vec<&str> =
+            plan.read_deps.iter().map(|dep| dep.path.as_str()).collect();
+        assert!(deps.contains(&"subs/tunely.md"));
+        assert!(!plan
+            .findings
+            .iter()
+            .any(|finding| finding.code
+                == "bank_import_subscriptions_unavailable"));
+
+        let warned = plan_batch(PlanInput {
+            config: Some(&config),
+            hub: ReadDep {
+                path: "bank.md".to_owned(),
+                preimage: Some(b"hub".to_vec()),
+            },
+            scan: &scan,
+            journal: &journal,
+            statements: two_txn_statements(),
+            file_labels: vec!["a.qfx".to_owned()],
+            restaurants: Vec::new(),
+            restaurant_deps: Vec::new(),
+            subscriptions: crate::native::bank::subscriptions::registry::SubscriptionRegistry::missing_invalid(),
+            subscription_deps: Vec::new(),
+            subscription_warning: Some(
+                "subscription records are unavailable; run `bob albums check`"
+                    .to_owned(),
+            ),
+            today: nov(12),
+            now_stamp: STAMP.to_owned(),
+            host: "apollo".to_owned(),
+            force_restore: false,
+        })
+        .expect("invalid subscriptions never refuse");
+        let warnings: Vec<_> = warned
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding.code == "bank_import_subscriptions_unavailable"
+            })
+            .collect();
+        assert_eq!(warnings.len(), 1);
     }
 
     fn ofx_fixture(acct: &str, amount: &str, fitid: &str) -> String {

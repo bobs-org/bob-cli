@@ -64,6 +64,9 @@ fn row(
         id: None,
         origin: "typed",
         suggestion: None,
+        subscription: None,
+        bank_recurring: false,
+        subscription_candidate: false,
     }
 }
 

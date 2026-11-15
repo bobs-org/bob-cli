@@ -14,24 +14,17 @@ use super::{
     config::{self, AccountStatus, BankConfig, Category, ConfigParse},
     import_plan::{
         self, BatchPlan, MonthEdit, PlanInput, PlanRefusal, ReadDep,
-        RestaurantEntry,
     },
     journal, scan,
     source::{self, ParsedStatement, ResolvedStatement, SourceError},
 };
 use crate::native::{
-    albums::registry::DiscoveryHealth,
     bank::model,
     capture::StagedTextFile,
     host_catalog::{
         CommitInfo, PlannedAppend, PlannedTxn, ReadDependencies, TxnResult,
     },
     ob, pref_journal,
-    records::{
-        catalog::RecordCatalog,
-        context::{RecordContext, RecordKindResolution},
-        schema::RecordDiagnosticCode,
-    },
     style::Styler,
     vault_rewrite::TxnFailure,
 };
@@ -430,25 +423,37 @@ pub(crate) fn plan_import(
         resolved.push(statement);
     }
 
+    let guarded = if sources.is_empty() {
+        None
+    } else {
+        Some(super::subscriptions::loader::load_record_links(vault)?)
+    };
     let (
         restaurants,
         restaurant_deps,
-        registry_dependencies,
-        restaurant_directory,
-        restaurant_dir_entries,
-        root_md_entries,
-    ) = if sources.is_empty() {
-        (
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
-            Vec::new(),
-            Vec::new(),
-        )
-    } else {
-        load_restaurants(vault)?
-    };
+        subscriptions,
+        subscription_deps,
+        subscription_warning,
+    ) = guarded.as_ref().map_or_else(
+        || {
+            (
+                Vec::new(),
+                Vec::new(),
+                super::subscriptions::registry::SubscriptionRegistry::missing(),
+                Vec::new(),
+                None,
+            )
+        },
+        |guarded| {
+            (
+                guarded.restaurants.clone(),
+                guarded.restaurant_deps.clone(),
+                guarded.subscriptions.clone(),
+                guarded.subscription_deps.clone(),
+                guarded.subscription_warning.clone(),
+            )
+        },
+    );
     let plan = import_plan::plan_batch(PlanInput {
         config: Some(&config),
         hub: ReadDep {
@@ -464,6 +469,10 @@ pub(crate) fn plan_import(
             .collect(),
         restaurants,
         restaurant_deps,
+        subscriptions,
+        subscription_deps,
+        subscription_warning,
+        today,
         now_stamp: now_stamp.to_owned(),
         host: host.to_owned(),
         force_restore,
@@ -484,18 +493,29 @@ pub(crate) fn plan_import(
         Some("jsonl"),
         journal.directory_entries.clone(),
     );
-    if !sources.is_empty() {
-        deps.insert_directory(PathBuf::from("."), Some("md"), root_md_entries);
-    }
-    if let Some(directory) = restaurant_directory {
+    if let Some(guarded) = guarded.as_ref() {
         deps.insert_directory(
-            PathBuf::from(directory),
+            PathBuf::from("."),
             Some("md"),
-            restaurant_dir_entries,
+            guarded.root_md_entries.clone(),
         );
-    }
-    for (path, preimage) in registry_dependencies {
-        deps.insert_bytes(path, preimage);
+        if let Some(directory) = guarded.restaurant_directory.clone() {
+            deps.insert_directory(
+                PathBuf::from(directory),
+                Some("md"),
+                guarded.restaurant_dir_entries.clone(),
+            );
+        }
+        if let Some(directory) = guarded.subscription_directory.clone() {
+            deps.insert_directory(
+                PathBuf::from(directory),
+                Some("md"),
+                guarded.subscription_dir_entries.clone(),
+            );
+        }
+        for (path, preimage) in &guarded.registry_dependencies {
+            deps.insert_bytes(path.clone(), preimage.clone());
+        }
     }
 
     let staged = plan
@@ -578,214 +598,6 @@ pub(crate) fn refresh_accounts(
     let rows = model::collect_rows(&scan, Some(config), Some(&journal));
     report.accounts =
         super::status::accounts_with_evidence(config, &journal, &rows, today).0;
-}
-
-fn load_restaurants(
-    vault: &Path,
-) -> Result<
-    (
-        Vec<RestaurantEntry>,
-        Vec<ReadDep>,
-        Vec<(PathBuf, Option<Vec<u8>>)>,
-        Option<String>,
-        Vec<String>,
-        Vec<String>,
-    ),
-    TxnFailure,
-> {
-    let root_md_entries = directory_names(vault, Some("md"))?;
-    let context = RecordContext::discover(vault);
-    if directory_names(vault, Some("md"))? != root_md_entries {
-        return Err(failure(
-            "bank_import_registry",
-            "the records registry changed while it was being read",
-            "re-run the import against the latest registry",
-        ));
-    }
-    let mut registry_dependencies = Vec::new();
-    for album in &context.registry().albums {
-        let path = vault.join(&album.declaration.path);
-        let bytes = fs::read(&path).map_err(|error| {
-            failure(
-                "bank_import_registry",
-                format!("could not read {}: {error}", album.declaration.path),
-                "repair the album declaration and retry",
-            )
-        })?;
-        if album
-            .contents
-            .as_ref()
-            .is_some_and(|contents| contents.as_bytes() != bytes)
-        {
-            return Err(failure(
-                "bank_import_registry",
-                format!(
-                    "{} changed while the records registry was read",
-                    album.declaration.path
-                ),
-                "re-run the import against the latest registry",
-            ));
-        }
-        registry_dependencies
-            .push((PathBuf::from(&album.declaration.path), Some(bytes)));
-    }
-
-    if let DiscoveryHealth::Partial(errors) = &context.registry().health {
-        return Err(failure(
-            "bank_import_registry",
-            format!(
-                "could not read the records registry: {}",
-                errors.join(", ")
-            ),
-            "repair the records registry and retry",
-        ));
-    }
-
-    let kind = match context.resolve("eat") {
-        RecordKindResolution::Valid { kind, .. } => Some(kind),
-        RecordKindResolution::DiscoveryIncomplete { errors } => {
-            return Err(failure(
-                "bank_import_registry",
-                format!(
-                    "could not read the restaurant registry: {}",
-                    errors.join(", ")
-                ),
-                "repair the records registry and retry",
-            ));
-        }
-        _ => None,
-    };
-    let mut entries = Vec::new();
-    let mut deps = Vec::new();
-    let mut restaurant_directory = None;
-    let mut dir_entries = Vec::new();
-    if let Some(kind) = kind {
-        let record_type = kind.record_type();
-        let directory = &record_type.dir;
-        restaurant_directory = Some(directory.clone());
-        let record_directory = vault.join(directory);
-        let before_entries = directory_names(&record_directory, Some("md"))?;
-        let mut catalog = RecordCatalog::new(vault);
-        let folder = catalog.folder(directory);
-        dir_entries = directory_names(&record_directory, Some("md"))?;
-        if dir_entries != before_entries {
-            return Err(failure(
-                "bank_import_registry",
-                format!("{directory}/ changed while its records were read"),
-                "re-run the import against the latest registry",
-            ));
-        }
-        for record in folder.notes() {
-            let full_path = vault.join(&record.relative_path);
-            let bytes = fs::read(&full_path).map_err(|error| {
-                failure(
-                    "bank_import_registry",
-                    format!(
-                        "could not read {}: {error}",
-                        record.relative_path.display()
-                    ),
-                    "repair the restaurant note and retry",
-                )
-            })?;
-            deps.push(ReadDep {
-                path: record.relative_path.to_string_lossy().replace('\\', "/"),
-                preimage: Some(bytes.clone()),
-            });
-            if record.diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == RecordDiagnosticCode::NoteRead
-            }) {
-                return Err(failure(
-                    "bank_import_registry",
-                    format!(
-                        "could not read {} from the restaurant registry",
-                        record.relative_path.display()
-                    ),
-                    "repair the restaurant note and retry",
-                ));
-            }
-            let markdown = std::str::from_utf8(&bytes).map_err(|error| {
-                failure(
-                    "bank_import_registry",
-                    format!(
-                        "{} is not readable UTF-8: {error}",
-                        record.relative_path.display()
-                    ),
-                    "repair the restaurant note and retry",
-                )
-            })?;
-            let current = crate::native::records::staged_record(
-                record.relative_path.clone(),
-                record.stem.clone(),
-                markdown,
-            );
-            if current.title != record.title {
-                return Err(failure(
-                    "bank_import_registry",
-                    format!(
-                        "{} changed while its title was read",
-                        record.relative_path.display()
-                    ),
-                    "re-run the import against the latest registry",
-                ));
-            }
-            if let Some(title) = &record.title {
-                let mut link_path = record.relative_path.clone();
-                link_path.set_extension("");
-                entries.push(RestaurantEntry {
-                    title: title.clone(),
-                    path: link_path.to_string_lossy().replace('\\', "/"),
-                    emoji: record_type.emoji.clone(),
-                });
-            }
-        }
-    }
-    Ok((
-        entries,
-        deps,
-        registry_dependencies,
-        restaurant_directory,
-        dir_entries,
-        root_md_entries,
-    ))
-}
-
-fn directory_names(
-    directory: &Path,
-    extension: Option<&str>,
-) -> Result<Vec<String>, TxnFailure> {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Vec::new())
-        }
-        Err(error) => {
-            return Err(failure(
-                "bank_import_incomplete_read",
-                format!("could not read {}: {error}", directory.display()),
-                "fix the directory permissions and retry",
-            ))
-        }
-    };
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            failure(
-                "bank_import_incomplete_read",
-                format!("could not read {}: {error}", directory.display()),
-                "fix the directory and retry",
-            )
-        })?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if extension.is_none_or(|extension| {
-            Path::new(&name)
-                .extension()
-                .is_some_and(|actual| actual == extension)
-        }) {
-            names.push(name);
-        }
-    }
-    names.sort();
-    Ok(names)
 }
 
 pub(crate) fn source_error_failure(error: SourceError) -> TxnFailure {

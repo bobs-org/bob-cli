@@ -491,6 +491,75 @@ Out of scope: subscriptions, historical `@BANK` migration,
 feeds, budgets, pending transactions, and multi-currency accounting. CSV
 is a fallback profile with no cross-format fuzzy identity inference.
 
+## Subscriptions
+
+A subscriptions album holds one record per discretionary recurring charge
+(for example Tunely `$9.99` monthly, Cloudbox `$19.99` monthly). Records
+never hold charges; `bob bank` attributes charges to records at read time
+and import time from the same shared resolver and ledger. Import never
+creates records, and no backfill rows are written.
+
+The album binds by noun through the records registry
+(`RecordContext::lookup_noun("subscription")`), never by folder stem. A
+renamed album with the same noun works; a hard-coded `subscriptions/`
+path does not. The link text is the album emoji.
+
+Each record carries `status` (`to_cancel`, `to_decide`, `active`,
+`cancelled`), `amount` (posted charge, tax included, exact integer cents),
+`cadence` (`monthly`, `four_weekly`, `quarterly`, `yearly`), `pricing`
+(`fixed`, defaulting to `fixed`, or `variable`), an optional `match`
+list ("Shows up as"), `category` (a `bank.categories` key), `url`,
+`renews`, and `ended`. An explicitly empty field is not absent. Malformed
+required identity, status, amount, cadence, or pricing makes that record
+unusable for matching; invalid optional dates become diagnosed absent
+values and an unknown category cannot supply a suggestion. Invalid needles
+are excluded while the rest of a valid record stays usable. Matchless
+records stay explicitly linkable.
+
+A needle matches as a case-insensitive substring of the raw description at
+import time, the masked journal description at read time, or the payee for
+a typed row without journal evidence. Trim needles, then drop any shorter
+than three characters, any with an ASCII run of four or more digits, or
+any equal after case folding to `PURCHASE`, `RECURRING`, `PAYMENT`,
+`RECURRING PAYMENT`, `AUTHORIZED`, `AUTHORIZED ON`, `CARD`, `POS`, `ACH`,
+`DEBIT`, `GOOGLE`, `APPLE`, `PAYPAL`, `AMAZON`, `SQ`, or `TST`. Deduplicate
+remaining needles case-insensitively within each record. Collect matches
+across all statuses; live beats cancelled, but cancelled-only attribution
+still counts. One record wins only on a strictly longest matched needle;
+an exact tie means no attribution with tied identities preserved. Never
+use amount, file order, or history to break a tie.
+
+Attribution covers every folded journal transaction once, including
+`before_start`, joined to its unique current bank row when present (the
+row supplies links and category, the journal supplies the descriptor).
+ID-less typed rows join only outside that account's merged import windows.
+A unique explicit subscription link wins over every pattern; a malformed
+or unresolved link never creates a phantom. Pattern inference skips zero
+amounts, non-refund inflows, `transfer`/`income`/`cash` rows, and Wells
+Fargo built-in transfers, cash withdrawals, and fees. A refund (an inflow
+with `[cat:: refund]`) attributes and nets against spending but never
+counts as a charge for latest, price, or interval facts.
+
+Ledger facts are pure functions of the registry, attribution, coverage,
+and today: charges oldest first with signed cents, refunds kept separate
+with gross, refund, and net totals, latest charge, next expected (`renews`
+or latest plus one cadence step with month-end clamping), monthly
+equivalent (fixed by cadence with half-up integer math, variable as the
+trailing three-month charge average, cancelled as zero), price change
+(fixed monthly or four-weekly needs the last two charges equal and
+different from `amount`; quarterly or yearly needs the latest different;
+variable never), still-charging (`to_cancel` with latest within 1.5 cadence
+steps of today), after-cancel (cancelled with charges after `ended`), and
+a twelve-bucket timeline (`charged`, `missed` only when merged coverage
+spans the interval, `uncovered`, `upcoming`).
+
+A missing album means every subscription field is `null` or `false`. An
+invalid or unreadable album disables subscription facts for that read and
+adds one bounded `bank_subscription_album_invalid` warning (with a
+`bob albums check` hint); read output carries it once in JSON and once for
+humans, and `bank check` carries it as a warning finding. Warning-only
+checks still exit 0.
+
 ## Commands
 
 `list` (the bare default) shows the waiting queue across every month,
@@ -726,19 +795,32 @@ bounded output. Balance findings are:
 `schema_version: 1`. Amounts are always signed integer `*_cents`, never
 strings or floats. Every report shares the objects below. A row is
 `{path, line, date, account, cents, payee, category, links, note,
-flagged, acknowledged, id, origin, suggestion}`; `origin` is `typed` (no ID),
+flagged, acknowledged, id, origin, suggestion, subscription,
+bank_recurring, subscription_candidate}`; `origin` is `typed` (no ID),
 `matched` (ID with journal `matched` evidence), or `imported` (an ID
 without journal evidence, including every journaled `written` row).
 `suggestion` is `{category, source}` or `null`; `source` is `rule`,
-`learned`, or `bank`. Hidden and undeclared categories are never
-suggested. Each `categories[]` entry is
+`subscription`, `learned`, or `bank`. Hidden and undeclared categories are
+never suggested; a subscription category fills an uncategorized attributed
+row only after `rule` and before `learned`. `subscription` is `null` or
+`{stem, path, title, status, status_label, cadence, pricing, amount_cents,
+source, needle, drift_cents, price_change, state}` with vault-relative
+`.md` paths; `source` is `link` or `match`, `drift_cents` is the fixed
+outflow minus `amount` (`null` for variable or refunds), `price_change` is
+`{from_cents, to_cents, since}` or `null`, and `state` is `after_cancel`,
+`to_cancel`, `usage`, `drift`, or `ok`. `bank_recurring` reads the
+unmasked `RECURRING PAYMENT` marker; `subscription_candidate` is true only
+for an eligible outflow with that marker, no attribution, and no matching
+bank rule. A missing or invalid album forces the whole projection to
+`null`/`false`. Each `categories[]` entry is
 `{key, emoji, label, builtin, hotkey, group, hidden}`; `hotkey` and
 `group` are a string or `null`.
 
 - `list` adds `filter` (`waiting` or `all`), `month`,
   `config_fingerprint` (`sha256:` or `null` when YAML cannot be parsed),
-  `days[] {date, heading, path, line, rows[]}`, and
-  `counts {rows, waiting, flagged}`.
+  `days[] {date, heading, path, line, rows[]}`,
+  `counts {rows, waiting, flagged}`, and `warnings[]`/`findings[]` carrying
+  at most one bounded `bank_subscription_album_invalid` entry.
 - `config show` adds `state` (`valid`, `invalid`, `missing`, or
   `teaching_empty`), `path`, `line`, `fingerprint`, `partial`,
   `config_fingerprint`, effective `categories[]` with `line`, `hotkey_source`,
@@ -770,10 +852,12 @@ suggested. Each `categories[]` entry is
   months[]}` (`waiting` is the oldest waiting row in the period,
   `first` the day heading of the earliest counted-money day, `months`
   the vault-relative month notes holding the period's rows; each target
-  is `null` when absent). With `-c` it also adds `charts`; see
-  [Report charts](#report-charts).
+  is `null` when absent), and `warnings[]`/`findings[]` carrying at most
+  one bounded `bank_subscription_album_invalid` entry. With `-c` it also
+  adds `charts`; see [Report charts](#report-charts).
 - `check` adds `findings[] {code, severity, path, line, message, hint}`;
-  configuration findings also include `key_path`.
+  configuration findings also include `key_path`. An invalid subscription
+  album adds one `bank_subscription_album_invalid` warning finding.
 - `ensure` adds `{path, line, day, created_note, created_heading}`.
 - `ack` prints the envelope `ok`, `dry_run`, `changed`,
   `changes[] {path, diff?}`, `findings`, `commit`, `sync`, and

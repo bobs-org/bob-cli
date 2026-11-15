@@ -174,6 +174,29 @@ pub(crate) fn lint(
     }
     let journal_snapshot = lint_journal(vault, &mut findings);
 
+    {
+        let registry =
+            super::subscriptions::registry::SubscriptionRegistry::load(vault);
+        if registry.availability
+            == super::subscriptions::registry::SubscriptionAvailability::Invalid
+        {
+            let path = registry
+                .album
+                .as_ref()
+                .map(|album| album.path.clone())
+                .unwrap_or_default();
+            findings.push(finding(
+                super::subscriptions::projection::SUBSCRIPTION_ALBUM_INVALID_CODE,
+                Severity::Warning,
+                path,
+                None,
+                "subscription records are unavailable; run `bob albums check`",
+                Some("run `bob albums check` for details".to_owned()),
+                None,
+            ));
+        }
+    }
+
     let (accounts, categories) = match &config {
         Some(config) => {
             let rows = super::model::collect_rows(

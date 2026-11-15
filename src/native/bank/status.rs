@@ -613,6 +613,9 @@ mod tests {
             id: Some(id.to_owned()),
             origin: "imported",
             suggestion: None,
+            subscription: None,
+            bank_recurring: false,
+            subscription_candidate: false,
         }
     }
 
@@ -720,6 +723,9 @@ mod tests {
                 id: Some("aaaaaaaa".to_owned()),
                 origin: "imported",
                 suggestion: None,
+                subscription: None,
+                bank_recurring: false,
+                subscription_candidate: false,
             },
             BankRow {
                 path: "bank/2026-11.md".to_owned(),
@@ -737,6 +743,9 @@ mod tests {
                 id: None,
                 origin: "typed",
                 suggestion: None,
+                subscription: None,
+                bank_recurring: false,
+                subscription_candidate: false,
             },
         ];
         let (_, findings) =

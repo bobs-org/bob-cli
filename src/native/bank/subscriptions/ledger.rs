@@ -531,6 +531,9 @@ mod tests {
             id: id.map(str::to_owned),
             origin: "typed",
             suggestion: None,
+            subscription: None,
+            bank_recurring: false,
+            subscription_candidate: false,
         }
     }
 
