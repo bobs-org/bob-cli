@@ -25,7 +25,7 @@ vault. Add a `gcal:` block to `~/.config/bob/config.yml` (or
 ```yaml
 gcal:
   account: you@example.com
-  root: meet
+  root: meet_inbox
   calendars:
     - id: primary
   timeout_secs: 60
@@ -207,7 +207,7 @@ Without `-y`, logout asks for confirmation on a TTY.
 | `Error 400: redirect_uri_mismatch` | The client is not a Desktop app. Rerun `bob gcal login -c` with Desktop-app JSON. |
 | "This site can't be reached" after Allow | Expected on paste. Copy that `127.0.0.1` page's whole address. |
 | Browser didn't open | Use the printed link, or set `BOB_GCAL_BROWSER`. |
-| Doctor `default root` fails | Create `meet.md` as `type: area`, or set `gcal.root` to an existing area. |
+| Doctor `default root` fails | Create `meet_inbox.md` as `type: area` (Bob's own vault files it under `inbox`), or set `gcal.root` to an existing area. |
 | Doctor `journal` fails | Add `!/.bob/gcal/*.jsonl` to `.gitignore` and `.bob/gcal/*.jsonl merge=union` to `.gitattributes`. |
 | Doctor `writer` fails | Run setup on the pinned host, or set `gcal.writer` to this host's vault-sync slug. |
 

@@ -843,10 +843,10 @@ fn list_reads_a_replaced_section_before_any_held_sync() {
     let env = GcalEnv::new("bob-cli-gcal-list-replaced-live");
     prepare(&env);
     fs::write(
-        env.vault().join("meet.md"),
-        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet\n",
+        env.vault().join("meet_inbox.md"),
+        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet Inbox\n",
     )
-    .expect("write meet area");
+    .expect("write meet inbox area");
     let fake = FakeGog::new(&env, "fake-gog");
     fake.events_json(include_str!("fixtures/gcal/events.json"));
     let first = sync_output(&env, &fake, &[]);

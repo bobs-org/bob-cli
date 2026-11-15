@@ -1317,7 +1317,7 @@ fn doctor_fails_invalid_default_root() {
 #[test]
 fn doctor_fails_missing_journal_rules() {
     let env = GcalEnv::new("bob-cli-gcal-doctor-journal");
-    env.write_meet_area();
+    env.write_meet_inbox_area();
     env.write_today();
     let fake = FakeGog::new(&env, "gog");
     let output = run_gcal(&env, &fake, &["doctor", "-f", "json"]);
@@ -1378,7 +1378,7 @@ fn calendars_table_and_json() {
         .find(|row| row["primary"] == true)
         .expect("primary");
     assert_eq!(primary["synced"], true);
-    assert_eq!(primary["root"], "meet");
+    assert_eq!(primary["root"], "meet_inbox");
     assert_eq!(primary["name"], "Personal");
 }
 
@@ -1731,7 +1731,7 @@ fn doctor_notes_ok_counts_a_live_note() {
     let env = GcalEnv::new("bob-cli-gcal-doctor-notes-ok");
     env.prepare_healthy_vault();
     let fake = FakeGog::new(&env, "gog");
-    append_journal(&env, event_note("live-note", "@meet", ACCOUNT));
+    append_journal(&env, event_note("live-note", "@meet_inbox", ACCOUNT));
     lookup_event(&fake, "live-note", "confirmed", "accepted");
     let notes = notes_from(&env, &fake);
     assert_eq!(notes["status"], "ok", "{notes}");
@@ -1743,7 +1743,7 @@ fn doctor_notes_orphans_not_found_cancelled_declined_and_series() {
     let env = GcalEnv::new("bob-cli-gcal-doctor-notes-orphans");
     env.prepare_healthy_vault();
     let fake = FakeGog::new(&env, "gog");
-    append_journal(&env, event_note("gone-event", "@meet", ACCOUNT));
+    append_journal(&env, event_note("gone-event", "@meet_inbox", ACCOUNT));
     let notes = notes_from(&env, &fake);
     assert_eq!(notes["status"], "warn", "{notes}");
     assert_eq!(notes["summary"], "1 orphaned");
@@ -1752,7 +1752,7 @@ fn doctor_notes_orphans_not_found_cancelled_declined_and_series() {
     let env = GcalEnv::new("bob-cli-gcal-doctor-notes-cancelled");
     env.prepare_healthy_vault();
     let fake = FakeGog::new(&env, "gog");
-    append_journal(&env, event_note("cancelled-event", "@meet", ACCOUNT));
+    append_journal(&env, event_note("cancelled-event", "@meet_inbox", ACCOUNT));
     lookup_event(&fake, "cancelled-event", "cancelled", "accepted");
     let notes = notes_from(&env, &fake);
     assert_eq!(notes["status"], "warn", "{notes}");
@@ -1771,7 +1771,7 @@ fn doctor_notes_orphans_not_found_cancelled_declined_and_series() {
     let env = GcalEnv::new("bob-cli-gcal-doctor-notes-declined");
     env.prepare_healthy_vault();
     let fake = FakeGog::new(&env, "gog");
-    append_journal(&env, event_note("declined-event", "@meet", ACCOUNT));
+    append_journal(&env, event_note("declined-event", "@meet_inbox", ACCOUNT));
     lookup_event(&fake, "declined-event", "confirmed", "declined");
     let notes = notes_from(&env, &fake);
     assert_eq!(notes["status"], "warn", "{notes}");
@@ -1786,7 +1786,7 @@ fn doctor_notes_orphans_not_found_cancelled_declined_and_series() {
     let env = GcalEnv::new("bob-cli-gcal-doctor-notes-series");
     env.prepare_healthy_vault();
     let fake = FakeGog::new(&env, "gog");
-    append_journal(&env, series_note("gone-series", "@meet"));
+    append_journal(&env, series_note("gone-series", "@meet_inbox"));
     let notes = notes_from(&env, &fake);
     assert_eq!(notes["status"], "warn", "{notes}");
     assert_eq!(notes["summary"], "1 orphaned");
@@ -1819,7 +1819,7 @@ fn doctor_notes_unresolved_foreign_malformed_and_cap() {
     let fake = FakeGog::new(&env, "gog");
     append_journal(
         &env,
-        event_note("foreign-note", "@meet", "other@example.com"),
+        event_note("foreign-note", "@meet_inbox", "other@example.com"),
     );
     let notes = notes_from(&env, &fake);
     assert_eq!(notes["status"], "warn", "{notes}");
@@ -1842,7 +1842,7 @@ fn doctor_notes_unresolved_foreign_malformed_and_cap() {
             "account": ACCOUNT,
             "key": {"calendar_id": "primary", "event_id": "broken"},
             "scope": "this-and-following",
-            "text": "@meet",
+            "text": "@meet_inbox",
         }),
     );
     let notes = notes_from(&env, &fake);
@@ -1861,7 +1861,7 @@ fn doctor_notes_unresolved_foreign_malformed_and_cap() {
     let fake = FakeGog::new(&env, "gog");
     for index in 1..=26 {
         let id = format!("cap-{index:02}");
-        append_journal(&env, event_note(&id, "@meet", ACCOUNT));
+        append_journal(&env, event_note(&id, "@meet_inbox", ACCOUNT));
         lookup_event(&fake, &id, "confirmed", "accepted");
     }
     let notes = notes_from(&env, &fake);
@@ -1874,7 +1874,7 @@ fn doctor_notes_lookup_errors_count_as_not_checked() {
     let env = GcalEnv::new("bob-cli-gcal-doctor-notes-lookup-err");
     env.prepare_healthy_vault();
     let fake = FakeGog::new(&env, "gog");
-    append_journal(&env, event_note("flaky-note", "@meet", ACCOUNT));
+    append_journal(&env, event_note("flaky-note", "@meet_inbox", ACCOUNT));
     fake.event_lookup(
         "flaky-note",
         r#"{"_fail": {"stderr": "boom: connection reset", "code": 1}}"#,
@@ -1890,10 +1890,10 @@ fn doctor_notes_combined_remedies_all_survive_and_run() {
     env.prepare_healthy_vault();
     let fake = FakeGog::new(&env, "gog");
     // Orphan (not found), unresolved route, foreign-account, malformed.
-    append_journal(&env, event_note("gone-1", "@meet", ACCOUNT));
+    append_journal(&env, event_note("gone-1", "@meet_inbox", ACCOUNT));
     append_journal(&env, event_note("bad-1", "@no-such-area", ACCOUNT));
     lookup_event(&fake, "bad-1", "confirmed", "accepted");
-    append_journal(&env, event_note("foreign-1", "@meet", "other@example.com"));
+    append_journal(&env, event_note("foreign-1", "@meet_inbox", "other@example.com"));
     append_journal(
         &env,
         json!({
@@ -1904,7 +1904,7 @@ fn doctor_notes_combined_remedies_all_survive_and_run() {
             "account": ACCOUNT,
             "key": {"calendar_id": "primary", "event_id": "broken-1"},
             "scope": "this-and-following",
-            "text": "@meet",
+            "text": "@meet_inbox",
         }),
     );
     let notes = notes_from(&env, &fake);

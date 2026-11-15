@@ -273,8 +273,9 @@ Stats bars order area segments by slot so adjacent colors keep the validated
 palette ordering.
 
 Bryan's current top-level area assignments are `dev: blue`, `gtd: grey`,
-`job: aqua`, `love: yellow`, `cash: magenta`, `body: green`, and `meet: violet`.
-These are vault configuration, not application constants.
+`job: aqua`, `love: yellow`, `cash: magenta`, and `body: green`. These are vault
+configuration, not application constants. The `meet_inbox` sub-area under `inbox`
+sets `violet`, so default-rooted meeting time keeps its hue.
 
 ## R9 — JSON object
 

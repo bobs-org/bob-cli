@@ -100,7 +100,7 @@ gcal:
   account: you@example.com # optional when gog holds exactly one account
   # gog: ~/bin/gog # optional absolute path or wrapper
   writer: kellys-macbook-pro # optional; the one host label allowed to sync
-  root: meet # default [root::]
+  root: meet_inbox # default [root::]
   calendars: # default: [primary]
     - id: primary
     # - id: <calendar id from `bob gcal calendars`>
@@ -1139,7 +1139,7 @@ then a note on the series (`✎ all events @abby`), the series memory of your
 earlier `[root::]` edit on another occurrence of the same recurring event, a
 title-ending `@route` or a description directive line (combinable and
 HTML-safe, so `@love #off -30` on one line routes), `gcal.colors` by event
-colour, the calendar's `root`, then `gcal.root` (default `meet`). A root must resolve relative to
+colour, the calendar's `root`, then `gcal.root` (default `meet_inbox`). A root must resolve relative to
 the daily note, be an area at any depth or a root project, and must not be
 `@unfiled`.
 

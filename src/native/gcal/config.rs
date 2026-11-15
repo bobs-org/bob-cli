@@ -10,7 +10,7 @@ use crate::native::{config as bob_config, env as bob_env};
 
 use super::GcalError;
 
-pub(crate) const DEFAULT_ROOT: &str = "meet";
+pub(crate) const DEFAULT_ROOT: &str = "meet_inbox";
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 60;
 /// Most bullet lines per Event Task, overflow line included.
 pub(crate) const DEFAULT_DESCRIPTION_LINES: u64 = 8;
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn defaults_when_block_is_missing() {
         let config = GcalConfig::from_settings(settings()).expect("defaults");
-        assert_eq!(config.root(), "meet");
+        assert_eq!(config.root(), "meet_inbox");
         assert_eq!(config.calendars().len(), 1);
         assert_eq!(config.calendars()[0].id, "primary");
         assert_eq!(config.timeout(), Duration::from_secs(60));

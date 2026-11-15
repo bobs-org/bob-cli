@@ -22,7 +22,7 @@
       "hue": "violet",
       "kind": "default",
       "source": "default",
-      "value": "meet"
+      "value": "meet_inbox"
     }
   },
   "event": {
@@ -72,8 +72,8 @@
       "start": "11:48"
     },
     "path": "2026/20261121.md",
-    "rail": "● meet 11:48 ╱╱12:00 ━━━━━━━━━━━━13:00 ╱╱╱╱13:18",
-    "row": "- [*] #task **1200-1300** Solo Lunch [📅](https://calendar.google.com/event?eid=solo-reasons) [buffer:: -12m +18m] [root:: meet] [type:: MEET] #unacked ^solo-lunch"
+    "rail": "● meet_inbox 11:48 ╱╱12:00 ━━━━━━━━13:00 ╱╱13:18",
+    "row": "- [*] #task **1200-1300** Solo Lunch [📅](https://calendar.google.com/event?eid=solo-reasons) [buffer:: -12m +18m] [root:: meet_inbox] [type:: MEET] #unacked ^solo-lunch"
   },
   "schema_version": 1,
   "scope": "event",

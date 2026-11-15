@@ -230,13 +230,18 @@ impl GcalEnv {
         command
     }
 
-    /// Write `meet.md` as an area so doctor can validate the default root.
-    pub(crate) fn write_meet_area(&self) {
+    /// Write `meet_inbox.md` as an area so doctor can validate the default root.
+    pub(crate) fn write_meet_inbox_area(&self) {
+        fs::write(
+            self.vault.join("meet_inbox.md"),
+            "---\ntype: area\ncolor: violet\n---\n# Meet Inbox\n",
+        )
+        .expect("write meet_inbox.md");
         fs::write(
             self.vault.join("meet.md"),
-            "---\ntype: area\ncolor: violet\n---\n# Meet\n",
+            "---\ntype: \"[[notebook]]\"\nparent: \"[[meet_inbox]]\"\n---\n# Meetings\n",
         )
-        .expect("write meet.md");
+        .expect("write meet.md notebook");
     }
 
     /// Write today's daily note with a Pomodoros heading.
@@ -265,7 +270,7 @@ impl GcalEnv {
     }
 
     pub(crate) fn prepare_healthy_vault(&self) {
-        self.write_meet_area();
+        self.write_meet_inbox_area();
         self.write_today();
         self.write_journal_rules();
     }

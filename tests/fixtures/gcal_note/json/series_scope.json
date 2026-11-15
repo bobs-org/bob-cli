@@ -22,7 +22,7 @@
       "hue": "violet",
       "kind": "default",
       "source": "default",
-      "value": "meet"
+      "value": "meet_inbox"
     }
   },
   "event": {
@@ -69,8 +69,8 @@
       "start": "09:15"
     },
     "path": "2026/20261113.md",
-    "rail": "● meet 09:15 09:15 ━━━━━━━━━━━━━━━━━━10:00 10:00",
-    "row": "- [*] #task **0915-1000** Little Gym [📅](https://calendar.google.com/event?eid=gym-1) [root:: meet] [type:: MEET] #unacked ^little-gym"
+    "rail": "● meet_inbox 09:15 09:15 ━━━━━━━━━━━━10:00 10:00",
+    "row": "- [*] #task **0915-1000** Little Gym [📅](https://calendar.google.com/event?eid=gym-1) [root:: meet_inbox] [type:: MEET] #unacked ^little-gym"
   },
   "schema_version": 1,
   "scope": "series",

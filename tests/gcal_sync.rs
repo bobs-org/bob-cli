@@ -9,10 +9,10 @@ use std::fs;
 fn prepare(env: &GcalEnv) {
     env.prepare_healthy_vault();
     fs::write(
-        env.vault().join("meet.md"),
-        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet\n",
+        env.vault().join("meet_inbox.md"),
+        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet Inbox\n",
     )
-    .expect("write meet area");
+    .expect("write meet inbox area");
     for area in ["body", "job", "health"] {
         fs::write(
             env.vault().join(format!("{area}.md")),
@@ -23,6 +23,30 @@ fn prepare(env: &GcalEnv) {
     env.write_config(
         "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  colors:\n    tomato: job\n",
     );
+}
+
+fn prepare_nested_meet_inbox_vault(env: &GcalEnv) {
+    prepare(env);
+    fs::write(
+        env.vault().join("gtd.md"),
+        "---\ntype: area\ntask_type: PLAN\ncolor: grey\n---\n# GTD\n",
+    )
+    .expect("write gtd area");
+    fs::write(
+        env.vault().join("inbox.md"),
+        "---\ntype: area\nparent: \"[[gtd]]\"\n---\n# Inbox\n",
+    )
+    .expect("write inbox area");
+    fs::write(
+        env.vault().join("meet_inbox.md"),
+        "---\ntype: area\nparent: \"[[inbox]]\"\ncolor: violet\ntask_type: MEET\n---\n# Meet Inbox\n",
+    )
+    .expect("write meet inbox area");
+    fs::write(
+        env.vault().join("meet.md"),
+        "---\ntype: \"[[notebook]]\"\nparent: \"[[meet_inbox]]\"\n---\n# Meetings\n",
+    )
+    .expect("write Meetings notebook");
 }
 
 fn sync_output(
@@ -168,7 +192,7 @@ fn first_sync_creates_events_meet_and_links() {
         .iter()
         .find(|row| row.contains("Flight from Gmail"))
         .expect("gmail row");
-    assert!(gmail.contains("[root:: meet]"), "{gmail}");
+    assert!(gmail.contains("[root:: meet_inbox]"), "{gmail}");
     assert!(!gmail.contains("[type::"), "{gmail}");
 
     // Closed MEET for the ended interview, then one placeholder for the rest.
@@ -219,6 +243,34 @@ fn first_sync_creates_events_meet_and_links() {
     assert!(out.contains("closed 08:00–08:30 — MEET"), "{out}");
     assert!(out.contains("created () — MEET"), "{out}");
     assert!(out.contains("Pomodoros +2 entries, +5 links"), "{out}");
+}
+
+#[test]
+fn default_root_uses_nested_meet_inbox_and_inherits_meet() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-nested-meet-inbox");
+    prepare_nested_meet_inbox_vault(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &json!({
+            "events": [simple_event(
+                "default-meeting",
+                "Default meeting",
+                "2026-10-30T08:00:00-04:00",
+                "2026-10-30T09:00:00-04:00",
+            )]
+        })
+        .to_string(),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("Default meeting"))
+        .expect("default-rooted event row");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
+    assert!(!row.contains("[type:: MEET]"), "{row}");
 }
 
 #[test]
@@ -1207,7 +1259,7 @@ fn past_completed_row_stays_syncable_and_reconcile_stable() {
         first_row.contains("  [completion:: 2026-10-30] ^rootless-past"),
         "{first_row}"
     );
-    assert!(first_row.contains("[root:: meet]"), "{first_row}");
+    assert!(first_row.contains("[root:: meet_inbox]"), "{first_row}");
     let closed_link = "\t- 🍅 ~~[[#^rootless-past]]~~";
     assert!(first_note.contains(closed_link), "{first_note}");
 
@@ -2979,7 +3031,7 @@ fn buffered_spans_drive_meet_phases_and_clusters() {
     let lunch = event_row(&note, "**1200-1300**");
     assert!(lunch.starts_with("- [*] #task"), "{lunch}");
     assert!(
-        lunch.contains(" #off [buffer:: -30m +15m] [root:: meet]"),
+        lunch.contains(" #off [buffer:: -30m +15m] [root:: meet_inbox]"),
         "{lunch}"
     );
 
@@ -4060,8 +4112,8 @@ fn edited_root_keeps_tag_without_blaming_badges() {
     // job. The conflict keeps Bryan's root and still keeps the tag.
     let note = today_note(&env);
     let ext = row_for(&note, "External review");
-    assert!(ext.contains("[root:: meet]"), "{ext}");
-    let edited_line = ext.replacen("[root:: meet]", "[root:: love]", 1);
+    assert!(ext.contains("[root:: meet_inbox]"), "{ext}");
+    let edited_line = ext.replacen("[root:: meet_inbox]", "[root:: love]", 1);
     assert_ne!(edited_line, ext);
     let edited = note.replacen(ext, &edited_line, 1);
     write_today(&env, &edited);

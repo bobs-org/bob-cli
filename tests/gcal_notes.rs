@@ -14,10 +14,10 @@ use std::{
 fn prepare(env: &GcalEnv) {
     env.prepare_healthy_vault();
     fs::write(
-        env.vault().join("meet.md"),
-        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet\n",
+        env.vault().join("meet_inbox.md"),
+        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet Inbox\n",
     )
-    .expect("write meet area");
+    .expect("write meet inbox area");
     for area in ["body", "job", "health", "family"] {
         fs::write(
             env.vault().join(format!("{area}.md")),
@@ -899,7 +899,7 @@ fn two_accounts_on_one_key_keep_separate_notes() {
     );
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
     let cleared = event_row(&today_note(&env), "^deerwood");
-    assert!(cleared.contains("[root:: meet]"), "{cleared}");
+    assert!(cleared.contains("[root:: meet_inbox]"), "{cleared}");
     assert!(!cleared.contains("[buffer::"), "{cleared}");
     let journal = fs::read_to_string(env.vault().join(".bob/gcal/mac.jsonl"))
         .expect("foreign journal");
@@ -931,7 +931,7 @@ fn foreign_account_note_is_ignored() {
     );
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
     let row = event_row(&today_note(&env), "^deerwood");
-    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
     assert!(!row.contains("[buffer::"), "{row}");
     let listed = list_json(&env, &fake, &[]);
     let list_report = json_report(&listed);
@@ -1132,7 +1132,7 @@ fn hold_on_truncated_note_line_and_clear_restores() {
     let cleared = sync_output(&env, &fake, &[]);
     assert_eq!(cleared.status.code(), Some(0), "{}", stderr(&cleared));
     let row = event_row(&today_note(&env), "^deerwood");
-    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
     assert!(!row.contains("[buffer::"), "{row}");
 }
 
@@ -1248,7 +1248,7 @@ fn no_hold_when_nothing_is_malformed() {
         "{warnings:?}"
     );
     let row = event_row(&today_note(&env), "^deerwood");
-    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
     assert!(!row.contains("[buffer::"), "{row}");
 }
 

@@ -10,10 +10,10 @@ use std::fs;
 fn prepare(env: &GcalEnv) {
     env.prepare_healthy_vault();
     fs::write(
-        env.vault().join("meet.md"),
-        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet\n",
+        env.vault().join("meet_inbox.md"),
+        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet Inbox\n",
     )
-    .expect("write meet area");
+    .expect("write meet inbox area");
     for area in ["body", "job", "health"] {
         fs::write(
             env.vault().join(format!("{area}.md")),
@@ -130,7 +130,7 @@ fn deprecated_aliases_warn_once_per_occurrence() {
         clock_event(
             "both",
             "Both #untracked",
-            Some("@meet #untracked"),
+            Some("@meet_inbox #untracked"),
             "2026-10-30T09:00:00-04:00",
             "2026-10-30T09:15:00-04:00",
         ),

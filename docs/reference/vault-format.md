@@ -345,7 +345,7 @@ retargets the walk. Other note kinds are traversed but do not declare a clock
 default. Inherited tags are never written onto task lines. Obsidian shows an `off` chip after ledger Task Links whose task resolves off-clock, tagged or inherited ([Off-clock link chips](../off-clock-link-chips.md)).
 
 Inbox files are area notes whose `parent` resolves to `inbox.md`
-(`mac_inbox.md`, `gkeep_inbox.md` today), plus `inbox.md` itself.
+(`mac_inbox.md`, `gkeep_inbox.md`, `gmail_inbox.md`, and `meet_inbox.md` today), plus `inbox.md` itself.
 
 Contract: [Area Note](glossary.md#area-note), [Inbox File](glossary.md#inbox-file).
 

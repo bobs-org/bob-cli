@@ -389,7 +389,7 @@ pub(crate) fn validate_root_with<S: HomeSource>(
                 "{trimmed:?} is not a valid root name (blank, or contains \
                  [ ] | # ^)"
             ),
-            fix: "write the bare note name, for example meet".to_string(),
+            fix: "write the bare note name, for example meet_inbox".to_string(),
         });
     }
 
@@ -494,6 +494,43 @@ mod tests {
             target.home.kind,
             crate::native::pomodoro_homes::HomeKind::Area
         );
+    }
+
+    #[test]
+    fn nested_meet_inbox_is_a_root_and_meet_notebook_is_not() {
+        let dir = tempfile::tempdir().expect("temp");
+        write_note(
+            dir.path(),
+            "gtd.md",
+            "---\ntype: area\ntask_type: PLAN\ncolor: grey\n---\n# GTD\n",
+        );
+        write_note(
+            dir.path(),
+            "inbox.md",
+            "---\ntype: area\nparent: \"[[gtd]]\"\n---\n# Inbox\n",
+        );
+        write_note(
+            dir.path(),
+            "meet_inbox.md",
+            "---\ntype: area\nparent: \"[[inbox]]\"\ncolor: violet\ntask_type: MEET\n---\n# Meet Inbox\n",
+        );
+        write_note(
+            dir.path(),
+            "meet.md",
+            "---\ntype: \"[[notebook]]\"\nparent: \"[[meet_inbox]]\"\n---\n# Meetings\n",
+        );
+        write_note(dir.path(), "2026/20261030.md", "# day\n");
+        let daily = Path::new("2026/20261030.md");
+
+        let target = validate_root_candidate(dir.path(), daily, "meet_inbox")
+            .expect("nested inbox area is a root");
+        assert_eq!(target.home.root_parent, "meet_inbox.md");
+        assert_eq!(target.home.hue, Some(Hue::Violet));
+
+        let notebook = validate_root_candidate(dir.path(), daily, "meet")
+            .expect_err("notebook resolves to its owning root");
+        assert_eq!(notebook.reason, "root_field_not_root");
+        assert!(notebook.message.contains("meet_inbox.md"));
     }
 
     fn config(

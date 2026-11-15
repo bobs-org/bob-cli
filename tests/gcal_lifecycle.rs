@@ -10,10 +10,10 @@ use std::fs;
 fn prepare(env: &GcalEnv) {
     env.prepare_healthy_vault();
     fs::write(
-        env.vault().join("meet.md"),
-        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet\n",
+        env.vault().join("meet_inbox.md"),
+        "---\ntype: area\ncolor: violet\ntask_type: MEET\n---\n# Meet Inbox\n",
     )
-    .expect("write meet area");
+    .expect("write meet inbox area");
     for area in ["body", "job", "health"] {
         fs::write(
             env.vault().join(format!("{area}.md")),
@@ -623,7 +623,7 @@ fn maybe_yes_upgrades_the_context_row_and_links() {
         row.starts_with("- [*] #task **2000-2100** Evening class"),
         "{row}"
     );
-    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
     assert!(!row.contains("maybe"), "{row}");
     assert!(note.contains("[[#^evening-class]]"), "{note}");
 
@@ -693,10 +693,11 @@ fn series_edit_teaches_and_reteaches_the_root() {
         .find(|line| line.contains("^weekly-1-1"))
         .unwrap_or_else(|| panic!("no standup row:\n{first}"))
         .to_string();
-    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
 
     // Bryan reroutes one occurrence; the series learns it.
-    let edited = today_note(&env).replace("[root:: meet]", "[root:: job]");
+    let edited =
+        today_note(&env).replace("[root:: meet_inbox]", "[root:: job]");
     write_today(&env, &edited);
     let output = sync_output(&env, &fake, &[]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -733,7 +734,7 @@ fn series_edit_teaches_and_reteaches_the_root() {
     assert!(new_row.contains("[type:: MEET]"), "{new_row}");
 
     // Changing it back re-teaches the series.
-    let edited = note.replace("[root:: job]", "[root:: meet]");
+    let edited = note.replace("[root:: job]", "[root:: meet_inbox]");
     write_today(&env, &edited);
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
     let journal = journal_lines(&env);
@@ -743,7 +744,7 @@ fn series_edit_teaches_and_reteaches_the_root() {
         .last()
         .cloned()
         .expect("series root re-taught");
-    assert_eq!(relearned["root"], "meet");
+    assert_eq!(relearned["root"], "meet_inbox");
 }
 
 #[test]
@@ -759,7 +760,7 @@ fn unedited_root_reroutes_when_google_adds_a_token() {
         .find(|line| line.contains("Weekly 1:1"))
         .unwrap_or_else(|| panic!("no standup row:\n{first}"))
         .to_string();
-    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(row.contains("[root:: meet_inbox]"), "{row}");
 
     let mut event = standup_event("standup-1");
     event["summary"] = "Weekly 1:1 @body".into();
@@ -799,7 +800,7 @@ fn unedited_root_reroutes_when_google_colour_changes() {
     let fake = FakeGog::new(&env, "fake-gog");
     fake.events_json(&events_envelope(vec![standup_event("standup-1")]));
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
-    assert!(today_note(&env).contains("[root:: meet]"));
+    assert!(today_note(&env).contains("[root:: meet_inbox]"));
 
     let mut event = standup_event("standup-1");
     event["colorId"] = "11".into();
@@ -883,7 +884,7 @@ fn dry_run_diff_shows_the_root_change() {
     let output = sync_output(&env, &fake, &["-d"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let diff = stdout(&output);
-    assert!(diff.contains("[root:: meet]"), "{diff}");
+    assert!(diff.contains("[root:: meet_inbox]"), "{diff}");
     assert!(diff.contains("[root:: body]"), "{diff}");
     assert_eq!(today_note(&env), before, "dry-run must not write");
 }
@@ -1192,7 +1193,7 @@ fn preexisting_off_clock_title_migrates_both_spans_in_place() {
     );
     let old_row = format!(
         "- [/] #task **1200-1300** Lunch #untracked{old_badges} \
-         [root:: meet] ^lunch"
+         [root:: meet_inbox] ^lunch"
     );
     let note = format!(
         "# Friday 2026-10-30\n\n## Events\n\n\
@@ -1255,7 +1256,7 @@ fn preexisting_off_clock_title_migrates_both_spans_in_place() {
     assert!(!row.contains("Lunch #untracked"), "{row}");
     assert!(
         row.contains(&format!(
-            " [📅]({html}) #off [buffer:: -30m] [root:: meet]"
+            " [📅]({html}) #off [buffer:: -30m] [root:: meet_inbox]"
         )),
         "legacy badge alias and buffer migrate in place: {row}"
     );
@@ -1394,13 +1395,13 @@ fn preexisting_titled_badges_migrate_in_place() {
         format!(" [📅]({done_html}) [📹]({done_join}) [📍]({done_maps})");
 
     let migrate_row = format!(
-        "- [*] #task **1830-1900** Migrate{migrate_legacy} [root:: meet] ^migrate"
+        "- [*] #task **1830-1900** Migrate{migrate_legacy} [root:: meet_inbox] ^migrate"
     );
     let hand_row = format!(
-        "- [*] #task **1900-1930** Hand{hand_edited} [root:: meet] ^hand"
+        "- [*] #task **1900-1930** Hand{hand_edited} [root:: meet_inbox] ^hand"
     );
     let done_row = format!(
-        "- [x] #task **2000-2030** Done{done_legacy} [root:: meet] ^done"
+        "- [x] #task **2000-2030** Done{done_legacy} [root:: meet_inbox] ^done"
     );
     let note = format!(
         "# Friday 2026-10-30\n\n## Events\n\n\
@@ -1541,7 +1542,7 @@ fn preexisting_titled_badges_migrate_in_place() {
         migrated.starts_with("- [*] #task **1830-1900** Migrate "),
         "{migrated}"
     );
-    assert!(migrated.contains("[root:: meet]"), "{migrated}");
+    assert!(migrated.contains("[root:: meet_inbox]"), "{migrated}");
 
     let done = note
         .lines()
@@ -1741,7 +1742,10 @@ fn maybe_upgrade_gains_buffer_field() {
         row.starts_with("- [*] #task **2000-2100** Evening class"),
         "{row}"
     );
-    assert!(row.contains(" [buffer:: -15m] [root:: meet]"), "{row}");
+    assert!(
+        row.contains(" [buffer:: -15m] [root:: meet_inbox]"),
+        "{row}"
+    );
     // The upgrade also writes the description bullet for "Stretch"
     // (`-15` is a directive); the rerun below proves it is stable.
     assert!(note.contains("\t- Stretch"), "{note}");
