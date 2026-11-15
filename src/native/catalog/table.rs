@@ -783,6 +783,28 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         fixed: JSON,
+        ..reads(
+            "areas-list",
+            &["areas", "list"],
+            "Area tree",
+            &["areas", "list", "tree", "catalog", "hosts"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
+        ..reads(
+            "areas-check",
+            &["areas", "check"],
+            "Check areas",
+            &["areas", "check", "lint", "contract", "catalog"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
         slots: &[("ROOT", "notebook-root"), ("root", "notebook-root")],
         ..reads(
             "notebooks-list",

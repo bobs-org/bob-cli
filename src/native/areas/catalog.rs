@@ -1,8 +1,4 @@
 //! Pure per-host planner for generated nested area catalogs.
-//!
-//! Shared by the follow-on areas-report/areas-sync phases; remove this
-//! allow as the report and sync wiring lands.
-#![allow(dead_code)]
 
 use std::{
     collections::BTreeMap,
@@ -70,6 +66,7 @@ pub(crate) struct HostPlan {
     pub(crate) state: CatalogState,
     pub(crate) rows: Vec<RowRecord>,
     pub(crate) issues: Vec<AreaIssue>,
+    #[allow(dead_code)] // consumed by the areas-sync writer
     pub(crate) edit: Option<FileEdit>,
 }
 
@@ -79,6 +76,7 @@ pub(crate) struct CatalogPlan {
 }
 
 impl CatalogPlan {
+    #[allow(dead_code)] // consumed by the areas-sync writer
     pub(crate) fn edits(&self) -> Vec<&FileEdit> {
         self.hosts
             .iter()
@@ -86,6 +84,7 @@ impl CatalogPlan {
             .collect()
     }
 
+    #[allow(dead_code)] // consumed by graph/planner tests and areas-sync
     pub(crate) fn host(&self, path: &Path) -> Option<&HostPlan> {
         self.hosts.iter().find(|host| host.path.as_path() == path)
     }

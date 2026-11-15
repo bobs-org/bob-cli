@@ -1,8 +1,4 @@
 //! Validated area-parent graph, computed only from a vault snapshot.
-//!
-//! Shared by the follow-on areas-report/areas-sync phases; remove this
-//! allow as the report and sync wiring lands.
-#![allow(dead_code)]
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},

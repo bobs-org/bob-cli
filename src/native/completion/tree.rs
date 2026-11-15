@@ -37,6 +37,10 @@ impl NativeCommand {
             NativeCommand::AlbumsUpdate => {
                 crate::native::albums::build_cli_update()
             }
+            NativeCommand::AreasCheck => {
+                crate::native::areas::build_cli_check()
+            }
+            NativeCommand::AreasList => crate::native::areas::build_cli_list(),
             NativeCommand::AttachmentsImport => {
                 crate::native::attachments::cli::build_cli_import()
             }

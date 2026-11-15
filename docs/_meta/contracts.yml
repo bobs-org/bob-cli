@@ -171,10 +171,13 @@ groups:
       - stem: records
         summary: "Albums and record notes: list/check, album create/sync/update, owner catalogs, schemas, record capture/update, and guarded writes"
         order: 48
+      - stem: areas
+        summary: "`bob areas` list and check, nested `## Areas` catalogs, JSON, and findings"
+        order: 49
       - stem: notebooks
         summary: "`bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals"
-        order: 49
+        order: 50
       - stem: bank
         summary: "Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON"
-        order: 50
+        order: 51
         reader: guides/acknowledge-bank-transactions.md

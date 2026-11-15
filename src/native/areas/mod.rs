@@ -1,20 +1,25 @@
-//! Pure analysis and planning for nested `## Areas` catalogs.
-//!
-//! Shared by the follow-on areas-report/areas-sync phases; remove these
-//! allows as the report and sync wiring lands.
-#![allow(dead_code)]
+//! Nested `## Areas` catalogs: graph, planner, and the read-only report.
 
-#[allow(dead_code)]
 pub(crate) mod catalog;
-#[allow(dead_code)]
+pub(crate) mod cli;
 pub(crate) mod graph;
+pub(crate) mod output;
+pub(crate) mod report;
 
 #[cfg(test)]
 mod tests;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Value};
 
 use crate::native::notebooks::model::Severity;
+
+pub(crate) use cli::{build_cli_check, build_cli_list};
+
+pub(crate) fn slash(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RootState {
@@ -77,6 +82,16 @@ impl AreaIssue {
             line,
             message: message.into(),
         }
+    }
+
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "path": slash(&self.path),
+            "code": self.code,
+            "severity": self.severity.as_str(),
+            "line": self.line,
+            "message": self.message,
+        })
     }
 }
 

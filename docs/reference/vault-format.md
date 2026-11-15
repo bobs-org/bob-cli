@@ -268,6 +268,19 @@ parent: "[[area]]"
 ---
 ```
 
+Optional `summary:` is one plain line describing the area's scope, not its
+contents. A missing summary is never a finding; `area_summary_long` and
+`area_summary_multiline` warn when a summary exceeds 140 characters or spans
+lines.
+
+The untyped root note that `[[area]]` resolves to (today `area.md`) is a
+terminal sentinel: its own `parent:` is never followed and it is never a
+catalog row. When it has at least one top-level area, it hosts a generated
+`## Areas` catalog covering the whole forest. Every area note with a valid
+child area also hosts a nested catalog of its descendant forest. Bob owns
+the `> [!areas]` callout; the heading and every other byte belong to the
+note. Contract: [Areas](../areas.md).
+
 Optional `ready_cap: N` or `ready_cap: off` overrides
 `plan.max_ready_per_note` (default 5) for that note's whole Ready lane.
 Optional `task_refresh: N` overrides the Ready freshness interval for tasks

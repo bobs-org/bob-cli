@@ -447,7 +447,7 @@ mod tests {
     fn run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
         let spec = RunSpec {
             program: PathBuf::from("sh"),
-            args: ["-c", "setsid sleep 8 & echo $!; exit 0"]
+            args: ["-c", "setsid sleep 8 & echo $!; sleep 0.1; exit 0"]
                 .into_iter()
                 .map(OsString::from)
                 .collect(),
@@ -472,7 +472,7 @@ mod tests {
     fn raw_run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
         let spec = RawRunSpec {
             program: PathBuf::from("sh"),
-            args: ["-c", "setsid sleep 8 & echo $!; exit 0"]
+            args: ["-c", "setsid sleep 8 & echo $!; sleep 0.1; exit 0"]
                 .into_iter()
                 .map(OsString::from)
                 .collect(),

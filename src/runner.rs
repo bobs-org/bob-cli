@@ -476,6 +476,37 @@ Examples:
 See docs/records.md for the album contract.
 Run 'bob albums <command> --help' for more information on a command.";
 
+const AREAS_MEMBERS: &[Member] = &[
+    Member {
+        name: "check",
+        about: "Check areas against the contract",
+        leaf: Leaf {
+            native_command: NativeCommand::AreasCheck,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List the area tree (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::AreasList,
+            script_command: None,
+        },
+    },
+];
+
+const AREAS_AFTER_HELP: &str = "\
+Bare `bob areas` runs the read-only list.
+
+Examples:
+  bob areas                       List the colored area tree
+  bob areas list -f json          Area tree as JSON
+  bob areas check                 Lint areas against the contract
+  bob areas check -f json         Findings as JSON
+
+See docs/areas.md for the area catalog contract.
+Run 'bob areas <command> --help' for more information on a command.";
+
 const RECORDS_MEMBERS: &[Member] = &[
     Member {
         name: "check",
@@ -1021,6 +1052,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
             ),
             after_help: ALBUMS_AFTER_HELP,
             usage: "bob albums [COMMAND]",
+        }),
+    },
+    Subcommand {
+        name: "areas",
+        about: "Inspect area notes",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: AREAS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob areas` runs the read-only list. `list` shows the colored area tree with hues, titles, summaries, and project/Today chips. `check` lints areas against the contract and reports catalog state.",
+            ),
+            after_help: AREAS_AFTER_HELP,
+            usage: "bob areas [COMMAND]",
         }),
     },
     Subcommand {
@@ -2570,6 +2615,8 @@ mod tests {
             NativeCommand::AlbumsList,
             NativeCommand::AlbumsSync,
             NativeCommand::AlbumsUpdate,
+            NativeCommand::AreasCheck,
+            NativeCommand::AreasList,
             NativeCommand::AttachmentsImport,
             NativeCommand::AttachmentsOrigin,
             NativeCommand::BankAck,

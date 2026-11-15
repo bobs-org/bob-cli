@@ -57,6 +57,8 @@ Root-level area notes are `@route` capture targets, and every area note gets the
 per-note Ready cap and `## Tasks` status grouping. `offclock: true|false` sets the clock default for tasks on the root walk beneath it; `offclock_types` sets the clock off only for tasks whose effective type is listed. When both keys are present, `offclock_types` decides (see [Off-Clock Note Defaults Filter By Task Type](../develop/decisions.md#off-clock-note-defaults-filter-by-task-type) and [Off-Clock Follows Tag Then Note Default](../develop/decisions.md#off-clock-follows-tag-then-note-default)).
 Each area or project also lists its descendant albums in a machine-owned `## Albums`
 catalog maintained by `bob albums sync`, beside the `## Notebooks` catalog.
+The root area note and every area with sub-areas also list their descendant areas in a
+machine-owned, nested `## Areas` catalog maintained by `bob areas sync`.
 
 ### Bank Badge {#bank-badge}
 

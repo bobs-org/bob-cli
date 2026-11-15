@@ -18,6 +18,7 @@ decision pages that stay in lockstep with the tools.
   diagnostics, and protocol.
 - [Capture syntax](capture-syntax.md) for every `bob capture` token.
 - [Vault format](vault-format.md) for task lines, lanes, fields, and notes.
+- [Areas](../areas.md) for the area tree, nested catalogs, and `bob areas` list/check.
 - [Notebooks](../notebooks.md) for task-free notes, capture, and catalogs.
 - [Albums and record notes](../records.md) for album schemas, collections, and field validation.
 - [Task archives](../task-archive.md) for retention, link repair, and restore.

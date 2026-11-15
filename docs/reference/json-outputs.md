@@ -12,11 +12,10 @@ stdout `schema_version` counts.
 
 ## Framing
 
-JSON goes to stdout, warnings and chatter to stderr; usage errors exit 2.
+JSON goes to stdout, chatter to stderr; usage errors exit 2.
 
-Versioned helpers return payloads with `ok: true` (often including
-`schema_version`); capture-helper errors may instead return
-`{"ok":false,"error":"…"}` without a version.
+Versioned helpers include `ok: true` and often `schema_version`; some
+capture-helper errors return `{"ok":false,"error":"…"}` unversioned.
 
 `…` marks omissions.
 
@@ -165,8 +164,12 @@ sets `one_off: true`.
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
 | `bob albums update` | `-f json` | `stem`, fingerprints, `inverse_ops` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
 
-`catalogs[]`: `host`, `path`, `root`, `state`, `albums`, `issues`; see
-[album contract](../records.md#albums).
+### Area reports {#area-reports}
+
+| Command | Flag | Shape | Version | Contract |
+| --- | --- | --- | --- | --- |
+| `bob areas list` | `-f json` | Area tree, catalogs, findings, counts | `schema_version: 1` | [Areas](../areas.md#json) |
+| `bob areas check` | `-f json` | Same report as list | `schema_version: 1` | [Areas](../areas.md#json) |
 
 ### Notebook reports {#notebook-reports}
 
@@ -183,13 +186,9 @@ sets `one_off: true`.
 | `bob projects list` | `-f json` | Projects, catalogs, findings, and counts | `schema_version: 1` | [Projects](../projects.md#json-report) |
 | `bob projects sync` | `-f json` | Lifecycle and catalog events, changes, findings, commit, sync, and warnings; dry runs include diffs | `schema_version: 1` | [Projects](../projects.md#commands) |
 
-Project creation through capture includes `project_note.parent_catalog` when
-the parent's catalog needs an edit. `path` is the parent's vault-relative
-Markdown path; `action` is `"written"` for a missing catalog or `"updated"`
-for an existing catalog. An unchanged catalog omits the field.
-These values also appear in dry runs: `dry_run: true` means the
-edit is only planned, even when `action` says `"written"`.
-See [capture JSON](../capture.md#input-stdin-and-json-output).
+Capture may include `project_note.parent_catalog` (`path`, `action`) when the
+parent catalog changes; dry runs set `dry_run: true`. See
+[capture JSON](../capture.md#input-stdin-and-json-output).
 
 ### Bank reports {#bank-reports}
 

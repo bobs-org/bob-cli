@@ -63,6 +63,9 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob albums list`](albums.md#bob-albums-list) | List albums grouped by root (default) |
 | [`bob albums sync`](albums.md#bob-albums-sync) | Repair generated records indexes and album catalogs |
 | [`bob albums update`](albums.md#bob-albums-update) | Update an album record schema through a guarded JSON envelope |
+| [`bob areas`](areas.md) | Inspect area notes |
+| [`bob areas check`](areas.md#bob-areas-check) | Check areas against the contract |
+| [`bob areas list`](areas.md#bob-areas-list) | List the area tree (default) |
 | [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |
 | [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
 | [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image and file paths into the vault |
@@ -165,6 +168,7 @@ Tasks and projects:
 
 Vault:
   albums       Inspect album notes
+  areas        Inspect area notes
   articles     Format and inspect article notes with bob-owned section numbers
   attachments  Copy files into the vault and show where copies came from
   nightly      Run nightly maintenance: vault-sync, task archive, articles,
