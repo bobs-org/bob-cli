@@ -617,6 +617,150 @@ fn mapping_categories_report_hotkeys_and_hidden_stays_valid() {
 }
 
 #[test]
+fn config_show_reports_effective_setup_usage_and_fingerprint() {
+    let vault = syncable(HUB);
+    fs::create_dir_all(vault.path.join("bank")).expect("bank folder");
+    write_file(
+        &vault.path.join("bank/2026-11.md"),
+        "---\nmonth: 2026-11\n---\n\n# November 2026\n\n## Thu Nov 12\n\n- [ ] $10.00 Groceries [cat:: groceries]\n- [ ] $1.00 Pocket cash [acct:: cash] [cat:: dining]\n",
+    );
+
+    let shown = run(&vault, &["config", "show", "-f", "json"]);
+    assert_success(&shown);
+    let payload = json(&shown);
+    assert_eq!(payload["status"], "valid");
+    assert_eq!(payload["teaching_empty"], false);
+    assert!(payload["config_fingerprint"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    assert!(payload["categories"].as_array().unwrap().len() >= 6);
+    assert_eq!(payload["categories"][0]["usage"]["rows"], 1);
+    assert_eq!(payload["categories"][1]["usage"]["rows"], 1);
+    assert_eq!(payload["accounts"][0]["usage"]["default_rows"], 1);
+    assert_eq!(payload["accounts"][1]["usage"]["explicit_rows"], 1);
+    assert_eq!(payload["rules"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["stale_after"]["days"], 10);
+    assert_eq!(payload["stale_after"]["explicit"], false);
+    assert!(payload["free_hotkeys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|key| key != "q"));
+
+    let listed = json(&run(&vault, &["list", "-f", "json"]));
+    let reported = json(&run(&vault, &["report", "-f", "json"]));
+    assert_eq!(listed["config_fingerprint"], payload["config_fingerprint"]);
+    assert_eq!(
+        reported["config_fingerprint"],
+        payload["config_fingerprint"]
+    );
+
+    let human = run(&vault, &["config"]);
+    assert_success(&human);
+    assert_stdout_has_no_ansi(&human);
+    assert_text_order(
+        &stdout(&human),
+        &[
+            "Bank setup · valid",
+            "Accounts",
+            "Categories",
+            "Free keys",
+            "Rules",
+            "Stale after",
+        ],
+    );
+}
+
+#[test]
+fn invalid_rule_diagnostics_keep_all_lines_in_read_envelopes() {
+    let hub = concat!(
+        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n",
+        "  accounts:\n    checking:\n      label: Checking\n",
+        "      kind: checking\n      start: 2026-11-01\n",
+        "  categories:\n    coffee: ☕ Coffee\n  rules:\n",
+        "    - match: FIRST\n      cat: missing_one\n",
+        "    - { match: SECOND, cat: missing_two }\n---\n# Bank\n",
+    );
+    let vault = syncable(hub);
+
+    for args in [
+        ["list", "-f", "json"].as_slice(),
+        ["report", "-f", "json"].as_slice(),
+    ] {
+        let output = run(&vault, args);
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        let payload = json(&output);
+        assert_eq!(
+            payload["error"],
+            "bank.rules.0.cat: unknown category \"missing_one\""
+        );
+        assert_eq!(payload["findings"].as_array().unwrap().len(), 2);
+        assert_eq!(payload["findings"][0]["key_path"], "bank.rules.0.cat");
+        assert_eq!(payload["findings"][0]["line"], 14);
+        assert_eq!(payload["findings"][1]["key_path"], "bank.rules.1.cat");
+        assert_eq!(payload["findings"][1]["line"], 15);
+        assert!(payload["config_fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+    }
+
+    let checked = run(&vault, &["check", "-f", "json"]);
+    assert_eq!(
+        checked.status.code(),
+        Some(1),
+        "{}",
+        format_output(&checked)
+    );
+    let payload = json(&checked);
+    let config_findings = payload["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|finding| finding["code"] == "bank_config_invalid")
+        .collect::<Vec<_>>();
+    assert_eq!(config_findings.len(), 2);
+    assert_eq!(config_findings[1]["key_path"], "bank.rules.1.cat");
+    assert_eq!(config_findings[1]["line"], 15);
+
+    let ensured = run(&vault, &["ensure", "-f", "json"]);
+    assert_eq!(
+        ensured.status.code(),
+        Some(2),
+        "{}",
+        format_output(&ensured)
+    );
+    assert_eq!(json(&ensured)["findings"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn rule_with_masked_digits_is_a_warning_in_check_and_config_report() {
+    let hub = HUB.replace(
+        "- match: VENMO\n      cat: transfer",
+        "- match: VENMO 1234\n      cat: transfer",
+    );
+    let vault = syncable(&hub);
+    let checked = run(&vault, &["check", "-f", "json"]);
+    assert_success(&checked);
+    let checked_json = json(&checked);
+    let warning = checked_json["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["code"] == "bank_rule_read_time_dead")
+        .expect("read-time-dead rule warning");
+    assert_eq!(warning["severity"], "warning");
+    assert_eq!(warning["key_path"], "bank.rules.0.match");
+    let config = json(&run(&vault, &["config", "show", "-f", "json"]));
+    assert!(config["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding["code"] == "bank_rule_read_time_dead"));
+}
+
+#[test]
 fn import_writes_shared_suggestion_and_points_next_at_the_walk() {
     let vault = syncable(MAPPING_HUB);
     assert_success(&run(&vault, &["ensure", "-f", "json"]));

@@ -999,11 +999,15 @@ mod tests {
                     label: alias.to_string(),
                     kind: *kind,
                     start: Some(date(2026, 11, 1)),
+                    source_line: None,
+                    label_authored: true,
                 })
                 .collect(),
             categories: Vec::new(),
             rules: Vec::new(),
             stale_after: 10,
+            stale_after_authored: false,
+            stale_after_line: None,
         }
     }
 

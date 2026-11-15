@@ -166,6 +166,8 @@ mod tests {
             categories: Vec::new(),
             rules: Vec::new(),
             stale_after: 10,
+            stale_after_authored: false,
+            stale_after_line: None,
         };
         let date = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
         let plan = plan(temp.path(), date, "", &config).expect("ensure plan");

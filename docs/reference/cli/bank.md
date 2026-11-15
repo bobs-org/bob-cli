@@ -11,13 +11,14 @@ Commands over bank rows, bank month notes, and their import journal
 ```text title="bob bank --help"
 Commands over bank rows, bank month notes, and their import journal
 
-Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents. `import` plans and records posted exports; `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.
+Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents; `config` shows the hub's `bank:` setup. `import` plans and records posted exports; `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.
 
 Usage: bob bank [COMMAND]
 
 Commands:
   ack     Acknowledge waiting bank rows
   check   Check bank notes against the contract
+  config  Show the effective bank configuration
   ensure  Ensure the month note and day heading exist
   import  Import posted bank transactions
   list    List waiting bank rows (default)
@@ -30,6 +31,7 @@ Bare `bob bank` runs the read-only list.
 
 Examples:
   bob bank                       List waiting rows
+  bob bank config -f json        Effective setup, usage, and findings
   bob bank report                 Report this month's totals
   bob bank ensure -D today        Ensure today's heading
   bob bank import ~/Downloads/*.qfx  Import posted transactions
@@ -107,6 +109,40 @@ Examples:
   bob bank check -f json
 
 See docs/bank.md for the bank contract.
+```
+
+## bob bank config
+
+Show the effective bank configuration
+
+```text title="bob bank config --help"
+Read the bank: mapping as bob uses it: resolved categories and hotkeys, account status, usage, rules, and located configuration findings. This command is read-only. Bare `bob bank config` runs `show`.
+
+Usage: bob bank config [OPTIONS] [COMMAND]
+
+Commands:
+  show  Show the effective bank setup (default)
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+Examples:
+  bob bank config
+  bob bank config -f json
+  bob bank config show -b ~/bob -f json
+
+See docs/bank.md for the setup and JSON contract.
 ```
 
 ## bob bank ensure

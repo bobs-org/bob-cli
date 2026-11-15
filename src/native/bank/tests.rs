@@ -1566,10 +1566,14 @@ fn reversed_all_time_interval_produces_no_days() {
             label: "WF Checking".to_owned(),
             kind: super::config::AccountKind::Checking,
             start: Some(future_start),
+            source_line: None,
+            label_authored: true,
         }],
         categories: Vec::new(),
         rules: Vec::new(),
         stale_after: 10,
+        stale_after_authored: false,
+        stale_after_line: None,
     };
     let rows: Vec<super::model::BankRow> = Vec::new();
     // Pure bound first: a future-only account with no rows reverses the

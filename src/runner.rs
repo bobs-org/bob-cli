@@ -368,6 +368,14 @@ const BANK_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "config",
+        about: "Show the effective bank configuration",
+        leaf: Leaf {
+            native_command: NativeCommand::BankConfig,
+            script_command: None,
+        },
+    },
+    Member {
         name: "ensure",
         about: "Ensure the month note and day heading exist",
         leaf: Leaf {
@@ -406,6 +414,7 @@ Bare `bob bank` runs the read-only list.
 
 Examples:
   bob bank                       List waiting rows
+  bob bank config -f json        Effective setup, usage, and findings
   bob bank report                 Report this month's totals
   bob bank ensure -D today        Ensure today's heading
   bob bank import ~/Downloads/*.qfx  Import posted transactions
@@ -1187,7 +1196,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: BANK_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents. `import` plans and records posted exports; `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.",
+                "Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents; `config` shows the hub's `bank:` setup. `import` plans and records posted exports; `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.",
             ),
             after_help: BANK_AFTER_HELP,
             usage: "bob bank [COMMAND]",
@@ -2632,6 +2641,7 @@ mod tests {
             NativeCommand::AttachmentsOrigin,
             NativeCommand::BankAck,
             NativeCommand::BankCheck,
+            NativeCommand::BankConfig,
             NativeCommand::BankEnsure,
             NativeCommand::BankImport,
             NativeCommand::BankList,

@@ -8,8 +8,8 @@ use clap::{
 };
 
 use super::{
-    ack, charts, check, dates, ensure, import_run, list, output, report, scan,
-    status,
+    ack, charts, check, config_report, dates, ensure, import_run, list, output,
+    report, scan, status,
 };
 use crate::native::env as bob_env;
 
@@ -52,6 +52,10 @@ pub(crate) fn run_list(args: Vec<OsString>) -> i32 {
 
 pub(crate) fn run_report(args: Vec<OsString>) -> i32 {
     run_with(build_cli_report(), args, execute_report)
+}
+
+pub(crate) fn run_config(args: Vec<OsString>) -> i32 {
+    run_with(build_cli_config(), args, execute_config)
 }
 
 pub(crate) fn run_ensure(args: Vec<OsString>) -> i32 {
@@ -118,6 +122,30 @@ pub(crate) fn build_cli_report() -> ClapCommand {
         .arg(week_arg())
         .arg(year_arg())
         .arg(help_arg())
+}
+
+pub(crate) fn build_cli_config() -> ClapCommand {
+    ClapCommand::new("bob bank config")
+        .about("Show the effective bank configuration")
+        .long_about(
+            "Read the bank: mapping as bob uses it: resolved categories and hotkeys, account status, usage, rules, and located configuration findings. This command is read-only. Bare `bob bank config` runs `show`.",
+        )
+        .after_help(
+            "Examples:\n  bob bank config\n  bob bank config -f json\n  bob bank config show -b ~/bob -f json\n\nSee docs/bank.md for the setup and JSON contract.",
+        )
+        .disable_help_flag(true)
+        .subcommand_required(false)
+        .arg(bob_dir_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .subcommand(
+            ClapCommand::new("show")
+                .about("Show the effective bank setup (default)")
+                .disable_help_flag(true)
+                .arg(bob_dir_arg())
+                .arg(format_arg())
+                .arg(help_arg()),
+        )
 }
 
 pub(crate) fn build_cli_ensure() -> ClapCommand {
@@ -212,6 +240,52 @@ fn help_arg() -> Arg {
         .short('h')
         .action(ArgAction::Help)
         .help("Show help")
+}
+
+fn execute_config(matches: &ArgMatches) -> i32 {
+    match matches.subcommand() {
+        Some(("show", sub_matches)) => execute_config_show(sub_matches),
+        None => execute_config_show(matches),
+        Some((name, _)) => {
+            eprintln!("bob bank config: unknown subcommand: {name}");
+            2
+        }
+    }
+}
+
+fn execute_config_show(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let today = bob_env::current_datetime().date();
+    let scan = scan::scan_bank(&bob_dir);
+    print_io_errors(&scan.io_errors);
+    if !scan.io_errors.is_empty() {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": false,
+                    "schema_version": 1,
+                    "today": today.format("%Y-%m-%d").to_string(),
+                    "status": "error",
+                    "error": scan.io_errors.join("; "),
+                })
+            );
+        }
+        return 1;
+    }
+    let journal = super::journal::load(&bob_dir).unwrap_or_default();
+    let report = config_report::ConfigReport::build(&scan, &journal, today);
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        config_report::print_human(&report);
+    }
+    if report.to_json()["ok"] == false {
+        1
+    } else {
+        0
+    }
 }
 
 fn all_arg() -> Arg {
@@ -452,18 +526,19 @@ fn execute_check(matches: &ArgMatches) -> i32 {
 
 fn load_config(
     scan: &scan::BankScan,
-) -> Result<(super::config::BankConfig, Vec<super::config::Category>), String> {
+) -> Result<super::config::BankConfig, ConfigLoadError> {
     let Some(hub) = &scan.hub else {
-        return Err("bank.md is missing".to_owned());
+        return Err(ConfigLoadError {
+            message: "bank.md is missing".to_owned(),
+            diagnostics: Vec::new(),
+        });
     };
     match super::config::parse_bank_config(&hub.contents) {
-        super::config::ConfigParse::Ok(config) => {
-            let categories = config.categories.clone();
-            Ok((config, categories))
-        }
-        super::config::ConfigParse::MissingMapping => {
-            Err("bank.md has no bank: mapping".to_owned())
-        }
+        super::config::ConfigParse::Ok(config) => Ok(config),
+        super::config::ConfigParse::MissingMapping => Err(ConfigLoadError {
+            message: "bank.md has no bank: mapping".to_owned(),
+            diagnostics: Vec::new(),
+        }),
         super::config::ConfigParse::Invalid { diagnostics, .. } => {
             let first = diagnostics
                 .first()
@@ -471,9 +546,52 @@ fn load_config(
                     format!("{}: {}", diagnostic.key_path, diagnostic.message)
                 })
                 .unwrap_or_else(|| "invalid bank configuration".to_owned());
-            Err(first)
+            Err(ConfigLoadError {
+                message: first,
+                diagnostics,
+            })
         }
     }
+}
+
+struct ConfigLoadError {
+    message: String,
+    diagnostics: Vec<super::config::ConfigDiagnostic>,
+}
+
+fn config_load_error_json(
+    today: chrono::NaiveDate,
+    error: &ConfigLoadError,
+    fingerprint: Option<String>,
+    include_fingerprint: bool,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "ok": false,
+        "schema_version": 1,
+        "today": today.format("%Y-%m-%d").to_string(),
+        "error": error.message,
+    });
+    if !error.diagnostics.is_empty() {
+        value["findings"] = serde_json::json!(error
+            .diagnostics
+            .iter()
+            .map(|item| {
+                serde_json::json!({
+                    "code": "bank_config_invalid",
+                    "severity": "error",
+                    "path": "bank.md",
+                    "line": item.line,
+                    "key_path": item.key_path,
+                    "message": item.message,
+                    "hint": item.hint,
+                })
+            })
+            .collect::<Vec<_>>());
+    }
+    if include_fingerprint {
+        value["config_fingerprint"] = serde_json::json!(fingerprint);
+    }
+    value
 }
 
 fn execute_list(matches: &ArgMatches) -> i32 {
@@ -523,20 +641,18 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         },
     };
     let config = match load_config(&scan) {
-        Ok((config, _)) => Some(config),
-        Err(message) => {
+        Ok(config) => Some(config),
+        Err(error) => {
             if json {
+                let fingerprint = scan.hub.as_ref().and_then(|hub| {
+                    super::config::config_fingerprint(&hub.contents)
+                });
                 println!(
                     "{}",
-                    serde_json::json!({
-                        "ok": false,
-                        "schema_version": 1,
-                        "today": today.format("%Y-%m-%d").to_string(),
-                        "error": message,
-                    })
+                    config_load_error_json(today, &error, fingerprint, true)
                 );
             } else {
-                eprintln!("bob bank list: {message}");
+                eprintln!("bob bank list: {}", error.message);
             }
             return 1;
         }
@@ -572,7 +688,12 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         heading_lines,
     );
     if json {
-        println!("{}", list::to_json(&report, &default_alias));
+        let mut payload = list::to_json(&report, &default_alias);
+        payload["config_fingerprint"] = serde_json::json!(scan
+            .hub
+            .as_ref()
+            .and_then(|hub| super::config::config_fingerprint(&hub.contents)));
+        println!("{payload}");
     } else {
         output::print_list(&report, today);
     }
@@ -646,20 +767,18 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         return 2;
     }
     let config = match load_config(&scan) {
-        Ok((config, _)) => Some(config),
-        Err(message) => {
+        Ok(config) => Some(config),
+        Err(error) => {
             if json {
+                let fingerprint = scan.hub.as_ref().and_then(|hub| {
+                    super::config::config_fingerprint(&hub.contents)
+                });
                 println!(
                     "{}",
-                    serde_json::json!({
-                        "ok": false,
-                        "schema_version": 1,
-                        "today": today.format("%Y-%m-%d").to_string(),
-                        "error": message,
-                    })
+                    config_load_error_json(today, &error, fingerprint, true)
                 );
             } else {
-                eprintln!("bob bank report: {message}");
+                eprintln!("bob bank report: {}", error.message);
             }
             return 1;
         }
@@ -700,7 +819,12 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         with_charts,
     );
     if json {
-        println!("{}", report::to_json(&built));
+        let mut payload = report::to_json(&built);
+        payload["config_fingerprint"] = serde_json::json!(scan
+            .hub
+            .as_ref()
+            .and_then(|hub| super::config::config_fingerprint(&hub.contents)));
+        println!("{payload}");
     } else {
         output::print_report(&built);
     }
@@ -763,21 +887,16 @@ fn execute_ensure(matches: &ArgMatches) -> i32 {
             return 2;
         }
     };
-    let (config, _) = match load_config(&scan) {
-        Ok(loaded) => loaded,
-        Err(message) => {
+    let config = match load_config(&scan) {
+        Ok(config) => config,
+        Err(error) => {
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({
-                        "ok": false,
-                        "schema_version": 1,
-                        "today": today.format("%Y-%m-%d").to_string(),
-                        "error": message,
-                    })
+                    config_load_error_json(today, &error, None, false)
                 );
             } else {
-                eprintln!("bob bank ensure: {message}");
+                eprintln!("bob bank ensure: {}", error.message);
             }
             return 2;
         }
@@ -944,20 +1063,15 @@ fn execute_ack(matches: &ArgMatches) -> i32 {
         return 2;
     }
     let config = match load_config(&scan) {
-        Ok((config, _)) => Some(config),
-        Err(message) => {
+        Ok(config) => Some(config),
+        Err(error) => {
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({
-                        "ok": false,
-                        "schema_version": 1,
-                        "today": today.format("%Y-%m-%d").to_string(),
-                        "error": message,
-                    })
+                    config_load_error_json(today, &error, None, false)
                 );
             } else {
-                eprintln!("bob bank ack: {message}");
+                eprintln!("bob bank ack: {}", error.message);
             }
             return 1;
         }

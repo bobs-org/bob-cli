@@ -50,6 +50,9 @@ impl NativeCommand {
             }
             NativeCommand::BankAck => crate::native::bank::build_cli_ack(),
             NativeCommand::BankCheck => crate::native::bank::build_cli_check(),
+            NativeCommand::BankConfig => {
+                crate::native::bank::build_cli_config()
+            }
             NativeCommand::BankEnsure => {
                 crate::native::bank::build_cli_ensure()
             }

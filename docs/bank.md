@@ -6,15 +6,17 @@ are shown and never written into notes. Weekly ritual:
 [Acknowledge bank transactions](guides/acknowledge-bank-transactions.md).
 
 `bob bank` lives in the Integrations section of `bob --help`. Membership:
-commands over bank rows, bank month notes, and their import journal. Bare
+commands over bank rows, bank month notes, their import journal, and the hub's
+`bank:` setup. Bare
 `bob bank` runs the read-only `list`. This page is the contract. `check`,
-`list`, `report`, `ensure`, `ack`, and `import` ship now, including account
+`config`, `list`, `report`, `ensure`, `ack`, and `import` ship now, including account
 balance verdicts and deliberate restoration of missing imported rows.
 
 ```text
 bob bank [list] [-a] [-b DIR] [-f human|json] [-m MONTH]
 bob bank ack [ID...] [-b DIR] [-D DAY] [-d] [-f human|json]
 bob bank check [-b DIR] [-f human|json]
+bob bank config [show] [-b DIR] [-f human|json]
 bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
 bob bank import [FILE...] [-a ALIAS] [-b DIR] [-d] [-F] [-f human|json]
 bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-w WEEK] [-y YEAR]
@@ -23,6 +25,8 @@ bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-
 - Every long option has a short alias; options stay alphabetical.
   Subcommands are alphabetical.
 - `list`, `report`, and `ensure` exit 0, or 1 on a runtime failure.
+- `config` exits 0 for a valid or teaching-empty setup, and 1 when the
+  configuration is missing or invalid.
 - `check` exits 1 on any error, 0 for warning-only, info-only, or clean
   reports, and 0 for the teaching empty state.
 - `ack` exits 2 when an ID is unknown or isn't a row, and changes nothing
@@ -31,7 +35,7 @@ bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-
 - `import` exits 2 on refused input or an unsafe/ambiguous batch, and 1
   on runtime failures.
 - Real I/O failures are reported on stderr and exit 1.
-- `check`, `list`, and `report` are read-only: vault bytes, index, and
+- `check`, `config`, `list`, and `report` are read-only: vault bytes, index, and
   HEAD are unchanged. `ensure` and `ack` are guarded writes with no
   commit, which vault-sync carries. `import` is a guarded write with one
   scoped `bank: import` commit plus pre/post sync (see
@@ -131,6 +135,38 @@ path, for example
 Unknown keys inside `bank:` are errors with suggestions. Unknown top-level
 YAML keys are tolerated. No account number, routing number, credential, or
 balance is stored.
+
+## Setup
+
+`bob bank config` and `bob bank config show` print the effective `bank:` setup
+used by bob. The human view groups effective categories by group, shows the
+assigned key and its source, lists free keys and account status, and points
+findings at their `bank.md` line. `-f json` returns the same versioned report
+used by setup surfaces. The command is read-only.
+
+Category entries distinguish declared categories from bob's built-ins, and
+show whether labels are authored or supplied by default. Hotkey provenance is
+`explicit`, `builtin_default`, `derived`, or `none`; a hidden explicit key still
+reserves that key. `free_hotkeys` excludes assigned keys and reserved `q`.
+Account usage separates rows with `[acct:: alias]` from rows using the first
+configured account by default. Category usage counts row tags and rule
+references. Account journal usage counts import and transaction events.
+
+The `sha256:` `config_fingerprint` hashes a canonical JSON encoding of authored
+configuration meaning. It includes accounts in declaration order (alias,
+authored label or null, kind, and start), categories in declaration order (key,
+label, explicit hotkey or null, group or null, and explicit hidden value or
+null), rules in order (match, payee, category, and link), and explicit
+`stale_after` or null. Flow/block YAML style, quoting, comments, and whitespace
+do not change it; authored semantic changes do. `list` and `report` also return
+this fingerprint so clients can guard later writes without another read.
+
+When `bank:` is invalid, the report keeps any safely parsed configuration and
+returns every located finding. A missing mapping returns a starter block; a
+teaching-empty vault returns the same starter guidance without inventing a
+configuration. A rule match with a run of four or more digits gets a warning
+because digit masking prevents it from matching read-time hints; imports still
+use the rule.
 
 ## Bank month notes
 
@@ -652,6 +688,7 @@ follows the envelope below. `issues` counts errors and warnings (not info).
 | --- | --- | --- |
 | `bank_hub_missing` | error | `bank/` exists without `bank.md`, or `bank.md` has no `bank:` mapping |
 | `bank_config_invalid` | error | Any `bank:` problem (file, line, key path) |
+| `bank_rule_read_time_dead` | warning | A rule match has a run of four or more digits; it still applies during import, but digit-masked journal descriptions prevent read-time matches |
 | `bank_day_invalid` | error | A date-shaped day heading outside the note's month, or an impossible date |
 | `bank_row_unparsed` | error | An amount-led row that doesn't parse |
 | `bank_row_payee_missing` | error | A row with no payee |
@@ -699,8 +736,21 @@ suggested. Each `categories[]` entry is
 `group` are a string or `null`.
 
 - `list` adds `filter` (`waiting` or `all`), `month`,
+  `config_fingerprint` (`sha256:` or `null` when YAML cannot be parsed),
   `days[] {date, heading, path, line, rows[]}`, and
   `counts {rows, waiting, flagged}`.
+- `config show` adds `state` (`valid`, `invalid`, `missing`, or
+  `teaching_empty`), `path`, `line`, `fingerprint`, `partial`,
+  `config_fingerprint`, effective `categories[]` with `line`, `hotkey_source`,
+  `rows`, `rule_refs`, `declared`, `provenance {entry, label, hotkey}`, and
+  `usage {rows, rule_references}`; `accounts[]` include `line`,
+  `label_explicit`, `rows`, `journal_events`, label provenance, and
+  explicit/default row plus journal usage; `rules[]` (present even when empty),
+  `stale_after {days, explicit, line, source_line}`,
+  `free_hotkeys[]`, aggregate `usage`, `issues`, and
+  `findings[] {code, severity, path, line, key_path, message, hint}`. It
+  includes partial config fields on parse errors and `starter` guidance when
+  the mapping is missing.
 - `report` adds `period {kind, key, start, end, label, so_far, note}`,
   where `kind` is `day`, `week`, `month`, `year` (calendar, `-y` only),
   `quarter`, `iso_year`, or `all_time`. The `key` is the canonical id
@@ -713,6 +763,7 @@ suggested. Each `categories[]` entry is
   waiting, flagged}` (every day of the period, including empty ones;
   `-s` reports `"days": []` with totals intact),
   `waiting {period, all, oldest}` plus `flagged`,
+  `config_fingerprint`,
   `coverage {tracked_since, imported_through, start, through, complete}`
   (dates are `YYYY-MM-DD` or `null`; `through` is always a date), and
   `navigation {waiting {path, line, date}, first {path, line, date},
@@ -721,7 +772,8 @@ suggested. Each `categories[]` entry is
   the vault-relative month notes holding the period's rows; each target
   is `null` when absent). With `-c` it also adds `charts`; see
   [Report charts](#report-charts).
-- `check` adds `findings[] {code, severity, path, line, message, hint}`.
+- `check` adds `findings[] {code, severity, path, line, message, hint}`;
+  configuration findings also include `key_path`.
 - `ensure` adds `{path, line, day, created_note, created_heading}`.
 - `ack` prints the envelope `ok`, `dry_run`, `changed`,
   `changes[] {path, diff?}`, `findings`, `commit`, `sync`, and

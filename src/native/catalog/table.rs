@@ -1235,6 +1235,25 @@ pub(crate) const ENTRIES: &[Row] = &[
             60,
         )
     },
+    Row {
+        fixed: JSON,
+        ..reads(
+            "bank-config-show",
+            &["bank", "config", "show"],
+            "Show effective bank setup",
+            &[
+                "bank",
+                "setup",
+                "config",
+                "categories",
+                "hotkeys",
+                "rules",
+                "accounts",
+            ],
+            Presentation::Report,
+            60,
+        )
+    },
     reads(
         "bank-list",
         &["bank", "list"],

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 use serde_yaml::{Mapping, Value};
+use sha2::{Digest, Sha256};
 
 use crate::native::albums::{key_line_map, output::split_icon};
 use crate::native::projects::{
@@ -67,6 +68,27 @@ pub(crate) struct Account {
     pub(crate) label: String,
     pub(crate) kind: AccountKind,
     pub(crate) start: Option<NaiveDate>,
+    pub(crate) source_line: Option<usize>,
+    pub(crate) label_authored: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HotkeySource {
+    Explicit,
+    BuiltinDefault,
+    Derived,
+    None,
+}
+
+impl HotkeySource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::BuiltinDefault => "builtin_default",
+            Self::Derived => "derived",
+            Self::None => "none",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +100,10 @@ pub(crate) struct Category {
     pub(crate) hotkey: Option<char>,
     pub(crate) group: Option<String>,
     pub(crate) hidden: bool,
+    pub(crate) source_line: Option<usize>,
+    pub(crate) declared: bool,
+    pub(crate) label_authored: bool,
+    pub(crate) hotkey_source: HotkeySource,
 }
 
 impl Category {
@@ -96,6 +122,7 @@ impl Category {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Rule {
+    pub(crate) source_line: Option<usize>,
     pub(crate) match_text: String,
     pub(crate) payee: Option<String>,
     pub(crate) cat: Option<String>,
@@ -108,6 +135,8 @@ pub(crate) struct BankConfig {
     pub(crate) categories: Vec<Category>,
     pub(crate) rules: Vec<Rule>,
     pub(crate) stale_after: u32,
+    pub(crate) stale_after_authored: bool,
+    pub(crate) stale_after_line: Option<usize>,
 }
 
 impl BankConfig {
@@ -154,6 +183,11 @@ pub(crate) fn parse_bank_config(contents: &str) -> ConfigParse {
     parse_bank_config_from_frontmatter(&frontmatter)
 }
 
+pub(crate) fn bank_source_line(contents: &str) -> Option<usize> {
+    let frontmatter = parse_frontmatter(contents)?;
+    bank_line_map(&frontmatter).get("bank").copied()
+}
+
 pub(crate) fn parse_bank_config_from_frontmatter(
     frontmatter: &Frontmatter<'_>,
 ) -> ConfigParse {
@@ -184,6 +218,137 @@ pub(crate) fn parse_bank_config_from_frontmatter(
             }
         }
     }
+}
+
+/// Fingerprint the authored configuration's meaning, excluding YAML layout.
+/// Sequence order and the presence of optional authored fields are retained.
+pub(crate) fn config_fingerprint(contents: &str) -> Option<String> {
+    let frontmatter = parse_frontmatter(contents)?;
+    let section = nested_section(&frontmatter, "bank")?;
+    let root = serde_yaml::from_str::<Value>(&section.yaml).ok()?;
+    let bank = mapping_get_from_value(&root, "bank")?.as_mapping()?;
+
+    let accounts = mapping_get(bank, "accounts")
+        .and_then(Value::as_mapping)
+        .map(|accounts| {
+            accounts
+                .iter()
+                .map(|(alias, value)| {
+                    let label = value
+                        .as_mapping()
+                        .and_then(|fields| mapping_get(fields, "label"))
+                        .and_then(yaml_text)
+                        .map(serde_json::Value::String)
+                        .unwrap_or(serde_json::Value::Null);
+                    let fields = value.as_mapping();
+                    serde_json::json!([
+                        alias.as_str(),
+                        label,
+                        fields
+                            .and_then(|fields| mapping_get(fields, "kind"))
+                            .and_then(yaml_text),
+                        fields
+                            .and_then(|fields| mapping_get(fields, "start"))
+                            .and_then(yaml_text),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let categories = mapping_get(bank, "categories")
+        .and_then(Value::as_mapping)
+        .map(|categories| {
+            categories
+                .iter()
+                .map(|(key, value)| {
+                    let fields = value.as_mapping();
+                    let label = fields
+                        .and_then(|fields| mapping_get(fields, "label"))
+                        .or_else(|| (!value.is_mapping()).then_some(value))
+                        .and_then(yaml_text);
+                    let hotkey = fields
+                        .and_then(|fields| mapping_get(fields, "hotkey"))
+                        .and_then(normalize_hotkey_value);
+                    let group = fields
+                        .and_then(|fields| mapping_get(fields, "group"))
+                        .and_then(yaml_text);
+                    let hidden = fields
+                        .and_then(|fields| mapping_get(fields, "hidden"))
+                        .and_then(Value::as_bool);
+                    serde_json::json!([
+                        key.as_str(),
+                        label,
+                        hotkey,
+                        group,
+                        hidden,
+                    ])
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let rules = mapping_get(bank, "rules")
+        .and_then(Value::as_sequence)
+        .map(|rules| {
+            rules
+                .iter()
+                .map(|rule| {
+                    let fields = rule.as_mapping();
+                    serde_json::json!([
+                        fields
+                            .and_then(|fields| mapping_get(fields, "match"))
+                            .and_then(yaml_text),
+                        fields
+                            .and_then(|fields| mapping_get(fields, "payee"))
+                            .and_then(yaml_text),
+                        fields
+                            .and_then(|fields| mapping_get(fields, "cat"))
+                            .and_then(yaml_text),
+                        fields
+                            .and_then(|fields| mapping_get(fields, "link"))
+                            .and_then(yaml_text),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let stale_after = mapping_get(bank, "stale_after")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .map(serde_json::Value::from)
+                .or_else(|| value.as_u64().map(serde_json::Value::from))
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let canonical = serde_json::json!({
+        "accounts": accounts,
+        "categories": categories,
+        "rules": rules,
+        "stale_after": stale_after,
+    });
+    let encoded = serde_json::to_vec(&canonical).ok()?;
+    Some(format!("sha256:{}", hex::encode(Sha256::digest(encoded))))
+}
+
+fn yaml_text(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .map(trim_yaml_scalar)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_hotkey_value(value: &Value) -> Option<String> {
+    if let Some(value) = yaml_text(value) {
+        let mut chars = value.chars();
+        let first = chars.next()?;
+        return chars.next().is_none().then(|| first.to_string());
+    }
+    value
+        .as_u64()
+        .filter(|number| *number <= 9)
+        .map(|number| number.to_string())
 }
 
 fn mapping_get_from_value<'a>(
@@ -230,16 +395,18 @@ fn parse_bank_value(
     let stale_after =
         parse_stale_after(mapping, line_by_path, &mut diagnostics);
 
-    let config = (!accounts.is_empty()).then_some(BankConfig {
+    let config = Some(BankConfig {
         accounts,
         categories,
         rules,
         stale_after,
+        stale_after_authored: mapping_get(mapping, "stale_after").is_some(),
+        stale_after_line: line_by_path.get("bank.stale_after").copied(),
     });
     if diagnostics.is_empty() {
-        match config {
-            Some(config) => ConfigParse::Ok(config),
-            None => ConfigParse::Invalid {
+        let config = config.expect("parsed bank config is present");
+        if config.accounts.is_empty() {
+            ConfigParse::Invalid {
                 diagnostics: vec![ConfigDiagnostic {
                     line: line_by_path
                         .get("bank.accounts")
@@ -250,8 +417,10 @@ fn parse_bank_value(
                         .to_owned(),
                     hint: None,
                 }],
-                config: None,
-            },
+                config: Some(config),
+            }
+        } else {
+            ConfigParse::Ok(config)
         }
     } else {
         ConfigParse::Invalid {
@@ -412,6 +581,8 @@ fn parse_account(
         label,
         kind,
         start,
+        source_line: line_by_path.get(path).copied(),
+        label_authored: mapping_get(mapping, "label").is_some(),
     })
 }
 
@@ -530,7 +701,15 @@ fn parse_category_value(
         });
         return None;
     }
-    Some((category_from_label(name, trimmed), None))
+    let mut category = category_from_label(
+        name,
+        trimmed,
+        line_for(line_by_path, path),
+        true,
+        true,
+    );
+    category.hotkey_source = HotkeySource::None;
+    Some((category, None))
 }
 
 fn parse_category_mapping(
@@ -560,7 +739,13 @@ fn parse_category_mapping(
         });
         return None;
     };
-    let mut category = category_from_label(name, &label);
+    let mut category = category_from_label(
+        name,
+        &label,
+        line_for(line_by_path, path),
+        true,
+        true,
+    );
     let hotkey = match mapping_get(mapping, "hotkey") {
         Some(value) => parse_hotkey_value(
             value,
@@ -601,7 +786,13 @@ fn parse_category_mapping(
     Some((category, hotkey))
 }
 
-fn category_from_label(name: &str, label: &str) -> Category {
+fn category_from_label(
+    name: &str,
+    label: &str,
+    source_line: Option<usize>,
+    declared: bool,
+    label_authored: bool,
+) -> Category {
     let (emoji, rest) = split_icon(label);
     Category {
         key: name.to_owned(),
@@ -615,6 +806,10 @@ fn category_from_label(name: &str, label: &str) -> Category {
         hotkey: None,
         group: None,
         hidden: false,
+        source_line,
+        declared,
+        label_authored,
+        hotkey_source: HotkeySource::None,
     }
 }
 
@@ -627,6 +822,10 @@ fn empty_builtin(key: &str, emoji: &str, label: &str) -> Category {
         hotkey: None,
         group: None,
         hidden: false,
+        source_line: None,
+        declared: false,
+        label_authored: false,
+        hotkey_source: HotkeySource::None,
     }
 }
 
@@ -664,6 +863,7 @@ fn assign_hotkeys(categories: &mut [Category], explicit: &[Option<char>]) {
     for (category, hotkey) in categories.iter_mut().zip(explicit.iter()) {
         if let Some(hotkey) = hotkey {
             category.hotkey = Some(*hotkey);
+            category.hotkey_source = HotkeySource::Explicit;
         }
     }
     for category in categories.iter_mut() {
@@ -675,6 +875,7 @@ fn assign_hotkeys(categories: &mut [Category], explicit: &[Option<char>]) {
         };
         if claimed.insert(default) {
             category.hotkey = Some(default);
+            category.hotkey_source = HotkeySource::BuiltinDefault;
         }
     }
     for category in categories.iter_mut() {
@@ -686,6 +887,7 @@ fn assign_hotkeys(categories: &mut [Category], explicit: &[Option<char>]) {
         {
             claimed.insert(hotkey);
             category.hotkey = Some(hotkey);
+            category.hotkey_source = HotkeySource::Derived;
         }
     }
 }
@@ -846,6 +1048,7 @@ fn parse_rules(
             });
         }
         parsed.push(Rule {
+            source_line: line_by_path.get(&path).copied(),
             match_text,
             payee: optional_string(rule_map, "payee"),
             cat,
@@ -1009,10 +1212,56 @@ fn nested_section<'a>(
 fn bank_line_map(frontmatter: &Frontmatter<'_>) -> HashMap<String, usize> {
     let mut map = key_line_map(frontmatter);
     let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut sequence_indices: HashMap<String, usize> = HashMap::new();
     for (index, line) in frontmatter.lines.iter().enumerate() {
         let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
         let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with(['#', '-']) {
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(item) = trimmed.strip_prefix('-')
+            && (item.is_empty()
+                || item.starts_with(' ')
+                || item.starts_with('\t'))
+        {
+            while stack
+                .last()
+                .is_some_and(|(indent, _)| *indent >= indentation)
+            {
+                stack.pop();
+            }
+            let parent = stack
+                .iter()
+                .map(|(_, key)| key.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let item_index =
+                sequence_indices.entry(parent.clone()).or_default();
+            let sequence_key = item_index.to_string();
+            let item_path = format!("{parent}.{sequence_key}");
+            *item_index += 1;
+            let line_number = index + 2;
+            map.entry(item_path.clone()).or_insert(line_number);
+            stack.push((indentation, sequence_key));
+
+            let item = item.trim();
+            if item.starts_with('{') {
+                if let Ok(Value::Sequence(values)) =
+                    serde_yaml::from_str::<Value>(&format!("[{item}]"))
+                    && let Some(Value::Mapping(fields)) = values.first()
+                {
+                    for key in mapping_keys(fields) {
+                        map.entry(format!("{item_path}.{key}"))
+                            .or_insert(line_number);
+                    }
+                }
+            } else if let Some((raw_key, _)) = item.split_once(':') {
+                let key = raw_key.trim().trim_matches(['\'', '"']);
+                if !key.is_empty() {
+                    map.entry(format!("{item_path}.{key}"))
+                        .or_insert(line_number);
+                }
+            }
             continue;
         }
         let Some((raw_key, _)) = trimmed.split_once(':') else {
@@ -1034,8 +1283,8 @@ fn bank_line_map(frontmatter: &Frontmatter<'_>) -> HashMap<String, usize> {
             .collect::<Vec<_>>();
         path.push(key);
         let path_str = path.join(".");
+        map.entry(path_str.clone()).or_insert(index + 2);
         if line.contains('{') {
-            map.entry(path_str).or_insert(index + 2);
             continue;
         }
         if !line.contains('}') {
@@ -1404,5 +1653,93 @@ mod tests {
         assert_eq!(income.hotkey, Some('n'));
         let refund = config.category("refund").unwrap();
         assert_eq!(refund.hotkey, Some('r'));
+    }
+
+    #[test]
+    fn block_and_flow_rule_diagnostics_point_to_the_second_rule_line() {
+        let block = concat!(
+            "---\nparent: cash\nbank:\n  accounts:\n    checking:\n",
+            "      kind: checking\n      start: 2026-11-12\n  rules:\n",
+            "    - match: FIRST\n      cat: transfer\n",
+            "    - match: SECOND\n      cat: unknown\n---\n",
+        );
+        let flow = concat!(
+            "---\nparent: cash\nbank:\n  accounts:\n    checking:\n",
+            "      kind: checking\n      start: 2026-11-12\n  rules:\n",
+            "    - { match: FIRST, cat: transfer }\n",
+            "    - { match: SECOND, cat: unknown }\n---\n",
+        );
+        for (text, line) in [(block, 12), (flow, 10)] {
+            let ConfigParse::Invalid { diagnostics, .. } = parse(text) else {
+                panic!("expected invalid config");
+            };
+            let diagnostic = diagnostics
+                .iter()
+                .find(|item| item.key_path == "bank.rules.1.cat")
+                .expect("second rule category diagnostic");
+            assert_eq!(diagnostic.line, Some(line), "{diagnostic:?}");
+        }
+    }
+
+    #[test]
+    fn config_fingerprint_ignores_yaml_presentation_but_tracks_authored_semantics(
+    ) {
+        const BASE: &str = "---\nbank:\n  accounts:\n    checking: { label: Checking, kind: checking, start: 2026-11-01 }\n    savings: { label: Savings, kind: savings, start: 2026-11-02 }\n  categories:\n    coffee: { label: Coffee, hotkey: c, group: Everyday, hidden: false }\n    dining: { label: Dining, hotkey: d, group: Bills }\n  rules:\n    - { match: VENMO, payee: Venmo, cat: coffee, link: payee }\n    - { match: PAYPAL, cat: dining }\n  stale_after: 10\n---\n";
+        let baseline = config_fingerprint(BASE).expect("base fingerprint");
+        let rewritten = "---\nbank:\n  accounts: { checking: { label: \"Checking\", kind: \"checking\", start: \"2026-11-01\" }, savings: { label: \"Savings\", kind: \"savings\", start: \"2026-11-02\" } } # comment\n  categories: { coffee: { label: \"Coffee\", hotkey: \"c\", group: \"Everyday\", hidden: false }, dining: { label: \"Dining\", hotkey: \"d\", group: \"Bills\" } }\n  rules: [{ match: \"VENMO\", payee: \"Venmo\", cat: \"coffee\", link: \"payee\" }, { match: \"PAYPAL\", cat: \"dining\" }]\n  stale_after: 10 # unchanged\n---\n";
+        assert_eq!(
+            config_fingerprint(rewritten).as_deref(),
+            Some(baseline.as_str())
+        );
+
+        let changes = [
+            ("checking: {", "checking_main: {"),
+            ("label: Checking", "label: Primary"),
+            ("kind: checking", "kind: savings"),
+            ("start: 2026-11-01", "start: 2026-11-03"),
+            ("coffee: {", "espresso: {"),
+            ("label: Coffee", "label: Espresso"),
+            ("hotkey: c", "hotkey: x"),
+            ("group: Everyday", "group: Home"),
+            ("hidden: false", "hidden: true"),
+            ("match: VENMO", "match: CASHAPP"),
+            ("payee: Venmo", "payee: Cash App"),
+            ("cat: coffee", "cat: dining"),
+            ("link: payee", "link: merchant"),
+            ("stale_after: 10", "stale_after: 20"),
+        ];
+        for (before, after) in changes {
+            let changed = BASE.replacen(before, after, 1);
+            assert_ne!(
+                config_fingerprint(&changed).as_deref(),
+                Some(baseline.as_str()),
+                "changing {before:?} should change the fingerprint"
+            );
+        }
+
+        let accounts_reordered = BASE.replace(
+            "    checking: { label: Checking, kind: checking, start: 2026-11-01 }\n    savings: { label: Savings, kind: savings, start: 2026-11-02 }",
+            "    savings: { label: Savings, kind: savings, start: 2026-11-02 }\n    checking: { label: Checking, kind: checking, start: 2026-11-01 }",
+        );
+        assert_ne!(
+            config_fingerprint(&accounts_reordered).as_deref(),
+            Some(baseline.as_str())
+        );
+        let categories_reordered = BASE.replace(
+            "    coffee: { label: Coffee, hotkey: c, group: Everyday, hidden: false }\n    dining: { label: Dining, hotkey: d, group: Bills }",
+            "    dining: { label: Dining, hotkey: d, group: Bills }\n    coffee: { label: Coffee, hotkey: c, group: Everyday, hidden: false }",
+        );
+        assert_ne!(
+            config_fingerprint(&categories_reordered).as_deref(),
+            Some(baseline.as_str())
+        );
+        let rules_reordered = BASE.replace(
+            "    - { match: VENMO, payee: Venmo, cat: coffee, link: payee }\n    - { match: PAYPAL, cat: dining }",
+            "    - { match: PAYPAL, cat: dining }\n    - { match: VENMO, payee: Venmo, cat: coffee, link: payee }",
+        );
+        assert_ne!(
+            config_fingerprint(&rules_reordered).as_deref(),
+            Some(baseline.as_str())
+        );
     }
 }

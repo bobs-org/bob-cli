@@ -49,6 +49,7 @@ pub(crate) struct Finding {
     pub(crate) message: String,
     pub(crate) hint: Option<String>,
     pub(crate) day: Option<NaiveDate>,
+    pub(crate) key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,9 +142,15 @@ pub(crate) fn lint(
                 for diagnostic in diagnostics {
                     findings.push(config_finding(diagnostic));
                 }
+                if let Some(config) = &parsed {
+                    append_rule_warnings(config, &mut findings);
+                }
                 config = parsed;
             }
-            ConfigParse::Ok(parsed) => config = Some(parsed),
+            ConfigParse::Ok(parsed) => {
+                append_rule_warnings(&parsed, &mut findings);
+                config = Some(parsed);
+            }
         }
     } else if scan.bank_dir_exists {
         findings.push(finding(
@@ -621,7 +628,7 @@ fn lint_journal(
 }
 
 fn config_finding(diagnostic: ConfigDiagnostic) -> Finding {
-    finding(
+    let mut finding = finding(
         "bank_config_invalid",
         Severity::Error,
         "bank.md",
@@ -629,7 +636,44 @@ fn config_finding(diagnostic: ConfigDiagnostic) -> Finding {
         format!("{}: {}", diagnostic.key_path, diagnostic.message),
         diagnostic.hint,
         None,
-    )
+    );
+    finding.key_path = Some(diagnostic.key_path);
+    finding
+}
+
+fn append_rule_warnings(config: &BankConfig, findings: &mut Vec<Finding>) {
+    for (index, rule) in config.rules.iter().enumerate() {
+        let mut digit_run = 0;
+        let dead = rule.match_text.chars().any(|character| {
+            if character.is_ascii_digit() {
+                digit_run += 1;
+                digit_run >= 4
+            } else {
+                digit_run = 0;
+                false
+            }
+        });
+        if !dead {
+            continue;
+        }
+        let mut item = finding(
+            "bank_rule_read_time_dead",
+            Severity::Warning,
+            "bank.md",
+            rule.source_line,
+            format!(
+                "rule match {:?} cannot match read-time hints because journal descriptions mask digit runs; imports still use it",
+                rule.match_text
+            ),
+            Some(
+                "Use a digit-free match phrase if this rule should affect read-time hints."
+                    .to_owned(),
+            ),
+            None,
+        );
+        item.key_path = Some(format!("bank.rules.{index}.match"));
+        findings.push(item);
+    }
 }
 
 fn finding(
@@ -649,16 +693,21 @@ fn finding(
         message: message.into(),
         hint,
         day,
+        key_path: None,
     }
 }
 
 fn finding_json(finding: &Finding) -> Value {
-    json!({
+    let mut value = json!({
         "code": finding.code,
         "severity": finding.severity.as_str(),
         "path": finding.path,
         "line": finding.line,
         "message": finding.message,
         "hint": finding.hint,
-    })
+    });
+    if let Some(key_path) = &finding.key_path {
+        value["key_path"] = json!(key_path);
+    }
+    value
 }
