@@ -98,7 +98,7 @@ pub(crate) fn resolve_name(
     }
 }
 
-fn contains_folded(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_folded(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }

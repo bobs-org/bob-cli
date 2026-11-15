@@ -27,6 +27,8 @@ pub(crate) mod scan;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod source;
 pub(crate) mod status;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod subscriptions;
 pub(crate) mod suggest;
 
 pub(crate) use cli::{
