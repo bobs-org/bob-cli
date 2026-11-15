@@ -2297,6 +2297,7 @@ mod tests {
             historical: false,
             confirmation_digest: None,
             opened_by: None,
+            after_generation: None,
             closed_at: None,
         };
         assert!(fresh_matches_close(&closed, &close));

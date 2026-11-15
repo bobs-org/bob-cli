@@ -97,6 +97,8 @@ pub(crate) struct ArchiveCloseGeneration {
     pub(crate) confirmation_digest: Option<String>,
     /// The `gmail.archive_observed` event that proved the prior open state.
     pub(crate) opened_by: Option<String>,
+    /// Prior consumed close generation, when this close is a reclose.
+    pub(crate) after_generation: Option<String>,
     pub(crate) closed_at: Option<DateTime<FixedOffset>>,
 }
 
@@ -737,7 +739,7 @@ impl ArchiveJournal {
             "thread_id": evidence.key.thread_id(),
             "enable_epoch": current.epoch,
             "after_generation": after_generation,
-            "tasks": task_values(&tasks),
+            "tasks": hash_task_values(&tasks),
         }));
         Some(PlannedArchiveEvent::new(
             OBSERVED_KIND,
@@ -748,7 +750,7 @@ impl ArchiveJournal {
                 "state": "open",
                 "observation_id": observation_id,
                 "after_generation": after_generation,
-                "tasks": task_values(&tasks),
+                "tasks": stored_task_values(&tasks),
             }),
         ))
     }
@@ -1324,7 +1326,7 @@ fn close_event(
             "opened_by": close.opened_by,
             "after_generation": after_generation,
             "note": close.note,
-            "tasks": task_values(&close.tasks),
+            "tasks": stored_task_values(&close.tasks),
             "saved_ids": close.saved_ids,
             "note_fingerprint": close.note_fingerprint,
             "label": label_value(&close.label),
@@ -1375,7 +1377,7 @@ fn close_from_evidence(
         "opened_by": opened_by,
         "after_generation": after_generation,
         "note": evidence.note,
-        "tasks": task_values(&tasks),
+        "tasks": hash_task_values(&tasks),
         "saved_ids": saved_ids,
         "note_fingerprint": note_fingerprint,
         "label": label_value(&label),
@@ -1394,6 +1396,7 @@ fn close_from_evidence(
         historical,
         confirmation_digest,
         opened_by,
+        after_generation,
         closed_at: None,
     })
 }
@@ -1429,7 +1432,28 @@ fn task_locators(tasks: &[ArchiveLinkTask]) -> Vec<ArchiveTaskLocator> {
     locators
 }
 
-fn task_values(tasks: &[ArchiveTaskLocator]) -> Vec<Value> {
+/// Journal hash contract: path, line, block_id, status. `row_hash` is
+/// unhashed locator metadata so pre-lk.2 readers accept new events.
+fn hash_task_values(tasks: &[ArchiveTaskLocator]) -> Vec<Value> {
+    locator_values(tasks, false)
+}
+
+/// Stored locators include optional `row_hash` without binding it into the
+/// generation or observation hash.
+fn stored_task_values(tasks: &[ArchiveTaskLocator]) -> Vec<Value> {
+    locator_values(tasks, true)
+}
+
+/// Interim lk.2 hashes bound `row_hash` when present. Current readers still
+/// accept those already-emitted events.
+fn interim_task_values(tasks: &[ArchiveTaskLocator]) -> Vec<Value> {
+    locator_values(tasks, true)
+}
+
+fn locator_values(
+    tasks: &[ArchiveTaskLocator],
+    include_row_hash: bool,
+) -> Vec<Value> {
     tasks
         .iter()
         .map(|task| {
@@ -1439,12 +1463,21 @@ fn task_values(tasks: &[ArchiveTaskLocator]) -> Vec<Value> {
                 "block_id": task.block_id,
                 "status": task.status.to_string(),
             });
-            if let Some(row_hash) = &task.row_hash {
+            if include_row_hash && let Some(row_hash) = &task.row_hash {
                 value["row_hash"] = json!(row_hash);
             }
             value
         })
         .collect()
+}
+
+fn matches_task_hash(
+    stored: &str,
+    payload: impl Fn(&[Value]) -> Value,
+    tasks: &[ArchiveTaskLocator],
+) -> bool {
+    stored == hash_value(&payload(&hash_task_values(tasks)))
+        || stored == hash_value(&payload(&interim_task_values(tasks)))
 }
 
 fn label_value(label: &ArchiveLabelIdentity) -> Value {
@@ -1622,15 +1655,17 @@ fn parse_open_observation(event: &StoredEvent) -> Option<OpenObservation> {
     {
         return None;
     }
-    let expected_id = hash_value(&json!({
-        "purpose": "gmail.archive.open",
-        "account": key.account(),
-        "thread_id": key.thread_id(),
-        "enable_epoch": enable_epoch,
-        "after_generation": after_generation,
-        "tasks": task_values(&tasks),
-    }));
-    if observation_id != expected_id {
+    let expected_payload = |tasks: &[Value]| {
+        json!({
+            "purpose": "gmail.archive.open",
+            "account": key.account(),
+            "thread_id": key.thread_id(),
+            "enable_epoch": enable_epoch,
+            "after_generation": after_generation.clone(),
+            "tasks": tasks,
+        })
+    };
+    if !matches_task_hash(&observation_id, expected_payload, &tasks) {
         return None;
     }
     Some(OpenObservation {
@@ -1711,24 +1746,27 @@ fn parse_close_value(
         historical,
         confirmation_digest: confirmation_digest.clone(),
         opened_by: opened_by.clone(),
+        after_generation: after_generation.clone(),
         closed_at,
     };
-    let expected_generation = hash_value(&json!({
-        "purpose": "gmail.archive.close",
-        "account": key.account(),
-        "thread_id": key.thread_id(),
-        "enable_epoch": close.enable_epoch,
-        "opened_by": close.opened_by,
-        "after_generation": after_generation,
-        "note": close.note,
-        "tasks": task_values(&close.tasks),
-        "saved_ids": close.saved_ids,
-        "note_fingerprint": close.note_fingerprint,
-        "label": label_value(&close.label),
-        "historical": close.historical,
-        "confirmation_digest": close.confirmation_digest,
-    }));
-    if expected_generation != close.generation {
+    let expected_payload = |tasks: &[Value]| {
+        json!({
+            "purpose": "gmail.archive.close",
+            "account": key.account(),
+            "thread_id": key.thread_id(),
+            "enable_epoch": close.enable_epoch,
+            "opened_by": close.opened_by,
+            "after_generation": close.after_generation.clone(),
+            "note": close.note,
+            "tasks": tasks,
+            "saved_ids": close.saved_ids,
+            "note_fingerprint": close.note_fingerprint,
+            "label": label_value(&close.label),
+            "historical": close.historical,
+            "confirmation_digest": close.confirmation_digest,
+        })
+    };
+    if !matches_task_hash(&close.generation, expected_payload, &close.tasks) {
         return None;
     }
     Some(CloseEvent {
@@ -1964,6 +2002,12 @@ fn ensure_gmail_journals_readable(vault: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::gmail::note::index::{MailIndex, MailIndexEntry};
+    use crate::native::gmail::sync::{
+        archive_scan::{classify_archive_status, ArchiveIssue},
+        scan::LinkPlacement,
+    };
+    use chrono::{TimeZone, Utc};
 
     #[test]
     fn task_locator_parser_accepts_legacy_rows_without_hashes() {
@@ -1979,12 +2023,231 @@ mod tests {
         assert_eq!(parsed[0].row_hash, None);
         assert_eq!(parsed[0].line, 4);
     }
-    use crate::native::gmail::note::index::{MailIndex, MailIndexEntry};
-    use crate::native::gmail::sync::{
-        archive_scan::{classify_archive_status, ArchiveIssue},
-        scan::LinkPlacement,
-    };
-    use chrono::{TimeZone, Utc};
+
+    fn idless_evidence(
+        key: ThreadKey,
+        status: char,
+        line: usize,
+        extra_identical: usize,
+    ) -> ArchiveThreadEvidence {
+        let text =
+            format!("- [{status}] #task PRIVATE TASK PHRASE [[mail/thread]]");
+        let task = |line: usize| ArchiveLinkTask {
+            path: "Projects/Task.md".to_string(),
+            line,
+            text: text.clone(),
+            block_id: None,
+            status,
+            class: classify_archive_status(status),
+            placement: LinkPlacement::TaskLine,
+            in_done: false,
+            merge_retired: false,
+            via_merge: false,
+            from_duplicate_note: false,
+        };
+        let mut tasks = vec![task(line)];
+        for offset in 1..=extra_identical {
+            tasks.push(task(line + offset));
+        }
+        ArchiveThreadEvidence {
+            key,
+            note: "mail/thread.md".to_string(),
+            tasks,
+            saved_ids: vec!["aa01".to_string(), "bb02".to_string()],
+            note_fingerprint: Some(format!("sha256:{}", "a".repeat(64))),
+            merge_unresolved: None,
+            identity_uncertain: false,
+            issues: Vec::<ArchiveIssue>::new(),
+        }
+    }
+
+    fn observation_hash_payload(event: &StoredEvent, tasks: &[Value]) -> Value {
+        let value = event.value.get("value").unwrap();
+        json!({
+            "purpose": "gmail.archive.open",
+            "account": value["account"],
+            "thread_id": value["thread_id"],
+            "enable_epoch": value["enable_epoch"],
+            "after_generation": value["after_generation"],
+            "tasks": tasks,
+        })
+    }
+
+    fn close_hash_payload(event: &StoredEvent, tasks: &[Value]) -> Value {
+        let value = event.value.get("value").unwrap();
+        json!({
+            "purpose": "gmail.archive.close",
+            "account": value["account"],
+            "thread_id": value["thread_id"],
+            "enable_epoch": value["enable_epoch"],
+            "opened_by": value["opened_by"],
+            "after_generation": value["after_generation"],
+            "note": value["note"],
+            "tasks": tasks,
+            "saved_ids": value["saved_ids"],
+            "note_fingerprint": value["note_fingerprint"],
+            "label": value["label"],
+            "historical": value["historical"],
+            "confirmation_digest": value["confirmation_digest"],
+        })
+    }
+
+    fn locator_values_without_row_hash(tasks: &Value) -> Vec<Value> {
+        tasks
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|task| {
+                json!({
+                    "path": task["path"],
+                    "line": task["line"],
+                    "block_id": task["block_id"],
+                    "status": task["status"],
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn new_idless_events_match_pre_lk2_hashes_and_keep_row_hash_metadata() {
+        let (mut state, mut events, label) = enabled();
+        let open = idless_evidence(key(), ' ', 7, 1);
+        let open_scan = scan(open.clone());
+        let open_event = state.event_for_open(&open_scan, &open).unwrap();
+        let stored_open = open_event.stored("athena", 2, 2);
+        let open_value = stored_open.value.get("value").unwrap();
+        let open_tasks = open_value.get("tasks").unwrap();
+        assert_eq!(open_tasks.as_array().unwrap().len(), 2);
+        assert!(open_tasks[0]["row_hash"].as_str().is_some());
+        assert!(open_tasks[1]["row_hash"].as_str().is_some());
+        let legacy_open = hash_value(&observation_hash_payload(
+            &stored_open,
+            &locator_values_without_row_hash(open_tasks),
+        ));
+        assert_eq!(
+            open_value["observation_id"].as_str(),
+            Some(legacy_open.as_str())
+        );
+        push(&mut events, &open_event, "athena", 2);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+        assert!(state.warnings().is_empty());
+
+        let closed = idless_evidence(key(), 'x', 7, 1);
+        let closed_scan = scan(closed.clone());
+        let close_event =
+            state.event_for_close(&closed_scan, &closed, label).unwrap();
+        let stored_close = close_event.stored("athena", 3, 3);
+        let close_value = stored_close.value.get("value").unwrap();
+        let close_tasks = close_value.get("tasks").unwrap();
+        assert!(close_tasks[0]["row_hash"].as_str().is_some());
+        let legacy_close = hash_value(&close_hash_payload(
+            &stored_close,
+            &locator_values_without_row_hash(close_tasks),
+        ));
+        assert_eq!(
+            close_value["generation"].as_str(),
+            Some(legacy_close.as_str())
+        );
+        push(&mut events, &close_event, "athena", 3);
+        state = ArchiveJournal::from_events(events, Vec::new());
+        assert!(state.warnings().is_empty());
+        assert!(state.unconsumed_close(&key()).is_some());
+    }
+
+    #[test]
+    fn current_reader_accepts_legacy_and_interim_idless_hashes() {
+        let (mut state, mut events, label) = enabled();
+        let open = idless_evidence(key(), ' ', 4, 0);
+        let open_scan = scan(open.clone());
+        let open_event = state.event_for_open(&open_scan, &open).unwrap();
+        push(&mut events, &open_event, "athena", 2);
+        state = ArchiveJournal::from_events(events.clone(), Vec::new());
+        let closed = idless_evidence(key(), 'x', 4, 0);
+        let closed_scan = scan(closed.clone());
+        let close_event =
+            state.event_for_close(&closed_scan, &closed, label).unwrap();
+        push(&mut events, &close_event, "athena", 3);
+
+        let mut legacy_events = events.clone();
+        for event in &mut legacy_events {
+            if event.kind != OBSERVED_KIND && event.kind != CLOSED_KIND {
+                continue;
+            }
+            let payload = event.value.get_mut("value").unwrap();
+            for task in
+                payload.get_mut("tasks").unwrap().as_array_mut().unwrap()
+            {
+                task.as_object_mut().unwrap().remove("row_hash");
+            }
+        }
+        let legacy_state =
+            ArchiveJournal::from_events(legacy_events, Vec::new());
+        assert!(legacy_state.warnings().is_empty());
+        assert!(legacy_state.unconsumed_close(&key()).is_some());
+
+        let mut interim_events = events.clone();
+        let mut rewritten_open = BTreeMap::new();
+        for event in &mut interim_events {
+            if event.kind != OBSERVED_KIND {
+                continue;
+            }
+            let tasks = parse_task_locators(
+                event.value.get("value").unwrap().get("tasks").unwrap(),
+            )
+            .expect("locators parse");
+            let id = hash_value(&observation_hash_payload(
+                event,
+                &interim_task_values(&tasks),
+            ));
+            let old = event.value["value"]["observation_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            rewritten_open.insert(old, id.clone());
+            event.value["value"]["observation_id"] = json!(id);
+        }
+        for event in &mut interim_events {
+            if event.kind != CLOSED_KIND {
+                continue;
+            }
+            if let Some(opened_by) = event.value["value"]["opened_by"]
+                .as_str()
+                .map(str::to_string)
+                && let Some(new_id) = rewritten_open.get(&opened_by)
+            {
+                event.value["value"]["opened_by"] = json!(new_id);
+            }
+            let tasks = parse_task_locators(
+                event.value.get("value").unwrap().get("tasks").unwrap(),
+            )
+            .expect("locators parse");
+            let id = hash_value(&close_hash_payload(
+                event,
+                &interim_task_values(&tasks),
+            ));
+            event.value["value"]["generation"] = json!(id);
+        }
+        let interim_state =
+            ArchiveJournal::from_events(interim_events, Vec::new());
+        assert!(interim_state.warnings().is_empty());
+        assert!(interim_state.unconsumed_close(&key()).is_some());
+
+        let id_bearing = {
+            let (state, events, _) = enabled();
+            let open = evidence(key(), ' ');
+            let open_scan = scan(open.clone());
+            let open_event = state.event_for_open(&open_scan, &open).unwrap();
+            let stored = open_event.stored("athena", 2, 2);
+            let tasks = stored.value["value"]["tasks"].as_array().unwrap();
+            assert!(
+                tasks[0].get("row_hash").is_none()
+                    || tasks[0]["row_hash"].is_null()
+            );
+            let _ = events;
+            stored
+        };
+        assert!(parse_open_observation(&id_bearing).is_some());
+    }
 
     const ACCOUNT: &str = "me@example.com";
     const THREAD: &str = "aa11";

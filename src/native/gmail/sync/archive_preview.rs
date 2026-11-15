@@ -13,8 +13,9 @@
 //! label name and resolved id, the receipt label name (never the remote id,
 //! so first-use label creation between preview and confirm cannot
 //! invalidate it), the archive action and limit, and per thread the
-//! close-generation facts plus task/note evidence and the frozen/archive
-//! message sets. Planning timestamps and display text never enter the
+//! semantic close witnesses (`opened_by`, `after_generation`) plus
+//! task/note evidence and the frozen/archive message sets. Planning
+//! timestamps, display text, and report line numbers never enter the
 //! digest, and thread rows sort by thread id so fetch order cannot change it.
 
 use std::collections::BTreeSet;
@@ -45,7 +46,7 @@ use crate::native::gmail::{
 /// The archive action bound into every preview digest.
 const DIGEST_ACTION: &str = "archive";
 /// Digest document version; bump when the bound fields change.
-const DIGEST_VERSION: u32 = 2;
+const DIGEST_VERSION: u32 = 3;
 
 /// A thread is still watched: at least one linking task is open.
 pub(crate) const HOLD_WATCHING: &str = "watching";
@@ -138,6 +139,10 @@ pub(crate) struct ArchivePreviewRow {
     /// The recorded close generation; `None` for unconfirmed backlog rows,
     /// whose generation is derived from the confirmation digest at apply.
     pub generation: Option<String>,
+    /// Open-observation id that armed this close, when one exists.
+    pub opened_by: Option<String>,
+    /// Prior consumed close generation, when this close is a reclose.
+    pub after_generation: Option<String>,
     pub historical: bool,
     pub decision: PreviewDecision,
 }
@@ -537,7 +542,8 @@ pub(crate) fn remote_verdict_for_saved_ids<R: GmailRead>(
 #[derive(Serialize)]
 struct DigestThread<'a> {
     thread_id: &'a str,
-    generation: Option<&'a str>,
+    opened_by: Option<&'a str>,
+    after_generation: Option<&'a str>,
     enable_epoch: &'a str,
     historical: bool,
     note: &'a str,
@@ -548,8 +554,10 @@ struct DigestThread<'a> {
     decision: String,
 }
 
-/// One task locator of the canonical digest document. Task prose never
-/// enters the digest: path, stable block ID or row hash, and box status bind the row.
+/// One task locator of the canonical digest document. Task prose and line
+/// numbers never enter the digest: path, stable block ID or row hash, and
+/// box status bind the row. Duplicate id-less rows stay as duplicate array
+/// entries.
 #[derive(Serialize)]
 struct DigestTask<'a> {
     path: &'a str,
@@ -621,7 +629,8 @@ pub(crate) fn plan_digest(
             };
             DigestThread {
                 thread_id: row.key.thread_id(),
-                generation: row.generation.as_deref(),
+                opened_by: row.opened_by.as_deref(),
+                after_generation: row.after_generation.as_deref(),
                 enable_epoch: row.enable_epoch.as_str(),
                 historical: row.historical,
                 note: row.note.as_str(),
@@ -1084,6 +1093,10 @@ fn row_for(
             .map(|close| close.enable_epoch.clone())
             .unwrap_or_default(),
         generation: close.as_ref().map(|close| close.generation.clone()),
+        opened_by: close.as_ref().and_then(|close| close.opened_by.clone()),
+        after_generation: close
+            .as_ref()
+            .and_then(|close| close.after_generation.clone()),
         historical,
         decision,
     }
@@ -1907,6 +1920,8 @@ mod tests {
             note_fingerprint: format!("sha256:{}", "b".repeat(64)),
             enable_epoch: "epoch-1".to_string(),
             generation: Some("sha256:gen".to_string()),
+            opened_by: Some("sha256:open".to_string()),
+            after_generation: None,
             historical: false,
             decision: PreviewDecision::Archive {
                 archive_ids: vec!["cc03".to_string()],
@@ -1926,6 +1941,8 @@ mod tests {
             note_fingerprint: format!("sha256:{}", "a".repeat(64)),
             enable_epoch: "epoch-1".to_string(),
             generation: None,
+            opened_by: None,
+            after_generation: None,
             historical: true,
             decision: PreviewDecision::Kept {
                 reason: KEPT_UNSAVED,
@@ -1947,7 +1964,16 @@ mod tests {
 
         let mut shifted = left.clone();
         shifted.tasks[0].line += 20;
+        shifted.generation = Some("sha256:other-gen".to_string());
         assert_eq!(digest(&[shifted, right.clone()]), forward);
+
+        let mut changed = left.clone();
+        changed.opened_by = Some("sha256:other-open".to_string());
+        assert_ne!(digest(&[changed, right.clone()]), forward);
+
+        let mut changed = left.clone();
+        changed.after_generation = Some("sha256:prior".to_string());
+        assert_ne!(digest(&[changed, right.clone()]), forward);
 
         let mut changed = left.clone();
         changed.saved_ids = vec!["zz99".to_string()];
@@ -1976,6 +2002,71 @@ mod tests {
     }
 
     #[test]
+    fn digest_keeps_duplicate_idless_rows_and_rejects_identity_changes() {
+        let row_hash = "a".repeat(64);
+        let task = |row_hash: Option<String>, status: char, line: usize| {
+            ArchiveTaskLocator {
+                path: "gmail_inbox.md".to_string(),
+                line,
+                block_id: None,
+                row_hash,
+                status,
+            }
+        };
+        let row = |tasks: Vec<ArchiveTaskLocator>| ArchivePreviewRow {
+            key: key("aa11"),
+            note: "mail/a.md".to_string(),
+            tasks,
+            saved_ids: vec!["aa01".to_string()],
+            note_fingerprint: format!("sha256:{}", "a".repeat(64)),
+            enable_epoch: "epoch-1".to_string(),
+            generation: Some("sha256:gen".to_string()),
+            opened_by: Some("sha256:open".to_string()),
+            after_generation: None,
+            historical: false,
+            decision: PreviewDecision::Archive {
+                archive_ids: vec!["aa01".to_string()],
+            },
+        };
+        let digest = |rows: &[ArchivePreviewRow]| {
+            plan_digest(
+                "me@example.com",
+                "bob",
+                Some("Label_1"),
+                "bob/closed",
+                10,
+                rows,
+            )
+        };
+        let duplicates = row(vec![
+            task(Some(row_hash.clone()), 'x', 4),
+            task(Some(row_hash.clone()), 'x', 5),
+        ]);
+        let forward = digest(&[duplicates.clone()]);
+        let mut shifted = duplicates.clone();
+        shifted.tasks[0].line = 40;
+        shifted.tasks[1].line = 41;
+        shifted.generation = Some("sha256:other-gen".to_string());
+        assert_eq!(digest(&[shifted]), forward);
+
+        let single = row(vec![task(Some(row_hash.clone()), 'x', 4)]);
+        assert_ne!(digest(&[single]), forward);
+
+        let mut flipped = duplicates.clone();
+        flipped.tasks[1].status = '-';
+        assert_ne!(digest(&[flipped]), forward);
+
+        let mut merged = duplicates.clone();
+        merged.tasks[0].block_id = Some("left".to_string());
+        merged.tasks[0].row_hash = None;
+        assert_ne!(digest(&[merged]), forward);
+
+        let mut saved = duplicates;
+        saved.saved_ids = vec!["aa01".to_string(), "bb02".to_string()];
+        assert_ne!(digest(&[saved]), forward);
+    }
+
+    #[test]
     fn gate_requires_backlog_and_burst_confirmation() {
         let row = |historical: bool| ArchivePreviewRow {
             key: key("aa11"),
@@ -1985,6 +2076,8 @@ mod tests {
             note_fingerprint: String::new(),
             enable_epoch: String::new(),
             generation: None,
+            opened_by: None,
+            after_generation: None,
             historical,
             decision: PreviewDecision::Archive {
                 archive_ids: vec!["aa01".to_string()],

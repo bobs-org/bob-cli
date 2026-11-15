@@ -382,6 +382,26 @@ fn close_inbox_task(env: &GmailEnv) {
     set_inbox_task_status(env, 'x');
 }
 
+fn shift_inbox_lines(env: &GmailEnv, blank_lines: usize) {
+    let inbox = env.vault().join("gmail_inbox.md");
+    let text = fs::read_to_string(&inbox).expect("read inbox");
+    fs::write(&inbox, format!("{}{text}", "\n".repeat(blank_lines)))
+        .expect("shift inbox lines");
+}
+
+fn preview_digest(env: &GmailEnv, fake: &FakeGog) -> String {
+    let preview = run_gmail(
+        env,
+        fake,
+        &["sync", "-d", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&preview, 0, "fresh close dry-run is confirmable");
+    json_stdout(&preview)["archive_digest"]
+        .as_str()
+        .expect("digest")
+        .to_string()
+}
+
 fn set_inbox_task_status(env: &GmailEnv, status: char) {
     let inbox = env.vault().join("gmail_inbox.md");
     let text = fs::read_to_string(&inbox).expect("read inbox");
@@ -912,6 +932,214 @@ fn supplied_confirmation_mismatch_never_writes_even_without_a_gate() {
     assert!(empty_value["archive"].as_array().unwrap().is_empty());
     assert!(empty_value.get("archive_digest").is_none());
     assert!(remote_write_calls(&fake).is_empty());
+}
+
+#[test]
+fn live_confirms_idless_close_after_line_shift() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-idless-line-shift");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (note, _) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+
+    let preview = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-d", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&preview, 0, "fresh close dry-run is confirmable");
+    let value = json_stdout(&preview);
+    assert_eq!(value["archive"][0]["action"], "would_archive");
+    assert_eq!(value["archive"][0]["tasks"][0]["path"], "gmail_inbox.md");
+    assert!(value["archive"][0]["tasks"][0]["block_id"].is_null());
+    let digest = value["archive_digest"]
+        .as_str()
+        .expect("digest")
+        .to_string();
+
+    shift_inbox_lines(&env, 2);
+    fake.clear_calls();
+    let confirmed = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-c", &digest, "-f", "json"],
+    );
+    assert_exit(&confirmed, 0, "line-shifted id-less confirm archives");
+    let value = json_stdout(&confirmed);
+    assert_eq!(value["archive"][0]["action"], "archived");
+    assert_eq!(value["archive"][0]["thread_id"], THREAD_A);
+    assert_eq!(value["archive"][0]["messages"], json!([MESSAGE_A]));
+    assert!(journal_has(&env, "gmail.archived"));
+    assert!(
+        env.vault().join(&note).is_file(),
+        "filing remains after confirm"
+    );
+}
+
+#[test]
+fn live_confirms_duplicate_idless_rows_after_line_shift() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-idless-duplicates");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (_note, link) = file_adopt(&env, &fake);
+    fs::write(
+        env.vault().join("gmail_inbox.md"),
+        format!(
+            "#task archive apply probe {link}\n\n\
+             - [ ] #task archive apply probe {link}\n\
+             - [ ] #task archive apply probe {link}\n"
+        ),
+    )
+    .expect("write duplicate id-less tasks");
+    close_all_inbox_tasks(&env);
+
+    let preview = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-d", "-l", "0", "-r", "0", "-f", "json"],
+    );
+    assert_exit(&preview, 0, "duplicate id-less dry-run is confirmable");
+    let value = json_stdout(&preview);
+    let tasks = value["archive"][0]["tasks"].as_array().expect("tasks");
+    assert_eq!(tasks.len(), 2, "both id-less rows bind: {value}");
+    assert!(tasks.iter().all(|task| {
+        task["path"] == "gmail_inbox.md" && task["block_id"].is_null()
+    }));
+    assert_ne!(tasks[0]["line"], tasks[1]["line"]);
+    let digest = value["archive_digest"]
+        .as_str()
+        .expect("digest")
+        .to_string();
+
+    shift_inbox_lines(&env, 3);
+    fake.clear_calls();
+    let confirmed = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-c", &digest, "-f", "json"],
+    );
+    assert_exit(
+        &confirmed,
+        0,
+        "line-shifted duplicate id-less confirm archives",
+    );
+    assert_eq!(json_stdout(&confirmed)["archive"][0]["action"], "archived");
+    assert!(journal_has(&env, "gmail.archived"));
+}
+
+#[test]
+fn confirmation_rejects_status_task_merge_and_saved_set_changes() {
+    let env = GmailEnv::new("bob-cli-gmail-archive-confirm-identity");
+    env.write_journal_rules();
+    write_archive_config(&env);
+    write_task_settings(&env);
+    let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+    seed_labels(&fake, true);
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    let (_note, link) = file_adopt(&env, &fake);
+    close_inbox_task(&env);
+    let inbox = env.vault().join("gmail_inbox.md");
+    let original_inbox = fs::read_to_string(&inbox).expect("closed inbox");
+    let digest = preview_digest(&env, &fake);
+
+    let mismatch =
+        |env: &GmailEnv, fake: &FakeGog, digest: &str, label: &str| {
+            fake.clear_calls();
+            let live = run_gmail(
+                env,
+                fake,
+                &["sync", "-l", "0", "-r", "0", "-c", digest, "-f", "json"],
+            );
+            assert_exit(&live, 1, label);
+            assert_eq!(
+                json_stdout(&live)["archive"][0]["reason"],
+                "confirm_mismatch"
+            );
+            assert!(remote_write_calls(fake).is_empty());
+            assert!(!journal_has(env, "gmail.archived"));
+        };
+
+    set_inbox_task_status(&env, '-');
+    mismatch(&env, &fake, &digest, "status flip mismatches");
+    fs::write(&inbox, &original_inbox).expect("restore closed inbox");
+
+    fs::write(
+        &inbox,
+        format!("{original_inbox}- [x] #task archive apply probe {link}\n"),
+    )
+    .expect("add a second closed linker");
+    mismatch(&env, &fake, &digest, "added task mismatches");
+    fs::write(&inbox, &original_inbox).expect("restore closed inbox");
+
+    seed_thread_and_messages(
+        &fake,
+        vec![
+            thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID]),
+            thread_message(MESSAGE_B, &["INBOX"]),
+        ],
+    );
+    mismatch(&env, &fake, &digest, "unsaved extra message mismatches");
+    seed_thread_and_messages(
+        &fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+
+    fs::write(
+        &inbox,
+        format!(
+            "- [-] #task Source {link} ^src\n\
+             \t- 🪢 **LINKS:** merged into [[gmail_inbox#^left]]\n\
+             - [x] #task Left ^left\n\
+             - [x] #task Right ^right\n"
+        ),
+    )
+    .expect("rewrite as merge to left");
+    mismatch(&env, &fake, &digest, "merge rewrite mismatches original");
+    let merge_digest = preview_digest(&env, &fake);
+    fs::write(
+        &inbox,
+        format!(
+            "- [-] #task Source {link} ^src\n\
+             \t- 🪢 **LINKS:** merged into [[gmail_inbox#^right]]\n\
+             - [x] #task Left ^left\n\
+             - [x] #task Right ^right\n"
+        ),
+    )
+    .expect("change merge endpoint");
+    mismatch(
+        &env,
+        &fake,
+        &merge_digest,
+        "merge endpoint change mismatches",
+    );
+
+    fs::write(&inbox, &original_inbox).expect("restore closed inbox");
+    shift_inbox_lines(&env, 2);
+    fake.clear_calls();
+    let confirmed = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "-c", &digest, "-f", "json"],
+    );
+    assert_exit(&confirmed, 0, "restored line-shifted close still confirms");
+    assert_eq!(json_stdout(&confirmed)["archive"][0]["action"], "archived");
 }
 
 #[test]

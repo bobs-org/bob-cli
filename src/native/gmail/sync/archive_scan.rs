@@ -822,20 +822,19 @@ fn effective_linkers(
             }
             Some(MergeProvenance::Relation(entries)) => {
                 for entry in entries {
-                    match follow_merge(
+                    let (targets, error) = follow_merge(
                         linker,
                         &entry,
                         index,
                         &originals,
                         0,
                         &mut Vec::new(),
-                    ) {
-                        Ok(target) => insert(target),
-                        Err(error) => {
-                            if unresolved.is_none() {
-                                unresolved = Some(error);
-                            }
-                        }
+                    );
+                    for target in targets {
+                        insert(target);
+                    }
+                    if unresolved.is_none() {
+                        unresolved = error;
                     }
                 }
             }
@@ -866,13 +865,16 @@ fn follow_merge(
     originals: &BTreeMap<(String, usize), ArchiveLinkTask>,
     depth: u8,
     stack: &mut Vec<(String, String)>,
-) -> Result<ArchiveLinkTask, MergeUnresolved> {
+) -> (Vec<ArchiveLinkTask>, Option<MergeUnresolved>) {
     if depth >= MERGE_FOLLOW_DEPTH {
-        return Err(MergeUnresolved::new(
-            source,
-            entry.canonical_text(),
-            MergeUnresolvedKind::DepthCap,
-        ));
+        return (
+            Vec::new(),
+            Some(MergeUnresolved::new(
+                source,
+                entry.canonical_text(),
+                MergeUnresolvedKind::DepthCap,
+            )),
+        );
     }
     let source_path = Path::new(&source.path);
     match resolve_relation_entry(
@@ -884,99 +886,106 @@ fn follow_merge(
         Ok((path, block_id)) => {
             let identity = (slashes(&path), block_id.clone());
             if stack.iter().any(|seen| seen == &identity) {
-                return Err(MergeUnresolved::new(
-                    source,
-                    entry.canonical_text(),
-                    MergeUnresolvedKind::Cycle,
-                ));
+                return (
+                    Vec::new(),
+                    Some(MergeUnresolved::new(
+                        source,
+                        entry.canonical_text(),
+                        MergeUnresolvedKind::Cycle,
+                    )),
+                );
             }
             let Some(snapshot) = index.task_id(&path, &block_id) else {
-                return Err(MergeUnresolved::new(
+                return (
+                    Vec::new(),
+                    Some(MergeUnresolved::new(
+                        source,
+                        entry.canonical_text(),
+                        MergeUnresolvedKind::MissingBlock,
+                    )),
+                );
+            };
+            let task = originals
+                .get(&(snapshot.path.clone(), snapshot.line))
+                .cloned()
+                .unwrap_or_else(|| linker_from_snapshot(snapshot, true));
+            follow_resolved_task(
+                source, entry, task, snapshot, index, originals, depth, stack,
+                identity,
+            )
+        }
+        Err(RelationResolveError::SelfRelation) => (
+            Vec::new(),
+            Some(MergeUnresolved::new(
+                source,
+                entry.canonical_text(),
+                MergeUnresolvedKind::SelfEdge,
+            )),
+        ),
+        Err(RelationResolveError::TargetNotTask) => (
+            Vec::new(),
+            Some(MergeUnresolved::new(
+                source,
+                entry.canonical_text(),
+                MergeUnresolvedKind::NonTask,
+            )),
+        ),
+        Err(RelationResolveError::Unresolved) => (
+            Vec::new(),
+            Some(MergeUnresolved::new(
+                source,
+                entry.canonical_text(),
+                classify_unresolved(source_path, entry, index),
+            )),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn follow_resolved_task(
+    source: &ArchiveLinkTask,
+    entry: &RelationEntry,
+    task: ArchiveLinkTask,
+    snapshot: &TaskSnapshot,
+    index: &ScanRelationIndex,
+    originals: &BTreeMap<(String, usize), ArchiveLinkTask>,
+    depth: u8,
+    stack: &mut Vec<(String, String)>,
+    identity: (String, String),
+) -> (Vec<ArchiveLinkTask>, Option<MergeUnresolved>) {
+    match &snapshot.provenance {
+        Some(MergeProvenance::Relation(entries)) => {
+            stack.push(identity);
+            let mut terminals = Vec::new();
+            let mut unresolved = None;
+            for nested in entries {
+                let (nested_terminals, nested_error) = follow_merge(
+                    &task,
+                    nested,
+                    index,
+                    originals,
+                    depth + 1,
+                    stack,
+                );
+                terminals.extend(nested_terminals);
+                if unresolved.is_none() {
+                    unresolved = nested_error;
+                }
+            }
+            stack.pop();
+            if terminals.is_empty() && unresolved.is_none() {
+                unresolved = Some(MergeUnresolved::new(
                     source,
                     entry.canonical_text(),
                     MergeUnresolvedKind::MissingBlock,
                 ));
-            };
-            if let Some(original) =
-                originals.get(&(snapshot.path.clone(), snapshot.line))
-            {
-                match &snapshot.provenance {
-                    Some(MergeProvenance::Relation(entries)) => {
-                        stack.push(identity);
-                        let mut last = None;
-                        for nested in entries {
-                            last = Some(follow_merge(
-                                original,
-                                nested,
-                                index,
-                                originals,
-                                depth + 1,
-                                stack,
-                            )?);
-                        }
-                        stack.pop();
-                        last.ok_or_else(|| {
-                            MergeUnresolved::new(
-                                source,
-                                entry.canonical_text(),
-                                MergeUnresolvedKind::MissingBlock,
-                            )
-                        })
-                    }
-                    Some(MergeProvenance::Section) => {
-                        Ok(section_closed_linker(original))
-                    }
-                    None => Ok(original.clone()),
-                }
-            } else {
-                match &snapshot.provenance {
-                    Some(MergeProvenance::Relation(entries)) => {
-                        stack.push(identity);
-                        let via = linker_from_snapshot(snapshot, true);
-                        let mut last = None;
-                        for nested in entries {
-                            last = Some(follow_merge(
-                                &via,
-                                nested,
-                                index,
-                                originals,
-                                depth + 1,
-                                stack,
-                            )?);
-                        }
-                        stack.pop();
-                        last.ok_or_else(|| {
-                            MergeUnresolved::new(
-                                source,
-                                entry.canonical_text(),
-                                MergeUnresolvedKind::MissingBlock,
-                            )
-                        })
-                    }
-                    Some(MergeProvenance::Section) => {
-                        Ok(section_closed_linker(&linker_from_snapshot(
-                            snapshot, true,
-                        )))
-                    }
-                    None => Ok(linker_from_snapshot(snapshot, true)),
-                }
             }
+            (terminals, unresolved)
         }
-        Err(RelationResolveError::SelfRelation) => Err(MergeUnresolved::new(
-            source,
-            entry.canonical_text(),
-            MergeUnresolvedKind::SelfEdge,
-        )),
-        Err(RelationResolveError::TargetNotTask) => Err(MergeUnresolved::new(
-            source,
-            entry.canonical_text(),
-            MergeUnresolvedKind::NonTask,
-        )),
-        Err(RelationResolveError::Unresolved) => Err(MergeUnresolved::new(
-            source,
-            entry.canonical_text(),
-            classify_unresolved(source_path, entry, index),
-        )),
+        Some(MergeProvenance::Section) => {
+            (vec![section_closed_linker(&task)], None)
+        }
+        None => (vec![task], None),
     }
 }
 
@@ -1878,6 +1887,121 @@ mod tests {
         assert_eq!(found.tasks.len(), 1);
         assert_eq!(found.tasks[0].block_id.as_deref(), Some("dst"));
         assert!(scan.archivable(found));
+    }
+
+    fn block_ids(found: &ArchiveThreadEvidence) -> Vec<&str> {
+        found
+            .tasks
+            .iter()
+            .map(|task| task.block_id.as_deref().unwrap_or(""))
+            .collect()
+    }
+
+    #[test]
+    fn branching_merge_keeps_open_and_closed_terminals_in_either_order() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
+        vault.write(
+            "job.md",
+            "- [-] #task Source [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^mid]]\n\
+             - [-] #task Mid ^mid\n\
+             \t- 🪢 **LINKS:** merged into [[job#^open]] • merged into [[job#^closed]]\n\
+             - [ ] #task Open ^open\n\
+             - [x] #task Closed ^closed\n\
+             - [-] #task Reverse [[mail/2026/quote]] ^rev\n\
+             \t- 🪢 **LINKS:** merged into [[job#^mid-rev]]\n\
+             - [-] #task Mid reverse ^mid-rev\n\
+             \t- 🪢 **LINKS:** merged into [[job#^closed-rev]] • merged into [[job#^open-rev]]\n\
+             - [x] #task Closed reverse ^closed-rev\n\
+             - [ ] #task Open reverse ^open-rev\n",
+        );
+        let scan = vault.scan();
+        let open_first = evidence(&scan, THREAD);
+        assert!(!open_first.merge_unresolved());
+        assert!(open_first.has_open());
+        assert_eq!(block_ids(open_first), ["open", "closed"]);
+        assert!(!scan.archivable(open_first));
+        let closed_first = evidence(&scan, OTHER);
+        assert!(!closed_first.merge_unresolved());
+        assert!(closed_first.has_open());
+        assert_eq!(block_ids(closed_first), ["closed-rev", "open-rev"]);
+        assert!(!scan.archivable(closed_first));
+    }
+
+    #[test]
+    fn branching_merge_keeps_two_closed_terminals_and_dedupes_diamonds() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
+        vault.write(
+            "job.md",
+            "- [-] #task Source [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^mid]]\n\
+             - [-] #task Mid ^mid\n\
+             \t- 🪢 **LINKS:** merged into [[job#^left]] • merged into [[job#^right]]\n\
+             - [x] #task Left [completion:: 2026-11-01] ^left\n\
+             - [x] #task Right [completion:: 2026-11-04] ^right\n\
+             - [-] #task Diamond [[mail/2026/quote]] ^d-src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^a]] • merged into [[job#^b]]\n\
+             - [-] #task A ^a\n\
+             \t- 🪢 **LINKS:** merged into [[job#^shared]]\n\
+             - [-] #task B ^b\n\
+             \t- 🪢 **LINKS:** merged into [[job#^shared]]\n\
+             - [x] #task Shared ^shared\n",
+        );
+        let scan = vault.scan();
+        let branched = evidence(&scan, THREAD);
+        assert!(!branched.merge_unresolved());
+        assert_eq!(block_ids(branched), ["left", "right"]);
+        assert!(scan.archivable(branched));
+        let newest =
+            super::super::reopen_plan::select_newest_linker(branched).unwrap();
+        assert_eq!(newest.block_id.as_deref(), Some("right"));
+        let diamond = evidence(&scan, OTHER);
+        assert!(!diamond.merge_unresolved());
+        assert_eq!(block_ids(diamond), ["shared"]);
+        assert!(diamond.tasks[0].via_merge);
+        assert!(scan.archivable(diamond));
+    }
+
+    #[test]
+    fn branching_merge_holds_when_one_branch_is_unresolved() {
+        let mut vault = Vault::new();
+        vault.mail("mail/2026/lease.md", ACCOUNT, THREAD, &[THREAD]);
+        vault.mail("mail/2026/quote.md", ACCOUNT, OTHER, &[OTHER]);
+        vault.write(
+            "job.md",
+            "- [-] #task Missing [[mail/2026/lease]] ^src\n\
+             \t- 🪢 **LINKS:** merged into [[job#^mid]]\n\
+             - [-] #task Mid ^mid\n\
+             \t- 🪢 **LINKS:** merged into [[job#^open]] • merged into [[gone#^nope]]\n\
+             - [ ] #task Open ^open\n\
+             - [-] #task Cycle [[mail/2026/quote]] ^cyc\n\
+             \t- 🪢 **LINKS:** merged into [[job#^mid-cyc]]\n\
+             - [-] #task Mid cycle ^mid-cyc\n\
+             \t- 🪢 **LINKS:** merged into [[job#^ok]] • merged into [[job#^loop]]\n\
+             - [x] #task Ok ^ok\n\
+             - [-] #task Loop ^loop\n\
+             \t- 🪢 **LINKS:** merged into [[job#^mid-cyc]]\n",
+        );
+        let scan = vault.scan();
+        let missing = evidence(&scan, THREAD);
+        assert_eq!(
+            missing.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::MissingNote)
+        );
+        assert_eq!(block_ids(missing), ["open"]);
+        assert!(missing.has_open());
+        assert!(!scan.archivable(missing));
+        let cyclic = evidence(&scan, OTHER);
+        assert_eq!(
+            cyclic.merge_unresolved.as_ref().map(|hold| hold.kind),
+            Some(MergeUnresolvedKind::Cycle)
+        );
+        assert_eq!(block_ids(cyclic), ["ok"]);
+        assert!(!scan.archivable(cyclic));
     }
 
     #[test]
