@@ -282,6 +282,7 @@ pub(crate) struct FakeGog {
     log: PathBuf,
     state: PathBuf,
     events: PathBuf,
+    events_dir: PathBuf,
     event_dir: PathBuf,
     home: PathBuf,
     stdin_log: PathBuf,
@@ -298,6 +299,9 @@ impl FakeGog {
         chmod_exec(&path);
         let event_dir = root.join("event-lookup");
         fs::create_dir_all(&event_dir).expect("create event lookup dir");
+        let events_dir = root.join("events-by-calendar");
+        fs::create_dir_all(&events_dir)
+            .expect("create per-calendar events dir");
         let home = root.join("home");
         fs::create_dir_all(&home).expect("create fake home dir");
         Self {
@@ -305,6 +309,7 @@ impl FakeGog {
             log: root.join("calls.jsonl"),
             state: root.join("state.json"),
             events: root.join("events.json"),
+            events_dir,
             event_dir,
             stdin_log: root.join("stdin.log"),
             home,
@@ -353,6 +358,107 @@ impl FakeGog {
             .expect("write fake event lookup");
     }
 
+    /// Answer `calendar event <calendar_id> <event_id>` from a
+    /// per-calendar lookup file, preferred over [`event_lookup`].
+    pub(crate) fn event_lookup_for(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        body: &str,
+    ) {
+        let dir = self.event_dir.join(calendar_id);
+        fs::create_dir_all(&dir).expect("create per-calendar event lookup dir");
+        fs::write(dir.join(format!("{event_id}.json")), body)
+            .expect("write per-calendar fake event lookup");
+    }
+
+    /// Serve `calendar events <calendar_id>` from a per-calendar fixture.
+    ///
+    /// A missing file for another calendar means no events. A
+    /// `{"_fail": {...}}` payload fails that calendar only.
+    pub(crate) fn events_json_for(&self, calendar_id: &str, text: &str) {
+        fs::write(self.events_dir.join(".enabled"), "")
+            .expect("enable per-calendar events dir");
+        fs::write(self.events_dir.join(format!("{calendar_id}.json")), text)
+            .expect("write per-calendar fake events");
+    }
+
+    fn load_state(&self) -> serde_json::Value {
+        if self.state.exists() {
+            serde_json::from_str(
+                &fs::read_to_string(&self.state).expect("read fake gog state"),
+            )
+            .expect("parse fake gog state")
+        } else {
+            serde_json::json!({})
+        }
+    }
+
+    fn save_state(&self, state: &serde_json::Value) {
+        fs::write(
+            &self.state,
+            serde_json::to_string(state).expect("serialize fake gog state"),
+        )
+        .expect("write fake gog state");
+    }
+
+    fn default_calendars() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({
+                "id": ACCOUNT,
+                "summary": "Personal",
+                "primary": true,
+                "accessRole": "owner",
+                "backgroundColor": "#9fc6e7",
+                "colorId": "1",
+            }),
+            serde_json::json!({
+                "id": "work@group.calendar.google.com",
+                "summary": "Work",
+                "primary": false,
+                "accessRole": "reader",
+                "backgroundColor": "#fad165",
+                "colorId": "5",
+            }),
+        ]
+    }
+
+    /// Replace the fake account's calendar list.
+    pub(crate) fn set_calendars(&self, calendars: Vec<serde_json::Value>) {
+        let mut state = self.load_state();
+        state["calendars"] = serde_json::Value::Array(calendars);
+        self.save_state(&state);
+    }
+
+    /// Append a calendar to the fake account's list.
+    pub(crate) fn add_calendar(&self, id: &str, summary: &str, primary: bool) {
+        let mut state = self.load_state();
+        let mut calendars = state
+            .get("calendars")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_else(Self::default_calendars);
+        calendars.push(serde_json::json!({
+            "id": id,
+            "summary": summary,
+            "primary": primary,
+            "accessRole": "owner",
+            "backgroundColor": "#7bd148",
+            "colorId": "2",
+        }));
+        state["calendars"] = serde_json::Value::Array(calendars);
+        self.save_state(&state);
+    }
+
+    /// Add the sample Birthdays calendar used by multi-calendar tests.
+    pub(crate) fn add_birthdays_calendar(&self) {
+        self.add_calendar(
+            "bdays@group.calendar.google.com",
+            "Birthdays",
+            false,
+        );
+    }
+
     pub(crate) fn scenario(mut self, name: &str) -> Self {
         self.scenario = name.to_string();
         self
@@ -367,7 +473,7 @@ impl FakeGog {
     pub(crate) fn env_pairs(
         &self,
     ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-        [
+        let mut pairs: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
             ("BOB_GCAL_GOG", self.path.as_os_str()),
             ("BOB_GCAL_FAKE_LOG", self.log.as_os_str()),
             ("BOB_GCAL_FAKE_STATE", self.state.as_os_str()),
@@ -381,11 +487,18 @@ impl FakeGog {
         .map(|(key, value)| {
             (std::ffi::OsString::from(key), value.to_os_string())
         })
-        .chain([(
+        .collect();
+        if self.events_dir.join(".enabled").exists() {
+            pairs.push((
+                std::ffi::OsString::from("BOB_GCAL_FAKE_EVENTS_DIR"),
+                self.events_dir.as_os_str().to_os_string(),
+            ));
+        }
+        pairs.push((
             std::ffi::OsString::from("BOB_GCAL_FAKE_SCENARIO"),
             std::ffi::OsString::from(&self.scenario),
-        )])
-        .collect()
+        ));
+        pairs
     }
 
     pub(crate) fn install<'a>(

@@ -990,3 +990,20 @@ fn list_marks_fragile_directives_only_for_guest_tasks_with_google_bob_lines() {
     assert!(!text.contains("⚑ Noted"), "{text}");
     assert!(!text.contains("⚑ Snacks"), "{text}");
 }
+
+#[test]
+fn list_names_empty_calendars_from_the_resolved_set() {
+    let env = GcalEnv::new("bob-cli-gcal-list-empty-cal-name");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(r#"{"events": [], "nextPageToken": null}"#);
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let output = command.output().expect("run list");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("list JSON");
+    assert_eq!(report["calendars"][0]["id"], "primary");
+    assert_eq!(report["calendars"][0]["name"], "Personal");
+}

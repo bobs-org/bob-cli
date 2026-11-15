@@ -592,17 +592,16 @@ pub(crate) fn fetch_candidates<S: HomeSource>(
     let timezone = bob_env::configured_timezone();
     let series_roots = journal::load_series_roots(vault).unwrap_or_default();
     let (book, warnings) = journal::load_notes(vault).unwrap_or_default();
+    let synced =
+        snapshot::resolve_synced_calendars(config, account, calendars)?;
     let mut candidates = Vec::new();
-    for configured in config.calendars() {
-        let calendar = calendars
-            .iter()
-            .find(|calendar| calendar.matches_configured_id(&configured.id));
-        let calendar_name = calendar
-            .map(|calendar| calendar.name().to_string())
-            .unwrap_or_else(|| configured.id.clone());
-        let raw_events = gog.events(&configured.id, from, to, account)?;
+    for configured in &synced {
+        let calendar_name = configured.name().to_string();
+        let raw_events =
+            gog.events(&configured.configured_id, from, to, account)?;
         for raw in raw_events {
-            let mut event = GcalEvent::from_google(&configured.id, raw)?;
+            let mut event =
+                GcalEvent::from_google(&configured.configured_id, raw)?;
             let google_event = event.clone();
             let occurrence_note = matching_note(
                 book.event(
@@ -806,21 +805,24 @@ pub(crate) fn lookup_exact<S: HomeSource>(
     let timezone = bob_env::configured_timezone();
     let series_roots = journal::load_series_roots(vault).unwrap_or_default();
     let (book, _) = journal::load_notes(vault).unwrap_or_default();
+    let synced =
+        snapshot::resolve_synced_calendars(config, account, calendars)?;
     let mut hits: Vec<(String, GcalEvent, GcalEvent, String)> = Vec::new();
     let mut tried: Vec<String> = Vec::new();
-    for configured in config.calendars() {
+    for configured in &synced {
         if let Some(pinned) = pinned
-            && configured.id != pinned
+            && configured.configured_id != pinned
         {
             continue;
         }
-        tried.push(configured.id.clone());
-        let raw = match gog.event(&configured.id, event_id, account) {
+        tried.push(configured.configured_id.clone());
+        let raw = match gog.event(&configured.configured_id, event_id, account)
+        {
             Ok(value) => value,
             Err(error) if is_not_found_error(&error) => continue,
             Err(error) => return Err(error),
         };
-        let mut event = GcalEvent::from_google(&configured.id, raw)?;
+        let mut event = GcalEvent::from_google(&configured.configured_id, raw)?;
         // Clone before layering notes: previews rebuild from this copy,
         // so it must hold Google's values, not the noted ones.
         let google_event = event.clone();
@@ -835,12 +837,13 @@ pub(crate) fn lookup_exact<S: HomeSource>(
             )
         });
         event.apply_notes(occurrence_note.as_ref(), series_note.as_ref());
-        let calendar_name = calendars
-            .iter()
-            .find(|calendar| calendar.matches_configured_id(&configured.id))
-            .map(|calendar| calendar.name().to_string())
-            .unwrap_or_else(|| configured.id.clone());
-        hits.push((configured.id.clone(), event, google_event, calendar_name));
+        let calendar_name = configured.name().to_string();
+        hits.push((
+            configured.configured_id.clone(),
+            event,
+            google_event,
+            calendar_name,
+        ));
     }
     if hits.len() > 1 && pinned.is_none() {
         let ids: Vec<String> =

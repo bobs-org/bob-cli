@@ -6,7 +6,7 @@ use crate::native::{
         journal::{NewNote, NoteSeen},
         model::ParsedNote,
         plan,
-        snapshot::{DaySnapshot, SnapshotEvent},
+        snapshot::{DaySnapshot, SnapshotEvent, SyncedCalendar},
     },
     parent_notes,
 };
@@ -1889,6 +1889,10 @@ pub(crate) fn preview(
         .account()
         .map(str::to_string)
         .unwrap_or_else(|| candidate.event.key.calendar_id.clone());
+    let calendar = SyncedCalendar::fallback(
+        candidate.event.key.calendar_id.clone(),
+        candidate.calendar_name.clone(),
+    );
     let snapshot = DaySnapshot {
         day: candidate.day,
         window: window.clone(),
@@ -1899,12 +1903,13 @@ pub(crate) fn preview(
             google_event: candidate.google_event.clone(),
             inclusion: candidate.inclusion.clone(),
             root: candidate.root.clone(),
-            calendar_name: candidate.calendar_name.clone(),
+            calendar: calendar.clone(),
             time: candidate.time.clone(),
             sort_at: candidate.sort_at,
             clock: candidate.clock.clone(),
             root_only_clock: candidate.root_only_clock.clone(),
         }],
+        calendars: vec![calendar],
         account,
         series_roots: journal::load_series_roots(vault).unwrap_or_default(),
     };

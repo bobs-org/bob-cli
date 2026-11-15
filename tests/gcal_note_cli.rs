@@ -1642,7 +1642,7 @@ fn event_id_lookup_and_calendar_pin_and_ambiguous_ids() {
     let env = GcalEnv::new("bob-cli-gcal-note-id");
     prepare(&env);
     env.write_config(
-        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  calendars:\n    - id: primary\n    - id: work@group.calendar.google.com\n",
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  calendars:\n    - id: primary\n    - id: work@group.calendar.google.com\n      mark: 🎯\n",
     );
     let fake = FakeGog::new(&env, "fake-gog");
     fake.events_json(&events_envelope(vec![]));

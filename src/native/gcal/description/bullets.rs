@@ -9,7 +9,9 @@ use crate::native::{
     event_task::BufferPart, gcal::journal, task_dependencies, task_text_escape,
 };
 
-use super::super::render::escape_badge_url as escape_destination;
+use super::super::render::{
+    escape_badge_url as escape_destination, neutralize_tasks_emoji,
+};
 use super::{BufferReason, EventDescription, Inline, LineMarker};
 
 /// Glyph that reaches back from the meeting's start.
@@ -280,21 +282,6 @@ fn escape_text(text: &str, starts_body: bool) -> String {
         task_text_escape::escape_note_inline(text)
     };
     neutralize_tasks_emoji(&escaped)
-}
-
-fn neutralize_tasks_emoji(text: &str) -> String {
-    const MARKERS: &[char] = &[
-        '🔁', '⏫', '🔼', '🔽', '🔺', '⏬', '🛫', '➕', '⏳', '⌛', '📅', '📆',
-        '🗓', '✅', '❌', '🏁', '🆔', '⛔',
-    ];
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        out.push(ch);
-        if MARKERS.contains(&ch) {
-            out.push('\u{200b}');
-        }
-    }
-    out
 }
 
 fn one_line(text: &str) -> String {

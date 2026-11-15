@@ -75,7 +75,10 @@ stored verifier, and gog redeems it immediately. Bob owns the browser and
 paste interaction, so gog never takes over the terminal.
 
 `id: primary` in config matches a calendar whose `primary` flag is true or
-whose id is the literal `primary`.
+whose id is the literal `primary`. An id equal to `gcal.account`
+(case-insensitive) is the same calendar. Two configured entries that
+resolve to one Google calendar, such as `primary` plus the account email,
+fail before any events fetch (`calendar_duplicate`).
 
 ## Setup
 
@@ -101,9 +104,10 @@ gcal:
   # gog: ~/bin/gog # optional absolute path or wrapper
   writer: kellys-macbook-pro # optional; the one host label allowed to sync
   root: meet_inbox # default [root::]
-  calendars: # default: [primary]
-    - id: primary
+  calendars: # default: [primary]; every other calendar needs a unique mark
+    - id: primary # unmarked: your own calendar
     # - id: <calendar id from `bob gcal calendars`>
+    #   mark: 🎂
     #   root: body
   colors: {} # e.g. {tomato: job, sage: body}
   tentative: context # context | task
@@ -129,7 +133,15 @@ gcal:
 
   Unique emails are compared case-insensitively. A sole Gmail grant in gog's
   default bucket does not hide a `bob-gcal` Calendar account.
-- `calendars` accepts a list of ids or a list of `{id, root?}` maps.
+- `calendars` accepts a list of `primary`/account-email ids or a list of
+  `{id, mark, root?}` maps. `mark` is required on every calendar except
+  the account's primary (`id: primary` or the `gcal.account` email). A
+  mark is a short emoji: 1–8 Unicode characters, no ASCII, whitespace, or
+  control characters. Marks must be unique. Reserved glyphs include Tasks
+  signifiers (`📅`, `⏳`, `✅`, …) and Bob's own (`🍅`, `📹`, `📍`, …).
+  A configured id that is not in the account's calendar list fails before
+  any events fetch (`calendar_not_found`); run `bob gcal calendars` to
+  copy ids you own.
 - `timeout_secs` must be an integer greater than 0. Default 60.
 - `gog`, when set, must be an absolute executable path; a leading `~/` is
   expanded. Bob resolves the executable in this order: `BOB_GCAL_GOG`,
@@ -1170,7 +1182,9 @@ sync.
   gog, gog older than v0.44.0, no client, not logged in, sync on a host
   other than `gcal.writer`, or `account_changed` when the day's Events stamp
   names a different Google account than this run, or an invalid private event
-  note. A note saved before an immediate sync failure remains saved; the note
+  note, or a configured calendar that is missing (`calendar_not_found`) or
+  duplicated (`calendar_duplicate`) in the account's calendar list. A note
+  saved before an immediate sync failure remains saved; the note
   command reports the sync failure as a warning and exits 0.
 
 Errors print `bob gcal <cmd>: <message>` to stderr (a red `error` prefix on a

@@ -650,8 +650,31 @@ if op == "calendars":
     )
     raise SystemExit(0)
 
+def emit_fixture(path: Path) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    failure = payload.get("_fail") if isinstance(payload, dict) else None
+    if failure is not None:
+        fail(
+            failure.get("stderr") or "gog failed",
+            int(failure.get("code") or 1),
+        )
+    text = path.read_text(encoding="utf-8")
+    sys.stdout.write(text)
+    if not text.endswith("\n"):
+        sys.stdout.write("\n")
+
+
 if op == "events":
     require_account_flag()
+    calendar_id = pos[2] if len(pos) > 2 else "primary"
+    events_dir = os.environ.get("BOB_GCAL_FAKE_EVENTS_DIR")
+    if events_dir:
+        candidate = Path(events_dir) / f"{calendar_id}.json"
+        if candidate.exists():
+            emit_fixture(candidate)
+        else:
+            dump({"events": [], "nextPageToken": None})
+        raise SystemExit(0)
     fixture = os.environ.get("BOB_GCAL_FAKE_EVENTS")
     if fixture and Path(fixture).exists():
         sys.stdout.write(Path(fixture).read_text(encoding="utf-8"))
@@ -663,20 +686,28 @@ if op == "events":
 
 if op == "event":
     require_account_flag()
-    event_id = pos[3] if len(pos) > 3 else (pos[2] if len(pos) > 2 else "event")
+    if len(pos) > 3:
+        calendar_id = pos[2]
+        event_id = pos[3]
+    else:
+        calendar_id = "primary"
+        event_id = pos[2] if len(pos) > 2 else "event"
     event_dir = os.environ.get("BOB_GCAL_FAKE_EVENT_DIR")
     if event_dir:
-        candidate = Path(event_dir) / f"{event_id}.json"
-        if candidate.exists():
-            payload = json.loads(candidate.read_text(encoding="utf-8"))
-            failure = payload.get("_fail")
-            if failure is not None:
-                fail(
-                    failure.get("stderr") or "gog failed",
-                    int(failure.get("code") or 1),
-                )
-            dump(payload)
-            raise SystemExit(0)
+        for candidate in (
+            Path(event_dir) / calendar_id / f"{event_id}.json",
+            Path(event_dir) / f"{event_id}.json",
+        ):
+            if candidate.exists():
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+                failure = payload.get("_fail")
+                if failure is not None:
+                    fail(
+                        failure.get("stderr") or "gog failed",
+                        int(failure.get("code") or 1),
+                    )
+                dump(payload)
+                raise SystemExit(0)
         fail(f"Not Found: no such event {event_id}", 1)
     dump({"event": {"id": event_id}})
     raise SystemExit(0)

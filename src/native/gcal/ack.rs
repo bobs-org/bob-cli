@@ -483,7 +483,7 @@ fn row_from_snapshot(
         candidate: NoteCandidate {
             event: item.event,
             google_event: item.google_event,
-            calendar_name: item.calendar_name,
+            calendar_name: item.calendar.name().to_string(),
             day,
             time: item.time,
             sort_at: item.sort_at,

@@ -15,7 +15,7 @@ use super::{
     account::resolve_command,
     classify::{self, DayWindow, Inclusion},
     clock,
-    config::GcalConfig,
+    config::{self, GcalConfig},
     gog::{Gog, GogCalendar},
     journal::{self, FoldedNote},
     model::{EventDateTime, GcalEvent, ParsedNote},
@@ -27,6 +27,37 @@ use crate::native::{
     pomodoro_homes::{ClockResolution, HomeResolver, HomeSource},
 };
 
+/// One configured calendar resolved against the account's Google list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SyncedCalendar {
+    pub configured_id: String,
+    #[allow(dead_code)]
+    pub google_id: String,
+    name: String,
+    #[allow(dead_code)]
+    pub mark: Option<String>,
+    #[allow(dead_code)]
+    pub primary: bool,
+}
+
+impl SyncedCalendar {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Identity for preview/test construction when Google's list is not at
+    /// hand. Fetch-time resolution always uses `resolve_synced_calendars`.
+    pub(crate) fn fallback(calendar_id: String, name: String) -> Self {
+        Self {
+            configured_id: calendar_id.clone(),
+            google_id: calendar_id,
+            name,
+            mark: None,
+            primary: false,
+        }
+    }
+}
+
 /// One classified event with its valid root and display fields.
 pub(crate) struct SnapshotEvent {
     pub event: GcalEvent,
@@ -34,8 +65,7 @@ pub(crate) struct SnapshotEvent {
     pub google_event: GcalEvent,
     pub inclusion: Inclusion,
     pub root: Option<EventRoot>,
-    #[allow(dead_code)]
-    pub calendar_name: String,
+    pub calendar: SyncedCalendar,
     pub time: String,
     pub sort_at: DateTime<FixedOffset>,
     /// Effective clock from Google's explicit tag plus the chosen root.
@@ -52,6 +82,8 @@ pub(crate) struct DaySnapshot {
     pub vault: PathBuf,
     pub daily_rel: PathBuf,
     pub events: Vec<SnapshotEvent>,
+    /// Resolved sync set in config order, even when a calendar is empty today.
+    pub calendars: Vec<SyncedCalendar>,
     /// Stable gog account for this snapshot and later absent-event lookups.
     pub account: String,
     /// Vault-learned series roots, for root source 1 and to keep the
@@ -64,7 +96,7 @@ pub(crate) struct FetchContext<'a> {
     config: &'a GcalConfig,
     gog: Gog,
     account: String,
-    calendars: Vec<GogCalendar>,
+    calendars: Vec<SyncedCalendar>,
     timezone: Option<Tz>,
 }
 
@@ -77,7 +109,8 @@ impl<'a> FetchContext<'a> {
         )?;
         let _ = gog.require_version()?;
         let account = resolve_command(&gog, config.account())?;
-        let calendars = gog.calendars(&account)?;
+        let google = gog.calendars(&account)?;
+        let calendars = resolve_synced_calendars(config, &account, &google)?;
         Ok(Self {
             config,
             gog,
@@ -107,9 +140,9 @@ impl<'a> FetchContext<'a> {
             let last = windows
                 .get(run.last().expect("non-empty day run"))
                 .expect("run day has window");
-            for configured in self.config.calendars() {
+            for configured in &self.calendars {
                 let raw_events = self.gog.events(
-                    &configured.id,
+                    &configured.configured_id,
                     &first.from_rfc3339(),
                     &last.to_rfc3339(),
                     &self.account,
@@ -123,7 +156,7 @@ impl<'a> FetchContext<'a> {
                                 .get_mut(day)
                                 .expect("requested day is present")
                                 .push((
-                                    configured.id.clone(),
+                                    configured.configured_id.clone(),
                                     raw_event.clone(),
                                 ));
                         }
@@ -199,10 +232,15 @@ fn assemble_day<S: HomeSource>(
         let calendar = context
             .calendars
             .iter()
-            .find(|calendar| calendar.matches_configured_id(&calendar_id));
-        let calendar_name = calendar
-            .map(|calendar| calendar.name().to_string())
-            .unwrap_or_else(|| calendar_id.clone());
+            .find(|calendar| calendar.configured_id == calendar_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                SyncedCalendar::fallback(
+                    calendar_id.clone(),
+                    calendar_id.clone(),
+                )
+            });
+        let calendar_name = calendar.name().to_string();
         let mut event = GcalEvent::from_google(&calendar_id, raw_event)?;
         let google_event = event.clone();
         let occurrence_note = matching_note(
@@ -265,7 +303,7 @@ fn assemble_day<S: HomeSource>(
             google_event,
             inclusion,
             root,
-            calendar_name,
+            calendar,
             time,
             sort_at,
             clock,
@@ -279,9 +317,58 @@ fn assemble_day<S: HomeSource>(
         vault,
         daily_rel,
         events,
+        calendars: context.calendars.clone(),
         account: account.clone(),
         series_roots,
     })
+}
+
+/// Resolve each configured calendar against the account's Google list.
+///
+/// Failures are setup errors (exit 2) and run before any events fetch.
+pub(crate) fn resolve_synced_calendars(
+    config: &GcalConfig,
+    account: &str,
+    google: &[GogCalendar],
+) -> Result<Vec<SyncedCalendar>, GcalError> {
+    let mut resolved = Vec::with_capacity(config.calendars().len());
+    let mut google_ids = BTreeMap::new();
+    for (index, configured) in config.calendars().iter().enumerate() {
+        let matched: Vec<&GogCalendar> = google
+            .iter()
+            .filter(|calendar| calendar.matches_configured_id(&configured.id))
+            .collect();
+        let Some(google_cal) = matched.first().copied() else {
+            return Err(GcalError::setup(
+                "calendar_not_found",
+                format!(
+                    "gcal.calendars[{index}] {} is not in {account}'s calendar list · run bob gcal calendars",
+                    configured.id
+                ),
+            ));
+        };
+        if let Some(first) = google_ids.insert(google_cal.id.clone(), index) {
+            let first_id = &config.calendars()[first].id;
+            return Err(GcalError::setup(
+                "calendar_duplicate",
+                format!(
+                    "gcal.calendars[{index}] {} is the same Google calendar as gcal.calendars[{first}] {first_id}",
+                    configured.id
+                ),
+            ));
+        }
+        if configured.mark.is_none() && !google_cal.primary {
+            return Err(config::needs_mark_setup_error(index, &configured.id));
+        }
+        resolved.push(SyncedCalendar {
+            configured_id: configured.id.clone(),
+            google_id: google_cal.id.clone(),
+            name: google_cal.name().to_string(),
+            mark: config.mark_for(&configured.id).map(str::to_string),
+            primary: google_cal.primary,
+        });
+    }
+    Ok(resolved)
 }
 
 fn contiguous_runs(days: &[NaiveDate]) -> Vec<Vec<NaiveDate>> {

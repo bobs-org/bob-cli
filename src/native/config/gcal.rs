@@ -23,6 +23,7 @@ pub(crate) struct GcalSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GcalCalendarSettings {
     pub(crate) id: String,
+    pub(crate) mark: Option<String>,
     pub(crate) root: Option<String>,
 }
 
@@ -480,6 +481,7 @@ fn parse_calendar_item(
             }
             Ok(GcalCalendarSettings {
                 id: id.to_string(),
+                mark: None,
                 root: None,
             })
         }
@@ -531,7 +533,27 @@ fn parse_calendar_item(
                     )));
                 }
             };
-            Ok(GcalCalendarSettings { id, root })
+            let mark = match get("mark") {
+                None | Some(serde_yaml::Value::Null) => None,
+                Some(serde_yaml::Value::String(mark)) => {
+                    let mark = mark.trim();
+                    if mark.is_empty() {
+                        return Err(ConfigError::Invalid(format!(
+                            "gcal.calendars[{index}].mark in {} must be a nonempty string",
+                            path.display()
+                        )));
+                    }
+                    Some(mark.to_string())
+                }
+                Some(other) => {
+                    return Err(ConfigError::Invalid(format!(
+                        "gcal.calendars[{index}].mark in {} must be a string; got {}",
+                        path.display(),
+                        render_scalar(&other)
+                    )));
+                }
+            };
+            Ok(GcalCalendarSettings { id, mark, root })
         }
         other => Err(ConfigError::Invalid(format!(
             "gcal.calendars[{index}] in {} must be a calendar id or a mapping; got {}",
@@ -599,13 +621,16 @@ mod tests {
     #[test]
     fn parses_full_block() {
         let settings = parse(
-            "gcal:\n  account: you@example.com\n  writer: kellys-macbook-pro\n  root: meet\n  calendars:\n    - id: primary\n    - id: work\n      root: job\n  colors:\n    tomato: job\n  tentative: task\n  timeout_secs: 90\n",
+            "gcal:\n  account: you@example.com\n  writer: kellys-macbook-pro\n  root: meet\n  calendars:\n    - id: primary\n    - id: work\n      mark: 🎂\n      root: job\n  colors:\n    tomato: job\n  tentative: task\n  timeout_secs: 90\n",
         )
         .expect("full block");
         assert_eq!(settings.account.as_deref(), Some("you@example.com"));
         assert_eq!(settings.writer.as_deref(), Some("kellys-macbook-pro"));
         assert_eq!(settings.root.as_deref(), Some("meet"));
         assert_eq!(settings.calendars.as_ref().map(Vec::len), Some(2));
+        let calendars = settings.calendars.as_ref().expect("calendars");
+        assert_eq!(calendars[0].mark.as_deref(), None);
+        assert_eq!(calendars[1].mark.as_deref(), Some("🎂"));
         assert_eq!(
             settings.colors.get("tomato").map(String::as_str),
             Some("job")
@@ -672,7 +697,30 @@ mod tests {
             parse("gcal:\n  calendars: [primary, work]\n").expect("string ids");
         let calendars = settings.calendars.expect("calendars");
         assert_eq!(calendars[0].id, "primary");
+        assert_eq!(calendars[0].mark, None);
         assert_eq!(calendars[1].id, "work");
+        assert_eq!(calendars[1].mark, None);
+    }
+
+    #[test]
+    fn calendars_parse_mark_and_reject_wrong_types() {
+        let settings = parse(
+            "gcal:\n  calendars:\n    - id: primary\n    - id: work\n      mark: 🎂\n",
+        )
+        .expect("mark parses");
+        let calendars = settings.calendars.expect("calendars");
+        assert_eq!(calendars[1].mark.as_deref(), Some("🎂"));
+        for text in [
+            "gcal:\n  calendars:\n    - id: work\n      mark: 1\n",
+            "gcal:\n  calendars:\n    - id: work\n      mark: true\n",
+            "gcal:\n  calendars:\n    - id: work\n      mark: ''\n",
+        ] {
+            let error = parse(text).expect_err(text);
+            assert!(
+                error.message().contains("gcal.calendars[0].mark"),
+                "{text} names the mark: {error}"
+            );
+        }
     }
 
     #[test]

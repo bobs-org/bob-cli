@@ -78,17 +78,11 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
     let snapshot =
         snapshot::fetch_day(vault.clone(), &config, day, &mut resolver)?;
     let (diag_warnings, deprecations) = snapshot_diagnostics(&snapshot.events);
-    let visible_calendars: Vec<Value> = config
-        .calendars()
+    let visible_calendars: Vec<Value> = snapshot
+        .calendars
         .iter()
         .map(|calendar| {
-            let name = snapshot
-                .events
-                .iter()
-                .find(|event| event.event.key.calendar_id == calendar.id)
-                .map(|event| event.calendar_name.clone())
-                .unwrap_or_else(|| calendar.id.clone());
-            json!({"id": calendar.id, "name": name})
+            json!({"id": calendar.configured_id, "name": calendar.name()})
         })
         .collect();
     let events = &snapshot.events;

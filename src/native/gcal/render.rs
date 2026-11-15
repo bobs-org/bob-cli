@@ -334,20 +334,23 @@ pub(crate) fn percent_encode_query(value: &str) -> String {
     encoded
 }
 
+/// Tasks-plugin signifiers that must never appear in a calendar mark
+/// and that the title escaper follows with a zero-width space.
+pub(crate) const TASKS_SIGNIFIER_CHARS: &[char] = &[
+    '🔁', '⏫', '🔼', '🔽', '🔺', '⏬', '🛫', '➕', '⏳', '⌛', '📅', '📆',
+    '🗓', '✅', '❌', '🏁', '🆔', '⛔',
+];
+
 /// Insert a zero-width space after every Tasks-signifier or priority
 /// emoji so the row never parses as recurring, dated, or prioritized.
 /// The bytes stay visually identical; the emoji regexes in the Tasks
 /// plugin and in `migrate_tasks` require the emoji to be followed by
 /// whitespace or end-of-token text, which the joiner breaks.
-fn neutralize_tasks_emoji(text: &str) -> String {
-    const MARKERS: &[char] = &[
-        '🔁', '⏫', '🔼', '🔽', '🔺', '⏬', '🛫', '➕', '⏳', '⌛', '📅', '📆',
-        '🗓', '✅', '❌', '🏁', '🆔', '⛔',
-    ];
+pub(crate) fn neutralize_tasks_emoji(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         out.push(ch);
-        if MARKERS.contains(&ch) {
+        if TASKS_SIGNIFIER_CHARS.contains(&ch) {
             out.push('\u{200b}');
         }
     }

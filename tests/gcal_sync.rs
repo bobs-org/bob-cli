@@ -2,7 +2,7 @@
 
 mod gcal_support;
 
-use gcal_support::{stderr, stdout, FakeGog, GcalEnv};
+use gcal_support::{json_stdout, stderr, stdout, FakeGog, GcalEnv, ACCOUNT};
 use serde_json::{json, Value};
 use std::fs;
 
@@ -5215,5 +5215,230 @@ fn event_spanning_midnight_keeps_existing_start_day_classification() {
     assert!(
         !next_day.contains("Overnight event"),
         "short timed events remain filed to their local start day: {next_day}"
+    );
+}
+
+fn two_calendar_config(second_id: &str, mark: &str) -> String {
+    format!(
+        "timezone: America/New_York\ngcal:\n  account: {ACCOUNT}\n  writer: test-host\n  colors:\n    tomato: job\n  calendars:\n    - id: primary\n    - id: {second_id}\n      mark: {mark}\n"
+    )
+}
+
+fn events_envelope(events: Vec<Value>) -> String {
+    json!({"events": events, "nextPageToken": null}).to_string()
+}
+
+fn all_day_event(id: &str, title: &str) -> Value {
+    json!({
+        "id": id,
+        "summary": title,
+        "start": {"date": "2026-10-30"},
+        "end": {"date": "2026-10-31"},
+        "status": "confirmed",
+        "eventType": "default",
+        "transparency": "transparent",
+        "organizer": {"self": true},
+        "attendees": [],
+    })
+}
+
+fn calendar_list_call_count(fake: &FakeGog) -> usize {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            call.windows(2)
+                .any(|pair| pair == ["calendar", "calendars"])
+        })
+        .count()
+}
+
+#[test]
+fn missing_configured_calendar_fails_before_fetch_and_writes_nothing() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-missing-cal");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "missing@group.calendar.google.com",
+        "🎂",
+    ));
+    let before = today_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![simple_event(
+        "standup",
+        "Standup",
+        "2026-10-30T09:00:00-04:00",
+        "2026-10-30T09:30:00-04:00",
+    )]));
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert_eq!(document["error"]["kind"], "calendar_not_found");
+    assert!(
+        document["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("gcal.calendars[1] missing@group.calendar.google.com is not in you@example.com's calendar list"),
+        "{document}"
+    );
+    assert_eq!(today_note(&env), before);
+    assert_eq!(calendar_event_call_count(&fake), 0, "{:?}", fake.calls());
+    assert!(calendar_list_call_count(&fake) >= 1, "{:?}", fake.calls());
+}
+
+#[test]
+fn primary_plus_account_email_is_a_duplicate_calendar() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-dup-cal");
+    prepare(&env);
+    env.write_config(
+        &format!(
+            "timezone: America/New_York\ngcal:\n  account: {ACCOUNT}\n  writer: test-host\n  calendars:\n    - id: primary\n    - id: {ACCOUNT}\n"
+        ),
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert_eq!(document["error"]["kind"], "calendar_duplicate");
+    assert!(
+        document["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("same Google calendar"),
+        "{document}"
+    );
+    assert_eq!(calendar_event_call_count(&fake), 0, "{:?}", fake.calls());
+}
+
+#[test]
+fn unmarked_entry_that_resolves_to_non_primary_fails() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-unmarked-nonprimary");
+    prepare(&env);
+    env.write_config(&format!(
+        "timezone: America/New_York\ngcal:\n  account: {ACCOUNT}\n  writer: test-host\n  calendars:\n    - id: {ACCOUNT}\n"
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.set_calendars(vec![
+        json!({
+            "id": "other@example.com",
+            "summary": "Other",
+            "primary": true,
+            "accessRole": "owner",
+        }),
+        json!({
+            "id": ACCOUNT,
+            "summary": "Not Primary",
+            "primary": false,
+            "accessRole": "owner",
+        }),
+    ]);
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let document = json_stdout(&output);
+    assert_eq!(document["error"]["kind"], "config");
+    assert!(
+        document["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&format!("gcal.calendars[0] {ACCOUNT} needs a mark")),
+        "{document}"
+    );
+    assert_eq!(calendar_event_call_count(&fake), 0, "{:?}", fake.calls());
+}
+
+#[test]
+fn second_calendar_fetch_failure_writes_nothing() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-second-fail");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let before = today_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for(
+        "primary",
+        &events_envelope(vec![simple_event(
+            "standup",
+            "Standup",
+            "2026-10-30T09:00:00-04:00",
+            "2026-10-30T09:30:00-04:00",
+        )]),
+    );
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &json!({
+            "_fail": {
+                "stderr": "fake gog: second calendar failed",
+                "code": 1
+            }
+        })
+        .to_string(),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("second calendar failed"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(today_note(&env), before, "failed fetch writes nothing");
+    assert!(
+        !env.vault().join(".bob/gcal/test-host.jsonl").exists(),
+        "failed fetch appends nothing"
+    );
+}
+
+#[test]
+fn same_event_id_on_two_calendars_keeps_independent_rows() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-shared-id");
+    prepare(&env);
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for(
+        "primary",
+        &events_envelope(vec![all_day_event("shared", "Primary copy")]),
+    );
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![all_day_event("shared", "Birthday copy")]),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(note.contains("Primary copy"), "{note}");
+    assert!(note.contains("Birthday copy"), "{note}");
+    let keys: Vec<(String, String)> = journal_lines(&env)
+        .iter()
+        .filter(|line| line["kind"] == "gcal.row")
+        .map(|line| {
+            (
+                line["key"]["calendar_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                line["key"]["event_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        keys.contains(&("primary".to_string(), "shared".to_string())),
+        "{keys:?}"
+    );
+    assert!(
+        keys.contains(&(
+            "bdays@group.calendar.google.com".to_string(),
+            "shared".to_string()
+        )),
+        "{keys:?}"
     );
 }

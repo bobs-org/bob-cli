@@ -1893,7 +1893,10 @@ fn doctor_notes_combined_remedies_all_survive_and_run() {
     append_journal(&env, event_note("gone-1", "@meet_inbox", ACCOUNT));
     append_journal(&env, event_note("bad-1", "@no-such-area", ACCOUNT));
     lookup_event(&fake, "bad-1", "confirmed", "accepted");
-    append_journal(&env, event_note("foreign-1", "@meet_inbox", "other@example.com"));
+    append_journal(
+        &env,
+        event_note("foreign-1", "@meet_inbox", "other@example.com"),
+    );
     append_journal(
         &env,
         json!({

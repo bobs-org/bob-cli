@@ -542,6 +542,7 @@ mod tests {
             root: Some(default_root.to_string()),
             calendars: Some(vec![GcalCalendarSettings {
                 id: "primary".to_string(),
+                mark: None,
                 root: calendar_root.map(str::to_string),
             }]),
             colors: color_root
