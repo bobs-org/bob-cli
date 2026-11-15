@@ -11,7 +11,7 @@
 //! than today. A 1.5-step still-charging window compares integer day counts
 //! with an inclusive threshold (`elapsed * 2 <= step_days * 3`).
 
-use chrono::{Days, Months, NaiveDate};
+use chrono::{Datelike, Days, Months, NaiveDate};
 
 use super::registry::SubscriptionCadence;
 
@@ -60,11 +60,87 @@ pub(crate) fn within_one_and_half_steps(
 
 /// Half-up division for nonnegative integer cents.
 pub(crate) fn div_round_half_up(numer: i64, denom: i64) -> Option<i64> {
+    div_round_half_up_i128(i128::from(numer), i128::from(denom))
+}
+
+/// Half-up `amount * mul / denom` using a widened intermediate.
+pub(crate) fn mul_div_round_half_up(
+    amount: i64,
+    mul: i64,
+    denom: i64,
+) -> Option<i64> {
+    if amount < 0 || mul < 0 || denom <= 0 {
+        return None;
+    }
+    let numer = i128::from(amount).checked_mul(i128::from(mul))?;
+    div_round_half_up_i128(numer, i128::from(denom))
+}
+
+/// Locate the cadence step whose due date is the first on or after `today`.
+///
+/// Steps are signed offsets from the original `anchor`, so a future `renews`
+/// date walks backward and an old charge walks forward with no 240-step cap.
+pub(crate) fn current_step(
+    anchor: NaiveDate,
+    today: NaiveDate,
+    cadence: SubscriptionCadence,
+) -> Option<i32> {
+    let mut n = estimate_steps(anchor, today, cadence);
+    loop {
+        let due = add_cadence_steps(anchor, n, cadence)?;
+        if due >= today {
+            break;
+        }
+        n = n.checked_add(1)?;
+    }
+    loop {
+        let Some(prev) = n.checked_sub(1) else {
+            break;
+        };
+        let Some(prev_due) = add_cadence_steps(anchor, prev, cadence) else {
+            break;
+        };
+        if prev_due < today {
+            break;
+        }
+        n = prev;
+    }
+    Some(n)
+}
+
+fn div_round_half_up_i128(numer: i128, denom: i128) -> Option<i64> {
     if numer < 0 || denom <= 0 {
         return None;
     }
     let half = denom / 2;
-    numer.checked_add(half)?.checked_div(denom)
+    let rounded = numer.checked_add(half)?.checked_div(denom)?;
+    i64::try_from(rounded).ok()
+}
+
+fn estimate_steps(
+    anchor: NaiveDate,
+    today: NaiveDate,
+    cadence: SubscriptionCadence,
+) -> i32 {
+    match cadence {
+        SubscriptionCadence::Monthly => months_between(anchor, today),
+        SubscriptionCadence::Quarterly => months_between(anchor, today) / 3,
+        SubscriptionCadence::Yearly => today.year() - anchor.year(),
+        SubscriptionCadence::FourWeekly => {
+            let days = (today - anchor).num_days();
+            i32::try_from(days / 28).unwrap_or(if days < 0 {
+                i32::MIN
+            } else {
+                i32::MAX
+            })
+        }
+    }
+}
+
+fn months_between(anchor: NaiveDate, today: NaiveDate) -> i32 {
+    (today.year() - anchor.year()).saturating_mul(12)
+        + (i32::try_from(today.month()).unwrap_or(0)
+            - i32::try_from(anchor.month()).unwrap_or(0))
 }
 
 fn shift_months(date: NaiveDate, months: i64) -> Option<NaiveDate> {
@@ -191,5 +267,56 @@ mod tests {
         assert_eq!(div_round_half_up(100, 3), Some(33));
         assert_eq!(div_round_half_up(2, 3), Some(1));
         assert_eq!(div_round_half_up(1, 3), Some(0));
+        assert_eq!(
+            mul_div_round_half_up(1_000_000_000_000_000_000, 13, 12),
+            Some(1_083_333_333_333_333_333)
+        );
+        assert_eq!(mul_div_round_half_up(i64::MAX, 13, 12), None);
+        assert_eq!(div_round_half_up(i64::MAX, 1), Some(i64::MAX));
+    }
+
+    #[test]
+    fn current_step_walks_backward_for_future_renews_and_past_anchors() {
+        let today = date(2026, 11, 15);
+        assert_eq!(
+            current_step(
+                date(2028, 1, 31),
+                today,
+                SubscriptionCadence::Monthly
+            ),
+            Some(-14)
+        );
+        assert_eq!(
+            add_cadence_steps(
+                date(2028, 1, 31),
+                -14,
+                SubscriptionCadence::Monthly
+            ),
+            Some(date(2026, 11, 30))
+        );
+        assert_eq!(
+            current_step(
+                date(2000, 1, 15),
+                today,
+                SubscriptionCadence::Monthly
+            ),
+            Some(322)
+        );
+        assert_eq!(
+            current_step(
+                date(2026, 11, 15),
+                today,
+                SubscriptionCadence::Monthly
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            current_step(
+                date(2026, 8, 15),
+                today,
+                SubscriptionCadence::Monthly
+            ),
+            Some(3)
+        );
     }
 }

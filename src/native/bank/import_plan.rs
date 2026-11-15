@@ -39,8 +39,8 @@ use super::{
     grammar::render_row,
     identity::{merchant_key, transaction_key, IdReservation},
     journal::{
-        serialize_import, serialize_txn, ImportCounts, JournalSnapshot,
-        NewImport, NewTxn, TxnOutcome,
+        projected_import, projected_txn, serialize_import, serialize_txn,
+        ImportCounts, JournalSnapshot, NewImport, NewTxn, TxnOutcome,
     },
     model::{month_of, month_path, BankRow},
     month::{
@@ -1036,29 +1036,32 @@ impl<'a> Planner<'a> {
         waiting_walk: (usize, Option<String>, usize),
     ) -> BatchPlan {
         let mut journal_events = Vec::new();
+        let mut planned_imports = Vec::new();
         for (statement, report) in input.statements.iter().zip(files.iter()) {
             if !report.new_evidence {
                 continue;
             }
             let parsed = &statement.statement;
+            let event = NewImport {
+                account: statement.alias.clone(),
+                source: parsed.source,
+                file_sha256: parsed.file_digest.clone(),
+                start: parsed
+                    .start
+                    .unwrap_or_else(|| coverage_fallback(parsed, true)),
+                end: parsed
+                    .end
+                    .unwrap_or_else(|| coverage_fallback(parsed, false)),
+                balance_cents: parsed.ledger_balance_cents,
+                balance_asof: parsed.ledger_balance_asof,
+                counts: report.counts.clone(),
+            };
             journal_events.push(serialize_import(
                 parse_stamp(&input.now_stamp),
                 &input.host,
-                &NewImport {
-                    account: statement.alias.clone(),
-                    source: parsed.source,
-                    file_sha256: parsed.file_digest.clone(),
-                    start: parsed
-                        .start
-                        .unwrap_or_else(|| coverage_fallback(parsed, true)),
-                    end: parsed
-                        .end
-                        .unwrap_or_else(|| coverage_fallback(parsed, false)),
-                    balance_cents: parsed.ledger_balance_cents,
-                    balance_asof: parsed.ledger_balance_asof,
-                    counts: report.counts.clone(),
-                },
+                &event,
             ));
+            planned_imports.push(event);
         }
         // `txn_events` already holds each identity once, in processing
         // order, so overlapping files never double-emit.
@@ -1090,7 +1093,7 @@ impl<'a> Planner<'a> {
         month_edits.sort_by(|left, right| left.path.cmp(&right.path));
         let (waiting, waiting_oldest_month, waiting_extra_months) =
             waiting_walk;
-        let rows = self.affected_rows(input);
+        let rows = self.affected_rows(input, &planned_imports);
         let restored_rows = rows
             .iter()
             .filter(|row| {
@@ -1146,7 +1149,11 @@ impl<'a> Planner<'a> {
 
     /// New and matched rows with their after-image coordinates, ordered by
     /// note and line. Matched rows report their journal outcome.
-    fn affected_rows(&self, input: &'a PlanInput<'a>) -> Vec<BankRow> {
+    fn affected_rows(
+        &self,
+        input: &'a PlanInput<'a>,
+        planned_imports: &[NewImport],
+    ) -> Vec<BankRow> {
         let mut wanted: HashMap<String, TxnOutcome> = HashMap::new();
         for event in &self.txn_events {
             if event.outcome != TxnOutcome::BeforeStart {
@@ -1161,6 +1168,16 @@ impl<'a> Planner<'a> {
         if wanted.is_empty() {
             return Vec::new();
         }
+        let stamp = parse_stamp(&input.now_stamp);
+        let journal_path = format!(".bob/bank/{}.jsonl", input.host);
+        let projected_journal = input.journal.with_projected_events(
+            planned_imports.iter().map(|event| {
+                projected_import(stamp, &input.host, &journal_path, 0, event)
+            }),
+            self.txn_events.iter().map(|event| {
+                projected_txn(stamp, &input.host, &journal_path, 0, event)
+            }),
+        );
         let mut rows = Vec::new();
         let mut paths: Vec<&String> = self.month_texts.keys().collect();
         paths.sort();
@@ -1176,12 +1193,6 @@ impl<'a> Planner<'a> {
                     let LocatedRowKind::Parsed(parsed) = &located.kind else {
                         continue;
                     };
-                    let Some(id) = parsed.id.as_deref() else {
-                        continue;
-                    };
-                    let Some(outcome) = wanted.get(id) else {
-                        continue;
-                    };
                     let account = parsed.account.clone().unwrap_or_else(|| {
                         input
                             .config
@@ -1189,9 +1200,24 @@ impl<'a> Planner<'a> {
                             .map(|account| account.alias.clone())
                             .unwrap_or_else(|| "checking".to_owned())
                     });
-                    let origin = match outcome {
-                        TxnOutcome::Matched => "matched",
-                        _ => "imported",
+                    let origin = match parsed.id.as_deref() {
+                        None => "typed",
+                        Some(id) => {
+                            let matched = projected_journal
+                                .ids
+                                .get(id)
+                                .and_then(|key| {
+                                    projected_journal.transactions.get(key)
+                                })
+                                .is_some_and(|event| {
+                                    event.outcome == TxnOutcome::Matched
+                                });
+                            if matched {
+                                "matched"
+                            } else {
+                                "imported"
+                            }
+                        }
                     };
                     rows.push(BankRow {
                         path: path.clone(),
@@ -1233,24 +1259,34 @@ impl<'a> Planner<'a> {
             }
         }
         if let Some(config) = input.config {
-            suggest::attach_suggestions(&mut rows, config, input.journal);
+            suggest::attach_suggestions(&mut rows, config, &projected_journal);
         }
-        {
-            use std::collections::HashMap;
-            let mut raw_descs: HashMap<String, String> = HashMap::new();
-            for event in &self.txn_events {
-                raw_descs
-                    .entry(event.id.clone())
-                    .or_insert_with(|| event.desc.clone());
+        let mut raw_descs: HashMap<String, String> = HashMap::new();
+        for event in &self.txn_events {
+            raw_descs
+                .entry(event.id.clone())
+                .or_insert_with(|| event.desc.clone());
+        }
+        super::subscriptions::projection::enrich_rows_with_raw(
+            &mut rows,
+            &input.subscriptions,
+            &projected_journal,
+            input.config,
+            input.today,
+            &raw_descs,
+        );
+        rows.retain(|row| {
+            row.id.as_ref().is_some_and(|id| wanted.contains_key(id))
+        });
+        for row in &mut rows {
+            if let Some(id) = &row.id
+                && let Some(outcome) = wanted.get(id)
+            {
+                row.origin = match outcome {
+                    TxnOutcome::Matched => "matched",
+                    _ => "imported",
+                };
             }
-            super::subscriptions::projection::enrich_rows_with_raw(
-                &mut rows,
-                &input.subscriptions,
-                input.journal,
-                input.config,
-                input.today,
-                &raw_descs,
-            );
         }
         rows
     }
@@ -3305,6 +3341,163 @@ mod tests {
             })
             .collect();
         assert_eq!(warnings.len(), 1);
+    }
+
+    fn subscription_record(
+        path: &str,
+        amount_cents: i64,
+        needles: &[&str],
+    ) -> crate::native::bank::subscriptions::registry::SubscriptionRecord {
+        use crate::native::bank::subscriptions::registry::{
+            SubscriptionCadence, SubscriptionPricing, SubscriptionStatus,
+        };
+        crate::native::bank::subscriptions::registry::SubscriptionRecord {
+            stem: path
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .trim_end_matches(".md")
+                .to_owned(),
+            path: path.to_owned(),
+            link_target: path.trim_end_matches(".md").to_owned(),
+            title: path.to_owned(),
+            status: SubscriptionStatus::Active,
+            status_label: "active".to_owned(),
+            amount_cents,
+            cadence: SubscriptionCadence::Monthly,
+            pricing: SubscriptionPricing::Fixed,
+            needles: needles
+                .iter()
+                .map(|needle| (*needle).to_owned())
+                .collect(),
+            invalid_needles: Vec::new(),
+            category: Some("groceries".to_owned()),
+            url: None,
+            renews: None,
+            ended: None,
+        }
+    }
+
+    fn subscription_registry(
+        records: Vec<
+            crate::native::bank::subscriptions::registry::SubscriptionRecord,
+        >,
+    ) -> crate::native::bank::subscriptions::registry::SubscriptionRegistry
+    {
+        crate::native::bank::subscriptions::registry::SubscriptionRegistry {
+            availability: crate::native::bank::subscriptions::registry::SubscriptionAvailability::Available,
+            album: None,
+            records,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn import_after_state_uses_projected_journal_and_historical_links() {
+        let config = hub_with("", "2026-11-01");
+        let tunely = subscription_record("billing/tunely.md", 999, &["TUNELY"]);
+        let cloudbox =
+            subscription_record("billing/cloudbox.md", 1999, &["CLOUDBOX"]);
+        let registries = subscription_registry(vec![tunely, cloudbox]);
+
+        let batch = plan_batch(PlanInput {
+            config: Some(&config),
+            hub: ReadDep {
+                path: "bank.md".to_owned(),
+                preimage: Some(b"hub".to_vec()),
+            },
+            scan: &scan_with(vec![november(&[])]),
+            journal: &JournalSnapshot::default(),
+            statements: vec![stmt(
+                "checking",
+                0,
+                vec![
+                    txn(october(10), -1099, "fitid-old", "TUNELY", None),
+                    txn(
+                        nov(12),
+                        -1099,
+                        "fitid-new",
+                        "TUNELY PREMIUM 1234 RECURRING PAYMENT",
+                        None,
+                    ),
+                ],
+                &digest("after-state"),
+            )],
+            file_labels: vec!["a.qfx".to_owned()],
+            restaurants: Vec::new(),
+            restaurant_deps: Vec::new(),
+            subscriptions: registries.clone(),
+            subscription_deps: Vec::new(),
+            subscription_warning: None,
+            today: nov(12),
+            now_stamp: STAMP.to_owned(),
+            host: "athena".to_owned(),
+            force_restore: false,
+        })
+        .expect("plan");
+        assert_eq!(batch.rows.len(), 1);
+        let projection =
+            batch.rows[0].subscription.clone().expect("projection");
+        assert_eq!(projection.path, "billing/tunely.md");
+        assert_eq!(projection.source, "match");
+        assert_eq!(projection.needle.as_deref(), Some("TUNELY"));
+        assert_eq!(projection.drift_cents, Some(100));
+        let change =
+            projection.price_change.expect("history from before_start");
+        assert_eq!(change.from_cents, 999);
+        assert_eq!(change.to_cents, 1099);
+        assert!(batch.rows[0].bank_recurring);
+
+        let old = journal_event(
+            "checking",
+            "fitid-linked",
+            TxnOutcome::Written,
+            Some("bank/2026-11.md"),
+            nov(2),
+            -1099,
+            "TUNELY",
+        );
+        let old_id = old.id.clone();
+        let scan = scan_with(vec![november(&[(
+            2,
+            vec![&format!(
+                "- [ ] $10.99 Tunely [[billing/cloudbox]] ^bank-{old_id}"
+            )],
+        )])]);
+        let linked = plan_batch(PlanInput {
+            config: Some(&config),
+            hub: ReadDep {
+                path: "bank.md".to_owned(),
+                preimage: Some(b"hub".to_vec()),
+            },
+            scan: &scan,
+            journal: &snapshot_with(vec![old]),
+            statements: vec![stmt(
+                "checking",
+                0,
+                vec![txn(nov(12), -1099, "fitid-fresh", "TUNELY", None)],
+                &digest("linked-history"),
+            )],
+            file_labels: vec!["b.qfx".to_owned()],
+            restaurants: Vec::new(),
+            restaurant_deps: Vec::new(),
+            subscriptions: registries,
+            subscription_deps: Vec::new(),
+            subscription_warning: None,
+            today: nov(12),
+            now_stamp: STAMP.to_owned(),
+            host: "athena".to_owned(),
+            force_restore: false,
+        })
+        .expect("plan");
+        assert_eq!(linked.rows.len(), 1);
+        let projection =
+            linked.rows[0].subscription.clone().expect("projection");
+        assert_eq!(projection.path, "billing/tunely.md");
+        assert_eq!(
+            projection.price_change, None,
+            "explicit cloudbox history must not enter the tunely ledger"
+        );
     }
 
     fn ofx_fixture(acct: &str, amount: &str, fitid: &str) -> String {

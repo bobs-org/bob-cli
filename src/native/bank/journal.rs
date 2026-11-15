@@ -247,6 +247,74 @@ pub(crate) fn load(vault: &Path) -> io::Result<JournalSnapshot> {
     Ok(snapshot)
 }
 
+impl JournalSnapshot {
+    /// Fold additional import windows and transactions as if they were
+    /// already in this snapshot, preserving identity and key dedup.
+    pub(crate) fn with_projected_events(
+        &self,
+        imports: impl IntoIterator<Item = ImportEvent>,
+        txns: impl IntoIterator<Item = TxnEvent>,
+    ) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.imports.extend(imports);
+        for event in txns {
+            fold_txn(&mut snapshot, event);
+        }
+        snapshot
+    }
+}
+
+/// Planned import window as a folded journal event.
+pub(crate) fn projected_import(
+    ts: DateTime<FixedOffset>,
+    host: &str,
+    path: &str,
+    line: u32,
+    event: &NewImport,
+) -> ImportEvent {
+    ImportEvent {
+        ts,
+        host: host.to_owned(),
+        path: path.to_owned(),
+        line,
+        account: event.account.clone(),
+        source: event.source,
+        file_sha256: event.file_sha256.clone(),
+        start: event.start,
+        end: event.end,
+        balance_cents: event.balance_cents,
+        balance_asof: event.balance_asof,
+        counts: event.counts.clone(),
+    }
+}
+
+/// Planned transaction as a folded journal event. Stored `desc` is
+/// digit-masked; callers that need the raw source description keep it
+/// beside this snapshot.
+pub(crate) fn projected_txn(
+    ts: DateTime<FixedOffset>,
+    host: &str,
+    path: &str,
+    line: u32,
+    event: &NewTxn,
+) -> TxnEvent {
+    TxnEvent {
+        ts,
+        host: host.to_owned(),
+        path: path.to_owned(),
+        line,
+        account: event.account.clone(),
+        key: event.key.clone(),
+        id: event.id.clone(),
+        posted: event.posted,
+        cents: event.cents,
+        desc: mask_digits(&event.desc),
+        merchant: merchant_key(&event.desc),
+        outcome: event.outcome,
+        note: event.note.clone(),
+    }
+}
+
 fn fold_txn(snapshot: &mut JournalSnapshot, event: TxnEvent) {
     if let Some(owner) = snapshot.ids.get(&event.id) {
         if owner != &event.key {

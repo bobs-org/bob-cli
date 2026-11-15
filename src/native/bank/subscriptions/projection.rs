@@ -95,7 +95,8 @@ pub(crate) fn enrich_rows_with_raw(
         }
         return;
     };
-    let ledger = compute_ledger(registry, journal, rows, today);
+    let ledger =
+        compute_ledger(registry, journal, rows, today, Some(config), raw_descs);
     let index = suggest::learned_index(rows, journal, config);
     let unique_ids = unique_id_set(rows);
     // Cache journal descriptions for recurring and rule checks.
@@ -136,7 +137,7 @@ pub(crate) fn enrich_rows_with_raw(
                 drift,
                 ledger_record.map(|ledger| {
                     (
-                        ledger.after_cancel.clone(),
+                        ledger.after_cancel_charges.clone(),
                         ledger.latest.clone(),
                         ledger.still_charging,
                     )
@@ -290,15 +291,19 @@ fn row_state(
     pricing: super::registry::SubscriptionPricing,
     drift: Option<i64>,
     ledger: Option<(
-        Option<super::ledger::LedgerCharge>,
+        Vec<super::ledger::LedgerCharge>,
         Option<super::ledger::LedgerCharge>,
         bool,
     )>,
 ) -> String {
-    let (after_cancel, latest, still_charging) =
-        ledger.unwrap_or((None, None, false));
-    if let Some(offending) = after_cancel
-        && charges_match(row, &offending)
+    let (after_cancel_charges, latest, still_charging) =
+        ledger.unwrap_or((Vec::new(), None, false));
+    if row.category.as_deref() == Some("refund") {
+        return "ok".to_owned();
+    }
+    if after_cancel_charges
+        .iter()
+        .any(|charge| charges_match(row, charge))
     {
         return "after_cancel".to_owned();
     }
@@ -959,5 +964,184 @@ mod tests {
         assert_eq!(projection.drift_cents, None);
         assert_eq!(projection.state, "usage");
         assert_eq!(projection.price_change, None);
+    }
+
+    #[test]
+    fn after_cancel_marks_every_ended_charge_and_to_cancel_only_latest() {
+        let config = base_config();
+        let mut cancelled = record(
+            "subs/tunely.md",
+            SubscriptionStatus::Cancelled,
+            999,
+            &["TUNELY"],
+            Some("streaming"),
+        );
+        cancelled.ended = Some(date(2026, 9, 1));
+        let ended = registry(vec![cancelled]);
+        let first = txn(
+            "aaaaaaaa",
+            date(2026, 10, 2),
+            -999,
+            "TUNELY",
+            TxnOutcome::Written,
+        );
+        let second = txn(
+            "bbbbbbbb",
+            date(2026, 11, 2),
+            -999,
+            "TUNELY",
+            TxnOutcome::Written,
+        );
+        let ended_journal = journal(
+            vec![first, second],
+            vec![import_window(date(2026, 10, 1), date(2026, 11, 15))],
+        );
+        let mut rows = vec![
+            BankRow {
+                path: "bank/2026-10.md".to_owned(),
+                line: 3,
+                date: date(2026, 10, 2),
+                heading: String::new(),
+                account: "checking".to_owned(),
+                cents: -999,
+                payee: "Tunely".to_owned(),
+                category: None,
+                links: Vec::new(),
+                note: None,
+                flagged: false,
+                acknowledged: false,
+                id: Some("aaaaaaaa".to_owned()),
+                origin: "imported",
+                suggestion: None,
+                subscription: None,
+                bank_recurring: false,
+                subscription_candidate: false,
+            },
+            BankRow {
+                path: "bank/2026-11.md".to_owned(),
+                line: 3,
+                date: date(2026, 11, 2),
+                heading: String::new(),
+                account: "checking".to_owned(),
+                cents: -999,
+                payee: "Tunely".to_owned(),
+                category: None,
+                links: Vec::new(),
+                note: None,
+                flagged: false,
+                acknowledged: false,
+                id: Some("bbbbbbbb".to_owned()),
+                origin: "imported",
+                suggestion: None,
+                subscription: None,
+                bank_recurring: false,
+                subscription_candidate: false,
+            },
+        ];
+        enrich_rows(&mut rows, &ended, &ended_journal, Some(&config), today());
+        assert_eq!(
+            rows[0]
+                .subscription
+                .as_ref()
+                .map(|item| item.state.as_str()),
+            Some("after_cancel")
+        );
+        assert_eq!(
+            rows[1]
+                .subscription
+                .as_ref()
+                .map(|item| item.state.as_str()),
+            Some("after_cancel")
+        );
+
+        let to_cancel = record(
+            "subs/cloudbox.md",
+            SubscriptionStatus::ToCancel,
+            1999,
+            &["CLOUDBOX"],
+            Some("streaming"),
+        );
+        let cancelling = registry(vec![to_cancel]);
+        let older = txn(
+            "cccccccc",
+            date(2026, 10, 10),
+            -1999,
+            "CLOUDBOX",
+            TxnOutcome::Written,
+        );
+        let latest = txn(
+            "dddddddd",
+            date(2026, 11, 10),
+            -1999,
+            "CLOUDBOX",
+            TxnOutcome::Written,
+        );
+        let cancelling_journal = journal(
+            vec![older, latest],
+            vec![import_window(date(2026, 10, 1), date(2026, 11, 15))],
+        );
+        let mut rows = vec![
+            BankRow {
+                path: "bank/2026-10.md".to_owned(),
+                line: 5,
+                date: date(2026, 10, 10),
+                heading: String::new(),
+                account: "checking".to_owned(),
+                cents: -1999,
+                payee: "Cloudbox".to_owned(),
+                category: None,
+                links: Vec::new(),
+                note: None,
+                flagged: false,
+                acknowledged: false,
+                id: Some("cccccccc".to_owned()),
+                origin: "imported",
+                suggestion: None,
+                subscription: None,
+                bank_recurring: false,
+                subscription_candidate: false,
+            },
+            BankRow {
+                path: "bank/2026-11.md".to_owned(),
+                line: 5,
+                date: date(2026, 11, 10),
+                heading: String::new(),
+                account: "checking".to_owned(),
+                cents: -1999,
+                payee: "Cloudbox".to_owned(),
+                category: None,
+                links: Vec::new(),
+                note: None,
+                flagged: false,
+                acknowledged: false,
+                id: Some("dddddddd".to_owned()),
+                origin: "imported",
+                suggestion: None,
+                subscription: None,
+                bank_recurring: false,
+                subscription_candidate: false,
+            },
+        ];
+        enrich_rows(
+            &mut rows,
+            &cancelling,
+            &cancelling_journal,
+            Some(&config),
+            today(),
+        );
+        assert_eq!(
+            rows[0]
+                .subscription
+                .as_ref()
+                .map(|item| item.state.as_str()),
+            Some("ok")
+        );
+        assert_eq!(
+            rows[1]
+                .subscription
+                .as_ref()
+                .map(|item| item.state.as_str()),
+            Some("to_cancel")
+        );
     }
 }

@@ -138,6 +138,31 @@ pub(crate) fn is_declared_category(config: &BankConfig, key: &str) -> bool {
     config.category(key).is_some()
 }
 
+/// Infer a category from a journal/raw description using read-time rule
+/// matching, then bank built-ins. Used to classify journal-only evidence
+/// so a `transfer`/`income`/`cash` rule still excludes pattern attribution.
+pub(crate) fn read_time_inferred_category(
+    config: &BankConfig,
+    desc: &str,
+) -> Option<String> {
+    if desc.is_empty() {
+        return None;
+    }
+    let query = SuggestQuery {
+        desc: Some(desc),
+        payee: None,
+        trntype: None,
+        identities: &[],
+        skip: None,
+        read_time: true,
+    };
+    if let Some(category) = rule_category(config, &query) {
+        return Some(category);
+    }
+    classify_builtin(desc, None)
+        .and_then(|item| item.category.map(str::to_owned))
+}
+
 /// True when any bank rule matches `haystack` at read time, including rules
 /// that only set a payee or link. Rules with a 4+ digit run never match at
 /// read time because journal descriptions are digit-masked.

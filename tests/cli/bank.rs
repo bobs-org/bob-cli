@@ -990,3 +990,350 @@ fn report_charts_refuses_periods_without_children() {
         assert_eq!(payload["error"], message);
     }
 }
+
+const SUB_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n    cash:\n      label: Pocket cash\n      kind: cash\n  categories:\n    streaming: Streaming\n    dining: 🍽️ Dining\n    kids: { label: 🧸 Kids, hidden: true }\n  rules:\n    - match: TUNELY\n      cat: dining\n---\n\n# 🏦 Bank\n";
+
+fn subscription_album(stem: &str, parent: &str, title: &str) -> String {
+    format!(
+        "---\ntype: [[album]]\nparent: \"[[{parent}]]\"\nemoji: 🔁\nrecord:\n  noun: subscription\n  label: Subscription\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: To cancel\n        to_decide: To decide\n        active: Active\n        cancelled: Cancelled\n    amount:\n      required: true\n      values: number\n      min: 0\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every four weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    pricing:\n      default: fixed\n      values:\n        fixed: Fixed\n        variable: Variable\n    match: {{list: true}}\n    category: {{suggest: true}}\n    url: {{values: url}}\n    renews: {{values: date}}\n    ended: {{values: date}}\n---\n# {title}\n"
+    )
+    .replace("billing", stem)
+}
+
+fn json_rows(payload: &Value) -> Vec<&Value> {
+    if let Some(rows) = payload["rows"].as_array() {
+        return rows.iter().collect();
+    }
+    let mut rows = Vec::new();
+    if let Some(days) = payload["days"].as_array() {
+        for day in days {
+            if let Some(day_rows) = day["rows"].as_array() {
+                rows.extend(day_rows.iter());
+            }
+        }
+    }
+    rows
+}
+
+fn row_with_payee<'a>(rows: &'a [&Value], needle: &str) -> &'a Value {
+    rows.iter()
+        .copied()
+        .find(|row| {
+            row["payee"]
+                .as_str()
+                .is_some_and(|payee| payee.contains(needle))
+        })
+        .unwrap_or_else(|| panic!("missing payee {needle} in {rows:?}"))
+}
+
+fn write_renamed_subscription_album(vault: &BankVault) {
+    write_file(
+        &vault.path.join("media.md"),
+        &subscription_album("media", "bank", "Media"),
+    );
+    fs::create_dir_all(vault.path.join("media")).unwrap();
+    write_file(
+        &vault.path.join("media/tunely.md"),
+        "---\ntitle: Tunely\nstatus: active\namount: 9.99\ncadence: monthly\nmatch: [TUNELY]\ncategory: streaming\n---\n# Tunely\n",
+    );
+    write_file(
+        &vault.path.join("media/cloudbox.md"),
+        "---\ntitle: Cloudbox\nstatus: active\namount: 19.99\ncadence: monthly\nmatch: [CLOUDBOX]\ncategory: kids\n---\n# Cloudbox\n",
+    );
+    write_file(
+        &vault.path.join("restaurants.md"),
+        "---\nparent: \"[[bank]]\"\ntype: [[album]]\nsummary: Restaurants.\nemoji: \"🍽️\"\nrecord:\n  noun: eat\n  label: Restaurant\n  fields: {}\n---\n\n# Restaurants\n",
+    );
+    fs::create_dir_all(vault.path.join("restaurants")).unwrap();
+    write_file(
+        &vault.path.join("restaurants/smashburger.md"),
+        "---\ntitle: Smashburger\n---\n# Smashburger\n",
+    );
+}
+
+fn tunely_ofx() -> String {
+    ofx(
+        "20261010",
+        "20261112",
+        "1000.00",
+        "20261112",
+        &[
+            ("DEBIT", "20261010", "-10.99", "fit-tunely-oct", "TUNELY"),
+            (
+                "DEBIT",
+                "20261112",
+                "-10.99",
+                "fit-tunely-nov",
+                "TUNELY PREMIUM 1234 RECURRING PAYMENT",
+            ),
+            ("DEBIT", "20261112", "-19.99", "fit-cloudbox", "CLOUDBOX"),
+            ("DEBIT", "20261112", "-13.71", "fit-smash", "SMASHBURGER"),
+        ],
+    )
+}
+
+fn assert_tunely_after_state(row: &Value) {
+    let sub = &row["subscription"];
+    assert_eq!(sub["stem"], "tunely", "{row}");
+    assert_eq!(sub["path"], "media/tunely.md", "{row}");
+    assert_eq!(sub["title"], "Tunely", "{row}");
+    assert_eq!(sub["source"], "match", "{row}");
+    assert_eq!(sub["needle"], "TUNELY", "{row}");
+    assert_eq!(sub["amount_cents"], 999, "{row}");
+    assert_eq!(sub["drift_cents"], 100, "{row}");
+    assert_eq!(sub["price_change"]["from_cents"], 999, "{row}");
+    assert_eq!(sub["price_change"]["to_cents"], 1099, "{row}");
+    assert_eq!(sub["price_change"]["since"], "2026-11-12", "{row}");
+    assert_eq!(row["bank_recurring"], true, "{row}");
+    assert_eq!(row["subscription_candidate"], false, "{row}");
+}
+
+#[test]
+fn import_preview_apply_list_and_report_agree_on_subscription_after_state() {
+    let vault = syncable(SUB_HUB);
+    write_renamed_subscription_album(&vault);
+    assert_success(&run(&vault, &["ensure", "-D", "2026-11-12", "-f", "json"]));
+    append_rows(&vault, "- [ ] $10.99 Tunely\n");
+    commit_all(&vault.path, "subscription album and typed tunely");
+
+    let qfx = write_qfx(&vault, "tunely.qfx", &tunely_ofx());
+    let before_preview = month_note(&vault);
+    let preview = run(
+        &vault,
+        &[
+            "import",
+            "-a",
+            "checking",
+            "-d",
+            "-f",
+            "json",
+            path_str(&qfx),
+        ],
+    );
+    assert_success(&preview);
+    let preview_json = json(&preview);
+    assert_eq!(preview_json["ok"], true);
+    assert_eq!(preview_json["dry_run"], true);
+    assert_eq!(preview_json["files"][0]["new"], 2, "{preview_json}");
+    assert_eq!(preview_json["files"][0]["matched"], 1, "{preview_json}");
+    assert_eq!(
+        preview_json["files"][0]["before_start"], 1,
+        "{preview_json}"
+    );
+    assert_eq!(month_note(&vault), before_preview, "dry-run is write-free");
+
+    let preview_rows = json_rows(&preview_json);
+    let tunely = row_with_payee(&preview_rows, "Tunely");
+    assert_eq!(tunely["payee"], "Tunely");
+    assert_eq!(tunely["origin"], "matched");
+    assert_eq!(tunely["category"], Value::Null);
+    assert_eq!(tunely["suggestion"]["source"], "rule");
+    assert_eq!(tunely["suggestion"]["category"], "dining");
+    assert_tunely_after_state(tunely);
+    let cloudbox = row_with_payee(&preview_rows, "Cloudbox");
+    assert_eq!(cloudbox["subscription"]["path"], "media/cloudbox.md");
+    assert_eq!(cloudbox["suggestion"], Value::Null, "{cloudbox}");
+    let smash = row_with_payee(&preview_rows, "Smashburger");
+    assert_eq!(smash["subscription"], Value::Null);
+    assert!(
+        smash["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link.as_str() == Some("[[restaurants/smashburger|🍽️]]")),
+        "{smash}"
+    );
+
+    let applied = run(
+        &vault,
+        &["import", "-a", "checking", "-f", "json", path_str(&qfx)],
+    );
+    assert_success(&applied);
+    let applied_json = json(&applied);
+    assert_eq!(applied_json["ok"], true);
+    assert_eq!(applied_json["dry_run"], false);
+    assert_eq!(applied_json["files"][0]["new"], 2, "{applied_json}");
+    assert_eq!(applied_json["files"][0]["matched"], 1, "{applied_json}");
+    let applied_rows = json_rows(&applied_json);
+    let tunely = row_with_payee(&applied_rows, "Tunely");
+    assert_eq!(tunely["payee"], "Tunely", "typed payee stays");
+    assert_tunely_after_state(tunely);
+    assert_eq!(tunely["suggestion"]["source"], "rule");
+    let note = month_note(&vault);
+    assert!(note.contains("- [ ] $10.99 Tunely"), "{note}");
+    assert!(note.contains("[[restaurants/smashburger|🍽️]]"), "{note}");
+    assert!(note.contains("^bank-"), "{note}");
+
+    let listed = json(&run(&vault, &["list", "-a", "-f", "json"]));
+    let reported =
+        json(&run(&vault, &["report", "-m", "2026-11", "-f", "json"]));
+    let list_rows = json_rows(&listed);
+    let report_rows = json_rows(&reported);
+    let list_tunely = row_with_payee(&list_rows, "Tunely");
+    let report_tunely = row_with_payee(&report_rows, "Tunely");
+    assert_tunely_after_state(list_tunely);
+    assert_tunely_after_state(report_tunely);
+    assert_eq!(list_tunely["suggestion"]["source"], "rule");
+    assert_eq!(report_tunely["suggestion"]["source"], "rule");
+    assert_eq!(
+        row_with_payee(&list_rows, "Cloudbox")["suggestion"],
+        Value::Null
+    );
+    let note_after_reads = month_note(&vault);
+    assert_eq!(note_after_reads, note, "list and report are read-only");
+
+    let replay = run(
+        &vault,
+        &["import", "-a", "checking", "-f", "json", path_str(&qfx)],
+    );
+    assert_success(&replay);
+    let replay_json = json(&replay);
+    assert_eq!(replay_json["files"][0]["new"], 0, "{replay_json}");
+    assert_eq!(replay_json["files"][0]["seen"], 4, "{replay_json}");
+    assert!(replay_json["commit"].is_null(), "{replay_json}");
+    assert_eq!(month_note(&vault), note, "replay is byte-idempotent");
+
+    let mut body = month_note(&vault);
+    body = body
+        .lines()
+        .filter(|line| !line.contains("Tunely"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    fs::write(vault.path.join("bank/2026-11.md"), body).unwrap();
+    commit_all(&vault.path, "delete tunely row");
+    let restored = run(&vault, &["import", "-F", "-f", "json"]);
+    assert_success(&restored);
+    let restored_json = json(&restored);
+    assert_eq!(restored_json["restored"], 1, "{restored_json}");
+    let restored_row = restored_json["restored_rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(json_rows(&restored_json))
+        .find(|row| {
+            row["payee"]
+                .as_str()
+                .is_some_and(|payee| payee.contains("Tunely"))
+                || row["subscription"]["path"] == "media/tunely.md"
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            let listed = json(&run(&vault, &["list", "-a", "-f", "json"]));
+            row_with_payee(&json_rows(&listed), "Tunely").clone()
+        });
+    assert_eq!(restored_row["subscription"]["path"], "media/tunely.md");
+    assert_eq!(
+        restored_row["subscription"]["price_change"]["to_cents"],
+        1099
+    );
+}
+
+#[test]
+fn missing_subscription_album_nulls_projection() {
+    let vault = syncable(SUB_HUB);
+    assert_success(&run(&vault, &["ensure", "-D", "2026-11-12", "-f", "json"]));
+    commit_all(&vault.path, "month note");
+    let qfx = write_qfx(
+        &vault,
+        "tunely.qfx",
+        &ofx(
+            "20261112",
+            "20261112",
+            "1000.00",
+            "20261112",
+            &[(
+                "DEBIT",
+                "20261112",
+                "-10.99",
+                "fit-tunely",
+                "TUNELY PREMIUM 1234 RECURRING PAYMENT",
+            )],
+        ),
+    );
+    let imported = run(
+        &vault,
+        &["import", "-a", "checking", "-f", "json", path_str(&qfx)],
+    );
+    assert_success(&imported);
+    let payload = json(&imported);
+    let rows = json_rows(&payload);
+    assert_eq!(rows[0]["subscription"], Value::Null, "{payload}");
+    assert_eq!(rows[0]["bank_recurring"], false, "{payload}");
+    assert_eq!(rows[0]["subscription_candidate"], false, "{payload}");
+    let listed = json(&run(&vault, &["list", "-a", "-f", "json"]));
+    assert_eq!(listed["warnings"].as_array().unwrap().len(), 0, "{listed}");
+    let list_rows = json_rows(&listed);
+    assert_eq!(list_rows[0]["subscription"], Value::Null);
+}
+
+#[test]
+fn invalid_subscription_album_warns_once_and_nulls_projection() {
+    let vault = syncable(SUB_HUB);
+    write_file(
+        &vault.path.join("media.md"),
+        "---\ntype: [[album]]\nparent: \"[[bank]]\"\nrecord: {noun: subscription, fields: {amount: {values: [invalid]}}}\n---\n# Media\n",
+    );
+    assert_success(&run(&vault, &["ensure", "-D", "2026-11-12", "-f", "json"]));
+    commit_all(&vault.path, "invalid subscription album");
+    let qfx = write_qfx(
+        &vault,
+        "tunely.qfx",
+        &ofx(
+            "20261112",
+            "20261112",
+            "1000.00",
+            "20261112",
+            &[(
+                "DEBIT",
+                "20261112",
+                "-10.99",
+                "fit-tunely",
+                "TUNELY PREMIUM 1234 RECURRING PAYMENT",
+            )],
+        ),
+    );
+    let imported = run(
+        &vault,
+        &["import", "-a", "checking", "-f", "json", path_str(&qfx)],
+    );
+    assert_success(&imported);
+    let payload = json(&imported);
+    assert_eq!(payload["ok"], true, "{payload}");
+    let import_codes = findings(&payload);
+    assert_eq!(
+        import_codes
+            .iter()
+            .filter(|code| *code == "bank_import_subscriptions_unavailable")
+            .count(),
+        1,
+        "{import_codes:?}"
+    );
+    let rows = json_rows(&payload);
+    assert_eq!(rows[0]["subscription"], Value::Null, "{payload}");
+    assert_eq!(rows[0]["bank_recurring"], false, "{payload}");
+
+    let listed = json(&run(&vault, &["list", "-a", "-f", "json"]));
+    assert_eq!(listed["warnings"].as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(
+        listed["findings"][0]["code"],
+        "bank_subscription_album_invalid"
+    );
+    assert_eq!(json_rows(&listed)[0]["subscription"], Value::Null);
+    let reported =
+        json(&run(&vault, &["report", "-m", "2026-11", "-f", "json"]));
+    assert_eq!(
+        reported["findings"][0]["code"],
+        "bank_subscription_album_invalid"
+    );
+    let checked = json(&run(&vault, &["check", "-f", "json"]));
+    assert_eq!(
+        findings(&checked)
+            .iter()
+            .filter(|code| *code == "bank_subscription_album_invalid")
+            .count(),
+        1
+    );
+}

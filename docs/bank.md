@@ -487,9 +487,11 @@ action. It respects `NO_COLOR` and pipes. Usage errors exit 2.
 
 ### Current limits
 
-Out of scope: subscriptions, historical `@BANK` migration,
-feeds, budgets, pending transactions, and multi-currency accounting. CSV
-is a fallback profile with no cross-format fuzzy identity inference.
+Out of scope: historical `@BANK` migration, feeds, budgets, pending
+transactions, and multi-currency accounting. CSV is a fallback profile
+with no cross-format fuzzy identity inference. Subscription records are
+attributed at import and read time as described in
+[Subscriptions](#subscriptions).
 
 ## Subscriptions
 
@@ -533,32 +535,56 @@ Attribution covers every folded journal transaction once, including
 `before_start`, joined to its unique current bank row when present (the
 row supplies links and category, the journal supplies the descriptor).
 ID-less typed rows join only outside that account's merged import windows.
-A unique explicit subscription link wins over every pattern; a malformed
-or unresolved link never creates a phantom. Pattern inference skips zero
-amounts, non-refund inflows, `transfer`/`income`/`cash` rows, and Wells
-Fargo built-in transfers, cash withdrawals, and fees. A refund (an inflow
-with `[cat:: refund]`) attributes and nets against spending but never
-counts as a charge for latest, price, or interval facts.
+Historical ledger membership is those journal transactions plus those
+uncovered typed rows. Orphan journal IDs still receive a row projection;
+they do not enter gross, net, latest, price, or timeline facts. A covered
+typed row with an explicit subscription link keeps that row's projection.
+Duplicate IDs never copy an arbitrary current row into history. Journal-only
+classification uses the effective bank config: matching rules, then built-in
+categories. Unique explicit row links stay authoritative. Sign alone never
+infers income or refund. A unique explicit subscription link wins over every
+pattern; a malformed or unresolved link never creates a phantom. Pattern
+inference skips zero amounts, non-refund inflows, `transfer`/`income`/`cash`
+rows, and Wells Fargo built-in transfers, cash withdrawals, and fees. A
+refund (an inflow with `[cat:: refund]`) attributes and nets against spending
+but never counts as a charge for latest, price, or interval facts.
 
 Ledger facts are pure functions of the registry, attribution, coverage,
 and today: charges oldest first with signed cents, refunds kept separate
 with gross, refund, and net totals, latest charge, next expected (`renews`
 or latest plus one cadence step with month-end clamping), monthly
-equivalent (fixed by cadence with half-up integer math, variable as the
-trailing three-month charge average, cancelled as zero), price change
-(fixed monthly or four-weekly needs the last two charges equal and
-different from `amount`; quarterly or yearly needs the latest different;
+equivalent (fixed by cadence with checked i128 half-up integer math,
+variable as the trailing three-month charge average, cancelled as zero),
+price change (fixed monthly or four-weekly needs the last two charges equal
+and different from `amount`; quarterly or yearly needs the latest different;
 variable never), still-charging (`to_cancel` with latest within 1.5 cadence
 steps of today), after-cancel (cancelled with charges after `ended`), and
 a twelve-bucket timeline (`charged`, `missed` only when merged coverage
-spans the interval, `uncovered`, `upcoming`).
+spans the interval, `uncovered`, `upcoming`). Unrepresentable derived
+amounts are omitted rather than zeroed. The current cadence interval is a
+signed offset from the original anchor, so a future `renews` and an old
+anchor both place today's bucket correctly. `to_cancel` marks only the
+latest qualifying charge; `after_cancel` marks every charge that satisfies
+that record's ended rule, and the record-level finding points at the newest.
+Refunds are never charge sentries or variable usage charges.
+
+Import preview and apply share one after-state: the existing journal folded
+with this batch's new transaction and import events, bank rows overlaid with
+planned after-images, then enrichment of the full snapshot before selecting
+affected or restored IDs. `bob bank import -F` loads the same subscription
+registry even without input files. Import plans bind the consulted album
+declaration, parent and ancestor notes, every root Markdown note (including
+notes that are not albums yet), and the record folder's membership,
+including an absent folder. Changing any of those between plan and apply
+refuses before writing rows or journal bytes.
 
 A missing album means every subscription field is `null` or `false`. An
-invalid or unreadable album disables subscription facts for that read and
-adds one bounded `bank_subscription_album_invalid` warning (with a
-`bob albums check` hint); read output carries it once in JSON and once for
-humans, and `bank check` carries it as a warning finding. Warning-only
-checks still exit 0.
+invalid album disables subscription facts for that read and adds one bounded
+`bank_subscription_album_invalid` warning (with a `bob albums check` hint);
+read output carries it once in JSON and once for humans, `bank check`
+carries it as a warning finding, and import proceeds without facts with one
+`bank_import_subscriptions_unavailable` finding. Unreadable or racing
+membership refuses the import. Warning-only checks still exit 0.
 
 ## Commands
 

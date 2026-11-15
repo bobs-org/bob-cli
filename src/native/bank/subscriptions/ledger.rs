@@ -11,11 +11,13 @@
 //! interval; with no schedule or no historical account evidence, missed
 //! charges are not manufactured.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::NaiveDate;
 
-use crate::native::bank::{journal::JournalSnapshot, model::BankRow};
+use crate::native::bank::{
+    config::BankConfig, journal::JournalSnapshot, model::BankRow,
+};
 
 use super::{
     attribution::{
@@ -23,7 +25,8 @@ use super::{
         AttributionSource,
     },
     cadence::{
-        add_cadence_steps, div_round_half_up, within_one_and_half_steps,
+        add_cadence_steps, current_step, div_round_half_up,
+        mul_div_round_half_up, within_one_and_half_steps,
     },
     coverage::CoverageIndex,
     registry::{
@@ -81,15 +84,16 @@ pub(crate) struct RecordLedger {
     pub(crate) record_path: String,
     pub(crate) charges: Vec<LedgerCharge>,
     pub(crate) refunds: Vec<LedgerCharge>,
-    pub(crate) gross_cents: i64,
-    pub(crate) refund_cents: i64,
-    pub(crate) net_cents: i64,
+    pub(crate) gross_cents: Option<i64>,
+    pub(crate) refund_cents: Option<i64>,
+    pub(crate) net_cents: Option<i64>,
     pub(crate) latest: Option<LedgerCharge>,
     pub(crate) next_expected: Option<NaiveDate>,
-    pub(crate) monthly_cents: i64,
+    pub(crate) monthly_cents: Option<i64>,
     pub(crate) price_change: Option<PriceChange>,
     pub(crate) still_charging: bool,
     pub(crate) after_cancel: Option<LedgerCharge>,
+    pub(crate) after_cancel_charges: Vec<LedgerCharge>,
     pub(crate) timeline: Vec<TimelineBucket>,
 }
 
@@ -116,9 +120,12 @@ pub(crate) fn compute_ledger(
     journal: &JournalSnapshot,
     rows: &[BankRow],
     today: NaiveDate,
+    config: Option<&BankConfig>,
+    raw_descs: &HashMap<String, String>,
 ) -> LedgerSnapshot {
     let coverage = CoverageIndex::from_journal(journal);
-    let attributed = attribute(registry, journal, rows, &coverage);
+    let attributed =
+        attribute(registry, journal, rows, &coverage, config, raw_descs);
     build_ledger(registry, attributed, coverage, today)
 }
 
@@ -131,7 +138,47 @@ fn build_ledger(
     let mut by_record = BTreeMap::<String, Vec<AttributedTxn>>::new();
     let mut by_row = BTreeMap::new();
     let mut by_id = BTreeMap::new();
-    for txn in attributed.transactions {
+    index_txn(
+        attributed.transactions,
+        &mut by_record,
+        &mut by_row,
+        &mut by_id,
+        true,
+    );
+    index_txn(
+        attributed.row_projections,
+        &mut BTreeMap::new(),
+        &mut by_row,
+        &mut by_id,
+        false,
+    );
+
+    let mut diagnostics = attributed.diagnostics;
+    let mut records = BTreeMap::new();
+    for record in &registry.records {
+        let txns = by_record.remove(&record.path).unwrap_or_default();
+        records.insert(
+            record.path.clone(),
+            record_ledger(record, &txns, &coverage, today, &mut diagnostics),
+        );
+    }
+    LedgerSnapshot {
+        records,
+        by_row,
+        by_id,
+        coverage,
+        diagnostics,
+    }
+}
+
+fn index_txn(
+    txns: Vec<AttributedTxn>,
+    by_record: &mut BTreeMap<String, Vec<AttributedTxn>>,
+    by_row: &mut BTreeMap<(String, usize), RowAttribution>,
+    by_id: &mut BTreeMap<String, RowAttribution>,
+    ledger_eligible: bool,
+) {
+    for txn in txns {
         let projection = RowAttribution {
             record_path: txn.record_path.clone(),
             source: txn.source,
@@ -142,27 +189,11 @@ fn build_ledger(
             by_row.insert((path, line), projection.clone());
         }
         if let Some(id) = txn.id.clone() {
-            by_id.insert(id, projection);
+            by_id.entry(id).or_insert(projection);
         }
-        if let Some(record_path) = txn.record_path.clone() {
+        if ledger_eligible && let Some(record_path) = txn.record_path.clone() {
             by_record.entry(record_path).or_default().push(txn);
         }
-    }
-
-    let mut records = BTreeMap::new();
-    for record in &registry.records {
-        let txns = by_record.remove(&record.path).unwrap_or_default();
-        records.insert(
-            record.path.clone(),
-            record_ledger(record, &txns, &coverage, today),
-        );
-    }
-    LedgerSnapshot {
-        records,
-        by_row,
-        by_id,
-        coverage,
-        diagnostics: attributed.diagnostics,
     }
 }
 
@@ -171,6 +202,7 @@ fn record_ledger(
     txns: &[AttributedTxn],
     coverage: &CoverageIndex,
     today: NaiveDate,
+    diagnostics: &mut Vec<AttributionDiagnostic>,
 ) -> RecordLedger {
     let mut charges = Vec::new();
     let mut refunds = Vec::new();
@@ -184,17 +216,35 @@ fn record_ledger(
     charges.sort_by(charge_order);
     refunds.sort_by(charge_order);
     let gross_cents = sum_magnitudes(&charges);
-    let refund_cents = refunds.iter().map(|refund| refund.cents.max(0)).sum();
-    let net_cents = gross_cents.saturating_sub(refund_cents);
+    let refund_cents = sum_refunds(&refunds);
+    let net_cents = match (gross_cents, refund_cents) {
+        (Some(gross), Some(refund)) => gross.checked_sub(refund),
+        _ => None,
+    };
+    let monthly_cents = monthly_equivalent(record, &charges, today);
+    if gross_cents.is_none()
+        || refund_cents.is_none()
+        || net_cents.is_none()
+        || monthly_cents.is_none()
+    {
+        diagnostics.push(AttributionDiagnostic {
+            code: "bank_subscription_amount_overflow",
+            path: record.path.clone(),
+            message: format!(
+                "subscription amounts for {} overflow signed 64-bit cents",
+                record.path
+            ),
+        });
+    }
     let latest = charges.last().cloned();
     let next_expected = next_expected_date(record, latest.as_ref());
-    let monthly_cents = monthly_equivalent(record, &charges, today);
     let price_change = price_change_for(record, &charges);
     let still_charging = record.status == SubscriptionStatus::ToCancel
         && latest.as_ref().is_some_and(|charge| {
             within_one_and_half_steps(charge.date, today, record.cadence)
         });
-    let after_cancel = after_cancel_charge(record, &charges);
+    let after_cancel_charges = after_cancel_charges(record, &charges);
+    let after_cancel = after_cancel_charges.last().cloned();
     let timeline = timeline_for(record, &charges, coverage, today);
     RecordLedger {
         record_path: record.path.clone(),
@@ -209,6 +259,7 @@ fn record_ledger(
         price_change,
         still_charging,
         after_cancel,
+        after_cancel_charges,
         timeline,
     }
 }
@@ -239,10 +290,21 @@ fn charge_order(
         .then(left.cents.cmp(&right.cents))
 }
 
-fn sum_magnitudes(charges: &[LedgerCharge]) -> i64 {
-    charges.iter().fold(0, |total, charge| {
-        total.saturating_add(charge.cents.saturating_neg())
-    })
+fn sum_magnitudes(charges: &[LedgerCharge]) -> Option<i64> {
+    let mut total: i128 = 0;
+    for charge in charges {
+        let magnitude = i128::from(charge.cents).checked_neg()?;
+        total = total.checked_add(magnitude)?;
+    }
+    i64::try_from(total).ok()
+}
+
+fn sum_refunds(refunds: &[LedgerCharge]) -> Option<i64> {
+    let mut total: i128 = 0;
+    for refund in refunds {
+        total = total.checked_add(i128::from(refund.cents.max(0)))?;
+    }
+    i64::try_from(total).ok()
 }
 
 fn next_expected_date(
@@ -259,9 +321,9 @@ fn monthly_equivalent(
     record: &SubscriptionRecord,
     charges: &[LedgerCharge],
     today: NaiveDate,
-) -> i64 {
+) -> Option<i64> {
     if record.status.is_cancelled() {
-        return 0;
+        return Some(0);
     }
     match record.pricing {
         SubscriptionPricing::Fixed => fixed_monthly(record),
@@ -271,18 +333,17 @@ fn monthly_equivalent(
     }
 }
 
-fn fixed_monthly(record: &SubscriptionRecord) -> i64 {
+fn fixed_monthly(record: &SubscriptionRecord) -> Option<i64> {
     match record.cadence {
-        SubscriptionCadence::Monthly => record.amount_cents,
+        SubscriptionCadence::Monthly => Some(record.amount_cents),
         SubscriptionCadence::FourWeekly => {
-            div_round_half_up(record.amount_cents.saturating_mul(13), 12)
-                .unwrap_or(0)
+            mul_div_round_half_up(record.amount_cents, 13, 12)
         }
         SubscriptionCadence::Quarterly => {
-            div_round_half_up(record.amount_cents, 3).unwrap_or(0)
+            div_round_half_up(record.amount_cents, 3)
         }
         SubscriptionCadence::Yearly => {
-            div_round_half_up(record.amount_cents, 12).unwrap_or(0)
+            div_round_half_up(record.amount_cents, 12)
         }
     }
 }
@@ -291,24 +352,25 @@ fn variable_monthly(
     amount_cents: i64,
     charges: &[LedgerCharge],
     today: NaiveDate,
-) -> i64 {
+) -> Option<i64> {
     let Some(start) =
         add_cadence_steps(today, -3, SubscriptionCadence::Monthly)
     else {
-        return amount_cents;
+        return Some(amount_cents);
     };
-    let mut sum = 0i64;
+    let mut total: i128 = 0;
     let mut any = false;
     for charge in charges {
         if charge.date >= start && charge.date <= today {
             any = true;
-            sum = sum.saturating_add(charge.cents.saturating_neg());
+            let magnitude = i128::from(charge.cents).checked_neg()?;
+            total = total.checked_add(magnitude)?;
         }
     }
     if !any {
-        return amount_cents;
+        return Some(amount_cents);
     }
-    div_round_half_up(sum, 3).unwrap_or(0)
+    div_round_half_up(i64::try_from(total).ok()?, 3)
 }
 
 fn price_change_for(
@@ -319,11 +381,11 @@ fn price_change_for(
         return None;
     }
     let latest = charges.last()?;
-    let latest_magnitude = latest.cents.saturating_neg();
+    let latest_magnitude = latest.cents.checked_neg()?;
     match record.cadence {
         SubscriptionCadence::Monthly | SubscriptionCadence::FourWeekly => {
             let previous = charges.get(charges.len().checked_sub(2)?)?;
-            let previous_magnitude = previous.cents.saturating_neg();
+            let previous_magnitude = previous.cents.checked_neg()?;
             if previous_magnitude == latest_magnitude
                 && latest_magnitude != record.amount_cents
             {
@@ -346,21 +408,21 @@ fn price_change_for(
     }
 }
 
-fn after_cancel_charge(
+fn after_cancel_charges(
     record: &SubscriptionRecord,
     charges: &[LedgerCharge],
-) -> Option<LedgerCharge> {
+) -> Vec<LedgerCharge> {
     if record.status != SubscriptionStatus::Cancelled {
-        return None;
+        return Vec::new();
     }
     charges
         .iter()
-        .rev()
-        .find(|charge| match record.ended {
+        .filter(|charge| match record.ended {
             Some(ended) => charge.date > ended,
             None => true,
         })
         .cloned()
+        .collect()
 }
 
 fn timeline_for(
@@ -379,7 +441,9 @@ fn timeline_for(
     let relevant_accounts = relevant_accounts(charges);
     let mut buckets = Vec::new();
     for offset in 0..12 {
-        let n = current_n.saturating_add(offset - 11);
+        let Some(n) = current_n.checked_add(offset as i32 - 11) else {
+            continue;
+        };
         let Some(due) = add_cadence_steps(anchor, n, record.cadence) else {
             continue;
         };
@@ -413,20 +477,6 @@ fn timeline_for(
         buckets.push(TimelineBucket { start, due, state });
     }
     buckets
-}
-
-fn current_step(
-    anchor: NaiveDate,
-    today: NaiveDate,
-    cadence: SubscriptionCadence,
-) -> Option<i32> {
-    for n in 0..=240 {
-        let due = add_cadence_steps(anchor, n, cadence)?;
-        if due >= today {
-            return Some(n);
-        }
-    }
-    Some(240)
 }
 
 fn relevant_accounts(charges: &[LedgerCharge]) -> Vec<String> {
@@ -593,7 +643,14 @@ mod tests {
             journal.transactions.insert(event.key.clone(), event);
         }
         journal.imports = imports;
-        compute_ledger(&registry(records), &journal, &rows, today)
+        compute_ledger(
+            &registry(records),
+            &journal,
+            &rows,
+            today,
+            None,
+            &HashMap::new(),
+        )
     }
 
     fn tunely(
@@ -756,7 +813,10 @@ mod tests {
             vec![],
             today,
         );
-        assert_eq!(fixed.records["billing/tunely.md"].monthly_cents, 1082);
+        assert_eq!(
+            fixed.records["billing/tunely.md"].monthly_cents,
+            Some(1082)
+        );
         assert_eq!(SubscriptionCadence::FourWeekly.as_str(), "four_weekly");
         assert_eq!(SubscriptionPricing::Fixed.as_str(), "fixed");
 
@@ -772,7 +832,10 @@ mod tests {
             vec![],
             today,
         );
-        assert_eq!(quarterly.records["billing/tunely.md"].monthly_cents, 34);
+        assert_eq!(
+            quarterly.records["billing/tunely.md"].monthly_cents,
+            Some(34)
+        );
 
         let yearly = ledger(
             vec![tunely(
@@ -786,7 +849,7 @@ mod tests {
             vec![],
             today,
         );
-        assert_eq!(yearly.records["billing/tunely.md"].monthly_cents, 1);
+        assert_eq!(yearly.records["billing/tunely.md"].monthly_cents, Some(1));
 
         let variable_empty = ledger(
             vec![tunely(
@@ -802,7 +865,7 @@ mod tests {
         );
         assert_eq!(
             variable_empty.records["billing/tunely.md"].monthly_cents,
-            1500
+            Some(1500)
         );
 
         let variable = ledger(
@@ -843,7 +906,10 @@ mod tests {
             today,
         );
         // Window is 2026-08-15..=2026-11-15; 1000+2000+3000 / 3 = 2000.
-        assert_eq!(variable.records["billing/tunely.md"].monthly_cents, 2000);
+        assert_eq!(
+            variable.records["billing/tunely.md"].monthly_cents,
+            Some(2000)
+        );
 
         let cancelled = ledger(
             vec![tunely(
@@ -864,7 +930,10 @@ mod tests {
             vec![],
             today,
         );
-        assert_eq!(cancelled.records["billing/tunely.md"].monthly_cents, 0);
+        assert_eq!(
+            cancelled.records["billing/tunely.md"].monthly_cents,
+            Some(0)
+        );
     }
 
     #[test]
@@ -911,9 +980,9 @@ mod tests {
         let rec = &snapshot.records["billing/tunely.md"];
         assert_eq!(rec.charges.len(), 2);
         assert_eq!(rec.refunds.len(), 1);
-        assert_eq!(rec.gross_cents, 1998);
-        assert_eq!(rec.refund_cents, 400);
-        assert_eq!(rec.net_cents, 1598);
+        assert_eq!(rec.gross_cents, Some(1998));
+        assert_eq!(rec.refund_cents, Some(400));
+        assert_eq!(rec.net_cents, Some(1598));
         assert_eq!(
             rec.latest.as_ref().map(|c| c.date),
             Some(date(2026, 10, 1))
@@ -1322,5 +1391,270 @@ mod tests {
             .by_row
             .contains_key(&("bank/2026-10.md".to_owned(), 4)));
         assert!(snapshot.by_id.contains_key("d0000001"));
+    }
+
+    #[test]
+    fn orphan_and_covered_rows_project_without_entering_totals() {
+        let today = date(2026, 11, 15);
+        let rec = tunely(
+            999,
+            SubscriptionCadence::Monthly,
+            SubscriptionPricing::Fixed,
+            SubscriptionStatus::Active,
+        );
+        let orphan = ledger(
+            vec![rec.clone()],
+            vec![],
+            vec![row(
+                "checking",
+                date(2026, 11, 2),
+                -999,
+                "Tunely",
+                None,
+                &["[[billing/tunely]]"],
+                Some("orphan01"),
+                3,
+            )],
+            vec![],
+            today,
+        );
+        let facts = &orphan.records["billing/tunely.md"];
+        assert!(facts.charges.is_empty());
+        assert_eq!(facts.gross_cents, Some(0));
+        assert_eq!(facts.net_cents, Some(0));
+        assert_eq!(facts.latest, None);
+        assert_eq!(facts.price_change, None);
+        assert!(facts.timeline.is_empty());
+        assert_eq!(
+            orphan
+                .by_row
+                .get(&("bank/2026-11.md".to_owned(), 3))
+                .and_then(|attribution| attribution.record_path.as_deref()),
+            Some("billing/tunely.md")
+        );
+
+        let covered = ledger(
+            vec![rec],
+            vec![],
+            vec![row(
+                "checking",
+                date(2026, 9, 10),
+                -999,
+                "Edited payee",
+                None,
+                &["[[billing/tunely]]"],
+                None,
+                8,
+            )],
+            vec![import("checking", date(2026, 9, 1), date(2026, 9, 15))],
+            today,
+        );
+        assert!(covered.records["billing/tunely.md"].charges.is_empty());
+        assert_eq!(
+            covered
+                .by_row
+                .get(&("bank/2026-09.md".to_owned(), 8))
+                .and_then(|attribution| attribution.record_path.as_deref()),
+            Some("billing/tunely.md")
+        );
+    }
+
+    #[test]
+    fn overflow_and_i64_min_suppress_money_facts() {
+        let today = date(2026, 11, 15);
+        let huge = tunely(
+            1_000_000_000_000_000_000,
+            SubscriptionCadence::FourWeekly,
+            SubscriptionPricing::Fixed,
+            SubscriptionStatus::Active,
+        );
+        let representable = ledger(vec![huge], vec![], vec![], vec![], today);
+        assert_eq!(
+            representable.records["billing/tunely.md"].monthly_cents,
+            Some(1_083_333_333_333_333_333)
+        );
+
+        let overflowing = tunely(
+            i64::MAX,
+            SubscriptionCadence::FourWeekly,
+            SubscriptionPricing::Fixed,
+            SubscriptionStatus::Active,
+        );
+        let overflow = ledger(vec![overflowing], vec![], vec![], vec![], today);
+        assert_eq!(overflow.records["billing/tunely.md"].monthly_cents, None);
+        assert!(overflow.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "bank_subscription_amount_overflow"
+        }));
+
+        let min_charge = ledger(
+            vec![tunely(
+                999,
+                SubscriptionCadence::Monthly,
+                SubscriptionPricing::Fixed,
+                SubscriptionStatus::Active,
+            )],
+            vec![txn(
+                "checking",
+                "min00001",
+                date(2026, 10, 1),
+                i64::MIN,
+                "TUNELY",
+                TxnOutcome::BeforeStart,
+            )],
+            vec![],
+            vec![],
+            today,
+        );
+        assert_eq!(min_charge.records["billing/tunely.md"].gross_cents, None);
+        assert_eq!(min_charge.records["billing/tunely.md"].net_cents, None);
+        assert!(min_charge.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "bank_subscription_amount_overflow"
+        }));
+
+        let refund_overflow = ledger(
+            vec![tunely(
+                999,
+                SubscriptionCadence::Monthly,
+                SubscriptionPricing::Fixed,
+                SubscriptionStatus::Active,
+            )],
+            vec![],
+            vec![
+                row(
+                    "checking",
+                    date(2026, 10, 15),
+                    i64::MAX,
+                    "Tunely credit",
+                    Some("refund"),
+                    &["[[billing/tunely]]"],
+                    None,
+                    15,
+                ),
+                row(
+                    "checking",
+                    date(2026, 10, 16),
+                    i64::MAX,
+                    "Tunely credit",
+                    Some("refund"),
+                    &["[[billing/tunely]]"],
+                    None,
+                    16,
+                ),
+            ],
+            vec![],
+            today,
+        );
+        assert_eq!(
+            refund_overflow.records["billing/tunely.md"].refund_cents,
+            None
+        );
+    }
+
+    #[test]
+    fn future_renews_and_old_anchors_keep_today_in_the_window() {
+        let today = date(2026, 11, 15);
+        let mut rec = tunely(
+            999,
+            SubscriptionCadence::Monthly,
+            SubscriptionPricing::Fixed,
+            SubscriptionStatus::Active,
+        );
+        rec.renews = Some(date(2028, 1, 31));
+        let future = ledger(vec![rec], vec![], vec![], vec![], today);
+        let timeline = &future.records["billing/tunely.md"].timeline;
+        assert_eq!(timeline.len(), 12);
+        assert_eq!(
+            timeline.last().map(|bucket| bucket.due),
+            Some(date(2026, 11, 30))
+        );
+        assert_eq!(
+            timeline.last().map(|bucket| bucket.state),
+            Some(TimelineState::Upcoming)
+        );
+        assert!(timeline
+            .iter()
+            .all(|bucket| bucket.due <= date(2026, 11, 30)));
+
+        let old = ledger(
+            vec![tunely(
+                999,
+                SubscriptionCadence::Monthly,
+                SubscriptionPricing::Fixed,
+                SubscriptionStatus::Active,
+            )],
+            vec![txn(
+                "checking",
+                "old00001",
+                date(2000, 1, 15),
+                -999,
+                "TUNELY",
+                TxnOutcome::BeforeStart,
+            )],
+            vec![],
+            vec![],
+            today,
+        );
+        let old_timeline = &old.records["billing/tunely.md"].timeline;
+        assert_eq!(old_timeline.len(), 12);
+        assert_eq!(
+            old_timeline.last().map(|bucket| bucket.due),
+            Some(date(2026, 11, 15))
+        );
+    }
+
+    #[test]
+    fn after_cancel_charges_keep_every_ended_rule_hit() {
+        let mut rec = tunely(
+            999,
+            SubscriptionCadence::Monthly,
+            SubscriptionPricing::Fixed,
+            SubscriptionStatus::Cancelled,
+        );
+        rec.ended = Some(date(2026, 9, 1));
+        let snapshot = ledger(
+            vec![rec],
+            vec![
+                txn(
+                    "checking",
+                    "ac000001",
+                    date(2026, 8, 15),
+                    -999,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+                txn(
+                    "checking",
+                    "ac000002",
+                    date(2026, 10, 2),
+                    -999,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+                txn(
+                    "checking",
+                    "ac000003",
+                    date(2026, 11, 2),
+                    -999,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+            ],
+            vec![],
+            vec![],
+            date(2026, 11, 15),
+        );
+        let facts = &snapshot.records["billing/tunely.md"];
+        assert_eq!(
+            facts
+                .after_cancel_charges
+                .iter()
+                .map(|charge| charge.date)
+                .collect::<Vec<_>>(),
+            vec![date(2026, 10, 2), date(2026, 11, 2)]
+        );
+        assert_eq!(
+            facts.after_cancel.as_ref().map(|charge| charge.date),
+            Some(date(2026, 11, 2))
+        );
     }
 }

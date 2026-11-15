@@ -423,37 +423,12 @@ pub(crate) fn plan_import(
         resolved.push(statement);
     }
 
-    let guarded = if sources.is_empty() {
-        None
-    } else {
-        Some(super::subscriptions::loader::load_record_links(vault)?)
-    };
-    let (
-        restaurants,
-        restaurant_deps,
-        subscriptions,
-        subscription_deps,
-        subscription_warning,
-    ) = guarded.as_ref().map_or_else(
-        || {
-            (
-                Vec::new(),
-                Vec::new(),
-                super::subscriptions::registry::SubscriptionRegistry::missing(),
-                Vec::new(),
-                None,
-            )
-        },
-        |guarded| {
-            (
-                guarded.restaurants.clone(),
-                guarded.restaurant_deps.clone(),
-                guarded.subscriptions.clone(),
-                guarded.subscription_deps.clone(),
-                guarded.subscription_warning.clone(),
-            )
-        },
-    );
+    let guarded = super::subscriptions::loader::load_record_links(vault)?;
+    let restaurants = guarded.restaurants.clone();
+    let restaurant_deps = guarded.restaurant_deps.clone();
+    let subscriptions = guarded.subscriptions.clone();
+    let subscription_deps = guarded.subscription_deps.clone();
+    let subscription_warning = guarded.subscription_warning.clone();
     let plan = import_plan::plan_batch(PlanInput {
         config: Some(&config),
         hub: ReadDep {
@@ -493,29 +468,27 @@ pub(crate) fn plan_import(
         Some("jsonl"),
         journal.directory_entries.clone(),
     );
-    if let Some(guarded) = guarded.as_ref() {
+    deps.insert_directory(
+        PathBuf::from("."),
+        Some("md"),
+        guarded.root_md_entries.clone(),
+    );
+    if let Some(directory) = guarded.restaurant_directory.clone() {
         deps.insert_directory(
-            PathBuf::from("."),
+            PathBuf::from(directory),
             Some("md"),
-            guarded.root_md_entries.clone(),
+            guarded.restaurant_dir_entries.clone(),
         );
-        if let Some(directory) = guarded.restaurant_directory.clone() {
-            deps.insert_directory(
-                PathBuf::from(directory),
-                Some("md"),
-                guarded.restaurant_dir_entries.clone(),
-            );
-        }
-        if let Some(directory) = guarded.subscription_directory.clone() {
-            deps.insert_directory(
-                PathBuf::from(directory),
-                Some("md"),
-                guarded.subscription_dir_entries.clone(),
-            );
-        }
-        for (path, preimage) in &guarded.registry_dependencies {
-            deps.insert_bytes(path.clone(), preimage.clone());
-        }
+    }
+    if let Some(directory) = guarded.subscription_directory.clone() {
+        deps.insert_directory(
+            PathBuf::from(directory),
+            Some("md"),
+            guarded.subscription_dir_entries.clone(),
+        );
+    }
+    for (path, preimage) in &guarded.registry_dependencies {
+        deps.insert_bytes(path.clone(), preimage.clone());
     }
 
     let staged = plan
@@ -1715,6 +1688,118 @@ mod tests {
             fs::read(vault.path.join("bank/2026-11.md")).unwrap(),
             original_rows
         );
+    }
+
+    fn subscription_album(parent: &str) -> String {
+        format!(
+            "---\ntype: [[album]]\nparent: \"[[{parent}]]\"\nemoji: 🔁\nrecord:\n  noun: subscription\n  label: Subscription\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: To cancel\n        to_decide: To decide\n        active: Active\n        cancelled: Cancelled\n    amount:\n      required: true\n      values: number\n      min: 0\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every four weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    pricing:\n      default: fixed\n      values:\n        fixed: Fixed\n        variable: Variable\n    match: {{list: true}}\n    category: {{suggest: true}}\n    url: {{values: url}}\n    renews: {{values: date}}\n    ended: {{values: date}}\n---\n# Billing\n"
+        )
+    }
+
+    fn write_subscription_record(vault: &Path, fields: &str) {
+        fs::create_dir_all(vault.join("billing")).unwrap();
+        fs::write(
+            vault.join("billing/tunely.md"),
+            format!("---\ntitle: Tunely\n{fields}---\n# Tunely\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn subscription_stale_inputs_refuse_before_import_writes() {
+        let _guard = environment();
+        let vault = vault();
+        fs::write(
+            vault.path.join("work.md"),
+            "---\ntype: [[area]]\n---\n# Work\n",
+        )
+        .unwrap();
+        fs::write(vault.path.join("billing.md"), subscription_album("work"))
+            .unwrap();
+        write_subscription_record(
+            &vault.path,
+            "status: active\namount: 9.99\ncadence: monthly\nmatch: [TUNELY]\n",
+        );
+        fs::write(vault.path.join("notes.md"), "# Scratch\n").unwrap();
+        let input = prepared(
+            "tunely.csv",
+            0,
+            "11/12/2026,-9.99,*,,TUNELY PREMIUM 1234 RECURRING PAYMENT\n",
+        );
+
+        let stale_record = planned(&vault.path, std::slice::from_ref(&input));
+        assert_eq!(
+            stale_record.context.rows[0]
+                .subscription
+                .as_ref()
+                .map(|item| item.path.as_str()),
+            Some("billing/tunely.md")
+        );
+        write_subscription_record(
+            &vault.path,
+            "status: active\namount: 12.99\ncadence: monthly\nmatch: [TUNELY]\n",
+        );
+        let error = apply_and_commit(&vault.path, &Vec::new(), stale_record)
+            .expect_err("changed subscription record");
+        assert_eq!(error.code, "stale_note");
+        assert!(!vault.path.join("bank").exists());
+
+        let stale_declaration =
+            planned(&vault.path, std::slice::from_ref(&input));
+        fs::write(
+            vault.path.join("billing.md"),
+            subscription_album("work").replace("emoji: 🔁", "emoji: 📻"),
+        )
+        .unwrap();
+        let error =
+            apply_and_commit(&vault.path, &Vec::new(), stale_declaration)
+                .expect_err("changed subscription declaration");
+        assert_eq!(error.code, "stale_note");
+        assert!(!vault.path.join("bank").exists());
+
+        fs::write(vault.path.join("billing.md"), subscription_album("work"))
+            .unwrap();
+        let stale_parent = planned(&vault.path, std::slice::from_ref(&input));
+        fs::write(
+            vault.path.join("work.md"),
+            "---\ntype: [[project]]\nparent: \"[[bank]]\"\n---\n# Work\n",
+        )
+        .unwrap();
+        let error = apply_and_commit(&vault.path, &Vec::new(), stale_parent)
+            .expect_err("changed album parent");
+        assert_eq!(error.code, "stale_note");
+        assert!(!vault.path.join("bank").exists());
+
+        fs::write(
+            vault.path.join("work.md"),
+            "---\ntype: [[area]]\n---\n# Work\n",
+        )
+        .unwrap();
+        let stale_root = planned(&vault.path, std::slice::from_ref(&input));
+        fs::write(
+            vault.path.join("notes.md"),
+            "---\ntype: [[album]]\nparent: \"[[work]]\"\nrecord:\n  noun: subscription\n  fields: {}\n---\n# Notes\n",
+        )
+        .unwrap();
+        let error = apply_and_commit(&vault.path, &Vec::new(), stale_root)
+            .expect_err("root note became a conflicting album");
+        assert_eq!(error.code, "stale_note");
+        assert!(!vault.path.join("bank").exists());
+
+        fs::write(vault.path.join("notes.md"), "# Scratch\n").unwrap();
+        fs::remove_dir_all(vault.path.join("billing")).unwrap();
+        fs::write(vault.path.join("billing.md"), subscription_album("work"))
+            .unwrap();
+        let stale_folder = planned(&vault.path, std::slice::from_ref(&input));
+        write_subscription_record(
+            &vault.path,
+            "status: active\namount: 9.99\ncadence: monthly\nmatch: [TUNELY]\n",
+        );
+        let error = apply_and_commit(&vault.path, &Vec::new(), stale_folder)
+            .expect_err("creating the missing folder must refuse");
+        assert_eq!(error.code, "stale_note");
+        assert!(!vault.path.join("bank").exists());
+        assert!(!vault.path.join(".bob/bank").exists());
     }
 
     #[test]

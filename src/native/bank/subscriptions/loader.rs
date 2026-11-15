@@ -10,12 +10,13 @@
 //! transaction apply, with no unguarded second semantic read.
 
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
 
 use crate::native::{
-    albums::registry::{DiscoveryHealth, RecordTypeSource},
+    albums::registry::{AlbumRegistry, DiscoveryHealth, RecordTypeSource},
     bank::{
         import_plan::{ReadDep, RestaurantEntry},
         subscriptions::{
@@ -26,6 +27,8 @@ use crate::native::{
             },
         },
     },
+    notebooks::snapshot::VaultSnapshot,
+    projects::wikilink_path_target,
     records::{
         catalog::RecordCatalog,
         context::{RecordContext, RecordKindResolution},
@@ -98,35 +101,75 @@ fn directory_names(
     Ok(names)
 }
 
-/// Load restaurants and subscriptions under one `RecordContext`, preserving
-/// the existing `eat` exact-title behavior.
-pub(crate) fn load_record_links(
+fn read_preimage(
     vault: &Path,
-) -> Result<GuardedRecordInputs, TxnFailure> {
-    let root_md_entries = directory_names(vault, Some("md"))?;
-    let context = RecordContext::discover(vault);
-    if directory_names(vault, Some("md"))? != root_md_entries {
-        return Err(failure(
+    relative: &Path,
+    listed_root: bool,
+) -> Result<Option<Vec<u8>>, TxnFailure> {
+    match fs::read(vault.join(relative)) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if listed_root {
+                Err(failure(
+                    "bank_import_registry",
+                    "the records registry changed while it was being read",
+                    "re-run the import against the latest registry",
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(error) => Err(failure(
             "bank_import_registry",
-            "the records registry changed while it was being read",
-            "re-run the import against the latest registry",
-        ));
+            format!("could not read {}: {error}", relative.display()),
+            "repair the records registry and retry",
+        )),
     }
-    let mut registry_dependencies = Vec::new();
+}
+
+fn insert_preimage(
+    vault: &Path,
+    relative: PathBuf,
+    listed_root: bool,
+    seen: &mut BTreeSet<PathBuf>,
+    deps: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+) -> Result<(), TxnFailure> {
+    if !seen.insert(relative.clone()) {
+        return Ok(());
+    }
+    let bytes = read_preimage(vault, &relative, listed_root)?;
+    deps.push((relative, bytes));
+    Ok(())
+}
+
+fn capture_registry_preimages(
+    vault: &Path,
+    root_md_entries: &[String],
+    snapshot: &VaultSnapshot,
+    context: &RecordContext,
+) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>, TxnFailure> {
+    let mut seen = BTreeSet::new();
+    let mut deps = Vec::new();
+    for name in root_md_entries {
+        insert_preimage(
+            vault,
+            PathBuf::from(name),
+            true,
+            &mut seen,
+            &mut deps,
+        )?;
+    }
+    let index = snapshot.index();
     for album in &context.registry().albums {
-        let path = vault.join(&album.declaration.path);
-        let bytes = fs::read(&path).map_err(|error| {
-            failure(
-                "bank_import_registry",
-                format!("could not read {}: {error}", album.declaration.path),
-                "repair the album declaration and retry",
-            )
-        })?;
-        if album
-            .contents
-            .as_ref()
-            .is_some_and(|contents| contents.as_bytes() != bytes)
-        {
+        let album_path = PathBuf::from(&album.declaration.path);
+        if album.contents.as_ref().is_some_and(|contents| {
+            deps.iter().any(|(path, bytes)| {
+                path == &album_path
+                    && bytes
+                        .as_ref()
+                        .is_some_and(|bytes| bytes != contents.as_bytes())
+            })
+        }) {
             return Err(failure(
                 "bank_import_registry",
                 format!(
@@ -136,9 +179,67 @@ pub(crate) fn load_record_links(
                 "re-run the import against the latest registry",
             ));
         }
-        registry_dependencies
-            .push((PathBuf::from(&album.declaration.path), Some(bytes)));
+        insert_preimage(vault, album_path, false, &mut seen, &mut deps)?;
+        let mut current = album.parent_path.clone();
+        let mut walked = BTreeSet::new();
+        while let Some(path) = current {
+            if !walked.insert(path.clone()) {
+                break;
+            }
+            insert_preimage(vault, path.clone(), false, &mut seen, &mut deps)?;
+            current = snapshot.files.get(&path).and_then(|file| {
+                file.lite.parent_raw.as_deref().and_then(|raw| {
+                    let target = wikilink_path_target(raw)?;
+                    match index.resolve(Some(&path), &target) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            Some(PathBuf::from(if target.ends_with(".md") {
+                                target
+                            } else {
+                                format!("{target}.md")
+                            }))
+                        }
+                    }
+                })
+            });
+        }
     }
+    Ok(deps)
+}
+
+/// Load restaurants and subscriptions under one `RecordContext`, preserving
+/// the existing `eat` exact-title behavior.
+pub(crate) fn load_record_links(
+    vault: &Path,
+) -> Result<GuardedRecordInputs, TxnFailure> {
+    let root_md_entries = directory_names(vault, Some("md"))?;
+    let snapshot = VaultSnapshot::load(vault);
+    if directory_names(vault, Some("md"))? != root_md_entries {
+        return Err(failure(
+            "bank_import_registry",
+            "the records registry changed while it was being read",
+            "re-run the import against the latest registry",
+        ));
+    }
+    if !snapshot.io_errors.is_empty() {
+        return Err(failure(
+            "bank_import_registry",
+            format!(
+                "could not read the records registry: {}",
+                snapshot.io_errors.join(", ")
+            ),
+            "repair the records registry and retry",
+        ));
+    }
+    let context = RecordContext::from_registry(AlbumRegistry::from_snapshot(
+        vault, &snapshot,
+    ));
+    let registry_dependencies = capture_registry_preimages(
+        vault,
+        &root_md_entries,
+        &snapshot,
+        &context,
+    )?;
 
     if let DiscoveryHealth::Partial(errors) = &context.registry().health {
         return Err(failure(

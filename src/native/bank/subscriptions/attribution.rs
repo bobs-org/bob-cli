@@ -9,14 +9,16 @@
 //! amounts, non-refund inflows, `transfer`/`income`/`cash` rows, or Wells
 //! Fargo built-in transfers, cash withdrawals, or fees.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::NaiveDate;
 
 use crate::native::bank::{
+    config::BankConfig,
     journal::{JournalSnapshot, TxnEvent, TxnOutcome},
     model::BankRow,
     naming::classify_builtin,
+    suggest,
 };
 
 use super::{
@@ -67,7 +69,12 @@ pub(crate) struct AttributedTxn {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AttributionSnapshot {
+    /// Folded journal transactions plus uncovered ID-less typed rows.
+    /// These are the only members of historical ledger totals.
     pub(crate) transactions: Vec<AttributedTxn>,
+    /// Row-level projections that must not enter historical totals:
+    /// orphan-ID rows, covered ID-less rows, and duplicate-ID rows.
+    pub(crate) row_projections: Vec<AttributedTxn>,
     pub(crate) diagnostics: Vec<AttributionDiagnostic>,
 }
 
@@ -90,15 +97,41 @@ pub(crate) fn attribute(
     journal: &JournalSnapshot,
     rows: &[BankRow],
     coverage: &CoverageIndex,
+    config: Option<&BankConfig>,
+    raw_descs: &HashMap<String, String>,
 ) -> AttributionSnapshot {
-    let universe = collect_universe(journal, rows, coverage);
+    let (ledger, projections) = collect_universe(journal, rows, coverage);
     let mut diagnostics = universe_diagnostics(rows);
     let records = &registry.records;
-    let mut transactions = universe
+    let mut transactions = ledger
         .into_iter()
-        .map(|txn| resolve_txn(txn, records, &mut diagnostics))
+        .map(|txn| {
+            resolve_txn(txn, records, config, raw_descs, &mut diagnostics)
+        })
         .collect::<Vec<_>>();
-    transactions.sort_by(|left, right| {
+    let mut row_projections = projections
+        .into_iter()
+        .map(|txn| {
+            resolve_txn(txn, records, config, raw_descs, &mut diagnostics)
+        })
+        .collect::<Vec<_>>();
+    sort_attributed(&mut transactions);
+    sort_attributed(&mut row_projections);
+    diagnostics.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.code.cmp(right.code))
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    AttributionSnapshot {
+        transactions,
+        row_projections,
+        diagnostics,
+    }
+}
+
+fn sort_attributed(txns: &mut [AttributedTxn]) {
+    txns.sort_by(|left, right| {
         left.date
             .cmp(&right.date)
             .then(left.account.cmp(&right.account))
@@ -108,23 +141,13 @@ pub(crate) fn attribute(
             .then(left.id.cmp(&right.id))
             .then(left.cents.cmp(&right.cents))
     });
-    diagnostics.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then_with(|| left.code.cmp(right.code))
-            .then_with(|| left.message.cmp(&right.message))
-    });
-    AttributionSnapshot {
-        transactions,
-        diagnostics,
-    }
 }
 
-fn collect_universe(
-    journal: &JournalSnapshot,
-    rows: &[BankRow],
+fn collect_universe<'a>(
+    journal: &'a JournalSnapshot,
+    rows: &'a [BankRow],
     coverage: &CoverageIndex,
-) -> Vec<UniverseTxn> {
+) -> (Vec<UniverseTxn>, Vec<UniverseTxn>) {
     let mut by_id = BTreeMap::<&str, Vec<&BankRow>>::new();
     for row in rows {
         if let Some(id) = row.id.as_deref() {
@@ -132,20 +155,22 @@ fn collect_universe(
         }
     }
     let mut consumed = BTreeSet::<(&str, usize)>::new();
-    let mut universe = Vec::new();
+    let mut ledger = Vec::new();
+    let mut projections = Vec::new();
     for event in journal.transactions.values() {
         match by_id.get(event.id.as_str()).map(Vec::as_slice) {
             Some([row]) => {
                 consumed.insert((row.path.as_str(), row.line));
-                universe.push(joined_txn(event, row));
+                ledger.push(joined_txn(event, row));
             }
-            Some(rows) if rows.len() > 1 => {
-                for row in rows {
+            Some(dupes) if dupes.len() > 1 => {
+                for row in dupes {
                     consumed.insert((row.path.as_str(), row.line));
+                    projections.push(typed_txn(row));
                 }
-                universe.push(journal_only_txn(event));
+                ledger.push(journal_only_txn(event));
             }
-            Some(_) | None => universe.push(journal_only_txn(event)),
+            Some(_) | None => ledger.push(journal_only_txn(event)),
         }
     }
     let journal_ids = journal
@@ -162,18 +187,24 @@ fn collect_universe(
             Some(id) if journal_ids.contains(id) => {}
             Some(id) => orphan_ids.entry(id).or_default().push(row),
             None => {
-                if !coverage.contains(&row.account, row.date) {
-                    universe.push(typed_txn(row));
+                if coverage.contains(&row.account, row.date) {
+                    projections.push(typed_txn(row));
+                } else {
+                    ledger.push(typed_txn(row));
                 }
             }
         }
     }
     for rows_for_id in orphan_ids.values() {
         if let [row] = rows_for_id.as_slice() {
-            universe.push(typed_txn(row));
+            projections.push(typed_txn(row));
+        } else {
+            for row in rows_for_id {
+                projections.push(typed_txn(row));
+            }
         }
     }
-    universe
+    (ledger, projections)
 }
 
 fn universe_diagnostics(rows: &[BankRow]) -> Vec<AttributionDiagnostic> {
@@ -253,19 +284,39 @@ fn typed_txn(row: &BankRow) -> UniverseTxn {
 fn resolve_txn(
     txn: UniverseTxn,
     records: &[SubscriptionRecord],
+    config: Option<&BankConfig>,
+    raw_descs: &HashMap<String, String>,
     diagnostics: &mut Vec<AttributionDiagnostic>,
 ) -> AttributedTxn {
-    let is_refund = txn.category.as_deref() == Some("refund");
-    let explicit =
-        resolve_explicit_links(&txn.links, records, &txn, diagnostics);
+    let desc = match txn.id.as_deref().and_then(|id| raw_descs.get(id)) {
+        Some(raw) => raw.clone(),
+        None => txn.desc.clone(),
+    };
+    let category = txn.category.clone().or_else(|| {
+        config.and_then(|config| {
+            suggest::read_time_inferred_category(config, &desc)
+        })
+    });
+    let is_refund = category.as_deref() == Some("refund");
+    let classified = UniverseTxn {
+        desc,
+        category: category.clone(),
+        ..txn
+    };
+    let explicit = resolve_explicit_links(
+        &classified.links,
+        records,
+        &classified,
+        diagnostics,
+    );
     let (record_path, source, needle, tied_paths) = match explicit {
         ExplicitResolution::Unique(path) => {
             (Some(path), Some(AttributionSource::Link), None, Vec::new())
         }
         ExplicitResolution::Ambiguous(tied) => (None, None, None, tied),
         ExplicitResolution::None => {
-            if pattern_eligible(&txn, is_refund) {
-                let resolved = resolve_match(records, &txn.desc);
+            if pattern_eligible(&classified, is_refund) {
+                let resolved = resolve_match(records, &classified.desc);
                 if let Some(path) = resolved.record_path {
                     (
                         Some(path),
@@ -282,19 +333,19 @@ fn resolve_txn(
         }
     };
     AttributedTxn {
-        date: txn.date,
-        cents: txn.cents,
-        account: txn.account,
-        path: txn.path,
-        line: txn.line,
-        id: txn.id,
-        journal_only: txn.journal_only,
-        outcome: txn.outcome,
+        date: classified.date,
+        cents: classified.cents,
+        account: classified.account,
+        path: classified.path,
+        line: classified.line,
+        id: classified.id,
+        journal_only: classified.journal_only,
+        outcome: classified.outcome,
         record_path,
         source,
         needle,
         tied_paths,
-        category: txn.category,
+        category,
         is_refund,
     }
 }
@@ -553,7 +604,38 @@ mod tests {
         }
         journal.imports = imports;
         let coverage = CoverageIndex::from_journal(&journal);
-        attribute(&registry(records), &journal, &rows, &coverage)
+        attribute(
+            &registry(records),
+            &journal,
+            &rows,
+            &coverage,
+            None,
+            &HashMap::new(),
+        )
+    }
+
+    fn snapshot_with_config(
+        records: Vec<SubscriptionRecord>,
+        txns: Vec<TxnEvent>,
+        rows: Vec<BankRow>,
+        imports: Vec<ImportEvent>,
+        config: &crate::native::bank::config::BankConfig,
+    ) -> AttributionSnapshot {
+        let mut journal = JournalSnapshot::default();
+        for event in txns {
+            journal.ids.insert(event.id.clone(), event.key.clone());
+            journal.transactions.insert(event.key.clone(), event);
+        }
+        journal.imports = imports;
+        let coverage = CoverageIndex::from_journal(&journal);
+        attribute(
+            &registry(records),
+            &journal,
+            &rows,
+            &coverage,
+            Some(config),
+            &HashMap::new(),
+        )
     }
 
     fn attributed_path(snapshot: &AttributionSnapshot) -> Vec<Option<&str>> {
@@ -928,12 +1010,98 @@ mod tests {
             )],
             vec![],
         );
-        assert_eq!(snapshot.transactions.len(), 1);
-        assert!(!snapshot.transactions[0].journal_only);
-        assert_eq!(snapshot.transactions[0].id.as_deref(), Some("orphan01"));
+        assert!(
+            snapshot.transactions.is_empty(),
+            "orphan IDs must not enter historical ledger membership"
+        );
+        assert_eq!(snapshot.row_projections.len(), 1);
+        assert!(!snapshot.row_projections[0].journal_only);
+        assert_eq!(snapshot.row_projections[0].id.as_deref(), Some("orphan01"));
         assert_eq!(
-            snapshot.transactions[0].source,
+            snapshot.row_projections[0].source,
             Some(AttributionSource::Link)
+        );
+    }
+
+    #[test]
+    fn covered_explicit_typed_row_stays_visible_without_entering_ledger() {
+        let tunely = record("billing/tunely.md", &["TUNELY"]);
+        let covered_day = date(2026, 9, 10);
+        let snapshot = snapshot(
+            vec![tunely],
+            vec![],
+            vec![row(
+                "checking",
+                covered_day,
+                -999,
+                "Edited payee",
+                None,
+                &["[[billing/tunely]]"],
+                None,
+            )],
+            vec![import("checking", date(2026, 9, 1), date(2026, 9, 15))],
+        );
+        assert!(snapshot.transactions.is_empty());
+        assert_eq!(snapshot.row_projections.len(), 1);
+        assert_eq!(
+            snapshot.row_projections[0].record_path.as_deref(),
+            Some("billing/tunely.md")
+        );
+        assert_eq!(
+            snapshot.row_projections[0].source,
+            Some(AttributionSource::Link)
+        );
+    }
+
+    #[test]
+    fn journal_only_rule_excludes_pattern_attribution() {
+        let tunely = record("billing/tunely.md", &["TUNELY"]);
+        let body = "---\nbank:\n  accounts:\n    checking:\n      kind: checking\n      start: 2026-01-01\n  categories:\n    transfer: Transfer\n    streaming: Streaming\n  rules:\n    - match: TUNELY MOVE\n      cat: transfer\n---\n";
+        let config = match crate::native::bank::config::parse_bank_config(body)
+        {
+            crate::native::bank::config::ConfigParse::Ok(config) => config,
+            other => panic!("expected ok, got {other:?}"),
+        };
+        let day = date(2026, 7, 1);
+        let excluded = snapshot_with_config(
+            vec![tunely.clone()],
+            vec![txn(
+                "checking",
+                "move0001",
+                day,
+                -999,
+                "TUNELY MOVE TO SAVINGS",
+                TxnOutcome::BeforeStart,
+            )],
+            vec![],
+            vec![],
+            &config,
+        );
+        assert_eq!(excluded.transactions.len(), 1);
+        assert!(excluded.transactions[0].journal_only);
+        assert_eq!(
+            excluded.transactions[0].category.as_deref(),
+            Some("transfer")
+        );
+        assert_eq!(excluded.transactions[0].record_path, None);
+
+        let matched = snapshot_with_config(
+            vec![tunely],
+            vec![txn(
+                "checking",
+                "tune0001",
+                day,
+                -999,
+                "TUNELY MUSIC",
+                TxnOutcome::BeforeStart,
+            )],
+            vec![],
+            vec![],
+            &config,
+        );
+        assert_eq!(
+            matched.transactions[0].record_path.as_deref(),
+            Some("billing/tunely.md")
         );
     }
 }
