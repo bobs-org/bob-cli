@@ -236,6 +236,17 @@ fn set_watch_thread(fake: &FakeGog, messages: Vec<Value>) {
     );
 }
 
+/// The `reopened` watch row for one thread, when the run reports one.
+fn reopened_watch_row(report: &Value, thread_id: &str) -> Option<Value> {
+    report["watch"].as_array().and_then(|rows| {
+        rows.iter()
+            .find(|row| {
+                row["action"] == "reopened" && row["thread_id"] == thread_id
+            })
+            .cloned()
+    })
+}
+
 fn write_blocked_task_settings(env: &GmailEnv) {
     let path = env
         .vault()
@@ -1551,6 +1562,15 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
     );
     assert_success(&dry_run, "dry-run closed-thread reply reopen");
     assert_eq!(snapshot_tree(env.vault(), false), before_dry_run);
+    let preview = reopened_watch_row(&json_stdout(&dry_run), WATCH_THREAD)
+        .expect("dry-run previews the reopened watch row");
+    assert_eq!(preview["reason"], "replied");
+    assert!(
+        preview["tasks"]
+            .as_array()
+            .is_some_and(|tasks| !tasks.is_empty()),
+        "dry-run previews the restored task locator: {preview}"
+    );
     assert!(
         fake.called_with(&["gmail.users.threads.list"]),
         "reopen activity is searched independently from label discovery"
@@ -1562,6 +1582,21 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
     let live =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
     assert_success(&live, "live closed-thread reply reopen");
+    let row = reopened_watch_row(&json_stdout(&live), WATCH_THREAD)
+        .expect("live run reports the reopened watch row");
+    assert_eq!(row["reason"], "replied");
+    assert!(
+        row["note"]
+            .as_str()
+            .is_some_and(|note| note.ends_with(".md")),
+        "live run reports the mail note path: {row}"
+    );
+    assert!(
+        row["tasks"]
+            .as_array()
+            .is_some_and(|tasks| !tasks.is_empty()),
+        "live run reports the restored task locator: {row}"
+    );
     let reopened = fs::read_to_string(&inbox).expect("reopened task note");
     assert!(reopened.contains("- [ ] #task"), "{reopened}");
     assert!(reopened.contains("📬 **REOPEN LOG**"), "{reopened}");
@@ -1574,9 +1609,174 @@ fn closed_thread_reply_reopens_once_and_dry_run_writes_nothing() {
     let retry =
         run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
     assert_success(&retry, "idempotent reply-reopen retry");
+    assert!(
+        reopened_watch_row(&json_stdout(&retry), WATCH_THREAD).is_none(),
+        "retry reports no second reopened row"
+    );
     let retried = fs::read_to_string(&inbox).expect("task after retry");
     assert_eq!(retried.matches("📬 **REOPEN LOG**").count(), 1);
     assert_eq!(retried.matches("#^m-2222222222222222|").count(), 1);
+}
+
+/// File one thread, close its task, then stage a counted reply for it.
+/// Returns the env and fake ready for a reopening `sync`.
+fn seed_closed_thread_with_reply(
+    test_name: &str,
+    reply_from: &str,
+    close_task: impl Fn(String) -> String,
+) -> (GmailEnv, FakeGog) {
+    let env = GmailEnv::new(test_name);
+    let fake = FakeGog::new(&env, "gog").scenario("gmail_pull_one");
+    let first = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+    assert_success(&first, "initial filing for reply reopen");
+    assert_eq!(json_stdout(&first)["pulled"], 1);
+
+    let inbox = env.vault().join("gmail_inbox.md");
+    let contents = fs::read_to_string(&inbox).expect("filed task");
+    fs::write(&inbox, close_task(contents)).expect("close enrolled task");
+
+    let mut original = watch_message_for(
+        WATCH_THREAD,
+        "1111111111111111",
+        1_793_908_800_000,
+        "Ada <ada@example.com>",
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    original["payload"]["headers"][2]["value"] = json!("Pull sample");
+    original["payload"]["headers"][3]["value"] =
+        json!("<message@example.test>");
+    original["snippet"] = json!("hello");
+    let reply = watch_message_for(
+        WATCH_THREAD,
+        "2222222222222222",
+        1_793_909_100_000,
+        reply_from,
+        ACCOUNT,
+        &["INBOX", "Label_1"],
+    );
+    fake.set_thread(
+        json!({
+            "thread": {
+                "id": WATCH_THREAD,
+                "historyId": "3",
+                "messages": [original, reply]
+            }
+        }),
+        json!({}),
+    );
+    fake.set_activity_search_pages(json!([{
+        "threads": [{"id": WATCH_THREAD}]
+    }]));
+    (env, fake)
+}
+
+#[test]
+fn reply_reopen_reports_human_and_quiet_news() {
+    let (env, fake) = seed_closed_thread_with_reply(
+        "bob-cli-gmail-reopen-human",
+        "Ada <ada@example.com>",
+        |contents| contents.replacen("- [ ] #task", "- [x] #task", 1),
+    );
+    let human = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0"]);
+    assert_success(&human, "live reply reopen in human mode");
+    let out = stdout(&human);
+    assert!(out.contains("✉ reopened"), "{out}");
+    assert!(out.contains("reply from Ada"), "{out}");
+    assert!(!out.contains("nothing new"), "{out}");
+    let reopened = fs::read_to_string(env.vault().join("gmail_inbox.md"))
+        .expect("reopened task note");
+    assert!(reopened.contains("- [ ] #task"), "{reopened}");
+    assert!(reopened.contains("📬 **REOPEN LOG**"), "{reopened}");
+
+    let (quiet_env, quiet_fake) = seed_closed_thread_with_reply(
+        "bob-cli-gmail-reopen-quiet",
+        "Ada <ada@example.com>",
+        |contents| contents.replacen("- [ ] #task", "- [x] #task", 1),
+    );
+    let quiet = run_gmail(
+        &quiet_env,
+        &quiet_fake,
+        &["sync", "-l", "0", "-r", "0", "-q"],
+    );
+    assert_success(&quiet, "live reply reopen in quiet mode");
+    let hushed = stdout(&quiet);
+    assert!(hushed.contains("✉ reopened"), "{hushed}");
+    assert!(hushed.contains("reply from Ada"), "{hushed}");
+    assert!(!hushed.contains("nothing new"), "{hushed}");
+}
+
+#[test]
+fn bounce_reopen_reports_the_bounced_reason() {
+    let (env, fake) = seed_closed_thread_with_reply(
+        "bob-cli-gmail-reopen-bounce",
+        "Mail Delivery Subsystem <mailer-daemon@googlemail.com>",
+        |contents| contents.replacen("- [ ] #task", "- [x] #task", 1),
+    );
+    let dry = run_gmail(
+        &env,
+        &fake,
+        &["sync", "-l", "0", "-r", "0", "--dry-run", "-f", "json"],
+    );
+    assert_success(&dry, "dry-run bounce reply reopen");
+    let preview = reopened_watch_row(&json_stdout(&dry), WATCH_THREAD)
+        .expect("dry-run previews the bounced reopen row");
+    assert_eq!(preview["reason"], "bounced");
+
+    let live = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0"]);
+    assert_success(&live, "live bounce reply reopen in human mode");
+    let out = stdout(&live);
+    assert!(out.contains("✉ reopened"), "{out}");
+    assert!(out.contains("· bounced"), "{out}");
+    let reopened = fs::read_to_string(env.vault().join("gmail_inbox.md"))
+        .expect("reopened task note");
+    assert!(reopened.contains("📬 **REOPEN LOG**"), "{reopened}");
+    assert!(reopened.contains("bounced"), "{reopened}");
+}
+
+#[test]
+fn recurring_reply_reopen_refuses_once_then_stays_quiet() {
+    let (env, fake) = seed_closed_thread_with_reply(
+        "bob-cli-gmail-reopen-recurring",
+        "Ada <ada@example.com>",
+        |contents| {
+            contents.replacen(
+                "- [ ] #task",
+                "- [x] #task Repeat [repeat:: every weekday]",
+                1,
+            )
+        },
+    );
+    let refused =
+        run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-f", "json"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stdout(&refused));
+    let report = json_stdout(&refused);
+    assert!(
+        reopened_watch_row(&report, WATCH_THREAD).is_none(),
+        "a refused reopen reports no reopened row"
+    );
+    assert!(
+        stdout(&refused).contains("recurring")
+            || stderr(&refused).contains("recurring"),
+        "refusal names the recurring shape: {} {}",
+        stdout(&refused),
+        stderr(&refused)
+    );
+
+    let retry = run_gmail(&env, &fake, &["sync", "-l", "0", "-r", "0", "-q"]);
+    assert_success(&retry, "refused reply retry stays quiet");
+    assert!(
+        !stdout(&retry).contains("recurring"),
+        "no second recurring warning: {}",
+        stdout(&retry)
+    );
+    let still_closed = fs::read_to_string(env.vault().join("gmail_inbox.md"))
+        .expect("recurring task note");
+    assert!(still_closed.contains("- [x] #task"), "{still_closed}");
+    assert!(
+        !still_closed.contains("📬 **REOPEN LOG**"),
+        "{still_closed}"
+    );
 }
 
 #[test]

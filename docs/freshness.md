@@ -674,11 +674,15 @@ recoveries keep the WRITE rule below and never stamp. Automation
 open task from Blocked `[?]` to Ready `[ ]` — reconcile Unblock;
 capture/cycler close recovery (including `project_member`); nav/cycler
 project recovery of residents; nav recoveries of lines other than the
-gesture's own line (the gesture stamps its own line); and Gmail reply
-lift (`bob gmail sync` and acknowledged `bob gmail send`) — evaluated on
-the recovered line. Gmail lift removes the exact `#awaiting_reply` token
-and that hold's `[scheduled::]` **before** applying the WRITE skips, so a
-nudge-due Ready row still qualifies (UB16–UB18). Skip when any of:
+gesture's own line (the gesture stamps its own line); Gmail reply lift
+(`bob gmail sync` and acknowledged `bob gmail send`); and Gmail reply
+reopen (`bob gmail sync` reopens a closed Gmail Task on a counted reply
+or bounce) — evaluated on the recovered line. Gmail lift removes the
+exact `#awaiting_reply` token and that hold's `[scheduled::]` **before**
+applying the WRITE skips, so a nudge-due Ready row still qualifies
+(UB16–UB18). Gmail reopen removes the same hold the same way, then a
+blocker-free Ready result marks unblocked with the same skips (UB19).
+Skip when any of:
 
 - the row is outside freshness scope (recurring, hidden, daily note, …);
 - it has no `[fresh::]` (NEW is already due);
@@ -1413,12 +1417,14 @@ non-Tasks key in the freshness group
 | UB16 | Gmail reply lift (H7): `- [?] #task #awaiting_reply … [fresh:: 2026-10-01] [scheduled:: 2026-10-10]` | removes the tag and scheduled field, recovers `[?]` to `[ ]`, writes `[unblocked:: 2026-10-08]`; `returned_by: unblocked`; `due_on` 2026-10-08; tier TICKLER |
 | UB17 | Gmail overdue-nudge lift (H8): `- [ ] #task #awaiting_reply … [fresh:: 2026-10-01] [scheduled:: 2026-10-07]` | removes the tag and scheduled field first, then writes `[unblocked:: 2026-10-08]` (the hold date no longer trips the scheduled-tickler skip) |
 | UB18 | Gmail reply lift of NEW (H10): held row with no `[fresh::]` | recovers `[?]` to `[ ]`; no `[unblocked::]`; already due as NEW |
+| UB19 | Gmail reply reopen: a closed Gmail Task reopened by a counted reply or bounce, blocker-free and Ready with `[fresh:: 2026-10-01]` | reopens to `[ ]`, removes the hold tag and date, writes `[unblocked:: 2026-10-08]`; `returned_by: unblocked`; `due_on` 2026-10-08; tier TICKLER |
 
 WRITE skips that the recovered line is a canonical daily-note task
 follow UB5/UB6 (outside freshness scope). Capture/cycler close
 recovery and nav/cycler project recovery of residents follow UB1
 with the same skips. Gmail reply lift follows UB16–UB18, then the
-same skips on the recovered line.
+same skips on the recovered line. Gmail reply reopen follows UB19
+with the same skips.
 
 ## 11. Display: the freshness mark
 
@@ -1770,6 +1776,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-10: schema 13 and freshness namespace v11 removed the reference cadence and REFERENCES review group. References now use ordinary freshness, lane groups, keep/decay eligibility, and commitment/upkeep rules.
 - 2026-10-12: schema 14 and freshness namespace v12 add `[unblocked::]` (returned_by / unblocked_on, `markUnblockedLine`). Automatic Blocked → Ready recoveries resurface as TICKLER.
 - 2026-11-08: Gmail reply lift is another `[unblocked::]` writer (UB16–UB18). It removes `#awaiting_reply` and the hold date before applying WRITE skips, so a nudge-due Ready row still resurfaces.
+- 2026-11-14: Gmail reply reopen is another `[unblocked::]` writer (UB19). A blocker-free Ready reopen marks unblocked with the same WRITE skips; recurring and `^prj` rows refuse instead.
 - 2026-10-23: Rotten Log went live — every counted keep asks "Why
   keep it as written?" and writes one dated `🥀 **ROTTEN LOG**` entry
   with the stamp (bob-navigation-hotkeys 2.53.0 grammar/reader, 2.54.0

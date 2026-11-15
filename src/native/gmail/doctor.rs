@@ -362,13 +362,14 @@ fn config_check(config: &GmailConfig) -> Check {
         id: "config",
         status: CheckStatus::Ok,
         summary: format!(
-            "folder {} · body {} · {sync} · {prefixes} · reply wait {days} day{}",
+            "folder {} · body {} · {sync} · {prefixes} · reply wait {days} day{} · reopen {}",
             config.folder(),
             match config.body() {
                 bob_config::GmailBodyMode::Full => "full",
                 bob_config::GmailBodyMode::Headers => "headers",
             },
             if days == 1 { "" } else { "s" },
+            if config.reopen_enabled() { "on" } else { "off" },
         ),
         fix: None,
     }

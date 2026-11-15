@@ -38,6 +38,9 @@ pub(crate) struct WatchThreadOutcome {
     pub(crate) turn: Option<String>,
     pub(crate) turn_since: Option<String>,
     pub(crate) action: &'static str,
+    /// Watch reason for actions that carry one. Only `reopened` uses this
+    /// today (`replied` or `bounced`); every other action leaves it empty.
+    pub(crate) reason: Option<&'static str>,
     pub(crate) nudge_on: Option<String>,
 }
 
@@ -171,6 +174,9 @@ pub(crate) const ACTION_RESURFACED: &str = "resurfaced";
 pub(crate) const ACTION_DEFERRED_RUNNING: &str = "deferred_running";
 pub(crate) const ACTION_REFRESHED: &str = "refreshed";
 pub(crate) const ACTION_UNCHANGED: &str = "unchanged";
+pub(crate) const ACTION_REOPENED: &str = "reopened";
+pub(crate) const REASON_REPLIED: &str = "replied";
+pub(crate) const REASON_BOUNCED: &str = "bounced";
 
 /// Plan watch task edits and marker receipts without locking or committing.
 pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
@@ -771,6 +777,7 @@ pub(crate) fn plan_watch_edits(input: WatchPlanInput<'_>) -> WatchPlan {
             turn,
             turn_since,
             action,
+            reason: None,
             nudge_on,
         });
     }

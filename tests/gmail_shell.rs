@@ -1791,21 +1791,25 @@ fn doctor_config_row_reports_sync_settings_and_fallbacks() {
     };
     assert_eq!(
         summary(""),
-        "folder mail · body full · sync bob → gmail_inbox.md · prefixes none · reply wait 3 days"
+        "folder mail · body full · sync bob → gmail_inbox.md · prefixes none · reply wait 3 days · reopen on"
     );
     assert_eq!(
         summary(
             "  sync:\n    label: watch\n    inbox: inbox/mail.md\n    route_prefixes: [\"#\", \"+\"]\n    reply_wait_days: 1\n"
         ),
-        "folder mail · body full · sync watch → inbox/mail.md · prefixes #/ +/ · reply wait 1 day"
+        "folder mail · body full · sync watch → inbox/mail.md · prefixes #/ +/ · reply wait 1 day · reopen on"
     );
     assert_eq!(
         summary("  pull:\n    label: old\n    inbox: old_inbox.md\n"),
-        "folder mail · body full · sync old → old_inbox.md · prefixes none · reply wait 3 days"
+        "folder mail · body full · sync old → old_inbox.md · prefixes none · reply wait 3 days · reopen on"
     );
     assert_eq!(
         summary("  sync:\n    label: \"\"\n"),
-        "folder mail · body full · sync disabled · prefixes none · reply wait 3 days"
+        "folder mail · body full · sync disabled · prefixes none · reply wait 3 days · reopen on"
+    );
+    assert_eq!(
+        summary("  sync:\n    reopen: off\n"),
+        "folder mail · body full · sync bob → gmail_inbox.md · prefixes none · reply wait 3 days · reopen off"
     );
 }
 

@@ -49,6 +49,12 @@ pub(crate) struct ReopenPlanInput {
     pub(crate) sender: String,
     pub(crate) bounced: bool,
     pub(crate) evidence: ArchiveThreadEvidence,
+    /// Inert display title for the report row, from the mail index.
+    pub(crate) title: Option<String>,
+    /// Inert display sender for the report row, from the mail index.
+    pub(crate) who: Option<String>,
+    /// Canonical indexed mail-note path for the report row.
+    pub(crate) note: Option<String>,
 }
 
 impl From<&PreparedReopenCandidate> for ReopenPlanInput {
@@ -60,6 +66,9 @@ impl From<&PreparedReopenCandidate> for ReopenPlanInput {
             sender: candidate.sender.clone(),
             bounced: candidate.bounced,
             evidence: candidate.evidence.clone(),
+            title: None,
+            who: None,
+            note: None,
         }
     }
 }
@@ -105,6 +114,12 @@ pub(crate) struct ReopenCandidateOutcome {
     pub(crate) pending_marker: bool,
     pub(crate) target: Option<ReopenTargetIdentity>,
     pub(crate) warnings: Vec<String>,
+    /// Whether the triggering reply bounced; selects the report reason.
+    pub(crate) bounced: bool,
+    /// Inert display fields for the report row, carried from the input.
+    pub(crate) title: Option<String>,
+    pub(crate) who: Option<String>,
+    pub(crate) note: Option<String>,
 }
 
 /// Overlay postimages plus one outcome per candidate, in input order.
@@ -615,6 +630,10 @@ fn finish(
         pending_marker,
         target,
         warnings,
+        bounced: candidate.bounced,
+        title: candidate.title.clone(),
+        who: candidate.who.clone(),
+        note: candidate.note.clone(),
     }
 }
 
@@ -1092,6 +1111,9 @@ mod tests {
             sender: sender.into(),
             bounced,
             evidence: body,
+            title: None,
+            who: None,
+            note: None,
         }
     }
 

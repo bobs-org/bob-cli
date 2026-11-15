@@ -193,6 +193,7 @@ gmail:
     inbox: gmail_inbox.md # unrouted threads and route problems; falls back to pull.inbox
     route_prefixes: ["#", "+"] # quote them; absent or [] = no-prefix mode
     reply_wait_days: 3 # integer >= 1; calendar days after your send
+    reopen: on # off | on; counted replies reopen closed Gmail Tasks
     archive: off # off | on; opt in to one-shot archive after all linking tasks close
     archive_label: bob/closed # receipt label; defaults to <resolved sync label>/closed
     archive_max: 10 # positive integer; larger batches require -c DIGEST
@@ -259,6 +260,11 @@ gmail:
 - `sync.reply_wait_days` must be an integer of at least 1. Default 3. It counts
   calendar days from your send to the awaiting-reply nudge date. Changing it
   never reschedules existing holds.
+- `sync.reopen` is `on` (default) or `off`. When on, a counted reply or
+  bounce after every effective linker closed reopens the newest closed
+  task ([Reopen](#reopen)). `off` skips activity discovery, automatic
+  reopen edits, and reopen state updates; existing watch and archive
+  behavior is unchanged (apart from the doctor configuration display).
 - `sync.archive` is `off` (default) or `on`. When enabled, the approved writer
   can archive enrolled Gmail messages after every linking task is positively
   closed. `sync.archive_label` names the receipt label and defaults to the
@@ -1053,6 +1059,46 @@ prevents claiming that all threads await replies. Several tasks on one
 thread are independent: a running deferral on one does not block the
 others.
 
+### Reopen
+
+A counted reply or bounce after every effective linker closed reopens the
+newest closed task: exactly one task per triggering message. Latest close
+date wins; ties prefer a live row over `done/`, then ascending vault path
+and line. Rows without a close date sort behind dated rows.
+Merge-retired tombstones, including section tombstones, are never
+reopened; a via-merge target reopens instead. The reply's local calendar
+date must not precede the selected row's latest completion date — an
+earlier message means no reopening and no marker; the same calendar day is
+allowed. A row without a close date skips the guard.
+
+A live row reopens in place to `[ ]`, stripping only completion fields. A
+`done/` row is restored through the same bound-source restore as
+`bob task restore` (`restore: true, reopen: true`), keeping destination
+eligibility, collisions, identity repair, and refusals; the report carries
+the restored location. Recurring rows and `^prj` rows are permanent
+refusals: one warning with a manual restore/reopen hint, exit 1, and no
+second warning for the same message.
+
+Each reopen removes the exact `#awaiting_reply` token and only its held
+`[scheduled::]` date, then checks remaining `dependsOn`,
+`#prj_is_blocked`, and future schedule: `[?]` only when Blocked allows,
+otherwise `[ ]`. A blocker-free Ready result runs the existing
+`[unblocked::]` writer ([Freshness §5](freshness.md#5-who-stamps), vector
+UB19) with the usual WRITE skips. Reopening never stamps, promotes to
+Next, or creates Pomodoro Task Links.
+
+Each reopen prepends a dated entry under a direct-child
+`📬 **REOPEN LOG**` with the exact triggering mail-card link (`bounced`
+when the trigger bounced), preserving history, indentation, and newlines;
+recovery dedupes the exact card. Reopening stays active with archive off,
+`--no-archive`, and `-l 0`.
+
+First lookback is run start minus 14 days; every search overlaps the
+cursor by 15 minutes for indexing lag. Discovery pages an ids-only query
+and stops at 10 pages: a further page warns, fails the run, and preserves
+the cursor. Fetch and hydration failures retry through the account cursor
+without losing the reply.
+
 ### Reports
 
 Human watch rows use inert title and who from mail metadata:
@@ -1065,13 +1111,20 @@ Human watch rows use inert title and who from mail metadata:
 | `resurfaced` | `✉ resurfaced` |
 | `deferred_running` | `✉ deferred (running task)` |
 | `refreshed` | `✉ refreshed` |
+| `reopened` | `✉ reopened — <title> · reply from <who>`, or `· bounced` |
 | `unchanged` | omitted from human output |
 
-Quiet (`-q`) suppresses ordinary rows and keeps failures, warnings, and
-running deferrals. A changed watch, a first-seen gone thread, or a new
-filing suppresses the header's `nothing new` suffix. Invalid grant aborts
-all writes. Isolated permanent errors and exhausted retries preserve
-successfully prepared independent work and report failure.
+Reopened rows carry `reason` (`replied` | `bounced`) and the touched
+task path/line/block-ID locators, including restored locations. Other
+watch rows carry no `reason`.
+
+Quiet (`-q`) suppresses ordinary rows and keeps failures, warnings,
+running deferrals, and reopened rows. Dry-run previews the same reopened
+action without writing. A changed watch, a first-seen gone thread, a
+reopened row, or a new filing suppresses the header's `nothing new`
+suffix. Invalid grant aborts all writes. Isolated permanent errors and
+exhausted retries preserve successfully prepared independent work and
+report failure.
 
 ## Attachments
 
@@ -1136,7 +1189,7 @@ config, the writer pin, and journal readability. Rows look like
   grant cannot be checked.
 - `config`: folder, body mode, the sync label and inbox after fallbacks
   (`sync disabled` when the label is empty), the route prefixes (`none` in
-  no-prefix mode), and the reply wait in days.
+  no-prefix mode), the reply wait in days, and reopen on/off.
 - `routes`: a warning, never a failure. It reads the account's label list once
   and lists every label under a configured prefix that doesn't resolve, one
   `label → kind · hint` line each. When all resolve it shows the routing-label
@@ -1211,8 +1264,11 @@ thread `count`, and one latest `items[]` row per thread. Each row has
 current `state: archived | let_go | restored`. This is archive history,
 including actions later undone, not the active-ownership list. Unavailable or
 unsafe journal history is `null` with a warning, never an empty snapshot.
-Reopen advice is a typed hint, not a watch action.
-The `restored` action stays reserved in sync `archive[]`; explicit undo is
+A successful reply reopen adds a `watch[]` row with `action: reopened`,
+`reason: replied | bounced`, and the touched task path/line/block-ID
+locators (restored locations included); the archive hint for the same
+thread stays a separate typed hint. The `restored` action stays reserved
+in sync `archive[]`; explicit undo is
 reported by `bob gmail unarchive` and only its historical state appears here.
 `watch[]` and
 `summary.{watching,awaiting,archived}` are specified under [Watch](#watch).

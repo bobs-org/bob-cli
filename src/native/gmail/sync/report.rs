@@ -20,7 +20,9 @@ use super::archive_scan::ArchiveScan;
 use super::archive_state::ArchiveJournal;
 use super::file::{FilingFailure, FilingOutcome, FilingResult};
 use super::scan::WatchScan;
-use super::watch_apply::{WatchGoneOutcome, WatchThreadOutcome};
+use super::watch_apply::{
+    WatchGoneOutcome, WatchThreadOutcome, ACTION_REOPENED, REASON_BOUNCED,
+};
 use super::ThreadKey;
 use crate::native::env as bob_env;
 use crate::native::gmail::body::inert_single_line;
@@ -552,7 +554,8 @@ pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
             }
         }
         for row in &report.watch {
-            if row.action == "deferred_running"
+            if (row.action == "deferred_running"
+                || row.action == ACTION_REOPENED)
                 && let Some(line) = watch_human_row(row)
             {
                 println!("  {}", styler.yellow(&line));
@@ -860,6 +863,9 @@ fn watch_json(row: &WatchThreadOutcome) -> Value {
         "turn_since": row.turn_since,
         "action": row.action,
     });
+    if let Some(reason) = &row.reason {
+        value["reason"] = json!(reason);
+    }
     if let Some(nudge_on) = &row.nudge_on {
         value["nudge_on"] = json!(nudge_on);
     }
@@ -867,6 +873,9 @@ fn watch_json(row: &WatchThreadOutcome) -> Value {
 }
 
 fn watch_human_row(row: &WatchThreadOutcome) -> Option<String> {
+    if row.action == ACTION_REOPENED {
+        return Some(reopened_human_row(row));
+    }
     let action = match row.action {
         "held" => "awaiting reply",
         "lifted" => "replied",
@@ -889,6 +898,23 @@ fn watch_human_row(row: &WatchThreadOutcome) -> Option<String> {
         .map(|date| format!(" (nudge {date})"))
         .unwrap_or_default();
     Some(format!("✉ {action:<23} {who} — {title}{nudge}{note}"))
+}
+
+/// A reopened watch row names the restored task's thread and the counted
+/// reply behind it. A bounce reports the bounce instead of a sender reply.
+fn reopened_human_row(row: &WatchThreadOutcome) -> String {
+    let title = row.title.as_deref().unwrap_or(row.key.thread_id());
+    let note = row
+        .note
+        .as_deref()
+        .map(|path| format!(" → {path}"))
+        .unwrap_or_default();
+    if row.reason == Some(REASON_BOUNCED) {
+        format!("✉ reopened — {title} · bounced{note}")
+    } else {
+        let who = row.who.as_deref().unwrap_or("Unknown sender");
+        format!("✉ reopened — {title} · reply from {who}{note}")
+    }
 }
 
 fn gone_human_row(row: &WatchGoneOutcome) -> Option<String> {
@@ -1158,7 +1184,10 @@ fn color_row(styler: &Styler, status: &str, line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::scan::{LinkPlacement, WatchTarget, WatchingTask};
-    use super::super::watch_apply::{WatchGoneOutcome, WatchTaskRef};
+    use super::super::watch_apply::{
+        WatchGoneOutcome, WatchTaskRef, ACTION_REOPENED, REASON_BOUNCED,
+        REASON_REPLIED,
+    };
     use super::*;
 
     fn filed() -> SyncResult {
@@ -1447,6 +1476,7 @@ mod tests {
             turn: Some("theirs".into()),
             turn_since: Some("2026-11-05T09:00:00-05:00".into()),
             action: "held",
+            reason: None,
             nudge_on: Some("2026-11-06".into()),
         };
         let value = watch_json(&row);
@@ -1475,6 +1505,32 @@ mod tests {
             assert!(line.contains("Dana Whitfield"), "{line}");
             assert!(line.contains("Lease renewal"), "{line}");
         }
+
+        let reopened = WatchThreadOutcome {
+            action: ACTION_REOPENED,
+            reason: Some(REASON_REPLIED),
+            ..row.clone()
+        };
+        let value = watch_json(&reopened);
+        assert_eq!(value["action"], "reopened");
+        assert_eq!(value["reason"], "replied");
+        assert!(value.get("nudge_on").is_some());
+        let line = watch_human_row(&reopened).expect("reopened human row");
+        assert!(line.contains("✉ reopened"), "{line}");
+        assert!(line.contains("reply from Dana Whitfield"), "{line}");
+        assert!(line.contains("Lease renewal"), "{line}");
+
+        let bounced = WatchThreadOutcome {
+            reason: Some(REASON_BOUNCED),
+            ..reopened
+        };
+        assert_eq!(watch_json(&bounced)["reason"], "bounced");
+        let line = watch_human_row(&bounced).expect("bounced reopen row");
+        assert!(line.contains("✉ reopened"), "{line}");
+        assert!(line.contains("· bounced"), "{line}");
+
+        let held_value = watch_json(&row);
+        assert!(held_value.get("reason").is_none());
 
         let gone = gone_human_row(&WatchGoneOutcome {
             key: ThreadKey::new("me@example.com", "aa01").unwrap(),

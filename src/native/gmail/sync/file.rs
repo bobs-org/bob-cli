@@ -37,7 +37,8 @@ use super::{
     watch::{PreparedWatch, WatchFailure},
     watch_apply::{
         self, FilingTaskSnapshot, RecoveryWatch, WatchGoneOutcome,
-        WatchThreadOutcome,
+        WatchTaskRef, WatchThreadOutcome, ACTION_REOPENED, REASON_BOUNCED,
+        REASON_REPLIED,
     },
     watch_state::WatchJournal,
     ThreadKey,
@@ -1233,6 +1234,14 @@ fn build_attempt(
                     }
                     let mut plan_input = ReopenPlanInput::from(&candidate);
                     plan_input.evidence = evidence.clone();
+                    if let Some(entry) = index.by_identity.get(&key.index_key())
+                    {
+                        plan_input.title = Some(entry.title.clone());
+                        plan_input.who = Some(entry.who.clone());
+                        plan_input.note = Some(entry.path.clone());
+                    } else {
+                        plan_input.note = Some(evidence.note.clone());
+                    }
                     let key_tuple = key.index_key();
                     if works.contains_key(&key_tuple) {
                         defer_reopen(
@@ -1697,6 +1706,7 @@ fn build_attempt(
     );
     outcome.watch_threads = watch_plan.outcomes;
     outcome.watch_gone = watch_plan.gone;
+    project_reopen_watch_rows(&mut outcome);
     outcome.reopen_activity = reopen_activity;
     for key in &watch_deferred {
         if !outcome.deferred.contains(key) {
@@ -1735,6 +1745,44 @@ fn build_attempt(
         reopen_retry_ids,
         health_events,
     })
+}
+
+/// Project successful reply reopens onto additive watch rows. Only applied
+/// reopens report; refusals already fail the run with a typed manual hint
+/// and deferred candidates retry through the activity cursor.
+fn project_reopen_watch_rows(outcome: &mut FilingOutcome) {
+    for reopen in &outcome.reopen_outcomes {
+        if reopen.disposition != ReopenDisposition::Applied {
+            continue;
+        }
+        let tasks = reopen
+            .target
+            .as_ref()
+            .map(|target| {
+                vec![WatchTaskRef {
+                    path: target.path.clone(),
+                    line: target.line,
+                    block_id: target.block_id.clone(),
+                }]
+            })
+            .unwrap_or_default();
+        outcome.watch_threads.push(WatchThreadOutcome {
+            key: reopen.key.clone(),
+            note: reopen.note.clone(),
+            title: reopen.title.clone(),
+            who: reopen.who.clone(),
+            tasks,
+            turn: None,
+            turn_since: None,
+            action: ACTION_REOPENED,
+            reason: Some(if reopen.bounced {
+                REASON_BOUNCED
+            } else {
+                REASON_REPLIED
+            }),
+            nudge_on: None,
+        });
+    }
 }
 
 fn apply_reopen_plan(
