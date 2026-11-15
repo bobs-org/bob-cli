@@ -864,7 +864,7 @@ fn parse_cadence(value: &str) -> Option<SubscriptionCadence> {
     }
 }
 
-fn validate_needle(value: &str) -> Option<NeedleInvalidReason> {
+pub(crate) fn validate_needle(value: &str) -> Option<NeedleInvalidReason> {
     if value.chars().count() < 3 {
         return Some(NeedleInvalidReason::TooShort);
     }

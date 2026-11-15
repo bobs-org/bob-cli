@@ -882,6 +882,28 @@ bounded output. Balance findings are:
 | `bank_row_unmatched` | info | A typed row in a covered window has no exact bank match yet |
 | `bank_twins` | warning | A typed row and imported transaction share a merchant/date window but differ in amount |
 
+Subscription findings follow the note groups under one `🔁 Subscriptions`
+heading. Warnings and info findings do not change `check`'s exit status.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `bank_subscription_cancelled_charge` | warning | A cancelled record has a charge after `ended`, or any charge when `ended` is empty; the newest charge is named |
+| `bank_subscription_to_cancel_charged` | info | A `to_cancel` record was charged within 1.5 cadence steps |
+| `bank_subscription_price` | info | The ledger detects a fixed-price change and offers a `bob records update` command |
+| `bank_subscription_candidate` | info | A recurring marker appears, or stable charges form a monthly/four-weekly run of 3, a quarterly run of 3, or a yearly run of 2; the top 10 by annualized cost include a proposal and paste-ready create or dismiss fix |
+| `bank_subscription_match_invalid` | warning | A Shows-up-as needle is too short, contains a masked four-digit run, or is statement noise |
+| `bank_subscription_overlap` | info | Live records share a folded needle, or an observed transaction ties between records |
+| `bank_subscription_category_unknown` | warning | A record names a category missing from `bank.categories`; check suggests the nearest key |
+| `bank_subscription_amount_invalid` | warning | A record amount is missing, negative, or has fractional cents |
+| `bank_subscription_album_invalid` | warning | The album cannot be read; check points at `bob albums check` |
+
+Candidate detection groups eligible outflows by the cleaned, digit-masked
+merchant. Bank rules, attributed transactions, refunds, built-in transfers,
+cash withdrawals, fees, and non-outflows are excluded. The recurring marker
+can identify a first charge; interval candidates need an amount spread no
+greater than 25% of the median. Check proposes records or a `bank.rules`
+dismissal and never writes either one.
+
 ## JSON
 
 `schema_version: 1`. Amounts are always signed integer `*_cents`, never
@@ -948,8 +970,11 @@ bank rule. A missing or invalid album forces the whole projection to
   one bounded `bank_subscription_album_invalid` entry. With `-c` it also
   adds `charts`; see [Report charts](#report-charts).
 - `check` adds `findings[] {code, severity, path, line, message, hint}`;
-  configuration findings also include `key_path`. An invalid subscription
-  album adds one `bank_subscription_album_invalid` warning finding.
+  configuration findings also include `key_path`. Subscription candidate
+  findings also include `proposal {title, amount_cents, cadence, match,
+  category}`, where `match` is a one-item string array or `null`, and category
+  is a bank category key or `null`. An invalid subscription album adds one
+  `bank_subscription_album_invalid` warning finding.
 - `ensure` adds `{path, line, day, created_note, created_heading}`.
 - `ack` prints the envelope `ok`, `dry_run`, `changed`,
   `changes[] {path, diff?}`, `findings`, `commit`, `sync`, and

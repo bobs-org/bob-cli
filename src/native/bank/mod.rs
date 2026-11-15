@@ -3,6 +3,7 @@
 pub(crate) mod ack;
 pub(crate) mod charts;
 pub(crate) mod check;
+pub(crate) mod check_subscriptions;
 pub(crate) mod cli;
 pub(crate) mod config;
 pub(crate) mod config_report;

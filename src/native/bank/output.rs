@@ -19,14 +19,32 @@ pub(crate) fn print_check(report: &CheckReport) {
         return;
     }
     let mut by_path: BTreeMap<&str, Vec<&Finding>> = BTreeMap::new();
+    let mut subscription_by_path: BTreeMap<&str, Vec<&Finding>> =
+        BTreeMap::new();
     for finding in &report.findings {
-        by_path.entry(&finding.path).or_default().push(finding);
+        if finding.code.starts_with("bank_subscription_") {
+            subscription_by_path
+                .entry(&finding.path)
+                .or_default()
+                .push(finding);
+        } else {
+            by_path.entry(&finding.path).or_default().push(finding);
+        }
     }
     let mut any = false;
     for (path, findings) in by_path {
         any = true;
         println!("{}", styler.bold(path));
         print_path_findings(path, &findings, &styler);
+        println!();
+    }
+    if !subscription_by_path.is_empty() {
+        any = true;
+        println!("{}", styler.bold("🔁 Subscriptions"));
+        for (path, findings) in subscription_by_path {
+            println!("{}", styler.dim(path));
+            print_path_findings(path, &findings, &styler);
+        }
         println!();
     }
     let summary = format!(

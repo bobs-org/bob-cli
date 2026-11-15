@@ -50,6 +50,7 @@ pub(crate) struct Finding {
     pub(crate) hint: Option<String>,
     pub(crate) day: Option<NaiveDate>,
     pub(crate) key_path: Option<String>,
+    pub(crate) proposal: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,36 +175,23 @@ pub(crate) fn lint(
     }
     let journal_snapshot = lint_journal(vault, &mut findings);
 
-    {
-        let registry =
-            super::subscriptions::registry::SubscriptionRegistry::load(vault);
-        if registry.availability
-            == super::subscriptions::registry::SubscriptionAvailability::Invalid
-        {
-            let path = registry
-                .album
-                .as_ref()
-                .map(|album| album.path.clone())
-                .unwrap_or_default();
-            findings.push(finding(
-                super::subscriptions::projection::SUBSCRIPTION_ALBUM_INVALID_CODE,
-                Severity::Warning,
-                path,
-                None,
-                "subscription records are unavailable; run `bob albums check`",
-                Some("run `bob albums check` for details".to_owned()),
-                None,
-            ));
-        }
-    }
+    let registry =
+        super::subscriptions::registry::SubscriptionRegistry::load(vault);
+    let rows = super::model::collect_rows(
+        scan,
+        config.as_ref(),
+        Some(&journal_snapshot),
+    );
+    findings.extend(super::check_subscriptions::findings(
+        config.as_ref(),
+        &registry,
+        &journal_snapshot,
+        &rows,
+        today,
+    ));
 
     let (accounts, categories) = match &config {
         Some(config) => {
-            let rows = super::model::collect_rows(
-                scan,
-                Some(config),
-                Some(&journal_snapshot),
-            );
             let (accounts, proof_findings) = status::accounts_with_evidence(
                 config,
                 &journal_snapshot,
@@ -717,6 +705,7 @@ fn finding(
         hint,
         day,
         key_path: None,
+        proposal: None,
     }
 }
 
@@ -731,6 +720,9 @@ fn finding_json(finding: &Finding) -> Value {
     });
     if let Some(key_path) = &finding.key_path {
         value["key_path"] = json!(key_path);
+    }
+    if let Some(proposal) = &finding.proposal {
+        value["proposal"] = proposal.clone();
     }
     value
 }
