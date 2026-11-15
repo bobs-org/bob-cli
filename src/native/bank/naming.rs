@@ -1,20 +1,25 @@
 //! Merchant cleaning and tiered naming for bank import.
 //!
-//! Naming resolves `payee` / `category` / `links` for a new bank row from four
+//! Naming resolves `payee` / `category` / `links` for a new bank row from five
 //! tiers, highest first:
 //!
 //! 1. the first configured rule whose `match` text is a case-insensitive
 //!    substring of the raw bank description;
-//! 2. the most recent acknowledged ID-bearing row with the same journal
-//!    merchant (learned from current row text, never a stale journal copy);
-//! 3. Wells Fargo built-ins (ATM withdrawal, fees, transfers);
-//! 4. the cleaned, title-cased description.
+//! 2. the uniquely matched subscription record ("Shows up as"), which sets
+//!    the payee to the record title, its category when declared, and its
+//!    link;
+//! 3. the most recent acknowledged ID-bearing row with the same journal
+//!    merchant (learned from current row text, never a stale journal copy,
+//!    skipping any link into the subscription album);
+//! 4. Wells Fargo built-ins (ATM withdrawal, fees, transfers);
+//! 5. the cleaned, title-cased description.
 //!
 //! Unspecified rule fields fall through to lower tiers. A rule-selected link
-//! always wins over the restaurant lookup. Bank-derived payees
-//! (tiers 3-with-cleaned-text and 4) pass through [`sanitize_payee`]; learned
+//! always wins over the subscription link, which wins over the filtered
+//! learned link and the restaurant lookup. Bank-derived payees
+//! (tiers 4-with-cleaned-text and 5) pass through [`sanitize_payee`]; learned
 //! payees retain their edited text unless the current cleaner removes bank
-//! transaction noise.
+//! transaction noise. Subscription titles are vault text and stay as-is.
 
 use super::{
     config::BankConfig,
@@ -38,18 +43,32 @@ pub(crate) struct NameResolution {
     pub(crate) link: Option<String>,
 }
 
-/// Resolve a name through the four tiers.
+/// A uniquely matched subscription record for import naming. The caller
+/// resolves the match against the raw description and filters learned
+/// subscription links before calling; this tier only applies the fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SubscriptionTier {
+    pub(crate) title: String,
+    pub(crate) category: Option<String>,
+    pub(crate) link: String,
+}
+
+/// Resolve a name through the five tiers.
 ///
 /// `learned` is the current text of the most recent acknowledged ID-bearing
-/// row with the same journal merchant, when one exists. `restaurant` is the
-/// single `[[eat/<stem>|<emoji>]]` link for an exact title match, used only
-/// when no higher tier selected a link. Categories naming an undeclared key
-/// are dropped; a positive amount alone never implies income or refund.
+/// row with the same journal merchant, when one exists; the caller filters
+/// any link into the subscription album out of it before calling.
+/// `subscription` is the uniquely matched subscription record, when one
+/// exists. `restaurant` is the single `[[eat/<stem>|<emoji>]]` link for an
+/// exact title match, used only when no higher tier selected a link.
+/// Categories naming an undeclared key are dropped; a positive amount alone
+/// never implies income or refund.
 pub(crate) fn resolve_name(
     config: &BankConfig,
     raw_desc: &str,
     trntype: Option<&str>,
     learned: Option<&LearnedName>,
+    subscription: Option<&SubscriptionTier>,
     restaurant: Option<String>,
     index: &LearnedIndex,
 ) -> NameResolution {
@@ -62,12 +81,17 @@ pub(crate) fn resolve_name(
 
     let payee = match rule.and_then(|rule| rule.payee.clone()) {
         Some(payee) => payee,
-        None => match learned.map(|name| clean_learned_payee(&name.payee)) {
-            Some(payee) => payee,
-            None => match builtin.clone().and_then(|item| item.payee) {
-                Some(payee) => payee,
-                None => sanitize_payee(&title_case(&cleaned)),
-            },
+        None => match subscription.map(|tier| tier.title.clone()) {
+            Some(title) => title,
+            None => {
+                match learned.map(|name| clean_learned_payee(&name.payee)) {
+                    Some(payee) => payee,
+                    None => match builtin.clone().and_then(|item| item.payee) {
+                        Some(payee) => payee,
+                        None => sanitize_payee(&title_case(&cleaned)),
+                    },
+                }
+            }
         },
     };
 
@@ -84,10 +108,24 @@ pub(crate) fn resolve_name(
         },
         index,
     );
-    let category = suggestion.map(|item| item.category);
+    let rule_category = suggestion
+        .as_ref()
+        .filter(|item| item.source == suggest::SuggestionSource::Rule)
+        .map(|item| item.category.clone());
+    let category = match rule_category {
+        Some(category) => Some(category),
+        None => match subscription
+            .and_then(|tier| tier.category.clone())
+            .filter(|category| suggest::is_declared_category(config, category))
+        {
+            Some(category) => Some(category),
+            None => suggestion.map(|item| item.category),
+        },
+    };
 
     let link = rule
         .and_then(|rule| rule.link.clone())
+        .or_else(|| subscription.map(|tier| tier.link.clone()))
         .or_else(|| learned.and_then(|name| name.links.first().cloned()))
         .or(restaurant);
 
@@ -737,6 +775,7 @@ mod tests {
             desc,
             trntype,
             learned,
+            None,
             restaurant,
             &LearnedIndex::default(),
         )
@@ -919,6 +958,7 @@ mod tests {
                 category: Some("dining".to_owned()),
                 links: vec!["[[eat/old|🍽️]]".to_owned()],
             }),
+            None,
             Some("[[eat/new|🍽️]]".to_owned()),
             &LearnedIndex::with_teacher(&identity, "dining"),
         );
@@ -979,5 +1019,54 @@ mod tests {
         assert_eq!(sanitize_payee("[[only]]"), "only");
         assert_eq!(sanitize_payee("^^^"), "Unnamed transaction");
         assert_eq!(sanitize_payee("AT&T Store"), "AT&T Store");
+    }
+
+    #[test]
+    fn subscription_tier_beats_learned_and_restaurant() {
+        let config = plain_hub();
+        let learned = LearnedName {
+            payee: "Learned Name".to_owned(),
+            category: Some("dining".to_owned()),
+            links: vec!["[[eat/old|🍽️]]".to_owned()],
+        };
+        let subscription = SubscriptionTier {
+            title: "Tunely".to_owned(),
+            category: Some("dining".to_owned()),
+            link: "[[subs/tunely|🔁]]".to_owned(),
+        };
+        let resolved = resolve_name(
+            &config,
+            "TUNELY PREMIUM SERVICE",
+            Some("POS"),
+            Some(&learned),
+            Some(&subscription),
+            Some("[[eat/new|🍽️]]".to_owned()),
+            &LearnedIndex::default(),
+        );
+        assert_eq!(resolved.payee, "Tunely");
+        assert_eq!(resolved.category.as_deref(), Some("dining"));
+        assert_eq!(resolved.link.as_deref(), Some("[[subs/tunely|🔁]]"));
+
+        // Undeclared subscription categories fall through to learned.
+        let undeclared = SubscriptionTier {
+            title: "Tunely".to_owned(),
+            category: Some("nope".to_owned()),
+            link: "[[subs/tunely|🔁]]".to_owned(),
+        };
+        let fallback = resolve_name(
+            &config,
+            "TUNELY PREMIUM SERVICE",
+            Some("POS"),
+            Some(&learned),
+            Some(&undeclared),
+            None,
+            &LearnedIndex::with_teacher(
+                &super::super::identity::merchant_key("TUNELY PREMIUM SERVICE"),
+                "dining",
+            ),
+        );
+        assert_eq!(fallback.payee, "Tunely");
+        assert_eq!(fallback.category.as_deref(), Some("dining"));
+        assert_eq!(fallback.link.as_deref(), Some("[[subs/tunely|🔁]]"));
     }
 }

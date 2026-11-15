@@ -425,9 +425,9 @@ JSON is unchanged.
 
 ### Naming
 
-New rows resolve `payee` / `category` / `link` through four tiers,
+New rows resolve `payee` / `category` / `link` through five tiers,
 highest first. Category uses one shared suggestion function with
-`list`/`report` (rule, then learned, then bank). Import calls it with the
+`list`/`report` (rule, subscription, then learned, then bank). Import calls it with the
 raw description and transaction type; reads use the masked journal
 description and no type.
 
@@ -436,16 +436,24 @@ description and no type.
    fields fall through to lower tiers. At read time the same rule runs on
    the journal description, or the payee when there is none; a match text
    with a run of four or more digits cannot match then.
-2. The most recent acknowledged ID-bearing row with the same journal
-   merchant (learned from current row text, never a stale journal copy).
-   Waiting rows never teach a name; ties break deterministically by note
-   and line. Typed rows join through `merchant_key(payee)`.
-3. Wells Fargo built-ins: ATM withdrawals (`cash`), ATM/overdraft fees
+2. The uniquely matched subscription record ("Shows up as"). A unique
+   match sets the payee to the record title, fills its category when it
+   names a declared bank key (hidden keys count), and links
+   `[[<link-target>|🔁]]`. Live records beat cancelled ones, the strictly
+   longest needle wins, and an exact tie links nothing. A missing or
+   invalid album yields no tier.
+3. The most recent acknowledged ID-bearing row with the same journal
+   merchant (learned from current row text, never a stale journal copy,
+   skipping any link into the subscription album). Waiting rows never
+   teach a name; ties break deterministically by note
+   and line. Typed rows join through `merchant_key(payee)`. Non-subscription
+   learned links keep today's behavior byte for byte.
+4. Wells Fargo built-ins: ATM withdrawals (`cash`), ATM/overdraft fees
    (`fees` when configured), card payments and online transfers
    (`transfer`). The raw type and description classify before cleaning
    can remove a useful discriminator. Reads classify from the journal
    description only.
-4. The cleaned, title-cased description.
+5. The cleaned, title-cased description.
 
 Cleaning is conservative and fixture-driven. It strips Wells Fargo QFX
 `PURCHASE [RETURN] [AUTHORIZED ON] MM/DD … [CARD dddd]` and
@@ -461,13 +469,14 @@ account-holder name tails are removed only after reference digits and a
 recognized payment-rail marker. The stages never erase an ordinary
 multiword merchant. A learned payee is re-cleaned only when it still carries
 one of these forms of noise; an already-clean edited name stays byte-for-byte
-unchanged. Bank-derived payees (tiers 3–4) pass through the grammar
-sanitizer; rules remain vault text. Untrusted source descriptions stay one
+unchanged. Bank-derived payees (tiers 4–5) pass through the grammar
+sanitizer; rules and subscription titles remain vault text. Untrusted source descriptions stay one
 grammar-safe payee line and cannot inject headings, block IDs, fields, or
 links. A positive amount alone never implies income or refund; undeclared
 categories are dropped.
 
-With no selected link, an exact case-insensitive restaurant title match
+Link precedence is rule, then subscription, then the filtered learned
+link, then restaurant. With no selected link, an exact case-insensitive restaurant title match
 through the records registry supplies its note link and kind emoji
 (normally `[[eat/<stem>|<emoji>]]`). No fuzzy guessing, no record
 mutation, no full-vault scan. Ambiguous titles omit the link. An
@@ -548,8 +557,10 @@ replay produces no scoped import commit and no new journal events.
 Human output prints one block per file (account, date range; new,
 matched, seen, ambiguous, before-start counts; out/in cents; ledger
 balance and date when present), followed by account statuses,
-restoration details, affected paths, commit/sync results, and a next
-action. It respects `NO_COLOR` and pipes. Usage errors exit 2.
+restoration details, affected paths, commit/sync results, a subscription
+summary line when there is news
+(`🔁 N rows linked to subscriptions · N possible new subscriptions · N price changes — bob bank check`),
+and a next action. It respects `NO_COLOR` and pipes. Usage errors exit 2.
 
 ### Current limits
 
@@ -985,7 +996,9 @@ bank rule. A missing or invalid album forces the whole projection to
   `sync {pre, post}`, `restored`, `restored_rows[]`, and `warnings`, plus the parent-contract
   `files[] {file, account, source, start, end, new, matched, seen,
   ambiguous, before_start, out_cents, in_cents, balance_cents,
-  balance_asof, status}` and `rows[]` using existing row JSON.
+  balance_asof, status}` and `rows[]` using existing row JSON,
+  plus `subscriptions {linked, candidates, price_changes}` counted over
+  this batch's new rows.
   `balance_cents`/`balance_asof` report the ledger balance and date.
   Diagnostics identify a file and field/record
   position without echoing private identifiers or raw data.

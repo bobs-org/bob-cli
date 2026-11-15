@@ -124,6 +124,11 @@ impl ImportReport {
             .as_ref()
             .map(|plan| changes_json(plan, self.dry_run))
             .unwrap_or_default();
+        let (linked, candidates, price_changes) = self
+            .plan
+            .as_ref()
+            .map(subscription_counts)
+            .unwrap_or((0, 0, 0));
         let mut payload = json!({
             "schema_version": 1,
             "ok": self.failure.is_none(),
@@ -153,6 +158,11 @@ impl ImportReport {
             "warnings": self.warnings,
             "files": files,
             "rows": rows,
+            "subscriptions": {
+                "linked": linked,
+                "candidates": candidates,
+                "price_changes": price_changes,
+            },
         });
         if let Some(failure) = &self.failure {
             payload["error"] = json!({
@@ -979,11 +989,71 @@ pub(crate) fn print_human(report: &ImportReport) {
     for warning in &report.warnings {
         println!("warning: {warning}");
     }
+    if let Some(summary) = format_subscription_summary(plan) {
+        println!("{summary}");
+    }
     if plan.wrote_waiting && plan.waiting > 0 {
         println!("{}", walk_next_line(plan));
     } else {
         println!("Next: check the import summary with `bob bank report`.");
     }
+}
+
+fn subscription_counts(plan: &import_plan::BatchPlan) -> (usize, usize, usize) {
+    let mut linked = 0usize;
+    let mut candidates = 0usize;
+    let mut price_changes = 0usize;
+    for row in &plan.rows {
+        if row.origin != "imported" {
+            continue;
+        }
+        if row.subscription.is_some() {
+            linked += 1;
+        }
+        if row.subscription_candidate {
+            candidates += 1;
+        }
+        if row
+            .subscription
+            .as_ref()
+            .is_some_and(|subscription| subscription.price_change.is_some())
+        {
+            price_changes += 1;
+        }
+    }
+    (linked, candidates, price_changes)
+}
+
+fn format_subscription_summary(
+    plan: &import_plan::BatchPlan,
+) -> Option<String> {
+    let (linked, candidates, price_changes) = subscription_counts(plan);
+    if linked == 0 && candidates == 0 && price_changes == 0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if linked > 0 {
+        if linked == 1 {
+            parts.push("1 row linked to subscriptions".to_owned());
+        } else {
+            parts.push(format!("{linked} rows linked to subscriptions"));
+        }
+    }
+    if candidates > 0 {
+        if candidates == 1 {
+            parts.push("1 possible new subscription".to_owned());
+        } else {
+            parts.push(format!("{candidates} possible new subscriptions"));
+        }
+    }
+    if price_changes > 0 {
+        if price_changes == 1 {
+            parts.push("1 price change".to_owned());
+        } else {
+            parts.push(format!("{price_changes} price changes"));
+        }
+    }
+    Some(format!("🔁 {} — bob bank check", parts.join(" · ")))
 }
 
 fn walk_next_line(plan: &import_plan::BatchPlan) -> String {
@@ -1058,6 +1128,111 @@ mod tests {
             super::format_walk_next(4, Some("2026-09"), 2),
             "Next: file the 4 waiting rows in bank/2026-09.md and 2 more months — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them)."
         );
+    }
+
+    #[test]
+    fn subscription_summary_counts_new_rows_and_pluralizes() {
+        use crate::native::bank::model::BankRow;
+        use chrono::NaiveDate;
+
+        fn row(
+            origin: &'static str,
+            subscription: bool,
+            candidate: bool,
+            price_change: bool,
+        ) -> BankRow {
+            BankRow {
+                path: "bank/2026-11.md".to_owned(),
+                line: 1,
+                date: NaiveDate::from_ymd_opt(2026, 11, 12).expect("date"),
+                heading: String::new(),
+                account: "checking".to_owned(),
+                cents: -999,
+                payee: "Tunely".to_owned(),
+                category: None,
+                links: Vec::new(),
+                note: None,
+                flagged: false,
+                acknowledged: false,
+                id: Some("cccccccc".to_owned()),
+                origin,
+                suggestion: None,
+                subscription: subscription.then(|| {
+                    crate::native::bank::model::RowSubscription {
+                        stem: "tunely".to_owned(),
+                        path: "subs/tunely.md".to_owned(),
+                        title: "Tunely".to_owned(),
+                        status: "active".to_owned(),
+                        status_label: "Active".to_owned(),
+                        cadence: "monthly".to_owned(),
+                        pricing: "fixed".to_owned(),
+                        amount_cents: 999,
+                        source: "match".to_owned(),
+                        needle: Some("TUNELY".to_owned()),
+                        drift_cents: Some(0),
+                        price_change: price_change.then(|| {
+                            crate::native::bank::model::SubscriptionPriceChange {
+                                from_cents: 999,
+                                to_cents: 1099,
+                                since: NaiveDate::from_ymd_opt(2026, 11, 12)
+                                    .expect("date"),
+                            }
+                        }),
+                        state: "ok".to_owned(),
+                    }
+                }),
+                bank_recurring: false,
+                subscription_candidate: candidate,
+            }
+        }
+
+        let plan = crate::native::bank::import_plan::BatchPlan {
+            files: Vec::new(),
+            rows: vec![
+                row("imported", true, false, false),
+                row("imported", true, false, true),
+                row("imported", false, true, false),
+                row("matched", true, false, false),
+            ],
+            restored_rows: Vec::new(),
+            restore_requested: false,
+            month_edits: Vec::new(),
+            journal_events: Vec::new(),
+            read_deps: Vec::new(),
+            findings: Vec::new(),
+            counts: Default::default(),
+            changed: true,
+            waiting: 0,
+            waiting_oldest_month: None,
+            waiting_extra_months: 0,
+            wrote_waiting: false,
+        };
+        assert_eq!(super::subscription_counts(&plan), (2, 1, 1));
+        assert_eq!(
+            super::format_subscription_summary(&plan).as_deref(),
+            Some(
+                "🔁 2 rows linked to subscriptions · 1 possible new subscription · 1 price change — bob bank check"
+            )
+        );
+
+        let empty = crate::native::bank::import_plan::BatchPlan {
+            files: Vec::new(),
+            rows: vec![row("imported", false, false, false)],
+            restored_rows: Vec::new(),
+            restore_requested: false,
+            month_edits: Vec::new(),
+            journal_events: Vec::new(),
+            read_deps: Vec::new(),
+            findings: Vec::new(),
+            counts: Default::default(),
+            changed: false,
+            waiting: 0,
+            waiting_oldest_month: None,
+            waiting_extra_months: 0,
+            wrote_waiting: false,
+        };
+        assert_eq!(super::subscription_counts(&empty), (0, 0, 0));
+        assert_eq!(super::format_subscription_summary(&empty), None);
     }
 
     struct TestVault {

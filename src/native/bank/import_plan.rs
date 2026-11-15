@@ -47,9 +47,13 @@ use super::{
         canonical_template, parse_month_note, plan_append_id, plan_append_row,
         plan_insert_day, LocatedRowKind,
     },
-    naming::{resolve_name, LearnedName},
+    naming::{resolve_name, LearnedName, SubscriptionTier},
     scan::BankScan,
     source::{ParsedTransaction, ResolvedStatement, SourceKind},
+    subscriptions::{
+        matching::resolve_match,
+        registry::{SubscriptionAvailability, SubscriptionRegistry},
+    },
     suggest::{self, CategorySuggestion, LearnedIndex},
 };
 
@@ -78,6 +82,55 @@ impl RestaurantEntry {
             _ => format!("[[{}]]", self.path),
         }
     }
+}
+
+fn subscription_link_for_record(
+    registry: &SubscriptionRegistry,
+    record: &super::subscriptions::registry::SubscriptionRecord,
+) -> String {
+    let emoji = registry
+        .album
+        .as_ref()
+        .and_then(|album| album.emoji.clone());
+    match emoji {
+        Some(emoji) if !emoji.is_empty() => {
+            format!("[[{}|{emoji}]]", record.link_target)
+        }
+        _ => format!("[[{}]]", record.link_target),
+    }
+}
+
+fn is_subscription_link(link: &str, registry: &SubscriptionRegistry) -> bool {
+    if link.contains('🔁') {
+        return true;
+    }
+    let Some(target) = wikilink_target(link) else {
+        return false;
+    };
+    let normalized = normalize_link_target(&target);
+    registry.records.iter().any(|record| {
+        normalize_link_target(&record.path) == normalized
+            || normalize_link_target(&record.link_target) == normalized
+    })
+}
+
+fn wikilink_target(link: &str) -> Option<String> {
+    let inner = link.trim().strip_prefix("[[")?.strip_suffix("]]")?.trim();
+    if inner.is_empty() || inner.contains("[[") || inner.contains("]]") {
+        return None;
+    }
+    let before_alias =
+        inner.split_once('|').map_or(inner, |(target, _)| target);
+    let target = before_alias
+        .split_once('#')
+        .map_or(before_alias, |(target, _)| target)
+        .trim();
+    (!target.is_empty()).then(|| target.to_owned())
+}
+
+fn normalize_link_target(target: &str) -> String {
+    let trimmed = target.trim().trim_start_matches("./").trim();
+    trimmed.strip_suffix(".md").unwrap_or(trimmed).to_owned()
 }
 
 /// Everything the planner needs, already read.
@@ -545,17 +598,20 @@ impl<'a> Planner<'a> {
                 }
                 self.count_new(file_index);
                 let merchant = merchant_key(&txn.desc);
-                let learned = self.learn(input, &merchant);
+                let learned =
+                    Self::filtered_learned(input, self.learn(input, &merchant));
                 let restaurant = self.restaurant_link(input, txn);
+                let subscription = Self::subscription_tier(input, &txn.desc);
                 let named = resolve_name(
                     self.config,
                     &txn.desc,
                     txn.trntype.as_deref(),
                     learned.as_ref(),
+                    subscription.as_ref(),
                     restaurant,
                     &self.learned_index,
                 );
-                let suggestion = suggest::suggest_category(
+                let suggestion = suggest::suggest_with_subscription(
                     self.config,
                     &suggest::SuggestQuery {
                         desc: Some(&txn.desc),
@@ -566,6 +622,9 @@ impl<'a> Planner<'a> {
                         read_time: false,
                     },
                     &self.learned_index,
+                    subscription
+                        .as_ref()
+                        .and_then(|tier| tier.category.as_deref()),
                 );
                 let mut links = Vec::new();
                 if let Some(link) = named.link {
@@ -684,16 +743,21 @@ impl<'a> Planner<'a> {
         });
         for event in events {
             let path = month_path(month_of(event.posted));
-            let learned = self.learn(input, &event.merchant);
+            let learned = Self::filtered_learned(
+                input,
+                self.learn(input, &event.merchant),
+            );
+            let subscription = Self::subscription_tier(input, &event.desc);
             let named = super::naming::resolve_name(
                 self.config,
                 &event.desc,
                 None,
                 learned.as_ref(),
+                subscription.as_ref(),
                 None,
                 &self.learned_index,
             );
-            let suggestion = suggest::suggest_category(
+            let suggestion = suggest::suggest_with_subscription(
                 self.config,
                 &suggest::SuggestQuery {
                     desc: Some(&event.desc),
@@ -704,6 +768,9 @@ impl<'a> Planner<'a> {
                     read_time: false,
                 },
                 &self.learned_index,
+                subscription
+                    .as_ref()
+                    .and_then(|tier| tier.category.as_deref()),
             );
             self.pending_rows
                 .entry((path, event.posted))
@@ -858,6 +925,54 @@ impl<'a> Planner<'a> {
             }
         }
         winner.map(RestaurantEntry::link)
+    }
+
+    /// Uniquely matched subscription tier for one raw description. A missing
+    /// or invalid album yields no tier, and an ambiguous match yields no
+    /// tier; only a strictly longest single winner links.
+    fn subscription_tier(
+        input: &'a PlanInput<'a>,
+        desc: &str,
+    ) -> Option<SubscriptionTier> {
+        let registry = &input.subscriptions;
+        if registry.availability != SubscriptionAvailability::Available {
+            return None;
+        }
+        let matched = resolve_match(&registry.records, desc);
+        let record_path = matched.record_path?;
+        let record = registry
+            .records
+            .iter()
+            .find(|record| record.path == record_path)?;
+        Some(SubscriptionTier {
+            title: record.title.clone(),
+            category: record.category.clone(),
+            link: subscription_link_for_record(registry, record),
+        })
+    }
+
+    /// Learned naming without any link into the subscription album. A stale
+    /// copy of an old subscription link must never outrank a live record
+    /// edit; non-subscription learned links keep today's behavior byte for
+    /// byte.
+    fn filtered_learned(
+        input: &'a PlanInput<'a>,
+        learned: Option<LearnedName>,
+    ) -> Option<LearnedName> {
+        learned.map(|name| {
+            let links = name
+                .links
+                .into_iter()
+                .filter(|link| {
+                    !is_subscription_link(link, &input.subscriptions)
+                })
+                .collect();
+            LearnedName {
+                payee: name.payee,
+                category: name.category,
+                links,
+            }
+        })
     }
 
     fn count_new(&mut self, file_index: usize) {
@@ -3439,8 +3554,10 @@ mod tests {
         let projection =
             batch.rows[0].subscription.clone().expect("projection");
         assert_eq!(projection.path, "billing/tunely.md");
-        assert_eq!(projection.source, "match");
-        assert_eq!(projection.needle.as_deref(), Some("TUNELY"));
+        // The subscription tier links the row at plan time, so the
+        // projection reports the explicit link rather than a needle match.
+        assert_eq!(projection.source, "link");
+        assert_eq!(projection.needle.as_deref(), None);
         assert_eq!(projection.drift_cents, Some(100));
         let change =
             projection.price_change.expect("history from before_start");
@@ -3497,6 +3614,216 @@ mod tests {
         assert_eq!(
             projection.price_change, None,
             "explicit cloudbox history must not enter the tunely ledger"
+        );
+    }
+
+    fn subscription_registry_with(
+        needle: &str,
+        title: &str,
+        category: Option<&str>,
+    ) -> crate::native::bank::subscriptions::registry::SubscriptionRegistry
+    {
+        use crate::native::bank::subscriptions::registry::{
+            SubscriptionAvailability, SubscriptionCadence, SubscriptionPricing,
+            SubscriptionRecord, SubscriptionStatus,
+        };
+        crate::native::bank::subscriptions::registry::SubscriptionRegistry {
+            availability: SubscriptionAvailability::Available,
+            album: Some(
+                crate::native::bank::subscriptions::registry::SubscriptionAlbum {
+                    stem: "subscriptions".to_owned(),
+                    path: "subscriptions.md".to_owned(),
+                    title: "Subscriptions".to_owned(),
+                    directory: "subs".to_owned(),
+                    emoji: Some("🔁".to_owned()),
+                },
+            ),
+            records: vec![SubscriptionRecord {
+                stem: "tunely".to_owned(),
+                path: "subs/tunely.md".to_owned(),
+                link_target: "subs/tunely".to_owned(),
+                title: title.to_owned(),
+                status: SubscriptionStatus::Active,
+                status_label: "Active".to_owned(),
+                amount_cents: 999,
+                cadence: SubscriptionCadence::Monthly,
+                pricing: SubscriptionPricing::Fixed,
+                needles: vec![needle.to_owned()],
+                invalid_needles: Vec::new(),
+                category: category.map(str::to_owned),
+                url: None,
+                renews: None,
+                ended: None,
+            }],
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn run_plan_with_subscriptions(
+        config: &BankConfig,
+        scan: &BankScan,
+        journal: &JournalSnapshot,
+        statements: Vec<ResolvedStatement>,
+        labels: Vec<&str>,
+        restaurants: Vec<RestaurantEntry>,
+        subscriptions: crate::native::bank::subscriptions::registry::SubscriptionRegistry,
+    ) -> Result<BatchPlan, PlanRefusal> {
+        plan_batch(PlanInput {
+            config: Some(config),
+            hub: ReadDep {
+                path: "bank.md".to_owned(),
+                preimage: Some(b"hub".to_vec()),
+            },
+            scan,
+            journal,
+            statements,
+            file_labels: labels.into_iter().map(str::to_owned).collect(),
+            restaurants,
+            restaurant_deps: Vec::new(),
+            subscriptions,
+            subscription_deps: Vec::new(),
+            subscription_warning: None,
+            today: nov(12),
+            now_stamp: STAMP.to_owned(),
+            host: "athena".to_owned(),
+            force_restore: false,
+        })
+    }
+
+    #[test]
+    fn subscription_tier_links_payee_category_and_link() {
+        let config = hub();
+        let scan = scan_with(vec![november(&[])]);
+        let journal = JournalSnapshot::default();
+        let subscriptions =
+            subscription_registry_with("TUNELY", "Tunely", Some("dining"));
+        let plan = run_plan_with_subscriptions(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(
+                    nov(12),
+                    -999,
+                    "sub-1",
+                    "TUNELY PREMIUM SERVICE",
+                    Some("POS"),
+                )],
+                &digest("sub-link"),
+            )],
+            vec!["sub.qfx"],
+            vec![restaurant("Tunely Premium Service", "tunely_cafe")],
+            subscriptions,
+        )
+        .expect("plan");
+        let edit = &plan.month_edits[0];
+        assert!(
+            edit.after.contains(
+                "- [ ] $9.99 Tunely [cat:: dining] [[subs/tunely|🔁]] ^bank-"
+            ),
+            "after: {}",
+            edit.after
+        );
+        assert!(!edit.after.contains("[[eat/"));
+    }
+
+    #[test]
+    fn rule_beats_subscription_and_stale_learned_links_are_skipped() {
+        // Rule wins over a live subscription match.
+        let config = hub_with(
+            "  rules:\n    - match: TUNELY\n      payee: Rule Payee\n      link: '[[recipes/rule]]'\n",
+            "2026-11-01",
+        );
+        let scan = scan_with(vec![november(&[])]);
+        let journal = JournalSnapshot::default();
+        let subscriptions =
+            subscription_registry_with("TUNELY", "Tunely", Some("dining"));
+        let plan = run_plan_with_subscriptions(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(
+                    nov(12),
+                    -999,
+                    "sub-rule",
+                    "TUNELY PREMIUM SERVICE",
+                    Some("POS"),
+                )],
+                &digest("sub-rule"),
+            )],
+            vec!["sub.qfx"],
+            Vec::new(),
+            subscriptions,
+        )
+        .expect("plan");
+        let edit = &plan.month_edits[0];
+        assert!(
+            edit.after.contains(
+                "- [ ] $9.99 Rule Payee [cat:: dining] [[recipes/rule]] ^bank-"
+            ),
+            "after: {}",
+            edit.after
+        );
+
+        // A stale learned subscription link never resurrects when the album
+        // is missing: the filtered learned tier yields no link.
+        let config = hub();
+        let stale_id: String = transaction_key("checking", "old-sub")
+            .chars()
+            .take(8)
+            .collect();
+        let stale_row = format!(
+            "- [x] $9.99 Old Tunely [[subs/tunely|🔁]] [acct:: checking] ^bank-{stale_id}\n"
+        );
+        let scan = scan_with(vec![november(&[(10, vec![stale_row.as_str()])])]);
+        let journal = snapshot_with(vec![journal_event(
+            "checking",
+            "old-sub",
+            TxnOutcome::Written,
+            Some("bank/2026-11.md"),
+            nov(10),
+            -999,
+            "TUNELY PREMIUM SERVICE",
+        )]);
+        let plan = run_plan(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(
+                    nov(12),
+                    -999,
+                    "sub-stale",
+                    "TUNELY PREMIUM SERVICE",
+                    Some("POS"),
+                )],
+                &digest("sub-stale"),
+            )],
+            vec!["sub.qfx"],
+            Vec::new(),
+        )
+        .expect("plan");
+        let edit = &plan.month_edits[0];
+        assert!(
+            edit.after.contains("- [ ] $9.99 Old Tunely ^bank-"),
+            "after: {}",
+            edit.after
+        );
+        // The pre-existing stale row keeps its link; the new row carries
+        // none because the filtered learned tier skips subscription targets.
+        assert!(
+            edit.after.contains(
+                "- [x] $9.99 Old Tunely [[subs/tunely|🔁]] [acct:: checking]"
+            ),
+            "after: {}",
+            edit.after
         );
     }
 
