@@ -38,6 +38,15 @@ fn print_json(calendars: &[GogCalendar], config: &GcalConfig) {
     let rows: Vec<serde_json::Value> = calendars
         .iter()
         .map(|calendar| {
+            // Match the table: `primary` (or the account email) configures
+            // the primary calendar, so look the mark up by configured id.
+            let mark = config
+                .calendars()
+                .iter()
+                .find(|configured| {
+                    calendar.matches_configured_id(&configured.id)
+                })
+                .and_then(|configured| configured.mark.as_deref());
             serde_json::json!({
                 "id": calendar.id,
                 "name": calendar.name(),
@@ -45,7 +54,7 @@ fn print_json(calendars: &[GogCalendar], config: &GcalConfig) {
                 "color": calendar.colour(),
                 "primary": calendar.primary,
                 "synced": config.syncs(&calendar.id, calendar.primary),
-                "mark": config.mark_for(&calendar.id),
+                "mark": mark,
                 "root": config.root_for(if calendar.primary {
                     "primary"
                 } else {

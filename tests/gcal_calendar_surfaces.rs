@@ -207,3 +207,29 @@ fn calendars_list_sync_and_doctor_expose_calendar_marks() {
         stdout(&output)
     );
 }
+
+#[test]
+fn calendars_json_reports_a_marked_primary_mark() {
+    // `mark` is optional on the primary calendar; when it is set under the
+    // `primary` alias, JSON reports it just like the table does.
+    let (env, fake) = marked_env();
+    env.write_config(&format!(
+        "timezone: America/New_York\ngcal:\n  account: {ACCOUNT}\n  calendars:\n    - id: primary\n      mark: 🏠\n    - id: bdays@group.calendar.google.com\n      mark: 🎂\n"
+    ));
+
+    let output = run(&env, &fake, &["gcal", "calendars"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let table = stdout(&output);
+    assert!(table.contains("🏠"), "{table}");
+
+    let output = run(&env, &fake, &["gcal", "calendars", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let calendars = json_stdout(&output);
+    let primary = calendars["calendars"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|calendar| calendar["primary"] == true)
+        .unwrap();
+    assert_eq!(primary["mark"], "🏠");
+}

@@ -292,10 +292,10 @@ The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 
 | Key | Type and rules | Default | Effect |
 | --- | --- | --- | --- |
-| `gcal.account` | String containing `@` | Optional when the isolated `bob-gcal` bucket holds exactly one unique email, else when gog as a whole holds exactly one | Account identity; `bob gcal login -a` can override it for that invocation. Commands prefer the Bob bucket before gog's default accounts. |
+| `gcal.account` | String containing `@` | Optional when the isolated `bob-gcal` bucket holds exactly one unique email, else when gog as a whole holds exactly one | Account identity; `bob gcal login -a` overrides it per invocation. Commands prefer the Bob bucket before gog's default accounts. |
 | `gcal.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to sync; `doctor` compares it to vault-sync's hostname slug. |
 | `gcal.root` | Bare note name | `meet_inbox` | Default `[root::]` for Event Tasks. |
-| `gcal.calendars` | Sequence of `primary`/account-email ids or `{id, mark, root?}` maps | `[primary]` | Calendars to sync; `primary` matches the account's primary calendar. Every other calendar needs a unique `mark`. |
+| `gcal.calendars` | `primary`/account-email ids or `{id, mark, root?}` maps | `[primary]` | Calendars to sync; every non-primary one needs a unique `mark`. |
 | `gcal.colors` | Mapping of Google event colour names or ids (`lavender`/`1` through `tomato`/`11`) to roots | `{}` | Event-colour root source, checked after an `@route` token and before the calendar's root. Unknown colour keys are a setup error. |
 | `gcal.tentative` | `context` or `task` | `context` | Whether a busy Maybe event becomes a context row or an Event Task. |
 | `gcal.ack` | `external` or `off` | `external` | Whether the external-event acknowledgement workflow is enabled; `off` is the kill switch. |

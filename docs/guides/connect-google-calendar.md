@@ -163,7 +163,7 @@ For example, add Birthdays like this:
 gcal:
   calendars:
     - id: primary
-    - id: <Birthdays calendar id from `bob gcal calendars>` # Birthdays
+    - id: <Birthdays calendar id from bob gcal calendars> # Birthdays
       mark: 🎂
 ```
 
