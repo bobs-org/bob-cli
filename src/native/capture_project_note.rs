@@ -219,34 +219,13 @@ where
         })
 }
 
-/// Whether a trimmed authored body matches the ALL-CAPS section-title shape
-/// (`^[A-Z0-9][A-Z0-9 \t&'(),./-]*$` with at least one `A-Z`), mirroring
-/// `PROJECT_SECTION_TITLE_RE` plus the letter check.
+/// Whether a trimmed authored body is a project-note section title.
+///
+/// Delegates to [`crate::native::capture_drawers::is_drawer_title`] so the
+/// two grammars never drift: drawer sentence punctuation (`?`, `!`, `;`,
+/// trailing `:`) qualifies here too.
 pub(crate) fn is_project_section_title(body: &str) -> bool {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let mut chars = trimmed.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_uppercase() || first.is_ascii_digit() => {
-        }
-        _ => return false,
-    }
-    for character in trimmed.chars() {
-        let allowed = character.is_ascii_uppercase()
-            || character.is_ascii_digit()
-            || matches!(
-                character,
-                ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
-            );
-        if !allowed {
-            return false;
-        }
-    }
-    trimmed
-        .chars()
-        .any(|character| character.is_ascii_uppercase())
+    crate::native::capture_drawers::is_drawer_title(body.trim())
 }
 
 /// Lowercase the whole body, then uppercase the first character of every
@@ -994,11 +973,16 @@ mod tests {
     }
 
     #[test]
-    fn section_title_shape_rejects_mixed_case_and_banners() {
+    fn section_title_shape_allows_sentence_punctuation() {
         assert!(is_project_section_title("FUTURE WORK"));
         assert!(is_project_section_title("Q&A"));
+        assert!(is_project_section_title("WHAT'S NEXT?"));
+        assert!(is_project_section_title("WHAT IS SASE?"));
+        assert!(is_project_section_title("OPTIONS:"));
         assert!(!is_project_section_title("Future Work"));
-        assert!(!is_project_section_title("WHAT'S NEXT?"));
+        assert!(!is_project_section_title("NOTE: X"));
+        assert!(!is_project_section_title("KEY:: VALUE"));
+        assert!(!is_project_section_title("OPTIONS::"));
         assert!(!is_project_section_title("123"));
         assert!(!is_project_section_title(""));
     }

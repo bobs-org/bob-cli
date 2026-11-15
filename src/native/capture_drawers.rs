@@ -157,7 +157,7 @@ pub(crate) fn reserved_selector_error(
 // Cached drawer catalog (relation_labels/scan.rs precedent).
 // ---------------------------------------------------------------------------
 
-pub(crate) const DRAWER_CATALOG_VERSION: u32 = 1;
+pub(crate) const DRAWER_CATALOG_VERSION: u32 = 2;
 const DRAWER_SNAPSHOT_TTL_SECS: u64 = 60;
 const DRAWER_STALE_TMP_SECS: u64 = 10 * 60;
 const DRAWER_RECENT_DAYS: u64 = 90;
@@ -1128,11 +1128,20 @@ pub(crate) fn resolve_drawer_for_write(
             },
             scope,
         );
+        // A punctuated drawer (`WHAT IS SASE?`, `Q&A`) has a slug that is
+        // not itself a valid slug, so suggesting `#slug` would suggest a
+        // selector that cannot parse. Suggest the quoted literal instead.
+        let suggestion = if !is_drawer_slug(&near.slug) {
+            normalize_drawer_literal(&near.title)
+                .map(|key| format!("#\"{key}\""))
+                .unwrap_or_else(|| format!("#{}", near.slug))
+        } else {
+            format!("#{}", near.slug)
+        };
         return Err(DrawerResolveError::new(
             "drawer_near_duplicate",
             format!(
-                "did you mean `#{}`? write `#\"{}\"` to create {}",
-                near.slug, intended, intended
+                "did you mean `{suggestion}`? write `#\"{intended}\"` to create {intended}"
             ),
         ));
     }
@@ -1574,27 +1583,37 @@ fn parse_drawer_title(body: &str) -> Option<&str> {
 
 /// Whether `title` is a drawer title.
 ///
-/// Drawer titles do not allow `+`. The Pomodoro-name grammar is this
-/// predicate plus `+` in the non-leading position; `+` is excluded here
-/// because [`parse_drawer_title`] uses this predicate to decide
-/// whether an ordinary child bullet is a drawer.
+/// Shared base: lead `A-Z` or `0-9`, rest from `A-Z`, `0-9`, space, tab,
+/// and `& ' ( ) , . / -`, with at least one `A-Z`. Drawer titles add `?`,
+/// `!`, and `;` anywhere after the lead, plus `:` only as the title's
+/// final character (so `OPTIONS:` qualifies but `NOTE: X`, `KEY:: VALUE`,
+/// and `OPTIONS::` do not). `+` stays out because
+/// [`parse_drawer_title`] uses this predicate to decide whether an
+/// ordinary child bullet is a drawer.
 pub(crate) fn is_drawer_title(title: &str) -> bool {
-    is_title(title, false)
+    is_title(title, TitleGrammar::Drawer)
 }
 
 /// Whether `name` is a canonical Pomodoro name.
 ///
-/// The Pomodoro name is the drawer title grammar plus `+` in the
-/// non-leading position. A name must still start with an ASCII uppercase
-/// letter or digit and must still contain at least one letter. `+` is
-/// deliberately excluded from drawer titles because
-/// [`parse_drawer_title`] uses that predicate to decide whether an
-/// ordinary child bullet is a drawer.
+/// Shared base: lead `A-Z` or `0-9`, rest from `A-Z`, `0-9`, space, tab,
+/// `& ' ( ) , . / -`, and `+` in the non-leading position, with at least
+/// one `A-Z`. Pomodoro names never take the drawer punctuation (`?`, `!`,
+/// `;`, `:`), so `WHY?` is not a Pomodoro name.
 pub(crate) fn is_pomodoro_name(name: &str) -> bool {
-    is_title(name, true)
+    is_title(name, TitleGrammar::PomodoroName)
 }
 
-fn is_title(title: &str, allow_plus: bool) -> bool {
+/// Drawer titles and Pomodoro names share a lead/first rule but diverge
+/// on the rest alphabet: drawers take sentence punctuation, Pomodoro
+/// names take `+`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TitleGrammar {
+    Drawer,
+    PomodoroName,
+}
+
+fn is_title(title: &str, grammar: TitleGrammar) -> bool {
     let mut chars = title.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -1603,8 +1622,14 @@ fn is_title(title: &str, allow_plus: bool) -> bool {
         return false;
     }
     let mut has_letter = first.is_ascii_uppercase();
-    for character in chars {
-        if !is_title_rest(character, allow_plus) {
+    let rest: Vec<char> = chars.collect();
+    for (index, character) in rest.iter().enumerate() {
+        let is_last = index + 1 == rest.len();
+        let allowed = match grammar {
+            TitleGrammar::Drawer => is_drawer_rest(*character, is_last),
+            TitleGrammar::PomodoroName => is_pomodoro_rest(*character),
+        };
+        if !allowed {
             return false;
         }
         has_letter |= character.is_ascii_uppercase();
@@ -1616,13 +1641,32 @@ fn is_drawer_title_first(character: char) -> bool {
     character.is_ascii_uppercase() || character.is_ascii_digit()
 }
 
-fn is_title_rest(character: char, allow_plus: bool) -> bool {
+fn is_drawer_rest(character: char, is_last: bool) -> bool {
+    if is_drawer_title_first(character) {
+        return true;
+    }
+    if matches!(
+        character,
+        ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
+    ) {
+        return true;
+    }
+    if matches!(character, '?' | '!' | ';') {
+        return true;
+    }
+    if character == ':' {
+        return is_last;
+    }
+    false
+}
+
+fn is_pomodoro_rest(character: char) -> bool {
     is_drawer_title_first(character)
         || matches!(
             character,
             ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
         )
-        || (allow_plus && character == '+')
+        || character == '+'
 }
 
 /// Plugin `PROJECT_CHILD_LIST_ITEM_RE` checkbox: `[x]` plus following
@@ -2463,6 +2507,84 @@ mod tests {
                 "future-work",
                 "notes"
             ]
+        );
+    }
+
+    #[test]
+    fn sentence_punctuation_drawer_titles_qualify() {
+        // `punctuation = sentence`: `?`, `!`, `;` anywhere after the lead,
+        // `:` only as the final character.
+        for title in [
+            "WHAT IS SASE?",
+            "WOW!",
+            "WHAT'S NEXT?",
+            "A;B",
+            "OPTIONS:",
+            "WHAT NEXT:",
+        ] {
+            assert!(is_drawer_title(title), "{title:?}");
+            assert_eq!(parse_drawer_title(title), Some(title), "{title:?}");
+        }
+        for title in [
+            "?WHY",
+            "!WOW",
+            ";LEAD",
+            ":LEAD",
+            "NOTE: X",
+            "PHONE: (609) 597-4111",
+            "KEY:: VALUE",
+            "OPTIONS::",
+            "C++",
+            "A+B",
+            "FOO:BAR",
+        ] {
+            assert!(!is_drawer_title(title), "{title:?}");
+            assert_eq!(parse_drawer_title(title), None, "{title:?}");
+        }
+        // Pomodoro names never take the drawer punctuation.
+        assert!(!is_pomodoro_name("WHY?"));
+        assert!(!is_pomodoro_name("WHAT IS SASE?"));
+        assert!(!is_pomodoro_name("OPTIONS:"));
+        assert!(is_pomodoro_name("C++"));
+        assert!(is_pomodoro_name("A+B"));
+
+        let contents = concat!(
+            "- [ ] #task Parent\n",
+            "\t- WHAT IS SASE?\n",
+            "\t\t- a note\n",
+        );
+        let found = drawers_of(contents);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "WHAT IS SASE?");
+        assert_eq!(found[0].key, "WHAT IS SASE?");
+        assert_eq!(found[0].slug, "what-is-sase?");
+    }
+
+    #[test]
+    fn near_duplicate_suggests_quoted_title_when_slug_is_invalid() {
+        // `slug_reach = exact`: `#what-is-sase` does not select
+        // `WHAT IS SASE?`; it refuses with a quoted suggestion.
+        let contents = concat!(
+            "- [ ] #task Parent\n",
+            "\t- WHAT IS SASE?\n",
+            "\t\t- existing\n",
+        );
+        let found = drawers_of(contents);
+        assert_eq!(found.len(), 1);
+        let error = resolve_drawer_for_write(
+            &found,
+            "what-is-sase",
+            false,
+            &BTreeMap::new(),
+            "foo",
+            Some("bar"),
+            DrawerScope::Task,
+        )
+        .expect_err("punctuated drawer is a near-duplicate");
+        assert_eq!(error.code, "drawer_near_duplicate");
+        assert_eq!(
+            error.message,
+            "did you mean `#\"WHAT IS SASE?\"`? write `#\"WHAT IS SASE\"` to create WHAT IS SASE"
         );
     }
 

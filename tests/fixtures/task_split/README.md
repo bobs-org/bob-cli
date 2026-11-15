@@ -1,7 +1,7 @@
 # Task-split vectors
 
 `vectors.json` is the single source of truth for split-bullet planners in
-bob-cli and bob-plugins (`docs/task-split.md` §6). Its cases are `SP1`–`SP30`,
+bob-cli and bob-plugins (`docs/task-split.md` §6). Its cases are `SP1`–`SP31`,
 covering cursor, count, clamped count, line-range, non-contiguous `nth`, and
 `match` selection; anchor reuse; silent owner mint; alias flattening (`|`,
 `]]`, `#`, links, emphasis); 80-character truncation; ALL-CAPS drawers;
@@ -29,6 +29,7 @@ collapse whitespace, truncate at 80 characters on a word boundary with `…`).
 | `SP5` | clamped counts report `requested` vs `split` |
 | `SP10` | silent owner mint reported as `owner_minted_id` |
 | `SP20`–`SP21`, `SP30` | cross-note placements reported as `root_note`, `inbox`, or `tasks_section` |
+| `SP31` | punctuated `WHAT IS SASE?` drawer entry splits inside its drawer |
 
 ## Selection kinds
 

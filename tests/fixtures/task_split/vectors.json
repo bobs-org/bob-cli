@@ -1295,6 +1295,49 @@
           "path": "dev.md"
         }
       }
+    },
+    {
+      "id": "SP31",
+      "title": "punctuated drawer entry splits inside its drawer",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - WHAT IS SASE?\n    - Try logical replication\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - WHAT IS SASE?\n    - [[#^try-logical|Try logical replication]]\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "try-logical",
+            "title": "Try logical replication",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Try logical replication"
+      }
     }
   ]
 }

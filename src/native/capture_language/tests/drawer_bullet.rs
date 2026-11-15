@@ -119,6 +119,39 @@ fn editor_reports_drawer_needs_and_all_caps_spans() {
     assert!(childless_caps.sub_bullets[0].drawer.is_none());
 }
 
+#[test]
+fn punctuated_drawer_reports_a_drawer_bullet_span() {
+    // `@route+id` / `- WHAT IS SASE?` / `  - note` files into the drawer.
+    let caps = editor("@foo+bar\n- WHAT IS SASE?\n  - a note");
+    assert!(
+        span_kinds(&caps).contains(&SpanKind::DrawerBullet),
+        "{:?}",
+        span_kinds(&caps)
+    );
+    assert_eq!(caps.sub_bullets[0].body, "WHAT IS SASE?");
+    assert!(caps.sub_bullets[0].drawer.as_ref().is_some_and(|drawer| {
+        drawer.exact && drawer.text == "WHAT IS SASE?"
+    }));
+
+    let parsed = execute("@foo+bar\n- WHAT IS SASE?\n  - a note")
+        .expect("punctuated drawer parses");
+    assert_eq!(parsed.sub_bullets[0].body, "WHAT IS SASE?");
+    assert!(parsed.sub_bullets[0].drawer.as_ref().is_some_and(|drawer| {
+        drawer.exact && drawer.text == "WHAT IS SASE?"
+    }));
+
+    // A quoted slug resolves to the punctuated title.
+    let quoted = scan_leading("#\"what is sase?\"", 0).expect("quoted");
+    let DrawerBulletHit::Complete {
+        title, selector, ..
+    } = quoted
+    else {
+        panic!("expected a complete quoted literal: {quoted:?}");
+    };
+    assert_eq!(title, "WHAT IS SASE?");
+    assert!(selector.exact);
+}
+
 /// The reserved-name diagnostics of one parse, as `(code, text)` pairs
 /// where `text` is the exact byte range the diagnostic points at.
 fn reserved_ranges(raw: &str) -> Vec<(&'static str, String)> {

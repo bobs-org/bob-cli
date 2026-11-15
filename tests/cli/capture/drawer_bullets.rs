@@ -126,6 +126,62 @@ fn same_line_note_is_not_under_task() {
 }
 
 #[test]
+fn punctuated_drawer_merges_into_the_existing_drawer() {
+    let temp = TempDir::new("bob-cli-drawer-punctuated-commit");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("foo.md"),
+        concat!(
+            "- [ ] #task Parent task [created::2026-01-01] ^bar\n",
+            "\t- WHAT IS SASE?\n",
+            "\t\t- first\n",
+            "\t\t- second\n",
+            "\t\t- third\n",
+        ),
+    );
+    let draft = "@foo+bar\n- WHAT IS SASE?\n  - fourth note";
+
+    let parse = parse_json(draft);
+    assert!(
+        !diagnostic_codes(&parse).contains(&"reserved_drawer".to_string()),
+        "{draft:?}: {parse}"
+    );
+
+    let (preview, commit) = preview_and_commit(&vault, draft);
+    let preview = preview.unwrap_or_else(|error| panic!("preview: {error}"));
+    assert_eq!(preview["dry_run"], serde_json::json!(true), "{preview}");
+    let commit = commit.unwrap_or_else(|error| panic!("commit: {error}"));
+    let notes = commit["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 1, "{commit}");
+    assert_eq!(
+        notes[0]["drawer"]["title"],
+        serde_json::json!("WHAT IS SASE?"),
+        "{commit}"
+    );
+    let file = fs::read_to_string(vault.join("foo.md")).expect("foo.md");
+    assert_eq!(file.matches("WHAT IS SASE?").count(), 1, "{file}");
+    assert!(file.contains("- fourth note"), "{file}");
+    let drawer_pos = file.find("WHAT IS SASE?").expect("drawer");
+    let third_pos = file.find("- third").expect("third");
+    let fourth_pos = file.find("- fourth note").expect("fourth");
+    assert!(
+        drawer_pos < third_pos && third_pos < fourth_pos,
+        "fourth note lands last in the drawer: {file}"
+    );
+
+    // A childless repeat is refused, never a second header.
+    let before = vault_files(&vault);
+    let childless = capture_error(&vault, "@foo+bar\n- WHAT IS SASE?");
+    assert_eq!(
+        childless["code"],
+        serde_json::json!("empty_drawer_bullet"),
+        "{childless}"
+    );
+    assert_eq!(vault_files(&vault), before, "refusal writes nothing");
+}
+
+#[test]
 fn childless_all_caps_stays_a_plain_bullet() {
     let temp = TempDir::new("bob-cli-drawer-bullet-nyc");
     let vault = temp.path().join("vault");

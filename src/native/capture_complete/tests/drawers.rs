@@ -765,6 +765,43 @@ fn bullet_menu_on_a_new_task_offers_recent_and_new_rows_only() {
 }
 
 #[test]
+fn punctuated_drawer_lists_under_task_with_exact_slug_reach() {
+    // `punctuation = sentence`, `slug_reach = exact`.
+    let temp = TempDir::new("bob-cli-punctuated-drawer-menu");
+    write_settings(temp.path());
+    write_file(
+        &temp.path().join("foo.md"),
+        concat!(
+            "---\ntype: [[area]]\n---\n",
+            "- [ ] #task Parent task ^bar\n",
+            "\t- WHAT IS SASE?\n",
+            "\t\t- first\n",
+            "\t\t- second\n",
+            "\t\t- third\n",
+        ),
+    );
+
+    // Bullet-start `- #` lists it under the task group, not refused, with
+    // the bare-title replacement.
+    let value = bullet(&temp, "@foo+bar\n- #");
+    let sase = row(&value, "task", "WHAT IS SASE?");
+    assert_eq!(sase.replacement, "WHAT IS SASE?\n  - ");
+    assert_eq!(sase.refused, None);
+    assert_eq!(sase.detail, "3 notes");
+
+    // Typing `- #what` keeps it as a prefix match.
+    let typed = bullet(&temp, "@foo+bar\n- #what");
+    assert_eq!(shape(&typed), ["task:WHAT IS SASE?", "new:WHAT"]);
+
+    // Glued `@route+id#what`: the title's slug is not a valid slug, so the
+    // row keeps the quoted fallback (`slug_reach = exact`).
+    let glued = menu(&temp, "note @foo+bar#what");
+    let sase = row(&glued, "task", "WHAT IS SASE?");
+    assert_eq!(sase.replacement, "#\"WHAT IS SASE?\"");
+    assert_eq!(sase.refused, None);
+}
+
+#[test]
 fn bullet_menu_on_a_new_project_note_creates_title_case_sections() {
     let temp = vault("bob-cli-bullet-menu-project-note");
     let value = bullet(&temp, "@foo^fresh@ Plan it\n- #");

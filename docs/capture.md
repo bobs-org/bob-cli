@@ -194,10 +194,10 @@ anything is written, and any failure rolls the whole batch back.
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
 | `#off`, `#on`, `#offclock`, `#off-clock`, `#untracked` | At an item edge, keep the clock tag as task text; it never selects a type |
 | `#` | Incomplete `#<type>` at a parent-line or nested-bullet edge: add a type (`#fix`) or write `\#` to keep a literal `#`; a first-level `- #` names a drawer under a task or a notebook section under a route-only `@nb` list / `%n` body; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
-| `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
+| `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`; punctuated drawers like `WHAT IS SASE?` are reached through the menu or `#"WHAT IS SASE?"`, since `#what-is-sase` does not select them) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
 | `- #future-work` | Drawer shortcut on a first-level bullet under a new task or new project note: nest notes beneath it; capture writes `- FUTURE WORK` |
-| `- FUTURE WORK` with nested notes | Drawer bullet: an ALL-CAPS title with nested notes is a drawer; a childless ALL-CAPS bullet stays a plain note |
+| `- FUTURE WORK` with nested notes | Drawer bullet: an ALL-CAPS title with nested notes is a drawer (grammar below; e.g., `WHAT IS SASE?`); a childless ALL-CAPS bullet stays a plain note |
 | `- #` | Incomplete drawer shortcut under a task, or incomplete notebook section under a route-only `@nb` list / `%n` body: add a name (`needs: ["drawer"]` / `["section"]`) or write `\#`; a complete childless shortcut needs nested notes (`needs: ["drawer_notes"]` / `["section_notes"]`) |
 | `- #Section` under `@nb` or `%n` | Notebook section bullet: nested one-line notes file under `## Section`; the selector line is never a note; `\#git` keeps a literal `#git` note |
 
@@ -1023,7 +1023,12 @@ On a new task or a new project note, a first-level bullet that starts with
 `#` is a drawer shortcut: `- #future-work` with nested notes writes
 `- FUTURE WORK` (the catalog's most-used spelling when the slug matches).
 A first-level ALL-CAPS title with nested notes is the same drawer
-(`- FUTURE WORK` / `  - try replication`). A childless ALL-CAPS bullet
+(`- FUTURE WORK` / `  - try replication`). A drawer title starts with
+`A-Z` or `0-9`, continues with `A-Z`, `0-9`, space, tab, and
+`& ' ( ) , . / -`, plus `?`, `!`, and `;` anywhere after the lead and `:`
+only as the final character (so `WHAT IS SASE?` and `OPTIONS:` qualify,
+but `NOTE: X`, `KEY:: VALUE`, and `OPTIONS::` do not), and contains at
+least one `A-Z`. A childless ALL-CAPS bullet
 stays a plain note. Same-line notes under `@route+id <note>` still nest,
 and a drawer shortcut there is refused (`drawer_bullet_position`). A
 drawer shortcut takes no same-line text (`drawer_bullet_text`); nest the
@@ -1620,8 +1625,9 @@ and reuses their indentation when possible.
 An optional `#<pomodoro>` component names the target: `@sase:deep-fix#bugs`
 links under the open Pomodoro named `BUGS` and leaves the current Pomodoro
 alone. The selector is a slug — ASCII-lowercase, internal whitespace collapsed
-to `-` — using `A-Z`, `a-z`, `0-9`, and `& ' ( ) + , . / -`. That is the
-drawer selector character set plus `+`. Matching is a whole-slug match in
+to `-` — using `A-Z`, `a-z`, `0-9`, and `& ' ( ) + , . / -`. That is its own
+explicit set: the drawer base characters plus `+`, without the drawer
+sentence punctuation (`?`, `!`, `;`, `:`). Matching is a whole-slug match in
 document order, else the first slug-prefix match, so `#bugs` and `#bug` both
 reach `BUGS`, and `#memory` still reaches `MEMORY` when `MEMORY WORK` appears
 first. Duplicate names resolve to the first open match; give the second a
@@ -5919,8 +5925,8 @@ metadata, and `^prj` keeps capture's documented `s:<N>` `[?]` rule.
 
 Authored child bullets are re-routed into the new note rather than nested
 under the captured line. A first-level authored bullet with at least one
-nested authored bullet **and** an ALL-CAPS title (letters, digits, spaces,
-and `& ' ( ) , . / -`, starting with a letter or digit) becomes a
+nested authored bullet **and** an ALL-CAPS drawer title (the drawer title
+grammar above, so `WHAT IS SASE?` and `OPTIONS:` qualify) becomes a
 `## Title Case` section appended at the end of the note, with its nested
 bullets copied in verbatim as `- <body>` lines. Title casing lowercases the
 body and uppercases the first character of every alphanumeric run, so
@@ -10820,10 +10826,11 @@ Assigns a canonical ALL-CAPS name to one open, unnamed Pomodoro in today's
 daily note. This is the only write needed to turn a nameable Pomodoro picker
 candidate into a selectable named Pomodoro. The command canonicalizes `--name`
 by trimming, collapsing internal whitespace to a single space, and
-ASCII-uppercasing, then requires the drawer title grammar plus `+`
-(`A-Z`, `0-9`, spaces, and `& ' ( ) + , . / -`, starting with a letter or
-digit). `+` is allowed in the rest of a Pomodoro name, not as the first
-character.
+ASCII-uppercasing, then requires the Pomodoro-name grammar
+(`A-Z`, `0-9`, spaces, tab, and `& ' ( ) + , . / -`, starting with a letter or
+digit, with at least one letter). `+` is allowed in the rest of a Pomodoro
+name, not as the first character. It never takes the drawer sentence
+punctuation (`?`, `!`, `;`, `:`).
 Uppercasing is deliberate: the vault's named-Pomodoro convention is ALL-CAPS,
 and case cannot affect the selector slug.
 

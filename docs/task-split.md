@@ -221,3 +221,4 @@ bob-plugins copies the file byte-for-byte; bob-cli is authoritative.
 | SP28 | Pomodoro line refused as `split_managed_line` |
 | SP29 | Checked checkbox refused as `split_not_splittable` |
 | SP30 | Section-bullet selection kind routes without an owner mention |
+| SP31 | Punctuated `WHAT IS SASE?` drawer entry splits inside its drawer |
