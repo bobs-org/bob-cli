@@ -16,7 +16,7 @@ use super::{
     journal,
     model::{GcalEvent, MyAnswer, ParsedNote},
     root::validate_root_candidate,
-    ui, DoctorArgs, GcalError,
+    snapshot, ui, DoctorArgs, GcalError,
 };
 use crate::native::google::doctor::{Check, CheckStatus};
 
@@ -201,37 +201,41 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     };
 
     if let Some(calendars) = calendars {
-        let mut missing = Vec::new();
-        for configured in config.calendars() {
-            let found = calendars
-                .iter()
-                .any(|calendar| calendar.matches_configured_id(&configured.id));
-            if !found {
-                missing.push(configured.id.clone());
+        let email = selected_account
+            .as_deref()
+            .expect("calendars are fetched only for a selected account");
+        match snapshot::resolve_synced_calendars(&config, email, &calendars) {
+            Ok(synced) => {
+                let names = synced
+                    .iter()
+                    .map(|calendar| {
+                        if calendar.primary {
+                            email.to_string()
+                        } else {
+                            super::render::display_title(
+                                calendar.mark.as_deref(),
+                                calendar.name(),
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                checks.push(Check {
+                    id: "calendars",
+                    status: CheckStatus::Ok,
+                    summary: format!("{} synced · {names}", synced.len()),
+                    fix: None,
+                });
             }
-        }
-        if missing.is_empty() {
-            let names: Vec<_> = config
-                .calendars()
-                .iter()
-                .map(|calendar| calendar.id.as_str())
-                .collect();
-            checks.push(Check {
-                id: "calendars",
-                status: CheckStatus::Ok,
-                summary: format!("{} reachable", names.join(", ")),
-                fix: None,
-            });
-        } else {
-            checks.push(Check {
+            Err(error) => checks.push(Check {
                 id: "calendars",
                 status: CheckStatus::Fail,
-                summary: format!("not reachable: {}", missing.join(", ")),
+                summary: error.message().to_string(),
                 fix: Some(
                     "run `bob gcal calendars` and set gcal.calendars to ids you own"
                         .to_string(),
                 ),
-            });
+            }),
         }
     }
 

@@ -481,12 +481,14 @@ pub(crate) fn choose_write_scope(
         };
     }
     if args.format.is_json() || !is_tty() {
+        let title = if args.format.is_json() {
+            candidate.event.title.clone()
+        } else {
+            candidate.display_title()
+        };
         return Err(GcalError::setup(
             "needs_scope",
-            format!(
-                "{} repeats; choose This event or All events",
-                candidate.event.title
-            ),
+            format!("{} repeats; choose This event or All events", title),
         )
         .with_hint("rerun with `-s event` or `-s series`"));
     }
@@ -555,18 +557,25 @@ pub(crate) fn choose_clear_scope(
             "no_note",
             "there is no private note to clear".to_string(),
         )),
-        _ if args.format.is_json() || !is_tty() => Err(GcalError::setup(
-            "needs_scope",
-            format!(
-                "{} has notes in both scopes; choose which one to clear",
-                candidate.event.title
-            ),
-        )
-        .with_hint("rerun with `-s event` or `-s series`")),
+        _ if args.format.is_json() || !is_tty() => {
+            let title = if args.format.is_json() {
+                candidate.event.title.clone()
+            } else {
+                candidate.display_title()
+            };
+            Err(GcalError::setup(
+                "needs_scope",
+                format!(
+                    "{} has notes in both scopes; choose which one to clear",
+                    title
+                ),
+            )
+            .with_hint("rerun with `-s event` or `-s series`"))
+        }
         _ => {
             eprintln!(
                 "{} repeats · choose the note scope to clear:",
-                candidate.event.title
+                candidate.display_title()
             );
             if event.is_some() {
                 eprintln!("  1  This event");
@@ -725,6 +734,7 @@ pub(crate) fn rebuild_candidate<S: HomeSource>(
         event,
         google_event: original.google_event.clone(),
         calendar_name: original.calendar_name.clone(),
+        calendar_mark: original.calendar_mark.clone(),
         day: original.day,
         time: original.time.clone(),
         sort_at: original.sort_at,
@@ -1665,6 +1675,13 @@ fn print_result(
         status_detail.to_string()
     };
     let status_detail = detail.as_str();
+    let human_status_detail =
+        if args.format.is_json() || candidate.event.title.is_empty() {
+            status_detail.to_string()
+        } else {
+            status_detail
+                .replace(&candidate.event.title, &candidate.display_title())
+        };
     if args.format.is_json() {
         let note_lines = note.map(note_lines_json).unwrap_or_default();
         let effective = effective_json(candidate, rendered);
@@ -1695,7 +1712,7 @@ fn print_result(
         ui::flush_stdout();
     } else {
         let styler = crate::native::style::Styler::detect();
-        println!("✎ {}", candidate.event.title);
+        println!("✎ {}", candidate.display_title());
         println!(
             "  {} · {} · from {} · {}",
             candidate.day.format("%a %b %d"),
@@ -1725,15 +1742,15 @@ fn print_result(
         if cleared {
             println!("✓ Cleared · Google's description decides again");
         } else if action == "preview" {
-            println!("Preview · {status_detail}");
+            println!("Preview · {human_status_detail}");
         } else if action == "unchanged" {
-            println!("✓ Unchanged · {status_detail}");
+            println!("✓ Unchanged · {human_status_detail}");
         } else if args.adopt {
             println!(
-                "✓ Noted · now live in Bob too: they survive the organizer's next update · {status_detail}"
+                "✓ Noted · now live in Bob too: they survive the organizer's next update · {human_status_detail}"
             );
         } else {
-            println!("✓ Noted · only in Bob · {status_detail}");
+            println!("✓ Noted · only in Bob · {human_status_detail}");
         }
         for warning in warnings {
             ui::warn(warning);

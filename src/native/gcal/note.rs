@@ -512,6 +512,7 @@ pub(crate) struct NoteCandidate {
     /// Google-only event, before private notes were layered over it.
     pub(crate) google_event: GcalEvent,
     pub(crate) calendar_name: String,
+    pub(crate) calendar_mark: Option<String>,
     pub(crate) day: NaiveDate,
     pub(crate) time: String,
     pub(crate) sort_at: DateTime<FixedOffset>,
@@ -522,6 +523,13 @@ pub(crate) struct NoteCandidate {
 }
 
 impl NoteCandidate {
+    pub(crate) fn display_title(&self) -> String {
+        super::render::display_title(
+            self.calendar_mark.as_deref(),
+            &self.event.title,
+        )
+    }
+
     pub(crate) fn recurring(&self) -> bool {
         self.event.series_id.is_some()
     }
@@ -703,6 +711,7 @@ pub(crate) fn fetch_candidates<S: HomeSource>(
                 event,
                 google_event,
                 calendar_name: calendar_name.clone(),
+                calendar_mark: configured.mark.clone(),
                 day,
                 time,
                 sort_at,
@@ -807,7 +816,8 @@ pub(crate) fn lookup_exact<S: HomeSource>(
     let (book, _) = journal::load_notes(vault).unwrap_or_default();
     let synced =
         snapshot::resolve_synced_calendars(config, account, calendars)?;
-    let mut hits: Vec<(String, GcalEvent, GcalEvent, String)> = Vec::new();
+    let mut hits: Vec<(String, GcalEvent, GcalEvent, String, Option<String>)> =
+        Vec::new();
     let mut tried: Vec<String> = Vec::new();
     for configured in &synced {
         if let Some(pinned) = pinned
@@ -843,11 +853,12 @@ pub(crate) fn lookup_exact<S: HomeSource>(
             event,
             google_event,
             calendar_name,
+            configured.mark.clone(),
         ));
     }
     if hits.len() > 1 && pinned.is_none() {
         let ids: Vec<String> =
-            hits.iter().map(|(id, _, _, _)| id.clone()).collect();
+            hits.iter().map(|(id, _, _, _, _)| id.clone()).collect();
         return Err(GcalError::setup(
             "ambiguous_calendar",
             format!(
@@ -857,7 +868,7 @@ pub(crate) fn lookup_exact<S: HomeSource>(
         )
         .with_hint("rerun with `-C <calendar>` to pin the calendar"));
     }
-    let Some((_, mut event, google_event, calendar_name)) =
+    let Some((_, mut event, google_event, calendar_name, calendar_mark)) =
         hits.into_iter().next()
     else {
         return Ok((None, tried));
@@ -925,6 +936,7 @@ pub(crate) fn lookup_exact<S: HomeSource>(
             event,
             google_event,
             calendar_name,
+            calendar_mark,
             day,
             time,
             sort_at,
@@ -1083,6 +1095,7 @@ fn run_list<S: HomeSource>(
     } else {
         print_list_human(
             args,
+            config,
             &window_from,
             &window_to,
             &listed,
@@ -2006,7 +2019,7 @@ pub(crate) fn pick_group_owned(
             position + 1,
             candidate.day.format("%a %b %d"),
             candidate.time,
-            candidate.event.title,
+            candidate.display_title(),
             candidate.organizer_name(),
             recurring,
             answer_chip(candidate.event.my_answer),
@@ -2088,6 +2101,7 @@ pub(crate) fn clone_candidate(candidate: &NoteCandidate) -> NoteCandidate {
         event: candidate.event.clone(),
         google_event: candidate.google_event.clone(),
         calendar_name: candidate.calendar_name.clone(),
+        calendar_mark: candidate.calendar_mark.clone(),
         day: candidate.day,
         time: candidate.time.clone(),
         sort_at: candidate.sort_at,
@@ -2118,7 +2132,7 @@ fn ambiguous_error(
             "\n  {} {}  {} (-i {} -C {})",
             candidate.day.format("%a %b %d"),
             candidate.time,
-            candidate.event.title,
+            candidate.display_title(),
             candidate.event.key.event_id,
             candidate.event.key.calendar_id,
         ));
@@ -2143,14 +2157,14 @@ pub(crate) fn pick_scope(
     };
     eprintln!(
         "{} repeats · {}s {} · {} · {}",
-        candidate.event.title,
+        candidate.display_title(),
         candidate.day.format("%A"),
         candidate.time,
         role,
         answer_chip(candidate.event.my_answer),
     );
     eprintln!("  1  This event   {}", candidate.day.format("%a %b %d"));
-    eprintln!("  2  All events   every {}", candidate.event.title);
+    eprintln!("  2  All events   every {}", candidate.display_title());
     eprint!("Which? [1] › ");
     let _ = io::stderr().flush();
     let line = read_line()?.unwrap_or_default();
@@ -2200,12 +2214,14 @@ pub(crate) fn resolve_show_scope(
         };
     }
     if args.format.is_json() || !is_tty() {
+        let title = if args.format.is_json() {
+            candidate.event.title.clone()
+        } else {
+            candidate.display_title()
+        };
         return Err(GcalError::setup(
             "needs_scope",
-            format!(
-                "{} repeats; choose This event or All events",
-                candidate.event.title
-            ),
+            format!("{} repeats; choose This event or All events", title),
         )
         .with_hint("rerun with `-s event` or `-s series`"));
     }
@@ -2399,7 +2415,7 @@ fn identity_line(candidate: &NoteCandidate) -> String {
         candidate.day.format("%b"),
         candidate.day.day(),
         time,
-        candidate.event.title,
+        candidate.display_title(),
         candidate.organizer_name(),
         answer_chip(candidate.event.my_answer),
     )
@@ -2801,6 +2817,7 @@ fn buffer_label(candidate: &NoteCandidate) -> String {
 
 fn print_list_human(
     args: &NoteArgs,
+    config: &GcalConfig,
     window_from: &NaiveDate,
     window_to: &NaiveDate,
     listed: &[&NoteCandidate],
@@ -2859,7 +2876,7 @@ fn print_list_human(
             "  {} {}  {:<32}  {:<10}  {}{}  {}",
             candidate.day.format("%a %b %d"),
             candidate.time,
-            candidate.event.title,
+            candidate.display_title(),
             scope_label,
             root_label,
             buffer_cell,
@@ -2881,7 +2898,10 @@ fn print_list_human(
         println!(
             "  {}  {:<32}  {:<10}  no longer on your calendar · {clear}",
             styler.yellow("⚠"),
-            orphan.title,
+            super::render::display_title(
+                config.mark_for(&orphan.calendar_id),
+                &orphan.title,
+            ),
             scope_label,
         );
     }
@@ -2901,10 +2921,11 @@ fn print_show_human(
 ) -> Result<(), GcalError> {
     use crate::native::style::Styler;
     let styler = Styler::detect();
+    let display_title = candidate.display_title();
     let title = if candidate.event.note.is_some() {
-        format!("✎ {}", candidate.event.title)
+        format!("✎ {display_title}")
     } else {
-        candidate.event.title.clone()
+        display_title
     };
     println!("{title}");
     println!(

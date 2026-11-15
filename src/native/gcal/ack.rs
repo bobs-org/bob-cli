@@ -49,6 +49,7 @@ struct StaleNotice {
     calendar_id: String,
     event_id: String,
     title: String,
+    mark: Option<String>,
     start: Option<String>,
     end: Option<String>,
 }
@@ -303,7 +304,7 @@ fn fetch_queue(
             if journal::ack_is_stale(receipt, &event.ack_seen()) {
                 stale.insert(
                     (event.key.calendar_id.clone(), event.key.event_id.clone()),
-                    stale_notice(event),
+                    stale_notice(event, item.calendar.mark.as_deref()),
                 );
             }
         }
@@ -379,7 +380,10 @@ fn fetch_queue(
                             event.key.calendar_id.clone(),
                             event.key.event_id.clone(),
                         ),
-                        stale_notice(&event),
+                        stale_notice(
+                            &event,
+                            config.mark_for(&event.key.calendar_id),
+                        ),
                     );
                 }
             }
@@ -479,11 +483,13 @@ fn row_from_snapshot(
     day: NaiveDate,
     stale: bool,
 ) -> AckRow {
+    let calendar_mark = item.calendar.mark.clone();
     AckRow {
         candidate: NoteCandidate {
             event: item.event,
             google_event: item.google_event,
             calendar_name: item.calendar.name().to_string(),
+            calendar_mark,
             day,
             time: item.time,
             sort_at: item.sort_at,
@@ -556,12 +562,13 @@ fn ends_after_now(
     local_end > now
 }
 
-fn stale_notice(event: &GcalEvent) -> StaleNotice {
+fn stale_notice(event: &GcalEvent, mark: Option<&str>) -> StaleNotice {
     let seen = event.ack_seen();
     StaleNotice {
         calendar_id: event.key.calendar_id.clone(),
         event_id: event.key.event_id.clone(),
         title: event.title.clone(),
+        mark: mark.map(str::to_string),
         start: seen.start,
         end: seen.end,
     }
@@ -614,7 +621,7 @@ fn print_queue_human(
             "  {} {} · {}\n    {}\n",
             candidate.day,
             candidate.time,
-            candidate.event.title,
+            candidate.display_title(),
             metadata.join(" · "),
         ));
         if row.stale {
@@ -637,7 +644,7 @@ fn print_queue_human(
         for item in &queue.stale {
             output.push_str(&format!(
                 "  ⚠ {} · {} · {} · ack stale · moved since ack?\n",
-                item.title,
+                super::render::display_title(item.mark.as_deref(), &item.title),
                 item.start.as_deref().unwrap_or("unknown time"),
                 item.calendar_id,
             ));
@@ -663,7 +670,7 @@ fn print_queue_human(
         for item in &queue.stale {
             ui::warn(&format!(
                 "{} · {} · {} · ack stale · moved since ack?",
-                item.title,
+                super::render::display_title(item.mark.as_deref(), &item.title),
                 item.start.as_deref().unwrap_or("unknown time"),
                 item.calendar_id,
             ));
@@ -1172,11 +1179,16 @@ fn select_query(
                 .take(10)
                 .map(|group| {
                     let candidate = &candidates[group.soonest];
+                    let title = if args.format.is_json() {
+                        candidate.event.title.clone()
+                    } else {
+                        candidate.display_title()
+                    };
                     format!(
                         "{} {} · {} (-i {} -C {})",
                         candidate.day,
                         candidate.time,
-                        candidate.event.title,
+                        title,
                         candidate.event.key.event_id,
                         candidate.event.key.calendar_id
                     )
@@ -1243,12 +1255,14 @@ fn choose_scope(
         };
     }
     if preview || !note::is_tty() {
+        let title = if args.format.is_json() {
+            candidate.event.title.clone()
+        } else {
+            candidate.display_title()
+        };
         return Err(GcalError::setup(
             "needs_scope",
-            format!(
-                "{} repeats; choose This event or All events",
-                candidate.event.title
-            ),
+            format!("{} repeats; choose This event or All events", title),
         )
         .with_hint("rerun with `-s event` or `-s series`"));
     }
@@ -1316,7 +1330,10 @@ fn print_selected_preview(
             "window": target_window_json(candidate.day),
             "queue": [],
             "waiting": { "count": 0, "events": [] },
-            "stale": stale.then(|| stale_json(&stale_notice(&candidate.event))).into_iter().collect::<Vec<_>>(),
+            "stale": stale.then(|| stale_json(&stale_notice(
+                &candidate.event,
+                candidate.calendar_mark.as_deref(),
+            ))).into_iter().collect::<Vec<_>>(),
             "counts": { "queue": 0, "waiting": 0, "stale": usize::from(stale) },
             "complete": false,
             "warnings": warnings,
@@ -1330,7 +1347,7 @@ fn print_selected_preview(
     };
     let mut output = format!(
         "Preview · would {label} {} ({})\n",
-        candidate.event.title,
+        candidate.display_title(),
         scope.as_str()
     );
     output.push_str(&format!(
@@ -1378,7 +1395,7 @@ fn print_selected_result(
         if stale {
             ui::warn(&format!(
                 "{} · ack stale · moved since ack?",
-                candidate.event.title
+                candidate.display_title()
             ));
         }
         for warning in warnings {
@@ -1409,7 +1426,7 @@ fn print_selected_result(
     } else {
         format!(
             "✓ Acked {} · {} scope",
-            candidate.event.title,
+            candidate.display_title(),
             scope.as_str()
         )
     };
@@ -1958,7 +1975,7 @@ fn render_card(
 ) -> Result<(), GcalError> {
     let preview = note::write::preview(candidate, vault, false)?;
     eprintln!("{}", session_progress(position, total));
-    for line in session_wrap(&candidate.event.title, "", "  ") {
+    for line in session_wrap(&candidate.display_title(), "", "  ") {
         eprintln!("{}", styler.bold(&line));
     }
     let mut meta = format!(
@@ -2213,7 +2230,7 @@ impl<'a> Session<'a> {
     ) -> ScopePick {
         eprintln!(
             "{} repeats · {} {} · {} · {}",
-            candidate.event.title,
+            candidate.display_title(),
             candidate.day.format("%A"),
             candidate.time,
             session_role(candidate),
@@ -2226,7 +2243,7 @@ impl<'a> Session<'a> {
         );
         eprintln!(
             "  2  All events   every {}{}",
-            candidate.event.title,
+            candidate.display_title(),
             if default_all { " (default)" } else { "" },
         );
         let prompt = if default_all {
@@ -2398,7 +2415,11 @@ impl<'a> Session<'a> {
         self.cards[index].state = CardState::Done;
         self.totals.acked += 1;
         self.refold()?;
-        eprintln!("✓ Acked {} · {} scope", event.title, scope.as_str());
+        eprintln!(
+            "✓ Acked {} · {} scope",
+            candidate.display_title(),
+            scope.as_str()
+        );
         eprintln!("  {}", session_writer_hint(self.config));
         Ok(())
     }
@@ -2434,13 +2455,13 @@ impl<'a> Session<'a> {
         if saved.newly_acked {
             eprintln!(
                 "✓ Noted {} · {} scope · acked",
-                candidate.event.title,
+                candidate.display_title(),
                 scope.as_str(),
             );
         } else {
             eprintln!(
                 "✓ Noted {} · {} scope",
-                candidate.event.title,
+                candidate.display_title(),
                 scope.as_str(),
             );
         }
@@ -2699,7 +2720,7 @@ impl<'a> Session<'a> {
     }
 
     fn do_skip(&mut self, index: usize) -> CardOutcome {
-        let title = self.cards[index].candidate.event.title.clone();
+        let title = self.cards[index].candidate.display_title();
         self.cards[index].state = CardState::Skipped;
         self.totals.skipped += 1;
         eprintln!("→ Skipped {title} · returns next run");
@@ -2745,7 +2766,7 @@ fn run_session(
         for item in &queue.stale {
             eprintln!(
                 "  ⚠ {} · {} · {} · ack stale · moved since ack?",
-                item.title,
+                super::render::display_title(item.mark.as_deref(), &item.title),
                 item.start.as_deref().unwrap_or("unknown time"),
                 item.calendar_id,
             );

@@ -253,6 +253,7 @@ pub(crate) struct SkippedEvent {
     pub title: String,
     pub calendar_id: String,
     pub event_id: String,
+    pub mark: Option<String>,
     pub reason: SkipReason,
 }
 
@@ -288,7 +289,7 @@ impl SkippedEvent {
         format!(
             "  {sigil} skipped {}  {}  {tail}",
             human_time(&self.time),
-            self.title
+            super::render::display_title(self.mark.as_deref(), &self.title)
         )
     }
 }
@@ -380,6 +381,7 @@ pub(crate) fn summarize(
                 title: event.title.clone(),
                 calendar_id: event.key.calendar_id.clone(),
                 event_id: event.key.event_id.clone(),
+                mark: listed.calendar.mark.clone(),
                 reason,
             });
         }
@@ -609,6 +611,7 @@ mod tests {
             title: "Design review".to_string(),
             calendar_id: "primary".to_string(),
             event_id: "reply".to_string(),
+            mark: None,
             reason,
         };
         let plain = Styler::plain();

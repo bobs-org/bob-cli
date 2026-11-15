@@ -191,6 +191,20 @@ pub(crate) fn row_title(mark: Option<&str>, title: &str) -> String {
     }
 }
 
+/// Calendar mark shown before an event title in human-readable output.
+pub(crate) fn display_title(mark: Option<&str>, title: &str) -> String {
+    let mark = mark.map(str::trim).filter(|mark| !mark.is_empty());
+    match mark {
+        Some(mark)
+            if title == mark || title.starts_with(&format!("{mark} ")) =>
+        {
+            title.to_string()
+        }
+        Some(mark) => format!("{mark} {title}"),
+        None => title.to_string(),
+    }
+}
+
 /// Escape a calendar title: collapse control and Unicode whitespace to
 /// a single space so a summary cannot forge daily-note lines, then the
 /// shared task-line escaper and the gcal pass (Tasks emoji, priority

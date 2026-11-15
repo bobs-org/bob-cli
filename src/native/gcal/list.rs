@@ -13,7 +13,7 @@ use super::{
     lifecycle::split_row_spans,
     model::MyAnswer,
     plan::journaled_title,
-    replaced,
+    render, replaced,
     skip::{restore_command, SkipReason},
     snapshot::{self, SnapshotEvent},
     ui, GcalError, ListArgs,
@@ -82,9 +82,25 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
         .calendars
         .iter()
         .map(|calendar| {
-            json!({"id": calendar.configured_id, "name": calendar.name()})
+            json!({
+                "id": calendar.configured_id,
+                "name": calendar.name(),
+                "mark": calendar.mark,
+            })
         })
         .collect();
+    let calendar_labels = snapshot
+        .calendars
+        .iter()
+        .map(|calendar| {
+            if calendar.primary {
+                snapshot.account.clone()
+            } else {
+                render::display_title(calendar.mark.as_deref(), calendar.name())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" + ");
     let events = &snapshot.events;
     // The VAULT column reads the same journal sync writes, plus the
     // day's note. A missing note means every row is still waiting;
@@ -206,7 +222,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
         print_table(
             day,
             &config,
-            &visible_calendars,
+            &calendar_labels,
             events,
             &counts,
             args.include_omitted,
@@ -404,7 +420,10 @@ fn event_title_plain(
     lines: usize,
     unacked: bool,
 ) -> String {
-    let mut title = event.event.title.clone();
+    let mut title = render::display_title(
+        event.calendar.mark.as_deref(),
+        &event.event.title,
+    );
     if event.event.note.is_some() {
         title.push_str(" ✎");
     }
@@ -423,7 +442,10 @@ fn event_title_styled(
     unacked: bool,
     styler: &Styler,
 ) -> String {
-    let mut title = event.event.title.clone();
+    let mut title = render::display_title(
+        event.calendar.mark.as_deref(),
+        &event.event.title,
+    );
     if event.event.note.is_some() {
         title.push(' ');
         title.push_str(&styler.dim("✎"));
@@ -679,6 +701,11 @@ fn print_json(
                 "time": event.time,
                 "title": event.event.title,
                 "calendar_id": event.event.key.calendar_id,
+                "calendar": {
+                    "id": event.calendar.configured_id,
+                    "name": event.calendar.name(),
+                    "mark": event.calendar.mark,
+                },
                 "event_id": event.event.key.event_id,
                 "answer": event.event.my_answer.as_str(),
                 "inclusion": event.inclusion.name(),
@@ -734,7 +761,7 @@ fn print_json(
 fn print_table(
     day: NaiveDate,
     config: &GcalConfig,
-    calendars: &[Value],
+    calendar_labels: &str,
     events: &[ListedEvent],
     counts: &Counts,
     include_omitted: bool,
@@ -748,15 +775,10 @@ fn print_table(
     past_open: &[(NaiveDate, String)],
 ) -> Result<(), GcalError> {
     let styler = Styler::detect();
-    let calendar_names = calendars
-        .iter()
-        .filter_map(|calendar| calendar.get("name").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join(", ");
     let mut output = format!(
         "{}\n",
         styler.cyan(&format!(
-            "Google Calendar · {} · {calendar_names} · {sync_state}",
+            "Google Calendar · {} · {calendar_labels} · {sync_state}",
             day.format("%a %Y-%m-%d")
         ))
     );
@@ -842,7 +864,10 @@ fn print_table(
             for warning in &root.warnings {
                 output.push_str(&styler.yellow(&format!(
                     "  warning · {} · {warning}",
-                    event.event.title
+                    render::display_title(
+                        event.calendar.mark.as_deref(),
+                        &event.event.title,
+                    )
                 )));
                 output.push('\n');
             }
@@ -850,7 +875,10 @@ fn print_table(
         if fragile_directives(event) {
             output.push_str(&styler.yellow(&format!(
                 "  ⚑ {}: its Bob lines live in the organizer's description and may vanish on their next update · bob gcal note -A -i {} -C {}",
-                event.event.title,
+                render::display_title(
+                    event.calendar.mark.as_deref(),
+                    &event.event.title,
+                ),
                 event.event.key.event_id,
                 event.event.key.calendar_id
             )));

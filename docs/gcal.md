@@ -314,6 +314,11 @@ command for the first offender (`bob gcal note -c -i … -C …`,
 the last sync held (fix: `bob gcal sync -F`) and shows the waiting reason when
 the last sync waited.
 
+The calendars check names the resolved sync set, with each non-primary mark
+before its calendar name (for example, `2 synced · you@example.com, 🎂 Birthdays`).
+Missing and duplicate configured calendars appear in the check summary with a
+fix to run `bob gcal calendars` and correct `gcal.calendars`.
+
 A failing check prints `✗ <check>  <problem>` plus `  fix: <one command or
 step>`. Exit 1 when any check fails; exit 0 when every check is `ok` or
 `warn` (matching `bob gkeep doctor`).
@@ -343,10 +348,12 @@ Journal rules doctor expects:
 
 ## Calendars
 
-`bob gcal calendars` lists each calendar's id, name, access role, colour,
-whether it is in the configured sync set, and its mapped root. Use the ids to
-fill `gcal.calendars`. Default format is a table; `-f json` prints
-`schema_version: 1` with `ok` and `calendars`.
+`bob gcal calendars` lists NAME, SYNC, MARK, ROOT, ROLE, COLOUR, and ID under
+the account name. Configured calendars appear first in config order; the rest
+follow Google's order in dim text. Unsynced calendars show `—` for MARK and
+ROOT. Use the ids to fill `gcal.calendars`. Default format is a table;
+`-f json` prints `schema_version: 1` with `ok` and `calendars`, including a
+`mark` value or `null` on every row.
 
 ## List
 
@@ -371,7 +378,12 @@ calendar is fetched with all pages; any transport failure, malformed event, or
 leftover page token fails the whole list rather than presenting a partial
 snapshot.
 
-The table shows local time, title, RSVP, selected root, and the VAULT column:
+The header names the sync set, using the account email for the primary
+calendar and `mark name` for marked calendars (for example,
+`you@example.com + 🎂 Birthdays`). The EVENT cell prefixes a marked event title;
+JSON keeps `title` bare and carries the source in `calendar`. The table shows
+local time, title, RSVP,
+selected root, and the VAULT column:
 what sync did, or would do, with the event — `task · MEET`, `task`,
 `context`, `waiting for note`, `waiting for Templater`,
 `lost · run sync -F` (the Events section was replaced), or
@@ -609,7 +621,8 @@ diagnostics.
 `status` (`written`, `unchanged`, `waiting`, `held`, or `dry_run`), `held`
 (`rows`, `written_at`, `detail`, `hint`, or `null`; populated when a replaced
 Events section is held), `rows`
-(`action`, `kind`, `time`, `title`, `root`, `source`, `off_clock`, deprecated
+(`action`, `kind`, `time`, `title`, `calendar_id`, `calendar` (`{id, name,
+mark}`), `root`, `source`, `off_clock`, deprecated
 `untracked`, `buffer` as `{"before_minutes", "after_minutes"}` or
 `null`, `description_lines`, the bullet lines this run wrote for the
 row, reasons included, 0 otherwise, and `detail`, the reason text of a
@@ -621,7 +634,9 @@ row, reasons included, 0 otherwise, and `detail`, the reason text of a
 `links_sorted`, `entries`),
 `warnings`, `deprecations`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
-section and for `waiting`). Human rows append the buffer label to the time
+section and for `waiting`). Human event rows begin with the calendar mark
+when one is configured; a title copied from the note is shown as stored.
+Human rows append the buffer label to the time
 (`~ task 12:00–13:00 −30m +15m  Lunch …`), and a dim `≡ N` when the run
 wrote N [description bullets](#description-bullets) for the row, reasons
 included
@@ -1224,12 +1239,13 @@ descriptions, or attendees.
 including the `last_sync` check.
 
 `calendars -f json`: `ok`, `calendars` (`id`, `name`, `access_role`, `color`,
-`primary`, `synced`, `root`).
+`primary`, `synced`, `mark` (string or null), `root`).
 
-`list -f json`: `day`, configured `calendars`, classified `events`,
+`list -f json`: `day`, configured `calendars` (`id`, `name`, `mark`), classified `events`,
 `counts`, `last_sync`, `past_open`, `warnings`, and `deprecations`. `-a`
 adds omitted event rows. Each event contains no provider description or
-attendee list, and carries `calendar_id`, `event_id`, `clock`,
+attendee list, and carries `calendar_id`, `calendar` (`{id, name, mark}`;
+`id` is the configured id), `event_id`, `clock`,
 `clock_source`, `clock_note`, `off_clock`, deprecated `untracked`, the
 `vault` state, `skip` (`{reason, detail, hint}` or `null`; see
 [Skipped events](#skipped-events)), `root.kind`, and a `note` summary
@@ -1243,7 +1259,11 @@ The raw `reason` values and existing `vault` strings are unchanged.
 `sync -f json`: `ok`, `day`, `path`, `status` (`written`, `unchanged`,
 `waiting`, `held`, `dry_run`), `force`, `rows`, `in_sync`, `skipped`,
 `pomodoro`, `waiting`, `held` (`{rows, written_at, detail, hint}` or `null`),
-`warnings`, `deprecations`, and `stamp`. `rows` entries gain a `note` summary (never note text). `skipped`
+`warnings`, `deprecations`, and `stamp`. `rows` entries carry `calendar_id`
+and `calendar` (`{id, name, mark}`); if a calendar is not configured, its
+name falls back to the id and its mark is `null`. Human sync rows show the
+mark once before the title; titles copied from the note keep their existing
+text. Rows also carry a `note` summary (never note text). `skipped`
 lists `{time, title, calendar_id, event_id, reason, detail, hint}` for every
 event the run leaves out; `rows` entries gain `detail`. A forced run sets
 `force: true`; restored rows use action `restored`, and forced span updates

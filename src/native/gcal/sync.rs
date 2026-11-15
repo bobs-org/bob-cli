@@ -147,6 +147,10 @@ struct ReportRow {
     kind: &'static str,
     time: String,
     title: String,
+    calendar: ReportCalendar,
+    /// True when `title` was copied from the note and already contains
+    /// the mark Bob last wrote there.
+    title_from_note: bool,
     root: Option<String>,
     source: Option<String>,
     off_clock: bool,
@@ -168,6 +172,46 @@ struct ReportRow {
     ack: Value,
     /// A live event receipt's captured times differ from this event.
     ack_stale: bool,
+}
+
+struct ReportCalendar {
+    id: String,
+    name: String,
+    mark: Option<String>,
+}
+
+impl ReportCalendar {
+    fn json(&self) -> Value {
+        json!({"id": self.id, "name": self.name, "mark": self.mark})
+    }
+}
+
+fn report_calendar(
+    snapshot: &snapshot::DaySnapshot,
+    calendar_id: &str,
+) -> ReportCalendar {
+    snapshot
+        .calendars
+        .iter()
+        .find(|calendar| calendar.configured_id == calendar_id)
+        .map(|calendar| ReportCalendar {
+            id: calendar.configured_id.clone(),
+            name: calendar.name().to_string(),
+            mark: calendar.mark.clone(),
+        })
+        .unwrap_or_else(|| ReportCalendar {
+            id: calendar_id.to_string(),
+            name: calendar_id.to_string(),
+            mark: None,
+        })
+}
+
+fn human_row_title(row: &ReportRow) -> String {
+    if row.title_from_note {
+        row.title.clone()
+    } else {
+        render::display_title(row.calendar.mark.as_deref(), &row.title)
+    }
 }
 
 struct SyncReport {
@@ -436,6 +480,7 @@ fn sync_day(
                 title: event.event.title.clone(),
                 calendar_id: event.event.key.calendar_id.clone(),
                 event_id: event.event.key.event_id.clone(),
+                mark: event.calendar.mark.clone(),
                 reason: SkipReason::events_replaced(day, is_today),
             });
         }
@@ -1513,6 +1558,8 @@ fn report_rows(
             },
             time: added.time_label.clone(),
             title: added.title.clone(),
+            calendar: report_calendar(snapshot, &added.calendar_id),
+            title_from_note: false,
             root: added.root.clone(),
             source: added.source.clone(),
             off_clock: added.off_clock,
@@ -1553,6 +1600,8 @@ fn report_rows(
             },
             time: restored.time_label.clone(),
             title: restored.title.clone(),
+            calendar: report_calendar(snapshot, &restored.calendar_id),
+            title_from_note: false,
             root: restored.root.clone(),
             source: restored.source.clone(),
             off_clock: restored.off_clock,
@@ -1597,6 +1646,8 @@ fn report_rows(
             },
             time: adopted.time_label.clone(),
             title: adopted.title.clone(),
+            calendar: report_calendar(snapshot, &adopted.calendar_id),
+            title_from_note: false,
             root: adopted.root.clone(),
             source: adopted.source.clone(),
             off_clock: adopted.off_clock,
@@ -1667,6 +1718,8 @@ fn report_rows(
             kind: "task",
             time,
             title,
+            calendar: report_calendar(snapshot, &gone.calendar_id),
+            title_from_note: false,
             root: None,
             source: None,
             off_clock: false,
@@ -1698,6 +1751,8 @@ fn report_rows(
             },
             time: updated.time_label.clone(),
             title: updated.title.clone(),
+            calendar: report_calendar(snapshot, &updated.calendar_id),
+            title_from_note: false,
             root: updated.root.clone(),
             source: updated.source.clone(),
             off_clock: updated.off_clock,
@@ -1742,6 +1797,8 @@ fn report_rows(
             },
             time: held.time_label.clone(),
             title: held.title.clone(),
+            calendar: report_calendar(snapshot, &held.calendar_id),
+            title_from_note: false,
             root: held.root.clone(),
             source: held.source.clone(),
             off_clock: held.off_clock,
@@ -1778,6 +1835,8 @@ fn report_rows(
             kind: "task",
             time: closed.time_label.clone(),
             title: closed.title.clone(),
+            calendar: report_calendar(snapshot, &closed.calendar_id),
+            title_from_note: false,
             root: closed.root.clone(),
             source: closed.source.clone(),
             off_clock: closed.off_clock,
@@ -1815,6 +1874,8 @@ fn report_rows(
             kind: "task",
             time: cancelled.time_label.clone(),
             title: format!("{} ({})", cancelled.title, cancelled.reason),
+            calendar: report_calendar(snapshot, &cancelled.calendar_id),
+            title_from_note: true,
             root: None,
             source: None,
             off_clock: false,
@@ -1836,6 +1897,8 @@ fn report_rows(
             kind: "context",
             time: String::new(),
             title: removed.reason.clone(),
+            calendar: report_calendar(snapshot, &removed.calendar_id),
+            title_from_note: true,
             root: None,
             source: None,
             off_clock: false,
@@ -1867,6 +1930,8 @@ fn report_rows(
             kind: "task",
             time: upgraded.time_label.clone(),
             title: upgraded.title.clone(),
+            calendar: report_calendar(snapshot, &upgraded.calendar_id),
+            title_from_note: false,
             root: upgraded.root.clone(),
             source: upgraded.source.clone(),
             off_clock: upgraded.off_clock,
@@ -1907,6 +1972,8 @@ fn report_rows(
             kind: "series",
             time: String::new(),
             title: learned.title.clone(),
+            calendar: report_calendar(snapshot, &learned.calendar_id),
+            title_from_note: false,
             root: Some(learned.root.clone()),
             source: Some(format!("learned from your {} edit", learned.day)),
             off_clock: false,
@@ -2351,6 +2418,8 @@ fn report_json(report: &SyncReport) -> Value {
                 "kind": row.kind,
                 "time": row.time,
                 "title": row.title,
+                "calendar_id": row.calendar.id,
+                "calendar": row.calendar.json(),
                 "root": row.root,
                 "source": row.source,
                 "off_clock": row.off_clock,
@@ -2478,7 +2547,7 @@ fn print_human(report: &SyncReport) {
                 Some(label) => format!("{} {label}", human_time(&row.time)),
                 None => human_time(&row.time),
             };
-            println!("  ✔ closed  {time}  {}", row.title);
+            println!("  ✔ closed  {time}  {}", human_row_title(row));
             continue;
         }
         let sigil = match row.action {
@@ -2515,7 +2584,10 @@ fn print_human(report: &SyncReport) {
                     .as_deref()
                     .map(|detail| format!("  {}", styler.dim(detail)))
                     .unwrap_or_default();
-                format!("{time}  {}{root}{source}{detail}", row.title)
+                format!(
+                    "{time}  {}{root}{source}{detail}",
+                    human_row_title(row)
+                )
             }
         };
         let bullets = if row.description_lines > 0 {
@@ -2758,7 +2830,7 @@ fn removed_row_text(
         parts.push(human_time(&row.time));
     }
     if !row.title.is_empty() {
-        parts.push(row.title.clone());
+        parts.push(human_row_title(row));
     }
     let mut tail = styler.dim(&skip.detail);
     if let Some(hint) = &skip.hint {

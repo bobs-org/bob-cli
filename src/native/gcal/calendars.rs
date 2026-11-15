@@ -29,7 +29,7 @@ fn list(args: &CalendarsArgs) -> Result<(), GcalError> {
     if args.format.is_json() {
         print_json(&calendars, &config);
     } else {
-        print_table(&calendars, &config);
+        print_table(&calendars, &config, &account);
     }
     Ok(())
 }
@@ -45,6 +45,7 @@ fn print_json(calendars: &[GogCalendar], config: &GcalConfig) {
                 "color": calendar.colour(),
                 "primary": calendar.primary,
                 "synced": config.syncs(&calendar.id, calendar.primary),
+                "mark": config.mark_for(&calendar.id),
                 "root": config.root_for(if calendar.primary {
                     "primary"
                 } else {
@@ -64,48 +65,72 @@ fn print_json(calendars: &[GogCalendar], config: &GcalConfig) {
     ui::flush_stdout();
 }
 
-fn print_table(calendars: &[GogCalendar], config: &GcalConfig) {
+fn print_table(calendars: &[GogCalendar], config: &GcalConfig, account: &str) {
     let styler = Styler::detect();
-    let rows: Vec<[String; 6]> = calendars
+    let mut ordered: Vec<(
+        &GogCalendar,
+        Option<&crate::native::config::GcalCalendarSettings>,
+    )> = Vec::new();
+    for configured in config.calendars() {
+        if let Some(calendar) = calendars
+            .iter()
+            .find(|calendar| calendar.matches_configured_id(&configured.id))
+            && !ordered.iter().any(|(seen, _)| seen.id == calendar.id)
+        {
+            ordered.push((calendar, Some(configured)));
+        }
+    }
+    for calendar in calendars {
+        if !ordered.iter().any(|(seen, _)| seen.id == calendar.id) {
+            ordered.push((calendar, None));
+        }
+    }
+    let rows: Vec<([String; 7], bool)> = ordered
         .iter()
-        .map(|calendar| {
-            let synced = if config.syncs(&calendar.id, calendar.primary) {
-                "yes"
-            } else {
-                "no"
-            };
-            let root_id = if calendar.primary {
-                "primary"
-            } else {
-                calendar.id.as_str()
-            };
-            [
-                calendar.id.clone(),
-                calendar.name().to_string(),
-                calendar.access_role.clone().unwrap_or_default(),
-                calendar.colour().unwrap_or("-").to_string(),
-                synced.to_string(),
-                config.root_for(root_id).to_string(),
-            ]
+        .map(|(calendar, configured)| {
+            let synced = configured.is_some();
+            let mark = configured
+                .and_then(|configured| configured.mark.as_deref())
+                .unwrap_or("—");
+            let root = configured.map_or_else(
+                || "—".to_string(),
+                |configured| config.root_for(&configured.id).to_string(),
+            );
+            (
+                [
+                    calendar.name().to_string(),
+                    if synced { "yes" } else { "no" }.to_string(),
+                    mark.to_string(),
+                    root,
+                    calendar.access_role.clone().unwrap_or_default(),
+                    calendar.colour().unwrap_or("-").to_string(),
+                    calendar.id.clone(),
+                ],
+                synced,
+            )
         })
         .collect();
-    let headers = ["ID", "NAME", "ROLE", "COLOUR", "SYNC", "ROOT"];
-    let widths: Vec<usize> = (0..6)
+    let headers = ["NAME", "SYNC", "MARK", "ROOT", "ROLE", "COLOUR", "ID"];
+    let widths: Vec<usize> = (0..7)
         .map(|col| {
             rows.iter()
-                .map(|row| style::display_width(&row[col]))
+                .map(|(row, _)| style::display_width(&row[col]))
                 .chain(std::iter::once(headers[col].len()))
                 .max()
                 .unwrap_or(0)
         })
         .collect();
-    println!("{}", styler.cyan("Google Calendar · calendars"));
+    println!(
+        "{}",
+        styler.cyan(&format!("Google Calendar · calendars · {account}"))
+    );
     println!(
         "{}",
         styler.dim(&format_row(&headers.map(str::to_string), &widths))
     );
-    for row in &rows {
-        println!("{}", format_row(row, &widths));
+    for (row, synced) in &rows {
+        let line = format_row(row, &widths);
+        println!("{}", if *synced { line } else { styler.dim(&line) });
     }
     ui::flush_stdout();
 }

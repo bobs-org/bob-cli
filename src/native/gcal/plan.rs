@@ -272,6 +272,7 @@ pub(crate) struct GoneRow {
 /// One cancelled Event Task, for the report.
 #[derive(Debug, Clone)]
 pub(crate) struct CancelledRow {
+    pub calendar_id: String,
     pub time_label: String,
     pub title: String,
     pub reason: String,
@@ -2071,6 +2072,7 @@ fn cancel_lifecycle_task(
             .unwrap_or_default(),
     );
     plan.rows_cancelled.push(CancelledRow {
+        calendar_id: calendar_id.to_string(),
         time_label: spans
             .as_ref()
             .map(|spans| spans.time.clone())
