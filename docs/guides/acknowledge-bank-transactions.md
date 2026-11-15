@@ -59,12 +59,14 @@ newest), and each `]b` steps to the next one. Ctrl+Enter on a waiting row
 opens the Category card.
 Bob's suggestion is highlighted: ↵ (or a second Ctrl+Enter) accepts it, a
 letter picks another category, Space files the row with no category, and
-Esc cancels. Each filing ticks the row and writes `[cat:: key]` in one
-undo step. The card stays open on the next waiting row, so the next key
-files it, and Esc leaves the cursor there. After the last
-row, a notice reports the session (rows, time, and accepted / picked /
-no-category counts) and names any other months that still hold waiting
-rows.
+Esc cancels. If none of the tiles fit, `+` (or unshifted `=`) opens a New
+category stage: type a Label, optionally a Group and Key, and Enter to add
+it and file this row. Esc closes the stage without adding. Each filing
+ticks the row and writes `[cat:: key]` in one undo step. The card stays
+open on the next waiting row, so the next key files it, and Esc leaves the
+cursor there. After the last row, a notice reports the session (rows, time,
+and accepted / picked / no-category counts) and names any other months that
+still hold waiting rows.
 
 Ctrl+Enter on a ticked row only unticks it: no card, no jump.
 **Bank: set category** opens the same card on any row later without
