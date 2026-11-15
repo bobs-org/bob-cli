@@ -8,6 +8,7 @@ pub(crate) mod config;
 pub(crate) mod config_report;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod config_spans;
+pub(crate) mod config_update;
 pub(crate) mod dates;
 pub(crate) mod ensure;
 pub(crate) mod grammar;

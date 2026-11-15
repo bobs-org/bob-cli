@@ -369,7 +369,7 @@ const BANK_MEMBERS: &[Member] = &[
     },
     Member {
         name: "config",
-        about: "Show the effective bank configuration",
+        about: "Show or update the bank configuration",
         leaf: Leaf {
             native_command: NativeCommand::BankConfig,
             script_command: None,
@@ -415,6 +415,7 @@ Bare `bob bank` runs the read-only list.
 Examples:
   bob bank                       List waiting rows
   bob bank config -f json        Effective setup, usage, and findings
+  bob bank config update -d -i envelope.json  Preview a setup edit
   bob bank report                 Report this month's totals
   bob bank ensure -D today        Ensure today's heading
   bob bank import ~/Downloads/*.qfx  Import posted transactions

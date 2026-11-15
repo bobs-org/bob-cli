@@ -432,6 +432,12 @@ fn document_shape() {
         entry.id == "bank-config-show"
             && entry.path == ["bank", "config", "show"]
     }));
+    assert!(catalog.excluded.iter().any(|row| {
+        row.path
+            .iter()
+            .map(String::as_str)
+            .eq(["bank", "config", "update"])
+    }));
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "albums-list" && entry.path == ["albums", "list"]

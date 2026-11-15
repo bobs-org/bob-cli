@@ -8,8 +8,8 @@ use clap::{
 };
 
 use super::{
-    ack, charts, check, config_report, dates, ensure, import_run, list, output,
-    report, scan, status,
+    ack, charts, check, config_report, config_update, dates, ensure,
+    import_run, list, output, report, scan, status,
 };
 use crate::native::env as bob_env;
 
@@ -126,12 +126,12 @@ pub(crate) fn build_cli_report() -> ClapCommand {
 
 pub(crate) fn build_cli_config() -> ClapCommand {
     ClapCommand::new("bob bank config")
-        .about("Show the effective bank configuration")
+        .about("Show or update the bank configuration")
         .long_about(
-            "Read the bank: mapping as bob uses it: resolved categories and hotkeys, account status, usage, rules, and located configuration findings. This command is read-only. Bare `bob bank config` runs `show`.",
+            "Read or write the bank: mapping. Bare `bob bank config` runs the read-only `show`. `update` applies a guarded JSON envelope of category and group ops: dry-run takes no lock, apply re-plans inside the vault lock, writes one file, verifies the post-image fingerprint, and makes one scoped `bank: config` commit. Labels never reach argv.",
         )
         .after_help(
-            "Examples:\n  bob bank config\n  bob bank config -f json\n  bob bank config show -b ~/bob -f json\n\nSee docs/bank.md for the setup and JSON contract.",
+            "Examples:\n  bob bank config\n  bob bank config -f json\n  bob bank config show -b ~/bob -f json\n  bob bank config update -d -i envelope.json\n  cat envelope.json | bob bank config update -f json\n\nSee docs/bank.md for the setup and JSON contract.",
         )
         .disable_help_flag(true)
         .subcommand_required(false)
@@ -145,6 +145,22 @@ pub(crate) fn build_cli_config() -> ClapCommand {
                 .arg(bob_dir_arg())
                 .arg(format_arg())
                 .arg(help_arg()),
+        )
+        .subcommand(
+            ClapCommand::new("update")
+                .about("Apply a guarded JSON envelope to bank:")
+                .long_about(
+                    "Apply ordered category and group ops from a JSON envelope: {schema_version, expect, ops}. `-i -` reads stdin, and omitted `-i` has the same meaning. An empty ops list is a valid no-op. Dry run (`-d`) previews diffs without a lock, commit, or sync. Apply takes the shared vault lock, pre-syncs, replans fresh, writes bank.md, verifies the installed fingerprint, and makes one scoped `bank: config (…)` commit. Validation or semantic refusal exits 2; runtime, lock, or transaction failures exit 1.",
+                )
+                .after_help(
+                    "Examples:\n  bob bank config update -d -i envelope.json\n  cat envelope.json | bob bank config update -f json\n  bob bank config update -i envelope.json\n\nSee docs/bank.md for the update envelope, ops, and refusal codes.",
+                )
+                .disable_help_flag(true)
+                .arg(bob_dir_arg())
+                .arg(dry_run_arg())
+                .arg(format_arg())
+                .arg(help_arg())
+                .arg(input_arg()),
         )
 }
 
@@ -245,12 +261,44 @@ fn help_arg() -> Arg {
 fn execute_config(matches: &ArgMatches) -> i32 {
     match matches.subcommand() {
         Some(("show", sub_matches)) => execute_config_show(sub_matches),
+        Some(("update", sub_matches)) => execute_config_update(sub_matches),
         None => execute_config_show(matches),
         Some((name, _)) => {
             eprintln!("bob bank config: unknown subcommand: {name}");
             2
         }
     }
+}
+
+fn execute_config_update(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let input = matches.get_one::<OsString>("input").cloned();
+    let envelope_text = match config_update::read_envelope_text(input.as_ref())
+    {
+        Ok(text) => text,
+        Err(failure) => {
+            let report = config_update::failed_from_read(dry_run, failure);
+            if json {
+                println!("{}", report.to_json());
+            } else {
+                config_update::print_human(&report);
+            }
+            return report.exit_code();
+        }
+    };
+    let report = if dry_run {
+        config_update::dry_run(&bob_dir, &envelope_text)
+    } else {
+        config_update::run_standalone(&bob_dir, &envelope_text, json)
+    };
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        config_update::print_human(&report);
+    }
+    report.exit_code()
 }
 
 fn execute_config_show(matches: &ArgMatches) -> i32 {
@@ -382,6 +430,15 @@ fn dry_run_arg() -> Arg {
         .short('d')
         .action(ArgAction::SetTrue)
         .help("Preview diffs without writing")
+}
+
+fn input_arg() -> Arg {
+    Arg::new("input")
+        .long("input")
+        .short('i')
+        .value_name("FILE")
+        .value_parser(OsStringValueParser::new())
+        .help("JSON envelope file; - reads stdin (default)")
 }
 
 fn restore_missing_arg() -> Arg {

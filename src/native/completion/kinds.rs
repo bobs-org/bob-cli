@@ -564,6 +564,12 @@ const TABLE: &[Entry] = &[
         arg: "files",
         kind: Kind::Files(None),
     },
+    // `bob bank config update -i` takes a JSON envelope file (`-` for stdin).
+    Entry {
+        path: &["bank", "config", "update"],
+        arg: "input",
+        kind: Kind::Files(None),
+    },
     Entry {
         path: &["attachments", "origin"],
         arg: "vault-path",

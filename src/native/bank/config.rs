@@ -19,8 +19,9 @@ const ACCOUNT_KEYS: &[&str] = &["label", "kind", "start"];
 const CATEGORY_KEYS: &[&str] = &["label", "hotkey", "group", "hidden"];
 const RULE_KEYS: &[&str] = &["match", "payee", "cat", "link"];
 const DEFAULT_STALE_AFTER: u32 = 10;
-const RESERVED_HOTKEY: char = 'q';
-const BUILTIN_GROUP: &str = "Money moves";
+pub(crate) const RESERVED_HOTKEY: char = 'q';
+pub(crate) const BUILTIN_GROUP: &str = "Money moves";
+pub(crate) const HOTKEY_ORDER: &str = "abcdefghijklmnopqrstuvwxyz1234567890";
 
 pub(crate) const BUILTIN_CATEGORIES: &[(&str, &str, &str)] = &[
     ("income", "💵", "Income"),
@@ -902,7 +903,7 @@ fn builtin_default_hotkey(key: &str) -> Option<char> {
     }
 }
 
-fn derive_hotkey(
+pub(crate) fn derive_hotkey(
     key: &str,
     label: &str,
     claimed: &std::collections::HashSet<char>,
@@ -929,7 +930,7 @@ fn normalize_hotkey_char(ch: char) -> Option<char> {
     is_hotkey_char(letter).then_some(letter)
 }
 
-fn is_hotkey_char(ch: char) -> bool {
+pub(crate) fn is_hotkey_char(ch: char) -> bool {
     ch != RESERVED_HOTKEY && (ch.is_ascii_lowercase() || ch.is_ascii_digit())
 }
 

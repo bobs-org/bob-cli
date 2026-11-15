@@ -18,7 +18,7 @@ Usage: bob bank [COMMAND]
 Commands:
   ack     Acknowledge waiting bank rows
   check   Check bank notes against the contract
-  config  Show the effective bank configuration
+  config  Show or update the bank configuration
   ensure  Ensure the month note and day heading exist
   import  Import posted bank transactions
   list    List waiting bank rows (default)
@@ -32,6 +32,7 @@ Bare `bob bank` runs the read-only list.
 Examples:
   bob bank                       List waiting rows
   bob bank config -f json        Effective setup, usage, and findings
+  bob bank config update -d -i envelope.json  Preview a setup edit
   bob bank report                 Report this month's totals
   bob bank ensure -D today        Ensure today's heading
   bob bank import ~/Downloads/*.qfx  Import posted transactions
@@ -113,16 +114,17 @@ See docs/bank.md for the bank contract.
 
 ## bob bank config
 
-Show the effective bank configuration
+Show or update the bank configuration
 
 ```text title="bob bank config --help"
-Read the bank: mapping as bob uses it: resolved categories and hotkeys, account status, usage, rules, and located configuration findings. This command is read-only. Bare `bob bank config` runs `show`.
+Read or write the bank: mapping. Bare `bob bank config` runs the read-only `show`. `update` applies a guarded JSON envelope of category and group ops: dry-run takes no lock, apply re-plans inside the vault lock, writes one file, verifies the post-image fingerprint, and makes one scoped `bank: config` commit. Labels never reach argv.
 
 Usage: bob bank config [OPTIONS] [COMMAND]
 
 Commands:
-  show  Show the effective bank setup (default)
-  help  Print this message or the help of the given subcommand(s)
+  show    Show the effective bank setup (default)
+  update  Apply a guarded JSON envelope to bank:
+  help    Print this message or the help of the given subcommand(s)
 
 Options:
   -b, --bob-dir <DIR>
@@ -141,6 +143,8 @@ Examples:
   bob bank config
   bob bank config -f json
   bob bank config show -b ~/bob -f json
+  bob bank config update -d -i envelope.json
+  cat envelope.json | bob bank config update -f json
 
 See docs/bank.md for the setup and JSON contract.
 ```

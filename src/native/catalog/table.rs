@@ -1561,6 +1561,11 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
                  from a terminal",
     },
     Excluded {
+        path: &["bank", "config", "update"],
+        reason: "JSON-input setup edit owned by the Setup card; run it \
+                 from a terminal",
+    },
+    Excluded {
         path: &["pomodoro", "notify"],
         reason: "Long-running notifier that never exits",
     },

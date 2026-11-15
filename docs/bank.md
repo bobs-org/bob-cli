@@ -17,6 +17,7 @@ bob bank [list] [-a] [-b DIR] [-f human|json] [-m MONTH]
 bob bank ack [ID...] [-b DIR] [-D DAY] [-d] [-f human|json]
 bob bank check [-b DIR] [-f human|json]
 bob bank config [show] [-b DIR] [-f human|json]
+bob bank config update [-b DIR] [-d] [-f human|json] [-i FILE]
 bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
 bob bank import [FILE...] [-a ALIAS] [-b DIR] [-d] [-F] [-f human|json]
 bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-w WEEK] [-y YEAR]
@@ -25,8 +26,10 @@ bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-
 - Every long option has a short alias; options stay alphabetical.
   Subcommands are alphabetical.
 - `list`, `report`, and `ensure` exit 0, or 1 on a runtime failure.
-- `config` exits 0 for a valid or teaching-empty setup, and 1 when the
-  configuration is missing or invalid.
+- `config show` exits 0 for a valid or teaching-empty setup, and 1 when
+  the configuration is missing or invalid.
+- `config update` exits 2 on envelope or semantic refusal, and 1 on
+  runtime, lock, or transaction failure.
 - `check` exits 1 on any error, 0 for warning-only, info-only, or clean
   reports, and 0 for the teaching empty state.
 - `ack` exits 2 when an ID is unknown or isn't a row, and changes nothing
@@ -35,12 +38,13 @@ bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-
 - `import` exits 2 on refused input or an unsafe/ambiguous batch, and 1
   on runtime failures.
 - Real I/O failures are reported on stderr and exit 1.
-- `check`, `config`, `list`, and `report` are read-only: vault bytes, index, and
-  HEAD are unchanged. `ensure` and `ack` are guarded writes with no
-  commit, which vault-sync carries. `import` is a guarded write with one
-  scoped `bank: import` commit plus pre/post sync (see
-  [Import](#import)). `-d` previews diffs without writing: no lock, no
-  Git, no sync, no journal append.
+- `check`, `config show`, `list`, and `report` are read-only: vault
+  bytes, index, and HEAD are unchanged. `ensure` and `ack` are guarded
+  writes with no commit, which vault-sync carries. `config update` is a
+  guarded write with one scoped `bank: config` commit plus pre/post
+  sync. `import` is a guarded write with one scoped `bank: import`
+  commit plus pre/post sync (see [Import](#import)). `-d` previews diffs
+  without writing: no lock, no Git, no sync, no journal append.
 - `-D` takes `today`, `yesterday`, `tomorrow`, or `YYYY-MM-DD`.
   `-m` takes `YYYY-MM`, `-w` takes `YYYY-Www` (ISO, Monday first), and
   `-y` takes `YYYY` (calendar year). `-p` takes one stats-strip period:
@@ -167,6 +171,68 @@ teaching-empty vault returns the same starter guidance without inventing a
 configuration. A rule match with a run of four or more digits gets a warning
 because digit masking prevents it from matching read-time hints; imports still
 use the rule.
+
+### `bob bank config update`
+
+The guarded writer. Envelope
+`{"schema_version": 1, "expect": "<fingerprint>", "ops": [...]}`.
+`-i FILE` reads that JSON; `-i -` and omitted `-i` read stdin. Labels
+never reach argv. An empty `ops` list is a valid no-op. Duplicate JSON
+keys, unknown versions, unknown ops, unknown keys, and wrong types
+refuse with structured `failure`.
+
+Ops, applied atomically in order then emitted through the entry editor:
+
+| Op | Payload | Effect |
+| --- | --- | --- |
+| `category.add` | `{label, group?, hotkey?, hidden?, after?\|before?}` | Derives the stored key from the label (emoji stripped, lowercased, non-alphanumerics → `_`, must match `[a-z][a-z0-9_]*`). Same-label collision refuses `category_exists` (suggesting unhide when hidden); any other key collision suffixes `_2`, `_3`. Pins bob's suggested free key unless `hotkey` is given. Default position is after the last member of the group. |
+| `category.set` | `{key, set{label, group, hotkey, hidden}, unset[hotkey, group]}` | The stored key never changes. Setting an undeclared built-in creates its override entry. Unsetting `hotkey` returns it to derivation. |
+| `category.reset` | `{key}` | Built-ins only: removes the override entry. |
+| `category.move` | `{key, before\|after}` | Reorders declared categories. |
+| `category.remove` | `{key}` | Only when the complete scan shows zero rows and zero rule references; otherwise `category_in_use`. Built-ins refuse `builtin_category`. |
+| `group.rename` | `{group, to}` | Renames the group on every declared member. |
+| `group.move` | `{group, before\|after}` | Moves the group's members as one block, preserving relative order. |
+
+The built-in `Money moves` group of undeclared built-ins refuses
+`group_builtin`. Hotkeys refuse `hotkey_taken` (naming the owner),
+`hotkey_reserved` (`q`), and `hotkey_invalid`.
+
+Every result carries `before_fingerprint`, `after_fingerprint`, one
+human `consequence` line plus `per_op[]`, `hotkeys {shifted[] {key,
+from, to}, free[]}`, the post-image `categories[]` (report shape),
+`inverse_ops`, `changes[] {path, diff}`, `commit {sha, subject}`,
+`sync {pre, post}`, `warnings`, and on refusal a typed `failure {code,
+message, hint, op_index, key_path, line, affected}`. Human output
+shows the consequence, the colored diff, hotkey table changes, then
+commit and sync lines.
+
+Writer guarantees:
+
+1. Dry run, cancel, refusal, and no-op are byte-identical: no lock, no
+   commit, no sync, no cache writes.
+2. The post-image re-parses through `parse_bank_config` to the planned
+   fingerprint; anything else refuses `post_image_mismatch` and writes
+   nothing.
+3. Only touched entries are re-emitted, in their own or their
+   neighbours' style. Sibling keys (`accounts`, `rules`,
+   `stale_after`, other top-level frontmatter) survive every op.
+4. Unpatchable YAML (anchors, aliases, tags, duplicate keys, comments
+   inside a flow value, multi-line flow values, tab indentation, a
+   flow-style `bank:`/`categories:` container) refuses
+   `unsupported_yaml`.
+5. `expect` guards concurrency: a fingerprint mismatch refuses
+   `stale_config`.
+6. Apply goes through the shared vault lock: pre-sync, one scoped
+   commit `bank: config (<short summary>)` (for example
+   `bank: config (+fast_food)` or `bank: config (3 edits)`),
+   post-sync, verify-installed rollback. A post-commit sync failure
+   reports "saved locally; sync failed"; retries re-sync only.
+7. `inverse_ops` revert the change as a normal edit with exact-byte
+   restoration where the span is unchanged, and refuse `undo_blocked`
+   when later rows now depend on what would be undone.
+
+When `bank:` is invalid, every op refuses (`invalid_config`: "fix
+bank: in YAML first"). Bob never edits a config it cannot fully parse.
 
 ## Bank month notes
 
