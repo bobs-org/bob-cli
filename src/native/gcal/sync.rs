@@ -496,7 +496,7 @@ fn sync_day(
     // snapshot row. A failed lookup makes the snapshot incomplete, so
     // nothing is written.
     let lifecycle =
-        resolve_absent(&snapshot, &occurrences, active_journal, &day)?;
+        resolve_absent(&snapshot, &occurrences, active_journal, &day, config)?;
 
     let plan = plan::plan_with_clock(
         &plan::SyncPlanInput {
@@ -664,6 +664,7 @@ fn sync_day(
                     &occurrences,
                     active_journal,
                     &day,
+                    config,
                 )?;
                 plan = plan::plan_with_clock(
                     &plan::SyncPlanInput {
@@ -1194,14 +1195,21 @@ fn needs_meet_type<S: HomeSource>(
 
 /// Verdicts for journaled occurrences with no included snapshot row:
 /// declined, deleted, or moved events cancel or remove untouched rows;
-/// anything else is left alone and reported once. A journaled row the
-/// user already deleted tombstones without a lookup. A failed lookup
-/// makes the whole snapshot incomplete, so nothing is written.
+/// anything else is left alone and reported once. A journaled row whose
+/// calendar id matches no configured entry is frozen: left alone,
+/// reported once, and never looked up, so a leftover day-2 all-day row
+/// cannot become a false Moved and a 404 cannot become a false Deleted.
+/// Past-day close, MEET refiling, and description/ack updates walk
+/// snapshot occurrences, so a frozen row is never cancelled, removed,
+/// retimed, refiled, or closed for leaving the config. A journaled row
+/// the user already deleted tombstones without a lookup. A failed
+/// lookup makes the whole snapshot incomplete, so nothing is written.
 fn resolve_absent(
     snapshot: &snapshot::DaySnapshot,
     occurrences: &[PlannedOccurrence],
     journal: &BTreeMap<(String, String), OccurrenceState>,
     day: &NaiveDate,
+    config: &GcalConfig,
 ) -> Result<Vec<LifecycleItem>, GcalError> {
     use std::collections::HashSet;
     let day_string = day.to_string();
@@ -1253,16 +1261,25 @@ fn resolve_absent(
                 _ => continue,
             },
             None => {
-                if transport.is_none() {
-                    let config = GcalConfig::resolve()?;
-                    transport = Some(Gog::resolve(
-                        crate::native::google::GCAL,
-                        config.gog(),
-                        config.timeout(),
-                    )?);
+                if !config
+                    .calendars()
+                    .iter()
+                    .any(|calendar| calendar.id == calendar_id)
+                {
+                    AbsentVerdict::LeftAlone(
+                        "calendar no longer synced".to_string(),
+                    )
+                } else {
+                    if transport.is_none() {
+                        transport = Some(Gog::resolve(
+                            crate::native::google::GCAL,
+                            config.gog(),
+                            config.timeout(),
+                        )?);
+                    }
+                    let gog = transport.as_ref().expect("gog resolved");
+                    lookup_verdict(gog, snapshot, &calendar_id, &event_id, day)?
                 }
-                let gog = transport.as_ref().expect("gog resolved");
-                lookup_verdict(gog, snapshot, &calendar_id, &event_id, day)?
             }
         };
         out.push(LifecycleItem {

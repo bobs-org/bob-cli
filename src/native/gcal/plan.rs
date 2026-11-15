@@ -1905,6 +1905,29 @@ fn apply_lifecycle(
             None,
         );
         let Some(line_index) = line_index else {
+            if let AbsentVerdict::LeftAlone(detail) = &item.verdict {
+                // A calendar that left the config is frozen, not deleted.
+                // Keep the journal identity so re-adding resumes the same
+                // row even when the line matcher cannot see it.
+                if detail == "calendar no longer synced" {
+                    let flagged =
+                        state.is_some_and(|state| state.flags.contains(detail));
+                    if !flagged {
+                        plan.kept.push(KeptNotice {
+                            calendar_id: item.calendar_id.clone(),
+                            event_id: item.event_id.clone(),
+                            title: if journaled.block_id.is_empty() {
+                                item.event_id.clone()
+                            } else {
+                                journaled.block_id.clone()
+                            },
+                            detail: detail.clone(),
+                            flag: detail.clone(),
+                        });
+                    }
+                    continue;
+                }
+            }
             // Already gone from the note: tombstone it so the event
             // never comes back, recording why it stays gone.
             plan.rows_gone.push(GoneRow {

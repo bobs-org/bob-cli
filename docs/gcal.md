@@ -1091,6 +1091,12 @@ render of its event:
   Calendar`, `Deleted in Google Calendar`, or `Moved to Fri 2026-10-31 in
   Google Calendar`. A cancel that empties an untimed MEET entry removes
   the entry.
+- A journaled row whose calendar is no longer in `gcal.calendars` is
+  frozen: the row stays in the note, the notice `calendar no longer
+  synced` fires once, and Bob never looks the event up. That is how a
+  leftover day-2 all-day row avoids a false Moved, and how a 404 avoids a
+  false Deleted. Re-adding the calendar resumes the same journal
+  identities. Link sorting may still reorder that row's MEET link.
 - One `[root::]` edit on an occurrence of a recurring event teaches the
   series: new rows in that series use the learned root (still validated),
   reported as `learned from your 2026-10-29 edit`. A later edit, including
@@ -1325,3 +1331,8 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
   today.
 - An off-clock event ending after the last reconcile before midnight does not
   settle.
+- Cross-calendar duplicates are not merged.
+- Switching `primary` to the literal account email (or back) changes
+  journal identity. Pick one spelling.
+- The contacts-birthday layer in Google's sidebar is not a CalendarList
+  calendar and is not syncable.

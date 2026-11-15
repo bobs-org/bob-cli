@@ -5821,3 +5821,244 @@ fn distinct_event_ids_on_one_marked_calendar_give_distinct_rows() {
         "{note}"
     );
 }
+
+fn primary_only_config() -> String {
+    format!(
+        "timezone: America/New_York\ngcal:\n  account: {ACCOUNT}\n  writer: test-host\n  colors:\n    tomato: job\n  calendars:\n    - id: primary\n"
+    )
+}
+
+fn calendar_event_lookups(fake: &FakeGog) -> Vec<Vec<String>> {
+    fake.calls()
+        .iter()
+        .filter(|call| {
+            call.windows(2).any(|pair| pair == ["calendar", "event"])
+        })
+        .cloned()
+        .collect()
+}
+
+fn day_note(env: &GcalEnv, date: &str) -> String {
+    let compact = date.replace('-', "");
+    fs::read_to_string(
+        env.vault().join(&date[..4]).join(format!("{compact}.md")),
+    )
+    .unwrap_or_else(|error| panic!("read {date} note: {error}"))
+}
+
+fn event_line(note: &str, needle: &str) -> String {
+    note.lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("no {needle} row:\n{note}"))
+        .to_string()
+}
+
+fn trip_event() -> Value {
+    json!({
+        "id": "trip",
+        "summary": "Trip",
+        "htmlLink": "https://calendar.google.com/event?eid=trip",
+        "start": {"date": "2026-10-30"},
+        "end": {"date": "2026-11-01"},
+        "status": "confirmed",
+        "eventType": "default",
+        "transparency": "transparent",
+        "organizer": {"self": true},
+        "attendees": [],
+    })
+}
+
+#[test]
+fn deconfigured_calendar_rows_freeze_without_lookup() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-deconfigured-freeze");
+    prepare(&env);
+    write_daily_note(
+        &env,
+        "2026-10-31",
+        "# Saturday 2026-10-31\n\n## Pomodoros\n",
+    );
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.add_birthdays_calendar();
+    fake.events_json_for(
+        "primary",
+        &events_envelope(vec![
+            simple_event(
+                "standup",
+                "Standup",
+                "2026-10-30T09:00:00-04:00",
+                "2026-10-30T09:30:00-04:00",
+            ),
+            simple_event(
+                "office-hours",
+                "Office hours",
+                "2026-10-31T14:00:00-04:00",
+                "2026-10-31T15:00:00-04:00",
+            ),
+        ]),
+    );
+    fake.events_json_for(
+        "bdays@group.calendar.google.com",
+        &events_envelope(vec![
+            trip_event(),
+            simple_event(
+                "cake",
+                "Cake tasting",
+                "2026-10-31T09:00:00-04:00",
+                "2026-10-31T10:00:00-04:00",
+            ),
+        ]),
+    );
+
+    let seeded =
+        sync_output(&env, &fake, &["-D", "2026-10-30", "-D", "2026-10-31"]);
+    assert_eq!(seeded.status.code(), Some(0), "{}", stderr(&seeded));
+    let day_two = day_note(&env, "2026-10-31");
+    let timed_row = event_line(&day_two, "Cake tasting");
+    let day_two_row = event_line(&day_two, "Trip");
+    assert!(
+        day_two_row.contains("· *day 2 of 2*"),
+        "expected a day-2 all-day row:\n{day_two_row}"
+    );
+    assert!(
+        calendar_event_lookups(&fake).is_empty(),
+        "seed sync looks up nothing: {:?}",
+        fake.calls()
+    );
+
+    // Lookups that would fire a false Deleted / Moved if freeze missed.
+    fake.event_lookup_for(
+        "bdays@group.calendar.google.com",
+        "cake",
+        r#"{"_fail": {"stderr": "Not Found: no such event", "code": 1}}"#,
+    );
+    fake.event_lookup_for(
+        "bdays@group.calendar.google.com",
+        "trip",
+        &json!({"event": trip_event()}).to_string(),
+    );
+
+    env.write_config(&primary_only_config());
+    let freeze = sync_output(&env, &fake, &["-D", "2026-10-31"]);
+    assert_eq!(freeze.status.code(), Some(0), "{}", stderr(&freeze));
+    let frozen = day_note(&env, "2026-10-31");
+    assert_eq!(
+        event_line(&frozen, "Cake tasting"),
+        timed_row,
+        "frozen timed row stays byte-identical:\n{frozen}"
+    );
+    assert_eq!(
+        event_line(&frozen, "Trip"),
+        day_two_row,
+        "frozen day-2 row stays byte-identical:\n{frozen}"
+    );
+    assert!(
+        frozen.contains("Office hours"),
+        "primary rows keep syncing:\n{frozen}"
+    );
+    let freeze_notices = format!("{}{}", stdout(&freeze), stderr(&freeze));
+    assert_eq!(
+        freeze_notices.matches("calendar no longer synced").count(),
+        2,
+        "each frozen row is reported once: {freeze_notices}"
+    );
+    assert!(
+        calendar_event_lookups(&fake).is_empty(),
+        "frozen rows are never looked up: {:?}",
+        fake.calls()
+    );
+
+    let again = sync_output(&env, &fake, &["-D", "2026-10-31"]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let again_notices = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(
+        !again_notices.contains("calendar no longer synced"),
+        "freeze notice is once-only: {again_notices}"
+    );
+    assert_eq!(
+        event_line(&day_note(&env, "2026-10-31"), "Cake tasting"),
+        timed_row
+    );
+    assert_eq!(
+        event_line(&day_note(&env, "2026-10-31"), "Trip"),
+        day_two_row
+    );
+    assert!(
+        calendar_event_lookups(&fake).is_empty(),
+        "rerun looks up nothing: {:?}",
+        fake.calls()
+    );
+
+    env.write_config(&two_calendar_config(
+        "bdays@group.calendar.google.com",
+        "🎂",
+    ));
+    let resumed = sync_output(&env, &fake, &["-D", "2026-10-31"]);
+    assert_eq!(resumed.status.code(), Some(0), "{}", stderr(&resumed));
+    let resumed_note = day_note(&env, "2026-10-31");
+    let event_rows = |needle: &str| {
+        resumed_note
+            .lines()
+            .filter(|line| line.starts_with("- ") && line.contains(needle))
+            .count()
+    };
+    assert_eq!(
+        event_rows("Cake tasting"),
+        1,
+        "resume must not duplicate cake:\n{resumed_note}"
+    );
+    assert_eq!(
+        event_rows("Trip"),
+        1,
+        "resume must not duplicate trip:\n{resumed_note}"
+    );
+    assert_eq!(
+        event_line(&resumed_note, "Cake tasting"),
+        timed_row,
+        "re-adding resumes the same timed identity:\n{resumed_note}"
+    );
+    assert_eq!(
+        event_line(&resumed_note, "Trip"),
+        day_two_row,
+        "re-adding resumes the same day-2 identity:\n{resumed_note}"
+    );
+    let keys: Vec<(String, String)> = journal_lines(&env)
+        .iter()
+        .filter(|line| line["kind"] == "gcal.row")
+        .filter(|line| {
+            matches!(
+                line["key"]["event_id"].as_str(),
+                Some("cake") | Some("trip")
+            )
+        })
+        .map(|line| {
+            (
+                line["key"]["calendar_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                line["key"]["event_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        keys.contains(&(
+            "bdays@group.calendar.google.com".to_string(),
+            "cake".to_string()
+        )),
+        "{keys:?}"
+    );
+    assert!(
+        keys.contains(&(
+            "bdays@group.calendar.google.com".to_string(),
+            "trip".to_string()
+        )),
+        "{keys:?}"
+    );
+}
