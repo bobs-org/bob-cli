@@ -2,10 +2,10 @@ use serde_json::json;
 
 use super::model::{
     BlockedTaskCandidate, Candidates, CaptureCompleteResult, CompleteError,
-    DependencyCandidate, OutputFormat, PomodoroNameCandidate,
-    ProjectTaskMoveCandidate, RelationCandidate, RelationLabelSuggestion,
-    TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
-    TaskParentCandidate, TaskTypeCandidate,
+    DependencyCandidate, NoteGotoCandidate, OutputFormat,
+    PomodoroNameCandidate, ProjectTaskMoveCandidate, RelationCandidate,
+    RelationLabelSuggestion, TaskCompleteCandidate, TaskGotoCandidate,
+    TaskLinkCandidate, TaskParentCandidate, TaskTypeCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::capture_task_wikilinks::WikilinkTaskCandidate;
@@ -187,6 +187,14 @@ pub(super) fn task_goto_line(item: &TaskGotoCandidate) -> (String, String) {
         detail.push_str(&format!("  · closed {closed}"));
     }
     (location, detail)
+}
+
+/// Human row for one `note_goto` candidate: `kind  title  · note_path`.
+pub(super) fn note_goto_line(item: &NoteGotoCandidate) -> (String, String) {
+    (
+        item.kind.as_str().to_string(),
+        format!("{}  · {}", item.title, item.note_path),
+    )
 }
 
 /// Human row for a `task_parent` candidate, using the plus marker so the
@@ -628,6 +636,9 @@ pub(super) fn candidate_lines(
         Candidates::TaskGoto(items) => {
             items.iter().map(task_goto_line).collect()
         }
+        Candidates::NoteGoto(items) => {
+            items.iter().map(note_goto_line).collect()
+        }
         Candidates::TaskParent(items) => {
             items.iter().map(task_parent_line).collect()
         }
@@ -842,6 +853,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::ActiveTask => "active_task",
         CompletionContext::TaskLink => "task_link",
         CompletionContext::TaskGoto => "task_goto",
+        CompletionContext::NoteGoto => "note_goto",
         CompletionContext::TaskParent => "task_parent",
         CompletionContext::TaskDependency => "task_dependency",
         CompletionContext::BlockedTask => "blocked_task",

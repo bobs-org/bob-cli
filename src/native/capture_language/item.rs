@@ -2212,6 +2212,13 @@ fn parse_capture_item_masked<'a>(
             }
         }
     }
+    // A whole-draft `//query` Go To Notes search is never executable: it
+    // rejects with the T4 teaching error before any other item parser --
+    // beside the T3 `/` check, before the `&` dependency scan, and so
+    // before the `:` refusal. Forced flags do not change this.
+    if let Some(token) = note_goto_query_token(item) {
+        return Err(note_goto_picker_error(token.text));
+    }
     // A whole-draft `/query` Go To search is never executable: it
     // rejects with the T3 teaching error before any other item parser --
     // before the `&` dependency scan, and so before the `:` refusal.

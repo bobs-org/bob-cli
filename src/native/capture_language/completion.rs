@@ -52,6 +52,11 @@ pub(crate) enum CompletionContext {
     /// replacement covers the whole token, sigil included, so refetching
     /// at `replacement.start` returns the unfiltered list.
     TaskGoto,
+    /// A whole-draft `//query` Go To Notes search over the living-notes
+    /// catalog. The query is the token text between `//` and the cursor
+    /// (empty at the token start, at offset 1, and at offset 2) and the
+    /// replacement covers the whole token, sigil included.
+    NoteGoto,
     /// A bare-plus task search across the capture-target catalog. Accept
     /// inserts a complete `@route+block-id` parent marker.
     TaskParent,
@@ -231,6 +236,36 @@ pub(super) fn task_goto_completion_field_at(
     };
     Some(CompletionField {
         context: CompletionContext::TaskGoto,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (token.start, token.end),
+        bare_name: false,
+    })
+}
+
+/// Complete a whole-draft `//query` Go To Notes search: the query is the
+/// token text between `//` and the cursor (empty at the token start, at
+/// offset 1, and at offset 2), and the replacement covers the whole
+/// token including the sigil, so refetching at `replacement.start`
+/// returns the unfiltered snapshot. The cursor may sit anywhere in
+/// `[token.start, token.end]`, including just before the sigil.
+pub(super) fn note_goto_completion_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let token = note_goto_query_token(item)?;
+    if cursor < token.start || cursor > token.end {
+        return None;
+    }
+    let relative = cursor - token.start;
+    let query = if relative <= 2 {
+        String::new()
+    } else {
+        token.text.get(2..relative)?.to_string()
+    };
+    Some(CompletionField {
+        context: CompletionContext::NoteGoto,
         route: None,
         block_id: None,
         query,
@@ -2338,6 +2373,15 @@ pub(crate) fn completion_field_at_with(
         )
     {
         return field;
+    }
+
+    // A whole-draft `//` token completes Go To Notes instead of offering
+    // `@` route completion. This runs before `/`, `!`, `:`, and `^`;
+    // those claims are disjoint, and `task_goto_query_token` already
+    // rejects any token with a second `/`.
+    if leading && let Some(field) = note_goto_completion_field_at(item, cursor)
+    {
+        return Some(field);
     }
 
     // A whole-draft `/` token completes Go To searches instead of

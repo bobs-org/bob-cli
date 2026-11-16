@@ -493,6 +493,32 @@ pub(super) fn task_goto_query_token<'a>(
     (item.source.trim() == token.text).then_some(*token)
 }
 
+/// A whole-draft `//query` Go To Notes claim: a single-line, single-token
+/// item whose token starts with `//`, whose third byte (if any) is not
+/// `/`, and which is the whole draft (`item.source` trimmed). The
+/// returned token covers the whole query including the sigil. The query
+/// is everything after `//` and may contain further slashes. Execution,
+/// the editor parse, and completion all call this one predicate;
+/// `task_goto_query_token` already rejects any token with a second `/`.
+pub(super) fn note_goto_query_token<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<Token<'a>> {
+    let [line] = item.lines.as_slice() else {
+        return None;
+    };
+    let tokens = tokenize_line_with_spans(&line.raw);
+    let [token] = tokens.as_slice() else {
+        return None;
+    };
+    if !token.text.starts_with("//") {
+        return None;
+    }
+    if token.text.as_bytes().get(2) == Some(&b'/') {
+        return None;
+    }
+    (item.source.trim() == token.text).then_some(*token)
+}
+
 /// One whole-item `!` token claim, shared by execution, the editor parse,
 /// and completion. A query is still being typed (`!`, `!fix`, `!sase:`);
 /// a complete token names a task; anything extra on the item is a

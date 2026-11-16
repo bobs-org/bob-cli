@@ -5,9 +5,10 @@ use super::{
     candidates::{
         active_task_candidates, apply_relationship_picker,
         blocked_task_candidates, dependency_candidates, link_candidates,
-        relation_candidates, relation_label_suggestions, route_candidates,
-        task_candidates, task_complete_candidates, task_goto_candidates,
-        task_link_candidates, task_parent_candidates, TaskSearch,
+        note_goto_candidates, relation_candidates, relation_label_suggestions,
+        route_candidates, task_candidates, task_complete_candidates,
+        task_goto_candidates, task_link_candidates, task_parent_candidates,
+        TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
@@ -68,21 +69,28 @@ pub(super) fn build_result(
 pub(super) fn build_result_for(
     request: &CompleteRequest<'_>,
 ) -> Result<CaptureCompleteResult, CompleteError> {
-    let directive_owns_cursor =
-        capture_language::completion_field_at(request.raw_text, request.cursor)
-            .is_some_and(|field| field.context == CompletionContext::Directive);
+    let cursor_field =
+        capture_language::completion_field_at(request.raw_text, request.cursor);
+    let directive_owns_cursor = cursor_field
+        .as_ref()
+        .is_some_and(|field| field.context == CompletionContext::Directive);
+    // `-n`/`-F` are record-field assists. A whole-draft `//` token is
+    // `note_goto`; those flags must not steal the catalog snapshot.
+    let note_goto_owns_cursor = cursor_field
+        .as_ref()
+        .is_some_and(|field| field.context == CompletionContext::NoteGoto);
     if !directive_owns_cursor
         && let Some(mut result) = template_completion_gate(request)?
     {
         result.initial_selection = initial_selection(request.raw_text, &result);
         return Ok(result);
     }
-    if request.next_missing_field {
+    if request.next_missing_field && !note_goto_owns_cursor {
         let mut result = super::records::next_missing_field(request)?;
         result.initial_selection = initial_selection(request.raw_text, &result);
         return Ok(result);
     }
-    if request.record_field.is_some() {
+    if request.record_field.is_some() && !note_goto_owns_cursor {
         let mut result = super::records::named_field(request)?;
         result.initial_selection = initial_selection(request.raw_text, &result);
         return Ok(result);
@@ -164,6 +172,7 @@ fn build_result_inner(
             | CompletionContext::ActiveTask
             | CompletionContext::TaskLink
             | CompletionContext::TaskGoto
+            | CompletionContext::NoteGoto
             | CompletionContext::TaskParent
             | CompletionContext::TaskDependency
             | CompletionContext::BlockedTask
@@ -212,6 +221,7 @@ fn build_result_inner(
             relation_merge: None,
             relation_successor: None,
             picker: None,
+            note_goto: None,
             hidden_count: None,
             one_off: None,
             project_task_move: None,
@@ -280,6 +290,7 @@ fn build_result_inner(
                 action_continuation_aliases: None,
                 relationship: None,
             }),
+            note_goto: None,
             hidden_count: None,
             one_off: None,
             project_task_move: None,
@@ -380,6 +391,7 @@ fn build_result_inner(
                 action_continuation_aliases,
                 relationship: None,
             }),
+            note_goto: None,
             project_task_move: Some(built.context),
             hidden_count: None,
             record: None,
@@ -462,6 +474,7 @@ fn build_result_inner(
             relation_merge: None,
             relation_successor: None,
             picker: None,
+            note_goto: None,
             hidden_count: None,
             one_off: None,
             project_task_move: None,
@@ -499,6 +512,7 @@ fn build_result_inner(
         )
         .is_some_and(|(_, _, hidden)| hidden);
     let mut theme_suggestion = None;
+    let mut note_goto = None;
     let (mut candidates, mut warnings) = match field.context {
         CompletionContext::Route => {
             (route_candidates(bob_dir, &field.query)?, Vec::new())
@@ -627,6 +641,12 @@ fn build_result_inner(
         }
         CompletionContext::TaskGoto => {
             task_goto_candidates(bob_dir, &field.query, closed_tasks)
+        }
+        CompletionContext::NoteGoto => {
+            let (candidates, warnings, meta) =
+                note_goto_candidates(bob_dir, &field.query);
+            note_goto = Some(meta);
+            (candidates, warnings)
         }
         CompletionContext::TaskParent => {
             task_parent_candidates(bob_dir, &field.query)
@@ -1125,6 +1145,7 @@ fn build_result_inner(
         relation_merge,
         relation_successor,
         picker,
+        note_goto,
         hidden_count,
         one_off: one_off.then_some(true),
         project_task_move: None,
@@ -1603,6 +1624,49 @@ fn picker_descriptor(
         }
         CompletionContext::ProjectTaskMove => {
             unreachable!("project task move handled above")
+        }
+        CompletionContext::NoteGoto => {
+            let marker_range = Replacement {
+                start: field.replacement.0,
+                end: field.replacement.1,
+            };
+            Some(PickerDescriptor {
+                kind: PickerKind::NoteGoto,
+                scope: PickerScope::Vault,
+                scope_token: "//".to_string(),
+                note_target: None,
+                marker_range,
+                trigger_removal_range: Replacement {
+                    start: field.replacement.0 + 1,
+                    end: field.replacement.1,
+                },
+                destination: None,
+                continuation: None,
+                action_continuation_keys: None,
+                action_continuation_aliases: None,
+                relationship: None,
+            })
+        }
+        CompletionContext::TaskGoto => {
+            let marker_range = Replacement {
+                start: field.replacement.0,
+                end: field.replacement.1,
+            };
+            let token = raw_text.get(marker_range.start..marker_range.end)?;
+            Some(PickerDescriptor {
+                kind: PickerKind::TaskGoto,
+                scope: PickerScope::Vault,
+                scope_token: "/".to_string(),
+                note_target: None,
+                marker_range,
+                trigger_removal_range: marker_range,
+                destination: None,
+                continuation: None,
+                action_continuation_keys: (token == "/")
+                    .then(|| vec!["/".to_string()]),
+                action_continuation_aliases: None,
+                relationship: None,
+            })
         }
         CompletionContext::TaskComplete => {
             // The replacement already covers the whole `!` token,

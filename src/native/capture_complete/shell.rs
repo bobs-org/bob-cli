@@ -763,6 +763,11 @@ pub(crate) fn shell_completion(
             // rewriting the draft, so the shell serves no rows.
             return Ok(Some(ShellCompletion { marker_start, rows }));
         }
+        CompletionContext::NoteGoto => {
+            // Nothing is insertable: Go To Notes rows open the note
+            // instead of rewriting the draft, so the shell serves no rows.
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
         CompletionContext::TaskParent => {
             let (mut candidates, _) = task_parent_candidates(bob_dir, "");
             if let Some(item) =

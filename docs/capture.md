@@ -36,6 +36,7 @@ workflow guide.
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
   - [Picking any open task with ':'](#picking-any-open-task-with)
   - [Going to a task with '/'](#going-to-a-task-with)
+  - [Going to a note with '//'](#going-to-a-note-with)
   - [Adding prerequisites with '&'](#adding-prerequisites-with)
   - [Blocking existing tasks with '*'](#blocking-existing-tasks-with)
   - [Relating existing tasks with '&' and '*'](#relating-existing-tasks)
@@ -130,6 +131,7 @@ anything is written, and any failure rolls the whole batch back.
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
 | `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
 | `/<query>` | Incomplete: pick any open task to open in Obsidian (`capture-parse` needs `task_goto`); accepting opens the task, and execution never captures it |
+| `//<query>` | Incomplete: pick a living vault note to open in Obsidian (`capture-parse` needs `note_goto`); accepting opens the note, and execution never captures it |
 | `+query` or terminal prose `+` | Incomplete: choose a parent task (`capture-parse` needs `task_parent`); accepting inserts `@route+block-id`, and execution never captures the unresolved selector |
 | lone `+` | Opens the same task picker in an editor; Escape leaves the valid +5m Pomodoro adjustment unchanged |
 | `&note:block-id` | Prerequisite task link: the captured (or explicitly selected) task depends on `note.md`'s `^block-id` task; nested notes use `&projects/foo:bar`, notes with spaces use `&"Shopping List":bar` |
@@ -1225,7 +1227,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 27`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 28`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -1951,7 +1953,7 @@ empty. Unlike `:`, the claim is per draft, not per item.
 | `/fix` | Query `fix` |
 | `/sase:deep-fix` | Query `sase:deep-fix` (a `:` inside the query is fine) |
 | `  /fix\n` | Query `fix` (surrounding whitespace is ignored) |
-| `//`, `/Users/x`, `/r/rust` | Prose: a second `/` |
+| `/Users/x`, `/r/rust` | Prose: a second `/` that is not leading (see [Going to a note with '//'](#going-to-a-note-with) for a leading `//`) |
 | `/a b`, `Buy /x` | Prose: several tokens |
 | `/x` with a child line | Prose: several lines |
 | `/x`, a blank line, then `Buy milk` | Prose: two items, both captured as usual |
@@ -1983,8 +1985,11 @@ omitted when absent), and `task_kind` (omitted when absent). There is no
 is the token text between the sigil and the cursor (empty at or just after
 the sigil); the replacement covers the whole token, sigil included, so
 refetching at `replacement.start` returns the unfiltered list. The response
-carries no `query` field and no `picker` descriptor, exactly like
-`task_link`. Human rows read `[status] text  · note_path:line`, with
+carries no `query` field. Each `task_goto` response also carries an additive
+`picker` descriptor: `{kind: "task_goto", scope: "vault", scope_token: "/",
+marker_range: <token>, trigger_removal_range: <token>}`. When the token is
+exactly `/`, it also carries `action_continuation_keys: ["/"]`, so a second
+`/` escalates to [Go To Notes](#going-to-a-note-with). Human rows read `[status] text  · note_path:line`, with
 `· scheduled YYYY-MM-DD` whenever the task carries a scheduled date and
 `· closed YYYY-MM-DD` for closed rows; the shell format yields no rows,
 because nothing is insertable.
@@ -2004,6 +2009,123 @@ from the vault catalog. Without the flag the output
 is unchanged. The navigation itself runs through bob-navigation-hotkeys'
 `obsidian://bob-goto-task` URI, whose contract is in the [Go to task URI
 reference](reference/plugins/goto-task-uri.md).
+
+### Going to a note with '//'
+
+Type `//` as the whole capture draft to fuzzy-search the living notes in the
+vault and open one in Obsidian. Picking a row opens that note — no line, ref,
+or block — through bob-navigation-hotkeys' `obsidian://bob-open-notes` URI
+([Open notes URI](reference/plugins/open-notes-uri.md)). Go To Notes never
+writes: no capture, no stamps, no ledger edits, no `.obsidian` touches.
+
+A draft is a Go To Notes query exactly when the whole draft is one
+whitespace-delimited token starting with `//` whose third byte, if any, is
+not `/`. The token is the sigil plus a query of any non-whitespace
+characters, possibly empty, and further slashes inside the query are fine.
+The claim is per draft, not per item.
+
+| Draft | Reading |
+| --- | --- |
+| `//` | Notes, query `""` |
+| `//cash` | Notes, query `cash` |
+| `//prj/sase` | Notes, query `prj/sase` |
+| `//2026-11-14` | Notes, query `2026-11-14` |
+| `  //cash\n` | Notes, query `cash` |
+| `/`, `/fix` | Tasks (see [Going to a task with '/'](#going-to-a-task-with)) |
+| `///`, `///x` | Prose (reserved for a future full-text mode) |
+| `/Users/x`, `/r/rust`, `/a/b` | Prose: the second `/` is not leading |
+| `// cash`, `//a b`, `Buy //x` | Prose: several tokens |
+| `//x` with a child line | Prose: several lines |
+| `//x`, a blank line, then `Buy milk` | Prose: two items, both captured as usual |
+| `@@work` on one line, then `//x` | Prose: `//x` routes to `work` as usual |
+
+`bob capture` (and `--dry-run`) refuses a claimed draft before any other item
+parser, beside the `/` check, so the whole batch rolls back and forced flags
+such as `-r` and `-s` change nothing. No vault file changes. The teaching
+error (T4) keeps the usual `capture item 1 starting on line L: …` prefix and
+reads `` `//cash` opens the Go To Notes picker; pick a note to open it in
+Obsidian — it never captures `` (the quoted token is the exact typed token,
+so a bare `//` reads `` `//` opens … ``).
+
+`bob capture-parse` reports a claimed draft as mode `incomplete` needing
+`note_goto`, with one `interactive_placeholder` span over the whole token,
+sigil included, and no diagnostics. A `@@` declaration never applies.
+
+`bob capture-complete` serves context `note_goto`. The query is the token
+text between `//` and the cursor; it is empty at the token start, at offset
+1, and at offset 2. The replacement covers the whole token, so refetching at
+`replacement.start` returns the unfiltered snapshot. The response carries no
+`query` field. Each response also carries:
+
+- `picker`: `{kind: "note_goto", scope: "vault", scope_token: "//",
+  marker_range: <token>, trigger_removal_range: {start: token.start + 1,
+  end: token.end}}`, with no continuation keys. Deleting the removal range
+  always leaves exactly `/`, which returns to Go To Tasks.
+- `note_goto`: `{vault_root: "<absolute vault path>", listed: <row count of
+  the unfiltered catalog>}`.
+
+`-C`/`--closed-tasks`, `-a`, `-n`, and `-F` do not affect this context.
+Unreadable or non-UTF-8 files go into the usual bounded, deduplicated
+`warnings` array and are skipped; they are never fatal.
+
+Each candidate carries `replacement` (always `""`; clients never insert it),
+`note_path` (the exact vault-relative path with extension; the app's row
+ID), `kind`, `title`, `match_keys` (non-empty; `match_keys[0]` equals
+`title`), optional `detail`, optional `status`, optional `hue` (Bob's hue
+name, the same `Hue` serialization the agenda uses), `rank` (kind tier
+0–8; lower sorts first at equal match score), optional `group`, and
+optional `depth` (omitted when 0). Human rows read `kind  title  ·
+note_path`. The shell format yields no rows, because nothing is insertable.
+
+**Catalog.** `//` lists the documents Bryan writes or reads as notes. It
+hides what bob or Obsidian owns as machinery, files that duplicate a listed
+note, and attachments that have their own opener. It never hides a real note
+for being old, empty, or unnamed: there are no `Untitled`/`tmp`/size
+heuristics. The scan is one walk of frontmatter-only reads (first 8 KiB per
+file) and never writes.
+
+Hidden during the walk:
+
+| Tier | Rule |
+| --- | --- |
+| Non-Markdown | Only regular `*.md` files are candidates; `.base` Views list separately; symlinked directories are never followed |
+| Machinery | Any dot-prefixed directory or file name at any depth; any `_`-prefixed directory at any depth, including `_meta/` |
+| Archive | The top-level `done/` tree only. A nested `projects/done/` and a root `done.md` stay live |
+| Library | Configured Highlights library roots (`lib`, `xlib`), top-level `old_lib/` / `ref_history/` / `lit_review/`, and any `X.md` whose sibling `X.pdf` exists |
+| Satellite | `YYYY/YYYYMMDD_{habit,done,poms,events}.md` under a top-level four-digit directory |
+
+Kinds (first match wins) and rank:
+
+| Kind | Rule | `rank` |
+| --- | --- | ---: |
+| `inbox` | An inbox file (`mac_inbox`, `inbox`, `gkeep_inbox`, `gmail_inbox`, …) | 0 |
+| `area` | Area frontmatter | 1 |
+| `project` | Open (non-terminal) project | 2 |
+| `notebook` / `album` | Notebook or album registry | 3 |
+| `bank` / `mail` / `note` / `view` | Bank hub or month; Gmail folder; everything else; Obsidian Bases (`.base`) | 4 |
+| `project` (closed) / `record` | Done or canceled project; record note | 5 |
+| `period` | Week, quarter, year, `all_time`, or frontmatter `type: [[day]]` | 6 |
+| `ref` | Frontmatter `type: [[ref]]` or under the configured ref directory | 7 |
+| `daily` | `YYYY/YYYYMMDD.md` under a top-level four-digit directory | 8 |
+
+**Titles and keys.** A daily's title is the ISO date `YYYY-MM-DD` and its
+`match_keys` are `[ISO date, stem]`; weekday aliases such as `2026-11-14 Sat`
+are never keys. Every other row uses a non-empty frontmatter `title:` or else
+the file stem, then `[title, stem when ≠ title, each frontmatter alias]`.
+
+**Empty-state map.** Map rows come first, in this group order, and every
+other listed row has no `group`: `today` (today's daily note, then the
+current ISO week note, each only when the file exists), `inbox` (capture
+targets order, `mac_inbox` first), `areas` (area tree order, `depth` capped
+at 2), `projects` (open projects in capture-targets order), `notebooks`,
+`albums`. Remaining rows sort by `(rank, within-rank key)`: dailies and
+periods newest-first by `note_path`, everything else by case-folded title
+then path.
+
+A non-empty query scores `match_keys` with the same matcher `:` uses (AND
+across whitespace terms). Primary matches come first by score descending;
+rows whose only match is `note_path` (without `.md`) come next; ties keep
+canonical position. There is never a row cap.
 
 ### Choosing a parent task with `+`
 
@@ -7122,7 +7244,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 27. Grammar 19
+`capture-parse` and `capture-complete` report grammar revision 28. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
 refuses an operator-only first-line body after an existing-task link start,
 teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
@@ -8536,7 +8658,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 27` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 28` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse consults local metadata but never
 executes the draft; a successful parse does not guarantee a successful
@@ -8903,7 +9025,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `drawer_notes`, `section_notes`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `drawer_notes`, `section_notes`, `task_type`, `active_task`, `task_link`, `task_goto`, `note_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, an unterminated `@route#"…` reports mode `incomplete` and
 needs `["section"]` with no diagnostic, while `@route+id#` with an empty drawer name reports mode
@@ -10063,7 +10185,7 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 27`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 28`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 
@@ -10240,7 +10362,7 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `project_task_move`, `pomodoro_name`, `pomodoro_start_name`, `pomodoro_past_name`, `task`,
-`drawer`, `active_task`, `task_type`, `directive`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
+`drawer`, `active_task`, `task_type`, `directive`, `task_link`, `task_goto`, `note_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
@@ -10271,6 +10393,13 @@ task_complete`, `scope_token: "!"`) instead. The `wikilink_task` context
 carries a vault-scoped `picker` descriptor (`kind: wikilink_task`,
 `scope_token: "(("`) whose `marker_range` is the `((query` token and whose
 `trigger_removal_range` runs from the second `(` to the range end. The
+`task_goto` context carries `{kind: "task_goto", scope: "vault",
+scope_token: "/", marker_range: <token>, trigger_removal_range: <token>}`
+and, on a bare `/` only, `action_continuation_keys: ["/"]`. The
+`note_goto` context carries `{kind: "note_goto", scope: "vault",
+scope_token: "//", marker_range: <token>, trigger_removal_range:
+{start: token.start + 1, end: token.end}}` with no continuation keys, plus
+a top-level `note_goto` object (`vault_root`, `listed`). The
 descriptor is omitted from all other contexts. For `Follow up ((s` at
 cursor 13:
 

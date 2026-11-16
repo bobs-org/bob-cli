@@ -569,6 +569,7 @@ pub(crate) fn parse_for_editor_with(
                 || item.mode == EditorMode::TaskComplete
                 || item.needs == [Need::TaskLink]
                 || item.needs == [Need::TaskGoto]
+                || item.needs == [Need::NoteGoto]
                 || item.needs == [Need::TaskComplete]
                 || item.pomodoro_close.is_some()
                 || item.pomodoro_past.is_some()
@@ -1109,6 +1110,63 @@ pub(super) fn parse_editor_task_link_item<'a>(
             section: None,
             block_id: None,
             needs: vec![Need::TaskLink],
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            pomodoro_past: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            list: None,
+            spans: vec![Span {
+                start: token.start,
+                end: token.end,
+                kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
+                title: None,
+                key: None,
+                section_action: None,
+            }],
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+            targets: Vec::new(),
+            merge_in: None,
+        },
+        declarations: Vec::new(),
+    })
+}
+
+/// A whole-draft `//query` Go To Notes picker search: a single-line,
+/// single-token item holding the whole draft reports `incomplete` needing
+/// `note_goto` with one `interactive_placeholder` span over the whole
+/// token (sigil included) and no diagnostics. A `@@` declaration never
+/// applies to it, exactly like `task_goto`.
+pub(super) fn parse_editor_note_goto_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    let token = note_goto_query_token(item)?;
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: String::new(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: vec![Need::NoteGoto],
             ref_listen: false,
             pomodoro_start: None,
             pomodoro_adjust: None,
@@ -4735,6 +4793,9 @@ pub(super) fn parse_editor_item_inner<'a>(
     // claims, no operator or picker forms.
     if item.list.is_some() {
         return parse_editor_list_item(item, options);
+    }
+    if let Some(note_goto) = parse_editor_note_goto_item(item) {
+        return note_goto;
     }
     if let Some(task_goto) = parse_editor_task_goto_item(item) {
         return task_goto;

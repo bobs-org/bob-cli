@@ -97,8 +97,9 @@ fn goto_completion_field_reports_sigil_relative_queries() {
 
 #[test]
 fn goto_claim_leaves_prose_byte_identical() {
-    // A second `/` stays prose.
-    for raw in ["//", "/Users/x", "/r/rust"] {
+    // A second `/` that is not a leading `//` stays prose. Whole-draft
+    // `//query` is Go To Notes (see `note_goto.rs`).
+    for raw in ["/Users/x", "/r/rust"] {
         execute(raw).expect(&format!("{raw} stays prose"));
         let parsed = editor(raw);
         assert_ne!(parsed.needs, vec![Need::TaskGoto], "{raw}");

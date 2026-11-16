@@ -45,10 +45,18 @@ fn set_files_opened(count: usize) {
     LAST_CATALOG_FILES_OPENED.set(count);
 }
 
+fn note_goto_owns(request: &CompleteRequest<'_>) -> bool {
+    capture_language::completion_field_at(request.raw_text, request.cursor)
+        .is_some_and(|field| field.context == CompletionContext::NoteGoto)
+}
+
 pub(super) fn try_complete(
     request: &CompleteRequest<'_>,
 ) -> Result<Option<CaptureCompleteResult>, CompleteError> {
     set_files_opened(0);
+    if note_goto_owns(request) {
+        return Ok(None);
+    }
     if request.next_missing_field {
         return Ok(Some(next_missing_field(request)?));
     }

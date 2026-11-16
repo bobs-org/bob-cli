@@ -9,10 +9,10 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 See [Capture contract](../capture.md).
 
 `@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
-capture directive. In completion, standalone `#` and `%` open menus.
+capture directive.
 
 Examples use synthetic notes (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
-Put options before drafts; `--` ends option parsing.
+Options precede drafts; `--` ends option parsing.
 
 ## Token index
 
@@ -41,6 +41,7 @@ Incomplete **picker** input cannot execute.
 | `^route:block-id` | Active-task spelling of a link | [`^route:block-id`](#caret-active-task) |
 | `:<query>` | **Picker:** choose any open task to link | [`:<query>`](#colon-picker) |
 | `/<query>` | **Picker:** choose any open task to open | [`/<query>`](#slash-picker) |
+| `//<query>` | **Picker:** choose a living note to open | [`//<query>`](#double-slash-picker) |
 | `+query` | **Picker:** choose a parent task | [`+query`](#plus-parent-picker) |
 | lone `+` | Editor parent picker; Escape leaves `+5m` unchanged | [lone `+`](#lone-plus) |
 | `&note:block-id` | Captured task depends on that prerequisite | [`&note:block-id`](#ampersand-prereq) |
@@ -126,12 +127,9 @@ A picker token is draft state. `capture-parse` reports its needs;
 `=#`) are incomplete too. A bare `=name` start is complete (`=bugs`); an empty `=#` needs a non-bare name (`pomodoro_name`).
 
 A signed count with extra prose (`+2 more`, `=3 more`) is an error.
-A sign or `=` followed by prose (`Plan +5`, `= foo`) stays task text. Capital `X` never closes; `X *job:cleanup` captures a
-task starting with the word `x`.
+A sign or `=` followed by prose (`Plan +5`, `= foo`) stays task text. Capital `X` never closes.
 
 ## Retired and rejected forms
-
-Bob teaches the replacement.
 
 | Typed | What happens |
 | --- | --- |
@@ -280,10 +278,9 @@ bob capture --dry-run -f json -- '@mac_inbox:triage'
 bob capture --dry-run -i 'mac_inbox.md#^triage=work' -- '@mac_inbox:triage'
 ```
 
-Both commands only preview. The second plans the link, then the move to
-`work.md` and link repairs; removing `--dry-run` from it commits the action
-and move together. Do not commit the first command before answering. New
-tasks and blocks with no status changes produce no candidates.
+Both preview. The second plans the link, then the move to `work.md`;
+dropping `--dry-run` commits them together. Do not commit the first
+before answering. New tasks and unchanged blocks produce no candidates.
 Destinations exclude inboxes; stale keys or refused moves abort the batch.
 
 Contract: [Routing inbox tasks out](../capture.md#routing-inbox-tasks-out).
@@ -536,6 +533,21 @@ bob capture: capture item 1 starting on line 1: `/queue` opens the Go To picker;
 ```
 
 Contract: [Going to a task with '/'](../capture.md#going-to-a-task-with).
+
+### `//<query>` {#double-slash-picker}
+
+Incomplete Go To Notes picker (`note_goto`); accepting opens notes in
+Obsidian without capture.
+
+```bash
+bob capture '//cash'
+```
+
+```text { .no-copy title="Output" }
+bob capture: capture item 1 starting on line 1: `//cash` opens the Go To Notes picker; pick a note to open it in Obsidian — it never captures
+```
+
+Contract: [Going to a note with '//'](../capture.md#going-to-a-note-with).
 
 ### `+query` {#plus-parent-picker}
 

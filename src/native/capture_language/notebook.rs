@@ -1500,6 +1500,7 @@ fn classify_item(
 fn item_has_explicit_operation(item: &CaptureItem<'_>) -> bool {
     if super::tokens::task_link_query_token(item).is_some()
         || super::tokens::task_goto_query_token(item).is_some()
+        || super::tokens::note_goto_query_token(item).is_some()
         || super::editor_parse::parse_editor_task_complete_item(item).is_some()
     {
         return true;

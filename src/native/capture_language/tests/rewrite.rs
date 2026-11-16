@@ -2164,6 +2164,16 @@ fn rewrite_draft_expands_slash_hash_alias() {
 }
 
 #[test]
+fn rewrite_draft_leaves_note_goto_and_task_goto_slashes_literal() {
+    for (raw, cursor) in [("//", 2), ("//cash", 6), ("/", 1)] {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+        assert_eq!(rewrite.edits, Vec::<TextEdit>::new(), "{raw:?}");
+    }
+}
+
+#[test]
 fn rewrite_draft_leaves_slash_hash_alias_literal() {
     for raw in [
         "/",

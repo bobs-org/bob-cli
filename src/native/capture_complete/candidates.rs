@@ -7,12 +7,12 @@ use std::{
 use super::model::{
     ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
     CandidateContinuation, Candidates, CompleteError, DependencyCandidate,
-    NotebookSectionCreate, PickerRelationEntry, PickerRelationship,
-    PickerRelationshipEntry, ProjectTaskMoveCandidate, ProjectTaskMoveContext,
-    RecordCreateCandidate, RelationCandidate, RelationLabelSuggestion,
-    Replacement, RouteCandidate, SectionCandidate, SectionMenuRow,
-    TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
-    TaskParentCandidate,
+    NoteGotoCandidate, NoteGotoContext, NotebookSectionCreate,
+    PickerRelationEntry, PickerRelationship, PickerRelationshipEntry,
+    ProjectTaskMoveCandidate, ProjectTaskMoveContext, RecordCreateCandidate,
+    RelationCandidate, RelationLabelSuggestion, Replacement, RouteCandidate,
+    SectionCandidate, SectionMenuRow, TaskCandidate, TaskCompleteCandidate,
+    TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
@@ -22,9 +22,9 @@ use crate::native::{
         EditorItemParse, ProjectTaskMoveDetail, RelationDirection,
         RelationEntry,
     },
-    capture_link_tasks, capture_targets, capture_tasks, config, note_tasks,
-    pomodoro, project_dependencies, task_complete, task_fields, task_move,
-    task_relations, task_status_hooks,
+    capture_link_tasks, capture_targets, capture_tasks, config, note_catalog,
+    note_tasks, pomodoro, project_dependencies, task_complete, task_fields,
+    task_move, task_relations, task_status_hooks,
 };
 
 pub(super) fn route_candidates(
@@ -1695,6 +1695,43 @@ pub(super) fn task_goto_candidates(
             .collect();
     let warnings = discovered.warnings;
     (Candidates::TaskGoto(candidates), warnings)
+}
+
+/// `note_goto` candidates for a whole-draft `//` token: every living
+/// note from `note_catalog`, in canonical order for an empty query and
+/// ranked by `match_keys` then `note_path` for a typed query. `-C`,
+/// `-a`, `-n`, and `-F` do not affect this context. `replacement` is
+/// always empty; `listed` on the companion object is the unfiltered
+/// catalog size.
+pub(super) fn note_goto_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>, NoteGotoContext) {
+    let catalog = note_catalog::scan(bob_dir);
+    let listed = catalog.rows.len();
+    let vault_root = catalog.vault_root.display().to_string();
+    let candidates: Vec<NoteGotoCandidate> =
+        note_catalog::rank(&catalog, query)
+            .into_iter()
+            .map(|row| NoteGotoCandidate {
+                replacement: String::new(),
+                note_path: row.note_path.clone(),
+                kind: row.kind,
+                title: row.title.clone(),
+                match_keys: row.match_keys.clone(),
+                detail: row.detail.clone(),
+                status: row.status.clone(),
+                hue: row.hue,
+                rank: row.rank,
+                group: row.group,
+                depth: row.depth,
+            })
+            .collect();
+    (
+        Candidates::NoteGoto(candidates),
+        catalog.warnings,
+        NoteGotoContext { vault_root, listed },
+    )
 }
 
 /// Closed-only `task_goto` rows from the vault-wide catalog, newest close

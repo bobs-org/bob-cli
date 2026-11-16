@@ -45,6 +45,7 @@ mod merge_in;
 mod multi_target;
 mod note_bullets;
 mod note_bullets_compose;
+mod note_goto;
 mod note_pull;
 mod notebook_create;
 mod notebook_notes;

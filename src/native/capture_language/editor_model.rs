@@ -382,6 +382,8 @@ pub(crate) enum Need {
     TaskLink,
     /// A whole-draft `/query` Go To picker is still open.
     TaskGoto,
+    /// A whole-draft `//query` Go To Notes picker is still open.
+    NoteGoto,
     /// A record route with no title: name the record before capture.
     RecordTitle,
     /// A record item has a first-level bullet with no `key::`: field-name
@@ -441,6 +443,7 @@ impl Need {
             Self::ActiveTask => "active_task",
             Self::TaskLink => "task_link",
             Self::TaskGoto => "task_goto",
+            Self::NoteGoto => "note_goto",
             Self::RecordTitle => "record_title",
             Self::RecordField => "record_field",
             Self::RecordValue => "record_value",

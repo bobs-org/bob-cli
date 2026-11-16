@@ -239,6 +239,7 @@ fn json_shape_is_stable() {
         relation_merge: None,
         relation_successor: None,
         picker: None,
+        note_goto: None,
         hidden_count: None,
         one_off: None,
         project_task_move: None,
@@ -250,7 +251,7 @@ fn json_shape_is_stable() {
 
     assert_eq!(pomodoro_json["context"], "pomodoro_name");
     assert_eq!(pomodoro_json["schema_version"], 1);
-    assert_eq!(pomodoro_json["grammar"], 27);
+    assert_eq!(pomodoro_json["grammar"], 28);
     assert_eq!(pomodoro_json["candidates"][0]["replacement"], "memory");
     assert_eq!(pomodoro_json["candidates"][0]["name"], "MEMORY");
     assert_eq!(pomodoro_json["candidates"][0]["requires_name"], false);
@@ -308,6 +309,7 @@ fn json_shape_is_stable() {
         relation_merge: None,
         relation_successor: None,
         picker: None,
+        note_goto: None,
         hidden_count: None,
         one_off: None,
         project_task_move: None,
@@ -634,6 +636,7 @@ fn human_output_is_plain_without_color() {
             relation_merge: None,
             relation_successor: None,
             picker: None,
+            note_goto: None,
             hidden_count: None,
             one_off: None,
             project_task_move: None,

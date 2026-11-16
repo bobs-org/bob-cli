@@ -324,7 +324,7 @@ fn capture_parse_goto_query_reports_incomplete_task_goto() {
 fn capture_parse_goto_prose_rows_keep_their_current_parse() {
     // A second `/`, several tokens, child lines, sibling items, and a `@@`
     // declaration never claim Go To.
-    for text in ["//", "/Users/x", "/r/rust", "/a b", "Buy /x"] {
+    for text in ["/Users/x", "/r/rust", "/a b", "Buy /x"] {
         let output = bob_command()
             .arg("capture-parse")
             .arg("-f")
@@ -374,7 +374,7 @@ fn capture_parse_goto_prose_rows_keep_their_current_parse() {
 }
 
 #[test]
-fn capture_complete_goto_query_reports_task_goto_without_query_or_picker() {
+fn capture_complete_goto_query_reports_task_goto_without_query() {
     let temp = TempDir::new("bob-cli-capture-task-goto-complete");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -405,7 +405,29 @@ fn capture_complete_goto_query_reports_task_goto_without_query_or_picker() {
             "{json}"
         );
         assert!(json.get("query").is_none(), "{json}");
-        assert!(json.get("picker").is_none(), "{json}");
+        let picker = json["picker"].as_object().expect("picker");
+        assert_eq!(picker["kind"], "task_goto", "{json}");
+        assert_eq!(picker["scope"], "vault", "{json}");
+        assert_eq!(picker["scope_token"], "/", "{json}");
+        assert_eq!(
+            picker["marker_range"],
+            serde_json::json!({"start": 0, "end": end}),
+            "{json}"
+        );
+        assert_eq!(
+            picker["trigger_removal_range"],
+            serde_json::json!({"start": 0, "end": end}),
+            "{json}"
+        );
+        if text == "/" {
+            assert_eq!(
+                picker["action_continuation_keys"],
+                serde_json::json!(["/"]),
+                "{json}"
+            );
+        } else {
+            assert!(picker.get("action_continuation_keys").is_none(), "{json}");
+        }
         assert_eq!(json["candidates"], serde_json::json!([]), "{json}");
     }
 }

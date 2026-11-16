@@ -124,6 +124,25 @@ pub(crate) enum NoteGroup {
 }
 
 impl NoteKindKey {
+    /// Snake-case kind key used in JSON and the text renderer.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Inbox => "inbox",
+            Self::Area => "area",
+            Self::Project => "project",
+            Self::Notebook => "notebook",
+            Self::Album => "album",
+            Self::Record => "record",
+            Self::Ref => "ref",
+            Self::Period => "period",
+            Self::Daily => "daily",
+            Self::Bank => "bank",
+            Self::Mail => "mail",
+            Self::Note => "note",
+            Self::View => "view",
+        }
+    }
+
     /// Tier rank: lower sorts first at equal match score.
     fn rank(self, closed_project: bool) -> u8 {
         match self {

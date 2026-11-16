@@ -68,9 +68,10 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 27` revision. Clients can use it to distinguish
+additive top-level `grammar: 28` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 27 adds the additive `record_field` need on record items
+envelope. Grammar 28 claims whole-draft `//query` as `note_goto` (previously
+prose). Grammar 27 adds the additive `record_field` need on record items
 with keyless first-level bullets. Grammar 26 adds notebook section bullets
 (`- #Section` under a route-only `@nb` list or `%n`) and the additive
 `section_action` span field. Grammar 24 restores the established notebook span labels and adds

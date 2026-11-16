@@ -99,6 +99,7 @@ fn is_whole_item_action(item: &capture_language::EditorItemParse) -> bool {
             item.needs.as_slice(),
             [Need::TaskLink]
                 | [Need::TaskGoto]
+                | [Need::NoteGoto]
                 | [Need::TaskComplete]
                 | [Need::ActiveTask]
         )

@@ -12,6 +12,8 @@ use crate::native::{
     capture_pomodoros::{self, PomodoroState},
     capture_targets::CaptureTargetKind,
     capture_task_wikilinks::WikilinkTaskCandidate,
+    note_catalog::{NoteGroup, NoteKindKey},
+    pomodoro_homes::Hue,
     pomodoro_themes::ThemeRef,
 };
 
@@ -754,6 +756,39 @@ pub(super) struct TaskGotoCandidate {
     pub(super) task_kind: Option<&'static str>,
 }
 
+/// One `note_goto` (Go To Notes picker) candidate: a living vault note
+/// from `note_catalog`. `replacement` is always `""` (clients never
+/// insert it; it is kept so the shared decoder still works). `note_path`
+/// is the exact vault-relative path with extension and is the app's row
+/// ID. `match_keys[0]` equals `title`. `depth` is omitted when 0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct NoteGotoCandidate {
+    pub(super) replacement: String,
+    pub(super) note_path: String,
+    pub(super) kind: NoteKindKey,
+    pub(super) title: String,
+    pub(super) match_keys: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hue: Option<Hue>,
+    pub(super) rank: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) group: Option<NoteGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) depth: Option<u8>,
+}
+
+/// Top-level `note_goto` object: the vault root and the unfiltered
+/// catalog row count. Present only in the `note_goto` context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct NoteGotoContext {
+    pub(super) vault_root: String,
+    pub(super) listed: usize,
+}
+
 /// One `task_parent` picker candidate: a linkable open task in the capture
 /// target catalog, with a parent-task `@route+id` replacement. ID-less
 /// candidates have no replacement and must go through Add block ID first.
@@ -939,6 +974,8 @@ pub(super) enum PickerKind {
     ProjectTaskMove,
     TaskComplete,
     WikilinkTask,
+    TaskGoto,
+    NoteGoto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1097,6 +1134,7 @@ pub(super) enum Candidates {
     ActiveTask(Vec<ActiveTaskCandidate>),
     TaskLink(Vec<TaskLinkCandidate>),
     TaskGoto(Vec<TaskGotoCandidate>),
+    NoteGoto(Vec<NoteGotoCandidate>),
     TaskParent(Vec<TaskParentCandidate>),
     ProjectTaskMove(Vec<ProjectTaskMoveCandidate>),
     Dependency(Vec<DependencyCandidate>),
@@ -1168,6 +1206,7 @@ impl Candidates {
             Self::ActiveTask(items) => items.len(),
             Self::TaskLink(items) => items.len(),
             Self::TaskGoto(items) => items.len(),
+            Self::NoteGoto(items) => items.len(),
             Self::TaskParent(items) => items.len(),
             Self::ProjectTaskMove(items) => items.len(),
             Self::Dependency(items) => items.len(),
@@ -1287,10 +1326,14 @@ pub(super) struct CaptureCompleteResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) one_off: Option<bool>,
     /// Server-authored picker scope and editing ranges for `task_parent`,
-    /// `task_complete`, and `wikilink_task`; omitted from every other
-    /// completion context.
+    /// `task_complete`, `wikilink_task`, `task_goto`, and `note_goto`;
+    /// omitted from every other completion context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) picker: Option<PickerDescriptor>,
+    /// Vault root and unfiltered catalog size for `note_goto`; omitted
+    /// from every other completion context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note_goto: Option<NoteGotoContext>,
     /// Parent and destination information for `project_task_move`; omitted
     /// from every other completion context.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1340,6 +1383,7 @@ impl CaptureCompleteResult {
             relation_merge: None,
             relation_successor: None,
             picker: None,
+            note_goto: None,
             project_task_move: None,
             hidden_count: None,
             one_off: None,
