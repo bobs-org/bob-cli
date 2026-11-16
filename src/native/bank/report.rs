@@ -6,6 +6,7 @@ use chrono::{Datelike, NaiveDate};
 use serde_json::{json, Value};
 
 use super::{
+    balance,
     config::{AccountKind, BankConfig},
     dates::{
         month_range, parse_month_arg, parse_week_arg, parse_year_arg,
@@ -99,6 +100,12 @@ pub(crate) struct Navigation {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ReportBalance {
+    pub(crate) balance: balance::PeriodBalance,
+    pub(crate) target: Option<NavTarget>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct BankReport {
     pub(crate) today: NaiveDate,
     pub(crate) period: Period,
@@ -114,6 +121,7 @@ pub(crate) struct BankReport {
     pub(crate) default_alias: String,
     pub(crate) coverage: Coverage,
     pub(crate) navigation: Navigation,
+    pub(crate) balances: Vec<ReportBalance>,
     /// The `-c` aggregate: `None` without `-c`; with `-c`, `Some(None)`
     /// only when all time spans more than 64 ISO years (JSON `null`).
     pub(crate) charts: Option<Option<super::charts::Charts>>,
@@ -355,6 +363,8 @@ pub(crate) fn build(
     let waiting_period =
         period_rows.iter().filter(|row| !row.acknowledged).count();
     let navigation = navigation_for(&period_rows, config, heading_lines);
+    let balances =
+        build_balances(config, journal, &period, today, heading_lines);
     let charts = charts.then(|| {
         super::charts::build(
             &period,
@@ -427,8 +437,41 @@ pub(crate) fn build(
         default_alias,
         coverage,
         navigation,
+        balances,
         charts,
     }
+}
+
+fn build_balances(
+    config: Option<&BankConfig>,
+    journal: &super::journal::JournalSnapshot,
+    period: &Period,
+    today: NaiveDate,
+    heading_lines: &HashMap<(String, NaiveDate), (String, usize)>,
+) -> Vec<ReportBalance> {
+    let Some(config) = config else {
+        return Vec::new();
+    };
+    let timezone = crate::native::env::configured_timezone();
+    balance::histories(config, journal, timezone)
+        .into_iter()
+        .map(|history| {
+            let resolved = balance::resolve(&history, period, today);
+            let target = resolved.as_of.and_then(|day| {
+                heading_lines.get(&(month_path(month_of(day)), day)).map(
+                    |(path, line)| NavTarget {
+                        path: path.clone(),
+                        line: *line,
+                        date: day,
+                    },
+                )
+            });
+            ReportBalance {
+                balance: resolved,
+                target,
+            }
+        })
+        .collect()
 }
 
 /// The rows dated inside `[start, end]`, in their original order.
@@ -726,6 +769,40 @@ fn nav_target_json(target: &Option<NavTarget>) -> Value {
     }
 }
 
+fn balance_json(entry: &ReportBalance) -> Value {
+    let inner = &entry.balance;
+    json!({
+        "alias": inner.alias,
+        "label": inner.label,
+        "kind": inner.kind.as_str(),
+        "hero": inner.hero,
+        "state": inner.state.as_str(),
+        "reason": inner.reason.map(|reason| reason.as_str()),
+        "cents": inner.cents,
+        "as_of": inner.as_of.map(|date| date.format("%Y-%m-%d").to_string()),
+        "wanted": inner.wanted.format("%Y-%m-%d").to_string(),
+        "stale": inner.stale,
+        "open": inner.open.as_ref().map_or(Value::Null, |open| json!({
+            "date": open.date.format("%Y-%m-%d").to_string(),
+            "cents": open.cents,
+        })),
+        "change_cents": inner.change_cents,
+        "coverage": inner.coverage.as_ref().map_or(Value::Null, |span| json!({
+            "since": span.since.format("%Y-%m-%d").to_string(),
+            "through": span.through.format("%Y-%m-%d").to_string(),
+        })),
+        "anchors": {
+            "count": inner.anchors.count,
+            "agree": inner.anchors.agree,
+        },
+        "target": entry.target.as_ref().map_or(Value::Null, |target| json!({
+            "path": target.path,
+            "line": target.line,
+            "date": target.date.format("%Y-%m-%d").to_string(),
+        })),
+    })
+}
+
 pub(crate) fn to_json(report: &BankReport) -> Value {
     let mut value = json!({
         "ok": true,
@@ -791,6 +868,7 @@ pub(crate) fn to_json(report: &BankReport) -> Value {
             "first": nav_target_json(&report.navigation.first),
             "months": report.navigation.months,
         },
+        "balances": report.balances.iter().map(balance_json).collect::<Vec<_>>(),
         "flagged": report.flagged,
     });
     if let Some(charts) = &report.charts {

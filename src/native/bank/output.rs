@@ -5,10 +5,12 @@ use std::collections::BTreeMap;
 use chrono::{Datelike, NaiveDate};
 
 use super::{
+    balance::BalanceState,
     charts::{Bucket, Charts},
     check::{CheckReport, Finding, Severity},
     grammar::{render_amount, render_day_heading},
     model::BankRow,
+    report::ReportBalance,
 };
 use crate::native::style::{display_width, pad_right, Styler};
 
@@ -230,6 +232,11 @@ pub(crate) fn print_report(report: &super::report::BankReport) {
         render_amount(totals.in_cents),
         render_amount(totals.net_cents),
     );
+    for entry in &report.balances {
+        if let Some(line) = balance_line(entry) {
+            println!("{line}");
+        }
+    }
     println!();
     for entry in &report.breakdown {
         let bar = share_bar(entry.share);
@@ -374,6 +381,100 @@ fn print_bucket_table(title: &str, buckets: &[Bucket], styler: &Styler) {
 fn pad_left(text: &str, width: usize) -> String {
     let padding = width.saturating_sub(display_width(text));
     format!("{}{text}", " ".repeat(padding))
+}
+
+fn balance_line(entry: &ReportBalance) -> Option<String> {
+    use chrono::Datelike;
+    let inner = &entry.balance;
+    let prefix = format!("Balance · {}", inner.label);
+    // Amounts never carry a `+`: `$1,000.00`, `$0.00`, `−$45.10`.
+    let amount = |cents: i64| {
+        if cents < 0 {
+            format!("−{}", render_amount(cents))
+        } else {
+            render_amount(-cents)
+        }
+    };
+    // Changes keep the inflow `+`: `+$12.00`, `$0.00`, `−$65.44`.
+    let signed = |cents: i64| {
+        if cents < 0 {
+            format!("−{}", render_amount(cents))
+        } else {
+            render_amount(cents)
+        }
+    };
+    let day_for = |date: NaiveDate| {
+        let mut label = day_label(date);
+        if date.year() != inner.wanted.year() {
+            label.push_str(&format!(", {}", date.year()));
+        }
+        label
+    };
+    match inner.state {
+        BalanceState::None => None,
+        BalanceState::SoFar => {
+            let cents = inner.cents?;
+            let as_of = inner.as_of?;
+            let mut line = format!(
+                "{prefix} {} so far, as of {}",
+                amount(cents),
+                day_for(as_of)
+            );
+            if let (Some(open), Some(change)) =
+                (&inner.open, inner.change_cents)
+            {
+                line.push_str(&format!(
+                    " · {} since {}",
+                    signed(change),
+                    day_for(open.date)
+                ));
+            }
+            if inner.stale {
+                line.push_str(" · stale");
+            }
+            Some(line)
+        }
+        BalanceState::Settled => {
+            let cents = inner.cents?;
+            let mut line = format!(
+                "{prefix} {} at close {}",
+                amount(cents),
+                day_for(inner.wanted)
+            );
+            if let (Some(open), Some(change)) =
+                (&inner.open, inner.change_cents)
+            {
+                line.push_str(&format!(
+                    " · {} since {}",
+                    signed(change),
+                    day_for(open.date)
+                ));
+            }
+            Some(line)
+        }
+        BalanceState::AsOf => {
+            let cents = inner.cents?;
+            let as_of = inner.as_of?;
+            let mut line =
+                format!("{prefix} {} as of {}", amount(cents), day_for(as_of));
+            if let (Some(open), Some(change)) =
+                (&inner.open, inner.change_cents)
+            {
+                line.push_str(&format!(
+                    " · {} since {}",
+                    signed(change),
+                    day_for(open.date)
+                ));
+            }
+            Some(line)
+        }
+        BalanceState::AwaitingImport | BalanceState::Gap => {
+            Some(format!("{prefix} not imported yet"))
+        }
+        BalanceState::Unverified => Some(format!(
+            "{prefix} unverified (bank balances disagree — see bob bank check)"
+        )),
+    }
 }
 
 fn print_coverage(report: &super::report::BankReport) {

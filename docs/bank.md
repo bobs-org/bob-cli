@@ -891,6 +891,67 @@ possible twins, and ID-less typed rows in covered windows that have no bank
 match. Edits remain in the note and never change the journal's bank amount.
 Possible twins are warnings only; bob never merges them.
 
+## Closing balances
+
+A closing balance is the posted (ledger) balance of one importable account
+at the end of a period's last covered day: what the bank says was in the
+account when that day ended, after that day's postings. It is never the
+app's "available" balance, which also subtracts pending holds. It is never
+a sum across accounts. It is never the latest balance pasted onto an old
+period.
+
+bob computes every cent from `.bob/bank/<host>.jsonl` at read time. OFX
+import windows give coverage, bank-reported balances give anchors, and
+journaled transactions fill the days between anchors. Nothing is ever
+written into notes: no frontmatter, no Review drafts, no
+`bob periods brief`, no `bob stats`, and no Mac surfaces. Daily notes stay
+untouched; the number is reported for day, week, month, quarter, ISO-year,
+and all-time periods.
+
+For a period `P`, `wanted` is today when the period holds today and
+`P.end` otherwise. `as_of` is the latest covered day on or before
+`wanted` (the latest final day — imported after the day itself — for a
+closed period).
+
+| Condition (checked in order) | `state` | `cents` |
+| --- | --- | --- |
+| `P.start` is after today | `none` (`future`) | null |
+| No covered day on or before `wanted` | `none` (`pre_coverage`) | null |
+| `as_of` sits in an unverified span or range | `unverified` | null |
+| Closed `P`, `as_of` before `P.start`, nothing covered after `wanted` | `awaiting_import` | null |
+| Closed `P`, `as_of` before `P.start`, coverage resumes later | `gap` | null |
+| Open `P` | `so_far` | `B(as_of)` |
+| Closed `P`, `as_of` equals `P.end` | `settled` | `B(as_of)` |
+| Closed `P`, `as_of` is before `wanted` | `as_of` | `B(as_of)` |
+
+The as-of honesty rule: until coverage reaches the period end, the line
+names its evidence day (`Balance · Checking $1,234.56 as of Fri Nov 13`).
+Only when the evidence day is the period end does it claim the close
+(`Balance · Checking $1,234.56 at close Sun Nov 15`). A falling balance is
+never colored; a negative amount renders `−$45.10` and `$0.00` renders
+normally.
+
+When the day before the period start is verified and the period has begun,
+the line adds the move since (`· −$65.44 since Sun Nov 8`, transfers
+included). An open period whose latest covered day is older than
+`bank.stale_after` days appends `· stale`. States without a number print
+words instead: `not imported yet`, or
+`unverified (bank balances disagree — see bob bank check)`. Periods with
+no number yet (`none`) print no line at all. A `target` (`path`, `line`,
+`date`) opens the as-of day's heading in the bank month note, or is null
+when that note has no such heading.
+
+Two safeguards keep the number honest. CSV-only batches never enter the
+arithmetic, and a batch that mixed CSV and OFX taints its whole span
+(`csv_overlap`). Anchor cross-checks degrade by segment: a disagreement
+between two bank-reported balances hides only the days strictly between
+them (`anchor_mismatch`), and a same-day snapshot taken on or after its
+import's local date is provisional — it never settles a closed period and
+is ignored once a later import supersedes it.
+
+Any single day is one lookup away: `bob bank report -D 2026-11-15`
+answers with the latest covered day on or before that date.
+
 ## Findings (`bob bank check`)
 
 Human output groups by note, then day, and ends with a summary. `-f json`
@@ -1019,7 +1080,18 @@ bank rule. A missing or invalid album forces the whole projection to
   months[]}` (`waiting` is the oldest waiting row in the period,
   `first` the day heading of the earliest counted-money day, `months`
   the vault-relative month notes holding the period's rows; each target
-  is `null` when absent), and `warnings[]`/`findings[]` carrying at most
+  is `null` when absent),
+  `balances[] {alias, label, kind, hero, state, reason, cents, as_of,
+  wanted, stale, open {date, cents}, change_cents,
+  coverage {since, through}, anchors {count, agree},
+  target {path, line, date}}` (one entry per importable account in config
+  order — cash accounts are omitted — and `[]` when config cannot load;
+  `state` is `none`, `unverified`, `awaiting_import`, `gap`, `so_far`,
+  `settled`, or `as_of`; `reason` is `future`, `pre_coverage`,
+  `journal_unreadable`, `journal_contradiction`, `csv_overlap`,
+  `no_anchor`, `anchor_mismatch`, or `null`; every non-number state has
+  `cents: null`; see [Closing balances](#closing-balances)), and
+  `warnings[]`/`findings[]` carrying at most
   one bounded `bank_subscription_album_invalid` entry. With `-c` it also
   adds `charts`; see [Report charts](#report-charts).
 - `check` adds `findings[] {code, severity, path, line, message, hint}`;

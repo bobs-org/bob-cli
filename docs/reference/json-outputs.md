@@ -192,7 +192,7 @@ parent catalog changes; dry runs set `dry_run: true`. See
 
 ### Bank reports {#bank-reports}
 
-`schema_version: 1`; [Bank JSON](../bank.md#json) with `day`/`week`/`quarter`/`iso_year`/`all_time` periods, `-s` `days`, `coverage`/`navigation`. Bank rows carry `subscription`/`bank_recurring`/`subscription_candidate` with latest charge date; `suggestion.source` gains `subscription`; `list`/`report` carry at most one bounded `bank_subscription_album_invalid` warning.
+`schema_version: 1`; [Bank JSON](../bank.md#json) with `day`/`week`/`quarter`/`iso_year`/`all_time` periods, `-s` `days`, `coverage`/`navigation`/`balances[]` ([Closing balances](../bank.md#closing-balances)). Bank rows carry `subscription`/`bank_recurring`/`subscription_candidate` with charge dates; `suggestion.source` gains `subscription`; `list`/`report` carry at most one bounded `bank_subscription_album_invalid` warning.
 `report -c` adds [`charts`](../bank.md#report-charts) `{version, granularity, buckets[], groups[], categories}` for `week`/`quarter`/`iso_year`/`all_time` periods.
 `subscriptions` adds `album`, `totals`, ledger entries, `issues`, `findings[]`.
 

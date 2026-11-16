@@ -1556,6 +1556,194 @@ fn ack_ticks_ids_day_and_reports_unknown() {
 }
 
 #[test]
+fn report_balances_cover_week_quarter_day_and_all_time() {
+    use super::model::{month_of, month_path};
+    let _guard = guard();
+    let config = match super::config::parse_bank_config(
+        "---\nbank:\n  accounts:\n    checking:\n      label: Checking\n      kind: checking\n      start: 2026-09-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: Groceries\n  stale_after: 10\n---\n",
+    ) {
+        super::config::ConfigParse::Ok(config) => config,
+        other => panic!("expected ok, got {other:?}"),
+    };
+    let stamp = |day: &str| {
+        chrono::DateTime::parse_from_rfc3339(&format!("{day}T12:00:00-05:00"))
+            .expect("ts")
+    };
+    let anchored =
+        |start: &str, end: &str, as_of: &str, cents: i64, imported: &str| {
+            super::journal::ImportEvent {
+                ts: stamp(imported),
+                host: "test".to_owned(),
+                path: ".bob/bank/test.jsonl".to_owned(),
+                line: 1,
+                account: "checking".to_owned(),
+                source: super::source::SourceKind::Ofx,
+                file_sha256: format!("{start}{end}{as_of}"),
+                start: NaiveDate::parse_from_str(start, "%Y-%m-%d")
+                    .expect("start"),
+                end: NaiveDate::parse_from_str(end, "%Y-%m-%d").expect("end"),
+                balance_cents: Some(cents),
+                balance_asof: Some(
+                    NaiveDate::parse_from_str(as_of, "%Y-%m-%d").expect("asof"),
+                ),
+                counts: super::journal::ImportCounts::default(),
+            }
+        };
+    let mut journal = super::journal::JournalSnapshot::default();
+    journal.imports.push(anchored(
+        "2026-09-21",
+        "2026-09-27",
+        "2026-09-27",
+        200_000,
+        "2026-09-28",
+    ));
+    journal.imports.push(anchored(
+        "2026-11-02",
+        "2026-11-08",
+        "2026-11-08",
+        105_000,
+        "2026-11-09",
+    ));
+    journal.imports.push(anchored(
+        "2026-11-09",
+        "2026-11-13",
+        "2026-11-13",
+        100_000,
+        "2026-11-14",
+    ));
+    let key = "0".repeat(64);
+    journal.transactions.insert(
+        key.clone(),
+        super::journal::TxnEvent {
+            ts: stamp("2026-11-10"),
+            host: "test".to_owned(),
+            path: ".bob/bank/test.jsonl".to_owned(),
+            line: 2,
+            account: "checking".to_owned(),
+            key: key.clone(),
+            id: "spend".to_owned(),
+            posted: NaiveDate::from_ymd_opt(2026, 11, 10).expect("posted"),
+            cents: -5_000,
+            desc: "SHOP".to_owned(),
+            merchant: "shop".to_owned(),
+            outcome: super::journal::TxnOutcome::Written,
+            note: None,
+        },
+    );
+    journal.ids.insert("spend".to_owned(), key);
+    let mut headings = HashMap::new();
+    for (date, line) in [
+        ("2026-09-27", 10),
+        ("2026-11-08", 20),
+        ("2026-11-10", 30),
+        ("2026-11-12", 40),
+        ("2026-11-13", 50),
+    ] {
+        let day = NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("day");
+        let path = month_path(month_of(day));
+        headings.insert((path.clone(), day), (path, line));
+    }
+    let rows = Vec::new();
+    let shape = |period: super::report::Period| {
+        let built = place_report(
+            &config,
+            rows.clone(),
+            period,
+            &headings,
+            &journal,
+            true,
+        );
+        let json = super::report::to_json(&built);
+        assert_eq!(json["schema_version"], 1);
+        let balances = json["balances"].as_array().expect("balances").clone();
+        // Cash accounts never appear; config order is preserved.
+        assert_eq!(balances.len(), 1, "cash omitted: {balances:?}");
+        let entry = &balances[0];
+        assert_eq!(entry["alias"], "checking");
+        assert_eq!(entry["label"], "Checking");
+        assert_eq!(entry["kind"], "checking");
+        assert_eq!(entry["hero"], true);
+        for key in [
+            "state",
+            "reason",
+            "cents",
+            "as_of",
+            "wanted",
+            "stale",
+            "open",
+            "change_cents",
+            "coverage",
+            "anchors",
+            "target",
+        ] {
+            assert!(entry.get(key).is_some(), "missing {key} in {entry}");
+        }
+        assert_eq!(entry["anchors"]["agree"], true);
+        (built, json)
+    };
+    // Week W46 holds today: so_far at Nov 12 with open/change and a target.
+    let (week, week_json) = shape(resolve_flag("2026-W46"));
+    assert_eq!(week.balances.len(), 1);
+    let balance = &week.balances[0].balance;
+    assert_eq!(balance.state.as_str(), "so_far");
+    assert_eq!(balance.cents, Some(100_000));
+    assert_eq!(balance.as_of, NaiveDate::from_ymd_opt(2026, 11, 12));
+    assert_eq!(week.balances[0].target.as_ref().expect("target").line, 40);
+    assert_eq!(week_json["balances"][0]["change_cents"], -5_000);
+    assert_eq!(week_json["balances"][0]["open"]["cents"], 105_000);
+    assert_eq!(week_json["balances"][0]["coverage"]["since"], "2026-11-02");
+    assert_eq!(week_json["balances"][0]["anchors"]["count"], 2);
+    // Closed quarter Q3 settles at its end with no open/change row.
+    let (quarter, quarter_json) = shape(resolve_flag("2026-Q3"));
+    assert_eq!(quarter.balances[0].balance.state.as_str(), "settled");
+    assert_eq!(quarter.balances[0].balance.cents, Some(200_000));
+    assert_eq!(
+        quarter.balances[0].balance.as_of,
+        NaiveDate::from_ymd_opt(2026, 9, 27)
+    );
+    assert!(quarter_json["balances"][0]["open"].is_null());
+    assert!(quarter_json["balances"][0]["change_cents"].is_null());
+    // A closed day settles; an old binary-free payload stays schema 1.
+    let day_period = super::report::resolve_period(
+        Some("2026-11-10"),
+        None,
+        None,
+        None,
+        None,
+        today(),
+    )
+    .expect("day");
+    let (day, _day_json) = shape(day_period);
+    assert_eq!(day.balances[0].balance.state.as_str(), "settled");
+    assert_eq!(day.balances[0].balance.cents, Some(100_000));
+    // All time resolves after the bank-history finalization and stays so_far.
+    let all_time =
+        super::report::all_time_period(Some(&config), &rows, today());
+    let (all, all_json) = shape(all_time);
+    assert_eq!(all.balances[0].balance.state.as_str(), "so_far");
+    assert_eq!(all_json["balances"][0]["wanted"], "2026-11-12");
+    // No config means an empty additive array.
+    let empty = super::report::build(
+        Vec::new(),
+        today(),
+        resolve_flag("2026-W46"),
+        None,
+        Vec::new(),
+        Vec::new(),
+        "checking".to_owned(),
+        &headings,
+        &journal,
+        true,
+        false,
+    );
+    assert!(empty.balances.is_empty());
+    assert_eq!(
+        super::report::to_json(&empty)["balances"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
 fn reversed_all_time_interval_produces_no_days() {
     let _guard = guard();
     let future_start =

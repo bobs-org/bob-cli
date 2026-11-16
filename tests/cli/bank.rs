@@ -1421,3 +1421,141 @@ fn subscriptions_reports_every_located_config_finding() {
         .unwrap_or_else(|| panic!("{payload}"))
         .starts_with("sha256:"));
 }
+
+#[test]
+fn report_balances_settle_across_imports() {
+    const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-09-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
+    let vault = syncable(HUB);
+    // A quiet September week settles Q3 at its end.
+    let september = write_qfx(
+        &vault,
+        "september.qfx",
+        &ofx("20260921", "20260927", "2000.00", "20260927", &[]),
+    );
+    let imported = run(
+        &vault,
+        &[
+            "import",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            path_str(&september),
+        ],
+    );
+    assert_success(&imported);
+    assert_eq!(json(&imported)["ok"], true);
+    // Monday import ending Friday leaves W46 honestly as_of Friday.
+    let week = write_qfx(
+        &vault,
+        "week.qfx",
+        &ofx(
+            "20261109",
+            "20261113",
+            "1000.00",
+            "20261113",
+            &[
+                ("DEBIT", "20261110", "-50.00", "fit-bal-10", "SHOPRITE"),
+                ("DEBIT", "20261113", "-10.00", "fit-bal-13", "CAFE NERO"),
+            ],
+        ),
+    );
+    let imported = run_at(
+        &vault,
+        "2026-11-16T12:00:00",
+        &["import", "-a", "checking", "-f", "json", path_str(&week)],
+    );
+    assert_success(&imported);
+    let monday = run_at(
+        &vault,
+        "2026-11-16T12:00:00",
+        &["report", "-p", "2026-W46", "-s", "-f", "json"],
+    );
+    assert_success(&monday);
+    let payload = json(&monday);
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(
+        payload["balances"].as_array().unwrap().len(),
+        1,
+        "{payload}"
+    );
+    let entry = &payload["balances"][0];
+    assert_eq!(entry["alias"], "checking");
+    assert_eq!(entry["kind"], "checking");
+    assert_eq!(entry["hero"], true);
+    assert_eq!(entry["state"], "as_of", "{payload}");
+    assert_eq!(entry["as_of"], "2026-11-13", "{payload}");
+    assert_eq!(entry["wanted"], "2026-11-15", "{payload}");
+    assert_eq!(entry["cents"], 100_000, "{payload}");
+    assert_eq!(entry["target"]["path"], "bank/2026-11.md", "{payload}");
+    // The Sunday lookup answers with the Friday close as its as_of date.
+    let sunday = run_at(
+        &vault,
+        "2026-11-16T12:00:00",
+        &["report", "-D", "2026-11-15", "-f", "json"],
+    );
+    assert_success(&sunday);
+    let payload = json(&sunday);
+    assert_eq!(
+        payload["balances"][0]["state"], "awaiting_import",
+        "{payload}"
+    );
+    assert_eq!(payload["balances"][0]["as_of"], "2026-11-13", "{payload}");
+    let human = run_at(
+        &vault,
+        "2026-11-16T12:00:00",
+        &["report", "-p", "2026-W46", "-s"],
+    );
+    assert_success(&human);
+    assert!(stdout(&human).contains("Balance · WF Checking $1,000.00 as of Fri Nov 13 · −$60.00 since Sun Nov 8"), "{}", stdout(&human));
+    // A Tuesday import proving the weekend empty settles the week.
+    let weekend = write_qfx(
+        &vault,
+        "weekend.qfx",
+        &ofx("20261114", "20261115", "1000.00", "20261115", &[]),
+    );
+    let imported = run_at(
+        &vault,
+        "2026-11-17T12:00:00",
+        &["import", "-a", "checking", "-f", "json", path_str(&weekend)],
+    );
+    assert_success(&imported);
+    assert_success(&run_at(
+        &vault,
+        "2026-11-17T12:00:00",
+        &["ensure", "-D", "2026-11-15", "-f", "json"],
+    ));
+    let settled = run_at(
+        &vault,
+        "2026-11-17T12:00:00",
+        &["report", "-p", "2026-W46", "-s", "-f", "json"],
+    );
+    assert_success(&settled);
+    let payload = json(&settled);
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["balances"][0]["state"], "settled");
+    assert_eq!(payload["balances"][0]["as_of"], "2026-11-15");
+    assert_eq!(payload["balances"][0]["cents"], 100_000);
+    assert_eq!(payload["balances"][0]["target"]["path"], "bank/2026-11.md");
+    let human = run_at(
+        &vault,
+        "2026-11-17T12:00:00",
+        &["report", "-p", "2026-W46", "-s"],
+    );
+    assert_success(&human);
+    assert!(
+        stdout(&human).contains("at close Sun Nov 15"),
+        "{}",
+        stdout(&human)
+    );
+    // The closed quarter settled back in September.
+    let quarter = run_at(
+        &vault,
+        "2026-11-17T12:00:00",
+        &["report", "-p", "2026-Q3", "-s", "-f", "json"],
+    );
+    assert_success(&quarter);
+    let payload = json(&quarter);
+    assert_eq!(payload["balances"][0]["state"], "settled");
+    assert_eq!(payload["balances"][0]["cents"], 200_000);
+}
