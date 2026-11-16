@@ -10313,11 +10313,17 @@ for `[[##...]]`. `wikilink_block` searches named block IDs in the analogous
 target, current-destination, or `[[^^...]]` vault-wide scope, except on a
 Work Log bullet line under a whole-item `x`, where block candidates are
 suppressed (entries reject block links) while note and heading completion
-keeps working. A `((query` token in free text — at line start or after a
-space or tab, outside code and existing `[[…]]`, outside Work Log text, and
-not on a whole-item action — opens `wikilink_task`. It searches every task
-in the vault (open and completed history, including ID-less rows, hidden
-tasks, ref notes, daily notes, and `done/` archive). `--all-tasks` has no
+keeps working. Vault-wide suggestions list living notes first; archived and
+hidden notes follow. This covers `[[note`, `[[##…`, `[[^^…`, and record
+link-value suggestions. Tiers follow the same path rules as `//`
+([Going to a note with '//'](#going-to-a-note-with)). Target-scoped
+completion (`[[note#`, `[[note#^`, `[[#`, `[[#^`) and link resolution are
+unchanged, so an archived note stays linkable. A `((query` token in free
+text — at line start or after a space or tab, outside code and existing
+`[[…]]`, outside Work Log text, and not on a whole-item action — opens
+`wikilink_task`. It searches every task in the vault (open and completed
+history, including ID-less rows, hidden tasks, ref notes, daily notes, and
+`done/` archive). `--all-tasks` has no
 effect. Empty-query order is this-note, In Progress, Next, other open notes,
 then completed history, with `#hide` last inside each group. A query ranks
 by the same fields as the dependency picker, with open matches ahead of

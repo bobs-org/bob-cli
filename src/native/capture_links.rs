@@ -1743,6 +1743,172 @@ mod tests {
     }
 
     #[test]
+    fn vault_wide_link_suggestions_rank_library_sidecars_after_living() {
+        let temp = TempDir::new("bob-cli-links-library-sidecar");
+        write_file(&temp.path().join("bob-living.md"), "# Living Bob\n");
+        write_file(&temp.path().join("lib/bob-lib.md"), "# Library Bob\n");
+        write_file(&temp.path().join("papers/bob-paper.md"), "# Paper Bob\n");
+        write_file(&temp.path().join("papers/bob-paper.pdf"), "%PDF-1.4\n");
+        let index = NoteIndex::read(temp.path()).expect("index");
+
+        let field = completion_field_at("[[bob", 5, "source.md".into())
+            .expect("note field");
+        let paths = note_candidates(&field, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            ["bob-living.md", "lib/bob-lib.md", "papers/bob-paper.md"]
+        );
+    }
+
+    #[test]
+    fn vault_wide_link_suggestions_rank_daily_ahead_of_satellites() {
+        let temp = TempDir::new("bob-cli-links-date-query");
+        write_file(&temp.path().join("2025/20251111.md"), "# Daily\n");
+        write_file(&temp.path().join("2025/20251110_habit.md"), "# Habit\n");
+        write_file(&temp.path().join("2025/20251110_done.md"), "# Done\n");
+        write_file(&temp.path().join("2025/20251110_poms.md"), "# Poms\n");
+        write_file(&temp.path().join("2025/20251110_events.md"), "# Events\n");
+        let index = NoteIndex::read(temp.path()).expect("index");
+
+        let field = completion_field_at("[[2025111", 9, "source.md".into())
+            .expect("note field");
+        let paths = note_candidates(&field, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            [
+                "2025/20251111.md",
+                "2025/20251110_done.md",
+                "2025/20251110_events.md",
+                "2025/20251110_habit.md",
+                "2025/20251110_poms.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn vault_wide_link_suggestions_truncate_to_living_before_archive() {
+        let temp = TempDir::new("bob-cli-links-truncation");
+        write_file(&temp.path().join("done/bob.md"), "# Bob\nText ^bob\n");
+        for index in 0..25 {
+            write_file(
+                &temp.path().join(format!("notes/bob-{index:02}.md")),
+                &format!("# Bob-{index:02}\nText ^bob-{index:02}\n"),
+            );
+        }
+        let index = NoteIndex::read(temp.path()).expect("index");
+
+        let note = completion_field_at("[[bob", 5, "source.md".into())
+            .expect("note field");
+        let note_paths = note_candidates(&note, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(note_paths.len(), RESULT_LIMIT);
+        assert!(
+            note_paths.iter().all(|path| path.starts_with("notes/")),
+            "{note_paths:?}"
+        );
+        assert!(!note_paths.iter().any(|path| path == "done/bob.md"));
+
+        let heading = completion_field_at("[[##bob", 7, "source.md".into())
+            .expect("vault heading field");
+        let heading_paths = heading_candidates(&heading, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(heading_paths.len(), RESULT_LIMIT);
+        assert!(
+            heading_paths.iter().all(|path| path.starts_with("notes/")),
+            "{heading_paths:?}"
+        );
+        assert!(!heading_paths.iter().any(|path| path == "done/bob.md"));
+
+        let block = completion_field_at("[[^^bob", 7, "source.md".into())
+            .expect("vault block field");
+        let block_paths = block_candidates(&block, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(block_paths.len(), RESULT_LIMIT);
+        assert!(
+            block_paths.iter().all(|path| path.starts_with("notes/")),
+            "{block_paths:?}"
+        );
+        assert!(!block_paths.iter().any(|path| path == "done/bob.md"));
+    }
+
+    #[test]
+    fn empty_vault_wide_link_query_partitions_living_archive_and_hidden() {
+        let temp = TempDir::new("bob-cli-links-empty-query");
+        write_file(&temp.path().join("zeta.md"), "# Zeta\n");
+        write_file(&temp.path().join("done/alpha.md"), "# Alpha\n");
+        write_file(&temp.path().join("_meta/beta.md"), "# Beta\n");
+        let index = NoteIndex::read(temp.path()).expect("index");
+
+        let field = completion_field_at("[[", 2, "source.md".into())
+            .expect("empty note field");
+        let paths = note_candidates(&field, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["zeta.md", "done/alpha.md", "_meta/beta.md"]);
+    }
+
+    #[test]
+    fn archived_notes_remain_resolvable_and_target_scoped() {
+        let temp = TempDir::new("bob-cli-links-resolve-archive");
+        write_file(&temp.path().join("zeta.md"), "# Zeta\n");
+        write_file(&temp.path().join("done/alpha.md"), "# Alpha\n");
+        write_file(&temp.path().join("_meta/beta.md"), "# Beta\n");
+        write_file(&temp.path().join("done/a_done.md"), "# Archived Heading\n");
+        let index = NoteIndex::read(temp.path()).expect("index");
+
+        let by_path = index.resolve_target("done/a_done");
+        assert_eq!(
+            by_path
+                .iter()
+                .map(|note| note.path.as_str())
+                .collect::<Vec<_>>(),
+            ["done/a_done.md"]
+        );
+        let by_stem = index.resolve_target("a_done");
+        assert_eq!(
+            by_stem
+                .iter()
+                .map(|note| note.path.as_str())
+                .collect::<Vec<_>>(),
+            ["done/a_done.md"]
+        );
+
+        let scoped =
+            completion_field_at("[[done/a_done#", 14, "source.md".into())
+                .expect("target heading field");
+        let headings = heading_candidates(&scoped, &index);
+        assert_eq!(headings[0].path, "done/a_done.md");
+        assert_eq!(headings[0].heading, "Archived Heading");
+    }
+
+    #[test]
+    fn matching_note_inserts_keep_living_ahead_of_archive_twins() {
+        let temp = TempDir::new("bob-cli-links-record-inserts");
+        write_file(&temp.path().join("done/cash.md"), "# Archive cash\n");
+        write_file(&temp.path().join("money/cash.md"), "# Living cash\n");
+        let index = NoteIndex::read(temp.path()).expect("index");
+        let inserts = index
+            .matching_note_inserts("cash")
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>();
+        assert_eq!(inserts, ["money/cash", "done/cash"]);
+    }
+
+    #[test]
     fn heading_and_block_completion_resolve_target_same_note_and_vault_scope() {
         let temp = TempDir::new("bob-cli-links-subpaths");
         write_file(

@@ -1187,3 +1187,25 @@ fn mixed_draft_scopes_route_errors_to_the_cursor_item() {
         );
     }
 }
+
+#[test]
+fn record_link_values_keep_the_living_stem_on_dedup() {
+    let vault = RecordVault::new("bob-cli-complete-link-tiers");
+    write_file(&vault.path().join("money/cash.md"), "# Living cash\n");
+    write_file(&vault.path().join("done/cash.md"), "# Archive cash\n");
+    let raw = "Ramen Nagi @eat/\n- related:: cash";
+    let result = vault.complete(raw, raw.len());
+    assert_eq!(result.context, Some(CompletionContext::RecordValue));
+    let values: Vec<&str> = value_rows(&result)
+        .iter()
+        .map(|row| row.value.as_str())
+        .collect();
+    assert!(
+        values.contains(&"[[money/cash]]"),
+        "living twin missing: {values:?}"
+    );
+    assert!(
+        !values.contains(&"[[done/cash]]"),
+        "archive twin should lose stem dedup: {values:?}"
+    );
+}

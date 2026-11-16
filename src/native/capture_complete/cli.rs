@@ -343,7 +343,9 @@ precedence over capture-marker completion. Note completion covers `[[note` \
 and offers Markdown note paths, stems, and aliases. Heading and block \
 completion cover target-qualified links like `[[note#Head` and \
 `[[note#^block`, same-destination links like `[[#Head`, and vault-wide \
-searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
+searches like `[[##Head` and `[[^^block`. Vault-wide suggestions (`[[note`, \
+`[[##Head`, `[[^^block`, and record link values) list living notes first; \
+archived and hidden notes follow. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset. \
 A `((query` token in free text opens `wikilink_task`: every task in the \
 vault-wide catalog (open and completed history, including ID-less rows), \
