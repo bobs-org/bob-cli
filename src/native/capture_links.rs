@@ -12,6 +12,7 @@ use serde::Serialize;
 use super::{
     capture_language::{CompletionContext, Span, SpanKind},
     is_always_excluded_note_directory_name, markdown,
+    note_catalog::{path_tier, NoteTier, TierContext},
 };
 
 const RESULT_LIMIT: usize = 20;
@@ -53,6 +54,7 @@ pub(crate) struct NoteIndex {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NoteEntry {
     path: String,
+    tier: NoteTier,
     insert_target: String,
     stem: String,
     aliases: Vec<String>,
@@ -208,6 +210,7 @@ pub(crate) fn completion_field_at(
 
 impl NoteIndex {
     pub(crate) fn read(bob_dir: &Path) -> Result<Self, String> {
+        let tier_context = TierContext::for_vault(bob_dir);
         let mut paths = Vec::new();
         let mut warnings = WarningCollector::default();
         collect_markdown_paths(bob_dir, bob_dir, &mut paths, &mut warnings)
@@ -218,7 +221,12 @@ impl NoteIndex {
 
         let mut notes = Vec::new();
         for path in paths {
-            notes.push(NoteEntry::read(bob_dir, &path, &mut warnings));
+            notes.push(NoteEntry::read(
+                bob_dir,
+                &path,
+                &tier_context,
+                &mut warnings,
+            ));
         }
         notes
             .sort_by(|left, right| compare_normalized(&left.path, &right.path));
@@ -240,17 +248,21 @@ impl NoteIndex {
         query: &str,
     ) -> Vec<(String, String)> {
         let lowered = query.to_lowercase();
-        self.notes
-            .iter()
-            .filter(|note| {
-                query.is_empty()
-                    || note.stem.to_lowercase().contains(&lowered)
-                    || note.path.to_lowercase().contains(&lowered)
-                    || note
-                        .aliases
-                        .iter()
-                        .any(|alias| alias.to_lowercase().contains(&lowered))
-            })
+        let mut matches =
+            self.notes
+                .iter()
+                .filter(|note| {
+                    query.is_empty()
+                        || note.stem.to_lowercase().contains(&lowered)
+                        || note.path.to_lowercase().contains(&lowered)
+                        || note.aliases.iter().any(|alias| {
+                            alias.to_lowercase().contains(&lowered)
+                        })
+                })
+                .collect::<Vec<_>>();
+        matches.sort_by_key(|note| tier_order(note.tier));
+        matches
+            .into_iter()
             .map(|note| (note.insert_target.clone(), note.stem.clone()))
             .collect()
     }
@@ -269,7 +281,9 @@ pub(crate) fn note_candidates(
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|(left_score, left), (right_score, right)| {
-        compare_score_rank(left_score, right_score)
+        tier_order(left.tier)
+            .cmp(&tier_order(right.tier))
+            .then_with(|| compare_score_rank(left_score, right_score))
             .then_with(|| compare_normalized(&left.path, &right.path))
     });
     ranked.truncate(RESULT_LIMIT);
@@ -315,11 +329,14 @@ pub(crate) fn heading_candidates(
     ranked.sort_by(
         |(left_score, left_note, left_heading),
          (right_score, right_note, right_heading)| {
-            compare_score_rank(left_score, right_score)
-                .then_with(|| {
-                    compare_normalized(&left_note.path, &right_note.path)
-                })
-                .then_with(|| left_heading.ordinal.cmp(&right_heading.ordinal))
+            (if matches!(scope, LinkSearchScope::Vault) {
+                tier_order(left_note.tier).cmp(&tier_order(right_note.tier))
+            } else {
+                Ordering::Equal
+            })
+            .then_with(|| compare_score_rank(left_score, right_score))
+            .then_with(|| compare_normalized(&left_note.path, &right_note.path))
+            .then_with(|| left_heading.ordinal.cmp(&right_heading.ordinal))
         },
     );
     ranked.truncate(RESULT_LIMIT);
@@ -368,11 +385,14 @@ pub(crate) fn block_candidates(
     ranked.sort_by(
         |(left_score, left_note, left_block),
          (right_score, right_note, right_block)| {
-            compare_score_rank(left_score, right_score)
-                .then_with(|| {
-                    compare_normalized(&left_note.path, &right_note.path)
-                })
-                .then_with(|| left_block.ordinal.cmp(&right_block.ordinal))
+            (if matches!(scope, LinkSearchScope::Vault) {
+                tier_order(left_note.tier).cmp(&tier_order(right_note.tier))
+            } else {
+                Ordering::Equal
+            })
+            .then_with(|| compare_score_rank(left_score, right_score))
+            .then_with(|| compare_normalized(&left_note.path, &right_note.path))
+            .then_with(|| left_block.ordinal.cmp(&right_block.ordinal))
         },
     );
     ranked.truncate(RESULT_LIMIT);
@@ -1057,13 +1077,12 @@ impl NoteEntry {
     fn read(
         bob_dir: &Path,
         path: &Path,
+        tier_context: &TierContext,
         warnings: &mut WarningCollector,
     ) -> Self {
-        let relative_path = path
-            .strip_prefix(bob_dir)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let relative = path.strip_prefix(bob_dir).unwrap_or(path);
+        let tier = path_tier(bob_dir, relative, tier_context);
+        let relative_path = relative.to_string_lossy().replace('\\', "/");
         let insert_target = relative_path
             .strip_suffix(".md")
             .unwrap_or(&relative_path)
@@ -1080,6 +1099,7 @@ impl NoteEntry {
                 warnings.push(format!("read {relative_path}: {error}"));
                 return Self {
                     path: relative_path,
+                    tier,
                     insert_target,
                     stem,
                     aliases: Vec::new(),
@@ -1094,6 +1114,7 @@ impl NoteEntry {
 
         Self {
             path: relative_path,
+            tier,
             insert_target,
             stem,
             aliases,
@@ -1466,6 +1487,14 @@ fn compare_scores(left: &MatchScore, right: &MatchScore) -> Ordering {
         .then_with(|| compare_normalized(&left.value, &right.value))
 }
 
+fn tier_order(tier: NoteTier) -> u8 {
+    match tier {
+        NoteTier::Living => 0,
+        NoteTier::Archive => 1,
+        NoteTier::Hidden => 2,
+    }
+}
+
 fn compare_score_rank(left: &MatchScore, right: &MatchScore) -> Ordering {
     left.tier
         .cmp(&right.tier)
@@ -1657,6 +1686,60 @@ mod tests {
         );
         assert_eq!(empty_candidates[0].alias, None);
         assert_eq!(empty_candidates[0].match_kind, MatchKind::Empty);
+    }
+
+    #[test]
+    fn vault_wide_link_suggestions_partition_living_archive_and_hidden() {
+        let temp = TempDir::new("bob-cli-links-tiers");
+        write_file(
+            &temp.path().join("bobber.md"),
+            "# Bob Notes\nText ^bobber-block\n",
+        );
+        write_file(
+            &temp.path().join("done/bob.md"),
+            "# Bob Archive\nText ^bob-archive-block\n",
+        );
+        write_file(
+            &temp.path().join("_meta/bob.md"),
+            "# Bob Hidden\nText ^bob-hidden-block\n",
+        );
+        let index = NoteIndex::read(temp.path()).expect("index");
+
+        let note = completion_field_at("[[bob", 5, "source.md".into())
+            .expect("note field");
+        let note_paths = note_candidates(&note, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(note_paths, ["bobber.md", "done/bob.md", "_meta/bob.md"]);
+
+        let heading = completion_field_at("[[##Bob", 7, "source.md".into())
+            .expect("vault heading field");
+        let heading_paths = heading_candidates(&heading, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(heading_paths, ["bobber.md", "done/bob.md", "_meta/bob.md"]);
+
+        let block = completion_field_at("[[^^bob", 7, "source.md".into())
+            .expect("vault block field");
+        let block_paths = block_candidates(&block, &index)
+            .into_iter()
+            .map(|candidate| candidate.path)
+            .collect::<Vec<_>>();
+        assert_eq!(block_paths, ["bobber.md", "done/bob.md", "_meta/bob.md"]);
+
+        let inserts = index
+            .matching_note_inserts("bob")
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>();
+        assert_eq!(inserts, ["bobber", "done/bob", "_meta/bob"]);
+
+        let scoped =
+            completion_field_at("[[done/bob#Bob", 14, "source.md".into())
+                .expect("target heading field");
+        assert_eq!(heading_candidates(&scoped, &index)[0].path, "done/bob.md");
     }
 
     #[test]
