@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use crate::native::pref_journal::MAX_MALFORMED_WARNINGS;
 
 use super::{
+    balance,
     config::{
         parse_bank_config, suggest_name, AccountStatus, BankConfig, Category,
         ConfigDiagnostic, ConfigParse,
@@ -213,6 +214,27 @@ pub(crate) fn lint(
                     item.hint,
                     item.day,
                 ));
+            }
+            let timezone = crate::native::env::configured_timezone();
+            for history in
+                balance::histories(config, &journal_snapshot, timezone)
+            {
+                for item in history.findings {
+                    let severity = match item.severity {
+                        "error" => Severity::Error,
+                        "warning" => Severity::Warning,
+                        _ => Severity::Info,
+                    };
+                    findings.push(finding(
+                        item.code,
+                        severity,
+                        item.path,
+                        item.line,
+                        item.message,
+                        item.hint,
+                        item.day,
+                    ));
+                }
             }
             (accounts, config.categories.clone())
         }

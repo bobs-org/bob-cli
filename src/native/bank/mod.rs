@@ -1,6 +1,7 @@
 //! Bank hub, month notes, row grammar, and `bob bank`.
 
 pub(crate) mod ack;
+pub(crate) mod balance;
 pub(crate) mod charts;
 pub(crate) mod check;
 pub(crate) mod check_subscriptions;

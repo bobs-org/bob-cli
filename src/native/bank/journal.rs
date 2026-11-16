@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, fs, io, path::Path};
 
-use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
+use chrono::{DateTime, FixedOffset, Local, NaiveDate, Utc};
 use serde_json::{json, Map, Value};
 
 use crate::native::pref_journal::{
@@ -72,6 +72,30 @@ pub(crate) struct ImportEvent {
     pub(crate) balance_cents: Option<i64>,
     pub(crate) balance_asof: Option<NaiveDate>,
     pub(crate) counts: ImportCounts,
+}
+
+/// Local calendar date of an import, using Bob's configured timezone
+/// (or the host zone when none is set). Shared by status proofs and the
+/// historical balance resolver so `last_import` and `Final(d)` agree.
+pub(crate) fn import_local_date(event: &ImportEvent) -> NaiveDate {
+    import_local_date_in(event, crate::native::env::configured_timezone())
+}
+
+pub(crate) fn import_local_date_in(
+    event: &ImportEvent,
+    timezone: Option<chrono_tz::Tz>,
+) -> NaiveDate {
+    timestamp_local_date(event.ts, timezone)
+}
+
+pub(crate) fn timestamp_local_date(
+    ts: DateTime<FixedOffset>,
+    timezone: Option<chrono_tz::Tz>,
+) -> NaiveDate {
+    match timezone {
+        Some(zone) => ts.with_timezone(&zone).date_naive(),
+        None => ts.with_timezone(&Local).date_naive(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

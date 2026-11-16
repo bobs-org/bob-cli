@@ -926,6 +926,8 @@ bounded output. Balance findings are:
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `bank_balance_delta` | error | The latest QFX ledger balance differs from the derived opening anchor plus current rows carrying journaled IDs |
+| `bank_balance_anchor_mismatch` | warning | A bank-reported balance disagrees with the reconstructed amount from a later (or same-day) observation; days strictly between the disagreeing anchors are hidden |
+| `bank_balance_csv_overlap` | info | A mixed CSV and QFX import batch makes that coverage span unverified |
 | `bank_coverage_gap` | warning | QFX import windows have a gap from the configured account start through the latest balance date |
 | `bank_row_missing` | error | A journaled transaction's `^bank-` row is absent; restore deliberately with `bob bank import -F` |
 | `bank_amount_edited` | warning | The row is present but its amount differs from the immutable journal amount |
