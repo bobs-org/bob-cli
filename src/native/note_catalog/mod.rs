@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::native::{
     albums::registry::AlbumRegistry,
     areas::graph::build_area_graph,
+    bank::month::filename_month_for,
     capture_link_tasks::match_score,
     config, done_archive, env as bob_env,
     highlights_ref::Config as HighlightsConfig,
@@ -980,25 +981,13 @@ fn is_period_note(stem: &str, is_day_type: bool) -> bool {
 }
 
 /// The bank hub (`bank.md` at the vault root) or a bank month note
-/// (`bank/YYYY-MM.md`).
+/// (`bank/YYYY-MM.md`), named by the bank scan's own month parser.
 fn is_bank_note(relative: &Path) -> bool {
     if relative == Path::new("bank.md") {
         return true;
     }
-    if relative.parent() != Some(Path::new("bank")) {
-        return false;
-    }
-    let Some(stem) = relative.file_stem().and_then(|stem| stem.to_str()) else {
-        return false;
-    };
-    let Some((year, month)) = stem.split_once('-') else {
-        return false;
-    };
-    year.len() == 4
-        && year.bytes().all(|byte| byte.is_ascii_digit())
-        && month.len() == 2
-        && month.bytes().all(|byte| byte.is_ascii_digit())
-        && (1..=12).contains(&month.parse::<u32>().unwrap_or(0))
+    relative.parent() == Some(Path::new("bank"))
+        && filename_month_for(relative).is_some()
 }
 
 fn file_stem(relative: &Path) -> String {
