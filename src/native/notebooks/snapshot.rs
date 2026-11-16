@@ -156,6 +156,26 @@ impl VaultSnapshot {
             .and_then(|file| file.contents.as_deref())
     }
 
+    /// A snapshot over already-read buffers (for example frontmatter
+    /// prefixes) without touching the filesystem. Paths in `discovered`
+    /// without a buffer stay discovered but unclassified, mirroring
+    /// unreadable files in [`Self::load`].
+    pub(crate) fn from_prefixes(
+        discovered: BTreeSet<PathBuf>,
+        contents_by_path: BTreeMap<PathBuf, String>,
+    ) -> Self {
+        let mut snapshot = Self {
+            discovered,
+            files: BTreeMap::new(),
+            record_ids: BTreeSet::new(),
+            album_declarations: BTreeMap::new(),
+            album_schema_diagnostics: Vec::new(),
+            io_errors: Vec::new(),
+        };
+        snapshot.rebuild_classification(contents_by_path);
+        snapshot
+    }
+
     /// Whether any discovered path equals `relative` ignoring ASCII case.
     pub(crate) fn contains_ignore_case(&self, relative: &Path) -> bool {
         let wanted = display_slash(relative).to_lowercase();

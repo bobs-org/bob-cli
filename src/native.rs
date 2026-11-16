@@ -77,6 +77,10 @@ pub(crate) mod host_catalog;
 mod ledger_place;
 mod markdown;
 mod nightly;
+// Consumed by phase `cli-note-goto` (`note_goto` completion); the
+// allowance drops when that phase wires the module in.
+#[cfg_attr(not(test), allow(dead_code))]
+mod note_catalog;
 mod note_ready;
 mod note_tasks;
 pub(crate) mod notebooks;
