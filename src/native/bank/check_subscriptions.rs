@@ -1111,15 +1111,15 @@ mod tests {
             txn("a1000004", date(11), -1099, "TUNELY"),
             txn("a1000005", date(9), -500, "SHARED BILL"),
         ]);
+        let cfg = config("");
         let ledger = compute_ledger(
             &registry,
             &journal,
             &[],
             date(12),
-            None,
+            Some(&cfg),
             &HashMap::new(),
         );
-        let cfg = config("");
         let mut findings = Vec::new();
         append_record_findings(
             Some(&cfg),
