@@ -205,6 +205,7 @@ fn usage_with_journal(
     journal: &JournalSnapshot,
 ) -> UsageIndex {
     UsageIndex::from_scan(&scan(markdown, month), &parse_ok(markdown), journal)
+        .with_subscription_refs(Default::default())
 }
 
 fn import_journal(alias: &str) -> JournalSnapshot {
@@ -996,6 +997,81 @@ fn remove_and_reset_refusal_matrix_with_counts() {
     )
     .expect_err("builtin group");
     assert_eq!(builtin_group.code, "group_builtin");
+}
+
+#[test]
+fn category_removal_counts_subscription_records_and_ignores_missing_album() {
+    let markdown = live_flow();
+    let remove = || {
+        parse_envelope(&envelope_json(
+            &fingerprint(markdown),
+            json!([{"op":"category.remove","key":"convenience"}]),
+        ))
+        .expect("envelope")
+    };
+
+    let missing_album = tempfile::tempdir().unwrap();
+    let allowed = plan::plan_update(
+        &scan(markdown, None),
+        &JournalSnapshot::default(),
+        &plan::load_subscription_refs(missing_album.path()),
+        &remove(),
+        today(),
+    )
+    .expect("missing album has no subscription users");
+    assert!(allowed.changed);
+
+    let vault = tempfile::tempdir().unwrap();
+    fs::write(
+        vault.path().join("area.md"),
+        "---\ntype: [[area]]\n---\n# Work\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("billing.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[area]]\"\n",
+            "emoji: 🔁\n",
+            "record:\n",
+            "  noun: subscription\n",
+            "  label: Subscription\n",
+            "  fields:\n",
+            "    status:\n",
+            "      required: true\n",
+            "      values: { active: Active, cancelled: Cancelled, to_cancel: To cancel, to_decide: To decide }\n",
+            "    amount: { required: true, values: number, min: 0 }\n",
+            "    cadence: { required: true, values: { monthly: Monthly, four_weekly: Four weeks, quarterly: Quarterly, yearly: Yearly } }\n",
+            "    pricing: { default: fixed, values: { fixed: Fixed, variable: Variable } }\n",
+            "    match: { list: true }\n",
+            "    category: { suggest: true }\n",
+            "    url: { values: url }\n",
+            "    renews: { values: date }\n",
+            "    ended: { values: date }\n",
+            "---\n# Subscriptions\n",
+        ),
+    )
+    .unwrap();
+    fs::create_dir(vault.path().join("billing")).unwrap();
+    fs::write(
+        vault.path().join("billing/tunely.md"),
+        "---\ntitle: Tunely\nstatus: active\namount: 9.99\ncadence: monthly\ncategory: convenience\nmatch: [TUNELY]\n---\n# Tunely\n",
+    )
+    .unwrap();
+
+    let refused = plan::plan_update(
+        &scan(markdown, None),
+        &JournalSnapshot::default(),
+        &plan::load_subscription_refs(vault.path()),
+        &remove(),
+        today(),
+    )
+    .expect_err("subscription category use refuses removal");
+    assert_eq!(refused.code, "category_in_use");
+    assert_eq!(refused.affected, Some(1));
+    assert!(refused.message.contains("1 subscription use"));
+    assert!(refused.message.contains("Convenience"));
 }
 
 #[test]

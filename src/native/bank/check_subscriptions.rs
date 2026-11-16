@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use chrono::{Months, NaiveDate};
+use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use super::{
@@ -194,15 +194,17 @@ fn append_ledger_findings(
     findings: &mut Vec<Finding>,
 ) {
     if let Some(charge) = &ledger.after_cancel {
-        let hint = record.url.as_ref().map(|url| format!("Manage: {url}"))
-            .or_else(|| {
-                record.ended.is_none().then(|| {
-                    format!(
-                        "Set the cancel date with `bob records update subscription {} -s ended=YYYY-MM-DD`.",
-                        shell_quote(&record.stem)
-                    )
-                })
-            });
+        let mut hint_parts = Vec::new();
+        if let Some(url) = &record.url {
+            hint_parts.push(format!("Manage: {url}"));
+        }
+        if record.ended.is_none() {
+            hint_parts.push(format!(
+                "Set the cancel date with `bob records update subscription {} -s ended=YYYY-MM-DD`.",
+                shell_quote(&record.stem)
+            ));
+        }
+        let hint = (!hint_parts.is_empty()).then(|| hint_parts.join(" · "));
         findings.push(make_finding(
             "bank_subscription_cancelled_charge",
             Severity::Warning,
@@ -612,10 +614,21 @@ fn detect_cadence(
                 if !stable_amounts(window) {
                     continue;
                 }
-                let cadence = if cadence == SubscriptionCadence::FourWeekly
-                    && is_calendar_month_run(window)
-                {
-                    SubscriptionCadence::Monthly
+                let cadence = if cadence == SubscriptionCadence::FourWeekly {
+                    let elapsed = i128::from(
+                        window
+                            .last()?
+                            .event
+                            .posted
+                            .signed_duration_since(window.first()?.event.posted)
+                            .num_days(),
+                    );
+                    let intervals = i128::try_from(window.len() - 1).ok()?;
+                    if elapsed * 2 < intervals * 59 {
+                        SubscriptionCadence::FourWeekly
+                    } else {
+                        SubscriptionCadence::Monthly
+                    }
                 } else {
                     cadence
                 };
@@ -631,13 +644,6 @@ fn detect_cadence(
         }
     }
     best.map(|(_, _, cadence)| cadence)
-}
-
-fn is_calendar_month_run(transactions: &[CandidateTxn<'_>]) -> bool {
-    transactions.windows(2).all(|pair| {
-        pair[0].event.posted.checked_add_months(Months::new(1))
-            == Some(pair[1].event.posted)
-    })
 }
 
 fn stable_amounts(transactions: &[CandidateTxn<'_>]) -> bool {
@@ -1009,6 +1015,11 @@ mod tests {
             event("f0000009", 2026, 2, 15, -1499, "NEWSLETTER PLAN"),
             event("f0000010", 2026, 3, 15, -1499, "NEWSLETTER PLAN"),
         ];
+        let weekend_shifted_monthly = [
+            event("f0000016", 2026, 7, 15, -2499, "WEEKEND BILLING PLAN"),
+            event("f0000017", 2026, 8, 17, -2499, "WEEKEND BILLING PLAN"),
+            event("f0000018", 2026, 9, 15, -2499, "WEEKEND BILLING PLAN"),
+        ];
         let quarterly = [
             event("f0000011", 2026, 1, 1, -2500, "QUARTERLY SERVICE"),
             event("f0000012", 2026, 4, 1, -2500, "QUARTERLY SERVICE"),
@@ -1024,12 +1035,13 @@ mod tests {
                 .chain(marker_only)
                 .chain(changed_descriptor)
                 .chain(monthly)
+                .chain(weekend_shifted_monthly)
                 .chain(quarterly)
                 .chain(yearly)
                 .collect(),
         );
         let candidates = candidate_rows(&journal);
-        assert_eq!(candidates.len(), 6);
+        assert_eq!(candidates.len(), 7);
         let tunely = candidates
             .iter()
             .find(|item| item.title == "Tunely Bill")
@@ -1040,6 +1052,11 @@ mod tests {
             .find(|item| item.title == "Newsletter Plan")
             .unwrap();
         assert_eq!(newsletter.cadence, SubscriptionCadence::Monthly);
+        let weekend = candidates
+            .iter()
+            .find(|item| item.title == "Weekend Billing Plan")
+            .unwrap();
+        assert_eq!(weekend.cadence, SubscriptionCadence::Monthly);
         let quarterly = candidates
             .iter()
             .find(|item| item.title == "Quarterly Service")
@@ -1140,6 +1157,56 @@ mod tests {
         assert!(codes.contains(&"bank_subscription_category_unknown"));
         assert!(codes.contains(&"bank_subscription_amount_invalid"));
         assert!(codes.contains(&"bank_subscription_overlap"));
+    }
+
+    #[test]
+    fn cancelled_charge_hint_keeps_manage_url_and_teaches_ended() {
+        let mut cancelled = record(
+            "Cloudbox",
+            SubscriptionStatus::Cancelled,
+            999,
+            &["CLOUDBOX"],
+        );
+        cancelled.url = Some("https://example.invalid/manage".to_owned());
+        let reg = registry(vec![cancelled.clone()]);
+        let journal =
+            journal(vec![txn("c1000001", date(11), -999, "CLOUDBOX")]);
+        let ledger = compute_ledger(
+            &reg,
+            &journal,
+            &[],
+            date(12),
+            None,
+            &HashMap::new(),
+        );
+        let mut findings = Vec::new();
+        append_ledger_findings(
+            &cancelled,
+            &ledger.records[&cancelled.path],
+            &mut findings,
+        );
+        let hint = findings[0].hint.as_deref().expect("hint");
+        assert!(hint.contains("Manage: https://example.invalid/manage"));
+        assert!(hint.contains("ended=YYYY-MM-DD"));
+
+        cancelled.ended = Some(date(10));
+        let reg = registry(vec![cancelled.clone()]);
+        let ledger = compute_ledger(
+            &reg,
+            &journal,
+            &[],
+            date(12),
+            None,
+            &HashMap::new(),
+        );
+        let mut findings = Vec::new();
+        append_ledger_findings(
+            &cancelled,
+            &ledger.records[&cancelled.path],
+            &mut findings,
+        );
+        let hint = findings[0].hint.as_deref().expect("hint");
+        assert_eq!(hint, "Manage: https://example.invalid/manage");
     }
 
     #[test]

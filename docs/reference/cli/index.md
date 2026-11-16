@@ -98,7 +98,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 
 | Command | What it does |
 | --- | --- |
-| [`bob bank`](bank.md) | Commands over bank rows, bank month notes, their import journal, and the subscription records rows link to |
+| [`bob bank`](bank.md) | Commands over bank rows, bank month notes, their import journal, the hub's bank: setup, and the subscription records rows link to |
 | [`bob bank ack`](bank.md#bob-bank-ack) | Acknowledge waiting bank rows |
 | [`bob bank check`](bank.md#bob-bank-check) | Check bank notes against the contract |
 | [`bob bank config`](bank.md#bob-bank-config) | Show or update the bank configuration |
@@ -186,7 +186,7 @@ Vault:
 
 Integrations:
   bank         Commands over bank rows, bank month notes, their import journal,
-               and the subscription records rows link to
+               the hub's bank: setup, and the subscription records rows link to
   clipboard    Diagnose clipboard history for counted capture
   gcal         Project Google Calendar events onto today's daily note
   gkeep        Drain the Google Keep inbox into Obsidian tasks

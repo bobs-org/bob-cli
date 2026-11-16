@@ -6,10 +6,10 @@ are shown and never written into notes. Weekly ritual:
 [Acknowledge bank transactions](guides/acknowledge-bank-transactions.md).
 
 `bob bank` lives in the Integrations section of `bob --help`. Membership:
-commands over bank rows, bank month notes, their import journal, and the hub's
-`bank:` setup. Bare
+commands over bank rows, bank month notes, their import journal, the hub's
+`bank:` setup, and the subscription records rows link to. Bare
 `bob bank` runs the read-only `list`. This page is the contract. `check`,
-`config`, `list`, `report`, `ensure`, `ack`, and `import` ship now, including account
+`config`, `list`, `report`, `subscriptions`, `ensure`, `ack`, and `import` ship now, including account
 balance verdicts and deliberate restoration of missing imported rows.
 
 ```text
@@ -21,11 +21,12 @@ bob bank config update [-b DIR] [-d] [-f human|json] [-i FILE]
 bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
 bob bank import [FILE...] [-a ALIAS] [-b DIR] [-d] [-F] [-f human|json]
 bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-w WEEK] [-y YEAR]
+bob bank subscriptions [-a] [-b DIR] [-f human|json]
 ```
 
 - Every long option has a short alias; options stay alphabetical.
   Subcommands are alphabetical.
-- `list`, `report`, and `ensure` exit 0, or 1 on a runtime failure.
+- `list`, `report`, `subscriptions`, and `ensure` exit 0, or 1 on a runtime failure.
 - `config show` exits 0 for a valid or teaching-empty setup, and 1 when
   the configuration is missing or invalid.
 - `config update` exits 2 on envelope or semantic refusal, and 1 on
@@ -968,7 +969,7 @@ without journal evidence, including every journaled `written` row).
 never suggested; a subscription category fills an uncategorized attributed
 row only after `rule` and before `learned`. `subscription` is `null` or
 `{stem, path, title, status, status_label, cadence, pricing, amount_cents,
-source, needle, drift_cents, price_change, state}` with vault-relative
+source, needle, latest, drift_cents, price_change, state}` with vault-relative
 `.md` paths; `source` is `link` or `match`, `drift_cents` is the fixed
 outflow minus `amount` (`null` for variable or refunds), `price_change` is
 `{from_cents, to_cents, since}` or `null`, and `state` is `after_cancel`,
@@ -1049,8 +1050,9 @@ bank rule. A missing or invalid album forces the whole projection to
   `files[] {file, account, source, start, end, new, matched, seen,
   ambiguous, before_start, out_cents, in_cents, balance_cents,
   balance_asof, status}` and `rows[]` using existing row JSON,
-  plus `subscriptions {linked, candidates, price_changes}` counted over
-  this batch's new rows.
+  plus `subscriptions {linked, candidates, price_changes}` over this batch's
+  new rows: `linked` counts written subscription links, `candidates` counts
+  distinct merchant groups, and `price_changes` counts distinct records.
   `balance_cents`/`balance_asof` report the ledger balance and date.
   Diagnostics identify a file and field/record
   position without echoing private identifiers or raw data.

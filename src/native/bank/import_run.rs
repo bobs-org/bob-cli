@@ -1001,27 +1001,29 @@ pub(crate) fn print_human(report: &ImportReport) {
 
 fn subscription_counts(plan: &import_plan::BatchPlan) -> (usize, usize, usize) {
     let mut linked = 0usize;
-    let mut candidates = 0usize;
-    let mut price_changes = 0usize;
+    let mut price_change_records = std::collections::BTreeSet::new();
     for row in &plan.rows {
         if row.origin != "imported" {
             continue;
         }
-        if row.subscription.is_some() {
-            linked += 1;
-        }
-        if row.subscription_candidate {
-            candidates += 1;
-        }
         if row
             .subscription
             .as_ref()
-            .is_some_and(|subscription| subscription.price_change.is_some())
+            .is_some_and(|subscription| subscription.source == "link")
         {
-            price_changes += 1;
+            linked += 1;
+        }
+        if let Some(subscription) = row.subscription.as_ref()
+            && subscription.price_change.is_some()
+        {
+            price_change_records.insert(subscription.stem.as_str());
         }
     }
-    (linked, candidates, price_changes)
+    (
+        linked,
+        plan.candidate_merchants.len(),
+        price_change_records.len(),
+    )
 }
 
 fn format_subscription_summary(
@@ -1138,6 +1140,7 @@ mod tests {
         fn row(
             origin: &'static str,
             subscription: bool,
+            linked: bool,
             candidate: bool,
             price_change: bool,
         ) -> BankRow {
@@ -1167,8 +1170,10 @@ mod tests {
                         cadence: "monthly".to_owned(),
                         pricing: "fixed".to_owned(),
                         amount_cents: 999,
-                        source: "match".to_owned(),
+                        source: if linked { "link" } else { "match" }
+                            .to_owned(),
                         needle: Some("TUNELY".to_owned()),
+                        latest: None,
                         drift_cents: Some(0),
                         price_change: price_change.then(|| {
                             crate::native::bank::model::SubscriptionPriceChange {
@@ -1189,11 +1194,16 @@ mod tests {
         let plan = crate::native::bank::import_plan::BatchPlan {
             files: Vec::new(),
             rows: vec![
-                row("imported", true, false, false),
-                row("imported", true, false, true),
-                row("imported", false, true, false),
-                row("matched", true, false, false),
+                row("imported", true, false, false, true),
+                row("imported", true, true, false, true),
+                row("imported", true, true, false, true),
+                row("imported", false, false, true, false),
+                row("imported", false, false, true, false),
+                row("matched", true, true, false, true),
             ],
+            candidate_merchants: std::collections::BTreeSet::from([
+                "daily ledger".to_owned(),
+            ]),
             restored_rows: Vec::new(),
             restore_requested: false,
             month_edits: Vec::new(),
@@ -1217,7 +1227,8 @@ mod tests {
 
         let empty = crate::native::bank::import_plan::BatchPlan {
             files: Vec::new(),
-            rows: vec![row("imported", false, false, false)],
+            rows: vec![row("imported", false, false, false, false)],
+            candidate_merchants: std::collections::BTreeSet::new(),
             restored_rows: Vec::new(),
             restore_requested: false,
             month_edits: Vec::new(),

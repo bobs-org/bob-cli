@@ -1200,7 +1200,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "bank",
-        about: "Commands over bank rows, bank month notes, their import journal, and the subscription records rows link to",
+        about: "Commands over bank rows, bank month notes, their import journal, the hub's bank: setup, and the subscription records rows link to",
         section: Section::Integrations,
         target: Target::Group(Group {
             members: BANK_MEMBERS,

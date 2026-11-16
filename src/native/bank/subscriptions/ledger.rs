@@ -361,7 +361,7 @@ fn variable_monthly(
     let mut total: i128 = 0;
     let mut any = false;
     for charge in charges {
-        if charge.date >= start && charge.date <= today {
+        if charge.date > start && charge.date <= today {
             any = true;
             let magnitude = i128::from(charge.cents).checked_neg()?;
             total = total.checked_add(magnitude)?;
@@ -389,10 +389,18 @@ fn price_change_for(
             if previous_magnitude == latest_magnitude
                 && latest_magnitude != record.amount_cents
             {
+                let since = charges
+                    .iter()
+                    .rev()
+                    .take_while(|charge| {
+                        charge.cents.checked_neg() == Some(latest_magnitude)
+                    })
+                    .last()?
+                    .date;
                 Some(PriceChange {
                     from_cents: record.amount_cents,
                     to_cents: latest_magnitude,
-                    since: latest.date,
+                    since,
                 })
             } else {
                 None
@@ -911,6 +919,56 @@ mod tests {
             Some(2000)
         );
 
+        let variable_same_day = ledger(
+            vec![tunely(
+                1500,
+                SubscriptionCadence::Monthly,
+                SubscriptionPricing::Variable,
+                SubscriptionStatus::Active,
+            )],
+            vec![
+                txn(
+                    "checking",
+                    "v0000011",
+                    date(2026, 8, 15),
+                    -1000,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+                txn(
+                    "checking",
+                    "v0000012",
+                    date(2026, 9, 15),
+                    -1000,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+                txn(
+                    "checking",
+                    "v0000013",
+                    date(2026, 10, 15),
+                    -1000,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+                txn(
+                    "checking",
+                    "v0000014",
+                    date(2026, 11, 15),
+                    -1000,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+            ],
+            vec![],
+            vec![],
+            today,
+        );
+        assert_eq!(
+            variable_same_day.records["billing/tunely.md"].monthly_cents,
+            Some(1000)
+        );
+
         let cancelled = ledger(
             vec![tunely(
                 999,
@@ -1028,7 +1086,52 @@ mod tests {
             .expect("price change");
         assert_eq!(change.from_cents, 999);
         assert_eq!(change.to_cents, 1299);
-        assert_eq!(change.since, date(2026, 10, 1));
+        assert_eq!(change.since, date(2026, 9, 1));
+
+        let three_charge_run = ledger(
+            vec![tunely(
+                999,
+                SubscriptionCadence::Monthly,
+                SubscriptionPricing::Fixed,
+                SubscriptionStatus::Active,
+            )],
+            vec![
+                txn(
+                    "checking",
+                    "p0000010",
+                    date(2026, 8, 1),
+                    -1299,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+                txn(
+                    "checking",
+                    "p0000011",
+                    date(2026, 9, 1),
+                    -1299,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+                txn(
+                    "checking",
+                    "p0000012",
+                    date(2026, 10, 1),
+                    -1299,
+                    "TUNELY",
+                    TxnOutcome::BeforeStart,
+                ),
+            ],
+            vec![],
+            vec![],
+            today,
+        );
+        assert_eq!(
+            three_charge_run.records["billing/tunely.md"]
+                .price_change
+                .as_ref()
+                .map(|change| change.since),
+            Some(date(2026, 8, 1))
+        );
 
         let proration = ledger(
             vec![tunely(

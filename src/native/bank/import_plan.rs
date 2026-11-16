@@ -108,6 +108,13 @@ fn is_subscription_link(link: &str, registry: &SubscriptionRegistry) -> bool {
         return false;
     };
     let normalized = normalize_link_target(&target);
+    let inside_records_folder = registry.album.as_ref().is_some_and(|album| {
+        let folder = normalize_link_target(&album.directory);
+        normalized.starts_with(&format!("{folder}/"))
+    });
+    if inside_records_folder {
+        return true;
+    }
     registry.records.iter().any(|record| {
         normalize_link_target(&record.path) == normalized
             || normalize_link_target(&record.link_target) == normalized
@@ -250,6 +257,9 @@ pub(crate) struct BatchPlan {
     /// New and matched rows in the after-images, ordered by note and line,
     /// ready for `model::row_json`.
     pub(crate) rows: Vec<BankRow>,
+    /// Merchant keys for new candidate rows, grouped the same way as
+    /// `bob bank check`'s detector.
+    pub(crate) candidate_merchants: BTreeSet<String>,
     /// Rows deliberately recreated from journal evidence by `import -F`.
     pub(crate) restored_rows: Vec<BankRow>,
     pub(crate) restore_requested: bool,
@@ -1209,6 +1219,19 @@ impl<'a> Planner<'a> {
         let (waiting, waiting_oldest_month, waiting_extra_months) =
             waiting_walk;
         let rows = self.affected_rows(input, &planned_imports);
+        let candidate_ids = rows
+            .iter()
+            .filter(|row| {
+                row.origin == "imported" && row.subscription_candidate
+            })
+            .filter_map(|row| row.id.as_deref())
+            .collect::<HashSet<_>>();
+        let candidate_merchants = self
+            .txn_events
+            .iter()
+            .filter(|event| candidate_ids.contains(event.id.as_str()))
+            .map(|event| merchant_key(&event.desc))
+            .collect();
         let restored_rows = rows
             .iter()
             .filter(|row| {
@@ -1247,6 +1270,7 @@ impl<'a> Planner<'a> {
         BatchPlan {
             files,
             rows,
+            candidate_merchants,
             restored_rows,
             restore_requested: input.force_restore,
             month_edits,
@@ -3559,6 +3583,10 @@ mod tests {
         assert_eq!(projection.source, "link");
         assert_eq!(projection.needle.as_deref(), None);
         assert_eq!(projection.drift_cents, Some(100));
+        assert_eq!(projection.latest, Some(nov(12)));
+        let row_json =
+            super::super::model::row_json(&batch.rows[0], "checking");
+        assert_eq!(row_json["subscription"]["latest"], "2026-11-12");
         let change =
             projection.price_change.expect("history from before_start");
         assert_eq!(change.from_cents, 999);
@@ -3659,6 +3687,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn subscription_link_skip_covers_deleted_records_but_keeps_restaurants() {
+        let registry = subscription_registry_with("TUNELY", "Tunely", None);
+        assert!(is_subscription_link("[[subs/deleted]]", &registry));
+        assert!(is_subscription_link(
+            "[[subs/deleted.md#details]]",
+            &registry
+        ));
+        assert!(!is_subscription_link("[[eat/smashburger|🍔]]", &registry));
+    }
+
     fn run_plan_with_subscriptions(
         config: &BankConfig,
         scan: &BankScan,
@@ -3727,6 +3766,273 @@ mod tests {
             edit.after
         );
         assert!(!edit.after.contains("[[eat/"));
+    }
+
+    #[test]
+    fn imports_match_changed_descriptors_and_cancelled_only_records() {
+        use crate::native::bank::subscriptions::registry::{
+            SubscriptionAlbum, SubscriptionStatus,
+        };
+
+        let config = hub();
+        let scan = scan_with(vec![november(&[])]);
+        let journal = JournalSnapshot::default();
+        let mut tunely = subscription_record(
+            "subs/tunely.md",
+            999,
+            &["TUNELY LEGACY", "TUNELY PREMIUM"],
+        );
+        tunely.title = "Tunely".to_owned();
+        let mut subscriptions = subscription_registry(vec![tunely]);
+        subscriptions.album = Some(SubscriptionAlbum {
+            stem: "subscriptions".to_owned(),
+            path: "subscriptions.md".to_owned(),
+            title: "Subscriptions".to_owned(),
+            directory: "subs".to_owned(),
+            emoji: Some("🔁".to_owned()),
+        });
+        let plan = run_plan_with_subscriptions(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![
+                    txn(
+                        nov(10),
+                        -999,
+                        "legacy-1",
+                        "TUNELY LEGACY SERVICE",
+                        None,
+                    ),
+                    txn(
+                        nov(12),
+                        -999,
+                        "premium-1",
+                        "TUNELY PREMIUM SERVICE",
+                        None,
+                    ),
+                ],
+                &digest("changed-descriptor"),
+            )],
+            vec!["changed.qfx"],
+            Vec::new(),
+            subscriptions,
+        )
+        .expect("both descriptor forms link");
+        assert_eq!(plan.rows.len(), 2);
+        assert!(plan.rows.iter().all(|row| {
+            row.subscription
+                .as_ref()
+                .is_some_and(|subscription| subscription.stem == "tunely")
+        }));
+        assert!(plan.month_edits[0].after.contains("[[subs/tunely|🔁]]"));
+
+        let mut cancelled =
+            subscription_record("subs/cloudbox.md", 1999, &["CLOUDBOX"]);
+        cancelled.stem = "cloudbox".to_owned();
+        cancelled.title = "Cloudbox".to_owned();
+        cancelled.status = SubscriptionStatus::Cancelled;
+        let mut subscriptions = subscription_registry(vec![cancelled]);
+        subscriptions.album = Some(SubscriptionAlbum {
+            stem: "subscriptions".to_owned(),
+            path: "subscriptions.md".to_owned(),
+            title: "Subscriptions".to_owned(),
+            directory: "subs".to_owned(),
+            emoji: Some("🔁".to_owned()),
+        });
+        let plan = run_plan_with_subscriptions(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(nov(12), -1999, "cancelled-1", "CLOUDBOX", None)],
+                &digest("cancelled-only"),
+            )],
+            vec!["cancelled.qfx"],
+            Vec::new(),
+            subscriptions,
+        )
+        .expect("cancelled-only match links");
+        assert!(plan.month_edits[0].after.contains("[[subs/cloudbox|🔁]]"));
+    }
+
+    #[test]
+    fn exact_subscription_needle_tie_writes_no_link() {
+        use crate::native::bank::subscriptions::registry::SubscriptionAlbum;
+
+        let config = hub();
+        let scan = scan_with(vec![november(&[])]);
+        let mut subscriptions = subscription_registry(vec![
+            subscription_record("subs/alpha.md", 999, &["SHARED BILL"]),
+            subscription_record("subs/beta.md", 999, &["SHARED BILL"]),
+        ]);
+        subscriptions.album = Some(SubscriptionAlbum {
+            stem: "subscriptions".to_owned(),
+            path: "subscriptions.md".to_owned(),
+            title: "Subscriptions".to_owned(),
+            directory: "subs".to_owned(),
+            emoji: Some("🔁".to_owned()),
+        });
+        let plan = run_plan_with_subscriptions(
+            &config,
+            &scan,
+            &JournalSnapshot::default(),
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(nov(12), -999, "tie-1", "SHARED BILL", None)],
+                &digest("exact-needle-tie"),
+            )],
+            vec!["tie.qfx"],
+            Vec::new(),
+            subscriptions,
+        )
+        .expect("ambiguous needle tie imports without a link");
+        assert_eq!(plan.rows.len(), 1);
+        assert!(plan.rows[0].subscription.is_none());
+        assert!(!plan.month_edits[0].after.contains("[[subs/"));
+    }
+
+    #[test]
+    fn candidate_summary_groups_new_rows_by_detector_merchant_key() {
+        let config = hub();
+        // Candidate projection requires an available registry: a missing or
+        // invalid album forces every row projection to null/false, so a
+        // missing-registry plan can never carry candidates.
+        let plan = run_plan_with_subscriptions(
+            &config,
+            &scan_with(vec![november(&[])]),
+            &JournalSnapshot::default(),
+            vec![stmt(
+                "checking",
+                0,
+                vec![
+                    txn(
+                        nov(10),
+                        -999,
+                        "candidate-1",
+                        "RECURRING PAYMENT 11/10/26 DAILY LEDGER",
+                        None,
+                    ),
+                    txn(
+                        nov(12),
+                        -999,
+                        "candidate-2",
+                        "RECURRING PAYMENT 11/12/26 DAILY LEDGER",
+                        None,
+                    ),
+                ],
+                &digest("candidate-merchant-count"),
+            )],
+            vec!["candidate.qfx"],
+            Vec::new(),
+            subscription_registry(Vec::new()),
+        )
+        .expect("plan");
+        assert_eq!(plan.rows.len(), 2);
+        assert!(plan.rows.iter().all(|row| row.subscription_candidate));
+        assert_eq!(plan.candidate_merchants.len(), 1);
+    }
+
+    #[test]
+    fn learned_restaurant_link_survives_while_deleted_subscription_link_does_not(
+    ) {
+        let config = hub();
+        let old_key = transaction_key("checking", "old-merchant");
+        let old_id: String = old_key.chars().take(8).collect();
+        let make_history = |link: &str, desc: &str| {
+            let row = format!(
+                "- [x] $9.99 Familiar Merchant {link} [acct:: checking] ^bank-{old_id}\n"
+            );
+            let scan = scan_with(vec![november(&[(10, vec![row.as_str()])])]);
+            let journal = snapshot_with(vec![journal_event(
+                "checking",
+                "old-merchant",
+                TxnOutcome::Written,
+                Some("bank/2026-11.md"),
+                nov(10),
+                -999,
+                desc,
+            )]);
+            (scan, journal)
+        };
+
+        let (scan, journal) =
+            make_history("[[eat/smashburger|🍔]]", "SMASHBURGER");
+        let restaurant_plan = run_plan_with_subscriptions(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(nov(12), -999, "new-merchant", "SMASHBURGER", None)],
+                &digest("learn-restaurant"),
+            )],
+            vec!["restaurant.qfx"],
+            Vec::new(),
+            crate::native::bank::subscriptions::registry::SubscriptionRegistry::missing(),
+        )
+        .expect("learned restaurant link");
+        // Assert on the new row: the history row also carries the link, so a
+        // whole-file contains check would prove nothing.
+        let restaurant_new: Vec<&str> = restaurant_plan.month_edits[0]
+            .after
+            .lines()
+            .filter(|line| line.starts_with("- [ ]"))
+            .collect();
+        assert!(
+            restaurant_new
+                .iter()
+                .any(|line| line.contains("[[eat/smashburger|🍔]]")),
+            "new row should carry the learned restaurant link: {}",
+            restaurant_plan.month_edits[0].after
+        );
+
+        let (scan, journal) = make_history("[[subs/deleted]]", "TUNELY");
+        let subscriptions =
+            subscription_registry_with("UNRELATED NEEDLE", "Other", None);
+        let subscription_plan = run_plan_with_subscriptions(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(nov(12), -999, "new-subscription", "TUNELY", None)],
+                &digest("learn-subscription"),
+            )],
+            vec!["subscription.qfx"],
+            Vec::new(),
+            subscriptions,
+        )
+        .expect("stale subscription learned link is skipped");
+        // The pre-existing history row keeps its link, so the check must
+        // target the new row: no new waiting row may carry the deleted link.
+        let subscription_new: Vec<&str> = subscription_plan.month_edits[0]
+            .after
+            .lines()
+            .filter(|line| line.starts_with("- [ ]"))
+            .collect();
+        assert!(
+            !subscription_new.is_empty(),
+            "expected a new waiting row: {}",
+            subscription_plan.month_edits[0].after
+        );
+        assert!(
+            subscription_new
+                .iter()
+                .all(|line| !line.contains("subs/deleted")),
+            "new row must not carry the deleted subscription link: {}",
+            subscription_plan.month_edits[0].after
+        );
+        assert!(subscription_plan.month_edits[0]
+            .after
+            .contains("- [ ] $9.99 Familiar Merchant ^bank-"));
     }
 
     #[test]

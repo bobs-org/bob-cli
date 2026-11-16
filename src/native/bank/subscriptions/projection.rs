@@ -154,6 +154,9 @@ pub(crate) fn enrich_rows_with_raw(
                 amount_cents: record.amount_cents,
                 source,
                 needle: attribution.needle.clone(),
+                latest: ledger_record
+                    .and_then(|ledger| ledger.latest.as_ref())
+                    .map(|charge| charge.date),
                 drift_cents: drift,
                 price_change,
                 state,

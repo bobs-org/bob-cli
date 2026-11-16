@@ -36,7 +36,7 @@ Vault:
 
 Integrations:
   bank         Commands over bank rows, bank month notes, their import journal,
-               and the subscription records rows link to
+               the hub's bank: setup, and the subscription records rows link to
   clipboard    Diagnose clipboard history for counted capture
   gcal         Project Google Calendar events onto today's daily note
   gkeep        Drain the Google Keep inbox into Obsidian tasks

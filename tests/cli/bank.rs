@@ -1083,7 +1083,8 @@ fn assert_tunely_after_state(row: &Value) {
     assert_eq!(sub["drift_cents"], 100, "{row}");
     assert_eq!(sub["price_change"]["from_cents"], 999, "{row}");
     assert_eq!(sub["price_change"]["to_cents"], 1099, "{row}");
-    assert_eq!(sub["price_change"]["since"], "2026-11-12", "{row}");
+    // Trailing 1099 run is Oct 10 + Nov 12, so since is the run start (A1).
+    assert_eq!(sub["price_change"]["since"], "2026-10-10", "{row}");
     assert_eq!(row["bank_recurring"], true, "{row}");
     assert_eq!(row["subscription_candidate"], false, "{row}");
 }

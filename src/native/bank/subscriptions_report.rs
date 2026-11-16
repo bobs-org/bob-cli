@@ -683,8 +683,7 @@ fn counts_line(report: &SubscriptionsReport) -> String {
             format!("{count} findings")
         });
     }
-    parts.push("bob bank check".to_owned());
-    parts.join(" · ")
+    format!("{} — bob bank check", parts.join(" · "))
 }
 
 fn category_subgroup_key(entry: &SubscriptionEntry) -> (String, String) {
@@ -1021,6 +1020,9 @@ mod tests {
         assert!(cancel_at < decide_at && decide_at < active_at);
         assert!(!human.contains("oldbox title"));
         assert!(human.contains("1 cancelled hidden; rerun with -a"));
+        assert!(human.contains(
+            "1 to cancel · 1 to decide · no findings — bob bank check"
+        ));
     }
 
     #[test]
