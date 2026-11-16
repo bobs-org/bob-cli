@@ -296,6 +296,7 @@ fn plan_ok(markdown: &str, ops: serde_json::Value) -> plan::UpdatePlan {
     plan::plan_update(
         &scan(markdown, None),
         &JournalSnapshot::default(),
+        &plan::SubscriptionRefs::new(),
         &envelope,
         today(),
     )
@@ -574,6 +575,7 @@ fn account_identity_refusals_hold_when_journal_scan_is_incomplete() {
     let error = plan::plan_update(
         &scan(mixed_shape(), None),
         &journal,
+        &plan::SubscriptionRefs::new(),
         &envelope,
         today(),
     )
@@ -1003,6 +1005,7 @@ fn stale_fingerprint_and_invalid_pre_image_refuse() {
     let error = plan::plan_update(
         &scan(live_flow(), None),
         &JournalSnapshot::default(),
+        &plan::SubscriptionRefs::new(),
         &envelope,
         today(),
     )
@@ -1016,6 +1019,7 @@ fn stale_fingerprint_and_invalid_pre_image_refuse() {
     let error = plan::plan_update(
         &scan(missing, None),
         &JournalSnapshot::default(),
+        &plan::SubscriptionRefs::new(),
         &envelope,
         today(),
     )
@@ -1069,6 +1073,51 @@ fn undo_blocked_when_rows_now_depend_on_the_category() {
 }
 
 #[test]
+fn subscription_records_block_category_remove_and_its_undo() {
+    let refs =
+        |key: &str| std::collections::HashMap::from([(key.to_owned(), 2usize)]);
+    let error = apply_with_usage(
+        live_flow(),
+        &[Op::CategoryRemove {
+            key: "coffee".to_owned(),
+        }],
+        &empty_usage(live_flow()).with_subscription_refs(refs("coffee")),
+    )
+    .expect_err("subscriptions use it");
+    assert_eq!(error.code, "category_in_use");
+    assert_eq!(error.affected, Some(2));
+    assert!(
+        error.message.contains("2 subscriptions"),
+        "{}",
+        error.message
+    );
+    assert!(!error.message.contains("row"), "{}", error.message);
+
+    let ops = [Op::CategoryAdd {
+        label: "🚆 Transit".to_owned(),
+        group: None,
+        hotkey: Some('n'),
+        hidden: None,
+        place: None,
+        restore_key: None,
+    }];
+    let (after, _, inverses) = apply(live_flow(), &ops);
+    let error = apply_inverses(
+        &after,
+        &inverses,
+        &empty_usage(&after).with_subscription_refs(refs("transit")),
+    )
+    .expect_err("undo blocked by subscriptions");
+    assert_eq!(error.code, "undo_blocked");
+    assert_eq!(error.affected, Some(2));
+    assert!(
+        error.message.contains("2 subscriptions"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
 fn post_image_mismatch_refuses_forged_restore() {
     let markdown = live_flow();
     let envelope = parse_envelope(
@@ -1094,6 +1143,7 @@ fn post_image_mismatch_refuses_forged_restore() {
     let error = plan::plan_update(
         &scan(markdown, None),
         &JournalSnapshot::default(),
+        &plan::SubscriptionRefs::new(),
         &envelope,
         today(),
     )

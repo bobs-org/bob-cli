@@ -86,6 +86,9 @@ pub(crate) struct UsageIndex {
     account_rows: HashMap<String, usize>,
     default_rows: usize,
     account_journal_events: HashMap<String, usize>,
+    /// Subscription records naming each category key (complete registry
+    /// scan, every status), so removal never strands a record's category.
+    subscription_refs: HashMap<String, usize>,
 }
 
 impl UsageIndex {
@@ -141,11 +144,24 @@ impl UsageIndex {
             account_rows,
             default_rows,
             account_journal_events,
+            subscription_refs: HashMap::new(),
         }
+    }
+
+    pub(crate) fn with_subscription_refs(
+        mut self,
+        refs: HashMap<String, usize>,
+    ) -> Self {
+        self.subscription_refs = refs;
+        self
     }
 
     fn rows(&self, key: &str) -> usize {
         self.rows.get(key).copied().unwrap_or(0)
+    }
+
+    fn subscription_refs(&self, key: &str) -> usize {
+        self.subscription_refs.get(key).copied().unwrap_or(0)
     }
 
     fn account_rows(&self, alias: &str) -> usize {
@@ -159,6 +175,28 @@ impl UsageIndex {
     fn default_rows(&self) -> usize {
         self.default_rows
     }
+}
+
+/// Everything that still names category `key`: filed rows, rules, and
+/// subscription records. Returns the plain-language parts and their total.
+fn category_uses(
+    key: &str,
+    usage: &UsageIndex,
+    config: &BankConfig,
+) -> (Vec<String>, usize) {
+    let counts = [
+        (usage.rows(key), "row"),
+        (rule_refs(config, key), "rule"),
+        (usage.subscription_refs(key), "subscription"),
+    ];
+    let parts = counts
+        .iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, noun)| {
+            format!("{count} {noun}{}", if *count == 1 { "" } else { "s" })
+        })
+        .collect();
+    (parts, counts.iter().map(|(count, _)| count).sum())
 }
 
 fn rule_refs(config: &BankConfig, key: &str) -> usize {
@@ -420,28 +458,14 @@ fn validate_remove_usage(
 ) -> Result<(), OpError> {
     match op {
         Op::CategoryRemove { key } => {
-            let rows = usage.rows(key);
-            let rules = rule_refs(config, key);
-            if rows == 0 && rules == 0 {
+            let (parts, total) = category_uses(key, usage, config);
+            if total == 0 {
                 return Ok(());
             }
             let label = config
                 .category(key)
                 .map(full_label)
                 .unwrap_or_else(|| key.to_owned());
-            let mut parts = Vec::new();
-            if rows > 0 {
-                parts.push(format!(
-                    "{rows} row{}",
-                    if rows == 1 { "" } else { "s" }
-                ));
-            }
-            if rules > 0 {
-                parts.push(format!(
-                    "{rules} rule{}",
-                    if rules == 1 { "" } else { "s" }
-                ));
-            }
             let mut error = OpError::new(
                 "undo_blocked",
                 format!("{} now use {label} · cannot undo", parts.join(" and ")),
@@ -451,7 +475,7 @@ fn validate_remove_usage(
                 ),
             );
             error.op_index = Some(index);
-            error.affected = Some(rows + rules);
+            error.affected = Some(total);
             error.key_path = Some(format!("bank.categories.{key}"));
             Err(error)
         }
@@ -1285,23 +1309,14 @@ fn refuse_in_use(
     config: &BankConfig,
     index: usize,
 ) -> Result<(), OpError> {
-    let rows = usage.rows(key);
-    let rules = rule_refs(config, key);
-    if rows == 0 && rules == 0 {
+    let (parts, total) = category_uses(key, usage, config);
+    if total == 0 {
         return Ok(());
     }
     let label = config
         .category(key)
         .map(full_label)
         .unwrap_or_else(|| key.to_owned());
-    let mut parts = Vec::new();
-    if rows > 0 {
-        parts.push(format!("{rows} row{}", if rows == 1 { "" } else { "s" }));
-    }
-    if rules > 0 {
-        parts
-            .push(format!("{rules} rule{}", if rules == 1 { "" } else { "s" }));
-    }
     let mut error = OpError::new(
         "category_in_use",
         format!(
@@ -1311,7 +1326,7 @@ fn refuse_in_use(
         Some("hide it instead".to_owned()),
     );
     error.op_index = Some(index);
-    error.affected = Some(rows + rules);
+    error.affected = Some(total);
     error.key_path = Some(format!("bank.categories.{key}"));
     Err(error)
 }

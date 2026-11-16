@@ -321,7 +321,14 @@ pub(crate) fn dry_run(vault: &Path, envelope_text: &str) -> UpdateReport {
         Err(error) => return failed_report(true, op_failure(&error)),
     };
     let journal = plan::load_journal(vault);
-    match plan::plan_update(&scan, &journal, &envelope, today()) {
+    let subscription_refs = plan::load_subscription_refs(vault);
+    match plan::plan_update(
+        &scan,
+        &journal,
+        &subscription_refs,
+        &envelope,
+        today(),
+    ) {
         Ok(plan) => report_of_plan(true, &plan),
         Err(error) => failed_report(true, op_failure(&error)),
     }
@@ -345,8 +352,14 @@ pub(crate) fn run_standalone(
         Err(error) => return failed_report(false, op_failure(&error)),
     };
     let journal = plan::load_journal(vault);
-    let preflight = match plan::plan_update(&scan, &journal, &envelope, today())
-    {
+    let subscription_refs = plan::load_subscription_refs(vault);
+    let preflight = match plan::plan_update(
+        &scan,
+        &journal,
+        &subscription_refs,
+        &envelope,
+        today(),
+    ) {
         Ok(plan) => plan,
         Err(error) => return failed_report(false, op_failure(&error)),
     };
@@ -371,19 +384,25 @@ pub(crate) fn run_standalone(
                 )
             })?;
             let journal = plan::load_journal(vault);
-            let plan =
-                match plan::plan_update(&scan, &journal, &envelope, today()) {
-                    Ok(plan) => plan,
-                    Err(error) => {
-                        let failure = TxnFailure::new(
-                            error.code,
-                            error.message.clone(),
-                            error.hint.clone(),
-                        );
-                        *typed.borrow_mut() = Some(error);
-                        return Err(failure);
-                    }
-                };
+            let subscription_refs = plan::load_subscription_refs(vault);
+            let plan = match plan::plan_update(
+                &scan,
+                &journal,
+                &subscription_refs,
+                &envelope,
+                today(),
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let failure = TxnFailure::new(
+                        error.code,
+                        error.message.clone(),
+                        error.hint.clone(),
+                    );
+                    *typed.borrow_mut() = Some(error);
+                    return Err(failure);
+                }
+            };
             if plan.before_fingerprint != expect {
                 let error = OpError::new(
                 "stale_config",

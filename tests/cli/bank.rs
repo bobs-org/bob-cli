@@ -1386,3 +1386,37 @@ fn subscriptions_reports_records_and_teaches_without_an_album() {
     assert_eq!(entry["charges"]["count"], 1);
     assert_eq!(entry["next_expected"], "2026-12-12");
 }
+
+#[test]
+fn subscriptions_reports_every_located_config_finding() {
+    let hub = concat!(
+        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n",
+        "  accounts:\n    checking:\n      label: Checking\n",
+        "      kind: checking\n      start: 2026-11-01\n",
+        "  categories:\n    coffee: ☕ Coffee\n  rules:\n",
+        "    - match: FIRST\n      cat: missing_one\n",
+        "    - { match: SECOND, cat: missing_two }\n---\n# Bank\n",
+    );
+    let vault = syncable(hub);
+    write_file(
+        &vault.path.join("subscriptions.md"),
+        "---\nparent: \"[[bank]]\"\ntype: \"[[album]]\"\nemoji: 🔁\nrecord:\n  noun: subscription\n  label: Subscription\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: To cancel\n        to_decide: To decide\n        active: Active\n        cancelled: Cancelled\n    amount: { required: true, values: number, min: 0 }\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every 4 weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    match: { list: true }\n    category: { suggest: true }\n---\n\n# Subscriptions\n",
+    );
+
+    let payload = json(&run(&vault, &["subscriptions", "-f", "json"]));
+    let config_findings = payload["findings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{payload}"))
+        .iter()
+        .filter(|finding| finding["code"] == "bank_config_invalid")
+        .collect::<Vec<_>>();
+    assert_eq!(config_findings.len(), 2, "{payload}");
+    assert_eq!(config_findings[0]["key_path"], "bank.rules.0.cat");
+    assert_eq!(config_findings[0]["line"], 14);
+    assert_eq!(config_findings[1]["key_path"], "bank.rules.1.cat");
+    assert_eq!(config_findings[1]["line"], 15);
+    assert!(payload["config_fingerprint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{payload}"))
+        .starts_with("sha256:"));
+}

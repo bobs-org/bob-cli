@@ -13,9 +13,9 @@ use serde_json::{json, Value};
 use crate::native::style::{display_width, pad_right, Styler};
 
 use super::{
-    check::{Finding, IssueCounts, Severity},
+    check::{config_finding, Finding, IssueCounts, Severity},
     check_subscriptions,
-    config::{parse_bank_config, BankConfig, ConfigParse},
+    config::{parse_bank_config, BankConfig, ConfigDiagnostic, ConfigParse},
     grammar::render_amount,
     model::collect_rows,
     scan::BankScan,
@@ -99,7 +99,12 @@ impl SubscriptionsReport {
         show_all: bool,
     ) -> Self {
         let journal = super::journal::load(vault).unwrap_or_default();
-        let (config, config_error, fingerprint) = load_partial_config(scan);
+        let PartialConfig {
+            config,
+            error: config_error,
+            diagnostics: config_diagnostics,
+            fingerprint,
+        } = load_partial_config(scan);
         let rows = collect_rows(scan, config.as_ref(), Some(&journal));
         let registry = SubscriptionRegistry::load(vault);
         if registry.availability == SubscriptionAvailability::Missing {
@@ -120,7 +125,14 @@ impl SubscriptionsReport {
             &rows,
             today,
         );
-        if let Some(message) = &config_error {
+        if !config_diagnostics.is_empty() {
+            // Every located config error, in source order, ahead of the
+            // subscription findings (the same shape `bob bank check` emits).
+            findings.splice(
+                0..0,
+                config_diagnostics.into_iter().map(config_finding),
+            );
+        } else if let Some(message) = &config_error {
             findings.insert(
                 0,
                 Finding {
@@ -370,20 +382,39 @@ impl SubscriptionsReport {
     }
 }
 
-fn load_partial_config(
-    scan: &BankScan,
-) -> (Option<BankConfig>, Option<String>, Option<String>) {
+/// The readable part of `bank:` plus every located diagnostic, so an
+/// invalid config reports each error on its own line instead of one
+/// unlocated first message.
+struct PartialConfig {
+    config: Option<BankConfig>,
+    error: Option<String>,
+    diagnostics: Vec<ConfigDiagnostic>,
+    fingerprint: Option<String>,
+}
+
+fn load_partial_config(scan: &BankScan) -> PartialConfig {
     let Some(hub) = &scan.hub else {
-        return (None, Some("bank.md is missing".to_owned()), None);
+        return PartialConfig {
+            config: None,
+            error: Some("bank.md is missing".to_owned()),
+            diagnostics: Vec::new(),
+            fingerprint: None,
+        };
     };
     let fingerprint = super::config::config_fingerprint(&hub.contents);
     match parse_bank_config(&hub.contents) {
-        ConfigParse::Ok(config) => (Some(config), None, fingerprint),
-        ConfigParse::MissingMapping => (
-            None,
-            Some("bank.md has no bank: mapping".to_owned()),
+        ConfigParse::Ok(config) => PartialConfig {
+            config: Some(config),
+            error: None,
+            diagnostics: Vec::new(),
             fingerprint,
-        ),
+        },
+        ConfigParse::MissingMapping => PartialConfig {
+            config: None,
+            error: Some("bank.md has no bank: mapping".to_owned()),
+            diagnostics: Vec::new(),
+            fingerprint,
+        },
         ConfigParse::Invalid {
             diagnostics,
             config,
@@ -394,7 +425,12 @@ fn load_partial_config(
                     format!("{}: {}", diagnostic.key_path, diagnostic.message)
                 })
                 .unwrap_or_else(|| "invalid bank configuration".to_owned());
-            (config, Some(first), fingerprint)
+            PartialConfig {
+                config,
+                error: Some(first),
+                diagnostics,
+                fingerprint,
+            }
         }
     }
 }

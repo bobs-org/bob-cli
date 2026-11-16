@@ -638,7 +638,7 @@ fn lint_journal(
     snapshot
 }
 
-fn config_finding(diagnostic: ConfigDiagnostic) -> Finding {
+pub(crate) fn config_finding(diagnostic: ConfigDiagnostic) -> Finding {
     let mut finding = finding(
         "bank_config_invalid",
         Severity::Error,

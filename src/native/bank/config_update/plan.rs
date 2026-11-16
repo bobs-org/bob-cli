@@ -1,5 +1,7 @@
 //! Plan a config update against the current vault snapshot.
 
+use std::collections::HashMap;
+
 use chrono::NaiveDate;
 
 use super::ops::{self, InverseOp, OpError, OpResult, UsageIndex};
@@ -8,6 +10,24 @@ use crate::native::bank::config::{self, ConfigParse};
 use crate::native::bank::config_report::ConfigReport;
 use crate::native::bank::journal::{self, JournalSnapshot};
 use crate::native::bank::scan::{self, BankScan};
+use crate::native::bank::subscriptions::registry::SubscriptionRegistry;
+
+/// Subscription records naming each bank category key.
+pub(crate) type SubscriptionRefs = HashMap<String, usize>;
+
+/// Count every subscription record's `category` reference (all statuses).
+/// A missing or unreadable subscription album contributes nothing.
+pub(crate) fn load_subscription_refs(
+    vault: &std::path::Path,
+) -> SubscriptionRefs {
+    let mut refs = SubscriptionRefs::new();
+    for record in SubscriptionRegistry::load(vault).records {
+        if let Some(category) = record.category {
+            *refs.entry(category).or_insert(0) += 1;
+        }
+    }
+    refs
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct HotkeyShift {
@@ -50,6 +70,7 @@ pub(crate) fn load_scan(vault: &std::path::Path) -> Result<BankScan, OpError> {
 pub(crate) fn plan_update(
     scan: &BankScan,
     journal: &JournalSnapshot,
+    subscription_refs: &SubscriptionRefs,
     envelope: &Envelope,
     today: NaiveDate,
 ) -> Result<UpdatePlan, OpError> {
@@ -106,7 +127,8 @@ pub(crate) fn plan_update(
             ),
         ));
     }
-    let usage = UsageIndex::from_scan(scan, &config, journal);
+    let usage = UsageIndex::from_scan(scan, &config, journal)
+        .with_subscription_refs(subscription_refs.clone());
     let (after, per_op, inverse_ops) = ops::apply_ops(
         &before,
         &envelope.ops,

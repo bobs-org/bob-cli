@@ -189,7 +189,7 @@ Ops, applied atomically in order then emitted through the entry editor:
 | `category.set` | `{key, set{label, group, hotkey, hidden}, unset[hotkey, group]}` | The stored key never changes. Setting an undeclared built-in creates its override entry. Unsetting `hotkey` returns it to derivation. |
 | `category.reset` | `{key}` | Built-ins only: removes the override entry. |
 | `category.move` | `{key, before\|after}` | Reorders declared categories. |
-| `category.remove` | `{key}` | Only when the complete scan shows zero rows and zero rule references; otherwise `category_in_use`. Built-ins refuse `builtin_category`. |
+| `category.remove` | `{key}` | Only when the complete scan shows zero rows, rule references, and subscription records naming it; otherwise `category_in_use`. Built-ins refuse `builtin_category`. |
 | `group.rename` | `{group, to}` | Renames the group on every declared member. |
 | `group.move` | `{group, before\|after}` | Moves the group's members as one block, preserving relative order. |
 | `account.add` | `{label, kind, start?, alias?}` | Appends an account so the default never moves. The alias is derived from the full label unless supplied, and must be unique and match `[a-z][a-z0-9_]*`. `start` is required except for `cash`. |
