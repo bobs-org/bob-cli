@@ -1,9 +1,10 @@
 # Attachment origins
 
-Every image or file bob copies into the vault remembers where it came
-from. The `Z` image viewer copies that path back out (`y`) or turns the
-link into it (`r`), and `Z` on a bullet holding only an image path
-imports it through the same copy rules. One loop: path → embed → path.
+Every image, video, or file bob copies into the vault remembers where
+it came from. The `Z` image viewer copies that path back out (`y`) or
+turns the link into it (`r`), and `Z` on a bullet holding only an image
+or video path imports it through the same copy rules. One loop:
+path → embed → path.
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/attachments/` (origin journal, resolution, and both
@@ -13,6 +14,22 @@ the `attachments` api namespace in bob-ledger-tools and the origin
 line, chips, pill, and key actions in bob-navigation-hotkeys. If an
 implementation disagrees with this file, fix this doc first in the same
 change.
+
+## Shared media catalog
+
+This table is the single catalog both repos cite. Extensions are
+matched case-insensitively.
+
+| Kind    | Extensions                                           | Directory | Written as           | `Z`                                                        |
+| ------- | ---------------------------------------------------- | --------- | -------------------- | ---------------------------------------------------------- |
+| `image` | avif bmp gif heic ico jpeg jpg png svg tif tiff webp | `img/`    | `![[img/NAME\|400]]` | Image viewer (decodable types: all except heic, tif, tiff) |
+| `video` | mp4 mov webm mkv                                     | `vid/`    | `![[vid/NAME\|400]]` | Video player                                               |
+| `file`  | everything else (including m4v, avi, ogv)            | `file/`   | `[[file/NAME]]`      | —                                                          |
+
+The video set is the intersection of the formats Obsidian renders as a
+player and the vault's git allowlist: `m4v` renders as a generic file,
+`avi` does not play in Chromium, and the live vault `.gitignore`
+ignores `ogv`.
 
 ## Origin journal
 
@@ -71,24 +88,27 @@ gets a short alias, and options are sorted alphabetically.
   the hidden internal `--via CLIENT`).
   - Takes 1–10 paths. Each is classified exactly as a `%c` clipboard
     line is (`classify_path_candidate`) and copied with the `%c`
-    planner: `img/` vs `file/`, the name sanitizer, reuse of an
-    identical file, and the 8-character hash suffix on a conflict. It
-    never edits notes.
+    planner: `img/` vs `vid/` vs `file/` (see the catalog above), the
+    name sanitizer, reuse of an identical file, and the 8-character
+    hash suffix on a conflict. It never edits notes.
   - Runs under `bob_sync.lock` with a 3 s wait (`ob::acquire_lock_waiting`;
     busy gives `lock_busy`). It appends journal events after the files
     are saved. If the append fails, it removes the files it created
     (reuse `capture_clip::cleanup_created`) and fails.
   - JSON output:
-    `{"schema_version":1,"attachments":[{"source","display","saved","kind","reused","embed","sha256"}]}`.
-    `embed` is `attachment_reference` output (`![[img/x.png|400]]` /
-    `[[file/x.pdf]]`).
+    `{"schema_version":1,"attachments":[{"source","display","saved","kind","reused","embed","size_bytes","sha256"}]}`.
+    `kind` is `"image"`, `"video"`, or `"file"`. `embed` is
+    `attachment_reference` output (`![[img/x.png|400]]` /
+    `![[vid/x.mp4|400]]` / `[[file/x.pdf]]`). `size_bytes` is the
+    copied file's size in bytes.
   - Failures reuse the `bob relations hide -f json` error envelope,
     with codes `missing`, `not_a_file`, `not_absolute`, `too_many`,
     `lock_busy`, and `io`.
   - Exit codes: 0 ok, 1 failure, 2 usage.
   - Human output is one colored line per file:
-    `imported  ~/tmp/…/x.png → img/x.png` or
-    `reused    ~/tmp/…/x.png → img/x.png`.
+    `imported  ~/tmp/…/x.png → img/x.png · 242.8 KiB` or
+    `reused    ~/tmp/…/x.png → img/x.png · 242.8 KiB`.
+    The size is dimmed; byte counts use one-decimal `B`/`KiB`/`MiB`.
 - **`bob attachments origin [-b DIR] [-f human|json] <VAULT_PATH>`** is
   read-only.
   - JSON output:
@@ -105,8 +125,8 @@ After a non-dry-run capture commits, bob appends one event per committed
 attachment (`via: "capture"`, history entries included), next to the
 relation-label hide appends. A failed append becomes a capture warning
 (`could not record attachment origin: …`) and never fails the capture.
-`--dry-run` appends nothing. The capture JSON is unchanged: the new
-`sha256` field never serializes.
+`--dry-run` appends nothing. The capture JSON carries `size_bytes`
+alongside each clip attachment; the `sha256` field never serializes.
 
 ## Vault copies are never deleted
 

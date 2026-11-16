@@ -14,12 +14,13 @@ use super::{
     AttachmentKind, AttachmentOutput, ClipMode, ClipOutput, ClipStatus,
 };
 
-pub(super) const IMAGE_EMBED_WIDTH: usize = 400;
+pub(super) const EMBED_WIDTH: usize = 400;
 pub(super) const MAX_SLUG_CHARACTERS: usize = 40;
 const IMAGE_EXTENSIONS: &[&str] = &[
     "avif", "bmp", "gif", "heic", "ico", "jpeg", "jpg", "png", "svg", "tif",
     "tiff", "webp",
 ];
+pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "webm", "mkv"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PathState {
@@ -127,9 +128,11 @@ pub(super) fn plan_attachments<'a>(
             format!("read clipboard attachment {}: {error}", source.display())
         })?;
         let hash = sha256_hex(&contents);
+        let size_bytes = contents.len() as u64;
         let kind = attachment_kind(source);
         let directory = match kind {
             AttachmentKind::Image => "img",
+            AttachmentKind::Video => "vid",
             AttachmentKind::File => "file",
         };
         let original_name = source
@@ -156,6 +159,7 @@ pub(super) fn plan_attachments<'a>(
             saved,
             kind,
             reused,
+            size_bytes,
             sha256: hash,
         });
     }
@@ -180,8 +184,8 @@ pub(super) fn plan_attachments<'a>(
 
 pub(crate) fn attachment_reference(attachment: &AttachmentOutput) -> String {
     match attachment.kind {
-        AttachmentKind::Image => {
-            format!("![[{}|{IMAGE_EMBED_WIDTH}]]", attachment.saved)
+        AttachmentKind::Image | AttachmentKind::Video => {
+            format!("![[{}|{EMBED_WIDTH}]]", attachment.saved)
         }
         AttachmentKind::File => format!("[[{}]]", attachment.saved),
     }
@@ -197,6 +201,11 @@ fn attachment_kind(path: &Path) -> AttachmentKind {
         .is_some_and(|extension| IMAGE_EXTENSIONS.contains(&extension))
     {
         AttachmentKind::Image
+    } else if extension
+        .as_deref()
+        .is_some_and(|extension| VIDEO_EXTENSIONS.contains(&extension))
+    {
+        AttachmentKind::Video
     } else {
         AttachmentKind::File
     }

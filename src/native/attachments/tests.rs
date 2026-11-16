@@ -534,3 +534,45 @@ fn plan_explicit_paths_classifies_each_path_like_clipboard_lines() {
     let error = plan_explicit_paths(&vault, &many).expect_err("too many fails");
     assert_eq!(error.code, "too_many");
 }
+
+#[test]
+fn explicit_video_paths_report_kind_embed_and_size() {
+    use crate::native::capture_clip::{attachment_reference, AttachmentKind};
+
+    let root = test_root("explicit-video");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let clip = root.join("20261116_155943.mp4");
+    fs::write(&clip, b"fake-video-bytes").expect("video source");
+
+    let plan = plan_explicit_paths(&vault, &[clip.display().to_string()])
+        .expect("video import plans");
+    assert_eq!(plan.output.attachments.len(), 1);
+    let attachment = &plan.output.attachments[0];
+    assert_eq!(attachment.kind, AttachmentKind::Video);
+    assert_eq!(attachment.kind.as_str(), "video");
+    assert_eq!(attachment.saved, "vid/20261116_155943.mp4");
+    assert_eq!(attachment.size_bytes, 16);
+    assert_eq!(
+        attachment_reference(attachment),
+        "![[vid/20261116_155943.mp4|400]]"
+    );
+    // The import JSON contract carries kind, embed, and size_bytes.
+    let value = serde_json::json!({
+        "kind": attachment.kind.as_str(),
+        "embed": attachment_reference(attachment),
+        "size_bytes": attachment.size_bytes,
+    });
+    assert_eq!(value["kind"], "video");
+    assert_eq!(value["embed"], "![[vid/20261116_155943.mp4|400]]");
+    assert_eq!(value["size_bytes"], 16);
+
+    plan.save().expect("save video import");
+    let reuse = plan_explicit_paths(&vault, &[clip.display().to_string()])
+        .expect("video reuse plans");
+    assert!(reuse.output.attachments[0].reused);
+    assert_eq!(
+        reuse.output.attachments[0].size_bytes, 16,
+        "reuse still reports the size",
+    );
+}

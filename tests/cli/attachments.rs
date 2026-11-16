@@ -131,23 +131,44 @@ fn attachments_import_copies_files_and_records_origins() {
     assert_eq!(attachments[0]["kind"], json!("image"));
     assert_eq!(attachments[0]["reused"], json!(false));
     assert_eq!(attachments[0]["embed"], json!("![[img/shot.png|400]]"));
+    assert_eq!(attachments[0]["size_bytes"], json!(10));
     assert_eq!(attachments[0]["source"], json!(shot.display().to_string()));
     assert_eq!(attachments[1]["saved"], json!("file/memo.txt"));
     assert_eq!(attachments[1]["kind"], json!("file"));
     assert_eq!(attachments[1]["embed"], json!("[[file/memo.txt]]"));
+    assert_eq!(attachments[1]["size_bytes"], json!(10));
+
+    let clip = write_source(&src, "20261116_155943.mp4", b"fake-video-bytes");
+    let output = attachments_command(&vault, &cache)
+        .args(["attachments", "import", "-f", "json"])
+        .arg("--")
+        .arg(&clip)
+        .output()
+        .expect("import video");
+    assert_success(&output);
+    let report: Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("video import JSON: {error}\n{}", format_output(&output))
+        });
+    let video = &report["attachments"][0];
+    assert_eq!(video["saved"], json!("vid/20261116_155943.mp4"));
+    assert_eq!(video["kind"], json!("video"));
+    assert_eq!(video["embed"], json!("![[vid/20261116_155943.mp4|400]]"));
+    assert_eq!(video["size_bytes"], json!(16));
 
     assert_eq!(
         fs::read(vault.join("img/shot.png")).expect("vault copy"),
         b"shot-bytes"
     );
     let events = journal_events(&vault);
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.len(), 3);
     assert_eq!(events[0]["kind"], json!("attachment.import"));
     assert_eq!(events[0]["saved"], json!("img/shot.png"));
     assert_eq!(events[0]["source"], json!(shot.display().to_string()));
     assert_eq!(events[0]["via"], json!("cli"));
     assert_eq!(events[0]["v"], json!(1));
     assert_eq!(events[0]["host"], json!("apollo"));
+    assert_eq!(events[2]["saved"], json!("vid/20261116_155943.mp4"));
 
     // A second import of the same file is reused and still recorded.
     let output = attachments_command(&vault, &cache)
@@ -160,11 +181,12 @@ fn attachments_import_copies_files_and_records_origins() {
     assert_success(&output);
     let line = stdout(&output).trim().to_string();
     assert!(
-        line.starts_with("reused") && line.ends_with(" → img/shot.png"),
+        line.starts_with("reused") && line.ends_with(" → img/shot.png · 10 B"),
         "human reuse line:\n{}",
         format_output(&output)
     );
-    assert_eq!(journal_events(&vault).len(), 3);
+    // Two from the first import, one from the video import, one now.
+    assert_eq!(journal_events(&vault).len(), 4);
 
     // A conflicting name with different bytes gains a hash suffix, and
     // the internal client id lands on the event.
@@ -190,9 +212,9 @@ fn attachments_import_copies_files_and_records_origins() {
         "hash suffix: {saved}"
     );
     let events = journal_events(&vault);
-    assert_eq!(events.len(), 4);
-    assert_eq!(events[3]["saved"], json!(saved));
-    assert_eq!(events[3]["via"], json!("zoom"));
+    assert_eq!(events.len(), 5);
+    assert_eq!(events[4]["saved"], json!(saved));
+    assert_eq!(events[4]["via"], json!("zoom"));
 }
 
 #[test]
@@ -539,8 +561,9 @@ fn attachments_capture_clip_records_origins_and_keeps_json_stable() {
             "saved": "img/clip.png",
             "kind": "image",
             "reused": false,
+            "size_bytes": 10,
         }),
-        "capture JSON stays byte-identical: no new attachment fields"
+        "capture clip attachments carry the additive size_bytes field"
     );
 
     let events = journal_events(&vault);

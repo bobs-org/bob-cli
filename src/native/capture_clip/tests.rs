@@ -1402,3 +1402,303 @@ fn insert_clipy_asset(
         )
         .expect("Clipy fixture asset");
 }
+
+#[test]
+fn video_clipboard_paths_embed_from_vid_at_400px() {
+    use super::AttachmentKind;
+
+    let root = test_root("video-basic");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let clip = root.join("20261116_155943.mp4");
+    fs::write(&clip, b"fake-video-bytes").expect("video source");
+
+    let planned = super::plan(
+        &vault,
+        clip.to_str().expect("utf8 path"),
+        test_now(),
+        "\t",
+    )
+    .expect("video plan");
+    assert_eq!(planned.output.mode, ClipMode::Attachments);
+    assert_eq!(
+        planned.output.lines,
+        ["\t- ![[vid/20261116_155943.mp4|400]]"]
+    );
+    let attachment = &planned.output.attachments[0];
+    assert_eq!(attachment.kind, AttachmentKind::Video);
+    assert_eq!(attachment.saved, "vid/20261116_155943.mp4");
+    assert_eq!(attachment.size_bytes, 16);
+    assert_eq!(attachment.kind.as_str(), "video");
+    assert_eq!(
+        super::attachment_reference(attachment),
+        "![[vid/20261116_155943.mp4|400]]"
+    );
+    assert_eq!(
+        planned.output.file_confirmations(),
+        vec![("vid/20261116_155943.mp4".to_string(), false, Some(16))],
+    );
+    let json = serde_json::to_value(&planned.output).expect("video JSON");
+    assert_eq!(json["attachments"][0]["kind"], "video");
+    assert_eq!(json["attachments"][0]["saved"], "vid/20261116_155943.mp4");
+    assert_eq!(json["attachments"][0]["size_bytes"], 16);
+    assert!(json["attachments"][0].get("sha256").is_none());
+
+    planned.save().expect("save video");
+    assert!(vault.join("vid/20261116_155943.mp4").exists());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn video_paths_accept_wrappers_cases_and_unicode_names() {
+    use super::AttachmentKind;
+
+    let root = test_root("video-wrappers");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+
+    let upper = root.join("CLIP.MP4");
+    fs::write(&upper, b"upper").expect("upper source");
+    let planned = plan(
+        &vault,
+        Some("clip"),
+        upper.to_str().expect("utf8 path"),
+        test_now(),
+    )
+    .expect("uppercase video");
+    assert_eq!(planned.output.attachments[0].kind, AttachmentKind::Video);
+    assert_eq!(planned.output.attachments[0].saved, "vid/CLIP.MP4");
+
+    let unicode = root.join("café clip (1).mov");
+    fs::write(&unicode, b"unicode").expect("unicode source");
+    let quoted = plan(
+        &vault,
+        Some("clip"),
+        &format!("\"{}\"", unicode.display()),
+        test_now(),
+    )
+    .expect("quoted unicode video");
+    assert_eq!(quoted.output.lines, ["  - ![[vid/café clip (1).mov|400]]"]);
+
+    let angle = plan(
+        &vault,
+        Some("clip"),
+        &format!("<{}>", unicode.display()),
+        test_now(),
+    )
+    .expect("angle-wrapped video");
+    assert_eq!(angle.output.attachments[0].kind, AttachmentKind::Video);
+
+    let uri = format!("file://{}", upper.display()).replace(' ', "%20");
+    let via_uri =
+        plan(&vault, Some("clip"), &uri, test_now()).expect("file URI video");
+    assert_eq!(via_uri.output.attachments[0].saved, "vid/CLIP.MP4");
+
+    let spaced = root.join("my clip.mp4");
+    fs::write(&spaced, b"spaced").expect("spaced source");
+    let spaced_uri = format!("file://{}", spaced.display()).replace(' ', "%20");
+    let via_escaped = plan(&vault, Some("clip"), &spaced_uri, test_now())
+        .expect("percent-escaped video");
+    assert_eq!(via_escaped.output.attachments[0].saved, "vid/my clip.mp4");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn video_catalog_covers_expected_extensions_only() {
+    use super::AttachmentKind;
+
+    let root = test_root("video-catalog");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+
+    for extension in ["mov", "webm", "mkv"] {
+        let source = root.join(format!("clip.{extension}"));
+        fs::write(&source, b"video").expect("video source");
+        let planned = plan(
+            &vault,
+            Some("clip"),
+            source.to_str().expect("utf8 path"),
+            test_now(),
+        )
+        .expect("video extension plans");
+        assert_eq!(
+            planned.output.attachments[0].kind,
+            AttachmentKind::Video,
+            "{extension}"
+        );
+        assert_eq!(
+            planned.output.attachments[0].saved,
+            format!("vid/clip.{extension}")
+        );
+        assert_eq!(
+            planned.output.lines,
+            [format!("  - ![[vid/clip.{extension}|400]]")]
+        );
+    }
+
+    for extension in ["m4v", "avi", "ogv"] {
+        let source = root.join(format!("clip.{extension}"));
+        fs::write(&source, b"not a player").expect("file source");
+        let planned = plan(
+            &vault,
+            Some("clip"),
+            source.to_str().expect("utf8 path"),
+            test_now(),
+        )
+        .expect("file extension plans");
+        assert_eq!(
+            planned.output.attachments[0].kind,
+            AttachmentKind::File,
+            "{extension}"
+        );
+        assert_eq!(
+            planned.output.lines,
+            [format!("  - [[file/clip.{extension}]]")]
+        );
+    }
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn mixed_image_video_and_file_clipboard_keeps_all_kinds_in_order() {
+    use super::AttachmentKind;
+
+    let root = test_root("video-mixed");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let image = root.join("shot.png");
+    let video = root.join("clip.mp4");
+    let document = root.join("notes.pdf");
+    fs::write(&image, b"image").expect("image source");
+    fs::write(&video, b"video").expect("video source");
+    fs::write(&document, b"document").expect("document source");
+
+    let planned = plan(
+        &vault,
+        Some("clip"),
+        &format!(
+            "{}\n{}\n{}",
+            image.display(),
+            video.display(),
+            document.display()
+        ),
+        test_now(),
+    )
+    .expect("mixed attachments");
+    assert_eq!(planned.output.mode, ClipMode::Attachments);
+    assert_eq!(
+        planned
+            .output
+            .attachments
+            .iter()
+            .map(|attachment| attachment.kind.clone())
+            .collect::<Vec<_>>(),
+        [
+            AttachmentKind::Image,
+            AttachmentKind::Video,
+            AttachmentKind::File,
+        ]
+    );
+    assert_eq!(
+        planned.output.lines,
+        [
+            "  - ![[img/shot.png|400]]",
+            "  - ![[vid/clip.mp4|400]]",
+            "  - [[file/notes.pdf]]",
+        ]
+    );
+    assert_eq!(
+        planned
+            .output
+            .attachments
+            .iter()
+            .map(|attachment| attachment.size_bytes)
+            .collect::<Vec<_>>(),
+        [5, 5, 8]
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn counted_history_carries_a_video_entry() {
+    use super::AttachmentKind;
+
+    let root = test_root("video-history");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let video = root.join("clip.mp4");
+    fs::write(&video, b"video").expect("video source");
+    let planned = plan_history(
+        &vault,
+        &[
+            "hello".to_string(),
+            video.display().to_string(),
+            "one\ntwo".to_string(),
+        ],
+        test_now(),
+    )
+    .expect("history with video");
+    assert_eq!(planned.output.mode, ClipMode::History);
+    assert_eq!(planned.output.attachments.len(), 1);
+    assert_eq!(planned.output.attachments[0].kind, AttachmentKind::Video);
+    assert_eq!(
+        planned.output.lines,
+        [
+            "  - hello",
+            "  - ![[vid/clip.mp4|400]]",
+            "  - one",
+            "  - two",
+        ]
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn vid_copies_reuse_identical_files_and_suffix_clashes() {
+    let root = test_root("video-reuse");
+    let vault = root.join("vault");
+    let first_dir = root.join("first");
+    let second_dir = root.join("second");
+    fs::create_dir_all(&vault).expect("vault");
+    fs::create_dir_all(&first_dir).expect("first dir");
+    fs::create_dir_all(&second_dir).expect("second dir");
+    let first = first_dir.join("clip.mp4");
+    let second = second_dir.join("clip.mp4");
+    fs::write(&first, b"one").expect("first source");
+    fs::write(&second, b"two").expect("second source");
+
+    let initial = plan(
+        &vault,
+        Some("clip"),
+        first.to_str().expect("utf8 path"),
+        test_now(),
+    )
+    .expect("initial video plan");
+    assert_eq!(initial.output.attachments[0].saved, "vid/clip.mp4");
+    initial.save().expect("save video");
+
+    let reused = plan(
+        &vault,
+        Some("clip"),
+        first.to_str().expect("utf8 path"),
+        test_now(),
+    )
+    .expect("reuse plan");
+    assert!(reused.output.attachments[0].reused);
+    assert!(reused.save().expect("reuse saves nothing").is_empty());
+
+    let differing = plan(
+        &vault,
+        Some("clip"),
+        second.to_str().expect("utf8 path"),
+        test_now(),
+    )
+    .expect("clash plan");
+    let expected_hash = &sha256_hex(b"two")[..8];
+    assert_eq!(
+        differing.output.attachments[0].saved,
+        format!("vid/clip-{expected_hash}.mp4")
+    );
+    differing.save().expect("save hashed video");
+    fs::remove_dir_all(root).expect("cleanup");
+}

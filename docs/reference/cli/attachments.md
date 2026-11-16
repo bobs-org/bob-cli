@@ -16,7 +16,7 @@ Bare `bob attachments` prints this help. import copies files in; origin reports 
 Usage: bob attachments <COMMAND>
 
 Commands:
-  import  Copy image and file paths into the vault
+  import  Copy image, video, and file paths into the vault
   origin  Show where a vault attachment came from
 
 Options:
@@ -36,16 +36,16 @@ Run 'bob attachments <command> --help' for more information on a command.
 
 ## bob attachments import
 
-Copy image and file paths into the vault
+Copy image, video, and file paths into the vault
 
 ```text title="bob attachments import --help"
-Copy one to ten explicit paths into the vault exactly as a `%c` clipboard line would: images land in `img/` (embedded at 400px), other files land in `file/`, an identical existing file is reused, and a name conflict gains an eight-character SHA-256 suffix. It never edits notes. Every copied attachment appends one `attachment.import` origin event to `.bob/attachments/<host>.jsonl` under `bob_sync.lock` (wait at most 3s); a failed append removes the files this import created.
+Copy one to ten explicit paths into the vault exactly as a `%c` clipboard line would: images land in `img/` (embedded at 400px), videos land in `vid/` (embedded at 400px), other files land in `file/`, an identical existing file is reused, and a name conflict gains an eight-character SHA-256 suffix. It never edits notes. Every copied attachment appends one `attachment.import` origin event to `.bob/attachments/<host>.jsonl` under `bob_sync.lock` (wait at most 3s); a failed append removes the files this import created.
 
 Usage: bob attachments import [OPTIONS] <PATH>...
 
 Arguments:
   <PATH>...
-          Absolute image or file path to copy into the vault
+          Absolute image, video, or file path to copy into the vault
 
 Options:
   -b, --bob-dir <DIR>
@@ -62,6 +62,7 @@ Options:
 
 Examples:
   bob attachments import ~/tmp/screenshots/x.png
+  bob attachments import ~/tmp/screencasts/20261116_155943.mp4
   bob attachments import -f json -- ~/tmp/a.png /tmp/b.pdf
 
 Environment:

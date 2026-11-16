@@ -4248,12 +4248,13 @@ pub(super) fn print_human_item_success(
         for line in &clip.lines {
             println!("  {}", styler.dim(line));
         }
-        for (saved, reused) in clip.file_confirmations() {
+        for (saved, reused, size_bytes) in clip.file_confirmations() {
             print_clip_file_confirmation(
                 &styler,
                 result.dry_run,
                 &saved,
                 reused,
+                size_bytes,
             );
         }
     }
@@ -7323,7 +7324,23 @@ pub(super) fn print_clip_file_confirmation(
     dry_run: bool,
     saved: &str,
     reused: bool,
+    size_bytes: Option<u64>,
 ) {
+    println!(
+        "{}",
+        format_clip_file_confirmation(
+            styler, dry_run, saved, reused, size_bytes
+        )
+    );
+}
+
+pub(super) fn format_clip_file_confirmation(
+    styler: &Styler,
+    dry_run: bool,
+    saved: &str,
+    reused: bool,
+    size_bytes: Option<u64>,
+) -> String {
     let prefix = if dry_run {
         styler.success_prefix(true)
     } else {
@@ -7337,7 +7354,14 @@ pub(super) fn print_clip_file_confirmation(
         "saved"
     };
     let note = if reused && dry_run { " (reused)" } else { "" };
-    println!("{prefix} {verb:<10}{}{note}", styler.cyan(saved));
+    let size = size_bytes.map(|bytes| {
+        styler.dim(&format!(
+            " · {}",
+            crate::native::human_bytes::human_bytes(bytes)
+        ))
+    });
+    let size = size.as_deref().unwrap_or("");
+    format!("{prefix} {verb:<11}{}{note}{size}", styler.cyan(saved))
 }
 
 pub(super) fn success_json(result: &CaptureResult) -> String {
@@ -8112,6 +8136,52 @@ mod tests {
             &Styler::colored(),
         )
         .contains("38;5;211m■"));
+    }
+
+    #[test]
+    fn clip_file_confirmations_pad_verbs_and_append_sizes() {
+        let styler = Styler::plain();
+        assert_eq!(
+            format_clip_file_confirmation(
+                &styler,
+                true,
+                "vid/20261116_155943.mp4",
+                false,
+                Some(248_678),
+            ),
+            "[dry-run] ok would save vid/20261116_155943.mp4 · 242.8 KiB"
+        );
+        assert_eq!(
+            format_clip_file_confirmation(
+                &styler,
+                false,
+                "vid/20261116_155943.mp4",
+                false,
+                Some(248_678),
+            ),
+            "✓ saved      vid/20261116_155943.mp4 · 242.8 KiB"
+        );
+        assert_eq!(
+            format_clip_file_confirmation(
+                &styler,
+                false,
+                "img/shot.png",
+                true,
+                Some(5),
+            ),
+            "✓ reused     img/shot.png · 5 B"
+        );
+        // Snippets carry no size suffix.
+        assert_eq!(
+            format_clip_file_confirmation(
+                &styler,
+                false,
+                "file/clip-20260715-131415-heading.md",
+                false,
+                None,
+            ),
+            "✓ saved      file/clip-20260715-131415-heading.md"
+        );
     }
 
     fn task_row(

@@ -1331,8 +1331,10 @@ Clipboard content is rendered according to its shape:
   become child bullets. Their source list markers and separating whitespace are
   removed while inline Markdown, including checkbox text, is preserved.
 - Absolute file paths (including quoted paths, `file://` URIs, and `~/...`)
-  become attachments. Images are copied to `img/` and embedded at 400px;
-  other files are copied to `file/` and linked.
+  become attachments. Images are copied to `img/` and videos to `vid/`,
+  both embedded at 400px; other files are copied to `file/` and linked.
+  See the [shared media catalog](attachments.md#shared-media-catalog)
+  for the exact extension sets.
 - Long, indented, blank-line-separated, or other Markdown-structured text is
   saved verbatim as `file/clip-YYYYMMDD-HHMMSS[-slug].md` and linked without
   the `.md` suffix. Ordered, nested, wrapped, mixed, or empty-item lists use
@@ -7881,9 +7883,10 @@ Clipboard captures additionally include a `clip` object. A dry run under
 was read reports `"status": "read"` plus `mode` (`"inline"`, `"lines"`,
 `"attachments"`, `"snippet"`, or `"history"`), `lines` (the exact rendered
 child lines), `attachments`, and `entries`. Leaf clips emit `entries: []`.
-Each attachment has `source`, vault-relative `saved`, `kind` (`"image"` or
-`"file"`), and `reused` fields. Snippet results also include the
-vault-relative `snippet` path. There is no `header` field.
+Each attachment has `source`, vault-relative `saved`, `kind` (`"image"`,
+`"video"`, or `"file"`), `reused`, and `size_bytes` fields. Snippet
+results also include the vault-relative `snippet` path. There is no
+`header` field.
 
 Counted histories above one use `mode: "history"`, flattened `lines`, and
 attachment records aggregated in entry order. Their `entries` array contains

@@ -609,8 +609,11 @@ The journal contract lives in
 
 ## Attachment origin journal
 
+`vid/` clips sync through the same extension allowlist as images:
+`!*.mp4 !*.mov !*.webm !*.mkv` keep every copied clip on every host.
+
 `.bob/attachments/<host>.jsonl` is the per-host attachment origin
-journal: where each image or file `%c` or `bob attachments import`
+journal: where each image, video, or file `%c` or `bob attachments import`
 copied into the vault came from. It follows the theme journal's rule:
 each host appends to its own file, readers union every `*.jsonl` in
 the directory, and bob is the only writer. The vault root `.gitignore`

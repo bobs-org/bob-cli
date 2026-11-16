@@ -74,6 +74,7 @@ pub(crate) mod gmail;
 pub(crate) mod google;
 mod highlights_ref;
 pub(crate) mod host_catalog;
+pub(crate) mod human_bytes;
 mod ledger_place;
 mod markdown;
 mod nightly;

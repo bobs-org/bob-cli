@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     desktop_notify, env as bob_env,
+    human_bytes::human_bytes,
     ob::{self, ChildEnv},
     style::Styler,
     vault_clobber,
@@ -2569,17 +2570,6 @@ pub(crate) fn hostname_slug() -> String {
         })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn human_bytes(bytes: u64) -> String {
-    const MIB: f64 = 1024.0 * 1024.0;
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MiB", bytes as f64 / MIB)
-    } else if bytes >= 1024 {
-        format!("{:.1} KiB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 fn short_sha(sha: &str) -> String {

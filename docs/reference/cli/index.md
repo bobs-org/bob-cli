@@ -69,7 +69,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob areas sync`](areas.md#bob-areas-sync) | Write every generated area catalog |
 | [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |
 | [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
-| [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image and file paths into the vault |
+| [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image, video, and file paths into the vault |
 | [`bob attachments origin`](attachments.md#bob-attachments-origin) | Show where a vault attachment came from |
 | [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, vault-sync |
 | [`bob notebooks`](notebooks.md) | Inspect or maintain notebook notes |

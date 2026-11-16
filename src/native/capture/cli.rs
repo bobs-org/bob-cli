@@ -149,7 +149,7 @@ On a note-less `@route+id` (or `@route+id#drawer`), `%c` files the clipboard lin
 under that task (or drawer). Each clipboard value is classified separately: \
 small text stays inline; 2-10 flat text lines and 1-10 flat unordered Markdown \
 list items become child bullets, with source list markers removed; copied file \
-paths are saved under img/ or file/; and long or other Markdown-structured text \
+paths are saved under img/, vid/, or file/; and long or other Markdown-structured text \
 is preserved in a timestamped file/clip-*.md snippet. Clipboard children use \
 the target note's dominant tab-or-two-space indentation and fall back to a tab. \
 History captures fail without writing \

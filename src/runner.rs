@@ -322,7 +322,7 @@ Run 'bob stats <command> --help' for more information on a command.";
 const ATTACHMENTS_MEMBERS: &[Member] = &[
     Member {
         name: "import",
-        about: "Copy image and file paths into the vault",
+        about: "Copy image, video, and file paths into the vault",
         leaf: Leaf {
             native_command: NativeCommand::AttachmentsImport,
             script_command: None,

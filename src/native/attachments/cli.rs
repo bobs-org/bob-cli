@@ -22,6 +22,7 @@ use super::{
 };
 use crate::native::{
     capture_clip, env as bob_env,
+    human_bytes::human_bytes,
     ob::{self, LockWaitError},
     style::Styler,
 };
@@ -82,19 +83,21 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli_import() -> ClapCommand {
     ClapCommand::new(IMPORT_COMMAND)
-        .about("Copy image and file paths into the vault")
+        .about("Copy image, video, and file paths into the vault")
         .long_about(
             "Copy one to ten explicit paths into the vault exactly as a \
 `%c` clipboard line would: images land in `img/` (embedded at 400px), \
-other files land in `file/`, an identical existing file is reused, and \
-a name conflict gains an eight-character SHA-256 suffix. It never edits \
-notes. Every copied attachment appends one `attachment.import` origin \
-event to `.bob/attachments/<host>.jsonl` under `bob_sync.lock` (wait at \
-most 3s); a failed append removes the files this import created.",
+videos land in `vid/` (embedded at 400px), other files land in `file/`, \
+an identical existing file is reused, and a name conflict gains an \
+eight-character SHA-256 suffix. It never edits notes. Every copied \
+attachment appends one `attachment.import` origin event to \
+`.bob/attachments/<host>.jsonl` under `bob_sync.lock` (wait at most 3s); \
+a failed append removes the files this import created.",
         )
         .after_help(
             "Examples:\n  \
 bob attachments import ~/tmp/screenshots/x.png\n  \
+bob attachments import ~/tmp/screencasts/20261116_155943.mp4\n  \
 bob attachments import -f json -- ~/tmp/a.png /tmp/b.pdf\n\n\
 Environment:\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -184,7 +187,7 @@ fn path_arg() -> Arg {
         .value_name("PATH")
         .required(true)
         .num_args(1..)
-        .help("Absolute image or file path to copy into the vault")
+        .help("Absolute image, video, or file path to copy into the vault")
 }
 
 fn vault_path_arg() -> Arg {
@@ -270,6 +273,7 @@ struct ImportedAttachment {
     kind: String,
     reused: bool,
     embed: String,
+    size_bytes: u64,
     sha256: String,
 }
 
@@ -348,12 +352,10 @@ fn execute_import(matches: &ArgMatches) -> Result<ImportReport, CommandError> {
                 source: attachment.source.clone(),
                 display: journal::display_for_source(&attachment.source),
                 saved: attachment.saved.clone(),
-                kind: match attachment.kind {
-                    capture_clip::AttachmentKind::Image => "image".to_string(),
-                    capture_clip::AttachmentKind::File => "file".to_string(),
-                },
+                kind: attachment.kind.as_str().to_string(),
                 reused: attachment.reused,
                 embed: capture_clip::attachment_reference(attachment),
+                size_bytes: attachment.size_bytes,
                 sha256: attachment.sha256.clone(),
             })
             .collect(),
@@ -383,6 +385,7 @@ fn print_import_success(report: &ImportReport, format: OutputFormat) {
                         "kind": attachment.kind,
                         "reused": attachment.reused,
                         "embed": attachment.embed,
+                        "size_bytes": attachment.size_bytes,
                         "sha256": attachment.sha256,
                     })
                 })
@@ -403,7 +406,12 @@ fn print_import_success(report: &ImportReport, format: OutputFormat) {
                 } else {
                     styler.green(&format!("{:<10}", "imported"))
                 };
-                println!("{verb}{} → {}", attachment.display, attachment.saved);
+                let size = styler
+                    .dim(&format!(" · {}", human_bytes(attachment.size_bytes)));
+                println!(
+                    "{verb}{} → {}{size}",
+                    attachment.display, attachment.saved
+                );
             }
         }
     }

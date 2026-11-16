@@ -21,7 +21,18 @@ pub(crate) enum ClipMode {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum AttachmentKind {
     Image,
+    Video,
     File,
+}
+
+impl AttachmentKind {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            AttachmentKind::Image => "image",
+            AttachmentKind::Video => "video",
+            AttachmentKind::File => "file",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -30,9 +41,10 @@ pub(crate) struct AttachmentOutput {
     pub(crate) saved: String,
     pub(crate) kind: AttachmentKind,
     pub(crate) reused: bool,
+    pub(crate) size_bytes: u64,
     /// SHA-256 of the planned bytes. Never serialized: `bob capture`'s
-    /// JSON stays byte-identical, and the origin journal reads this field
-    /// instead.
+    /// JSON keeps its existing shape apart from the additive `size_bytes`,
+    /// and the origin journal reads this field instead.
     #[serde(skip_serializing)]
     pub(crate) sha256: String,
 }
@@ -159,7 +171,9 @@ impl Serialize for ClipOutput {
 }
 
 impl ClipOutput {
-    pub(crate) fn file_confirmations(&self) -> Vec<(String, bool)> {
+    pub(crate) fn file_confirmations(
+        &self,
+    ) -> Vec<(String, bool, Option<u64>)> {
         let outputs = if self.entries.is_empty() {
             std::slice::from_ref(self)
         } else {
@@ -170,14 +184,17 @@ impl ClipOutput {
         for output in outputs {
             for attachment in &output.attachments {
                 if seen.insert(attachment.saved.clone()) {
-                    confirmations
-                        .push((attachment.saved.clone(), attachment.reused));
+                    confirmations.push((
+                        attachment.saved.clone(),
+                        attachment.reused,
+                        Some(attachment.size_bytes),
+                    ));
                 }
             }
             if let Some(snippet) = &output.snippet
                 && seen.insert(snippet.clone())
             {
-                confirmations.push((snippet.clone(), false));
+                confirmations.push((snippet.clone(), false, None));
             }
         }
         confirmations
