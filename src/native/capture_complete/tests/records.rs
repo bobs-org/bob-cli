@@ -130,6 +130,7 @@ impl RecordVault {
                 raw_text: raw,
                 cursor,
                 all_tasks: false,
+                archived_notes: false,
                 closed_tasks: false,
                 next_missing_field: next_missing,
                 record_field,

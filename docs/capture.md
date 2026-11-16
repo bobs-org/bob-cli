@@ -2062,7 +2062,14 @@ text between `//` and the cursor; it is empty at the token start, at offset
   end: token.end}}`, with no continuation keys. Deleting the removal range
   always leaves exactly `/`, which returns to Go To Tasks.
 - `note_goto`: `{vault_root: "<absolute vault path>", listed: <row count of
-  the unfiltered catalog>}`.
+  the unfiltered catalog>, archived: <boolean>}`. `archived` is always present.
+
+Pass `-A`/`--archived-notes` to list archived notes instead of living notes.
+The archive includes top-level `done/`, the superseded library folders
+`old_lib/`, `ref_history/`, and `lit_review/`, plus zorg-era daily satellites
+`YYYY/YYYYMMDD_{habit,done,poms,events}.md`. Archive rows use kind `archive`
+or `satellite`; rows under `done/` carry group `done`. With the flag,
+`note_goto.archived` is `true`; otherwise it is `false`.
 
 `-C`/`--closed-tasks`, `-a`, `-n`, and `-F` do not affect this context.
 Unreadable or non-UTF-8 files go into the usual bounded, deduplicated
@@ -2084,15 +2091,19 @@ for being old, empty, or unnamed: there are no `Untitled`/`tmp`/size
 heuristics. The scan is one walk of frontmatter-only reads (first 8 KiB per
 file) and never writes.
 
-Hidden during the walk:
+Path tiers, with the first matching rule winning:
 
 | Tier | Rule |
 | --- | --- |
 | Non-Markdown | Only regular `*.md` files are candidates; `.base` Views list separately; symlinked directories are never followed |
-| Machinery | Any dot-prefixed directory or file name at any depth; any `_`-prefixed directory at any depth, including `_meta/` |
-| Archive | The top-level `done/` tree only. A nested `projects/done/` and a root `done.md` stay live |
-| Library | Configured Highlights library roots (`lib`, `xlib`), top-level `old_lib/` / `ref_history/` / `lit_review/`, and any `X.md` whose sibling `X.pdf` exists |
-| Satellite | `YYYY/YYYYMMDD_{habit,done,poms,events}.md` under a top-level four-digit directory |
+| Hidden | Any dot-prefixed path component; any `_`-prefixed directory at any depth, including `_meta/` |
+| Hidden | Configured Highlights library roots (`lib`, `xlib`) and any `X.md` whose sibling `X.pdf` exists |
+| Archive | The top-level `done/` tree and top-level `old_lib/`, `ref_history/`, and `lit_review/` folders. A nested `projects/done/` and a root `done.md` stay live |
+| Archive | `YYYY/YYYYMMDD_{habit,done,poms,events}.md` under a matching top-level four-digit year directory |
+| Living | Every other note |
+
+`//` uses the Living tier by default. `-A`/`--archived-notes` uses the Archive
+tier; Hidden paths never appear in either scope.
 
 Kinds (first match wins) and rank:
 
@@ -9765,7 +9776,7 @@ types `#` and `\` types `%`.
 ## `bob capture-complete`
 
 ```bash
-bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-n|--next-missing-field] [-F|--record-field KEY] [--] [TEXT]...
+bob capture-complete --cursor BYTE [-a|--all-tasks] [-A|--archived-notes] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-n|--next-missing-field] [-F|--record-field KEY] [--] [TEXT]...
 ```
 
 In a `<` source slot, `< +` / `< +query` opens the

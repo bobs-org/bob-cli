@@ -1698,16 +1698,22 @@ pub(super) fn task_goto_candidates(
 }
 
 /// `note_goto` candidates for a whole-draft `//` token: every living
-/// note from `note_catalog`, in canonical order for an empty query and
-/// ranked by `match_keys` then `note_path` for a typed query. `-C`,
-/// `-a`, `-n`, and `-F` do not affect this context. `replacement` is
+/// note or archived note from `note_catalog`, in canonical order for an
+/// empty query and ranked by `match_keys` then `note_path` for a typed
+/// query. `-C`, `-a`, `-n`, and `-F` do not affect this context.
+/// `replacement` is
 /// always empty; `listed` on the companion object is the unfiltered
 /// catalog size.
 pub(super) fn note_goto_candidates(
     bob_dir: &Path,
     query: &str,
+    archived: bool,
 ) -> (Candidates, Vec<String>, NoteGotoContext) {
-    let catalog = note_catalog::scan(bob_dir);
+    let catalog = if archived {
+        note_catalog::scan_archive(bob_dir)
+    } else {
+        note_catalog::scan(bob_dir)
+    };
     let listed = catalog.rows.len();
     let vault_root = catalog.vault_root.display().to_string();
     let candidates: Vec<NoteGotoCandidate> =
@@ -1730,7 +1736,11 @@ pub(super) fn note_goto_candidates(
     (
         Candidates::NoteGoto(candidates),
         catalog.warnings,
-        NoteGotoContext { vault_root, listed },
+        NoteGotoContext {
+            vault_root,
+            listed,
+            archived,
+        },
     )
 }
 

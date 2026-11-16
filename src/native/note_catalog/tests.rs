@@ -58,18 +58,28 @@ fn tier_vault() -> TempDir {
     md(root, "_meta/x.md", "# x\n");
     md(root, "_zorg_templates/x.md", "# x\n");
     md(root, "done/old.md", "# archive\n");
+    md(
+        root,
+        "done/a_done.md",
+        "---\ntitle: A\nparent: \"[[a]]\"\naliases:\n  - alpha\n---\n",
+    );
     md(root, "lib/papers/p.md", "# p\n");
     write(root, "lib/papers/p.pdf", b"%PDF-1.4\n");
     md(root, "xlib/q.md", "# q\n");
     md(root, "old_lib/r.md", "# r\n");
     md(root, "ref_history/o.md", "# o\n");
     md(root, "lit_review/l.md", "# l\n");
+    md(root, "ref_history/x/h.md", "# h\n");
     md(root, "notes/s.md", "# s\n");
     write(root, "notes/s.pdf", b"%PDF-1.4\n");
     md(root, "2026/20261114_done.md", "# satellite\n");
     md(root, "2026/20261114_habit.md", "# satellite\n");
     md(root, "2026/20261114_poms.md", "# satellite\n");
     md(root, "2026/20261114_events.md", "# satellite\n");
+    md(root, "2026/20261113_done.md", "# satellite\n");
+    md(root, "2026/20261113_habit.md", "# satellite\n");
+    md(root, "2026/20261113_poms.md", "# satellite\n");
+    md(root, "2026/20261113_events.md", "# satellite\n");
     write(root, "img/a.png", b"\x89PNG\r\n\x1a\n");
     // A symlinked directory is never followed.
     let outside = tempfile::tempdir().expect("outside");
@@ -212,6 +222,38 @@ fn hash_vault(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files
 }
 
+fn note_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let entries = fs::read_dir(directory).expect("read dir");
+        for entry in entries {
+            let entry = entry.expect("dir entry");
+            let metadata = entry.path().symlink_metadata().expect("metadata");
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                stack.push(entry.path());
+            } else if metadata.is_file()
+                && entry.path().extension().is_some_and(|extension| {
+                    extension == "md" || extension == "base"
+                })
+            {
+                files.push(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .expect("relative")
+                        .to_path_buf(),
+                );
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
 #[test]
 fn golden_listed_set_and_canonical_order() {
     let (_vault, _config, _guard, catalog) =
@@ -258,6 +300,138 @@ fn golden_listed_set_and_canonical_order() {
             "2025/20251114.md",
         ]
     );
+}
+
+#[test]
+fn shared_path_tiers_agree_with_the_living_walk() {
+    let vault = tier_vault();
+    let (_config, _guard) = scan_env("2026-11-14T10:00:00-05:00");
+    let tiers = super::TierContext::for_vault(vault.path());
+    let catalog = scan(vault.path());
+    let listed: std::collections::BTreeSet<_> = catalog
+        .rows
+        .iter()
+        .map(|row| PathBuf::from(&row.note_path))
+        .collect();
+
+    for path in note_files(vault.path()) {
+        let tier = super::path_tier(vault.path(), &path, &tiers);
+        if listed.contains(&path) {
+            assert_eq!(tier, super::NoteTier::Living, "listed {path:?}");
+        } else {
+            assert!(
+                matches!(
+                    tier,
+                    super::NoteTier::Archive | super::NoteTier::Hidden
+                ),
+                "skipped {path:?} classified {tier:?}"
+            );
+        }
+    }
+
+    for (path, expected) in [
+        (".bob/x.md", super::NoteTier::Hidden),
+        (".md", super::NoteTier::Hidden),
+        ("_meta/x.md", super::NoteTier::Hidden),
+        ("_draft.md", super::NoteTier::Living),
+        ("lib/papers/p.md", super::NoteTier::Hidden),
+        ("xlib/q.md", super::NoteTier::Hidden),
+        ("notes/s.md", super::NoteTier::Hidden),
+        ("done/a_done.md", super::NoteTier::Archive),
+        ("old_lib/r.md", super::NoteTier::Archive),
+        ("ref_history/x/h.md", super::NoteTier::Archive),
+        ("lit_review/l.md", super::NoteTier::Archive),
+        ("2026/20261114_habit.md", super::NoteTier::Archive),
+        ("projects/done/keep.md", super::NoteTier::Living),
+    ] {
+        assert_eq!(
+            super::path_tier(vault.path(), Path::new(path), &tiers),
+            expected,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn archive_scan_has_exact_rows_fields_order_and_ranking() {
+    let vault = tier_vault();
+    let (_config, _guard) = scan_env("2026-11-14T10:00:00-05:00");
+    let catalog = super::scan_archive(vault.path());
+    let paths: Vec<_> = catalog
+        .rows
+        .iter()
+        .map(|row| row.note_path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "done/a_done.md",
+            "done/old.md",
+            "ref_history/x/h.md",
+            "lit_review/l.md",
+            "ref_history/o.md",
+            "old_lib/r.md",
+            "2026/20261114_poms.md",
+            "2026/20261114_habit.md",
+            "2026/20261114_events.md",
+            "2026/20261114_done.md",
+            "2026/20261113_poms.md",
+            "2026/20261113_habit.md",
+            "2026/20261113_events.md",
+            "2026/20261113_done.md",
+        ]
+    );
+    let index = by_path(&catalog);
+    let a_done = &catalog.rows[index["done/a_done.md"]];
+    assert_eq!(a_done.kind, NoteKindKey::Archive);
+    assert_eq!(a_done.rank, 4);
+    assert_eq!(a_done.title, "A");
+    assert_eq!(a_done.match_keys, vec!["A", "a_done", "alpha"]);
+    assert_eq!(a_done.detail.as_deref(), Some("a"));
+    assert_eq!(a_done.group, Some(NoteGroup::Done));
+    assert_eq!(a_done.status, None);
+    assert_eq!(a_done.hue, None);
+    assert_eq!(a_done.depth, None);
+
+    let history = &catalog.rows[index["ref_history/x/h.md"]];
+    assert_eq!(history.kind, NoteKindKey::Archive);
+    assert_eq!(history.title, "h");
+    assert_eq!(history.detail.as_deref(), Some("ref_history/x"));
+    assert_eq!(history.group, None);
+
+    let satellite = &catalog.rows[index["2026/20261114_habit.md"]];
+    assert_eq!(satellite.kind, NoteKindKey::Satellite);
+    assert_eq!(satellite.rank, 8);
+    assert_eq!(satellite.title, "2026-11-14 habit");
+    assert_eq!(
+        satellite.match_keys,
+        vec!["2026-11-14 habit", "20261114_habit"]
+    );
+    assert_eq!(satellite.detail.as_deref(), Some("Saturday"));
+    assert_eq!(satellite.group, None);
+    assert_eq!(satellite.status, None);
+    assert_eq!(satellite.hue, None);
+    assert_eq!(satellite.depth, None);
+
+    assert_eq!(
+        super::rank(&catalog, "1114")
+            .iter()
+            .map(|row| row.note_path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "2026/20261114_poms.md",
+            "2026/20261114_habit.md",
+            "2026/20261114_events.md",
+            "2026/20261114_done.md",
+        ]
+    );
+    assert!(super::rank(&catalog, "sat").is_empty());
+    assert_eq!(super::rank(&catalog, "a")[0].note_path, "done/a_done.md");
+    assert!(catalog.rows.iter().all(|row| {
+        !row.note_path.starts_with(".bob/")
+            && !row.note_path.starts_with("lib/")
+            && !row.note_path.starts_with("xlib/")
+    }));
 }
 
 #[test]
@@ -477,8 +651,10 @@ fn warnings_and_byte_identity() {
     let before = hash_vault(vault.path());
     let (_config, _guard) = scan_env("2026-11-14T10:00:00-05:00");
     let catalog = scan(vault.path());
+    let archive = super::scan_archive(vault.path());
     let after = hash_vault(vault.path());
     assert_eq!(before, after);
+    assert!(!archive.rows.is_empty());
     assert!(catalog
         .warnings
         .iter()

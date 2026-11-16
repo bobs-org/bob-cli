@@ -787,6 +787,7 @@ pub(super) struct NoteGotoCandidate {
 pub(super) struct NoteGotoContext {
     pub(super) vault_root: String,
     pub(super) listed: usize,
+    pub(super) archived: bool,
 }
 
 /// One `task_parent` picker candidate: a linkable open task in the capture

@@ -74,6 +74,7 @@ pub(crate) fn shell_completion(
         raw_text,
         cursor,
         all_tasks: false,
+        archived_notes: false,
         closed_tasks: false,
         next_missing_field: false,
         record_field: None,

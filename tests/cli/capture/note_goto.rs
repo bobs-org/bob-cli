@@ -31,6 +31,12 @@ fn write_catalog_vault(vault: &Path) {
         "---\ntitle: Ideas\naliases:\n  - sparks\n---\n",
     );
     write_file(&vault.join("2026/20261114.md"), "# plain daily\n");
+    write_file(
+        &vault.join("done/a_done.md"),
+        "---\ntitle: A\nparent: \"[[areas/a]]\"\n---\n",
+    );
+    write_file(&vault.join("ref_history/old.md"), "# old\n");
+    write_file(&vault.join("2026/20261114_habit.md"), "# old satellite\n");
     write_file(&vault.join("x.base"), "---\ntitle: Base\n---\n");
     write_file(&vault.join("_meta/hidden.md"), "# machinery\n");
 }
@@ -372,6 +378,7 @@ fn complete_note_goto_candidates_carry_contract_keys() {
     write_catalog_vault(&vault);
 
     let json = complete_json(&vault, 2, "//");
+    assert_eq!(json["note_goto"]["archived"], false, "{json}");
     let raw_output = bob_command()
         .arg("capture-complete")
         .arg("-b")
@@ -478,6 +485,7 @@ fn complete_note_goto_flags_do_not_change_the_catalog() {
     write_catalog_vault(&vault);
 
     let plain = complete_json(&vault, 2, "//");
+    assert_eq!(plain["note_goto"]["archived"], false, "{plain}");
     for flags in [
         &["-C"][..],
         &["-a"][..],
@@ -488,6 +496,64 @@ fn complete_note_goto_flags_do_not_change_the_catalog() {
         assert_eq!(flagged["context"], "note_goto", "{flags:?}");
         assert_eq!(flagged["candidates"], plain["candidates"], "{flags:?}");
         assert_eq!(flagged["note_goto"], plain["note_goto"], "{flags:?}");
+    }
+}
+
+#[test]
+fn complete_note_goto_archive_scope_is_explicit_and_ranked() {
+    let temp = TempDir::new("bob-cli-complete-note-goto-archive");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_catalog_vault(&vault);
+
+    let living = complete_json(&vault, 2, "//");
+    let archive = complete_json_with_flags(&vault, 2, "//", &["-A"]);
+    assert_eq!(living["note_goto"]["archived"], false, "{living}");
+    assert_eq!(archive["note_goto"]["archived"], true, "{archive}");
+    assert!(
+        !living["candidates"]
+            .as_array()
+            .expect("living candidates")
+            .iter()
+            .any(|row| row["note_path"] == "done/a_done.md"),
+        "{living}"
+    );
+    let rows = archive["candidates"].as_array().expect("archive rows");
+    assert_eq!(rows[0]["note_path"], "done/a_done.md", "{archive}");
+    assert_eq!(rows[0]["kind"], "archive", "{archive}");
+    assert_eq!(rows[0]["group"], "done", "{archive}");
+    assert_eq!(rows[0]["title"], "A", "{archive}");
+    assert!(rows.iter().any(|row| {
+        row["note_path"] == "ref_history/old.md" && row["kind"] == "archive"
+    }));
+    assert!(rows.iter().any(|row| {
+        row["note_path"] == "2026/20261114_habit.md"
+            && row["kind"] == "satellite"
+            && row["title"] == "2026-11-14 habit"
+    }));
+
+    let filtered =
+        complete_json_with_flags(&vault, 3, "//a", &["--archived-notes"]);
+    assert_eq!(filtered["note_goto"]["archived"], true, "{filtered}");
+    assert_eq!(
+        filtered["candidates"][0]["note_path"], "done/a_done.md",
+        "{filtered}"
+    );
+}
+
+#[test]
+fn archived_notes_flag_is_ignored_outside_note_goto() {
+    let temp = TempDir::new("bob-cli-complete-archived-notes-scope");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_catalog_vault(&vault);
+
+    for (text, cursor) in [("/", 1), (":", 1), ("[[cash", 6)] {
+        let plain = complete_json(&vault, cursor, text);
+        let flagged = complete_json_with_flags(&vault, cursor, text, &["-A"]);
+        assert_eq!(flagged["context"], plain["context"], "{text}: {flagged}");
+        assert_eq!(flagged["candidates"], plain["candidates"], "{text}");
+        assert_eq!(flagged.get("note_goto"), plain.get("note_goto"), "{text}");
     }
 }
 
@@ -520,6 +586,34 @@ fn complete_note_goto_human_lines_show_kind_title_and_path() {
     );
     assert!(out.contains("candidates"), "{out}");
     assert!(!out.contains("_meta/hidden.md"), "{out}");
+}
+
+#[test]
+fn complete_note_goto_archive_human_lines_keep_the_row_format() {
+    let temp = TempDir::new("bob-cli-complete-note-goto-archive-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_catalog_vault(&vault);
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-A")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("2")
+        .arg("--")
+        .arg("//")
+        .env("BOB_NOW", BOB_NOW)
+        .output()
+        .expect("run archived note_goto completion");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(out.contains("archive A  · done/a_done.md"), "{out}");
+    assert!(
+        out.contains("satellite 2026-11-14 habit  · 2026/20261114_habit.md"),
+        "{out}"
+    );
 }
 
 #[test]

@@ -35,6 +35,9 @@ use crate::native::{
     vault_links::{LinkResolution, NoteIndex},
 };
 
+mod tiers;
+pub(crate) use tiers::{path_tier, NoteTier, TierContext};
+
 #[cfg(test)]
 mod tests;
 
@@ -53,14 +56,6 @@ pub(crate) const MAX_WARNINGS: usize = 50;
 /// `inbox` the bare inbox route.
 const INBOX_STEMS: &[&str] =
     &["mac_inbox", "inbox", "gkeep_inbox", "gmail_inbox"];
-
-/// Fixed top-level Highlights-adjacent library directories, always
-/// hidden alongside the configured `lib`/`xlib` roots.
-const FIXED_LIBRARY_DIRS: &[&str] = &["old_lib", "ref_history", "lit_review"];
-
-/// Zorg-era daily satellite suffixes: `YYYY/YYYYMMDD_<suffix>.md`
-/// under a top-level four-digit directory.
-const SATELLITE_SUFFIXES: &[&str] = &["habit", "done", "poms", "events"];
 
 /// A scanned vault: rows in canonical order plus bounded warnings.
 /// `warnings` names unreadable or non-UTF-8 files and never fails
@@ -106,6 +101,8 @@ pub(crate) enum NoteKindKey {
     Ref,
     Period,
     Daily,
+    Archive,
+    Satellite,
     Bank,
     Mail,
     Note,
@@ -122,6 +119,7 @@ pub(crate) enum NoteGroup {
     Projects,
     Notebooks,
     Albums,
+    Done,
 }
 
 impl NoteKindKey {
@@ -137,6 +135,8 @@ impl NoteKindKey {
             Self::Ref => "ref",
             Self::Period => "period",
             Self::Daily => "daily",
+            Self::Archive => "archive",
+            Self::Satellite => "satellite",
             Self::Bank => "bank",
             Self::Mail => "mail",
             Self::Note => "note",
@@ -156,6 +156,8 @@ impl NoteKindKey {
             Self::Ref => 7,
             Self::Period => 6,
             Self::Daily => 8,
+            Self::Archive => 4,
+            Self::Satellite => 8,
             Self::Bank | Self::Mail | Self::Note | Self::View => 4,
         }
     }
@@ -174,6 +176,7 @@ pub(crate) fn scan(bob_dir: &Path) -> NoteCatalog {
     let mut collect = Collect::new(bob_dir);
     collect.run();
     let highlights = HighlightsConfig::for_vault(bob_dir);
+    let tiers = TierContext::for_vault(bob_dir);
     let context =
         ClassifyContext::new(&vault_root, &highlights, &gmail_folder());
 
@@ -182,7 +185,7 @@ pub(crate) fn scan(bob_dir: &Path) -> NoteCatalog {
     // One parse per file: owned facts feed classification and every
     // row field, so no prefix is ever parsed twice.
     let (mut entries, mut warnings) =
-        read_classify_parallel(bob_dir, &collect.paths, &context);
+        read_classify_parallel(bob_dir, &collect.paths, &context, &tiers);
     warnings.extend(collect.warnings);
     // Legacy record nouns come from album declarations, so resolve
     // them after the first pass and re-check the leftovers.
@@ -229,6 +232,314 @@ pub(crate) fn scan(bob_dir: &Path) -> NoteCatalog {
         rows,
         warnings,
     }
+}
+
+/// Walk the archive scope and build its read-only note catalog. Only
+/// top-level `done/`, fixed history folders, and year directories can
+/// contain rows in this scope; hidden directories and symlinks are
+/// pruned before file reads.
+pub(crate) fn scan_archive(bob_dir: &Path) -> NoteCatalog {
+    let vault_root =
+        fs::canonicalize(bob_dir).unwrap_or_else(|_| bob_dir.to_path_buf());
+    let tiers = TierContext::for_vault(bob_dir);
+    let mut collect = ArchiveCollect::new(bob_dir, &tiers);
+    collect.run();
+    let (rows, mut warnings) =
+        read_archive_rows_parallel(bob_dir, &collect.paths);
+    warnings.extend(collect.warnings);
+    warnings.sort();
+    warnings.dedup();
+    warnings.truncate(MAX_WARNINGS);
+    NoteCatalog {
+        vault_root,
+        rows: canonical_archive_order(rows),
+        warnings,
+    }
+}
+
+struct ArchiveCollect<'a> {
+    bob_dir: &'a Path,
+    tiers: &'a TierContext,
+    paths: BTreeSet<PathBuf>,
+    warnings: Vec<String>,
+}
+
+impl<'a> ArchiveCollect<'a> {
+    fn new(bob_dir: &'a Path, tiers: &'a TierContext) -> Self {
+        Self {
+            bob_dir,
+            tiers,
+            paths: BTreeSet::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn run(&mut self) {
+        let entries = match fs::read_dir(self.bob_dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.warn(format!(".: failed to read directory: {error}"));
+                return;
+            }
+        };
+        let mut entries = match entries.collect::<Result<Vec<_>, _>>() {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.warn(format!(
+                    ".: failed to read directory entries: {error}"
+                ));
+                return;
+            }
+        };
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let relative = PathBuf::from(entry.file_name());
+            let file_type = match entry.path().symlink_metadata() {
+                Ok(metadata) => metadata.file_type(),
+                Err(error) => {
+                    self.warn(format!(
+                        "{}: failed to inspect path: {error}",
+                        display_slash(&relative)
+                    ));
+                    continue;
+                }
+            };
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
+            let name = relative.file_name().and_then(|name| name.to_str());
+            let archive_root = done_archive::skip_archive_directory(
+                self.bob_dir,
+                &self.bob_dir.join(&relative),
+            );
+            let history_root = name.is_some_and(|name| {
+                matches!(name, "old_lib" | "ref_history" | "lit_review")
+            });
+            let satellite_year = name.is_some_and(is_year_directory);
+            if !(archive_root || history_root || satellite_year)
+                || self.tiers.hidden_directory(&relative)
+            {
+                continue;
+            }
+            self.visit_dir(&relative);
+        }
+    }
+
+    fn visit_dir(&mut self, relative: &Path) {
+        let entries = match fs::read_dir(self.bob_dir.join(relative)) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.warn(format!(
+                    "{}: failed to read directory: {error}",
+                    display_dir(relative)
+                ));
+                return;
+            }
+        };
+        let mut entries = match entries.collect::<Result<Vec<_>, _>>() {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.warn(format!(
+                    "{}: failed to read directory entries: {error}",
+                    display_dir(relative)
+                ));
+                return;
+            }
+        };
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let child = relative.join(entry.file_name());
+            let file_type = match entry.path().symlink_metadata() {
+                Ok(metadata) => metadata.file_type(),
+                Err(error) => {
+                    self.warn(format!(
+                        "{}: failed to inspect path: {error}",
+                        display_slash(&child)
+                    ));
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                if !self.tiers.hidden_directory(&child) {
+                    self.visit_dir(&child);
+                }
+                continue;
+            }
+            if !file_type.is_file()
+                || child.extension().is_none_or(|extension| extension != "md")
+                || path_tier(self.bob_dir, &child, self.tiers)
+                    != NoteTier::Archive
+            {
+                continue;
+            }
+            self.paths.insert(child);
+        }
+    }
+
+    fn warn(&mut self, warning: String) {
+        if !self.warnings.contains(&warning) {
+            self.warnings.push(warning);
+        }
+    }
+}
+
+fn is_year_directory(name: &str) -> bool {
+    name.len() == 4 && name.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn read_archive_rows_parallel(
+    bob_dir: &Path,
+    paths: &BTreeSet<PathBuf>,
+) -> (Vec<NoteRow>, Vec<String>) {
+    if paths.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let paths: Vec<_> = paths.iter().cloned().collect();
+    let threads = read_thread_count(paths.len());
+    let chunk = paths.len().div_ceil(threads);
+    let mut rows = Vec::with_capacity(paths.len());
+    let mut warnings = Vec::new();
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(threads);
+        for owned in paths.chunks(chunk) {
+            let bob_dir = bob_dir.to_path_buf();
+            let owned = owned.to_vec();
+            handles.push(scope.spawn(move || {
+                let mut rows = Vec::with_capacity(owned.len());
+                let mut warnings = Vec::new();
+                for relative in owned {
+                    match read_prefix_full(&bob_dir.join(&relative)) {
+                        Ok(prefix) => {
+                            rows.push(build_archive_row(&relative, &prefix))
+                        }
+                        Err(error) => warnings.push(format!(
+                            "{}: {error}",
+                            display_slash(&relative)
+                        )),
+                    }
+                }
+                (rows, warnings)
+            }));
+        }
+        for handle in handles {
+            let (mut chunk_rows, mut chunk_warnings) =
+                handle.join().expect("archive catalog reader");
+            rows.append(&mut chunk_rows);
+            warnings.append(&mut chunk_warnings);
+        }
+    });
+    (rows, warnings)
+}
+
+fn build_archive_row(relative: &Path, prefix: &str) -> NoteRow {
+    if let Some((date, suffix)) = tiers::satellite_date_suffix(relative) {
+        let stem = file_stem(relative);
+        let title = format!("{} {suffix}", date.format("%Y-%m-%d"));
+        return NoteRow {
+            note_path: display_slash(relative),
+            kind: NoteKindKey::Satellite,
+            title: title.clone(),
+            match_keys: vec![title, stem],
+            detail: Some(date.format("%A").to_string()),
+            status: None,
+            hue: None,
+            rank: 8,
+            group: None,
+            depth: None,
+        };
+    }
+
+    let facts = Facts::parse(prefix);
+    let stem = file_stem(relative);
+    let title = facts
+        .title
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| stem.clone());
+    let mut match_keys = vec![title.clone()];
+    if stem != title
+        && !match_keys.iter().any(|key| key.eq_ignore_ascii_case(&stem))
+    {
+        match_keys.push(stem);
+    }
+    for alias in facts.aliases {
+        if !match_keys
+            .iter()
+            .any(|key| key.eq_ignore_ascii_case(&alias))
+        {
+            match_keys.push(alias);
+        }
+    }
+    let frontmatter = parse_frontmatter(prefix);
+    let parent = frontmatter
+        .as_ref()
+        .and_then(|frontmatter| {
+            frontmatter_top_level_value(frontmatter, "parent")
+        })
+        .and_then(parent_link_label);
+    let detail = parent.or_else(|| {
+        relative
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(display_slash)
+    });
+    NoteRow {
+        note_path: display_slash(relative),
+        kind: NoteKindKey::Archive,
+        title,
+        match_keys,
+        detail,
+        status: None,
+        hue: None,
+        rank: 4,
+        group: done_archive::is_archive_path(relative)
+            .then_some(NoteGroup::Done),
+        depth: None,
+    }
+}
+
+fn parent_link_label(raw: &str) -> Option<String> {
+    let value = trim_yaml_scalar(raw);
+    let inner = value.strip_prefix("[[")?.strip_suffix("]]")?;
+    let (target, alias) = inner
+        .split_once('|')
+        .map_or((inner, None), |(target, alias)| (target, Some(alias)));
+    if let Some(alias) = alias.map(str::trim).filter(|alias| !alias.is_empty())
+    {
+        return Some(alias.to_string());
+    }
+    let target = target.split_once('#').map_or(target, |(target, _)| target);
+    target
+        .trim()
+        .rsplit('/')
+        .next()
+        .filter(|label| !label.is_empty())
+        .map(str::to_string)
+}
+
+fn canonical_archive_order(mut rows: Vec<NoteRow>) -> Vec<NoteRow> {
+    rows.sort_by(|left, right| {
+        let category = |row: &NoteRow| match row.kind {
+            NoteKindKey::Satellite => 2,
+            NoteKindKey::Archive if row.group == Some(NoteGroup::Done) => 0,
+            _ => 1,
+        };
+        let left_category = category(left);
+        let right_category = category(right);
+        left_category.cmp(&right_category).then_with(|| {
+            if left_category == 2 {
+                right.note_path.cmp(&left.note_path)
+            } else {
+                left.title
+                    .to_lowercase()
+                    .cmp(&right.title.to_lowercase())
+                    .then_with(|| left.note_path.cmp(&right.note_path))
+            }
+        })
+    });
+    rows
 }
 
 /// Rank rows for a non-empty query: primary `match_keys` matches first
@@ -557,26 +868,6 @@ fn project_needs_full_window(
         && !at_eof
 }
 
-/// Path-only hidden tiers: the top-level `done/` archive (H2), the
-/// Highlights library roots and sibling PDFs (H3), and zorg-era
-/// satellites (H4). Decided without reading any contents.
-fn path_hidden(
-    relative: &Path,
-    context: &ClassifyContext,
-    bob_dir: &Path,
-) -> bool {
-    if done_archive::is_archive_path(relative) {
-        return true;
-    }
-    if context.under_library(relative) {
-        return true;
-    }
-    if is_sibling_of_pdf(bob_dir, relative) {
-        return true;
-    }
-    is_satellite(relative)
-}
-
 /// Owned row inputs from one frontmatter parse. The scan parses
 /// each prefix once; classification and every row field read these
 /// facts instead of re-parsing.
@@ -645,6 +936,7 @@ fn read_classify_parallel(
     bob_dir: &Path,
     candidates: &[PathBuf],
     context: &ClassifyContext,
+    tiers: &TierContext,
 ) -> (Vec<Classified>, Vec<String>) {
     if candidates.is_empty() {
         return (Vec::new(), Vec::new());
@@ -663,7 +955,8 @@ fn read_classify_parallel(
                 let mut entries = Vec::with_capacity(owned.len());
                 let mut warnings = Vec::new();
                 for relative in owned {
-                    if path_hidden(&relative, context, &bob_dir) {
+                    if path_tier(&bob_dir, &relative, tiers) != NoteTier::Living
+                    {
                         continue;
                     }
                     let absolute = bob_dir.join(&relative);
@@ -729,7 +1022,6 @@ fn read_classify_parallel(
 
 /// Paths a candidate is hidden under, resolved once per scan.
 struct ClassifyContext {
-    lib_roots: Vec<PathBuf>,
     ref_dir: PathBuf,
     gmail_folder: PathBuf,
 }
@@ -740,24 +1032,10 @@ impl ClassifyContext {
         highlights: &HighlightsConfig,
         gmail_folder: &str,
     ) -> Self {
-        let mut lib_roots = vec![
-            relativize(vault_root, &highlights.lib_dir),
-            relativize(vault_root, &highlights.xlib_dir),
-        ];
-        for fixed in FIXED_LIBRARY_DIRS {
-            lib_roots.push(PathBuf::from(fixed));
-        }
         Self {
-            lib_roots,
             ref_dir: relativize(vault_root, &highlights.ref_dir),
             gmail_folder: PathBuf::from(gmail_folder),
         }
-    }
-
-    fn under_library(&self, relative: &Path) -> bool {
-        self.lib_roots.iter().any(|root| {
-            !root.as_os_str().is_empty() && relative.starts_with(root)
-        })
     }
 }
 
@@ -804,8 +1082,8 @@ enum ClassifiedKind {
 }
 
 /// First-match-wins kind classification in §5.2 order, from one
-/// parse's owned facts. Path-only hidden tiers are decided before any
-/// read in [`path_hidden`]; `.base` views list per the `bases`
+/// parse's owned facts. Path tiers are decided before any read in
+/// [`path_tier`]; `.base` views list per the `bases`
 /// decision. Legacy record nouns resolve in a second pass (see
 /// [`album_record_ids`]).
 fn classify(
@@ -892,47 +1170,6 @@ fn album_record_ids(entries: &[Classified]) -> BTreeSet<String> {
 
 fn under_dir(relative: &Path, dir: &Path) -> bool {
     !dir.as_os_str().is_empty() && relative.starts_with(dir)
-}
-
-/// A sibling `X.pdf` beside `X.md` in any directory hides the note:
-/// Highlights owns that reading surface.
-fn is_sibling_of_pdf(bob_dir: &Path, relative: &Path) -> bool {
-    let Some(stem) = relative.file_stem().and_then(|stem| stem.to_str()) else {
-        return false;
-    };
-    let pdf = relative
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .join(format!("{stem}.pdf"));
-    bob_dir.join(pdf).is_file()
-}
-
-/// `YYYY/YYYYMMDD_{habit,done,poms,events}.md` with a top-level
-/// four-digit directory.
-fn is_satellite(relative: &Path) -> bool {
-    let mut components = relative.components();
-    let (Some(first), Some(second), None) =
-        (components.next(), components.next(), components.next())
-    else {
-        return false;
-    };
-    let (Some(year), Some(file)) =
-        (first.as_os_str().to_str(), second.as_os_str().to_str())
-    else {
-        return false;
-    };
-    if year.len() != 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
-        return false;
-    }
-    let Some(stem) = file.strip_suffix(".md") else {
-        return false;
-    };
-    let Some((date, suffix)) = stem.split_once('_') else {
-        return false;
-    };
-    date.len() == 8
-        && date.bytes().all(|byte| byte.is_ascii_digit())
-        && SATELLITE_SUFFIXES.contains(&suffix)
 }
 
 /// `YYYY/YYYYMMDD.md` under a top-level four-digit directory with a
@@ -1591,6 +1828,7 @@ fn group_rank(group: NoteGroup) -> u8 {
         NoteGroup::Projects => 3,
         NoteGroup::Notebooks => 4,
         NoteGroup::Albums => 5,
+        NoteGroup::Done => 6,
     }
 }
 

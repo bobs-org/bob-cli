@@ -42,6 +42,7 @@ pub(super) struct CompleteRequest<'a> {
     pub(super) raw_text: &'a str,
     pub(super) cursor: usize,
     pub(super) all_tasks: bool,
+    pub(super) archived_notes: bool,
     pub(super) closed_tasks: bool,
     pub(super) next_missing_field: bool,
     pub(super) record_field: Option<&'a str>,
@@ -60,6 +61,7 @@ pub(super) fn build_result(
         raw_text,
         cursor,
         all_tasks,
+        archived_notes: false,
         closed_tasks,
         next_missing_field: false,
         record_field: None,
@@ -643,8 +645,11 @@ fn build_result_inner(
             task_goto_candidates(bob_dir, &field.query, closed_tasks)
         }
         CompletionContext::NoteGoto => {
-            let (candidates, warnings, meta) =
-                note_goto_candidates(bob_dir, &field.query);
+            let (candidates, warnings, meta) = note_goto_candidates(
+                bob_dir,
+                &field.query,
+                request.archived_notes,
+            );
             note_goto = Some(meta);
             (candidates, warnings)
         }
