@@ -1270,6 +1270,20 @@ pub(crate) const ENTRIES: &[Row] = &[
         Presentation::Report,
         60,
     ),
+    reads(
+        "bank-subscriptions",
+        &["bank", "subscriptions"],
+        "Report subscription records",
+        &[
+            "bank",
+            "subscriptions",
+            "recurring",
+            "ledger",
+            "audit",
+        ],
+        Presentation::Report,
+        60,
+    ),
     writes(
         "bank-ensure",
         &["bank", "ensure"],

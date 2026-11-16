@@ -1337,3 +1337,52 @@ fn invalid_subscription_album_warns_once_and_nulls_projection() {
         1
     );
 }
+
+#[test]
+fn subscriptions_reports_records_and_teaches_without_an_album() {
+    const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-09-01\n  categories:\n    streaming: 📡 Streaming\n---\n\n# 🏦 Bank\n";
+    let vault = syncable(HUB);
+
+    let human = run(&vault, &["subscriptions"]);
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("No subscriptions album yet."), "{text}");
+    assert!(
+        text.contains("bob albums create bank subscriptions"),
+        "{text}"
+    );
+    let empty = json(&run(&vault, &["subscriptions", "-f", "json"]));
+    assert_eq!(empty["ok"], true);
+    assert_eq!(empty["teaching_empty"], true);
+    assert_eq!(empty["subscriptions"], serde_json::json!([]));
+
+    write_file(
+        &vault.path.join("subscriptions.md"),
+        "---\nparent: \"[[bank]]\"\ntype: \"[[album]]\"\nsummary: What we pay for on repeat.\nemoji: 🔁\nindex_by: category\nindex_facets: [amount, cadence]\nrecord:\n  noun: subscription\n  label: Subscription\n  plural: subscriptions\n  dated_notes: true\n  legacy: [recur_id]\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: ✂️ To cancel\n        to_decide: 🤔 To decide\n        active: 💚 Active\n        cancelled: 🚫 Cancelled\n    amount: { required: true, values: number, min: 0, label: Charged }\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every 4 weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    pricing:\n      default: fixed\n      values: { fixed: 📌 Fixed, variable: 📈 Usage }\n    match: { list: true, label: Shows up as }\n    category: { suggest: true }\n    url: { values: url, label: Manage }\n    renews: { values: date }\n    ended: { values: date }\n---\n\n# Subscriptions\n",
+    );
+    write_file(
+        &vault.path.join("subscriptions/tunely.md"),
+        "---\nparent: \"[[subscriptions]]\"\ntype: \"[[record]]\"\ntitle: Tunely\nstatus: active\namount: 9.99\ncadence: monthly\npricing: fixed\nmatch: [TUNELY]\ncategory: streaming\n---\n\n# Tunely\n",
+    );
+    write_file(
+        &vault.path.join("bank/2026-11.md"),
+        "---\nmonth: 2026-11\ntype: \"[[bank_month]]\"\n---\n\n# 🏦 November 2026\n\n## Thu Nov 12\n\n- [x] $9.99 Tunely [cat:: streaming] [[subscriptions/tunely|🔁]]\n",
+    );
+
+    let reported = run(&vault, &["subscriptions"]);
+    assert_success(&reported);
+    let text = stdout(&reported);
+    assert!(text.contains("🔁 Subscriptions"), "{text}");
+    assert!(text.contains("Tunely"), "{text}");
+    assert!(text.contains("last Nov 12"), "{text}");
+    let payload = json(&run(&vault, &["subscriptions", "-f", "json"]));
+    assert_eq!(payload["ok"], true, "{payload}");
+    assert_eq!(payload["album"]["stem"], "subscriptions");
+    assert_eq!(payload["totals"]["monthly_cents"], 999);
+    let entry = &payload["subscriptions"][0];
+    assert_eq!(entry["stem"], "tunely");
+    assert_eq!(entry["status"], "active");
+    assert_eq!(entry["monthly_cents"], 999);
+    assert_eq!(entry["charges"]["count"], 1);
+    assert_eq!(entry["next_expected"], "2026-12-12");
+}

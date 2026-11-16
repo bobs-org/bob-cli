@@ -98,7 +98,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 
 | Command | What it does |
 | --- | --- |
-| [`bob bank`](bank.md) | Commands over bank rows, bank month notes, and their import journal |
+| [`bob bank`](bank.md) | Commands over bank rows, bank month notes, their import journal, and the subscription records rows link to |
 | [`bob bank ack`](bank.md#bob-bank-ack) | Acknowledge waiting bank rows |
 | [`bob bank check`](bank.md#bob-bank-check) | Check bank notes against the contract |
 | [`bob bank config`](bank.md#bob-bank-config) | Show or update the bank configuration |
@@ -106,6 +106,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob bank import`](bank.md#bob-bank-import) | Import posted bank transactions |
 | [`bob bank list`](bank.md#bob-bank-list) | List waiting bank rows (default) |
 | [`bob bank report`](bank.md#bob-bank-report) | Report bank totals for a day, week, month, quarter, year, or all time |
+| [`bob bank subscriptions`](bank.md#bob-bank-subscriptions) | Report subscription records with their charge ledgers |
 | [`bob clipboard`](clipboard.md) | Diagnose clipboard history for counted capture |
 | [`bob gcal`](gcal.md) | Project Google Calendar events onto today's daily note |
 | [`bob gkeep`](gkeep.md) | Drain the Google Keep inbox into Obsidian tasks |
@@ -184,8 +185,8 @@ Vault:
   vault-sync   Reconcile the vault through Git (default: run) or show status
 
 Integrations:
-  bank         Commands over bank rows, bank month notes, and their import
-               journal
+  bank         Commands over bank rows, bank month notes, their import journal,
+               and the subscription records rows link to
   clipboard    Diagnose clipboard history for counted capture
   gcal         Project Google Calendar events onto today's daily note
   gkeep        Drain the Google Keep inbox into Obsidian tasks

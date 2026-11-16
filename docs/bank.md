@@ -733,6 +733,18 @@ notes. It works without source files, restores rows under their posted days,
 and never duplicates a row whose ID is still present. Restored imported rows
 wait for acknowledgment; rows originally matched to typed entries stay ticked.
 
+`subscriptions` reports every subscription record with its ledger: status
+groups in action order (✂️, 🤔, 💚, 🚫), the monthly and yearly estimates,
+and the subscription findings. Cancelled records stay hidden unless `-a`
+is given or a finding names them. Each row shows the record title, amount,
+cadence (`every 4 weeks` for `four_weekly`), latest and next-expected
+charges, and flags (`still charging`, `after cancel`, a `↑` price change,
+`usage-based` for variable pricing). A large Active group splits into
+bank-category subgroups past eight records. An invalid album reports no
+records with one `bank_subscription_album_invalid` warning; a missing
+album prints the `bob albums create` teaching state. See
+[Audit subscriptions](guides/audit-subscriptions.md) for the monthly walk.
+
 ## Totals
 
 `report` computes every total from rows at read time. Rows on
@@ -1014,6 +1026,19 @@ bank rule. A missing or invalid album forces the whole projection to
   is a bank category key or `null`. An invalid subscription album adds one
   `bank_subscription_album_invalid` warning finding.
 - `ensure` adds `{path, line, day, created_note, created_heading}`.
+- `subscriptions` adds `all`, `album {stem, path, title, emoji}` (or `null`),
+  `totals {monthly_cents, yearly_cents, by_status {<status>: {count, monthly_cents}}}`,
+  `subscriptions[]`, `hidden_cancelled`, `issues`, and `findings[]` in `check`'s
+  shape. Each entry adds the record identity (`stem`, `path`, `title`),
+  `status` and `status_label`, `cadence`, `pricing`, `amount_cents`,
+  `category {key, emoji, label}` (or `null`), `match`, `url`, `renews`,
+  `ended`, `monthly_cents` (`0` for cancelled, `null` on overflow),
+  `charges {count, total_cents, latest}`, `next_expected`, `price_change`,
+  `still_charging`, `after_cancel`, `timeline[] {start, due, state}`, and the
+  entry's `findings[]` codes. `charges.latest` and `after_cancel` are
+  `{date, cents, path, line, id, journal_only}` or `null`; `total_cents` nets
+  refunds against spending. A missing album reports `teaching_empty` with an
+  empty `subscriptions[]` list.
 - `ack` prints the envelope `ok`, `dry_run`, `changed`,
   `changes[] {path, diff?}`, `findings`, `commit`, `sync`, and
   `warnings`, plus `acknowledged[]`, `already[]`, and `unknown[]`.

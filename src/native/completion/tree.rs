@@ -63,6 +63,9 @@ impl NativeCommand {
             NativeCommand::BankReport => {
                 crate::native::bank::build_cli_report()
             }
+            NativeCommand::BankSubscriptions => {
+                crate::native::bank::build_cli_subscriptions()
+            }
             NativeCommand::Capture => crate::native::capture::cli::build_cli(),
             NativeCommand::CaptureComplete => {
                 crate::native::capture_complete::build_cli()

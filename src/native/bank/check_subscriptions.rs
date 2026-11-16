@@ -55,7 +55,16 @@ pub(crate) fn findings(
     }
 
     let ledger = (registry.availability == SubscriptionAvailability::Available)
-        .then(|| compute_ledger(registry, journal, rows, today));
+        .then(|| {
+            compute_ledger(
+                registry,
+                journal,
+                rows,
+                today,
+                config,
+                &HashMap::new(),
+            )
+        });
     if let Some(ledger) = &ledger {
         append_record_findings(
             config,
@@ -1102,7 +1111,14 @@ mod tests {
             txn("a1000004", date(11), -1099, "TUNELY"),
             txn("a1000005", date(9), -500, "SHARED BILL"),
         ]);
-        let ledger = compute_ledger(&registry, &journal, &[], date(12));
+        let ledger = compute_ledger(
+            &registry,
+            &journal,
+            &[],
+            date(12),
+            None,
+            &HashMap::new(),
+        );
         let cfg = config("");
         let mut findings = Vec::new();
         append_record_findings(

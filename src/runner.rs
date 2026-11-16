@@ -407,6 +407,14 @@ const BANK_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "subscriptions",
+        about: "Report subscription records with their charge ledgers",
+        leaf: Leaf {
+            native_command: NativeCommand::BankSubscriptions,
+            script_command: None,
+        },
+    },
 ];
 
 const BANK_AFTER_HELP: &str = "\
@@ -421,6 +429,7 @@ Examples:
   bob bank import ~/Downloads/*.qfx  Import posted transactions
   bob bank ack -D 2026-11-10      Acknowledge one day
   bob bank check -f json         Findings as JSON
+  bob bank subscriptions         Report subscription records
 
 See docs/bank.md for the bank contract.
 Run 'bob bank <command> --help' for more information on a command.";
@@ -1191,13 +1200,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "bank",
-        about: "Commands over bank rows, bank month notes, and their import journal",
+        about: "Commands over bank rows, bank month notes, their import journal, and the subscription records rows link to",
         section: Section::Integrations,
         target: Target::Group(Group {
             members: BANK_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents; `config` shows the hub's `bank:` setup. `import` plans and records posted exports; `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract.",
+                "Bare `bob bank` runs the read-only list. `list` shows the waiting queue; `report` explains the month with exact cents; `config` shows the hub's `bank:` setup. `import` plans and records posted exports; `ensure` creates the month note and day heading; `ack` ticks shown rows. `check` lints bank notes against the contract. `subscriptions` reports the subscription records rows link to.",
             ),
             after_help: BANK_AFTER_HELP,
             usage: "bob bank [COMMAND]",
@@ -2647,6 +2656,7 @@ mod tests {
             NativeCommand::BankImport,
             NativeCommand::BankList,
             NativeCommand::BankReport,
+            NativeCommand::BankSubscriptions,
             NativeCommand::Capture,
             NativeCommand::CaptureComplete,
             NativeCommand::CaptureParse,

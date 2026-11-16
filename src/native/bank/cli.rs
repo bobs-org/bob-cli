@@ -9,7 +9,7 @@ use clap::{
 
 use super::{
     ack, charts, check, config_report, config_update, dates, ensure,
-    import_run, list, output, report, scan, status,
+    import_run, list, output, report, scan, status, subscriptions_report,
 };
 use crate::native::env as bob_env;
 
@@ -52,6 +52,10 @@ pub(crate) fn run_list(args: Vec<OsString>) -> i32 {
 
 pub(crate) fn run_report(args: Vec<OsString>) -> i32 {
     run_with(build_cli_report(), args, execute_report)
+}
+
+pub(crate) fn run_subscriptions(args: Vec<OsString>) -> i32 {
+    run_with(build_cli_subscriptions(), args, execute_subscriptions)
 }
 
 pub(crate) fn run_config(args: Vec<OsString>) -> i32 {
@@ -121,6 +125,22 @@ pub(crate) fn build_cli_report() -> ClapCommand {
         .arg(summary_arg())
         .arg(week_arg())
         .arg(year_arg())
+        .arg(help_arg())
+}
+
+pub(crate) fn build_cli_subscriptions() -> ClapCommand {
+    ClapCommand::new("bob bank subscriptions")
+        .about("Report subscription records with their charge ledgers")
+        .long_about(
+            "Every discretionary recurring charge with its ledger: status groups in action order, the monthly and yearly estimates, and the subscription findings. Cancelled records stay hidden unless -a is given or a finding names them. This command is read-only. With no subscription album yet, prints a teaching empty state and exits 0.",
+        )
+        .after_help(
+            "Examples:\n  bob bank subscriptions\n  bob bank subscriptions -a\n  bob bank subscriptions -f json\n\nSee docs/bank.md for the subscriptions contract.",
+        )
+        .disable_help_flag(true)
+        .arg(show_all_arg())
+        .arg(bob_dir_arg())
+        .arg(format_arg())
         .arg(help_arg())
 }
 
@@ -342,6 +362,14 @@ fn all_arg() -> Arg {
         .short('a')
         .action(ArgAction::SetTrue)
         .help("Show all rows, not only waiting rows")
+}
+
+fn show_all_arg() -> Arg {
+    Arg::new("all")
+        .long("all")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help("Show cancelled records, not only live ones")
 }
 
 fn month_arg() -> Arg {
@@ -782,6 +810,54 @@ fn execute_list(matches: &ArgMatches) -> i32 {
         output::print_list(&report, today);
     }
     0
+}
+
+fn execute_subscriptions(matches: &ArgMatches) -> i32 {
+    let bob_dir = vault_from(matches);
+    let json = format_is_json(matches);
+    let show_all = matches.get_flag("all");
+    let today = bob_env::current_datetime().date();
+    let scan = scan::scan_bank(&bob_dir);
+    print_io_errors(&scan.io_errors);
+    if !scan.io_errors.is_empty() {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": false,
+                    "schema_version": 1,
+                    "today": today.format("%Y-%m-%d").to_string(),
+                    "error": scan.io_errors.join("; "),
+                })
+            );
+        }
+        return 1;
+    }
+    if scan::is_teaching_empty(&scan) {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "schema_version": 1,
+                    "today": today.format("%Y-%m-%d").to_string(),
+                    "teaching_empty": true,
+                })
+            );
+        } else {
+            output::print_teaching_empty(today);
+        }
+        return 0;
+    }
+    let report = subscriptions_report::SubscriptionsReport::build(
+        &bob_dir, &scan, today, show_all,
+    );
+    if json {
+        println!("{}", report.to_json());
+    } else {
+        subscriptions_report::print_human(&report);
+    }
+    report.exit_code()
 }
 
 fn execute_report(matches: &ArgMatches) -> i32 {

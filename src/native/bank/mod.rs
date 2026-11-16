@@ -32,11 +32,13 @@ pub(crate) mod source;
 pub(crate) mod status;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod subscriptions;
+pub(crate) mod subscriptions_report;
 pub(crate) mod suggest;
 
 pub(crate) use cli::{
     build_cli_ack, build_cli_check, build_cli_config, build_cli_ensure,
     build_cli_import, build_cli_list, build_cli_report,
+    build_cli_subscriptions,
 };
 
 #[cfg(test)]
