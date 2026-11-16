@@ -228,7 +228,8 @@ With the review plugins enabled in Obsidian, `]s` from outside the
 queue starts at PRE when PRE is due. `[S` / `]S` cycle occupied review
 groups and always land on the destination group's first due task. Every gesture that answers the landed row advances the
 walk once to the next remaining item in the same keystroke: Ctrl+Enter
-completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
+completes (the last PRE chore moves into the next group; it never steps
+from a lane row onto POST),
 Ctrl+Alt+F keeps an ordinary non-recurring task, Alt+N releases,
 Ctrl+Shift+Enter picks a Pomodoro (↵ takes the current/next one), and a
 resolving Task Card commit moves on. On an inbox task, every non-closing Task Card answer asks

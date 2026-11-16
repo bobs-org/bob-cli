@@ -729,16 +729,19 @@ same default as any other generic stamp.
 2. Complete each PRE chore with Ctrl+Enter or Ctrl+Alt+F, or skip it with
    `]s`. On the PRE/POST row the walk just landed on, Ctrl+Enter completes
    it through Tasks (including a still-`[?]` chore) and moves to the next
-   live row of that group with a completion and landing toast. It never
-   leaves PRE: the final chore stays put with `PRE done` and a `]s → …`
-   hint. Ctrl+Alt+F also completes and advances, crossing from PRE into the
-   next tier; Alt+F completes in place. When Ctrl+Enter or Ctrl+Alt+F
+   live row of that group with a completion and landing toast. The final
+   PRE chore's Ctrl+Enter lands on the next review group's first due row,
+   where `]s` would go, with `PRE done` and the landing in one toast; a
+   short guard swallows a repeated rapid press. It stays only when nothing
+   else is due, or the walk would wrap back to a skipped PRE chore.
+   Ctrl+Alt+F also completes and advances, crossing the same way; Alt+F
+   completes in place. When Ctrl+Enter or Ctrl+Alt+F
    finishes the last live due row of a checklist stage, the done line adds
    `· <STAGE> ✓` after the task text, for example
    `✓ Done · Read email · BROWSER ✓ · Ctrl+Enter → next PRE`. The walk never
    pauses at a stage boundary. Checklist rows never stamp.
-   Elsewhere, Ctrl+Enter on any landed row completes and advances, but it
-   never crosses the PRE/POST boundary: on the last lane row before POST it
+   Elsewhere, Ctrl+Enter on any landed row completes and advances, but
+   never steps onto a checklist row: on the last lane row before POST it
    stays with a `]s → POST` hint (Ctrl+Alt+F crosses).
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
 3. Walk commitments through NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER with ]s / Ctrl+Alt+F until the notice says Commitments done. N]s / N[s move N entries along that queue and wrap with the existing notice. N]S / N[S move N occupied groups and wrap at the occupied ends. NEW is never capped or skipped. In PROJECTS, replenish the empty project with Ctrl+Alt+F; stamping a project advances to the correct next entry with its block ID and #hide preserved. References follow the ordinary NEW, lane, TICKLER, and ROTTEN rules as other tasks. In RECURRING the occurrence date has arrived: complete it (Ctrl+Enter), do it today
@@ -1813,6 +1816,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   bob-navigation-hotkeys 2.75.0 adds `· STAGE ✓` to completion lines that finish
   a checklist stage. The nav and freshness docs describe the stage-end tick and
   continuous walk across stage boundaries.
+- 2026-11-16: Ctrl+Enter on the last PRE chore lands on the next review group with a 1.5 s extra-press guard (nav 2.83.0).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

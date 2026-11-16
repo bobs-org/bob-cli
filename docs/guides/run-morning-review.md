@@ -81,9 +81,10 @@ On the row `]s` just landed on, pick one explicit answer:
 - **Keep and advance:** Press `Ctrl+Alt+F` and confirm any prompt to move
   to the next remaining due row.
 - **Skip without answering:** `]s` leaves the row due.
-- **Complete a PRE/POST checklist row:** `Ctrl+Enter` completes it. On PRE it
-  never leaves that group; `Ctrl+Alt+F` can cross into the next tier.
-  Checklist rows are never stamped.
+- **Complete a PRE/POST checklist row:** `Ctrl+Enter` completes it. From the
+  last PRE row it lands on the next review group's first due row; it never
+  steps from a lane row onto POST. `Ctrl+Alt+F` completes and advances the
+  same way. Checklist rows are never stamped.
 
 A counted keep asks why the task stays in its lane or priority level.
 Enter a reason; blank Enter logs `🤷 no reason given` in the Rotten Log,

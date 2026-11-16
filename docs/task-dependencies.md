@@ -1764,8 +1764,8 @@ notification line). This is the plain fallback and walk-toast form:
   open; after it settles (including Esc) the walk advances exactly
   once and the pull-in result composes into `outcome.notice` as the
   line after `✓ Done · <task>`. No card is shown. Inserted rows never
-  steal focus or cause a second advance. Ctrl+Enter never crosses the
-  PRE/POST boundary. A double-press guard ignores Enter carrying
+  steal focus or cause a second advance. Ctrl+Enter never steps from a
+  lane row onto a checklist row. A double-press guard ignores Enter carrying
   modifiers, key repeats, and presses within ~350 ms of opening.
 
 **Bob Mac Capture: preview first, choice step, notification second.**
