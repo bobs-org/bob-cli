@@ -48,7 +48,7 @@ impl AccountKind {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "checking" => Some(Self::Checking),
             "savings" => Some(Self::Savings),

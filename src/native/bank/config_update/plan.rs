@@ -29,6 +29,7 @@ pub(crate) struct UpdatePlan {
     pub(crate) shifted: Vec<HotkeyShift>,
     pub(crate) free: Vec<char>,
     pub(crate) categories: serde_json::Value,
+    pub(crate) warnings: Vec<String>,
 }
 
 pub(crate) fn load_scan(vault: &std::path::Path) -> Result<BankScan, OpError> {
@@ -93,7 +94,19 @@ pub(crate) fn plan_update(
         error.key_path = Some("bank".to_owned());
         return Err(error);
     }
-    let usage = UsageIndex::from_scan(scan, &config);
+    if envelope.ops.iter().any(|op| op.needs_complete_journal())
+        && (!journal.io_errors.is_empty() || !journal.malformed.is_empty())
+    {
+        return Err(OpError::new(
+            "journal_incomplete",
+            "account usage cannot be counted because the bank journal scan is incomplete",
+            Some(
+                "repair unreadable or malformed .bob/bank journal files, then retry; nothing was written"
+                    .to_owned(),
+            ),
+        ));
+    }
+    let usage = UsageIndex::from_scan(scan, &config, journal);
     let (after, per_op, inverse_ops) = ops::apply_ops(
         &before,
         &envelope.ops,
@@ -150,6 +163,7 @@ pub(crate) fn plan_update(
     }
     let report = ConfigReport::build(&scan_after, journal, today);
     let categories = report.to_json()["categories"].clone();
+    let warnings = report.warning_messages();
     let mut consequence = per_op
         .iter()
         .map(|result| result.summary.clone())
@@ -193,6 +207,7 @@ pub(crate) fn plan_update(
         shifted,
         free,
         categories,
+        warnings,
     })
 }
 
@@ -207,7 +222,10 @@ fn hotkey_map(
 }
 
 pub(crate) fn load_journal(vault: &std::path::Path) -> JournalSnapshot {
-    journal::load(vault).unwrap_or_default()
+    journal::load(vault).unwrap_or_else(|error| JournalSnapshot {
+        io_errors: vec![format!(".bob/bank: {error}")],
+        ..JournalSnapshot::default()
+    })
 }
 
 pub(crate) fn commit_subject(plan: &UpdatePlan) -> String {
@@ -244,6 +262,32 @@ pub(crate) fn commit_subject(plan: &UpdatePlan) -> String {
         }
         Some(result) if result.op_name == "group.move" => {
             "bank: config (move group)".to_owned()
+        }
+        Some(result) if result.op_name == "account.add" => format!(
+            "bank: config (+account {})",
+            result.key.as_deref().unwrap_or("account")
+        ),
+        Some(result) if result.op_name == "account.remove" => format!(
+            "bank: config (-account {})",
+            result.key.as_deref().unwrap_or("account")
+        ),
+        Some(result) if result.op_name.starts_with("account.") => {
+            "bank: config (account edit)".to_owned()
+        }
+        Some(result) if result.op_name == "rule.add" => {
+            "bank: config (+rule)".to_owned()
+        }
+        Some(result) if result.op_name == "rule.remove" => {
+            "bank: config (-rule)".to_owned()
+        }
+        Some(result) if result.op_name == "rule.move" => {
+            "bank: config (move rule)".to_owned()
+        }
+        Some(result) if result.op_name == "rule.set" => {
+            "bank: config (edit rule)".to_owned()
+        }
+        Some(result) if result.op_name == "bank.set" => {
+            "bank: config (stale_after)".to_owned()
         }
         Some(result) => format!(
             "bank: config ({})",

@@ -5,16 +5,21 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Value};
 
 use super::protocol::{
-    Anchor, Op, Restoration, RestoreSpan as ProtocolSpan, UnsetField,
+    AccountUnsetField, Anchor, Op, Restoration, RestoreSpan as ProtocolSpan,
+    RuleUnsetField, UnsetField,
 };
 use crate::native::albums::output::split_icon;
 use crate::native::bank::config::{
-    self, BankConfig, Category, ConfigParse, HOTKEY_ORDER, RESERVED_HOTKEY,
+    self, Account, AccountKind, BankConfig, Category, ConfigParse, Rule,
+    HOTKEY_ORDER, RESERVED_HOTKEY,
 };
 use crate::native::bank::config_spans::{
-    self, BankContainer, CategoryDraft, Place, RestoreSpan,
+    self, AccountDraft, BankContainer, CategoryDraft, Place, RestoreSpan,
+    RuleDraft, SeqPlace,
 };
+use crate::native::bank::journal::JournalSnapshot;
 use crate::native::bank::model;
+use crate::native::bank::month::{self, LocatedRowKind};
 use crate::native::bank::scan::BankScan;
 
 #[derive(Debug, Clone)]
@@ -66,6 +71,7 @@ pub(crate) struct OpResult {
     pub(crate) hotkey: Option<char>,
     pub(crate) rows: Option<usize>,
     pub(crate) rule_refs: Option<usize>,
+    pub(crate) journal_events: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,27 +83,64 @@ pub(crate) struct InverseOp {
 #[derive(Debug, Clone)]
 pub(crate) struct UsageIndex {
     rows: HashMap<String, usize>,
-    rule_refs: HashMap<String, usize>,
+    account_rows: HashMap<String, usize>,
+    default_rows: usize,
+    account_journal_events: HashMap<String, usize>,
 }
 
 impl UsageIndex {
-    pub(crate) fn from_scan(scan: &BankScan, config: &BankConfig) -> Self {
+    pub(crate) fn from_scan(
+        scan: &BankScan,
+        config: &BankConfig,
+        journal: &JournalSnapshot,
+    ) -> Self {
         let rows = model::collect_rows(scan, Some(config), None);
         let mut row_counts = HashMap::new();
+        let mut account_rows = HashMap::new();
         for row in &rows {
+            *account_rows.entry(row.account.clone()).or_insert(0) += 1;
             if let Some(key) = &row.category {
                 *row_counts.entry(key.clone()).or_insert(0) += 1;
             }
         }
-        let mut rule_refs = HashMap::new();
-        for rule in &config.rules {
-            if let Some(key) = &rule.cat {
-                *rule_refs.entry(key.clone()).or_insert(0) += 1;
-            }
+        let default_rows = scan
+            .months
+            .iter()
+            .flat_map(|month| {
+                let note = month::parse_month_note(
+                    &month.path,
+                    &month.contents,
+                    month.month,
+                );
+                note.days
+                    .into_iter()
+                    .flat_map(|day| day.rows)
+                    .filter(|row| {
+                        matches!(
+                            &row.kind,
+                            LocatedRowKind::Parsed(parsed)
+                                if parsed.account.is_none()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .count();
+        let mut account_journal_events = HashMap::new();
+        for event in &journal.imports {
+            *account_journal_events
+                .entry(event.account.clone())
+                .or_insert(0) += 1;
+        }
+        for event in journal.transactions.values() {
+            *account_journal_events
+                .entry(event.account.clone())
+                .or_insert(0) += 1;
         }
         Self {
             rows: row_counts,
-            rule_refs,
+            account_rows,
+            default_rows,
+            account_journal_events,
         }
     }
 
@@ -105,9 +148,25 @@ impl UsageIndex {
         self.rows.get(key).copied().unwrap_or(0)
     }
 
-    fn rule_refs(&self, key: &str) -> usize {
-        self.rule_refs.get(key).copied().unwrap_or(0)
+    fn account_rows(&self, alias: &str) -> usize {
+        self.account_rows.get(alias).copied().unwrap_or(0)
     }
+
+    fn account_journal_events(&self, alias: &str) -> usize {
+        self.account_journal_events.get(alias).copied().unwrap_or(0)
+    }
+
+    fn default_rows(&self) -> usize {
+        self.default_rows
+    }
+}
+
+fn rule_refs(config: &BankConfig, key: &str) -> usize {
+    config
+        .rules
+        .iter()
+        .filter(|rule| rule.cat.as_deref() == Some(key))
+        .count()
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +302,113 @@ fn apply_one(
         Op::GroupMove { group, place } => {
             move_group(markdown, &config, group, place, index)
         }
+        Op::AccountAdd {
+            alias,
+            label,
+            kind,
+            start,
+        } => add_account(
+            markdown,
+            &config,
+            alias.as_deref(),
+            label,
+            *kind,
+            start.as_deref(),
+            index,
+        ),
+        Op::AccountSet {
+            alias,
+            label,
+            rename_to,
+            kind,
+            start,
+            unset,
+        } => set_account(
+            markdown,
+            &config,
+            usage,
+            alias,
+            label.as_deref(),
+            rename_to.as_deref(),
+            *kind,
+            start.as_deref(),
+            unset,
+            index,
+        ),
+        Op::AccountRename { alias, to } => {
+            refuse_account_rename(markdown, &config, usage, alias, to, index)
+        }
+        Op::AccountDefault { alias } => {
+            refuse_account_default(markdown, &config, usage, alias, index)
+        }
+        Op::AccountMove { alias, place } => {
+            refuse_account_move(markdown, &config, usage, alias, place, index)
+        }
+        Op::AccountRemove { alias } => {
+            remove_account(markdown, &config, usage, alias, index)
+        }
+        Op::RuleAdd {
+            match_text,
+            payee,
+            cat,
+            link,
+            position,
+        } => add_rule(
+            markdown,
+            &config,
+            match_text,
+            payee.as_deref(),
+            cat.as_deref(),
+            link.as_deref(),
+            *position,
+            index,
+        ),
+        Op::RuleSet {
+            index: rule_index,
+            match_was,
+            match_text,
+            payee,
+            cat,
+            link,
+            unset,
+        } => set_rule(
+            markdown,
+            &config,
+            *rule_index,
+            match_was,
+            match_text.as_deref(),
+            payee.as_deref(),
+            cat.as_deref(),
+            link.as_deref(),
+            unset,
+            index,
+        ),
+        Op::RuleMove {
+            index: rule_index,
+            match_was,
+            position,
+        } => move_rule(
+            markdown,
+            &config,
+            *rule_index,
+            match_was,
+            *position,
+            index,
+        ),
+        Op::RuleRemove {
+            index: rule_index,
+            match_was,
+        } => remove_rule(markdown, &config, *rule_index, match_was, index),
+        Op::BankSet {
+            stale_after,
+            unset_stale_after,
+        } => set_stale_after(
+            markdown,
+            &config,
+            *stale_after,
+            *unset_stale_after,
+            index,
+        ),
     }
 }
 
@@ -252,38 +418,76 @@ fn validate_remove_usage(
     config: &BankConfig,
     index: usize,
 ) -> Result<(), OpError> {
-    let Op::CategoryRemove { key } = op else {
-        return Ok(());
-    };
-    let rows = usage.rows(key);
-    let rules = usage.rule_refs(key);
-    if rows == 0 && rules == 0 {
-        return Ok(());
+    match op {
+        Op::CategoryRemove { key } => {
+            let rows = usage.rows(key);
+            let rules = rule_refs(config, key);
+            if rows == 0 && rules == 0 {
+                return Ok(());
+            }
+            let label = config
+                .category(key)
+                .map(full_label)
+                .unwrap_or_else(|| key.to_owned());
+            let mut parts = Vec::new();
+            if rows > 0 {
+                parts.push(format!(
+                    "{rows} row{}",
+                    if rows == 1 { "" } else { "s" }
+                ));
+            }
+            if rules > 0 {
+                parts.push(format!(
+                    "{rules} rule{}",
+                    if rules == 1 { "" } else { "s" }
+                ));
+            }
+            let mut error = OpError::new(
+                "undo_blocked",
+                format!("{} now use {label} · cannot undo", parts.join(" and ")),
+                Some(
+                    "hide it instead, or wait until those rows no longer depend on it"
+                        .to_owned(),
+                ),
+            );
+            error.op_index = Some(index);
+            error.affected = Some(rows + rules);
+            error.key_path = Some(format!("bank.categories.{key}"));
+            Err(error)
+        }
+        Op::AccountRemove { alias } => {
+            let Some(account) = config.account(alias) else {
+                return Ok(());
+            };
+            let rows = usage.account_rows(alias);
+            let events = usage.account_journal_events(alias);
+            if config
+                .default_account()
+                .is_some_and(|default| default.alias == account.alias)
+            {
+                return Err(account_error(
+                    "undo_blocked",
+                    format!("{alias} is now the default account · cannot undo"),
+                    rows,
+                    events,
+                    index,
+                    alias,
+                ));
+            }
+            if rows == 0 && events == 0 {
+                return Ok(());
+            }
+            Err(account_error(
+                "undo_blocked",
+                format!("{rows} rows and {events} journal events now use {alias} · cannot undo"),
+                rows,
+                events,
+                index,
+                alias,
+            ))
+        }
+        _ => Ok(()),
     }
-    let label = config
-        .category(key)
-        .map(full_label)
-        .unwrap_or_else(|| key.to_owned());
-    let mut parts = Vec::new();
-    if rows > 0 {
-        parts.push(format!("{rows} row{}", if rows == 1 { "" } else { "s" }));
-    }
-    if rules > 0 {
-        parts
-            .push(format!("{rules} rule{}", if rules == 1 { "" } else { "s" }));
-    }
-    let mut error = OpError::new(
-        "undo_blocked",
-        format!("{} now use {label} · cannot undo", parts.join(" and ")),
-        Some(
-            "hide it instead, or wait until those rows no longer depend on it"
-                .to_owned(),
-        ),
-    );
-    error.op_index = Some(index);
-    error.affected = Some(rows + rules);
-    error.key_path = Some(format!("bank.categories.{key}"));
-    Err(error)
 }
 
 fn restored_result(
@@ -306,10 +510,27 @@ fn restored_result(
                 config.category(key).and_then(|category| category.hotkey);
             (Some(key.clone()), hotkey)
         }
-        Op::GroupRename { .. } | Op::GroupMove { .. } => (None, None),
+        Op::AccountAdd { alias, .. } => (alias.clone(), None),
+        Op::AccountSet { alias, .. }
+        | Op::AccountRename { alias, .. }
+        | Op::AccountDefault { alias }
+        | Op::AccountMove { alias, .. }
+        | Op::AccountRemove { alias } => (Some(alias.clone()), None),
+        Op::RuleAdd { .. }
+        | Op::RuleSet { .. }
+        | Op::RuleMove { .. }
+        | Op::RuleRemove { .. }
+        | Op::BankSet { .. }
+        | Op::GroupRename { .. }
+        | Op::GroupMove { .. } => (None, None),
     };
     let rows = key.as_deref().map(|key| usage.rows(key));
-    let rule_refs = key.as_deref().map(|key| usage.rule_refs(key));
+    let rule_refs = key.as_deref().map(|key| rule_refs(config, key));
+    let journal_events = key.as_deref().and_then(|key| {
+        config
+            .account(key)
+            .map(|_| usage.account_journal_events(key))
+    });
     OpResult {
         op_index: index,
         op_name: op.name(),
@@ -318,6 +539,7 @@ fn restored_result(
         hotkey,
         rows,
         rule_refs,
+        journal_events,
     }
 }
 
@@ -408,6 +630,7 @@ fn add_category(
             hotkey: Some(pinned),
             rows: Some(0),
             rule_refs: Some(0),
+            journal_events: None,
         },
         inverse: InverseOp {
             op: Op::CategoryRemove { key },
@@ -574,6 +797,10 @@ fn refuse_taken(
 }
 
 fn categories_missing(markdown: &str) -> bool {
+    bank_container_missing(markdown, "categories")
+}
+
+fn bank_container_missing(markdown: &str, key: &str) -> bool {
     let Some(frontmatter) =
         crate::native::projects::parse_frontmatter(markdown)
     else {
@@ -589,7 +816,7 @@ fn categories_missing(markdown: &str) -> bool {
         return false;
     };
     !bank.as_mapping().is_some_and(|mapping| {
-        mapping.contains_key(serde_yaml::Value::String("categories".to_owned()))
+        mapping.contains_key(serde_yaml::Value::String(key.to_owned()))
     })
 }
 
@@ -739,7 +966,8 @@ fn set_category(
             key: Some(key.to_owned()),
             hotkey: draft.hotkey.or(existing.hotkey),
             rows: Some(rows),
-            rule_refs: Some(usage.rule_refs(key)),
+            rule_refs: Some(rule_refs(config, key)),
+            journal_events: None,
         },
         inverse,
     })
@@ -856,7 +1084,8 @@ fn reset_category(
                 key: Some(key.to_owned()),
                 hotkey: existing.hotkey,
                 rows: Some(usage.rows(key)),
-                rule_refs: Some(usage.rule_refs(key)),
+                rule_refs: Some(rule_refs(config, key)),
+                journal_events: None,
             },
             inverse: InverseOp {
                 op: Op::CategoryReset {
@@ -884,7 +1113,8 @@ fn reset_category(
             key: Some(key.to_owned()),
             hotkey: existing.hotkey,
             rows: Some(usage.rows(key)),
-            rule_refs: Some(usage.rule_refs(key)),
+            rule_refs: Some(rule_refs(config, key)),
+            journal_events: None,
         },
         inverse: InverseOp {
             op: Op::CategoryAdd {
@@ -958,6 +1188,7 @@ fn move_category(
             hotkey: existing.hotkey,
             rows: None,
             rule_refs: None,
+            journal_events: None,
         },
         inverse: InverseOp {
             op: Op::CategoryMove {
@@ -1032,6 +1263,7 @@ fn remove_category(
             hotkey: existing.hotkey,
             rows: Some(0),
             rule_refs: Some(0),
+            journal_events: None,
         },
         inverse: InverseOp {
             op: Op::CategoryAdd {
@@ -1054,7 +1286,7 @@ fn refuse_in_use(
     index: usize,
 ) -> Result<(), OpError> {
     let rows = usage.rows(key);
-    let rules = usage.rule_refs(key);
+    let rules = rule_refs(config, key);
     if rows == 0 && rules == 0 {
         return Ok(());
     }
@@ -1136,6 +1368,7 @@ fn rename_group(
             hotkey: None,
             rows: None,
             rule_refs: None,
+            journal_events: None,
         },
         inverse: InverseOp {
             op: Op::GroupRename {
@@ -1169,6 +1402,7 @@ fn move_group(
                 hotkey: None,
                 rows: None,
                 rule_refs: None,
+                journal_events: None,
             },
             inverse: InverseOp {
                 op: Op::GroupMove {
@@ -1257,6 +1491,7 @@ fn move_group(
             hotkey: None,
             rows: None,
             rule_refs: None,
+            journal_events: None,
         },
         inverse: InverseOp {
             op: Op::GroupMove {
@@ -1326,6 +1561,954 @@ fn refuse_builtin_group(
         .at(index));
     }
     Ok(())
+}
+
+fn add_account(
+    markdown: &str,
+    config: &BankConfig,
+    alias: Option<&str>,
+    label: &str,
+    kind: AccountKind,
+    start: Option<&str>,
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    let alias = match alias {
+        Some(alias) => alias.to_owned(),
+        None => derive_account_alias(label).ok_or_else(|| {
+            OpError::new(
+                "account_alias_invalid",
+                format!("could not derive an account alias from {label:?}"),
+                Some("supply alias matching [a-z][a-z0-9_]*".to_owned()),
+            )
+            .at(index)
+        })?,
+    };
+    if config.account(&alias).is_some() {
+        return Err(OpError::new(
+            "account_exists",
+            format!("account alias {alias} already exists"),
+            Some(
+                "choose a unique alias or edit the existing account".to_owned(),
+            ),
+        )
+        .at(index));
+    }
+    let draft = AccountDraft {
+        alias: alias.clone(),
+        label: Some(label.to_owned()),
+        kind: kind.as_str().to_owned(),
+        start: start.map(str::to_owned),
+    };
+    let edit = config_spans::insert_account(markdown, &draft, Place::End)
+        .map_err(|error| span_error(&error).at(index))?;
+    let start_text =
+        start.map(|day| format!(", from {day}")).unwrap_or_default();
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index: index,
+            op_name: "account.add",
+            summary: format!(
+                "adds {label} as {alias} ({}){start_text} · default account stays put",
+                kind.as_str()
+            ),
+            key: Some(alias.clone()),
+            hotkey: None,
+            rows: Some(0),
+            rule_refs: None,
+            journal_events: Some(0),
+        },
+        inverse: InverseOp {
+            op: Op::AccountRemove {
+                alias: alias.clone(),
+            },
+            restore: Some(restoration_from(&edit.spans)),
+        },
+    })
+}
+
+fn derive_account_alias(label: &str) -> Option<String> {
+    let mut alias = String::new();
+    for character in label.chars() {
+        if character.is_ascii_alphanumeric() {
+            alias.push(character.to_ascii_lowercase());
+        } else if !alias.is_empty() && !alias.ends_with('_') {
+            alias.push('_');
+        }
+    }
+    let alias = alias.trim_matches('_').to_owned();
+    config::is_alias(&alias).then_some(alias)
+}
+
+fn set_account(
+    markdown: &str,
+    config: &BankConfig,
+    usage: &UsageIndex,
+    alias: &str,
+    label: Option<&str>,
+    rename_to: Option<&str>,
+    kind: Option<AccountKind>,
+    start: Option<&str>,
+    unset: &[AccountUnsetField],
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    let existing = config.account(alias).ok_or_else(|| {
+        OpError::new(
+            "unknown_account",
+            format!("account {alias} does not exist"),
+            None,
+        )
+        .at(index)
+    })?;
+    if unset.contains(&AccountUnsetField::Alias)
+        || rename_to.is_some_and(|target| target != alias)
+    {
+        return Err(account_migration_error(
+            "account_alias_immutable",
+            format!("account alias {alias} cannot be renamed"),
+            usage,
+            alias,
+            index,
+            "account aliases identify existing rows and journal history; edit bank.md in YAML or wait for a migration flow",
+        ));
+    }
+    let current_start =
+        existing.start.map(|day| day.format("%Y-%m-%d").to_string());
+    let changes_kind = kind.is_some_and(|next| next != existing.kind);
+    let changes_start =
+        start.is_some_and(|next| Some(next) != current_start.as_deref());
+    if changes_kind
+        || changes_start
+        || unset.contains(&AccountUnsetField::Kind)
+        || unset.contains(&AccountUnsetField::Start)
+    {
+        return Err(account_migration_error(
+            "account_migration",
+            format!("account {alias} kind or start cannot change without a row migration"),
+            usage,
+            alias,
+            index,
+            "edit bank.md in YAML or wait for a migration flow; existing rows keep their account attribution",
+        ));
+    }
+
+    let prior_label = existing.label.clone();
+    let prior_label_authored = existing.label_authored;
+    let next_label = if unset.contains(&AccountUnsetField::Label) {
+        None
+    } else if let Some(label) = label {
+        Some(label.to_owned())
+    } else if prior_label_authored {
+        Some(prior_label.clone())
+    } else {
+        None
+    };
+    let label_changes = if unset.contains(&AccountUnsetField::Label) {
+        prior_label_authored
+    } else {
+        label.is_some_and(|label| !prior_label_authored || label != prior_label)
+    };
+    if !label_changes {
+        return Ok(OneOutcome {
+            contents: markdown.to_owned(),
+            result: OpResult {
+                op_index: index,
+                op_name: "account.set",
+                summary: format!("account {alias} is already current"),
+                key: Some(alias.to_owned()),
+                hotkey: None,
+                rows: Some(usage.account_rows(alias)),
+                rule_refs: None,
+                journal_events: Some(usage.account_journal_events(alias)),
+            },
+            inverse: InverseOp {
+                op: Op::AccountSet {
+                    alias: alias.to_owned(),
+                    label: label.map(str::to_owned),
+                    rename_to: rename_to.map(str::to_owned),
+                    kind,
+                    start: start.map(str::to_owned),
+                    unset: unset.to_vec(),
+                },
+                restore: None,
+            },
+        });
+    }
+    let edit =
+        config_spans::set_account_label(markdown, alias, next_label.as_deref())
+            .map_err(|error| span_error(&error).at(index))?;
+    let rows = usage.account_rows(alias);
+    let events = usage.account_journal_events(alias);
+    let summary = match next_label.as_deref() {
+        Some(next) if next != prior_label => format!(
+            "renames account {prior_label} → {next} · {rows} rows and {events} journal events stay under {alias}"
+        ),
+        None if prior_label_authored => format!(
+            "clears {alias}'s custom label · {rows} rows and {events} journal events keep the alias"
+        ),
+        _ => format!("keeps {alias} unchanged"),
+    };
+    let inverse = Op::AccountSet {
+        alias: alias.to_owned(),
+        label: prior_label_authored.then_some(prior_label),
+        rename_to: None,
+        kind: None,
+        start: None,
+        unset: if prior_label_authored {
+            Vec::new()
+        } else {
+            vec![AccountUnsetField::Label]
+        },
+    };
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index: index,
+            op_name: "account.set",
+            summary,
+            key: Some(alias.to_owned()),
+            hotkey: None,
+            rows: Some(rows),
+            rule_refs: None,
+            journal_events: Some(events),
+        },
+        inverse: InverseOp {
+            op: inverse,
+            restore: (!edit.spans.is_empty())
+                .then(|| restoration_from(&edit.spans)),
+        },
+    })
+}
+
+fn refuse_account_rename(
+    markdown: &str,
+    config: &BankConfig,
+    usage: &UsageIndex,
+    alias: &str,
+    to: &str,
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    let account = config.account(alias).ok_or_else(|| {
+        OpError::new(
+            "unknown_account",
+            format!("account {alias} does not exist"),
+            None,
+        )
+        .at(index)
+    })?;
+    if alias == to {
+        return Ok(account_noop_result(
+            markdown,
+            "account.rename",
+            alias,
+            account,
+            usage,
+            Op::AccountRename {
+                alias: alias.to_owned(),
+                to: to.to_owned(),
+            },
+            index,
+        ));
+    }
+    Err(account_migration_error(
+        "account_alias_immutable",
+        format!("refused: {} rows and {} journal events are filed under {alias} · account aliases cannot be renamed", usage.account_rows(alias), usage.account_journal_events(alias)),
+        usage,
+        alias,
+        index,
+        "edit bank.md in YAML or wait for a migration flow that rewrites row and journal identities",
+    ))
+}
+
+fn refuse_account_default(
+    markdown: &str,
+    config: &BankConfig,
+    usage: &UsageIndex,
+    alias: &str,
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    let account = config.account(alias).ok_or_else(|| {
+        OpError::new(
+            "unknown_account",
+            format!("account {alias} does not exist"),
+            None,
+        )
+        .at(index)
+    })?;
+    if config
+        .default_account()
+        .is_some_and(|default| default.alias == alias)
+    {
+        return Ok(account_noop_result(
+            markdown,
+            "account.default",
+            alias,
+            account,
+            usage,
+            Op::AccountDefault {
+                alias: alias.to_owned(),
+            },
+            index,
+        ));
+    }
+    let default = config
+        .default_account()
+        .map(|account| account.alias.as_str())
+        .unwrap_or("?");
+    Err(account_order_error(
+        config,
+        usage,
+        index,
+        format!("refused: changing the default from {default} to {alias} can reattribute rows without [acct:: alias]"),
+    ))
+}
+
+fn refuse_account_move(
+    markdown: &str,
+    config: &BankConfig,
+    usage: &UsageIndex,
+    alias: &str,
+    place: &Anchor,
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    let account = config.account(alias).ok_or_else(|| {
+        OpError::new(
+            "unknown_account",
+            format!("account {alias} does not exist"),
+            None,
+        )
+        .at(index)
+    })?;
+    let target = match place {
+        Anchor::Before(target) | Anchor::After(target) => target,
+    };
+    if config.account(target).is_none() {
+        return Err(OpError::new(
+            "unknown_account",
+            format!("account position anchor {target} does not exist"),
+            None,
+        )
+        .at(index));
+    }
+    if target == alias {
+        return Ok(account_noop_result(
+            markdown,
+            "account.move",
+            alias,
+            account,
+            usage,
+            Op::AccountMove {
+                alias: alias.to_owned(),
+                place: place.clone(),
+            },
+            index,
+        ));
+    }
+    Err(account_order_error(
+        config,
+        usage,
+        index,
+        format!("refused: account order cannot change around {alias}; the first account determines rows without [acct:: alias]"),
+    ))
+}
+
+fn account_order_error(
+    config: &BankConfig,
+    usage: &UsageIndex,
+    index: usize,
+    message: String,
+) -> OpError {
+    let default = config
+        .default_account()
+        .map(|account| account.alias.as_str())
+        .unwrap_or("");
+    let rows = usage.default_rows();
+    let events = usage.account_journal_events(default);
+    account_error(
+        "account_default",
+        format!("{message} · {rows} rows without [acct:: alias] currently inherit {default}; {events} journal events remain keyed to it"),
+        rows,
+        events,
+        index,
+        default,
+    )
+    .with_hint("account order and default changes need a row migration; edit bank.md in YAML or wait for that migration flow")
+}
+
+fn account_migration_error(
+    code: &'static str,
+    message: String,
+    usage: &UsageIndex,
+    alias: &str,
+    index: usize,
+    hint: &str,
+) -> OpError {
+    let rows = usage.account_rows(alias);
+    let events = usage.account_journal_events(alias);
+    account_error(code, message, rows, events, index, alias).with_hint(hint)
+}
+
+fn account_error(
+    code: &'static str,
+    message: String,
+    rows: usize,
+    events: usize,
+    index: usize,
+    alias: &str,
+) -> OpError {
+    let mut error = OpError::new(code, message, None);
+    error.op_index = Some(index);
+    error.key_path = Some(format!("bank.accounts.{alias}"));
+    error.affected = Some(rows + events);
+    error
+}
+
+impl OpError {
+    fn with_hint(mut self, hint: &str) -> Self {
+        self.hint = Some(hint.to_owned());
+        self
+    }
+}
+
+fn account_noop_result(
+    markdown: &str,
+    op_name: &'static str,
+    alias: &str,
+    account: &Account,
+    usage: &UsageIndex,
+    inverse: Op,
+    index: usize,
+) -> OneOutcome {
+    let rows = usage.account_rows(alias);
+    let events = usage.account_journal_events(alias);
+    OneOutcome {
+        contents: markdown.to_owned(),
+        result: OpResult {
+            op_index: index,
+            op_name,
+            summary: format!("{alias} is already in the requested state"),
+            key: Some(account.alias.clone()),
+            hotkey: None,
+            rows: Some(rows),
+            rule_refs: None,
+            journal_events: Some(events),
+        },
+        inverse: InverseOp {
+            op: inverse,
+            restore: None,
+        },
+    }
+}
+
+fn remove_account(
+    markdown: &str,
+    config: &BankConfig,
+    usage: &UsageIndex,
+    alias: &str,
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    let account = config.account(alias).ok_or_else(|| {
+        OpError::new(
+            "unknown_account",
+            format!("account {alias} does not exist"),
+            None,
+        )
+        .at(index)
+    })?;
+    let rows = usage.account_rows(alias);
+    let events = usage.account_journal_events(alias);
+    if config
+        .default_account()
+        .is_some_and(|default| default.alias == alias)
+    {
+        return Err(account_error(
+            "account_default",
+            format!("{alias} is the default account · the first account cannot be removed"),
+            rows,
+            events,
+            index,
+            alias,
+        )
+        .with_hint("keep the first account, or wait for a migration flow that reassigns rows and journal history"));
+    }
+    if rows > 0 || events > 0 {
+        return Err(account_error(
+            "account_in_use",
+            format!("{rows} rows and {events} journal events are filed under {alias} · account is in use"),
+            rows,
+            events,
+            index,
+            alias,
+        )
+        .with_hint("edit bank.md in YAML or wait until the account has no rows or journal events"));
+    }
+    let edit = config_spans::remove_account(markdown, alias)
+        .map_err(|error| span_error(&error).at(index))?;
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index: index,
+            op_name: "account.remove",
+            summary: format!(
+                "removes {} · 0 rows · 0 journal events",
+                account.label
+            ),
+            key: Some(alias.to_owned()),
+            hotkey: None,
+            rows: Some(0),
+            rule_refs: None,
+            journal_events: Some(0),
+        },
+        inverse: InverseOp {
+            op: Op::AccountAdd {
+                alias: Some(alias.to_owned()),
+                label: account.label.clone(),
+                kind: account.kind,
+                start: account
+                    .start
+                    .map(|day| day.format("%Y-%m-%d").to_string()),
+            },
+            restore: Some(restoration_from(&edit.spans)),
+        },
+    })
+}
+
+fn add_rule(
+    markdown: &str,
+    config: &BankConfig,
+    match_text: &str,
+    payee: Option<&str>,
+    cat: Option<&str>,
+    link: Option<&str>,
+    position: Option<usize>,
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    validate_rule_category(config, cat, index)?;
+    let position = position.unwrap_or(config.rules.len());
+    if position > config.rules.len() {
+        return Err(rule_position_error(position, config.rules.len(), index));
+    }
+    let draft = RuleDraft {
+        match_text: match_text.to_owned(),
+        payee: payee.map(str::to_owned),
+        cat: cat.map(str::to_owned),
+        link: link.map(str::to_owned),
+    };
+    let mut text = markdown.to_owned();
+    let mut spans = Vec::new();
+    if bank_container_missing(&text, "rules") {
+        let ensured =
+            config_spans::ensure_container(&text, BankContainer::Rules)
+                .map_err(|error| span_error(&error).at(index))?;
+        text = ensured.contents;
+        spans.extend(ensured.spans);
+    }
+    let place = if position == config.rules.len() {
+        SeqPlace::End
+    } else {
+        SeqPlace::Before(position)
+    };
+    let edit = config_spans::insert_rule(&text, &draft, place)
+        .map_err(|error| span_error(&error).at(index))?;
+    spans.extend(edit.spans);
+    let inverse = Op::RuleRemove {
+        index: position,
+        match_was: match_text.to_owned(),
+    };
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index: index,
+            op_name: "rule.add",
+            summary: rule_effect_summary(format!(
+                "adds rule {} {:?}",
+                position + 1,
+                match_text
+            )),
+            key: None,
+            hotkey: None,
+            rows: None,
+            rule_refs: None,
+            journal_events: None,
+        },
+        inverse: InverseOp {
+            op: inverse,
+            restore: Some(restoration_from(&spans)),
+        },
+    })
+}
+
+fn set_rule(
+    markdown: &str,
+    config: &BankConfig,
+    index_in_rules: usize,
+    match_was: &str,
+    match_text: Option<&str>,
+    payee: Option<&str>,
+    cat: Option<&str>,
+    link: Option<&str>,
+    unset: &[RuleUnsetField],
+    op_index: usize,
+) -> Result<OneOutcome, OpError> {
+    let existing = guarded_rule(config, index_in_rules, match_was, op_index)?;
+    validate_rule_category(config, cat, op_index)?;
+    let prior = existing.clone();
+    let mut next = prior.clone();
+    if let Some(value) = match_text {
+        next.match_text = value.to_owned();
+    }
+    if let Some(value) = payee {
+        next.payee = Some(value.to_owned());
+    }
+    if let Some(value) = cat {
+        next.cat = Some(value.to_owned());
+    }
+    if let Some(value) = link {
+        next.link = Some(value.to_owned());
+    }
+    for field in unset {
+        match field {
+            RuleUnsetField::Payee => next.payee = None,
+            RuleUnsetField::Cat => next.cat = None,
+            RuleUnsetField::Link => next.link = None,
+        }
+    }
+    if next == prior {
+        return Ok(OneOutcome {
+            contents: markdown.to_owned(),
+            result: OpResult {
+                op_index,
+                op_name: "rule.set",
+                summary: format!(
+                    "rule {} {:?} is already current",
+                    index_in_rules + 1,
+                    prior.match_text
+                ),
+                key: None,
+                hotkey: None,
+                rows: None,
+                rule_refs: None,
+                journal_events: None,
+            },
+            inverse: InverseOp {
+                op: Op::RuleSet {
+                    index: index_in_rules,
+                    match_was: match_was.to_owned(),
+                    match_text: match_text.map(str::to_owned),
+                    payee: payee.map(str::to_owned),
+                    cat: cat.map(str::to_owned),
+                    link: link.map(str::to_owned),
+                    unset: unset.to_vec(),
+                },
+                restore: None,
+            },
+        });
+    }
+    let draft = RuleDraft {
+        match_text: next.match_text.clone(),
+        payee: next.payee.clone(),
+        cat: next.cat.clone(),
+        link: next.link.clone(),
+    };
+    let edit = config_spans::replace_rule(markdown, index_in_rules, &draft)
+        .map_err(|error| span_error(&error).at(op_index))?;
+    let mut inverse_unset = Vec::new();
+    if prior.payee.is_none() && next.payee.is_some() {
+        inverse_unset.push(RuleUnsetField::Payee);
+    }
+    if prior.cat.is_none() && next.cat.is_some() {
+        inverse_unset.push(RuleUnsetField::Cat);
+    }
+    if prior.link.is_none() && next.link.is_some() {
+        inverse_unset.push(RuleUnsetField::Link);
+    }
+    let inverse = Op::RuleSet {
+        index: index_in_rules,
+        match_was: next.match_text.clone(),
+        match_text: (prior.match_text != next.match_text)
+            .then(|| prior.match_text.clone()),
+        payee: (prior.payee != next.payee)
+            .then(|| prior.payee.clone())
+            .flatten(),
+        cat: (prior.cat != next.cat).then(|| prior.cat.clone()).flatten(),
+        link: (prior.link != next.link)
+            .then(|| prior.link.clone())
+            .flatten(),
+        unset: inverse_unset,
+    };
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index,
+            op_name: "rule.set",
+            summary: rule_effect_summary(format!(
+                "updates rule {} {:?}",
+                index_in_rules + 1,
+                next.match_text
+            )),
+            key: None,
+            hotkey: None,
+            rows: None,
+            rule_refs: None,
+            journal_events: None,
+        },
+        inverse: InverseOp {
+            op: inverse,
+            restore: (!edit.spans.is_empty())
+                .then(|| restoration_from(&edit.spans)),
+        },
+    })
+}
+
+fn move_rule(
+    markdown: &str,
+    config: &BankConfig,
+    index_in_rules: usize,
+    match_was: &str,
+    position: usize,
+    op_index: usize,
+) -> Result<OneOutcome, OpError> {
+    let existing = guarded_rule(config, index_in_rules, match_was, op_index)?;
+    if position >= config.rules.len() {
+        return Err(rule_position_error(
+            position,
+            config.rules.len().saturating_sub(1),
+            op_index,
+        ));
+    }
+    if position == index_in_rules {
+        return Ok(rule_noop_result(
+            markdown,
+            "rule.move",
+            index_in_rules,
+            match_was,
+            op_index,
+        ));
+    }
+    let place = if position < index_in_rules {
+        SeqPlace::Before(position)
+    } else {
+        SeqPlace::After(position)
+    };
+    let edit = config_spans::move_rule(markdown, index_in_rules, place)
+        .map_err(|error| span_error(&error).at(op_index))?;
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index,
+            op_name: "rule.move",
+            summary: rule_effect_summary(format!(
+                "moves rule {:?} to position {}",
+                existing.match_text,
+                position + 1
+            )),
+            key: None,
+            hotkey: None,
+            rows: None,
+            rule_refs: None,
+            journal_events: None,
+        },
+        inverse: InverseOp {
+            op: Op::RuleMove {
+                index: position,
+                match_was: match_was.to_owned(),
+                position: index_in_rules,
+            },
+            restore: Some(restoration_from(&edit.spans)),
+        },
+    })
+}
+
+fn remove_rule(
+    markdown: &str,
+    config: &BankConfig,
+    index_in_rules: usize,
+    match_was: &str,
+    op_index: usize,
+) -> Result<OneOutcome, OpError> {
+    let existing = guarded_rule(config, index_in_rules, match_was, op_index)?;
+    let edit = config_spans::remove_rule(markdown, index_in_rules)
+        .map_err(|error| span_error(&error).at(op_index))?;
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index: op_index,
+            op_name: "rule.remove",
+            summary: rule_effect_summary(format!(
+                "removes rule {} {:?}",
+                index_in_rules + 1,
+                existing.match_text
+            )),
+            key: None,
+            hotkey: None,
+            rows: None,
+            rule_refs: None,
+            journal_events: None,
+        },
+        inverse: InverseOp {
+            op: Op::RuleAdd {
+                match_text: existing.match_text.clone(),
+                payee: existing.payee.clone(),
+                cat: existing.cat.clone(),
+                link: existing.link.clone(),
+                position: Some(index_in_rules),
+            },
+            restore: Some(restoration_from(&edit.spans)),
+        },
+    })
+}
+
+fn guarded_rule<'a>(
+    config: &'a BankConfig,
+    index_in_rules: usize,
+    match_was: &str,
+    op_index: usize,
+) -> Result<&'a Rule, OpError> {
+    let rule = config.rules.get(index_in_rules).ok_or_else(|| {
+        rule_mismatch_error(index_in_rules, match_was, op_index)
+    })?;
+    if rule.match_text != match_was {
+        return Err(rule_mismatch_error(index_in_rules, match_was, op_index));
+    }
+    Ok(rule)
+}
+
+fn rule_mismatch_error(
+    index_in_rules: usize,
+    match_was: &str,
+    index: usize,
+) -> OpError {
+    let mut error = OpError::new(
+        "rule_mismatch",
+        format!(
+            "rule {} no longer matches {:?}",
+            index_in_rules + 1,
+            match_was
+        ),
+        Some(
+            "refresh the config report and preview the rule edit again"
+                .to_owned(),
+        ),
+    );
+    error.op_index = Some(index);
+    error.key_path = Some(format!("bank.rules.{index_in_rules}"));
+    error
+}
+
+fn validate_rule_category(
+    config: &BankConfig,
+    cat: Option<&str>,
+    index: usize,
+) -> Result<(), OpError> {
+    if let Some(cat) = cat
+        && config.category(cat).is_none()
+    {
+        let mut error = OpError::new(
+            "unknown_category",
+            format!("rule category {cat:?} does not exist"),
+            Some("choose a category from the effective bank setup".to_owned()),
+        );
+        error.op_index = Some(index);
+        error.key_path = Some(format!("bank.categories.{cat}"));
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn rule_position_error(position: usize, max: usize, index: usize) -> OpError {
+    let mut error = OpError::new(
+        "rule_position",
+        format!("rule position {position} is out of range (0..={max})"),
+        None,
+    );
+    error.op_index = Some(index);
+    error.key_path = Some("bank.rules".to_owned());
+    error
+}
+
+fn rule_effect_summary(summary: String) -> String {
+    format!("{summary} · future imports and hints; filed rows do not change")
+}
+
+fn rule_noop_result(
+    markdown: &str,
+    op_name: &'static str,
+    rule_index: usize,
+    match_text: &str,
+    op_index: usize,
+) -> OneOutcome {
+    OneOutcome {
+        contents: markdown.to_owned(),
+        result: OpResult {
+            op_index,
+            op_name,
+            summary: format!(
+                "rule {} {:?} is already in that position",
+                rule_index + 1,
+                match_text
+            ),
+            key: None,
+            hotkey: None,
+            rows: None,
+            rule_refs: None,
+            journal_events: None,
+        },
+        inverse: InverseOp {
+            op: Op::RuleMove {
+                index: rule_index,
+                match_was: match_text.to_owned(),
+                position: rule_index,
+            },
+            restore: None,
+        },
+    }
+}
+
+fn set_stale_after(
+    markdown: &str,
+    config: &BankConfig,
+    stale_after: Option<u32>,
+    unset: bool,
+    index: usize,
+) -> Result<OneOutcome, OpError> {
+    let days = if unset { None } else { stale_after };
+    let edit = config_spans::set_stale_after(markdown, days)
+        .map_err(|error| span_error(&error).at(index))?;
+    let summary = if unset {
+        "restores the 10-day balance freshness default".to_owned()
+    } else {
+        format!(
+            "sets balances stale after {} day{}",
+            stale_after.unwrap_or(config.stale_after),
+            if stale_after.unwrap_or(config.stale_after) == 1 {
+                ""
+            } else {
+                "s"
+            }
+        )
+    };
+    let inverse = Op::BankSet {
+        stale_after: config.stale_after_authored.then_some(config.stale_after),
+        unset_stale_after: !config.stale_after_authored,
+    };
+    Ok(OneOutcome {
+        contents: edit.contents,
+        result: OpResult {
+            op_index: index,
+            op_name: "bank.set",
+            summary,
+            key: None,
+            hotkey: None,
+            rows: None,
+            rule_refs: None,
+            journal_events: None,
+        },
+        inverse: InverseOp {
+            op: inverse,
+            restore: (!edit.spans.is_empty())
+                .then(|| restoration_from(&edit.spans)),
+        },
+    })
 }
 
 fn parse_ok(markdown: &str) -> Result<BankConfig, OpError> {
@@ -1560,6 +2743,151 @@ pub(crate) fn op_to_json(op: &Op) -> Value {
                 Anchor::After(target) => payload["after"] = json!(target),
             }
             payload
+        }
+        Op::AccountAdd {
+            alias,
+            label,
+            kind,
+            start,
+        } => {
+            let mut payload = json!({
+                "op": "account.add",
+                "label": label,
+                "kind": kind.as_str(),
+            });
+            if let Some(alias) = alias {
+                payload["alias"] = json!(alias);
+            }
+            if let Some(start) = start {
+                payload["start"] = json!(start);
+            }
+            payload
+        }
+        Op::AccountSet {
+            alias,
+            label,
+            rename_to,
+            kind,
+            start,
+            unset,
+        } => {
+            let mut payload = json!({"op": "account.set", "alias": alias});
+            let mut set = serde_json::Map::new();
+            if let Some(label) = label {
+                set.insert("label".to_owned(), json!(label));
+            }
+            if let Some(rename_to) = rename_to {
+                set.insert("alias".to_owned(), json!(rename_to));
+            }
+            if let Some(kind) = kind {
+                set.insert("kind".to_owned(), json!(kind.as_str()));
+            }
+            if let Some(start) = start {
+                set.insert("start".to_owned(), json!(start));
+            }
+            if !set.is_empty() {
+                payload["set"] = Value::Object(set);
+            }
+            if !unset.is_empty() {
+                payload["unset"] = json!(unset
+                    .iter()
+                    .map(|field| field.as_str())
+                    .collect::<Vec<_>>());
+            }
+            payload
+        }
+        Op::AccountRename { alias, to } => {
+            json!({"op": "account.rename", "alias": alias, "to": to})
+        }
+        Op::AccountDefault { alias } => {
+            json!({"op": "account.default", "alias": alias})
+        }
+        Op::AccountMove { alias, place } => {
+            let mut payload = json!({"op": "account.move", "alias": alias});
+            match place {
+                Anchor::Before(target) => payload["before"] = json!(target),
+                Anchor::After(target) => payload["after"] = json!(target),
+            }
+            payload
+        }
+        Op::AccountRemove { alias } => {
+            json!({"op": "account.remove", "alias": alias})
+        }
+        Op::RuleAdd {
+            match_text,
+            payee,
+            cat,
+            link,
+            position,
+        } => {
+            let mut payload = json!({"op": "rule.add", "match": match_text});
+            if let Some(payee) = payee {
+                payload["payee"] = json!(payee);
+            }
+            if let Some(cat) = cat {
+                payload["cat"] = json!(cat);
+            }
+            if let Some(link) = link {
+                payload["link"] = json!(link);
+            }
+            if let Some(position) = position {
+                payload["position"] = json!(position);
+            }
+            payload
+        }
+        Op::RuleSet {
+            index,
+            match_was,
+            match_text,
+            payee,
+            cat,
+            link,
+            unset,
+        } => {
+            let mut payload = json!({"op": "rule.set", "index": index, "match_was": match_was});
+            let mut set = serde_json::Map::new();
+            if let Some(match_text) = match_text {
+                set.insert("match".to_owned(), json!(match_text));
+            }
+            if let Some(payee) = payee {
+                set.insert("payee".to_owned(), json!(payee));
+            }
+            if let Some(cat) = cat {
+                set.insert("cat".to_owned(), json!(cat));
+            }
+            if let Some(link) = link {
+                set.insert("link".to_owned(), json!(link));
+            }
+            if !set.is_empty() {
+                payload["set"] = Value::Object(set);
+            }
+            if !unset.is_empty() {
+                payload["unset"] = json!(unset
+                    .iter()
+                    .map(|field| field.as_str())
+                    .collect::<Vec<_>>());
+            }
+            payload
+        }
+        Op::RuleMove {
+            index,
+            match_was,
+            position,
+        } => {
+            json!({"op": "rule.move", "index": index, "match_was": match_was, "position": position})
+        }
+        Op::RuleRemove { index, match_was } => {
+            json!({"op": "rule.remove", "index": index, "match_was": match_was})
+        }
+        Op::BankSet {
+            stale_after,
+            unset_stale_after,
+        } => {
+            if *unset_stale_after {
+                json!({"op": "bank.set", "unset": ["stale_after"]})
+            } else {
+                json!({"op": "bank.set", "set": {"stale_after": stale_after}})
+            }
         }
     }
 }

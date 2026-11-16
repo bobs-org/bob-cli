@@ -125,6 +125,7 @@ impl UpdateReport {
                     "hotkey": result.hotkey.map(|hotkey| hotkey.to_string()),
                     "rows": result.rows,
                     "rule_refs": result.rule_refs,
+                    "journal_events": result.journal_events,
                 })
             }).collect::<Vec<_>>(),
             "hotkeys": {
@@ -305,7 +306,7 @@ fn report_of_plan(dry_run: bool, plan: &UpdatePlan) -> UpdateReport {
         commit: None,
         sync_pre: dry_run.then_some("skipped"),
         sync_post: dry_run.then_some("skipped"),
-        warnings: Vec::new(),
+        warnings: plan.warnings.clone(),
         failure: None,
     }
 }
@@ -533,6 +534,9 @@ pub(crate) fn print_human(report: &UpdateReport) {
         );
         if !report.consequence.is_empty() {
             println!("  {}", styler.dim(&report.consequence));
+        }
+        for warning in &report.warnings {
+            println!("  {}", styler.yellow(warning));
         }
         return;
     }

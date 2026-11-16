@@ -86,6 +86,14 @@ pub(crate) struct ConfigFinding {
 }
 
 impl ConfigReport {
+    pub(crate) fn warning_messages(&self) -> Vec<String> {
+        self.findings
+            .iter()
+            .filter(|finding| finding.severity == "warning")
+            .map(|finding| format!("{}: {}", finding.code, finding.message))
+            .collect()
+    }
+
     pub(crate) fn build(
         scan: &BankScan,
         journal: &JournalSnapshot,

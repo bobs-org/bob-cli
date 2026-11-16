@@ -470,6 +470,27 @@ pub(crate) fn remove_rule(
     let doc = parse_bank_document(markdown)?;
     let container = rules(&doc)?;
     let existing = seq_get(&container.entries, index)?;
+    if container.entries.len() == 1 {
+        let comment = trailing_comment(
+            &doc.lines,
+            container.item.key_line,
+            container.item.colon,
+        );
+        let replacement = vec![Line {
+            text: format!(
+                "{}rules: []{comment}",
+                " ".repeat(container.item.indent)
+            ),
+            ending: doc.newline.clone(),
+        }];
+        return splice_item(
+            markdown,
+            &doc,
+            &container.item,
+            &replacement,
+            "bank.rules",
+        );
+    }
     remove_seq_entry(markdown, &doc, existing, &format!("bank.rules.{index}"))
 }
 

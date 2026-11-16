@@ -192,6 +192,31 @@ Ops, applied atomically in order then emitted through the entry editor:
 | `category.remove` | `{key}` | Only when the complete scan shows zero rows and zero rule references; otherwise `category_in_use`. Built-ins refuse `builtin_category`. |
 | `group.rename` | `{group, to}` | Renames the group on every declared member. |
 | `group.move` | `{group, before\|after}` | Moves the group's members as one block, preserving relative order. |
+| `account.add` | `{label, kind, start?, alias?}` | Appends an account so the default never moves. The alias is derived from the full label unless supplied, and must be unique and match `[a-z][a-z0-9_]*`. `start` is required except for `cash`. |
+| `account.set` | `{alias, set{label}, unset[label]}` | Changes or clears the display label; account rows keep their stable alias. |
+| `account.remove` | `{alias}` | Removes only a non-default account with zero rows and zero import or transaction journal events; otherwise `account_in_use` or `account_default`, with counts. |
+| `rule.add` | `{match, payee?, cat?, link?, position?}` | Inserts a rule; `position` is a zero-based insertion index (default: end). A category must exist. Rules affect future imports and hints; filed rows do not change. |
+| `rule.set` | `{index, match_was, set{match,payee,cat,link}, unset[payee,cat,link]}` | Edits the rule at a zero-based index only when its current `match` equals `match_was`; otherwise `rule_mismatch`. |
+| `rule.move` | `{index, match_was, position}` | Moves the guarded rule to a zero-based final position. |
+| `rule.remove` | `{index, match_was}` | Removes the guarded rule. |
+| `bank.set` | `{set{stale_after}}` or `{unset[stale_after]}` | Sets the non-negative stale-day count or restores the 10-day default. |
+
+Account identity changes stay explicit refusals so the UI can teach the migration
+boundary instead of hiding an edit. `account.rename {alias, to}` refuses with
+`account_alias_immutable`; account alias changes through `account.set` use the same
+refusal. `account.set` requests to change or clear `kind` or `start` refuse with
+`account_migration`. `account.default {alias}` and `account.move {alias,
+before\|after}` refuse with `account_default`: the first account determines the
+attribution of rows without `[acct:: alias]`, and the journal keeps account aliases as
+identity. These refusals include row and journal-event counts and point to YAML or a
+future migration flow. A removal count includes every import and transaction event
+that remains in the append-only journal. If that journal cannot be fully scanned,
+account identity operations refuse with `journal_incomplete` rather than undercount.
+
+Rules are edited by guarded index plus `match_was` because they have no stable key.
+`cat` must name an effective category, including a built-in. A match with a run of four
+or more digits still affects imports but cannot match read-time hints; the update
+report returns this as a warning.
 
 The built-in `Money moves` group of undeclared built-ins refuses
 `group_builtin`. Hotkeys refuse `hotkey_taken` (naming the owner),
@@ -204,7 +229,9 @@ from, to}, free[]}`, the post-image `categories[]` (report shape),
 `sync {pre, post}`, `warnings`, and on refusal a typed `failure {code,
 message, hint, op_index, key_path, line, affected}`. Human output
 shows the consequence, the colored diff, hotkey table changes, then
-commit and sync lines.
+commit and sync lines. `per_op[]` includes `rows`, `rule_refs`, and
+`journal_events` when those counts apply. The warnings list includes any
+read-time-dead rule findings from the post-image report.
 
 Writer guarantees:
 

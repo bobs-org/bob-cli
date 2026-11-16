@@ -15,8 +15,11 @@ use super::{
     SCHEMA_VERSION,
 };
 use crate::native::bank::config::{self, ConfigParse};
-use crate::native::bank::journal::JournalSnapshot;
+use crate::native::bank::journal::{
+    ImportCounts, ImportEvent, JournalSnapshot, MalformedLine,
+};
 use crate::native::bank::scan::{BankScan, HubFile, MonthFile};
+use crate::native::bank::source::SourceKind;
 use crate::native::env::TestEnvGuard;
 
 fn live_flow() -> &'static str {
@@ -193,7 +196,39 @@ fn scan(hub: &str, month: Option<&str>) -> BankScan {
 }
 
 fn usage(markdown: &str, month: Option<&str>) -> UsageIndex {
-    UsageIndex::from_scan(&scan(markdown, month), &parse_ok(markdown))
+    usage_with_journal(markdown, month, &JournalSnapshot::default())
+}
+
+fn usage_with_journal(
+    markdown: &str,
+    month: Option<&str>,
+    journal: &JournalSnapshot,
+) -> UsageIndex {
+    UsageIndex::from_scan(&scan(markdown, month), &parse_ok(markdown), journal)
+}
+
+fn import_journal(alias: &str) -> JournalSnapshot {
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 15).unwrap();
+    JournalSnapshot {
+        imports: vec![ImportEvent {
+            ts: chrono::DateTime::parse_from_rfc3339(
+                "2026-11-15T12:00:00-05:00",
+            )
+            .unwrap(),
+            host: "test".to_owned(),
+            path: "bank/2026-11.md".to_owned(),
+            line: 1,
+            account: alias.to_owned(),
+            source: SourceKind::Csv,
+            file_sha256: "sha256:test".to_owned(),
+            start: date,
+            end: date,
+            balance_cents: None,
+            balance_asof: None,
+            counts: ImportCounts::default(),
+        }],
+        ..JournalSnapshot::default()
+    }
 }
 
 fn empty_usage(markdown: &str) -> UsageIndex {
@@ -305,7 +340,7 @@ fn protocol_rejection_matrix() {
     assert_eq!(version.code, "envelope_unknown_version");
 
     let op = parse_envelope(
-        r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"account.add","label":"x"}]}"#,
+        r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"not.an.op"}]}"#,
     )
     .expect_err("unknown op");
     assert_eq!(op.code, "envelope_unknown_op");
@@ -369,6 +404,306 @@ fn protocol_parses_each_category_and_group_op() {
     assert_eq!(envelope.ops.len(), 7);
     assert_eq!(envelope.ops[0].name(), "category.add");
     assert_eq!(envelope.ops[6].name(), "group.move");
+}
+
+#[test]
+fn protocol_parses_account_rule_and_setting_ops() {
+    let envelope = parse_envelope(
+        r#"{"schema_version":1,"expect":"sha256:x","ops":[
+            {"op":"account.add","label":"Pocket cash","kind":"cash"},
+            {"op":"account.set","alias":"checking","set":{"label":"Primary","kind":"savings","start":"2026-11-12"}},
+            {"op":"account.rename","alias":"checking","to":"primary"},
+            {"op":"account.default","alias":"checking"},
+            {"op":"account.move","alias":"savings","after":"checking"},
+            {"op":"account.remove","alias":"savings"},
+            {"op":"rule.add","match":"VENMO","cat":"coffee","position":0},
+            {"op":"rule.set","index":0,"match_was":"VENMO","set":{"payee":"Venmo"},"unset":["link"]},
+            {"op":"rule.move","index":0,"match_was":"VENMO","position":1},
+            {"op":"rule.remove","index":0,"match_was":"VENMO"},
+            {"op":"bank.set","set":{"stale_after":0}},
+            {"op":"bank.set","unset":["stale_after"]}
+        ]}"#,
+    )
+    .expect("writer ops parse");
+    assert_eq!(envelope.ops.len(), 12);
+    assert_eq!(envelope.ops[0].name(), "account.add");
+    assert_eq!(envelope.ops[6].name(), "rule.add");
+    assert_eq!(envelope.ops[10].name(), "bank.set");
+}
+
+#[test]
+fn account_add_set_remove_and_inverse_preserve_authored_style() {
+    let add = [Op::AccountAdd {
+        alias: None,
+        label: "Savings account".to_owned(),
+        kind: crate::native::bank::config::AccountKind::Savings,
+        start: Some("2026-11-12".to_owned()),
+    }];
+    let (added, _, inverses) = apply(mixed_shape(), &add);
+    assert!(added.contains("    savings_account:\n"));
+    assert_eq!(parse_ok(&added).accounts[2].alias, "savings_account");
+    assert_eq!(inverses[0].op.name(), "account.remove");
+    let restored =
+        apply_inverses(&added, &inverses, &empty_usage(&added)).unwrap();
+    assert_eq!(restored.0, mixed_shape());
+
+    let rename = [Op::AccountSet {
+        alias: "checking".to_owned(),
+        label: Some("Primary".to_owned()),
+        rename_to: None,
+        kind: None,
+        start: None,
+        unset: Vec::new(),
+    }];
+    let (renamed, _, inverses) = apply(mixed_shape(), &rename);
+    assert!(renamed.contains("checking: {"));
+    let checking = &parse_ok(&renamed).accounts[0];
+    assert_eq!(checking.label, "Primary");
+    assert_eq!(
+        checking.kind,
+        crate::native::bank::config::AccountKind::Checking
+    );
+    assert_eq!(checking.start, NaiveDate::from_ymd_opt(2026, 11, 11));
+    siblings_survive(mixed_shape(), &renamed);
+    let restored =
+        apply_inverses(&renamed, &inverses, &empty_usage(&renamed)).unwrap();
+    assert_eq!(restored.0, mixed_shape());
+
+    let remove = [Op::AccountRemove {
+        alias: "savings".to_owned(),
+    }];
+    let (removed, _, inverses) = apply(mixed_shape(), &remove);
+    assert!(!removed.contains("    savings:\n"));
+    let restored =
+        apply_inverses(&removed, &inverses, &empty_usage(&removed)).unwrap();
+    assert_eq!(restored.0, mixed_shape());
+}
+
+#[test]
+fn account_migration_refusals_report_complete_usage_counts() {
+    let month = "---\nmonth: 2026-11\n---\n\n# November 2026\n\n## Sun Nov 15\n\n- [ ] $5.00 Store [acct:: savings] [cat:: groceries]\n";
+    let journal = import_journal("savings");
+    let usage = usage_with_journal(mixed_shape(), Some(month), &journal);
+
+    let remove = apply_with_usage(
+        mixed_shape(),
+        &[Op::AccountRemove {
+            alias: "savings".to_owned(),
+        }],
+        &usage,
+    )
+    .expect_err("used account remains");
+    assert_eq!(remove.code, "account_in_use");
+    assert_eq!(remove.affected, Some(2));
+    assert!(remove.message.contains("1 rows and 1 journal events"));
+
+    let rename = apply_with_usage(
+        mixed_shape(),
+        &[Op::AccountRename {
+            alias: "savings".to_owned(),
+            to: "joint".to_owned(),
+        }],
+        &usage,
+    )
+    .expect_err("alias migration refused");
+    assert_eq!(rename.code, "account_alias_immutable");
+    assert!(rename.message.contains("1 rows and 1 journal events"));
+
+    let kind = apply_with_usage(
+        mixed_shape(),
+        &[Op::AccountSet {
+            alias: "savings".to_owned(),
+            label: None,
+            rename_to: None,
+            kind: Some(crate::native::bank::config::AccountKind::Credit),
+            start: None,
+            unset: Vec::new(),
+        }],
+        &usage,
+    )
+    .expect_err("kind migration refused");
+    assert_eq!(kind.code, "account_migration");
+    assert_eq!(kind.affected, Some(2));
+
+    let default = apply_with_usage(
+        mixed_shape(),
+        &[Op::AccountDefault {
+            alias: "savings".to_owned(),
+        }],
+        &usage,
+    )
+    .expect_err("default change refused");
+    assert_eq!(default.code, "account_default");
+
+    let reordered = apply_with_usage(
+        mixed_shape(),
+        &[Op::AccountMove {
+            alias: "savings".to_owned(),
+            place: Anchor::Before("checking".to_owned()),
+        }],
+        &usage,
+    )
+    .expect_err("account reordering refused");
+    assert_eq!(reordered.code, "account_default");
+
+    let default_remove = apply_with_usage(
+        mixed_shape(),
+        &[Op::AccountRemove {
+            alias: "checking".to_owned(),
+        }],
+        &usage,
+    )
+    .expect_err("default account stays");
+    assert_eq!(default_remove.code, "account_default");
+}
+
+#[test]
+fn account_identity_refusals_hold_when_journal_scan_is_incomplete() {
+    let journal = JournalSnapshot {
+        malformed: vec![MalformedLine {
+            path: ".bob/bank/test.jsonl".to_owned(),
+            line: 1,
+        }],
+        ..JournalSnapshot::default()
+    };
+    let envelope = parse_envelope(&envelope_json(
+        &fingerprint(mixed_shape()),
+        json!([{"op":"account.remove","alias":"savings"}]),
+    ))
+    .unwrap();
+    let error = plan::plan_update(
+        &scan(mixed_shape(), None),
+        &journal,
+        &envelope,
+        today(),
+    )
+    .expect_err("incomplete history blocks identity edit");
+    assert_eq!(error.code, "journal_incomplete");
+}
+
+#[test]
+fn rule_ops_preserve_siblings_apply_guards_and_round_trip() {
+    let add = [Op::RuleAdd {
+        match_text: "CARD 1234".to_owned(),
+        payee: Some("Card payment".to_owned()),
+        cat: Some("coffee".to_owned()),
+        link: Some("[[bank/notes]]".to_owned()),
+        position: Some(0),
+    }];
+    let (added, _, inverses) = apply(live_flow(), &add);
+    let rules = &parse_ok(&added).rules;
+    assert_eq!(rules[0].match_text, "CARD 1234");
+    assert_eq!(rules[0].cat.as_deref(), Some("coffee"));
+    siblings_survive(live_flow(), &added);
+    let restored =
+        apply_inverses(&added, &inverses, &empty_usage(&added)).unwrap();
+    assert_eq!(restored.0, live_flow());
+
+    let update = [Op::RuleSet {
+        index: 0,
+        match_was: "VENMO".to_owned(),
+        match_text: None,
+        payee: Some("Venmo".to_owned()),
+        cat: None,
+        link: None,
+        unset: Vec::new(),
+    }];
+    let (updated, _, inverses) = apply(live_flow(), &update);
+    assert!(updated.contains("- { match: VENMO"));
+    assert!(!updated.contains("- match: VENMO"));
+    assert_eq!(parse_ok(&updated).rules[0].payee.as_deref(), Some("Venmo"));
+    let restored =
+        apply_inverses(&updated, &inverses, &empty_usage(&updated)).unwrap();
+    assert_eq!(restored.0, live_flow());
+
+    let two_rules = live_flow().replace(
+        "  rules:\n    - { match: VENMO, cat: transfer }\n",
+        "  rules:\n    - { match: VENMO, cat: transfer }\n    - { match: PAYPAL, cat: refund }\n",
+    );
+    let rule_move_op = [Op::RuleMove {
+        index: 0,
+        match_was: "VENMO".to_owned(),
+        position: 1,
+    }];
+    let (moved, _, inverses) = apply(&two_rules, &rule_move_op);
+    let moved_rules = parse_ok(&moved).rules;
+    assert_eq!(moved_rules[0].match_text, "PAYPAL");
+    let restored =
+        apply_inverses(&moved, &inverses, &empty_usage(&moved)).unwrap();
+    assert_eq!(restored.0, two_rules);
+
+    let remove = [Op::RuleRemove {
+        index: 0,
+        match_was: "VENMO".to_owned(),
+    }];
+    let (removed, _, inverses) = apply(live_flow(), &remove);
+    assert!(parse_ok(&removed).rules.is_empty());
+    let restored =
+        apply_inverses(&removed, &inverses, &empty_usage(&removed)).unwrap();
+    assert_eq!(restored.0, live_flow());
+
+    let mismatch = apply_with_usage(
+        live_flow(),
+        &[Op::RuleRemove {
+            index: 0,
+            match_was: "PAYPAL".to_owned(),
+        }],
+        &empty_usage(live_flow()),
+    )
+    .expect_err("rule guard mismatch");
+    assert_eq!(mismatch.code, "rule_mismatch");
+}
+
+#[test]
+fn rules_and_stale_after_create_missing_containers_and_report_warnings() {
+    let no_rules = live_flow()
+        .replace("  rules:\n    - { match: VENMO, cat: transfer }\n", "");
+    let no_rules = no_rules.replace("  stale_after: 10\n", "");
+    let ops_json = json!([
+        {"op":"rule.add","match":"CARD 1234","cat":"coffee"},
+        {"op":"bank.set","set":{"stale_after":0}}
+    ]);
+    let plan = plan_ok(&no_rules, ops_json);
+    assert!(plan.after.contains("  rules:\n    - match: CARD 1234"));
+    assert!(plan.after.contains("  stale_after: 0\n"));
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("bank_rule_read_time_dead")));
+    siblings_survive(&no_rules, &plan.after);
+    let inverses = plan.inverse_ops.clone();
+    let restored =
+        apply_inverses(&plan.after, &inverses, &empty_usage(&plan.after))
+            .unwrap();
+    assert_eq!(restored.0, no_rules);
+
+    let unset = [Op::BankSet {
+        stale_after: None,
+        unset_stale_after: true,
+    }];
+    let (without_setting, _, inverses) = apply(live_flow(), &unset);
+    assert!(!without_setting.contains("stale_after:"));
+    let restored = apply_inverses(
+        &without_setting,
+        &inverses,
+        &empty_usage(&without_setting),
+    )
+    .unwrap();
+    assert_eq!(restored.0, live_flow());
+
+    let unknown_category = apply_with_usage(
+        live_flow(),
+        &[Op::RuleAdd {
+            match_text: "SHOP".to_owned(),
+            payee: None,
+            cat: Some("not_a_category".to_owned()),
+            link: None,
+            position: None,
+        }],
+        &empty_usage(live_flow()),
+    )
+    .expect_err("rule category must exist");
+    assert_eq!(unknown_category.code, "unknown_category");
 }
 
 fn assert_add_on(fixture: &str) {
