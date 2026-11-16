@@ -72,6 +72,8 @@
   location: /reference/capture-syntax/#colon-picker
 - query: "/<query>"
   location: /reference/capture-syntax/#slash-picker
+- query: "//<query>"
+  location: /reference/capture-syntax/#double-slash-picker
 - query: "+query"
   location: /reference/capture-syntax/#plus-parent-picker
 - query: "+"
