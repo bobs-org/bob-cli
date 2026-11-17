@@ -67,6 +67,17 @@ also carry an optional one-line `summary:`, shown after its link in the catalog.
 
 A read-only money summary that follows one [Day Strip](#day-strip) or [Stats Strip](#stats-strip) and covers exactly that strip's period: a day, ISO week, quarter, ISO week-year, or all time over the bank's own history. bob supplies the counted totals, waiting [Bank Row](#bank-row)s, and coverage from `bob bank report`. In counts `income` and `refund` inflows; Out counts outflows except transfers and cash-account rows. Each side appears only above $0.00, and the badge hides when both sides and period waiting are zero. In uses a `+` and green ink, Out uses body ink, and waiting uses warning ink. The chrome tints green only when In exceeds Out; otherwise it is neutral for counted money or amber for waiting without money. Color never carries meaning alone, and the badge names partial coverage. Its tooltip includes exact cents, excluded money, largest outflows, waiting, and coverage. Click, Enter, or Space opens the oldest waiting row, a day heading, the single [Bank Month Note](#bank-month-note), or `bank.md`; it never creates a note or writes the vault. `stats.bank_badge` (alias `stats.bank_chip`) controls every host. The badge is not a Stats metric, not a `bob-bank` card, and does not appear in `bob-period-parts`.
 
+### Bank Closing {#bank-closing}
+
+*Aliases: period close, period closing balance, closing balance.*
+
+The posted balance of one checking account at a period's end, never an available
+balance or a sum of accounts. Until that period end is verified, the header labels the
+last imported day explicitly with `as of`. bob draws it at read time from bank journal
+evidence; it is never written into a note. It appears only in the Bank Period Charts
+header on [Period Note](#period-note)s, never daily notes, beside that period's [Stats Strip](#stats-strip) and
+separately from the [Bank Badge](#bank-badge) summary.
+
 ### Bank Month Note {#bank-month-note}
 
 *Aliases: bank month, month note.*
@@ -728,6 +739,9 @@ Not the parts table (`bob-period-parts`), the [Stats Dash](#stats-dash), `bob st
 output, or the [Morning GTD Review Footer](#morning-gtd-review-footer).
 
 A [Bank Badge](#bank-badge) follows each Stats Strip for the same period.
+
+On periods, the Bank Period Charts header can also show that period's [Bank Closing](#bank-closing)
+balance.
 
 ### Successor Offer {#successor-offer}
 

@@ -36,4 +36,5 @@ output, or the [[morning-gtd-review-footer]].
 
 A [[bank-badge]] follows each Stats Strip for the same period.
 
-The Bank Period Charts header can also show that period's [[bank-closing]] balance.
+On periods, the Bank Period Charts header can also show that period's [[bank-closing]]
+balance.

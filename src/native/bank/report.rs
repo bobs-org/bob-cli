@@ -1,6 +1,6 @@
 //! `bob bank report` with the totals semantics.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{Datelike, NaiveDate};
 use serde_json::{json, Value};
@@ -333,6 +333,7 @@ pub(crate) fn all_time_period(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn build(
     all_rows: Vec<BankRow>,
     today: NaiveDate,
@@ -342,6 +343,37 @@ pub(crate) fn build(
     accounts: Vec<super::config::AccountStatus>,
     default_alias: String,
     heading_lines: &HashMap<(String, NaiveDate), (String, usize)>,
+    journal: &super::journal::JournalSnapshot,
+    summary: bool,
+    charts: bool,
+) -> BankReport {
+    build_with_month_notes(
+        all_rows,
+        today,
+        period,
+        config,
+        categories,
+        accounts,
+        default_alias,
+        heading_lines,
+        &BTreeSet::new(),
+        journal,
+        summary,
+        charts,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_with_month_notes(
+    all_rows: Vec<BankRow>,
+    today: NaiveDate,
+    period: Period,
+    config: Option<&BankConfig>,
+    categories: Vec<super::config::Category>,
+    accounts: Vec<super::config::AccountStatus>,
+    default_alias: String,
+    heading_lines: &HashMap<(String, NaiveDate), (String, usize)>,
+    month_notes: &BTreeSet<String>,
     journal: &super::journal::JournalSnapshot,
     summary: bool,
     charts: bool,
@@ -363,8 +395,14 @@ pub(crate) fn build(
     let waiting_period =
         period_rows.iter().filter(|row| !row.acknowledged).count();
     let navigation = navigation_for(&period_rows, config, heading_lines);
-    let balances =
-        build_balances(config, journal, &period, today, heading_lines);
+    let balances = build_balances(
+        config,
+        journal,
+        &period,
+        today,
+        heading_lines,
+        month_notes,
+    );
     let charts = charts.then(|| {
         super::charts::build(
             &period,
@@ -448,6 +486,7 @@ fn build_balances(
     period: &Period,
     today: NaiveDate,
     heading_lines: &HashMap<(String, NaiveDate), (String, usize)>,
+    month_notes: &BTreeSet<String>,
 ) -> Vec<ReportBalance> {
     let Some(config) = config else {
         return Vec::new();
@@ -458,13 +497,21 @@ fn build_balances(
         .map(|history| {
             let resolved = balance::resolve(&history, period, today);
             let target = resolved.as_of.and_then(|day| {
-                heading_lines.get(&(month_path(month_of(day)), day)).map(
-                    |(path, line)| NavTarget {
+                let month_path = month_path(month_of(day));
+                heading_lines
+                    .get(&(month_path.clone(), day))
+                    .map(|(path, line)| NavTarget {
                         path: path.clone(),
                         line: *line,
                         date: day,
-                    },
-                )
+                    })
+                    .or_else(|| {
+                        month_notes.contains(&month_path).then_some(NavTarget {
+                            path: month_path,
+                            line: 1,
+                            date: day,
+                        })
+                    })
             });
             ReportBalance {
                 balance: resolved,

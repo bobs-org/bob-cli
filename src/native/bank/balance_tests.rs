@@ -71,6 +71,18 @@ fn ofx_at(
     }
 }
 
+fn ofx_with_ts(
+    start: &str,
+    end: &str,
+    as_of: &str,
+    cents: i64,
+    timestamp: &str,
+) -> ImportEvent {
+    let mut event = ofx(start, end, as_of, cents, "2026-11-16");
+    event.ts = DateTime::parse_from_rfc3339(timestamp).expect("timestamp");
+    event
+}
+
 fn csv(start: &str, end: &str, imported_on: &str, hour: u32) -> ImportEvent {
     ImportEvent {
         ts: stamp_at(imported_on, hour),
@@ -562,6 +574,171 @@ fn provisional_anchor_is_ignored_once_superseded() {
     let balance = resolve(&history, &day_period("2026-11-13", today), today);
     assert_eq!(balance.state, BalanceState::Settled);
     assert_eq!(balance.cents, Some(9_000));
+}
+
+#[test]
+fn cross_date_provisional_anchor_is_retired_when_a_later_import_finalizes_it() {
+    let config = config("2026-11-01", 10);
+    let today = date("2026-11-17");
+    let mut journal = JournalSnapshot::default();
+    journal.imports.push(ofx_at(
+        "2026-11-01",
+        "2026-11-13",
+        "2026-11-13",
+        10_000,
+        "2026-11-13",
+        12,
+    ));
+    journal.imports.push(ofx_at(
+        "2026-11-01",
+        "2026-11-15",
+        "2026-11-15",
+        9_000,
+        "2026-11-16",
+        12,
+    ));
+    insert_txn(
+        &mut journal,
+        txn_at(
+            "aaaaaaaa",
+            "2026-11-13",
+            -1_000,
+            "2026-11-16",
+            12,
+            TxnOutcome::Written,
+        ),
+    );
+
+    let history = checking_history(&config, &journal);
+    assert!(history.findings.is_empty(), "{:?}", history.findings);
+    for (day, expected) in [
+        ("2026-11-12", 10_000),
+        ("2026-11-13", 9_000),
+        ("2026-11-14", 9_000),
+        ("2026-11-15", 9_000),
+    ] {
+        let day = date(day);
+        assert_eq!(balance_on(&history, day), Some(expected), "{day}");
+        let resolved =
+            resolve(&history, &day_period(&day.to_string(), today), today);
+        assert_eq!(resolved.state, BalanceState::Settled, "{day}");
+        assert_eq!(resolved.cents, Some(expected), "{day}");
+    }
+}
+
+#[test]
+fn unrelated_later_import_does_not_retire_a_provisional_anchor() {
+    let config = config("2026-11-01", 10);
+    let mut journal = JournalSnapshot::default();
+    journal.imports.push(ofx_at(
+        "2026-11-01",
+        "2026-11-13",
+        "2026-11-13",
+        10_000,
+        "2026-11-13",
+        12,
+    ));
+    // The later import is in the same connected coverage span, but its window
+    // starts after the provisional anchor date.
+    journal.imports.push(ofx_at(
+        "2026-11-14",
+        "2026-11-15",
+        "2026-11-15",
+        9_000,
+        "2026-11-16",
+        12,
+    ));
+
+    let history = checking_history(&config, &journal);
+    assert_eq!(history.spans.len(), 1);
+    assert_eq!(
+        history.spans[0]
+            .effective_anchors
+            .iter()
+            .map(|anchor| anchor.as_of)
+            .collect::<Vec<_>>(),
+        [date("2026-11-13"), date("2026-11-15")]
+    );
+    assert!(history
+        .findings
+        .iter()
+        .any(|finding| { finding.code == "bank_balance_anchor_mismatch" }));
+}
+
+#[test]
+fn final_cross_date_anchor_disagreement_still_reports_a_mismatch() {
+    let config = config("2026-11-01", 10);
+    let mut journal = JournalSnapshot::default();
+    journal.imports.push(ofx_at(
+        "2026-11-01",
+        "2026-11-13",
+        "2026-11-13",
+        10_000,
+        "2026-11-14",
+        12,
+    ));
+    journal.imports.push(ofx_at(
+        "2026-11-14",
+        "2026-11-15",
+        "2026-11-15",
+        9_000,
+        "2026-11-16",
+        12,
+    ));
+
+    let history = checking_history(&config, &journal);
+    assert!(history.findings.iter().any(|finding| {
+        finding.code == "bank_balance_anchor_mismatch"
+            && finding.message.contains("2026-11-13")
+    }));
+    let disputed = date("2026-11-14");
+    let balance = resolve(
+        &history,
+        &day_period(&disputed.to_string(), date("2026-11-17")),
+        date("2026-11-17"),
+    );
+    assert_eq!(balance.state, BalanceState::Unverified);
+    assert_eq!(balance.reason, Some(BalanceReason::AnchorMismatch));
+    assert_eq!(balance.cents, None);
+}
+
+#[test]
+fn configured_local_date_keeps_same_day_later_anchor_provisional() {
+    let config = config("2026-11-01", 10);
+    let mut journal = JournalSnapshot::default();
+    journal.imports.push(ofx_at(
+        "2026-11-01",
+        "2026-11-13",
+        "2026-11-13",
+        10_000,
+        "2026-11-13",
+        12,
+    ));
+    let later = ofx_with_ts(
+        "2026-11-01",
+        "2026-11-15",
+        "2026-11-15",
+        10_000,
+        "2026-11-16T02:00:00+00:00",
+    );
+    assert_eq!(later.ts.date_naive(), date("2026-11-16"));
+    assert_eq!(
+        super::super::journal::import_local_date_in(&later, Some(eastern())),
+        date("2026-11-15")
+    );
+    journal.imports.push(later);
+
+    let history = checking_history(&config, &journal);
+    assert_eq!(history.spans.len(), 1);
+    assert_eq!(
+        history.spans[0]
+            .effective_anchors
+            .iter()
+            .map(|anchor| anchor.as_of)
+            .collect::<Vec<_>>(),
+        [date("2026-11-13"), date("2026-11-15")]
+    );
+    assert!(history.findings.is_empty());
 }
 
 #[test]

@@ -182,6 +182,8 @@ struct Observation {
     cents: i64,
     ts: DateTime<FixedOffset>,
     provisional: bool,
+    import_start: NaiveDate,
+    import_end: NaiveDate,
 }
 
 pub(crate) fn histories(
@@ -526,12 +528,21 @@ fn fill_anchors(
             cents,
             ts: event.ts,
             provisional: as_of >= imported,
+            import_start: event.start,
+            import_end: event.end,
         });
     }
 
     let mut disputes = Vec::new();
     for (as_of, observations) in &by_date {
-        let Some(effective) = observations.iter().max_by_key(|item| item.ts)
+        let candidates = observations
+            .iter()
+            .filter(|observation| {
+                !provisional_superseded(*as_of, observation, &by_date)
+            })
+            .collect::<Vec<_>>();
+        let Some(effective) =
+            candidates.iter().copied().max_by_key(|item| item.ts)
         else {
             continue;
         };
@@ -539,7 +550,10 @@ fn fill_anchors(
             as_of: *as_of,
             cents: effective.cents,
         });
-        for earlier in observations.iter().filter(|item| item.ts < effective.ts)
+        for earlier in candidates
+            .iter()
+            .copied()
+            .filter(|item| item.ts < effective.ts)
         {
             if earlier.provisional {
                 continue;
@@ -617,6 +631,31 @@ fn fill_anchors(
             hide_to,
         ));
     }
+}
+
+/// A later final OFX anchor retires an intraday snapshot only when that import
+/// itself covered the snapshot date. A later balance elsewhere in the span is
+/// not enough to erase the snapshot's evidence.
+fn provisional_superseded(
+    as_of: NaiveDate,
+    provisional: &Observation,
+    by_date: &BTreeMap<NaiveDate, Vec<Observation>>,
+) -> bool {
+    if !provisional.provisional {
+        return false;
+    }
+    by_date
+        .range((Bound::Excluded(as_of), Bound::Unbounded))
+        .any(|(later_as_of, observations)| {
+            observations.iter().any(|later| {
+                !later.provisional
+                    && later.ts > provisional.ts
+                    && later.import_start <= as_of
+                    && as_of <= later.import_end
+                    && later.import_start <= *later_as_of
+                    && *later_as_of <= later.import_end
+            })
+        })
 }
 
 fn posted_between(

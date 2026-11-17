@@ -1,6 +1,11 @@
 //! `bob bank` list, report, ensure, ack, and check.
 
-use std::{collections::HashMap, ffi::OsString, fs, path::PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ffi::OsString,
+    fs,
+    path::PathBuf,
+};
 
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
@@ -976,7 +981,12 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         })
         .unwrap_or_default();
     let heading_lines = list::collect_heading_lines(&scan);
-    let built = report::build(
+    let month_notes = scan
+        .months
+        .iter()
+        .map(|month| month.path.clone())
+        .collect::<BTreeSet<_>>();
+    let built = report::build_with_month_notes(
         rows,
         today,
         period,
@@ -985,6 +995,7 @@ fn execute_report(matches: &ArgMatches) -> i32 {
         accounts,
         default_alias,
         &heading_lines,
+        &month_notes,
         &journal,
         summary,
         with_charts,

@@ -809,6 +809,128 @@ fn import_writes_shared_suggestion_and_points_next_at_the_walk() {
     assert_eq!(atm["category"], atm["suggestion"]["category"]);
 }
 
+#[test]
+fn cross_date_import_supersedes_provisional_balance_in_report() {
+    let vault = syncable(EARLY_START_HUB);
+    let first = write_qfx(
+        &vault,
+        "intraday.qfx",
+        &ofx("20261101", "20261113", "100.00", "20261113", &[]),
+    );
+    let first_import = run_at(
+        &vault,
+        "2026-11-13T12:00:00",
+        &["import", "-a", "checking", path_str(&first)],
+    );
+    assert_success(&first_import);
+
+    let later = write_qfx(
+        &vault,
+        "later.qfx",
+        &ofx(
+            "20261101",
+            "20261115",
+            "90.00",
+            "20261115",
+            &[("DEBIT", "20261113", "-10.00", "cross-date-posting", "SHOP")],
+        ),
+    );
+    let later_import = run_at(
+        &vault,
+        "2026-11-16T12:00:00",
+        &["import", "-a", "checking", path_str(&later)],
+    );
+    assert_success(&later_import);
+
+    for (day, expected) in [
+        ("2026-11-12", 10_000),
+        ("2026-11-13", 9_000),
+        ("2026-11-14", 9_000),
+        ("2026-11-15", 9_000),
+    ] {
+        let output = run_at(
+            &vault,
+            "2026-11-17T12:00:00",
+            &["report", "-D", day, "-f", "json"],
+        );
+        assert_success(&output);
+        let payload = json(&output);
+        let balance = &payload["balances"][0];
+        assert_eq!(balance["state"], "settled", "{day}: {payload}");
+        assert_eq!(balance["cents"], expected, "{day}: {payload}");
+    }
+    let output = run_at(
+        &vault,
+        "2026-11-17T12:00:00",
+        &["report", "-D", "2026-11-14", "-f", "json"],
+    );
+    assert_success(&output);
+    assert!(json(&output)["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|finding| finding["code"] != "bank_balance_anchor_mismatch"));
+}
+
+#[test]
+fn report_balance_target_uses_heading_month_start_or_null() {
+    let vault = syncable(EARLY_START_HUB);
+    let qfx = write_qfx(
+        &vault,
+        "target.qfx",
+        &ofx(
+            "20261101",
+            "20261110",
+            "100.00",
+            "20261110",
+            &[("DEBIT", "20261110", "-1.00", "target-posting", "SHOP")],
+        ),
+    );
+    let imported = run_at(
+        &vault,
+        "2026-11-11T12:00:00",
+        &["import", "-a", "checking", path_str(&qfx)],
+    );
+    assert_success(&imported);
+
+    let report = || {
+        let output = run_at(
+            &vault,
+            "2026-11-17T12:00:00",
+            &["report", "-D", "2026-11-10", "-f", "json"],
+        );
+        assert_success(&output);
+        json(&output)
+    };
+
+    let exact = report();
+    let target = &exact["balances"][0]["target"];
+    assert_eq!(target["path"], "bank/2026-11.md");
+    assert_eq!(target["date"], "2026-11-10");
+    let month = fs::read_to_string(vault.path.join("bank/2026-11.md"))
+        .expect("imported month note");
+    let heading_line = month
+        .lines()
+        .position(|line| line.trim_start().starts_with("## "))
+        .map(|index| index + 1)
+        .expect("day heading");
+    assert_eq!(target["line"], heading_line);
+
+    fs::write(
+        vault.path.join("bank/2026-11.md"),
+        "---\nparent: \"[[bank]]\"\ntype: \"[[bank_month]]\"\nmonth: 2026-11\ncreated: 2026-11-11T12:00:00Z\n---\n\n# November 2026\n",
+    )
+    .expect("write valid sectionless month note");
+    let fallback = report();
+    assert_eq!(fallback["balances"][0]["target"]["path"], "bank/2026-11.md");
+    assert_eq!(fallback["balances"][0]["target"]["line"], 1);
+
+    fs::remove_file(vault.path.join("bank/2026-11.md"))
+        .expect("remove month note");
+    let absent = report();
+    assert!(absent["balances"][0]["target"].is_null());
+}
+
 const CHARTS_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
 
 const CHARTS_MONTH: &str = "---\nparent: \"[[bank]]\"\ntype: \"[[bank_month]]\"\nmonth: 2026-11\ncreated: 2026-11-12T07:30:00-05:00\n---\n\n# 🏦 November 2026\n\n```bob-bank\nview: month\n```\n\n## Wed Nov 11\n\n- [x] $13.71 Smashburger [cat:: dining]\n- [x] +$15.00 Refund [cat:: refund]\n- [x] $100.00 Card payment [cat:: transfer]\n\n## Thu Nov 12\n\n- [ ] $61.20 ShopRite [cat:: groceries]\n- [x] +$1,250.00 Payroll [cat:: income]\n";
