@@ -2,8 +2,8 @@
 keyword: Capture
 ---
 
-One `bob capture` run over one draft: its arguments, piped stdin, or Bob Mac Capture's
-panel, which submits the whole draft as exactly one `bob capture` call and hides only
+One `bob capture` run over one draft: its arguments, piped stdin, or the [[capture-panel]],
+which submits the whole draft as exactly one `bob capture` call and hides only
 once bob reports success (see [[decisions:mac-capture-is-a-thin-client]]). bob splits
 the draft into capture items, each a parent line plus optional authored child bullets,
 and each item's markers decide what it does. That is far more than GTD inbox capture: an

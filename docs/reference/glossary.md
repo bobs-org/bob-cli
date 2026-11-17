@@ -131,8 +131,8 @@ Complete, or Queue, the notification is titled with the count, and Shift-Return 
 
 ### Capture {#capture}
 
-One `bob capture` run over one draft: its arguments, piped stdin, or Bob Mac Capture's
-panel, which submits the whole draft as exactly one `bob capture` call and hides only
+One `bob capture` run over one draft: its arguments, piped stdin, or the [Capture Panel](#capture-panel),
+which submits the whole draft as exactly one `bob capture` call and hides only
 once bob reports success (see [Bob Mac Capture Is A Thin Client Of bob](../develop/decisions.md#mac-capture-is-a-thin-client)). bob splits
 the draft into capture items, each a parent line plus optional authored child bullets,
 and each item's markers decide what it does. That is far more than GTD inbox capture: an
@@ -216,6 +216,33 @@ close-list comma (`x1` then `2` → `x1,2`). See bob-cli `docs/capture.md`
 `bob capture-rewrite --cursor` also returns `sigil_alias_tip`, proved by running the
 forward rewrite; Bob Mac Capture shows it as a fading "Next time" row in the list or
 picker the sigil opened.
+
+### Capture Panel {#capture-panel}
+
+Bob Mac Capture's capture window: the pre-warmed, non-activating `NSPanel` that the
+global hotkey (Control-Shift-Command-I by default, plus `Command-\`) or the menu-bar
+item's Capture row opens over any app. It stacks a one-line editor that grows with
+the draft, an auxiliary region, and footer actions that always stay visible (Capture,
+Preview, Discard, Stash, and the `⌃↩ Open` chip). The auxiliary region shows today's
+Pomodoro agenda while the draft is empty
+([An Empty Capture Draft Shows Today's Ledger Agenda](../develop/decisions.md#idle-capture-shows-ledger-agenda)), then completion and picker cards,
+bob's live preview (`bob capture --dry-run`), and errors as you write. Every show
+puts the input line at one fixed eye line; height follows content, and width stays
+resizable. It is a thin client ([Bob Mac Capture Is A Thin Client Of bob](../develop/decisions.md#mac-capture-is-a-thin-client)): spans,
+completions, rewrites, previews, and picker rows all come from `bob capture` and
+`bob capture-*` JSON, and submitting sends the whole draft, one item or a
+[Bulk Capture](#bulk-capture), as exactly one [Capture](#capture). The panel hides only after bob reports
+success; a failure leaves the full draft open beside an actionable error. Escape,
+`Ctrl+[`, and Ctrl+Tab hide it with the draft and caret retained; Discard clears the
+draft; Control-C, Quit, and Restart stash a nonempty draft that Control-S restores.
+It also works without capturing: Go To (`/` tasks, `//` notes) and event note mode
+(`Command-E`) open inside it over the retained draft. Only one of it and the
+[Ref Panel](#ref-panel) is visible at a time, and Ctrl+Tab switches between them. The app's
+menus and docs call it just "Capture"; in this glossary a capture is one
+`bob capture` run, so say "capture panel" for the window. Not the Obsidian
+[Command Mode](#command-mode) sheet, the app's menu-bar item or Settings window, or the
+Hammerspoon [Mac Menu Bar Pomodoro Indicator](#mac-menu-bar-pomodoro-indicator). See Bob Mac Capture's
+`docs/capture-panel.md`.
 
 ### Command Mode {#command-mode}
 
@@ -632,6 +659,39 @@ notes. The album's generated index catalogs its record notes. Capture can create
 update one with `@album/` or `@album/<stem>`; `bob records new|update` writes the same
 record-note format and `bob records check` validates it. Record notes are not notebooks,
 references, or tasks. See `docs/records.md`.
+
+### Ref Panel {#ref-panel}
+
+*Aliases: Bob Refs, refs panel.*
+
+The reference-library window of the `bob-mac-capture` menu-bar app, named **Bob
+Refs** in its menus and docs: a near-full-screen, non-activating glass panel that
+quick-opens any PDF-backed [Reference Note](#reference-note) while Highlights stays frontmost,
+hiding again when it loses key focus. Control-Shift-Command-O or `Command-]` toggles
+it from any app; while Highlights is frontmost, `Command-O` opens it in place of
+Highlights' Open dialog, and `Command-T` and `Command-Y` open it on Highlights' open
+tabs or on the focused PDF's Copy card. A search field filters two-line rows (kind
+tile, title, reading state, a NEW dot, and a Now pill while the row's
+[Reference Task](#reference-task) has a [Task Link](#task-link) under one of today's open ledger entries)
+grouped under pinned headers such as Just scanned, NEW, NOW, Reading, Next, and
+Ready; `Command-0` regroups them by date added and `Command-T` narrows them to
+Highlights' open tabs. An inspector column beside the list fills from `bob ref show`.
+Return opens the PDF in Highlights (the note when the PDF is missing) and changes
+nothing in the vault; other keys open the note or the reading task in Obsidian,
+reveal the PDF in Finder, or raise in-panel cards: Copy (IDs, links, code blocks,
+highlights; [Code Copy Reads bob's Render-Time Catalog](../develop/decisions.md#code-copy-reads-render-time-catalog)), Rename
+(`bob ref rename`; [Reference Renames Keep Identity](../develop/decisions.md#reference-renames-keep-identity)), and Link to Today
+(`bob ref today`). `Command-S` runs `bob ref scan -a -w` and reports what it filed
+([Open PDF Writes Are Coordinated](../develop/decisions.md#open-pdf-writes-are-coordinated)). Escape or `Ctrl+[` backs out of a
+card or banner, then hides the panel with its view remembered for the next show. Like
+the [Capture Panel](#capture-panel), it is a thin client
+([Bob Mac Capture Is A Thin Client Of bob](../develop/decisions.md#mac-capture-is-a-thin-client)): rows come from `bob ref list` and
+`bob plan`, and it never parses notes or writes the vault itself. Its NEW section,
+Seen marks, and open history are app-local state, never the `]s` walk's NEW tier.
+Only one of the two panels is visible at a time; Ctrl+Tab switches between them, and
+each comes back as it was left. Not Highlights, not the reference's Obsidian note,
+and not `bob ref` CLI output. See `docs/refs.md` and `docs/refs-inspector.md` in the
+`bob-mac-capture` repo.
 
 ### Reference Note {#reference-note}
 
