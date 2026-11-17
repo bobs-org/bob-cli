@@ -735,12 +735,24 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         fixed: JSON,
-        slots: &[("TYPE", "record-type"), ("type", "record-type")],
+        slots: &[
+            ("TYPE", "record-type"),
+            ("type", "record-type"),
+            ("STEM", "record-stem"),
+            ("stem", "record-stem"),
+        ],
         ..reads(
             "records-show",
             &["records", "show"],
-            "Record Note schema",
-            &["records", "show", "schema", "fields", "values"],
+            "Record schema or one record",
+            &[
+                "records",
+                "show",
+                "schema",
+                "fields",
+                "values",
+                "fingerprint",
+            ],
             Presentation::Report,
             60,
         )

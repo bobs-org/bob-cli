@@ -7,10 +7,12 @@ pub(crate) mod catalog;
 pub(crate) mod check;
 pub(crate) mod cli;
 pub(crate) mod context;
+pub(crate) mod fingerprint;
 pub(crate) mod init;
 pub(crate) mod plan;
 pub(crate) mod render;
 pub(crate) mod schema;
+pub(crate) mod show;
 pub(crate) mod stem;
 
 #[allow(unused_imports)]
@@ -19,14 +21,18 @@ pub(crate) use catalog::{
     NearValueHint, RecordCatalog, StemLookup, ValueSuggestion,
 };
 #[allow(unused_imports)]
+pub(crate) use fingerprint::{
+    parse_frontmatter_mapping, record_fingerprint, strip_bom,
+};
+#[allow(unused_imports)]
 pub(crate) use plan::{
     display_scalar, display_value, plan_create, plan_create_with_identity,
-    plan_fields, plan_update, resolve_update_target, PlanUpdateRequest,
-    PlannedRecordProperty, PlannedUpdateProperty, RecordCreatePlan,
-    RecordCreateRequest, RecordFieldPlan, RecordPlanError, RecordPlanErrorCode,
-    RecordPropertySource, RecordPropertyState, RecordStemSource,
-    RecordUpdatePlan, RecordUpdateTargetError, RecordUpdateTargetErrorCode,
-    ResolvedUpdateTarget,
+    plan_fields, plan_update, resolve_update_target, yaml_to_inputs,
+    PlanUpdateRequest, PlannedRecordProperty, PlannedUpdateProperty,
+    RecordCreatePlan, RecordCreateRequest, RecordFieldPlan, RecordPlanError,
+    RecordPlanErrorCode, RecordPropertySource, RecordPropertyState,
+    RecordStemSource, RecordUpdatePlan, RecordUpdateTargetError,
+    RecordUpdateTargetErrorCode, ResolvedUpdateTarget,
 };
 #[allow(unused_imports)]
 pub(crate) use render::{
@@ -36,7 +42,8 @@ pub(crate) use render::{
 };
 #[allow(unused_imports)]
 pub(crate) use schema::{
-    FieldInputState, FieldKind, RecordChoice, RecordDate, RecordDiagnostic,
-    RecordDiagnosticCode, RecordField, RecordFieldInput, RecordScalar,
-    RecordType, RecordValue, RecordsConfig, ValidatedFieldInput,
+    record_value_json, FieldInputState, FieldKind, RecordChoice, RecordDate,
+    RecordDiagnostic, RecordDiagnosticCode, RecordField, RecordFieldInput,
+    RecordScalar, RecordType, RecordValue, RecordsConfig, ValidatedFieldInput,
+    IDENTITY_FIELD_NAMES,
 };

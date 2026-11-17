@@ -89,7 +89,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob records check`](records.md#bob-records-check) | Check Record Notes against their album schemas |
 | [`bob records list`](records.md#bob-records-list) | List Record Note collections (default) |
 | [`bob records new`](records.md#bob-records-new) | Create one Record Note from its schema |
-| [`bob records show`](records.md#bob-records-show) | Show one record schema and its common values |
+| [`bob records show`](records.md#bob-records-show) | Show one record schema, or one record |
 | [`bob records update`](records.md#bob-records-update) | Update one existing Record Note in place |
 | [`bob ref`](ref.md) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`bob vault-sync`](vault-sync.md) | Reconcile the vault through Git (default: run) or show status |

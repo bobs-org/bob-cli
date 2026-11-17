@@ -623,7 +623,7 @@ fn shell_completion_serves_no_note_goto_rows() {
     fs::create_dir_all(&vault).expect("create vault");
     write_catalog_vault(&vault);
 
-    let output = bob_command()
+    let output = bob_completion_command()
         .arg("__complete")
         .arg("zsh")
         .arg("--protocol")

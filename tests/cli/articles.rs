@@ -37,7 +37,7 @@ fn json(output: &Output) -> Value {
 }
 
 fn complete(vault: &Path, words: &[&str]) -> Output {
-    let mut command = bob_command();
+    let mut command = bob_completion_command();
     command
         .arg("__complete")
         .arg("zsh")

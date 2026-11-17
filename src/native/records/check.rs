@@ -30,6 +30,8 @@ pub(crate) struct Finding {
     pub(crate) file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) line: Option<usize>,
     pub(crate) message: String,
 }
 
@@ -291,6 +293,7 @@ impl TypeReport {
             code,
             file: file.map(str::to_owned),
             field: field.map(str::to_owned),
+            line: None,
             message: message.into(),
         });
     }
@@ -439,15 +442,17 @@ impl TypeReport {
                 continue;
             }
             if fence.is_none() && rules::is_checkbox_line(line) {
-                self.push(
-                    "error",
-                    "record_checkbox",
-                    Some(&file),
-                    None,
-                    format!(
+                self.errors += 1;
+                self.findings.push(Finding {
+                    severity: "error",
+                    code: "record_checkbox",
+                    file: Some(file.clone()),
+                    field: None,
+                    line: Some(line_number),
+                    message: format!(
                         "checkbox on line {line_number}; records hold facts, never tasks"
                     ),
-                );
+                });
             }
         }
     }
@@ -558,7 +563,7 @@ fn field_state(note: &IndexedRecord, field: &RecordField) -> FieldInputState {
     }
 }
 
-fn legacy_field(key: &str, legacy: &[String]) -> bool {
+pub(crate) fn legacy_field(key: &str, legacy: &[String]) -> bool {
     legacy.iter().any(|pattern| {
         if let Some(prefix) = pattern.strip_suffix('*') {
             key.starts_with(prefix)

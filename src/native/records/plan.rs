@@ -1355,7 +1355,7 @@ fn yaml_to_current(
     }
 }
 
-fn yaml_to_inputs(raw: &serde_yaml::Value) -> Option<Vec<String>> {
+pub(crate) fn yaml_to_inputs(raw: &serde_yaml::Value) -> Option<Vec<String>> {
     match raw {
         serde_yaml::Value::String(text) => Some(vec![text.clone()]),
         serde_yaml::Value::Bool(flag) => Some(vec![flag.to_string()]),

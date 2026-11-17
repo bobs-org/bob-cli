@@ -571,7 +571,7 @@ const RECORDS_MEMBERS: &[Member] = &[
     },
     Member {
         name: "show",
-        about: "Show one record schema and its common values",
+        about: "Show one record schema, or one record",
         leaf: Leaf {
             native_command: NativeCommand::RecordsShow,
             script_command: None,
@@ -593,6 +593,7 @@ Bare `bob records` runs the read-only list.
 Examples:
   bob records                                      List record types and counts
   bob records show restaurant                     Inspect a schema and common values
+  bob records show restaurant ninja_sushi         Read one record
   bob records check -f json                       Lint every record folder
   bob records new restaurant 'Ramen Nagi' -s status=to_try
 

@@ -98,7 +98,7 @@ fn complete_output(
 }
 
 fn shell_values(vault: &std::path::Path, text_words: &[&str]) -> Vec<String> {
-    let output = bob_command()
+    let output = bob_completion_command()
         .arg("__complete")
         .arg("zsh")
         .arg("--protocol")

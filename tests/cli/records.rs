@@ -2,8 +2,9 @@
 
 use crate::support::*;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const RECORDS_CONFIG: &str = r##"
 records:
@@ -1881,5 +1882,615 @@ fn record_writes_human_dry_run_shows_unified_album_diff() {
     assert!(
         out.contains('+') && out.contains("Ramen Nagi"),
         "changed lines: {out}"
+    );
+}
+
+// record-read: bob records show TYPE STEM
+
+fn show_fixture() -> RecordsFixture {
+    let temp = TempDir::new("bob-cli-records-show");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_file(&config, "other: true\n");
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(&vault.join("eat.md"), SHOW_ALBUM);
+    RecordsFixture {
+        _temp: temp,
+        vault,
+        config,
+    }
+}
+
+const SHOW_ALBUM: &str = concat!(
+    "---\n",
+    "type: [[album]]\n",
+    "parent: \"[[body]]\"\n",
+    "summary: Places to eat.\n",
+    "emoji: \"🍽️\"\n",
+    "record:\n",
+    "  noun: restaurant\n",
+    "  label: Restaurant\n",
+    "  dated_notes: true\n",
+    "  legacy: [lid, source_*]\n",
+    "  fields:\n",
+    "    status:\n",
+    "      required: true\n",
+    "      values:\n",
+    "        to_try: \"To try\"\n",
+    "        liked: \"Liked\"\n",
+    "    category:\n",
+    "      required: true\n",
+    "      suggest: true\n",
+    "    location: {}\n",
+    "    tags: {list: true}\n",
+    "    rating: {values: number}\n",
+    "---\n\n",
+    "# Restaurants\n",
+);
+
+fn show_record(
+    fixture: &RecordsFixture,
+    args: &[&str],
+) -> std::process::Output {
+    records_command(fixture)
+        .args(args)
+        .output()
+        .expect("bob records show")
+}
+
+fn show_json(output: &std::process::Output) -> Value {
+    json(output)
+}
+
+fn property<'a>(payload: &'a Value, key: &str) -> &'a Value {
+    payload["record"]["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap_or_else(|| panic!("missing property {key}: {payload}"))
+}
+
+fn identity<'a>(payload: &'a Value, key: &str) -> &'a Value {
+    payload["record"]["identity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap_or_else(|| panic!("missing identity {key}: {payload}"))
+}
+
+fn other<'a>(payload: &'a Value, key: &str) -> &'a Value {
+    payload["record"]["other"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap_or_else(|| panic!("missing other {key}: {payload}"))
+}
+
+fn field_schema<'a>(payload: &'a Value, key: &str) -> &'a Value {
+    payload["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap_or_else(|| panic!("missing field {key}: {payload}"))
+}
+
+fn write_show_record(vault: &Path, stem: &str, front: &str, body: &str) {
+    write_file(
+        &vault.join(format!("eat/{stem}.md")),
+        &format!("---\n{front}---\n{body}"),
+    );
+}
+
+fn healthy_front() -> &'static str {
+    concat!(
+        "title: Ninja Sushi\n",
+        "parent: \"[[eat]]\"\n",
+        "type: \"[[record]]\"\n",
+        "created: \"2026-10-07T13:40:00-0400\"\n",
+        "status: liked\n",
+        "category: Sushi\n",
+        "location: Clark\n",
+        "tags:\n",
+        "  - sushi\n",
+        "  - lunch\n",
+        "rating: 4\n",
+    )
+}
+
+fn init_git_vault(vault: &Path) {
+    git_in(vault, ["init", "-q"]);
+    git_in(vault, ["config", "user.email", "t@t"]);
+    git_in(vault, ["config", "user.name", "t"]);
+    git_in(vault, ["add", "-A"]);
+    git_in(vault, ["commit", "-qm", "init"]);
+}
+
+fn read_tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn walk(dir: &Path, root: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().and_then(|name| name.to_str()) == Some(".git") {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, root, out);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(rel, fs::read(&path).unwrap());
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+fn fingerprint_ok(value: &Value) {
+    let text = value.as_str().unwrap_or_default();
+    assert!(text.starts_with("sha256:"), "{value}");
+    assert_eq!(text.len(), "sha256:".len() + 64, "{value}");
+    let hex = &text["sha256:".len()..];
+    assert!(
+        hex.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f')),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_type_only_json_stays_schema_shaped() {
+    let fixture = show_fixture();
+    write_show_record(
+        &fixture.vault,
+        "ninja_sushi",
+        healthy_front(),
+        "# Ninja Sushi\n",
+    );
+    let output = show_record(&fixture, &["show", "restaurant", "-f", "json"]);
+    assert_success(&output);
+    let payload = show_json(&output);
+    assert!(payload.get("record").is_none(), "{payload}");
+    for field in payload["fields"].as_array().unwrap() {
+        assert!(
+            field.get("values").is_none(),
+            "TYPE-only schema must omit values: {field}"
+        );
+        assert!(field.get("top_values").is_some(), "{field}");
+    }
+    assert_eq!(payload["type"], "restaurant");
+}
+
+#[test]
+fn show_one_record_reports_typed_properties_identity_and_fingerprint() {
+    let fixture = show_fixture();
+    write_show_record(
+        &fixture.vault,
+        "ninja_sushi",
+        healthy_front(),
+        "# Ninja Sushi\n\n## Notes\n- First visit.\n",
+    );
+    for (index, category) in ["Ramen", "Pizza", "Tacos", "Burgers", "Thai"]
+        .iter()
+        .enumerate()
+    {
+        write_show_record(
+            &fixture.vault,
+            &format!("extra_{index}"),
+            &format!(
+                "parent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Extra {index}\nstatus: to_try\ncategory: {category}\n"
+            ),
+            &format!("# Extra {index}\n"),
+        );
+    }
+
+    let output = show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    );
+    assert_success(&output);
+    let payload = show_json(&output);
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["type"], "restaurant");
+    assert_eq!(payload["record"]["stem"], "ninja_sushi");
+    assert_eq!(payload["record"]["path"], "eat/ninja_sushi.md");
+    assert_eq!(payload["record"]["title"], "Ninja Sushi");
+    assert_eq!(payload["record"]["heading"], "Ninja Sushi");
+    assert_eq!(payload["record"]["created"], "2026-10-07T13:40:00-0400");
+    fingerprint_ok(&payload["record"]["fingerprint"]);
+    fingerprint_ok(&payload["record"]["schema_fingerprint"]);
+    assert_eq!(payload["record"]["frontmatter_end_line"], 13);
+    assert_eq!(payload["record"]["group"]["field"], "status");
+    assert_eq!(payload["record"]["group"]["value"], "liked");
+    assert_eq!(payload["record"]["group"]["label"], "Liked");
+
+    let status = property(&payload, "status");
+    assert_eq!(status["state"], "set");
+    assert_eq!(status["value"], "liked");
+    assert_eq!(status["display"], "Liked");
+    assert_eq!(status["raw"], "liked");
+    assert_eq!(status["line"], 6);
+    assert_eq!(status["required"], true);
+    assert_eq!(status["kind"], "choices");
+
+    let tags = property(&payload, "tags");
+    assert_eq!(tags["state"], "set");
+    assert_eq!(tags["list"], true);
+    assert_eq!(tags["value"], serde_json::json!(["sushi", "lunch"]));
+    assert_eq!(tags["display"], "sushi, lunch");
+
+    assert_eq!(identity(&payload, "parent")["value"], "[[eat]]");
+    assert_eq!(identity(&payload, "type")["value"], "[[record]]");
+    assert_eq!(identity(&payload, "title")["value"], "Ninja Sushi");
+    assert_eq!(
+        identity(&payload, "created")["value"],
+        "2026-10-07T13:40:00-0400"
+    );
+
+    let category = field_schema(&payload, "category");
+    let top_values = category["top_values"].as_array().unwrap();
+    let values = category["values"].as_array().unwrap();
+    assert_eq!(top_values.len(), 5, "{category}");
+    assert!(values.len() >= 6, "{category}");
+    assert!(
+        values.iter().any(|row| row["value"] == "Sushi"),
+        "{category}"
+    );
+    assert!(field_schema(&payload, "status")["values"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let catalog = bob_command()
+        .arg("__catalog")
+        .arg("--protocol")
+        .arg("1")
+        .output()
+        .expect("catalog");
+    assert_success(&catalog);
+    let catalog_json: Value =
+        serde_json::from_str(&stdout(&catalog)).expect("parse catalog");
+    let show = catalog_json["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "records-show")
+        .expect("records-show");
+    let slots: std::collections::BTreeSet<String> = show["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| {
+            format!(
+                "{}:{}",
+                arg["name"].as_str().unwrap_or_default(),
+                arg["slot"].as_str().unwrap_or_default()
+            )
+        })
+        .collect();
+    assert!(slots.contains("TYPE:record-type"), "{slots:?}");
+    assert!(slots.contains("STEM:record-stem"), "{slots:?}");
+
+    let human = show_record(&fixture, &["show", "restaurant", "ninja_sushi"]);
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("Ninja Sushi"), "{text}");
+    assert!(text.contains("Restaurant"), "{text}");
+    assert!(text.contains("Liked"), "{text}");
+    assert!(text.contains("0 other properties"), "{text}");
+}
+
+#[test]
+fn show_one_record_marks_none_missing_invalid_legacy_and_heading() {
+    let fixture = show_fixture();
+    write_show_record(
+        &fixture.vault,
+        "sparse",
+        concat!(
+            "title: Equilibrium\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[record]]\"\n",
+            "status: liked\n",
+            "category: Sushi\n",
+        ),
+        "# Different Heading\n",
+    );
+    write_show_record(
+        &fixture.vault,
+        "missing_status",
+        concat!(
+            "title: Missing\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[record]]\"\n",
+            "category: Sushi\n",
+        ),
+        "# Missing\n",
+    );
+    write_show_record(
+        &fixture.vault,
+        "invalid_choice",
+        concat!(
+            "title: Invalid\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[record]]\"\n",
+            "status: nope\n",
+            "category: Sushi\n",
+        ),
+        "# Invalid\n",
+    );
+    write_show_record(
+        &fixture.vault,
+        "legacy_lid",
+        concat!(
+            "title: Legacy\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[record]]\"\n",
+            "status: liked\n",
+            "category: Sushi\n",
+            "lid: abc\n",
+            "source_url: https://example.com\n",
+            "extra: leftover\n",
+        ),
+        "# Legacy\n",
+    );
+
+    let sparse = show_json(&show_record(
+        &fixture,
+        &["show", "eat", "sparse", "-f", "json"],
+    ));
+    assert_eq!(sparse["record"]["title"], "Equilibrium");
+    assert_eq!(sparse["record"]["heading"], "Different Heading");
+    assert_eq!(property(&sparse, "location")["state"], "none");
+    assert!(property(&sparse, "location")["line"].is_null());
+    assert_eq!(property(&sparse, "tags")["state"], "none");
+    assert_eq!(property(&sparse, "rating")["state"], "none");
+    assert_eq!(property(&sparse, "status")["state"], "set");
+    assert!(sparse["record"]["group"].is_object());
+
+    let missing = show_record(
+        &fixture,
+        &["show", "restaurant", "missing_status", "-f", "json"],
+    );
+    assert_success(&missing);
+    let missing_json = show_json(&missing);
+    assert_eq!(property(&missing_json, "status")["state"], "missing");
+    assert!(property(&missing_json, "status")["line"].is_null());
+    let codes: Vec<_> = missing_json["record"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap_or_default())
+        .collect();
+    assert!(codes.contains(&"record_missing_field"), "{codes:?}");
+    assert!(missing_json["record"]["group"].is_null());
+
+    let invalid = show_json(&show_record(
+        &fixture,
+        &["show", "restaurant", "invalid_choice", "-f", "json"],
+    ));
+    let status = property(&invalid, "status");
+    assert_eq!(status["state"], "invalid");
+    assert_eq!(status["raw"], "nope");
+    assert!(status["value"].is_null());
+    assert!(status["display"].is_null());
+    assert_eq!(status["line"], 5);
+
+    let legacy = show_json(&show_record(
+        &fixture,
+        &["show", "restaurant", "legacy_lid", "-f", "json"],
+    ));
+    assert_eq!(other(&legacy, "lid")["legacy"], true);
+    assert_eq!(other(&legacy, "source_url")["legacy"], true);
+    assert_eq!(other(&legacy, "extra")["legacy"], false);
+    assert_eq!(other(&legacy, "lid")["value"], "abc");
+
+    let human =
+        show_record(&fixture, &["show", "restaurant", "missing_status"]);
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("missing"), "{text}");
+    assert!(text.contains("other properties"), "{text}");
+}
+
+#[test]
+fn show_one_record_accepts_crlf_and_bom_and_stays_read_only() {
+    let fixture = show_fixture();
+    let unix = format!("---\n{}---\n# Ninja Sushi\n", healthy_front());
+    let crlf = unix.replace('\n', "\r\n");
+    write_file(&fixture.vault.join("eat/ninja_sushi.md"), &crlf);
+    init_git_vault(&fixture.vault);
+    let before = read_tree(&fixture.vault);
+    let head = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]));
+
+    let crlf_json = show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    );
+    assert_success(&crlf_json);
+    let payload = show_json(&crlf_json);
+    assert_eq!(property(&payload, "status")["line"], 6);
+    assert_eq!(payload["record"]["heading"], "Ninja Sushi");
+    assert_eq!(read_tree(&fixture.vault), before, "CRLF show wrote bytes");
+    let fingerprint = payload["record"]["fingerprint"].clone();
+
+    let bom = format!("\u{feff}{unix}");
+    write_file(&fixture.vault.join("eat/ninja_sushi.md"), &bom);
+    let bom_output = show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    );
+    assert_success(&bom_output);
+    let bom_json = show_json(&bom_output);
+    assert_eq!(bom_json["record"]["fingerprint"], fingerprint);
+    assert_eq!(property(&bom_json, "status")["line"], 6);
+
+    write_file(&fixture.vault.join("eat/ninja_sushi.md"), &crlf);
+    git_in(&fixture.vault, ["checkout", "--", "."]);
+    let shown = show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    );
+    assert_success(&shown);
+    assert_eq!(read_tree(&fixture.vault), before, "vault bytes changed");
+    assert_eq!(stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"])), head);
+    assert_eq!(
+        stdout(&git_in(&fixture.vault, ["status", "--porcelain"])),
+        ""
+    );
+}
+
+#[test]
+fn show_one_record_refuses_unknown_parent_mismatch_and_outside_folder() {
+    let fixture = show_fixture();
+    write_show_record(
+        &fixture.vault,
+        "ninja_sushi",
+        healthy_front(),
+        "# Ninja Sushi\n",
+    );
+    write_show_record(
+        &fixture.vault,
+        "wrong_parent",
+        concat!(
+            "title: Wrong\n",
+            "parent: \"[[body]]\"\n",
+            "type: \"[[record]]\"\n",
+            "status: liked\n",
+            "category: Sushi\n",
+        ),
+        "# Wrong\n",
+    );
+    fs::create_dir_all(fixture.vault.join("eat/nested")).expect("nested");
+    write_file(
+        &fixture.vault.join("eat/nested/buried.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Buried\nstatus: liked\ncategory: Sushi\n---\n# Buried\n",
+    );
+    write_file(
+        &fixture.vault.join("stray.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Stray\nstatus: liked\ncategory: Sushi\n---\n# Stray\n",
+    );
+
+    let unknown = show_record(
+        &fixture,
+        &["show", "restaurant", "missing_note", "-f", "json"],
+    );
+    assert_eq!(unknown.status.code(), Some(2));
+    let unknown_json = show_json(&unknown);
+    assert_eq!(unknown_json["error"]["code"], "record_not_found");
+    assert!(unknown_json.get("record").is_none(), "{unknown_json}");
+
+    let mismatch = show_record(
+        &fixture,
+        &["show", "restaurant", "wrong_parent", "-f", "json"],
+    );
+    assert_eq!(mismatch.status.code(), Some(2));
+    let mismatch_json = show_json(&mismatch);
+    assert_eq!(mismatch_json["error"]["code"], "record_parent_mismatch");
+    assert!(
+        mismatch_json["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("parent"),
+        "{mismatch_json}"
+    );
+
+    let nested =
+        show_record(&fixture, &["show", "restaurant", "buried", "-f", "json"]);
+    assert_eq!(nested.status.code(), Some(2));
+    assert_eq!(show_json(&nested)["error"]["code"], "record_outside_album");
+
+    let stray =
+        show_record(&fixture, &["show", "restaurant", "stray", "-f", "json"]);
+    assert_eq!(stray.status.code(), Some(2));
+    assert_eq!(show_json(&stray)["error"]["code"], "record_outside_album");
+}
+
+#[test]
+fn show_one_record_fingerprint_ignores_format_and_tracks_value_and_schema() {
+    let fixture = show_fixture();
+    write_show_record(
+        &fixture.vault,
+        "ninja_sushi",
+        healthy_front(),
+        "# Ninja Sushi\n\n## Notes\n- one\n",
+    );
+    let first = show_json(&show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    ));
+    let fingerprint = first["record"]["fingerprint"].clone();
+    let schema = first["record"]["schema_fingerprint"].clone();
+
+    write_show_record(
+        &fixture.vault,
+        "ninja_sushi",
+        concat!(
+            "rating: 4\n",
+            "tags: [sushi, lunch]\n",
+            "location: Clark\n",
+            "category: Sushi\n",
+            "status: liked\n",
+            "created: \"2026-10-07T13:40:00-0400\"\n",
+            "type: \"[[record]]\"\n",
+            "parent: \"[[eat]]\"\n",
+            "title: Ninja Sushi\n",
+        ),
+        "# Ninja Sushi\n\n## Notes\n- two\n",
+    );
+    let reordered = show_json(&show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    ));
+    assert_eq!(reordered["record"]["fingerprint"], fingerprint);
+    assert_eq!(reordered["record"]["schema_fingerprint"], schema);
+
+    write_show_record(
+        &fixture.vault,
+        "ninja_sushi",
+        concat!(
+            "title: Ninja Sushi\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[record]]\"\n",
+            "created: \"2026-10-07T13:40:00-0400\"\n",
+            "status: to_try\n",
+            "category: Sushi\n",
+            "location: Clark\n",
+            "tags:\n",
+            "  - sushi\n",
+            "  - lunch\n",
+            "rating: 4\n",
+        ),
+        "# Ninja Sushi\n",
+    );
+    let changed = show_json(&show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    ));
+    assert_ne!(changed["record"]["fingerprint"], fingerprint);
+    assert_eq!(changed["record"]["schema_fingerprint"], schema);
+
+    let mutated_album = SHOW_ALBUM.replace(
+        "    rating: {values: number}\n",
+        "    rating: {values: number}\n    url: {}\n",
+    );
+    write_file(&fixture.vault.join("eat.md"), &mutated_album);
+    let schema_changed = show_json(&show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    ));
+    assert_ne!(schema_changed["record"]["schema_fingerprint"], schema);
+    assert_ne!(
+        schema_changed["record"]["fingerprint"],
+        changed["record"]["fingerprint"]
     );
 }

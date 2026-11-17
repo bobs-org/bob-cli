@@ -464,7 +464,7 @@ fn shell_completion_serves_identified_enabled_bang_rows() {
     fs::create_dir_all(&vault).expect("create vault");
     let _day_file = write_fixture(&vault);
 
-    let output = bob_command()
+    let output = bob_completion_command()
         .arg("__complete")
         .arg("zsh")
         .arg("--protocol")

@@ -188,7 +188,7 @@ pub(crate) fn group_records(
     }
 }
 
-fn group_field(fields: &[RecordField]) -> Option<&RecordField> {
+pub(crate) fn group_field(fields: &[RecordField]) -> Option<&RecordField> {
     fields
         .iter()
         .find(|field| {

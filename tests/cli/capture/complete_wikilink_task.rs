@@ -883,7 +883,7 @@ fn shell_completion_returns_nothing() {
     fs::create_dir_all(&vault).expect("create vault");
     write_fixture(&vault);
 
-    let output = bob_command()
+    let output = bob_completion_command()
         .arg("__complete")
         .arg("zsh")
         .arg("--protocol")

@@ -21,7 +21,9 @@ const ALBUM_RESERVED_RECORD_IDS: &[&str] = &[
 ];
 const ALBUM_RECORD_KEYS: &[&str] =
     &["noun", "label", "plural", "dated_notes", "fields", "legacy"];
-const RESERVED_FIELD_NAMES: &[&str] = &["parent", "type", "title", "created"];
+pub(crate) const IDENTITY_FIELD_NAMES: &[&str] =
+    &["parent", "type", "title", "created"];
+const RESERVED_FIELD_NAMES: &[&str] = IDENTITY_FIELD_NAMES;
 const RECORD_KEYS: &[&str] = &[
     "dir",
     "label",
@@ -429,7 +431,7 @@ impl RecordField {
     }
 }
 
-fn record_value_json(value: &RecordValue) -> JsonValue {
+pub(crate) fn record_value_json(value: &RecordValue) -> JsonValue {
     match value {
         RecordValue::Scalar(value) => record_scalar_json(value),
         RecordValue::List(values) => {

@@ -163,6 +163,12 @@ sets `one_off: true`.
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
 | `bob albums update` | `-f json` | `stem`, fingerprints, `inverse_ops` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
 
+### Record reports {#record-reports}
+
+| Command | Flag | Shape | Version | Contract |
+| --- | --- | --- | --- | --- |
+| `bob records show` | `-f json` | Schema for `TYPE`; with `STEM`, one record's properties, identity, findings, full suggestions, and fingerprint. Refusals add `error.code` | `schema_version: 1` | [Reading one record](../records.md#reading-one-record) |
+
 ### Area reports {#area-reports}
 
 | Command | Flag | Shape | Version | Contract |

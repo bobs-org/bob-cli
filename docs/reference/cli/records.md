@@ -19,7 +19,7 @@ Commands:
   check   Check Record Notes against their album schemas
   list    List Record Note collections (default)
   new     Create one Record Note from its schema
-  show    Show one record schema and its common values
+  show    Show one record schema, or one record
   update  Update one existing Record Note in place
 
 Options:
@@ -30,6 +30,7 @@ Bare `bob records` runs the read-only list.
 Examples:
   bob records                                      List record types and counts
   bob records show restaurant                     Inspect a schema and common values
+  bob records show restaurant ninja_sushi         Read one record
   bob records check -f json                       Lint every record folder
   bob records new restaurant 'Ramen Nagi' -s status=to_try
 
@@ -158,16 +159,19 @@ See docs/records.md for field kinds, defaults, and failure behavior.
 
 ## bob records show
 
-Show one record schema and its common values
+Show one record schema, or one record
 
 ```text title="bob records show --help"
-Display a record type's ordered fields, kinds, required marks, defaults, choices, and most-used suggested values. TYPE accepts a noun or album stem.
+Display a record type's ordered fields, kinds, required marks, defaults, choices, and most-used suggested values. With STEM, print one existing record's typed properties, identity, findings, and fingerprint. TYPE accepts a noun or album stem. This command is read-only.
 
-Usage: bob records show [OPTIONS] <TYPE>
+Usage: bob records show [OPTIONS] <TYPE> [STEM]
 
 Arguments:
   <TYPE>
           Record noun or album stem
+
+  [STEM]
+          Existing filename stem of one record note
 
 Options:
   -b, --bob-dir <PATH>
@@ -185,9 +189,11 @@ Options:
 Examples:
   bob records show restaurant
   bob records show eat
+  bob records show zettel bead_lifecycle
+  bob records show zettel bead_lifecycle -f json
   bob records show podcast -f json
 
-See docs/records.md for the schema contract.
+See docs/records.md for the schema contract and reading one record.
 ```
 
 ## bob records update

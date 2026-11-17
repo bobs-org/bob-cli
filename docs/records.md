@@ -533,7 +533,7 @@ the noun or folder stem, such as `restaurant` or `eat`. It is separate from
 | `bob records init TYPE` | Retired hidden command; always refuses and points to `bob albums create`. |
 | `bob records list` | Show kinds, albums, folders, note counts, and required fields. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
-| `bob records show TYPE` | Show the schema, choice labels, defaults, and common suggested values. |
+| `bob records show TYPE [STEM]` | Show the schema, choice labels, defaults, and common suggested values; with STEM, read one record. |
 | `bob records update TYPE STEM` | Edit one existing record in place through the shared update planner. |
 
 Every command accepts `-f json`. The human output is intended for a terminal;
@@ -597,6 +597,46 @@ bytes alongside the record Markdown and writes nothing; JSON adds `album_index`
 (`path`, `state`, `before`, `after`) only when the index changes. The owner and
 unrelated albums stay byte-identical.
 
+### Reading one record
+
+`bob records show TYPE` prints that kind's schema, choice labels, defaults,
+and the top five suggested values. With an optional `STEM` it resolves one
+existing note the same way `bob records update` does and prints a read-only
+card of that record.
+
+```sh
+bob records show restaurant ninja_sushi
+bob records show zettel bead_lifecycle -f json
+```
+
+JSON keeps today's schema payload and adds `fields[].values` (the full ranked
+suggestions; `top_values` stays capped at five) plus a `record` object:
+
+- `stem`, `path`, `title`, `heading` (the first H1), `created`
+- `fingerprint` and `schema_fingerprint`
+- `frontmatter_end_line`, `group` (`{field, value, label}` or `null`)
+- `properties[]`: schema fields in declaration order with `state`, typed
+  `value`, `display`, `raw`, and the 1-based YAML `line` (or `null` when the
+  key is absent)
+- `identity[]`: `parent`, `type`, `title`, and `created` when present
+- `other[]`: remaining keys, each with a `legacy` flag from the album's
+  `legacy` patterns
+- `findings[]`: this note's `bob records check` diagnostics
+
+`state` is `set`, `missing` (empty required), `none` (empty optional), or
+`invalid` (the stored value fails validation; `raw` keeps it). The record
+fingerprint is `sha256:` plus 64 lowercase hex digits over the parsed
+frontmatter mapping (canonical JSON with sorted keys and typed scalars kept
+distinct) together with the album schema fingerprint. Body bytes, YAML
+formatting, and key order do not affect it.
+
+The command never writes, repairs, locks, or commits. A missing stem, a
+parent mismatch, or a record outside its album folder exits 2 with a typed
+JSON `error` (`code`, `message`): `record_not_found`,
+`record_parent_mismatch`, or `record_outside_album`. It never impersonates
+an empty record. Human output is a colored card: title, album crumb,
+label/value rows, missing marks, findings, and the other-key count.
+
 ## Adding a record kind
 
 Create an album with [`bob albums create`](#creating-an-album), then add
@@ -610,6 +650,7 @@ setup path.
 - [Capture](capture.md#record-notes)
 - [Capture syntax](reference/capture-syntax.md#record-notes)
 - [JSON outputs](reference/json-outputs.md#album-reports)
+- [JSON outputs](reference/json-outputs.md#record-reports)
 - [JSON outputs](reference/json-outputs.md#record-notes)
 - [Task types](task-types.md)
 - [`bob albums` CLI](reference/cli/albums.md)

@@ -96,6 +96,20 @@ pub(crate) fn run_show(args: Vec<OsString>) -> i32 {
             return report_error("bob records show", output_format, &message, 2)
         }
     };
+    if let Some(stem) = matches.get_one::<String>("stem") {
+        print_warnings(
+            "bob records show",
+            output_format,
+            &kind_warnings(&context, selector),
+        );
+        return super::show::execute_show_record(
+            output_format == OutputFormat::Json,
+            &vault,
+            &context,
+            &kind,
+            stem,
+        );
+    }
     let record_type = kind.record_type();
     let mut catalog = RecordCatalog::new(vault);
     let folder = catalog.folder(&record_type.dir);
@@ -297,15 +311,22 @@ pub(crate) fn build_cli_init() -> ClapCommand {
 
 pub(crate) fn build_cli_show() -> ClapCommand {
     ClapCommand::new("bob records show")
-        .about("Show one record schema and its common values")
+        .about("Show one record schema, or one record")
         .long_about(
-            "Display a record type's ordered fields, kinds, required marks, defaults, choices, and most-used suggested values. TYPE accepts a noun or album stem.",
+            "Display a record type's ordered fields, kinds, required marks, defaults, choices, and most-used suggested values. With STEM, print one existing record's typed properties, identity, findings, and fingerprint. TYPE accepts a noun or album stem. This command is read-only.",
         )
         .after_help(
-            "Examples:\n  bob records show restaurant\n  bob records show eat\n  bob records show podcast -f json\n\nSee docs/records.md for the schema contract.",
+            "Examples:\n  bob records show restaurant\n  bob records show eat\n  bob records show zettel bead_lifecycle\n  bob records show zettel bead_lifecycle -f json\n  bob records show podcast -f json\n\nSee docs/records.md for the schema contract and reading one record.",
         )
         .disable_help_flag(true)
         .arg(record_type_arg(true))
+        .arg(
+            Arg::new("stem")
+                .value_name("STEM")
+                .required(false)
+                .value_hint(ValueHint::Other)
+                .help("Existing filename stem of one record note"),
+        )
         .arg(bob_dir_arg())
         .arg(format_arg())
         .arg(help_arg())
@@ -1586,7 +1607,7 @@ fn print_new_success(
     }
 }
 
-fn config_from_kind(kind: &ResolvedRecordKind) -> RecordsConfig {
+pub(crate) fn config_from_kind(kind: &ResolvedRecordKind) -> RecordsConfig {
     RecordsConfig {
         types: vec![kind.record_type().clone()],
     }
@@ -1694,7 +1715,10 @@ fn album_index_json(album: &PlannedAlbumWrite) -> Value {
     })
 }
 
-fn merge_kind_metadata(payload: &mut Value, kind: &ResolvedRecordKind) {
+pub(crate) fn merge_kind_metadata(
+    payload: &mut Value,
+    kind: &ResolvedRecordKind,
+) {
     if let Some(object) = payload.as_object_mut() {
         object.insert("source".to_owned(), json!(kind.source_name()));
         if let Some(album) = &kind.album {
