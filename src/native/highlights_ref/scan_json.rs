@@ -1,10 +1,10 @@
 //! Versioned JSON report for `bob ref scan --format json`.
 //!
-//! Human mode stays byte-identical (see `sync.rs`); this module mirrors
-//! its stage order but collects a machine-readable envelope instead of
-//! printing display lines. Stdout carries exactly one compact JSON line;
-//! hook chatter goes to stderr, and hard failures print a coded error
-//! envelope with exit 1 and no `bob ref:` stderr line.
+//! Human mode stays byte-identical (see `sync.rs`); both entry points
+//! share `apply_full_scan` and this module collects a machine-readable
+//! envelope instead of printing display lines. Stdout carries exactly one
+//! compact JSON line; hook chatter goes to stderr, and hard failures print
+//! a coded error envelope with exit 1 and no `bob ref:` stderr line.
 use super::sections::SectionDiagnosticKind;
 use super::*;
 
@@ -200,12 +200,13 @@ fn scan_vault_relative(config: &Config, path: &Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
-/// Take the shared vault-maintenance lock (`bob_sync.lock`) that writing
-/// scans hold before `scan.lock`. Dry runs never lock. On contention the
-/// wait line goes to stderr once in both modes, then the lock retries
-/// every 250 ms for up to 120 s (`BOB_REF_SCAN_LOCK_WAIT_SECONDS`
-/// overrides both this wait and the scan-lock wait) before failing with
-/// `lock_busy`. The returned file holds the lock until the scan returns.
+/// Take the shared vault-maintenance lock (`bob_sync.lock`) that a
+/// mutating full scan holds before `scan.lock`. Dry runs and lock-free
+/// no-work scans never lock. On contention the wait line goes to stderr
+/// once in both modes, then the lock retries every 250 ms for up to 120 s
+/// (`BOB_REF_SCAN_LOCK_WAIT_SECONDS` overrides both this wait and the
+/// scan-lock wait) before failing with `lock_busy`. The caller holds the
+/// returned file for the mutation window only.
 pub(super) fn acquire_scan_maintenance_lock(
     dry_run: bool,
 ) -> Result<Option<fs::File>> {
@@ -225,13 +226,13 @@ pub(super) fn acquire_scan_maintenance_lock(
     })
 }
 
-/// Take the exclusive writer lock serializing writing scans
-/// (`bob_cli_state_dir()/ref/scan.lock`). Dry runs never lock. On
-/// contention the wait line goes to stderr once in both modes, then the
-/// lock retries every 250 ms for up to 120 s (`BOB_REF_SCAN_LOCK_WAIT_SECONDS`
-/// overrides, for tests) before failing with `scan_busy`. The returned
-/// file holds the lock until the scan returns. Callers take
-/// [`acquire_scan_maintenance_lock`] first.
+/// Take the exclusive writer lock serializing mutating full scans
+/// (`bob_cli_state_dir()/ref/scan.lock`). Dry runs and lock-free no-work
+/// scans never lock. On contention the wait line goes to stderr once in
+/// both modes, then the lock retries every 250 ms for up to 120 s
+/// (`BOB_REF_SCAN_LOCK_WAIT_SECONDS` overrides, for tests) before failing
+/// with `scan_busy`. The caller holds the returned file for the mutation
+/// window only, after [`acquire_scan_maintenance_lock`].
 pub(super) fn acquire_scan_writer_lock(
     dry_run: bool,
 ) -> Result<Option<fs::File>> {
@@ -353,208 +354,64 @@ pub(super) fn scan_library_json(
 ) -> i32 {
     let mode = if options.dry_run { "dry_run" } else { "write" };
 
-    if let Err(error) = validate_library_layout(config) {
-        return print_scan_error_envelope(
-            config,
-            options,
-            mode,
-            &[],
-            0,
-            &error,
-            false,
-        );
-    }
-
-    let _maintenance_lock = match acquire_scan_maintenance_lock(options.dry_run)
-    {
-        Ok(lock) => lock,
-        Err(error) => {
-            return print_scan_error_envelope(
-                config,
-                options,
-                mode,
-                &[],
-                0,
-                &error,
-                false,
-            );
-        }
-    };
-    let _scan_lock = match acquire_scan_writer_lock(options.dry_run) {
-        Ok(lock) => lock,
-        Err(error) => {
-            return print_scan_error_envelope(
-                config,
-                options,
-                mode,
-                &[],
-                0,
-                &error,
-                false,
-            );
-        }
-    };
-
-    // Recover an interrupted overwrite under the held locks before any
-    // pre-sync can commit half-applied files. Dry runs only report, and
-    // recovery notices stay on stderr so stdout keeps one envelope line.
-    match overwrite::recovery::recover_with_locks_held(
+    let applied = match apply_full_scan(
         config,
-        &ob::child_env(),
-        options.dry_run,
+        options,
+        jobs,
+        no_hooks,
+        attended,
+        HookMode::Json,
     ) {
-        Ok(notice) => {
-            if let Some(notice) = notice {
-                eprintln!("{notice}");
+        Ok(applied) => applied,
+        Err(err) => {
+            if err.acquired_writer_lock {
+                let line = err
+                    .receipt_line
+                    .expect("locked errors emit a receipt line");
+                println!("{line}");
+                return 1;
             }
-        }
-        Err(error) => {
             return print_scan_error_envelope(
                 config,
                 options,
                 mode,
-                &[],
-                0,
-                &error,
+                &err.intake,
+                err.completed_intake,
+                &err.error,
                 false,
             );
         }
-    }
-
-    let resolved_hook: Option<PreScanHook> = if no_hooks {
-        None
-    } else {
-        match configured_pre_scan_hook(false) {
-            Ok(hook) => hook,
-            Err(error) => {
-                return print_scan_error_envelope(
-                    config,
-                    options,
-                    mode,
-                    &[],
-                    0,
-                    &error,
-                    true,
-                );
-            }
-        }
     };
+
+    let resolved_hook = applied.hook.clone();
     let hook = scan_hook_for_envelope(
         no_hooks,
         options.dry_run,
         resolved_hook.as_ref(),
     );
-
-    if let Err(error) =
-        run_pre_scan_hook_json(config, resolved_hook.as_ref(), options.dry_run)
-    {
-        return print_scan_error_envelope(
-            config,
-            options,
-            mode,
-            &[],
-            0,
-            &error,
-            true,
-        );
+    if applied.acquired_writer_lock {
+        let line = applied
+            .receipt_line
+            .as_ref()
+            .expect("locked scans emit a receipt line");
+        println!("{line}");
+        let write_outcomes = applied.write_outcomes.as_deref().unwrap_or(&[]);
+        let plan_failures = applied
+            .prepared
+            .plan_outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, ScanPlanOutcome::Failed(_)))
+            .count();
+        let write_failures = write_outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, ScanWriteOutcome::Failed(_)))
+            .count();
+        return i32::from(plan_failures + write_failures > 0);
     }
 
-    let intake = match plan_xlib_intake(config) {
-        Ok(intake) => intake,
-        Err(error) => {
-            return print_scan_error_envelope(
-                config,
-                options,
-                mode,
-                &[],
-                0,
-                &error,
-                true,
-            );
-        }
-    };
-    let mut completed_intake = 0usize;
-    if !options.dry_run {
-        let (moved, result) = execute_xlib_intake_counting(&intake);
-        completed_intake = moved;
-        if let Err(error) = result {
-            return print_scan_error_envelope(
-                config,
-                options,
-                mode,
-                &intake,
-                completed_intake,
-                &error,
-                true,
-            );
-        }
-        completed_intake = intake.len();
-    }
-
-    // Shared preparation with immediate revalidation (or lib+xlib for dry
-    // runs): ordered discovery, one locator index plus one invocation date
-    // (stable across the retry), parallel planning, and canonical
-    // finalization. This unifies the former JSON reserve-then-finalize order
-    // with the human finalize-then-reserve order without changing final IDs
-    // or task links. The work predicate and unchanged assembly are
-    // established for the locked-apply fast path; this phase retains
-    // execution regardless.
-    let prepared = match (|| -> Result<PreparedFullScan> {
-        let pdfs = collect_pdf_paths(config, options.dry_run)?;
-        let mut first = prepare_from_inputs(
-            config,
-            options,
-            jobs,
-            intake.clone(),
-            pdfs,
-            None,
-        )?;
-        match validate_prepared_scan(&first) {
-            PreparedValidation::Unchanged => Ok(first),
-            PreparedValidation::Failed(error) => Err(error),
-            PreparedValidation::Stale { .. } => {
-                reset_prepared_finalization(&mut first);
-                let date = first.invocation_date.clone();
-                let pdfs = collect_pdf_paths(config, options.dry_run)?;
-                let rebuilt = prepare_from_inputs(
-                    config,
-                    options,
-                    jobs,
-                    intake.clone(),
-                    pdfs,
-                    Some(date),
-                )?;
-                match validate_prepared_scan(&rebuilt) {
-                    PreparedValidation::Unchanged => Ok(rebuilt),
-                    PreparedValidation::Stale { reason } => {
-                        Err(CommandError::new(format!(
-                            "scan inputs changed during planning ({reason}); rerun bob ref scan"
-                        ))
-                        .with_code("scan_failed"))
-                    }
-                    PreparedValidation::Failed(error) => Err(error),
-                }
-            }
-        }
-    })() {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            return print_scan_error_envelope(
-                config,
-                options,
-                mode,
-                &intake,
-                completed_intake,
-                &error,
-                true,
-            );
-        }
-    };
-    let _actual_work = prepared_scan_has_actual_work(&prepared);
-    let _unchanged_fallback =
-        unchanged_write_outcomes_for(&prepared.plan_outcomes);
-    let pdfs = prepared.pdfs;
-    let plan_outcomes = prepared.plan_outcomes;
+    let pdfs = applied.prepared.pdfs;
+    let plan_outcomes = applied.prepared.plan_outcomes;
+    let intake = applied.prepared.intake;
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -623,58 +480,7 @@ pub(super) fn scan_library_json(
         );
     }
 
-    let dirty_preflight =
-        match scan_dirty_preflight(config, plans.iter().copied()) {
-            Ok(preflight) => preflight,
-            Err(error) => {
-                return print_scan_error_envelope(
-                    config,
-                    options,
-                    mode,
-                    &intake,
-                    completed_intake,
-                    &error,
-                    true,
-                );
-            }
-        };
-    let mut session = match MarkerWriteSession::for_scan(attended) {
-        Ok(session) => session,
-        Err(error) => {
-            return print_scan_error_envelope(
-                config,
-                options,
-                mode,
-                &intake,
-                completed_intake,
-                &error,
-                true,
-            );
-        }
-    };
-    let mut run_state = RunWriteState::default();
-    let mut write_outcomes = Vec::new();
-    for plan in &plans {
-        match execute_scan_plan(
-            config,
-            plan,
-            &dirty_preflight,
-            &mut run_state,
-            &mut session,
-        ) {
-            Ok(PdfSyncOutcome::Written(report)) => {
-                write_outcomes.push(ScanWriteOutcome::Written(report))
-            }
-            Ok(PdfSyncOutcome::Held(hold)) => {
-                write_outcomes.push(ScanWriteOutcome::Held(hold))
-            }
-            Err(error) => {
-                write_outcomes.push(ScanWriteOutcome::Failed(
-                    ScanFailure::new(plan.pdf.clone(), error),
-                ));
-            }
-        }
-    }
+    let write_outcomes = applied.write_outcomes.unwrap_or_default();
     let reports = write_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -704,7 +510,7 @@ pub(super) fn scan_library_json(
         assembled.failures,
         Vec::new(),
         assembled.held,
-        true,
+        false,
     )
 }
 
@@ -927,6 +733,60 @@ pub(super) fn scan_hook_for_envelope(
             command: None,
         },
     }
+}
+
+/// JSON envelope line for a writing full scan, shared by the locked
+/// receipt and JSON stdout so they stay byte-identical.
+pub(super) fn write_scan_envelope_line(
+    config: &Config,
+    options: SyncOptions,
+    no_hooks: bool,
+    hook: Option<&PreScanHook>,
+    prepared: &PreparedFullScan,
+    write_outcomes: &[ScanWriteOutcome],
+) -> String {
+    let reports = write_outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanWriteOutcome::Written(report) => Some(report.clone()),
+            ScanWriteOutcome::Held(_) | ScanWriteOutcome::Failed(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let plan_failures = prepared
+        .plan_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, ScanPlanOutcome::Failed(_)))
+        .count();
+    let write_failures = write_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, ScanWriteOutcome::Failed(_)))
+        .count();
+    let mut counts = ScanCounts::from_reports(&reports);
+    counts.held =
+        held_count(write_outcomes) + plan_hold_count(&prepared.plan_outcomes);
+    let assembled = assemble_full_scan_entries(
+        config,
+        &prepared.plan_outcomes,
+        write_outcomes,
+    );
+    render_scan_report_envelope(
+        plan_failures == 0 && write_failures == 0,
+        "write",
+        options.write_pdf,
+        scan_hook_for_envelope(no_hooks, options.dry_run, hook),
+        intake_moves(config, &prepared.intake),
+        scan_summary_json(
+            &counts,
+            prepared.pdfs.len(),
+            plan_failures + write_failures,
+        ),
+        assembled.notes,
+        assembled.failures,
+        Vec::new(),
+        false,
+        Vec::new(),
+        assembled.held,
+    )
 }
 
 /// The `summary` object: the same counts the human summary line prints,

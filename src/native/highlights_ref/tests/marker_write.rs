@@ -902,6 +902,62 @@ fn v2_birth_attaches_verified_source_through_normalizing_marker_write() {
 }
 
 #[test]
+fn note_only_pdf_hash_mismatch_holds_marker_changed() {
+    let bob = temp_bob_dir("marker-write-note-only-hash");
+    seed_area(&bob);
+    let pdf = bob.join("lib/chat/stale.pdf");
+    write_pdf_with_marker(&pdf, WIP_MARKER, false);
+    let config = vault_config(&bob);
+    let plan = plan_single_pdf_sync(&config, &pdf, note_opts())
+        .expect("note-only create plan");
+    assert!(
+        !plan.marker_write_needed,
+        "note-only planning must not request a marker write"
+    );
+    assert_ne!(
+        plan.stable_note_action, "none",
+        "a missing note is actual work"
+    );
+    let planned_digest = plan.marker.source_pdf_sha256.clone();
+    write_pdf_with_marker(&pdf, WIP_MARKER, true);
+    assert_ne!(
+        sha256_file(&pdf).expect("mutated digest"),
+        planned_digest,
+        "padding the PDF must change its hash"
+    );
+    let note_before = bob.join("ref/chat/stale.md").exists();
+    let pdf_before = bytes_of(&pdf);
+    let fake = FakeCoordinator::grant(Duration::ZERO);
+    let mut session = write_session(
+        MarkerWriteCoordinator::Fake(fake),
+        ReadingHoldMode::Exempt,
+    );
+    let outcome = execute_pdf_sync(
+        &config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut session,
+    )
+    .expect("note-only hash recheck");
+    match outcome {
+        PdfSyncOutcome::Held(hold) => {
+            assert_eq!(hold.reason, HoldReason::MarkerChanged);
+        }
+        other => panic!("expected MarkerChanged hold, got {other:?}"),
+    }
+    assert_eq!(
+        bytes_of(&pdf),
+        pdf_before,
+        "the held write must not touch the PDF"
+    );
+    assert_eq!(
+        bob.join("ref/chat/stale.md").exists(),
+        note_before,
+        "the held write must not create the note"
+    );
+}
+
+#[test]
 fn v2_birth_does_not_attach_a_source_that_fails_digest_verification() {
     let bob = temp_bob_dir("marker-write-v2-corrupt-source");
     seed_area(&bob);

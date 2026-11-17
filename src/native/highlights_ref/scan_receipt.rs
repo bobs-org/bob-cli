@@ -4,7 +4,8 @@
 //! exact envelope line JSON mode would print to
 //! `<state>/bob-cli/ref/last-scan.json`, then (on macOS) posts
 //! `org.bobs.bob.ref.scan-finished` so Bob Mac Capture can re-read it.
-//! Dry runs, `ref sync`, and scans that never got the lock write nothing.
+//! Dry runs, `ref sync`, lock-free no-work scans, and failures before lock
+//! acquisition write nothing and leave the previous receipt untouched.
 //! A receipt or notification failure warns on stderr and never changes
 //! stdout or the exit code.
 use super::*;
@@ -49,16 +50,19 @@ impl<'a> WriteScanReceipt<'a> {
         )
     }
 
-    /// Write the hard-failure envelope for `error` as the scan receipt.
-    pub(super) fn write_error(&self, error: &CommandError) {
-        emit_scan_receipt(&render_scan_error_envelope(
+    /// Write the hard-failure envelope for `error` as the scan receipt
+    /// and return that exact line so JSON stdout can match it.
+    pub(super) fn write_error(&self, error: &CommandError) -> String {
+        let line = render_scan_error_envelope(
             self.config,
             self.options,
             "write",
             self.completed_moves(),
             error,
             false,
-        ));
+        );
+        emit_scan_receipt(&line);
+        line
     }
 }
 

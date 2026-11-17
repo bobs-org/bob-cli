@@ -89,46 +89,36 @@ pub(super) fn scan_library(
     no_hooks: bool,
     attended: bool,
 ) -> Result<()> {
-    validate_library_layout(config)?;
-    let _maintenance_lock = acquire_scan_maintenance_lock(options.dry_run)?;
-    let _scan_lock = acquire_scan_writer_lock(options.dry_run)?;
-    // Recover an interrupted overwrite under the held locks before any
-    // pre-sync can commit half-applied files. Dry runs only report.
-    if let Some(notice) = overwrite::recovery::recover_with_locks_held(
+    match apply_full_scan(
         config,
-        &ob::child_env(),
-        options.dry_run,
-    )? {
-        eprintln!("{notice}");
+        options,
+        jobs,
+        no_hooks,
+        attended,
+        HookMode::Human,
+    ) {
+        Ok(applied) if options.dry_run => {
+            present_human_dry_run(config, options, verbose, attended, applied)
+        }
+        Ok(applied) => {
+            present_human_write(config, options, verbose, attended, applied)
+        }
+        Err(err) => Err(err.error),
     }
-    if options.dry_run {
-        return scan_library_dry_run(
-            config, options, jobs, verbose, no_hooks, attended,
-        );
-    }
-    scan_library_write(config, options, jobs, verbose, no_hooks, attended)
 }
 
 /// Dry-run full scan: planning and human reporting only. Dry runs never
 /// take the writer lock and never write the scan receipt.
-fn scan_library_dry_run(
+fn present_human_dry_run(
     config: &Config,
     options: SyncOptions,
-    jobs: usize,
     verbose: bool,
-    no_hooks: bool,
     attended: bool,
+    applied: AppliedFullScan,
 ) -> Result<()> {
-    let pre_scan_hook = configured_pre_scan_hook(no_hooks)?;
-    run_pre_scan_hook(config, pre_scan_hook.as_ref(), options.dry_run)?;
-    // Shared read-only preparation with bounded retry: ordered discovery,
-    // one locator index plus one invocation date (stable across the retry),
-    // parallel planning, canonical finalization, and collision checks.
-    // Planning never prints and never executes; reporting stays below.
-    let prepared = prepare_full_scan_with_retry(config, options, jobs)?;
-    let intake = prepared.intake;
-    let pdfs = prepared.pdfs;
-    let plan_outcomes = prepared.plan_outcomes;
+    let intake = applied.prepared.intake;
+    let pdfs = applied.prepared.pdfs;
+    let plan_outcomes = applied.prepared.plan_outcomes;
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -184,106 +174,20 @@ fn scan_library_dry_run(
     }
 }
 
-/// Writing full scan: the writer lock is held, so every outcome — success,
-/// partial failure, and hard failure after the lock — writes the same
-/// envelope line JSON mode would print as the scan receipt.
-fn scan_library_write(
+/// Writing full scan presenter. Receipt publication for a locked mutation
+/// window already happened inside [`apply_full_scan`]; lock-free no-work
+/// scans print the write-mode summary and leave the previous receipt.
+fn present_human_write(
     config: &Config,
     options: SyncOptions,
-    jobs: usize,
     verbose: bool,
-    no_hooks: bool,
     attended: bool,
+    applied: AppliedFullScan,
 ) -> Result<()> {
-    let mut receipt = WriteScanReceipt::new(config, options);
-    let pre_scan_hook = match configured_pre_scan_hook(no_hooks) {
-        Ok(hook) => hook,
-        Err(error) => {
-            receipt.write_error(&error);
-            return Err(error);
-        }
-    };
-    if let Err(error) =
-        run_pre_scan_hook(config, pre_scan_hook.as_ref(), options.dry_run)
-    {
-        receipt.write_error(&error);
-        return Err(error);
-    }
-    let intake = match plan_xlib_intake(config) {
-        Ok(intake) => intake,
-        Err(error) => {
-            receipt.write_error(&error);
-            return Err(error);
-        }
-    };
-    let (moved, result) = execute_xlib_intake_counting(&intake);
-    receipt.set_intake(intake.clone(), moved);
-    if let Err(error) = result {
-        receipt.write_error(&error);
-        return Err(error);
-    }
-    receipt.set_intake(intake.clone(), intake.len());
-    // Shared preparation over the post-intake library with immediate
-    // revalidation: ordered discovery, one locator index plus one invocation
-    // date, parallel planning, and canonical finalization. Intake execution
-    // stays under the same locks in this phase; planning never prints and
-    // never executes PDF writes. A stale validation rebuilds once under the
-    // same date; persistent churn returns the generic `scan_failed` envelope.
-    // The actual-work predicate and read-only unchanged assembly are
-    // established here for the locked-apply fast path; this phase retains
-    // execution regardless so the lock window is unchanged.
-    let prepared = match (|| -> Result<PreparedFullScan> {
-        let pdfs = collect_pdf_paths(config, options.dry_run)?;
-        let mut first = prepare_from_inputs(
-            config,
-            options,
-            jobs,
-            intake.clone(),
-            pdfs,
-            None,
-        )?;
-        match validate_prepared_scan(&first) {
-            PreparedValidation::Unchanged => Ok(first),
-            PreparedValidation::Failed(error) => Err(error),
-            PreparedValidation::Stale { .. } => {
-                reset_prepared_finalization(&mut first);
-                let date = first.invocation_date.clone();
-                let pdfs = collect_pdf_paths(config, options.dry_run)?;
-                let rebuilt = prepare_from_inputs(
-                    config,
-                    options,
-                    jobs,
-                    intake.clone(),
-                    pdfs,
-                    Some(date),
-                )?;
-                match validate_prepared_scan(&rebuilt) {
-                    PreparedValidation::Unchanged => Ok(rebuilt),
-                    PreparedValidation::Stale { reason } => {
-                        Err(CommandError::new(format!(
-                            "scan inputs changed during planning ({reason}); rerun bob ref scan"
-                        ))
-                        .with_code("scan_failed"))
-                    }
-                    PreparedValidation::Failed(error) => Err(error),
-                }
-            }
-        }
-    })() {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            receipt.write_error(&error);
-            return Err(error);
-        }
-    };
-    // Established for locked-apply: exhaustive work check plus a read-only
-    // unchanged assembly that never calls the mutation executor. Retained
-    // execution below keeps this phase's lock window unchanged.
-    let _actual_work = prepared_scan_has_actual_work(&prepared);
-    let _unchanged_fallback =
-        unchanged_write_outcomes_for(&prepared.plan_outcomes);
-    let pdfs = prepared.pdfs;
-    let plan_outcomes = prepared.plan_outcomes;
+    let intake = applied.prepared.intake;
+    let pdfs = applied.prepared.pdfs;
+    let plan_outcomes = applied.prepared.plan_outcomes;
+    let write_outcomes = applied.write_outcomes.unwrap_or_default();
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -300,13 +204,7 @@ fn scan_library_write(
         .collect::<Vec<_>>();
 
     let styler = Styler::detect();
-    let mut session = match MarkerWriteSession::for_scan(attended) {
-        Ok(session) => session,
-        Err(error) => {
-            receipt.write_error(&error);
-            return Err(error);
-        }
-    };
+    let session = MarkerWriteSession::for_scan(attended)?;
     if verbose {
         print_verbose_scan_plan_report(
             config,
@@ -322,37 +220,6 @@ fn scan_library_write(
         print_scan_header(config, pdfs.len(), options.dry_run, &styler);
     }
 
-    let dirty_preflight =
-        match scan_dirty_preflight(config, plans.iter().copied()) {
-            Ok(preflight) => preflight,
-            Err(error) => {
-                receipt.write_error(&error);
-                return Err(error);
-            }
-        };
-    let mut run_state = RunWriteState::default();
-    let mut write_outcomes = Vec::new();
-    for plan in &plans {
-        match execute_scan_plan(
-            config,
-            plan,
-            &dirty_preflight,
-            &mut run_state,
-            &mut session,
-        ) {
-            Ok(PdfSyncOutcome::Written(report)) => {
-                write_outcomes.push(ScanWriteOutcome::Written(report))
-            }
-            Ok(PdfSyncOutcome::Held(hold)) => {
-                write_outcomes.push(ScanWriteOutcome::Held(hold))
-            }
-            Err(error) => {
-                write_outcomes.push(ScanWriteOutcome::Failed(
-                    ScanFailure::new(plan.pdf.clone(), error),
-                ));
-            }
-        }
-    }
     let reports = write_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -394,32 +261,6 @@ fn scan_library_write(
             &styler,
         );
     }
-    let mut counts = ScanCounts::from_reports(&reports);
-    counts.held = held_count(&write_outcomes) + plan_hold_count(&plan_outcomes);
-    let assembled =
-        assemble_full_scan_entries(config, &plan_outcomes, &write_outcomes);
-    emit_scan_receipt(&render_scan_report_envelope(
-        plan_failures.is_empty() && write_failures.is_empty(),
-        "write",
-        options.write_pdf,
-        scan_hook_for_envelope(
-            no_hooks,
-            options.dry_run,
-            pre_scan_hook.as_ref(),
-        ),
-        intake_moves(config, &intake),
-        scan_summary_json(
-            &counts,
-            pdfs.len(),
-            plan_failures.len() + write_failures.len(),
-        ),
-        assembled.notes,
-        assembled.failures,
-        Vec::new(),
-        false,
-        Vec::new(),
-        assembled.held,
-    ));
     if plan_failures.is_empty() && write_failures.is_empty() {
         Ok(())
     } else {

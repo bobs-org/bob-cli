@@ -415,6 +415,26 @@ pub(super) fn execute_pdf_sync(
     if let Some(hold) = super::sync::replaced_capture_hold(config, &plan.pdf)? {
         return Ok(PdfSyncOutcome::Held(hold));
     }
+    if !plan.marker_write_needed {
+        // A save during unlocked planning can change annotations without a
+        // marker write. Recheck PDF bytes so note-only writes cannot import
+        // a stale plan. Coordinated marker writes keep the in-accessor
+        // recheck as the authority for a same-marker editor save.
+        if note_write_planned(plan) || plan_has_actual_work(plan) {
+            let current = sha256_file(&plan.pdf)?;
+            if current != plan.marker.source_pdf_sha256 {
+                return Ok(PdfSyncOutcome::Held(scan_hold_for(
+                    plan,
+                    HoldReason::MarkerChanged,
+                    hold_message(
+                        HoldReason::MarkerChanged,
+                        &session.policy,
+                        false,
+                    ),
+                )));
+            }
+        }
+    }
     if !plan.marker_write_needed || !session.policy.coordinate_pdf_writes {
         return execute_pdf_sync_inner(config, plan, run_state, None).map(
             |report| {

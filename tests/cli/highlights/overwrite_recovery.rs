@@ -582,3 +582,129 @@ fn overwrite_recovery_reverses_annotated_pdf_move_on_scan() {
         "the intent is cleared after a proved rollback"
     );
 }
+
+/// Recovery that mutates settles `last-scan.json` while both writer locks
+/// are held. The follow-on empty-library scan is lock-free no-work and
+/// must leave that receipt untouched.
+#[test]
+fn overwrite_recovery_receipt_survives_lock_free_no_work_scan() {
+    let (temp, vault, state) = fixture("bob-cli-overwrite-recovery-receipt");
+    let base = head(&vault);
+    fs::write(
+        vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nCRASHED\n",
+    )
+    .expect("dirty note");
+    write_intent(
+        &state,
+        &vault,
+        &base,
+        None,
+        &["ref/blogs/half-written.md"],
+        &[],
+    );
+    let lock_path = temp.path().join("bob_sync.lock");
+
+    let recovered = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("NO_COLOR", "1")
+        .env("XDG_STATE_HOME", &state)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .output()
+        .expect("json scan with pending overwrite intent");
+    assert_eq!(
+        recovered.status.code(),
+        Some(0),
+        "rollback then a lock-free empty-lib scan exits 0:\n{}",
+        format_output(&recovered)
+    );
+    assert!(
+        stderr(&recovered).contains(
+            "recovered: rolled back an interrupted overwrite of half-written"
+        ),
+        "the rollback notice is exact:\n{}",
+        format_output(&recovered)
+    );
+    assert!(
+        note_body(&vault).contains("body"),
+        "the note is restored to the base"
+    );
+    assert!(
+        !intent_path(&state, &vault).exists(),
+        "the intent is cleared after a proved rollback"
+    );
+    let receipt = scan_receipt_path(&state);
+    let receipt_after_recovery =
+        fs::read(&receipt).expect("recovery writes a serialized receipt");
+
+    let _scan_lock = hold_scan_writer_lock(&state);
+    let _maint_lock = hold_vault_maintenance_lock(&lock_path);
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("NO_COLOR", "1")
+        .env("XDG_STATE_HOME", &state)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("no-work json scan after recovery");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "post-recovery no-work must finish without either lock:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        !err.contains("waiting for another bob ref scan to finish")
+            && !err.contains("waiting for another vault maintenance run"),
+        "no-work scans must not wait on either lock:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read(&receipt).expect("receipt remains"),
+        receipt_after_recovery,
+        "a lock-free no-work scan must leave the recovery receipt untouched"
+    );
+}
+
+fn scan_receipt_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("bob-cli/ref/last-scan.json")
+}
+
+fn hold_scan_writer_lock(state_dir: &Path) -> std::fs::File {
+    let lock_dir = state_dir.join("bob-cli/ref");
+    fs::create_dir_all(&lock_dir).expect("create scan lock dir");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_dir.join("scan.lock"))
+        .expect("open scan lock");
+    fs2::FileExt::try_lock_exclusive(&file).expect("take scan lock");
+    file
+}
+
+fn hold_vault_maintenance_lock(path: &Path) -> std::fs::File {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create vault lock dir");
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("open vault maintenance lock");
+    fs2::FileExt::try_lock_exclusive(&file)
+        .expect("take vault maintenance lock");
+    file
+}

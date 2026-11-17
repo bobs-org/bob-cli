@@ -94,6 +94,7 @@ mod render_tex;
 mod report;
 // This phase defines the planner seam consumed by the later render phase.
 pub(crate) mod return_links;
+mod scan_apply;
 mod scan_json;
 mod scan_plan;
 mod scan_receipt;
@@ -137,6 +138,7 @@ use projection::*;
 use reading_execute::*;
 use reading_plan::*;
 use report::*;
+use scan_apply::*;
 use scan_json::*;
 use scan_plan::*;
 use scan_receipt::*;
@@ -156,6 +158,7 @@ const DEFAULT_XLIB_DIR: &str = "xlib";
 const ENV_LEGACY_PRE_SCAN_COMMAND: &str = "BOB_HIGHLIGHTS_PRE_SCAN_COMMAND";
 const ENV_LIB_DIR: &str = "BOB_HIGHLIGHTS_LIB_DIR";
 const ENV_PRE_SCAN_HOOK: &str = "BOB_HIGHLIGHTS_PRE_SCAN_HOOK";
+const ENV_IN_PRE_SCAN_HOOK: &str = "BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK";
 pub(crate) const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
 pub(crate) const ENV_XLIB_DIR: &str = "BOB_HIGHLIGHTS_XLIB_DIR";
 

@@ -1279,23 +1279,28 @@ pub(super) fn collect_orphan_audio(config: &Config) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-/// Move every planned intake pair, reporting how many top-level renames
-/// completed before the first error alongside that error. A main rename
-/// counts immediately, before companions are attempted, so an already
-/// moved PDF is still reported when a companion fails.
+/// Move every planned intake pair with non-clobber renames, reporting how
+/// many top-level renames completed before the first error alongside that
+/// error. A main rename counts immediately, before companions are
+/// attempted, so an already moved PDF is still reported when a companion
+/// fails. Non-clobbering keeps a stale destination list from overwriting
+/// another writer's new bundle.
 pub(super) fn execute_xlib_intake_counting(
     moves: &[IntakeMove],
 ) -> (usize, Result<()>) {
     let mut moved = 0usize;
     for intake_move in moves {
-        if let Err(error) =
-            execute_intake_move(&intake_move.source, &intake_move.destination)
-        {
+        if let Err(error) = execute_intake_move_no_replace(
+            &intake_move.source,
+            &intake_move.destination,
+        ) {
             return (moved, Err(error));
         }
         moved += 1;
         for (source, destination) in &intake_move.companions {
-            if let Err(error) = execute_intake_move(source, destination) {
+            if let Err(error) =
+                execute_intake_move_no_replace(source, destination)
+            {
                 return (moved, Err(error));
             }
         }
@@ -1303,7 +1308,7 @@ pub(super) fn execute_xlib_intake_counting(
     (moved, Ok(()))
 }
 
-pub(super) fn execute_intake_move(
+pub(super) fn execute_intake_move_no_replace(
     source: &Path,
     destination: &Path,
 ) -> Result<()> {
@@ -1317,7 +1322,7 @@ pub(super) fn execute_intake_move(
             ))
         })?;
     }
-    fs::rename(source, destination).map_err(|error| {
+    rename_no_replace(source, destination).map_err(|error| {
         CommandError::new(format!(
             "move {} to {}: {error}",
             source.display(),

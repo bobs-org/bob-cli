@@ -5,9 +5,8 @@
 //! locator index plus one invocation date), parallel planning, annotation
 //! finalization, preview-ID reservation, and collision checks. Planning
 //! never prints and never executes; output and execution stay with the
-//! callers. This phase retains the existing lock window: callers still hold
-//! both locks across preparation. The later `locked-apply` phase reuses
-//! this substrate outside the locks.
+//! callers. [`scan_apply`] runs this substrate outside the writer locks
+//! and applies the result inside a bounded mutation window.
 use super::*;
 
 /// Content fingerprint for one evidence file: existence plus, when present,
@@ -24,11 +23,7 @@ fn fingerprint_bytes(bytes: &[u8]) -> String {
 }
 
 fn fingerprint_file(path: &Path) -> Result<EvidenceFileState> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(EvidenceFileState {
-            exists: true,
-            sha256: Some(fingerprint_bytes(&bytes)),
-        }),
+    match fs::metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(EvidenceFileState {
                 exists: false,
@@ -36,9 +31,34 @@ fn fingerprint_file(path: &Path) -> Result<EvidenceFileState> {
             })
         }
         Err(error) => Err(CommandError::new(format!(
-            "read evidence file {}: {error}",
+            "stat evidence file {}: {error}",
             path.display()
         ))),
+        Ok(meta) if meta.is_dir() => {
+            // TextBundle sidecars and asset folders are membership, not
+            // file bytes. Nested files the planner reads (text.md, notes)
+            // are tracked through their own paths.
+            Ok(EvidenceFileState {
+                exists: true,
+                sha256: None,
+            })
+        }
+        Ok(_) => match fs::read(path) {
+            Ok(bytes) => Ok(EvidenceFileState {
+                exists: true,
+                sha256: Some(fingerprint_bytes(&bytes)),
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(EvidenceFileState {
+                    exists: false,
+                    sha256: None,
+                })
+            }
+            Err(error) => Err(CommandError::new(format!(
+                "read evidence file {}: {error}",
+                path.display()
+            ))),
+        },
     }
 }
 
@@ -132,6 +152,7 @@ pub(super) fn plan_has_actual_work(plan: &PdfSyncPlan) -> bool {
 
 /// True when the prepared scan still needs any vault or PDF write.
 /// Pending xlib intake is work even when the existing library is unchanged.
+#[cfg(test)]
 pub(super) fn prepared_scan_has_actual_work(
     prepared: &PreparedFullScan,
 ) -> bool {
@@ -144,24 +165,44 @@ pub(super) fn prepared_scan_has_actual_work(
     })
 }
 
+/// True when the prepared scan must acquire writer locks. Pending intake
+/// or a planned vault/PDF write needs the mutation window; per-PDF holds
+/// and plan failures are reported on the lock-free path.
+pub(super) fn prepared_scan_needs_mutation(
+    prepared: &PreparedFullScan,
+) -> bool {
+    if !prepared.intake.is_empty() {
+        return true;
+    }
+    prepared.plan_outcomes.iter().any(|outcome| match outcome {
+        ScanPlanOutcome::Planned(plan) => plan_has_actual_work(plan),
+        ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => false,
+    })
+}
+
+pub(super) fn scan_inputs_changed_error(reason: &str) -> CommandError {
+    CommandError::new(format!(
+        "scan inputs changed during planning ({reason}); rerun bob ref scan"
+    ))
+    .with_code("scan_failed")
+}
+
 /// Read-only assembly of equivalent unchanged write outcomes without calling
-/// the mutation executor. `Held`/`Failed` planning outcomes pass through;
-/// `Planned` outcomes become `Written` reports with `none` actions and the
-/// plan's diagnostic counts, so no-work scans preserve per-PDF diagnostics
-/// without writing.
+/// the mutation executor. Only `Planned` PDFs produce a write outcome
+/// (`Written` with `none` actions and the plan's diagnostic counts), the
+/// same shape the mutation executor emits. Plan-time holds and failures
+/// stay on the plan outcomes so presenters and JSON assembly do not
+/// double-count them as write holds or write failures.
 pub(super) fn unchanged_write_outcomes_for(
     plan_outcomes: &[ScanPlanOutcome],
 ) -> Vec<ScanWriteOutcome> {
     plan_outcomes
         .iter()
-        .map(|outcome| match outcome {
+        .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => {
-                ScanWriteOutcome::Written(unchanged_report_for_plan(plan))
+                Some(ScanWriteOutcome::Written(unchanged_report_for_plan(plan)))
             }
-            ScanPlanOutcome::Held(hold) => ScanWriteOutcome::Held(hold.clone()),
-            ScanPlanOutcome::Failed(failure) => ScanWriteOutcome::Failed(
-                ScanFailure::new(failure.pdf.clone(), failure.error.clone()),
-            ),
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect()
 }
@@ -333,10 +374,9 @@ fn first_state_mismatch(
 
 /// Ordered shared preparation from explicit intake and PDF lists.
 ///
-/// Callers keep the existing lock window in this phase. `invocation_date`
-/// pins one date across retries; pass `None` for a fresh scan and
-/// `Some(date)` to rebuild under the same date. Never prints and never
-/// executes vault or PDF writes. Finalization order is canonical
+/// `invocation_date` pins one date across retries; pass `None` for a fresh
+/// scan and `Some(date)` to rebuild under the same date. Never prints and
+/// never executes vault or PDF writes. Finalization order is canonical
 /// (annotation tasks, then preview IDs) for both human and JSON paths.
 pub(super) fn prepare_from_inputs(
     config: &Config,
@@ -419,9 +459,9 @@ pub(super) fn prepare_from_inputs(
 }
 
 /// Convenience read-only preparation: discover intake plus ordered PDFs,
-/// then plan. Dry runs include xlib in the PDF list; write mode lists the
-/// library only (callers in this phase execute intake under the same locks
-/// before planning, preserving the existing window).
+/// then plan. Dry runs include xlib in the PDF list. Write mode lists the
+/// existing library only (empty when `lib/` is missing and intake is
+/// pending, so an xlib-only vault can still prepare outside the locks).
 pub(super) fn prepare_full_scan(
     config: &Config,
     options: SyncOptions,
@@ -429,7 +469,15 @@ pub(super) fn prepare_full_scan(
     invocation_date: Option<String>,
 ) -> Result<PreparedFullScan> {
     let intake = plan_xlib_intake(config)?;
-    let pdfs = collect_pdf_paths(config, options.dry_run)?;
+    let pdfs = if options.dry_run {
+        collect_pdf_paths(config, true)?
+    } else if config.lib_dir.is_dir() {
+        collect_pdf_paths(config, false)?
+    } else if intake.is_empty() {
+        collect_pdf_paths(config, false)?
+    } else {
+        Vec::new()
+    };
     prepare_from_inputs(config, options, jobs, intake, pdfs, invocation_date)
 }
 
@@ -443,7 +491,17 @@ pub(super) fn prepare_full_scan_with_retry(
     options: SyncOptions,
     jobs: usize,
 ) -> Result<PreparedFullScan> {
-    let mut prepared = prepare_full_scan(config, options, jobs, None)?;
+    prepare_full_scan_with_retry_date(config, options, jobs, None)
+}
+
+pub(super) fn prepare_full_scan_with_retry_date(
+    config: &Config,
+    options: SyncOptions,
+    jobs: usize,
+    invocation_date: Option<String>,
+) -> Result<PreparedFullScan> {
+    let mut prepared =
+        prepare_full_scan(config, options, jobs, invocation_date)?;
     match validate_prepared_scan(&prepared) {
         PreparedValidation::Unchanged => Ok(prepared),
         PreparedValidation::Failed(error) => Err(error),
@@ -457,15 +515,114 @@ pub(super) fn prepare_full_scan_with_retry(
             match validate_prepared_scan(&rebuilt) {
                 PreparedValidation::Unchanged => Ok(rebuilt),
                 PreparedValidation::Stale { reason } => {
-                    Err(CommandError::new(format!(
-                        "scan inputs changed during planning ({reason}); rerun bob ref scan"
-                    ))
-                    .with_code("scan_failed"))
+                    Err(scan_inputs_changed_error(&reason))
                 }
                 PreparedValidation::Failed(error) => Err(error),
             }
         }
     }
+}
+
+fn plan_outcome_pdf(outcome: &ScanPlanOutcome) -> &Path {
+    match outcome {
+        ScanPlanOutcome::Planned(plan) => plan.pdf.as_path(),
+        ScanPlanOutcome::Held(hold) => hold.pdf.as_path(),
+        ScanPlanOutcome::Failed(failure) => failure.pdf.as_path(),
+    }
+}
+
+/// PDFs that intake moved into the library, plus existing library PDFs
+/// that received late audio and must be replanned.
+pub(super) fn intake_affected_pdfs(intake: &[IntakeMove]) -> Vec<PathBuf> {
+    let mut pdfs = Vec::new();
+    for item in intake {
+        if is_pdf_path(&item.destination) {
+            pdfs.push(item.destination.clone());
+        } else {
+            let pdf = item.destination.with_extension("pdf");
+            if pdf.is_file() {
+                pdfs.push(pdf);
+            }
+        }
+    }
+    pdfs.sort();
+    pdfs.dedup();
+    pdfs
+}
+
+/// Move and plan only newly intaken / late-audio-affected PDFs, then
+/// rebuild shared ID reservations over the combined ordered set. Existing
+/// library plans are reused. Must run after intake moves, while the
+/// mutation locks are still held; never retries.
+pub(super) fn integrate_intake_plans(
+    prepared: &mut PreparedFullScan,
+    intake: &[IntakeMove],
+    options: SyncOptions,
+    jobs: usize,
+) -> Result<()> {
+    let new_pdfs = intake_affected_pdfs(intake);
+    if new_pdfs.is_empty() {
+        return Ok(());
+    }
+    reset_prepared_finalization(prepared);
+    let ctx = ScanContext {
+        index: crate::native::ref_tasks::RefTaskIndex::build(
+            &prepared.config.bob_dir,
+            &prepared.config.ref_dir,
+        ),
+        invocation_date: prepared.invocation_date.clone(),
+    };
+    let new_outcomes =
+        plan_pdfs(&prepared.config, &new_pdfs, options, jobs, &ctx);
+    for outcome in &new_outcomes {
+        if let ScanPlanOutcome::Planned(plan) = outcome {
+            prepared.draft_annotation_candidates.insert(
+                plan.pdf.clone(),
+                plan.annotation_task_candidates.clone(),
+            );
+            prepared.draft_rendered.insert(
+                plan.pdf.clone(),
+                (
+                    plan.rendered_body.clone(),
+                    plan.stable_rendered_note.clone(),
+                    plan.stable_note_action,
+                ),
+            );
+        }
+    }
+    let replan = new_pdfs.iter().cloned().collect::<BTreeSet<_>>();
+    prepared
+        .plan_outcomes
+        .retain(|outcome| !replan.contains(plan_outcome_pdf(outcome)));
+    prepared.plan_outcomes.extend(new_outcomes);
+    let pdfs = if prepared.config.lib_dir.is_dir() {
+        collect_pdf_paths(&prepared.config, false)?
+    } else {
+        Vec::new()
+    };
+    prepared.plan_outcomes.sort_by_key(|outcome| {
+        pdfs.iter()
+            .position(|pdf| pdf == plan_outcome_pdf(outcome))
+            .unwrap_or(usize::MAX)
+    });
+    prepared.pdfs = pdfs;
+    {
+        let mut plans_to_finalize = prepared
+            .plan_outcomes
+            .iter_mut()
+            .filter_map(|outcome| match outcome {
+                ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
+                ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
+            })
+            .collect::<Vec<_>>();
+        finalize_annotation_task_plans(
+            &prepared.config,
+            &mut plans_to_finalize,
+            &ctx,
+        )?;
+        reserve_preview_ids(&prepared.config, &mut plans_to_finalize, &ctx)?;
+    }
+    Ok(())
 }
 
 fn audio_companion_candidates(pdf: &Path) -> Vec<PathBuf> {
@@ -1125,5 +1282,90 @@ mod tests {
         assert_eq!(plan.rendered_body, "body");
         assert_eq!(plan.stable_rendered_note, "note");
         assert_eq!(plan.stable_note_action, "none");
+    }
+
+    #[test]
+    fn mutation_predicate_ignores_holds_and_plan_failures() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pdf = temp.path().join("a.pdf");
+        let note = temp.path().join("a.md");
+        let plan = minimal_plan(&pdf, &note);
+        assert!(!plan_has_actual_work(&plan));
+        let prepared = PreparedFullScan {
+            config: test_config(temp.path()),
+            invocation_date: "2026-11-17".to_string(),
+            intake: Vec::new(),
+            pdfs: vec![pdf.clone()],
+            plan_outcomes: vec![
+                ScanPlanOutcome::Planned(Box::new(plan)),
+                ScanPlanOutcome::Held(ScanHold {
+                    pdf: pdf.clone(),
+                    note_path: note.clone(),
+                    title: "A".to_string(),
+                    reason: HoldReason::DirtyTargets,
+                    message: "held".to_string(),
+                }),
+                ScanPlanOutcome::Failed(ScanFailure::new(
+                    pdf.clone(),
+                    CommandError::new("plan failed"),
+                )),
+            ],
+            evidence: ScanInputEvidence {
+                pdf_hashes: BTreeMap::new(),
+                file_states: BTreeMap::new(),
+                lib_pdfs: Vec::new(),
+                xlib_members: Vec::new(),
+                intake_destinations: Vec::new(),
+                index_fingerprint: String::new(),
+            },
+            draft_annotation_candidates: BTreeMap::new(),
+            draft_rendered: BTreeMap::new(),
+        };
+        assert!(
+            prepared_scan_has_actual_work(&prepared),
+            "holds and failures still count as reportable work"
+        );
+        assert!(
+            !prepared_scan_needs_mutation(&prepared),
+            "holds and failures alone do not take writer locks"
+        );
+        let writes = unchanged_write_outcomes_for(&prepared.plan_outcomes);
+        assert_eq!(
+            writes.len(),
+            1,
+            "lock-free assembly emits one write outcome per Planned PDF"
+        );
+        match &writes[0] {
+            ScanWriteOutcome::Written(report) => {
+                assert_eq!(report.note_action, "none");
+                assert_eq!(report.marker_action, "none");
+            }
+            other => panic!(
+                "expected Written(none) for the unchanged Planned PDF, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn intake_affected_pdfs_include_late_audio_library_pdf() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let lib = temp.path().join("lib/chat");
+        fs::create_dir_all(&lib).expect("mkdir");
+        let library_pdf = lib.join("listen.pdf");
+        fs::write(&library_pdf, b"%PDF").expect("write pdf");
+        let intake = vec![
+            IntakeMove {
+                source: temp.path().join("xlib/chat/fresh.pdf"),
+                destination: lib.join("fresh.pdf"),
+                companions: Vec::new(),
+            },
+            IntakeMove {
+                source: temp.path().join("xlib/chat/listen.mp3"),
+                destination: lib.join("listen.mp3"),
+                companions: Vec::new(),
+            },
+        ];
+        let affected = intake_affected_pdfs(&intake);
+        assert_eq!(affected, vec![lib.join("fresh.pdf"), library_pdf],);
     }
 }

@@ -2995,12 +2995,9 @@ fn ref_scan_json_hard_failure_writes_error_receipt() {
         format_output(&output)
     );
     let text = stdout(&output);
-    let bytes = fs::read(scan_receipt_path(&state_dir))
-        .expect("a hard failure after the lock must write the receipt");
-    assert_eq!(
-        bytes,
-        text.to_string().into_bytes(),
-        "the error receipt must be the exact envelope line from stdout"
+    assert!(
+        !scan_receipt_path(&state_dir).exists(),
+        "an output collision is now a prelock failure and must not write a receipt"
     );
     let document: serde_json::Value =
         serde_json::from_str(text.trim()).expect("stdout parses as JSON");
@@ -3042,19 +3039,133 @@ fn ref_scan_human_hard_failure_writes_error_receipt() {
         "collision human scan should exit 1:\n{}",
         format_output(&output)
     );
-    let receipt: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(scan_receipt_path(&state_dir))
-            .expect("a hard failure after the lock must write the receipt"),
-    )
-    .expect("receipt parses as JSON");
-    assert_eq!(receipt["ok"], false);
-    assert_eq!(receipt["command"], "ref scan");
-    assert_eq!(receipt["mode"], "write");
-    assert_eq!(receipt["intake_only"], false);
-    assert_eq!(receipt["error"]["code"], "output_collision");
     assert!(
-        receipt.get("held").is_none(),
-        "the error envelope has no held field"
+        !scan_receipt_path(&state_dir).exists(),
+        "an output collision is now a prelock failure and must not write a receipt"
+    );
+    assert!(
+        stderr(&output).contains("output path collision"),
+        "human mode still reports the collision:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn ref_scan_json_no_work_ignores_held_locks_and_writes_no_receipt() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-nowork-locks");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/stable.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Stable\n",
+    );
+    let state_dir = temp.path().join("state");
+    let lock_path = temp.path().join("bob_sync.lock");
+    assert_success(
+        &bob_command()
+            .arg("ref")
+            .arg("scan")
+            .env("BOB_DIR", &vault)
+            .env("BOB_NOW", SCAN_JSON_NOW)
+            .env("XDG_STATE_HOME", &state_dir)
+            .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+            .output()
+            .expect("initial writing scan"),
+    );
+    let receipt_before = fs::read(scan_receipt_path(&state_dir))
+        .expect("initial writing scan writes a receipt");
+    let _scan_lock = hold_scan_writer_lock(&state_dir);
+    let _maint_lock = hold_vault_maintenance_lock(&lock_path);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("no-work json scan under both locks");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a converged writing scan must finish without either lock:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        !err.contains("waiting for another bob ref scan to finish")
+            && !err.contains("waiting for another vault maintenance run"),
+        "no-work scans must not wait on either lock:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["summary"]["unchanged"], 1);
+    assert_eq!(
+        fs::read(scan_receipt_path(&state_dir)).expect("receipt remains"),
+        receipt_before,
+        "a lock-free no-work scan must leave the previous receipt untouched"
+    );
+}
+
+#[test]
+fn ref_scan_human_no_work_ignores_held_locks() {
+    let temp = TempDir::new("bob-cli-ref-scan-human-nowork-locks");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/stable.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Stable\n",
+    );
+    let state_dir = temp.path().join("state");
+    let lock_path = temp.path().join("bob_sync.lock");
+    assert_success(
+        &bob_command()
+            .arg("ref")
+            .arg("scan")
+            .env("BOB_DIR", &vault)
+            .env("BOB_NOW", SCAN_JSON_NOW)
+            .env("XDG_STATE_HOME", &state_dir)
+            .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+            .output()
+            .expect("initial writing scan"),
+    );
+    let _scan_lock = hold_scan_writer_lock(&state_dir);
+    let _maint_lock = hold_vault_maintenance_lock(&lock_path);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("no-work human scan under both locks");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a converged writing scan must finish without either lock:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        !err.contains("waiting for another bob ref scan to finish")
+            && !err.contains("waiting for another vault maintenance run"),
+        "no-work scans must not wait on either lock:\n{}",
+        format_output(&output)
+    );
+    let report = stdout(&output);
+    assert!(
+        report.contains("notes_unchanged: 1"),
+        "write-mode summary is preserved on the lock-free path:\n{report}"
     );
 }
 

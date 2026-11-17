@@ -616,3 +616,59 @@ fn ref_scan_json_hook_failure_error_envelope() {
         format_output(&output)
     );
 }
+
+#[test]
+fn highlights_ref_scan_nested_writing_scan_from_hook_fails_lock_busy() {
+    let temp = TempDir::new("bob-cli-highlights-ref-nested-scan-hook");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/nested.pdf");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Nested\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nBOB_DIR={} {} ref scan -f json\n",
+            shell_single_quote(path_str(&vault)),
+            shell_single_quote(BOB_BIN),
+        ),
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_hook: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("scan whose hook nests a writing scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a nested writing scan must fail the hook:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "hook_failed");
+    let err = stderr(&output);
+    assert!(
+        err.contains("lock_busy")
+            && err.contains("nested writing scan from a pre-scan hook"),
+        "the nested writing scan must fail with the existing lock_busy envelope:\n{}",
+        format_output(&output)
+    );
+}
