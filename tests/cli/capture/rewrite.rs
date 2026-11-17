@@ -400,6 +400,43 @@ fn capture_rewrite_json_expands_a_dot_route_alias() {
 }
 
 #[test]
+fn capture_rewrite_json_expands_an_item_start_dot_route_alias() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("1")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(".")
+        .output()
+        .expect("run bob capture-rewrite item-start dot route alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], ".");
+    assert_eq!(json["text"], "@");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 1);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 0, "end": 1 }, "replacement": "@" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed @ for .");
+    assert_eq!(
+        json["alias"],
+        serde_json::json!({ "id": "route_item_start", "key": ".", "sigil": "@" }),
+    );
+}
+
+#[test]
 fn capture_rewrite_json_expands_a_dot_dependency_alias() {
     let output = bob_command()
         .arg("capture-rewrite")
@@ -1640,7 +1677,6 @@ fn capture_rewrite_json_sends_an_explicit_null_when_no_tip_is_proved() {
     for (draft, cursor) in [
         ("Buy milk &", 10),
         ("Buy milk", 8),
-        ("@", 1),
         ("Do work @file:{0}^ %t\n\nrow", 18),
         ("xx", 1),
         // Under hash_fallback = drop no key would have typed `#` here.
@@ -1680,6 +1716,7 @@ fn capture_rewrite_json_omits_the_tip_without_a_cursor_or_after_a_change() {
 fn capture_rewrite_json_stamps_the_alias_on_forward_sigil_aliases() {
     for (draft, id, key, sigil) in [
         ("Buy milk .", "route_after_text", ".", "@"),
+        (".", "route_item_start", ".", "@"),
         ("Buy milk /", "hash_menu", "/", "#"),
         ("Buy milk \\", "directive_menu", "\\", "%"),
         ("@errands.", "block_id_after_route", ".", "^"),

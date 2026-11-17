@@ -10,6 +10,7 @@ use super::*;
 /// reverse check through `assert_alias_applied`.
 const FORWARD_FIXTURES: &[(&str, AliasId)] = &[
     ("Buy milk .", AliasId::RouteAfterText),
+    (".", AliasId::RouteItemStart),
     ("Buy milk /", AliasId::HashMenu),
     ("Buy milk \\", AliasId::DirectiveMenu),
     ("@errands.", AliasId::BlockIdAfterRoute),
@@ -70,6 +71,7 @@ fn the_tipped_classification_matches_the_v1_lessons() {
         tipped,
         BTreeSet::from([
             "route_after_text",
+            "route_item_start",
             "hash_menu",
             "directive_menu",
             "block_id_after_route",
@@ -98,6 +100,20 @@ fn sigil_alias_tip_proves_each_positive_row() {
             &["."][..],
             '@',
             Some("after a word"),
+        ),
+        (
+            "@",
+            AliasId::RouteItemStart,
+            &["."][..],
+            '@',
+            Some("at an item start"),
+        ),
+        (
+            "Buy milk\n\n@",
+            AliasId::RouteItemStart,
+            &["."],
+            '@',
+            Some("at an item start"),
         ),
         (
             "- [ ] Buy @",
@@ -291,8 +307,6 @@ fn sigil_alias_tip_only_looks_at_the_sigil_ending_at_the_cursor() {
 #[test]
 fn sigil_alias_tip_stays_silent_for_the_negative_corpus() {
     for (raw, cursor) in [
-        ("@", 1),
-        ("  @", 3),
         ("- @", 3),
         ("- [ ] @", 7),
         ("@cash Buy milk @", 16),
@@ -336,6 +350,7 @@ fn sigil_alias_tip_agrees_with_the_forward_rewrite_for_every_prefix() {
     // and rewriting yields the draft again, byte for byte.
     for raw in [
         "Buy milk @",
+        "@",
         "@errands^",
         "@errands:",
         ":",

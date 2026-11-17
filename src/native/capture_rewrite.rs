@@ -157,11 +157,12 @@ alias. A whole-item ';' becomes ':' only \
 where the Task Link picker opens. A '- .' or '- ;' first-level bullet in a \
 sealed project-note item becomes '- ^' or '- :' where the Move picker would \
 open, and '- ^.' becomes '- ^^'. Typing '.' after a space or tab that \
-follows body text becomes '@' wherever a bare '@' would open route \
-completion and the item is not already routed. It stays literal at a line \
-or bullet-body start, after a checkbox, glued to a word, inside an unclosed \
-backtick span or a wikilink, and in positions with no route field. For \
-example, 'Buy milk .' becomes 'Buy milk @', while '@errands.' still becomes \
+follows body text, or at an item start, becomes '@' wherever a bare '@' \
+would open route completion and the item is not already routed. It stays \
+literal at a later line of the same item, at a bullet-body or checkbox \
+start, glued to a word, inside an unclosed backtick span or a wikilink, \
+and in positions with no route field. For example, 'Buy milk .' becomes \
+'Buy milk @' and '.' becomes '@', while '@errands.' still becomes \
 '@errands^' as the first '.' rule. Once the item already owns a route \
 marker, a spaced '.' tries '&' first and falls back to '@' only where '&' \
 cannot open; otherwise a spaced '.' that does not become '@' becomes '&' \

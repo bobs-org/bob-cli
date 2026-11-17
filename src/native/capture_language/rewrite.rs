@@ -487,9 +487,9 @@ fn collapse_global_destination(
 /// where `&` cannot open; otherwise it tries `@` first and falls back to `&`.
 /// Each fires only where the winning bare sigil would open route completion
 /// or the Depends On picker. A spaced `;` that did not become `:` aliases
-/// `*` wherever a bare `*` would open the Blocks picker. Both share the
-/// spaced `.` -> `@` position guard, so a line-initial `.` or `;` stays
-/// literal.
+/// `*` wherever a bare `*` would open the Blocks picker. The `&` and `*`
+/// fallbacks share the spaced `.` -> `@` position guard, so a `.` or `;`
+/// at a later line of the same item or at a bullet-body start stays literal.
 /// A comma glued to a complete `@route:id` / `@route^id` is claimed earlier
 /// by `switch_block_id_separator`, before this alias lane runs.
 fn expand_sigil_alias(
@@ -691,17 +691,20 @@ fn expand_dot_block_id_alias(
     ))
 }
 
-/// Typing `.` after a space or tab that follows body text aliases `@` only
-/// where a bare `@` would open route completion and the item is not already
-/// routed (routed items try `&` first; see [`alias_item_is_routed`]). Line
-/// and bullet-body starts, a bare checkbox, glued words, code spans, and
-/// wikilink fields stay literal.
+/// Typing `.` after a space or tab that follows body text, or at an item
+/// start, aliases `@` only where a bare `@` would open route completion and
+/// the item is not already routed (routed items try `&` first; see
+/// [`alias_item_is_routed`]). A later line of the same item, bullet-body
+/// starts, a bare checkbox, glued words, code spans, and wikilink fields
+/// stay literal.
 fn expand_dot_route_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
 ) -> Option<DraftRewrite> {
-    if !spaced_alias_position_ok(raw_text, start) {
+    let spaced = spaced_alias_position_ok(raw_text, start);
+    let at_item_start = item_start_alias_position_ok(raw_text, start);
+    if !spaced && !at_item_start {
         return None;
     }
     if tokenize_with_spans(raw_text)
@@ -721,12 +724,14 @@ fn expand_dot_route_alias(
     {
         return None;
     }
+    let stamp = if spaced {
+        AliasStamp::new(AliasId::RouteAfterText, ".", '@').at("after a word")
+    } else {
+        AliasStamp::new(AliasId::RouteItemStart, ".", '@')
+            .at("at an item start")
+    };
     Some(finish_sigil_alias(
-        raw_text,
-        &candidate,
-        start,
-        cursor,
-        AliasStamp::new(AliasId::RouteAfterText, ".", '@').at("after a word"),
+        raw_text, &candidate, start, cursor, stamp,
     ))
 }
 
@@ -1080,6 +1085,38 @@ fn relation_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
 /// while `- [ ] =` still becomes `- [ ] ~`.
 fn spaced_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
     sigil_alias_position_ok(raw_text, alias_start, true)
+}
+
+/// Whether `.` sits at an item start: every byte from its physical line's
+/// start up to `alias_start` is a space or tab, and that line is `lines[0]`
+/// of the capture item containing `alias_start`. Bullet markers and
+/// checkboxes are not stripped, so `- .` and `- [ ] .` stay literal.
+fn item_start_alias_position_ok(raw_text: &str, alias_start: usize) -> bool {
+    if alias_start > raw_text.len() || !raw_text.is_char_boundary(alias_start) {
+        return false;
+    }
+    let line_start = raw_text[..alias_start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let Some(prefix) = raw_text.get(line_start..alias_start) else {
+        return false;
+    };
+    if !prefix.bytes().all(|byte| byte == b' ' || byte == b'\t') {
+        return false;
+    }
+    let draft = split_capture_draft(raw_text);
+    let Some((_, line_index)) = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                alias_start >= line.raw.start && alias_start <= line.raw.end
+            })
+            .map(|(line_index, _)| (item, line_index))
+    }) else {
+        return false;
+    };
+    line_index == 0
 }
 
 fn sigil_alias_position_ok(

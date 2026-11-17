@@ -39,6 +39,8 @@ macro_rules! alias_ids {
 alias_ids! {
     /// `.` -> `@` after body text and a space or tab.
     RouteAfterText => "route_after_text",
+    /// `.` -> `@` at an item start.
+    RouteItemStart => "route_item_start",
     /// `/` -> `#` wherever a `#` menu would open.
     HashMenu => "hash_menu",
     /// `\` -> `%` wherever the directive menu would open.
@@ -81,6 +83,7 @@ impl AliasId {
     pub(crate) fn tipped(self) -> bool {
         match self {
             Self::RouteAfterText
+            | Self::RouteItemStart
             | Self::HashMenu
             | Self::DirectiveMenu
             | Self::BlockIdAfterRoute

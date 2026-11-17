@@ -98,7 +98,7 @@ Incomplete **picker** input cannot execute.
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
 | `,` | Parent picker; glued `@route:id` / `@route^id` | Alias `+`; continue target runs with ` +`; change `:`/`^` to `+` |
-| `.` | Right after `@route`; after a space following text | Alias `^`, `@`, or `&`; spaced `;` aliases `*` |
+| `.` | After `@route`, a space, or an item start | Alias `^`, `@`, or `&`; spaced `;` aliases `*` |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge; `@parent^id@` | Pomodoro note; create a notebook |
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
@@ -375,7 +375,8 @@ Contract: [Bulk templates](../capture.md#bulk-templates).
 ## Block IDs and linked tasks
 
 Editor `capture-rewrite` aliases include `@route.` / `@route;` → `^` / `:`,
-whole-item `;` → `:`, and spaced `.` / `;` → route or dependency pickers.
+whole-item `;` → `:`, item-start `.` → `@`, spaced `./;` → route/dependency
+pickers.
 A trailing `.` toggles complete `@route:id` ↔ `@route^id`, including sealed
 project markers and task-list IDs. Direct CLI capture never applies these
 [typing assists](../capture.md#bob-capture-rewrite).

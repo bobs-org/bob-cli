@@ -15,8 +15,9 @@ key. The aliases:
 - `.` → `^` right after `@route` (`@errands.` → `@errands^`); `;` → `:` there, and as a
   whole item (Task Link picker). In a [[project-note-capture]], a first-level `- .` or
   `- ;` opens the Move picker and `- ^.` gives `- ^^`.
-- `.` → `@` after body text and a space or tab, wherever a bare `@` opens route
-  completion and the item is not already routed (`Buy milk .` → `Buy milk @`).
+- `.` → `@` after body text and a space or tab, or at an item start (`.` → `@`
+  like the whole-item `;`), wherever a bare `@` opens route completion and the
+  item is not already routed (`Buy milk .` → `Buy milk @`; `.` → `@`).
 - `.` → `&` and `;` → `*` after text or a marker and a space or tab, where a bare `&` /
   `*` opens the Depends On / Blocks picker; once the item is routed, `.` gives `&`
   wherever Depends On opens (`Buy milk @foo:bar .` → `Buy milk @foo:bar &`;

@@ -9521,11 +9521,12 @@ same Block ID picker as the real sigil. A `.` glued to a complete
 the candidate opens the Task Link picker. A `- .` or `- ;` first-level bullet
 in a sealed project-note item becomes `- ^` or `- :` where the Move picker
 would open, and `- ^.` becomes `- ^^`. Typing `.` after a space or tab that
-follows body text becomes `@` wherever a bare `@` would open route
-completion and the item is not already routed. It stays literal at a line or
-bullet-body start, after a checkbox, glued to a word, inside an unclosed
-backtick span or a wikilink, and in positions with no route field. For
-example, `Buy milk .` becomes `Buy milk @`, while `@errands.` still becomes
+follows body text, or at an item start, becomes `@` wherever a bare `@`
+would open route completion and the item is not already routed. It stays
+literal at a later line of the same item, at a bullet-body or checkbox
+start, glued to a word, inside an unclosed backtick span or a wikilink, and
+in positions with no route field. For example, `Buy milk .` becomes
+`Buy milk @` and `.` becomes `@`, while `@errands.` still becomes
 `@errands^` as the first `.` rule. Once the item already owns a route marker,
 a spaced `.` tries `&` first and falls back to `@` only where `&` cannot
 open; otherwise a spaced `.` that does not become `@` becomes `&` wherever a
@@ -9788,9 +9789,10 @@ sigil, `keys` lists the kept keys in bob's preference order for the first
 proved id, and `where` is a short true phrase (`after a word`,
 `right after a route`, `at an item start`, `on a move bullet`, `once routed`)
 that bob omits when none applies. Template drafts never tip. The tipped ids are
-`route_after_text`, `hash_menu`, `directive_menu`, `block_id_after_route`, `link_after_route`,
-`task_link_item`, `move_bullet_caret`, `move_bullet_colon`, `parent_task`,
-`relation`, `dependency`, and `blocked_task`. The other forward aliases still
+`route_after_text`, `route_item_start`, `hash_menu`, `directive_menu`,
+`block_id_after_route`, `link_after_route`, `task_link_item`,
+`move_bullet_caret`, `move_bullet_colon`, `parent_task`, `relation`,
+`dependency`, and `blocked_task`. The other forward aliases still
 carry an `alias` id (`relation_flip`, `move_choice`, `next_parent`,
 `past_segment`, `close_complete`, `close_park`) but are never taught. `/`
 types `#` and `\` types `%`.

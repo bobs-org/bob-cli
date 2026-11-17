@@ -1296,10 +1296,64 @@ fn rewrite_draft_expands_dot_route_alias() {
 }
 
 #[test]
+fn rewrite_draft_expands_item_start_dot_route_alias() {
+    for (raw, expected) in [
+        (".", "@"),
+        ("  .", "  @"),
+        ("\t.", "\t@"),
+        ("Buy milk\n\n.", "Buy milk\n\n@"),
+        ("@@sase\n\n.", "@@sase\n\n@"),
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            assert_alias_applied(raw, &rewrite),
+            AliasId::RouteItemStart,
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Typed @ for ."),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].start, cursor - 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].end, cursor, "{raw:?}");
+        assert_eq!(rewrite.edits[0].replacement, "@", "{raw:?}");
+        assert!(raw.is_char_boundary(rewrite.edits[0].start), "{raw:?}");
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+
+    let raw = ". Buy milk";
+    let cursor = 1;
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(
+        assert_alias_applied(raw, &rewrite),
+        AliasId::RouteItemStart,
+        "{raw:?}"
+    );
+    assert_eq!(rewrite.text, "@ Buy milk", "{raw:?}");
+    assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+    assert_eq!(rewrite.summary.as_deref(), Some("Typed @ for ."), "{raw:?}");
+    assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+    assert_eq!(rewrite.edits[0].start, 0, "{raw:?}");
+    assert_eq!(rewrite.edits[0].end, 1, "{raw:?}");
+    assert_eq!(rewrite.edits[0].replacement, "@", "{raw:?}");
+
+    let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+    assert_eq!(again.rule, None, "idempotent {raw:?}");
+    assert_eq!(again.text, "@ Buy milk", "idempotent {raw:?}");
+}
+
+#[test]
 fn rewrite_draft_dot_route_alias_stays_literal() {
     let mut cases = vec![
-        (".", 1),
-        ("  .", 3),
         ("- .", 3),
         ("Buy milk\n.", "Buy milk\n.".len()),
         ("Buy\n  - foo .", "Buy\n  - foo .".len()),
@@ -1316,10 +1370,15 @@ fn rewrite_draft_dot_route_alias_stays_literal() {
         ("run `cargo .", 12),
         ("see [[foo .", 11),
         ("Fix ((foo .", 11),
+        ("- [ ] .", 7),
+        ("[ ] .", 5),
+        ("Buy milk\n\n- .", "Buy milk\n\n- .".len()),
+        ("Buy\n.", "Buy\n.".len()),
     ];
     for raw in ["Buy . milk", "Buy .foo"] {
         cases.push((raw, raw.find('.').expect("dot") + 1));
     }
+    cases.push((".foo", 1));
     for (raw, cursor) in cases {
         let rewrite = rewrite_draft(raw, Some(cursor));
         assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
