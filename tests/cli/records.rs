@@ -3080,3 +3080,263 @@ fn update_envelope_capability_in_album_reports() {
         assert_eq!(json(&output)["schema_version"], 1);
     }
 }
+fn write_tidy_records(vault: &std::path::Path) {
+    fs::create_dir_all(vault.join("podcasts")).expect("podcasts");
+    write_file(
+        &vault.join("podcasts.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\nparent: \"[[body]]\"\nsummary: Podcasts.\n",
+            "record:\n  noun: podcast\n  label: Podcast\n",
+            "  fields:\n    status: {required: true}\n    category: {required: true}\n",
+            "---\n\n# Podcasts\n"
+        ),
+    );
+    write_file(
+        &vault.join("eat/empty_eof.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Empty Eof\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n# Empty Eof\n\n## Notes\n",
+    );
+    write_file(
+        &vault.join("eat/empty_source.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Empty Source\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n# Empty Source\n\n## Notes\n\n## Source\n\n```text\nrow\n```\n",
+    );
+    write_file(
+        &vault.join("eat/kept.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Kept\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n# Kept\n\n## Notes\n\n- hello\n",
+    );
+    write_file(
+        &vault.join("eat/not_a_record.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[area]]\"\ntitle: Not A Record\n---\n\n# Not A Record\n\n## Notes\n",
+    );
+    write_file(
+        &vault.join("eat.md.bak"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Backup\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n# Backup\n\n## Notes\n",
+    );
+    write_file(
+        &vault.join("podcasts/empty_cast.md"),
+        "---\nparent: \"[[podcasts]]\"\ntype: \"[[record]]\"\ntitle: Empty Cast\nstatus: to_try\ncategory: python\n---\n\n# Empty Cast\n\n## Notes\n",
+    );
+}
+
+fn tidy_fixture() -> RecordsFixture {
+    let fixture = fixture();
+    write_tidy_records(&fixture.vault);
+    fixture
+}
+
+fn tidy_sync_fixture(temp: &TempDir) -> (PathBuf, PathBuf) {
+    let (vault, _remote, _peer) = init_vault_sync_pair(temp);
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Places to eat.\n",
+            "emoji: \"🍽️\"\n",
+            "record:\n",
+            "  noun: restaurant\n",
+            "  label: Restaurant\n",
+            "  fields:\n",
+            "    status:\n",
+            "      required: true\n",
+            "      values: {to_try: \"To try\", liked: \"Liked\"}\n",
+            "    category: {required: true}\n",
+            "    location: {required: true}\n",
+            "---\n\n# Restaurants\n"
+        ),
+    );
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_tidy_records(&vault);
+    let config = temp.path().join("config.yml");
+    write_file(&config, RECORDS_CONFIG);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "tidy fixture"]);
+    git_in(&vault, ["push", "-q"]);
+    (vault, config)
+}
+
+fn tidy_sync_command(
+    vault: &PathBuf,
+    config: &PathBuf,
+    temp: &TempDir,
+    args: &[&str],
+) -> std::process::Command {
+    let mut command = bob_command();
+    command
+        .arg("records")
+        .args(args)
+        .env("BOB_DIR", vault)
+        .env("BOB_CONFIG_FILE", config)
+        .env("BOB_NOW", "2026-10-07 13:40:00")
+        .env("NO_COLOR", "1")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(temp))
+        .env("HOME", temp.path().join("home-dir"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"));
+    command
+}
+
+#[test]
+fn tidy_dry_run_writes_nothing_and_leaves_head_unchanged() {
+    let fixture = tidy_fixture();
+    init_git_vault(&fixture.vault);
+    let before = read_tree(&fixture.vault);
+    let head = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]));
+
+    let dry = records_command(&fixture)
+        .args(["tidy", "-d"])
+        .output()
+        .expect("tidy dry-run");
+    assert_success(&dry);
+    assert_eq!(read_tree(&fixture.vault), before, "dry-run writes nothing");
+    assert_eq!(
+        stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"])),
+        head,
+        "dry-run commits nothing"
+    );
+    let text = stdout(&dry);
+    assert!(text.contains("empty_eof.md"), "{text}");
+    assert!(text.contains("empty_source.md"), "{text}");
+    assert!(text.contains("empty_cast.md"), "{text}");
+    assert!(!text.contains("kept.md"), "{text}");
+    assert!(!text.contains("not_a_record.md"), "{text}");
+}
+
+#[test]
+fn tidy_real_run_commits_once_and_changes_only_record_bodies() {
+    let temp = TempDir::new("bob-cli-records-tidy-real");
+    let (vault, config) = tidy_sync_fixture(&temp);
+
+    let real = tidy_sync_command(&vault, &config, &temp, &["tidy"])
+        .output()
+        .expect("tidy real run");
+    assert_success(&real);
+    let text = stdout(&real);
+    assert!(text.contains("3"), "{text}");
+
+    let log = stdout(&git_in(&vault, ["log", "--oneline", "-2"]));
+    assert!(log.contains("records: tidy (3 notes)"), "{log}");
+
+    for path in [
+        "eat/empty_eof.md",
+        "eat/empty_source.md",
+        "podcasts/empty_cast.md",
+    ] {
+        let contents = fs::read_to_string(vault.join(path)).expect("read");
+        assert!(!contents.contains("## Notes"), "{path}: {contents}");
+    }
+    // Non-empty records, non-records, and album declarations stay put.
+    let kept = fs::read_to_string(vault.join("eat/kept.md")).unwrap();
+    assert!(kept.contains("- hello"), "{kept}");
+    let skipped =
+        fs::read_to_string(vault.join("eat/not_a_record.md")).unwrap();
+    assert!(skipped.contains("## Notes"), "{skipped}");
+    let album = fs::read_to_string(vault.join("eat.md")).unwrap();
+    assert!(album.contains("# Restaurants"), "{album}");
+
+    // A second run is a no-op with no new commit.
+    let head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    let again = tidy_sync_command(&vault, &config, &temp, &["tidy"])
+        .output()
+        .expect("tidy no-op");
+    assert_success(&again);
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
+        head,
+        "no-op commits nothing"
+    );
+    assert!(stdout(&again).contains("0 tidied"), "{}", stdout(&again));
+}
+
+#[test]
+fn tidy_type_scoping_and_json_shape() {
+    let temp = TempDir::new("bob-cli-records-tidy-scope");
+    let (vault, config) = tidy_sync_fixture(&temp);
+
+    let scoped = tidy_sync_command(
+        &vault,
+        &config,
+        &temp,
+        &["tidy", "eat", "-d", "-f", "json"],
+    )
+    .output()
+    .expect("tidy scoped dry-run");
+    assert_success(&scoped);
+    let payload = json(&scoped);
+    assert_eq!(payload["command"], "tidy");
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["counts"]["scanned"], 3);
+    assert_eq!(payload["counts"]["changed"], 2);
+    let paths = payload["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|change| change["path"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, vec!["eat/empty_eof.md", "eat/empty_source.md"]);
+    assert!(payload["changes"][0].get("diff").is_some());
+    assert!(payload["commit"].is_null());
+
+    let unknown = tidy_sync_command(
+        &vault,
+        &config,
+        &temp,
+        &["tidy", "nope", "-f", "json"],
+    )
+    .output()
+    .expect("unknown type");
+    assert_eq!(unknown.status.code(), Some(2));
+
+    // JSON real run omits diffs but keeps the envelope shape.
+    let real = tidy_sync_command(
+        &vault,
+        &config,
+        &temp,
+        &["tidy", "podcast", "-f", "json"],
+    )
+    .output()
+    .expect("tidy podcast");
+    assert_success(&real);
+    let real_json = json(&real);
+    assert_eq!(real_json["counts"]["changed"], 1);
+    assert!(real_json["changes"][0].get("diff").is_none());
+    assert!(real_json["commit"]["subject"]
+        .as_str()
+        .unwrap()
+        .contains("records: tidy (1 notes)"));
+}
+
+#[test]
+fn tidy_update_inserts_notes_above_source() {
+    let fixture = update_fixture();
+    write_file(
+        &fixture.vault.join("eat/sourced.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Sourced\nstatus: liked\ncategory: Ramen\nlocation: Clark\n---\n\n# Sourced\n\n## Source\n\n```text\nrow\n```\n",
+    );
+    let updated = records_command(&fixture)
+        .args([
+            "update",
+            "restaurant",
+            "sourced",
+            "-n",
+            "Revisit was great",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("update sourced record");
+    assert_success(&updated);
+    let markdown =
+        fs::read_to_string(fixture.vault.join("eat/sourced.md")).unwrap();
+    assert!(
+        markdown.contains(
+            "## Notes\n\n- 2026-10-07: Revisit was great\n\n## Source"
+        ),
+        "Notes inserted above Source: {markdown}"
+    );
+}

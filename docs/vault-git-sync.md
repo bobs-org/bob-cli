@@ -448,7 +448,10 @@ athena's `bob-nightly` job, in the same chezmoi `cron:` data, runs `bob nightly`
    indexes and owner `## Albums` catalogs and makes one
    `albums: sync (N notes)` commit only when an index or catalog changed; a
    failure here never stops the final sync)
-9. `bob vault-sync`
+9. `bob records tidy` (the lock-free core: it removes empty record
+   `## Notes` sections and makes one `records: tidy (N notes)` commit only
+   when a note changed; a failure here never stops the final sync)
+10. `bob vault-sync`
 
 That ordering pulls the MacBook's latest notes before maintenance rewrites task blocks
 and pushes the maintenance commit afterwards.

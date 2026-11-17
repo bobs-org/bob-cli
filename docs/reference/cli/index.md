@@ -71,7 +71,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
 | [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image, video, and file paths into the vault |
 | [`bob attachments origin`](attachments.md#bob-attachments-origin) | Show where a vault attachment came from |
-| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, vault-sync |
+| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, records, vault-sync |
 | [`bob notebooks`](notebooks.md) | Inspect or maintain notebook notes |
 | [`bob notebooks check`](notebooks.md#bob-notebooks-check) | Check notebooks against the contract |
 | [`bob notebooks create`](notebooks.md#bob-notebooks-create) | Create a notebook and its catalog rows |
@@ -85,11 +85,12 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob periods migrate`](periods.md#bob-periods-migrate) | Adopt the period-note tree (dry run by default) |
 | [`bob periods show`](periods.md#bob-periods-show) | Show a period's live stats and child summaries |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
-| [`bob records`](records.md) | List, inspect, check, create, and update Record Notes |
+| [`bob records`](records.md) | List, inspect, check, create, update, and tidy Record Notes |
 | [`bob records check`](records.md#bob-records-check) | Check Record Notes against their album schemas |
 | [`bob records list`](records.md#bob-records-list) | List Record Note collections (default) |
 | [`bob records new`](records.md#bob-records-new) | Create one Record Note from its schema |
 | [`bob records show`](records.md#bob-records-show) | Show one record schema, or one record |
+| [`bob records tidy`](records.md#bob-records-tidy) | Remove empty `## Notes` sections from Record Notes |
 | [`bob records update`](records.md#bob-records-update) | Update one existing Record Note in place |
 | [`bob ref`](ref.md) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`bob vault-sync`](vault-sync.md) | Reconcile the vault through Git (default: run) or show status |
@@ -175,11 +176,12 @@ Vault:
   articles     Format and inspect article notes with bob-owned section numbers
   attachments  Copy files into the vault and show where copies came from
   nightly      Run nightly maintenance: vault-sync, task archive, articles,
-               period notes, areas, projects, notebooks, albums, vault-sync
+               period notes, areas, projects, notebooks, albums, records,
+               vault-sync
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   query        Run Dataview or Tasks queries against the vault
-  records      List, inspect, check, create, and update Record Notes
+  records      List, inspect, check, create, update, and tidy Record Notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
   vault-sync   Reconcile the vault through Git (default: run) or show status

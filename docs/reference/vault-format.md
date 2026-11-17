@@ -463,8 +463,8 @@ Contract: [Albums and record notes](../records.md).
 Each album owns one folder. Record notes use `type: "[[record]]"` and
 `parent: "[[<album>]]"`. Notes live at `<dir>/<stem>.md`; Bob writes the
 album parent, type, title, schema fields, and created date.
-Ordinary note bullets live under
-`## Notes`, with dates when `dated_notes: true`.
+Ordinary note bullets live under `## Notes` (which exists only when there are
+bullets), with dates when `dated_notes: true`.
 
 For a `restaurant` album owning `eat/`, `Ramen Nagi @eat/` plus its required
 field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi` updates supplied

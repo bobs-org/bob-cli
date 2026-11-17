@@ -578,6 +578,14 @@ const RECORDS_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "tidy",
+        about: "Remove empty `## Notes` sections from Record Notes",
+        leaf: Leaf {
+            native_command: NativeCommand::RecordsTidy,
+            script_command: None,
+        },
+    },
+    Member {
         name: "update",
         about: "Update one existing Record Note in place",
         leaf: Leaf {
@@ -596,6 +604,7 @@ Examples:
   bob records show restaurant ninja_sushi         Read one record
   bob records check -f json                       Lint every record folder
   bob records new restaurant 'Ramen Nagi' -s status=to_try
+  bob records tidy -d                             Preview empty Notes cleanup as diffs
 
 See docs/records.md for the schema, CLI, and lint contract.
 Run 'bob records <command> --help' for more information on a command.";
@@ -1123,7 +1132,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "nightly",
-        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, vault-sync",
+        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, records, vault-sync",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,
@@ -1169,13 +1178,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "records",
-        about: "List, inspect, check, create, and update Record Notes",
+        about: "List, inspect, check, create, update, and tidy Record Notes",
         section: Section::Vault,
         target: Target::Group(Group {
             members: RECORDS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob records` runs the read-only list. `new` creates a note through the shared records planner and refuses missing fields or duplicates. `update` edits an existing note in place.",
+                "Bare `bob records` runs the read-only list. `new` creates a note through the shared records planner and refuses missing fields or duplicates. `update` edits an existing note in place. `tidy` removes empty `## Notes` sections in one guarded commit.",
             ),
             after_help: RECORDS_AFTER_HELP,
             usage: "bob records [COMMAND]",

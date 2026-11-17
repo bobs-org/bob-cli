@@ -677,8 +677,8 @@ fn areas_nightly_runs_the_areas_step_before_projects() {
     assert_text_order(
         &out,
         &[
-            "step 5/9 · areas — Repair generated area catalogs",
-            "step 6/9 · projects",
+            "step 5/10 · areas — Repair generated area catalogs",
+            "step 6/10 · projects",
         ],
     );
     assert!(

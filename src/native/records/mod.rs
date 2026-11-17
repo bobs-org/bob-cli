@@ -9,12 +9,14 @@ pub(crate) mod cli;
 pub(crate) mod context;
 pub(crate) mod fingerprint;
 pub(crate) mod init;
+pub(crate) mod notes_section;
 pub(crate) mod plan;
 pub(crate) mod protocol;
 pub(crate) mod render;
 pub(crate) mod schema;
 pub(crate) mod show;
 pub(crate) mod stem;
+pub(crate) mod tidy;
 
 #[allow(unused_imports)]
 pub(crate) use catalog::{

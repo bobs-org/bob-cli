@@ -69,6 +69,11 @@ const STEPS: &[Step] = &[
         run: run_albums_step,
     },
     Step {
+        name: "records",
+        blurb: "Remove empty record Notes sections",
+        run: run_records_step,
+    },
+    Step {
         name: "vault-sync",
         blurb: "Publish maintenance changes",
         run: run_vault_sync_step,
@@ -162,7 +167,7 @@ pub(crate) fn help_text() -> String {
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
-runs `vault-sync`, `task archive`, `articles`, `period notes`, `areas`, `projects`, `notebooks`, `albums`, and `vault-sync` in order.
+runs `vault-sync`, `task archive`, `articles`, `period notes`, `areas`, `projects`, `notebooks`, `albums`, `records`, and `vault-sync` in order.
 
 workflow:
   1. acquire the shared Bob maintenance lock
@@ -174,7 +179,8 @@ workflow:
   7. sync project lifecycles and sub-project catalogs (one scoped commit when any changed)
   8. repair generated notebook catalogs (one scoped commit when any changed)
   9. repair generated album records indexes and owner catalogs (one scoped commit when any changed)
-  10. run vault-sync against the vault
+  10. remove empty record `## Notes` sections (one scoped commit when any changed)
+  11. run vault-sync against the vault
 
 environment:
   BOB_DIR                        Bob vault root; defaults to ~/bob
@@ -222,6 +228,10 @@ fn run_notebooks_step(child_env: &ChildEnv) -> i32 {
 
 fn run_albums_step(child_env: &ChildEnv) -> i32 {
     super::albums::sync::nightly_step(&bob_env::bob_dir(), child_env)
+}
+
+fn run_records_step(child_env: &ChildEnv) -> i32 {
+    super::records::tidy::nightly_step(&bob_env::bob_dir(), child_env)
 }
 
 fn run_vault_sync_step(child_env: &ChildEnv) -> i32 {

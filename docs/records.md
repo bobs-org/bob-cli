@@ -153,9 +153,43 @@ Damaged or invalid albums and damaged owner catalogs remain unchanged. Sync
 continues with healthy regions, reports each skipped damaged region, and
 exits 1 if an album or catalog is damaged or a runtime operation fails. An
 unreadable or incomplete source is never treated as an empty folder. In
-`bob nightly`, album sync runs directly after `notebooks` and before the
-final `vault-sync`; a failed maintenance step does not prevent that final
-publish.
+`bob nightly`, album sync runs directly after `notebooks` and before
+`records`; a failed maintenance step does not prevent that final publish.
+
+### Tidying empty Notes sections
+
+An empty `## Notes` section holds only blank lines between its heading and the
+next level-1 or level-2 heading (or EOF). Any other content keeps the section:
+bullets, prose, a `###` subheading, `%%` or HTML comments, a fence, or a block
+id. `bob records tidy [TYPE]` removes every empty `## Notes` section from
+record bodies:
+
+```sh
+bob records tidy -d
+bob records tidy eat -d
+bob records tidy -f json
+```
+
+`TYPE` accepts a noun or album stem, as `bob records check` does; an unknown
+`TYPE` exits 2. Without `TYPE`, every album is processed. Only direct Markdown
+children of album folders count, and only when their frontmatter type is
+`record` or the album's legacy noun type. Notes outside album folders, album
+declarations, and non-record notes in the folder are never touched. Unreadable
+notes are skipped and reported in `io_errors[]`.
+
+`-d/--dry-run` prints unified diffs without taking the maintenance lock,
+writing files, running Git, or syncing the vault. A real run takes the shared
+maintenance lock, pre-syncs, guards each rewritten note by its full preimage,
+verifies that no rewritten note keeps an empty Notes section, makes one scoped
+`records: tidy (N notes)` commit when any note changed, and post-syncs only
+when it committed. A no-op writes and commits nothing and skips post-sync. A
+preimage race fails the transaction with nothing written and exits 1.
+
+JSON uses schema version 1 with `command: "tidy"`, `counts {scanned, changed}`,
+`changes[]` (`path`, plus `diff` on dry runs), `commit`, `sync`, `warnings[]`,
+and `io_errors[]`. `ok` is false on runtime or guard failure. `bob nightly`
+runs the lock-free tidy core after `albums` and before the final `vault-sync`;
+a failure never stops that final publish.
 
 JSON uses schema version 1. `albums[]` repeats the list/check entry shape;
 `catalogs[]` repeats the owner-catalog report. `counts.damaged` counts unsafe
@@ -452,10 +486,17 @@ created: 2026-11-08T12:41:07-0500
 - Spicy tuna was great; Kelly loved the salmon.
 ```
 
-`created` uses Bob's configured timezone and `BOB_NOW` when set. `## Notes` is
-always present, including when empty. With `dated_notes: true`, each first-level
-note bullet gets today's date; nested bullets stay nested. An all-caps first-
-level bullet with nested bullets becomes a title-cased section.
+`created` uses Bob's configured timezone and `BOB_NOW` when set. `## Notes`
+exists only when the new note holds ordinary bullets. With `dated_notes: true`,
+each first-level note bullet gets today's date; nested bullets stay nested.
+An all-caps first-level bullet with nested bullets becomes a title-cased
+section. A note with no ordinary bullets holds only its H1:
+
+```markdown
+---
+
+# Ramen Nagi
+```
 
 ## Updating notes
 
@@ -463,8 +504,10 @@ An update validates only the fields it changes. An explicitly empty optional
 field removes its key; an empty required field is refused. Repeated values for
 a list replace that field's current list in request order. Missing fields are
 inserted in schema order, before `created` when there is no earlier schema
-field to follow. Notes append under the existing `## Notes` section, and named
-sections reuse a matching heading instead of creating a duplicate.
+field to follow. Notes append under an existing `## Notes` section; otherwise
+Bob creates the section directly under the H1 region, before the first other
+`##` section. Named sections reuse a matching heading instead of creating a
+duplicate.
 
 Bob edits the original YAML spans and preserves every untouched key, comment,
 body byte, and line ending. Existing unrelated schema problems are returned as
@@ -536,6 +579,7 @@ the noun or folder stem, such as `restaurant` or `eat`. It is separate from
 | `bob records list` | Show kinds, albums, folders, note counts, and required fields. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
 | `bob records show TYPE [STEM]` | Show the schema, choice labels, defaults, and common suggested values; with STEM, read one record. |
+| `bob records tidy [TYPE]` | Remove empty `## Notes` sections from record bodies in one guarded commit. |
 | `bob records update TYPE STEM` | Edit one existing record in place through the shared update planner, or apply a guarded JSON envelope with `-i FILE`. |
 
 Every command accepts `-f json`. The human output is intended for a terminal;
@@ -565,8 +609,9 @@ the album index edit with its own preimage guard.
 Update one record with repeated `-s/--set KEY=VALUE` fields and optional repeated
 `-n/--note TEXT` bullets. Only supplied fields change; defaults never apply to an
 update. An explicitly empty optional field removes its key, while an empty required
-field is refused with exit 2. Notes append under the existing `## Notes` section,
-dated when the record type opts in:
+field is refused with exit 2. Notes append under the existing `## Notes` section;
+otherwise Bob creates the section directly under the H1 region, before the first
+other `##` section. Notes are dated when the record type opts in:
 
 ```sh
 bob records update restaurant ninja_sushi \

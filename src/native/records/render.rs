@@ -306,7 +306,8 @@ fn render_note_bullet(
 /// title, schema fields in schema order, then created. String scalars use
 /// safe double quoting, choice tokens and dates/URLs/numbers stay bare when
 /// YAML-safe, lists are block lists, empty optionals are omitted, and legacy
-/// keys are never written. The body always holds H1 and `## Notes`.
+/// keys are never written. The body always holds H1 and holds `## Notes`
+/// only when the new note has ordinary bullets.
 pub(crate) fn render_record(
     request: &RecordRenderRequest<'_>,
 ) -> RenderedRecord {
@@ -384,9 +385,9 @@ pub(crate) fn render_record_with_identity(
         }
     }
 
-    let mut body = format!("# {}\n\n## Notes\n", request.title);
+    let mut body = format!("# {}\n", request.title);
     if !ordinary.is_empty() {
-        body.push('\n');
+        body.push_str("\n## Notes\n\n");
         for note in ordinary {
             for line in render_note_bullet(
                 record_type.dated_notes,
@@ -1531,6 +1532,43 @@ fn append_bullets_under_notes(
                 );
             }
         }
+    } else if let Some(insert_at) = notes_insert_position(body_lines, &headings)
+    {
+        ensure_separator_before_insert(body_lines, insert_at, newline);
+        let need_leading_blank = insert_at > 0
+            && !body_lines
+                .get(insert_at - 1)
+                .is_some_and(|line| line.content.trim().is_empty());
+        let mut block: Vec<SplitLine> = Vec::new();
+        if need_leading_blank {
+            block.push(SplitLine {
+                content: String::new(),
+                ending: newline.to_owned(),
+            });
+        }
+        block.push(SplitLine {
+            content: "## Notes".to_owned(),
+            ending: newline.to_owned(),
+        });
+        block.push(SplitLine {
+            content: String::new(),
+            ending: newline.to_owned(),
+        });
+        for line in rendered {
+            block.push(SplitLine {
+                content: line.clone(),
+                ending: newline.to_owned(),
+            });
+        }
+        block.push(SplitLine {
+            content: String::new(),
+            ending: newline.to_owned(),
+        });
+        let mut offset = 0;
+        for line in block {
+            body_lines.insert(insert_at + offset, line);
+            offset += 1;
+        }
     } else {
         if !body_lines.is_empty()
             && !body_lines
@@ -1564,6 +1602,26 @@ fn append_bullets_under_notes(
                 ending: newline.to_owned(),
             });
         }
+    }
+}
+
+fn notes_insert_position(
+    body_lines: &[SplitLine],
+    headings: &[BodyHeading],
+) -> Option<usize> {
+    let _ = body_lines;
+    let first_h1 = headings.iter().find(|heading| heading.level == 1);
+    match first_h1 {
+        Some(h1) => headings
+            .iter()
+            .filter(|heading| heading.line > h1.line && heading.level <= 2)
+            .map(|heading| heading.line)
+            .min(),
+        None => headings
+            .iter()
+            .filter(|heading| heading.level <= 2)
+            .map(|heading| heading.line)
+            .min(),
     }
 }
 
@@ -2264,7 +2322,7 @@ mod tests {
         );
         assert!(
             rendered.markdown.contains("# Ramen Nagi\n\n## Notes\n"),
-            "H1 and Notes always present:\n{}",
+            "H1 and Notes present with ordinary bullets:\n{}",
             rendered.markdown
         );
         assert!(
@@ -2289,6 +2347,75 @@ mod tests {
         assert_eq!(
             yaml.get(serde_yaml::Value::String("status".to_owned())),
             Some(&serde_yaml::Value::String("liked".to_owned()))
+        );
+    }
+
+    #[test]
+    fn create_writes_notes_only_with_ordinary_bullets() {
+        let record_type = restaurant_type();
+        let vals = values(vec![
+            ("status", choice_value("liked")),
+            ("category", text_value("Ramen")),
+            ("location", text_value("Clark")),
+        ]);
+        let render = |notes: &[RecordNoteInput]| {
+            render_record(&RecordRenderRequest {
+                record_type: &record_type,
+                title: "T",
+                parent: Some("[[eat]]"),
+                created: CREATED,
+                values: &vals,
+                notes,
+                note_date: Some(NOTE_DATE),
+                today: TODAY,
+            })
+        };
+        let none = render(&[]);
+        assert_eq!(none.body, "# T\n", "no notes body:\n{}", none.markdown);
+        let ordinary = render(&[RecordNoteInput::bullet("a")]);
+        assert_eq!(
+            ordinary.body, "# T\n\n## Notes\n\n- 2026-11-08: a\n",
+            "ordinary only body:\n{}",
+            ordinary.markdown
+        );
+        let section = render(&[RecordNoteInput::section(
+            "MUST ORDER",
+            vec!["Dragon roll".to_owned()],
+        )]);
+        assert_eq!(
+            section.body, "# T\n\n## Must Order\n\n- Dragon roll\n",
+            "section only body:\n{}",
+            section.markdown
+        );
+        let both = render(&[
+            RecordNoteInput::bullet("a"),
+            RecordNoteInput::section(
+                "MUST ORDER",
+                vec!["Dragon roll".to_owned()],
+            ),
+        ]);
+        assert_eq!(
+            both.body,
+            "# T\n\n## Notes\n\n- 2026-11-08: a\n\n## Must Order\n\n- Dragon roll\n",
+            "ordinary plus section body:\n{}",
+            both.markdown
+        );
+        // Dated and undated variants keep their prefixes.
+        let podcast = podcast_type();
+        let undated = render_record(&RecordRenderRequest {
+            record_type: &podcast,
+            title: "Talk",
+            parent: Some("[[podcasts]]"),
+            created: CREATED,
+            values: &BTreeMap::new(),
+            notes: &[RecordNoteInput::bullet("hello")],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        });
+        assert!(
+            undated.body.contains("- hello\n"),
+            "undated note has no date prefix:\n{}",
+            undated.body
         );
     }
 
@@ -3195,6 +3322,103 @@ mod tests {
             applied.markdown.contains("status: bogus\n"),
             "untouched defect preserved:\n{}",
             applied.markdown
+        );
+    }
+
+    #[test]
+    fn update_creates_notes_in_canonical_place() {
+        let record_type = restaurant_type();
+        let front = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"B\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n";
+        let apply = |original: &str| {
+            apply_record_update(&RecordUpdateRequest {
+                record_type: &record_type,
+                original,
+                fields: &[],
+                notes: &[RecordNoteInput::bullet("x")],
+                note_date: Some("2026-11-17"),
+                today: TODAY,
+            })
+            .expect("note appends")
+            .markdown
+        };
+        // Before ## Source with a blank line already present.
+        let with_blank =
+            format!("{front}\n# B\n\n## Source\n\n```text\nrow\n```\n");
+        assert_eq!(
+            apply(&with_blank),
+            format!(
+                "{front}\n# B\n\n## Notes\n\n- 2026-11-17: x\n\n## Source\n\n```text\nrow\n```\n"
+            ),
+        );
+        // Missing blank line between H1 and Source.
+        let missing_blank = format!("{front}\n# B\n## Source\n");
+        assert_eq!(
+            apply(&missing_blank),
+            format!(
+                "{front}\n# B\n\n## Notes\n\n- 2026-11-17: x\n\n## Source\n"
+            ),
+        );
+        // Before a named section.
+        let named = format!("{front}\n# T\n\n## Must Order\n\n- Dragon roll\n");
+        assert_eq!(
+            apply(&named),
+            format!(
+                "{front}\n# T\n\n## Notes\n\n- 2026-11-17: x\n\n## Must Order\n\n- Dragon roll\n"
+            ),
+        );
+        // No H1: first level-2 heading is the insertion point.
+        let no_h1 = format!("{front}\nIntro\n\n## Source\n\nrow\n");
+        let no_h1_out = apply(&no_h1);
+        assert!(
+            no_h1_out.contains("## Notes\n\n- 2026-11-17: x\n\n## Source\n"),
+            "no-H1 inserts before Source:\n{no_h1_out}"
+        );
+        // End append when no heading follows.
+        let end = format!("{front}\n# Talk Python\n");
+        assert_eq!(
+            apply(&end),
+            format!("{front}\n# Talk Python\n\n## Notes\n\n- 2026-11-17: x\n"),
+        );
+        // CRLF and a missing final newline.
+        let crlf = with_blank.replace('\n', "\r\n");
+        let crlf_out = apply(&crlf);
+        assert!(
+            crlf_out.contains(
+                "\r\n## Notes\r\n\r\n- 2026-11-17: x\r\n\r\n## Source\r\n"
+            ),
+            "CRLF insertion:\n{}",
+            crlf_out.replace('\r', "\\r")
+        );
+        let no_newline = format!("{front}\n# B\n\n## Source");
+        let no_newline_out = apply(&no_newline);
+        assert!(
+            no_newline_out.contains("## Notes\n\n- 2026-11-17: x\n\n## Source"),
+            "missing final newline inserts before Source:\n{no_newline_out}"
+        );
+        // A fence containing ## Source is not an insertion point.
+        let fenced = format!(
+            "{front}\n# B\n\n```text\n## Source\n```\n\n## Real\n\nrow\n"
+        );
+        let fenced_out = apply(&fenced);
+        assert!(
+            fenced_out.contains("## Notes\n\n- 2026-11-17: x\n\n## Real\n"),
+            "fenced Source ignored:\n{fenced_out}"
+        );
+        // Field-only updates leave body bytes identical.
+        let body_only = format!("{front}\n# B\n\n## Source\n\nrow\n");
+        let field_only = apply_record_update(&RecordUpdateRequest {
+            record_type: &record_type,
+            original: &body_only,
+            fields: &[field_input("location", &["Westfield"])],
+            notes: &[],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        })
+        .expect("field-only succeeds");
+        assert!(
+            field_only.markdown.ends_with("\n# B\n\n## Source\n\nrow\n"),
+            "field-only preserves body:\n{}",
+            field_only.markdown
         );
     }
 

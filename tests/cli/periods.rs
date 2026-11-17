@@ -646,7 +646,8 @@ fn nightly_help_names_the_period_notes_step() {
             "7. sync project lifecycles and sub-project catalogs",
             "8. repair generated notebook catalogs",
             "9. repair generated album records indexes",
-            "10. run vault-sync against the vault",
+            "10. remove empty record `## Notes` sections",
+            "11. run vault-sync against the vault",
         ],
     );
 }

@@ -2231,3 +2231,31 @@ fn album_capture_task_only_leaves_album_untouched() {
     );
     assert!(!vault.join("eat/ninja_sushi.md").exists());
 }
+
+#[test]
+fn capture_update_inserts_notes_above_source() {
+    let (_temp, vault, config) = complete_fixture();
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_file(
+        &vault.join("eat/sourced.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Sourced\nstatus: liked\ncategory: Ramen\nlocation: Clark\n---\n\n# Sourced\n\n## Source\n\n```text\nrow\n```\n",
+    );
+    let output = capture(
+        &vault,
+        &config,
+        &["-f", "json", "Revisit was great @eat/sourced"],
+    )
+    .output()
+    .expect("capture update sourced record");
+    assert_success(&output);
+    let json = json_output(&output);
+    let markdown = json["note_files"][0]["markdown"]
+        .as_str()
+        .expect("markdown");
+    assert!(
+        markdown.contains(
+            "## Notes\n\n- 2026-10-07: Revisit was great\n\n## Source"
+        ),
+        "Notes inserted above Source: {markdown}"
+    );
+}

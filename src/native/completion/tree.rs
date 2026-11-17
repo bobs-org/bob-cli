@@ -194,6 +194,9 @@ impl NativeCommand {
             NativeCommand::RecordsShow => {
                 crate::native::records::cli::build_cli_show()
             }
+            NativeCommand::RecordsTidy => {
+                crate::native::records::tidy::build_cli_tidy()
+            }
             NativeCommand::RecordsUpdate => {
                 crate::native::records::cli::build_cli_update()
             }

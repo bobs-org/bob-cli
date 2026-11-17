@@ -235,9 +235,10 @@ fn nightly_continues_after_album_failure_and_publishes_healthy_indexes() {
     let output = command.output().expect("run nightly");
     let text = format_output(&output);
     assert_ne!(output.status.code(), Some(0), "{text}");
-    assert!(text.contains("step 7/9 · notebooks"), "{text}");
-    assert!(text.contains("step 8/9 · albums"), "{text}");
-    assert!(text.contains("step 9/9 · vault-sync"), "{text}");
+    assert!(text.contains("step 7/10 · notebooks"), "{text}");
+    assert!(text.contains("step 8/10 · albums"), "{text}");
+    assert!(text.contains("step 9/10 · records"), "{text}");
+    assert!(text.contains("step 10/10 · vault-sync"), "{text}");
     assert!(text.contains("albums failed"), "{text}");
     assert_eq!(
         stdout(&git_in(&vault, ["rev-parse", "origin/master"])).trim(),
