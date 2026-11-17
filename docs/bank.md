@@ -840,20 +840,30 @@ the tooltip, the readout, and the table twin: `not imported yet`
 | Teaching empty | Hidden |
 | Older bob refusing `-c`, or a bad `charts` payload | Hidden, plus one `console.warn` per session; the badge is unaffected |
 | `charts` missing, undecodable, or for another period | One muted `Bank charts unavailable` line |
-| No counted money and no waiting rows | Hidden, with no added space |
-| No money but waiting rows, with `stats.bank_badge` on | Hidden |
-| No money but waiting rows, with `stats.bank_badge` off | One quiet waiting line |
-| Counted money | Header, the available charts, and the Not-counted line when it has parts |
+| No counted money and no waiting rows | Header-only balance when a hero close is available, else hidden with no added space |
+| No money but waiting rows, with `stats.bank_badge` on | Header-only balance when a hero close is available, else hidden |
+| No money but waiting rows, with `stats.bank_badge` off | One quiet waiting line, with the balance appended when a hero close is available |
+| Counted money | Header (with the balance when a hero close is available), the available charts, and the Not-counted line when it has parts |
 
 A cashflow chart with fewer than 2 buckets is omitted, and an empty
 category series is omitted; when only one chart is available it shows alone
 and the view switch hides. The header holds a collapse disclosure
-(`BANK CHARTS`), a view glyph cycling Both → In / Out → Categories, and a
-readout naming the hovered or focused bucket. The per-device view and
+(`BANK CHARTS`), a view glyph cycling Both → In / Out → Categories, a
+readout naming the hovered or focused bucket, and a resting `BALANCE`
+readout with the period's closing balance (see [Closing
+balances](#closing-balances)). The balance shows the hero account's posted
+balance as a bare amount at close, with an as-of date while coverage is
+still arriving (`BALANCE $1,234.56 · as of Fri Nov 13`), or as a muted
+`not imported yet` / `not imported` / `unverified` word. It hides while the
+hover or focus readout has text; collapsed panels keep it. A negative amount
+renders in warning ink; a falling balance never takes color. The per-device view and
 collapse live under the `bob-ledger-tools-bank-period-view` localStorage
 key. The cashflow axis is one roving tab stop (Arrow Left/Right, Home/End;
 Enter, Space, or click activates; Escape clears the readout), and each
-chart has a visually hidden table twin so no value hides behind hover.
+chart has a visually hidden table twin so no value hides behind hover. The
+balance is a second tab stop with its own link: Enter, Space, or click opens
+the as-of day in the bank month note, and it stays inert when no month note
+exists.
 
 Activation is read-only and never creates a note. Day buckets open the
 month note at the day heading; period buckets open the child note, or show
