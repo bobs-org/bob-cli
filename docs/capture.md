@@ -1390,6 +1390,14 @@ written, and newly created clipboard files are removed if the note write fails.
 Each copied attachment's origin is recorded in the attachment origin journal;
 see [Attachment origins](attachments.md).
 
+Every attachment kind is checked before hashing or writing. At 50 MiB or
+more, Bob adds the structured `attachment_large` warning; at 95 MiB or
+more, it refuses the capture with `attachment_too_large`. In a Git vault,
+an attachment destination matched by `.gitignore` is refused with
+`attachment_not_synced`. Dry runs show the same warnings and refusals.
+The size limits and import codes are documented in
+[attachment copy safeguards](attachments.md#copy-safeguards).
+
 Use `-c, --clip` to force a clipboard read as if `%c` were written. It injects
 a live-clipboard request only when the item has no `%c` already, so
 `%c3 --clip` still reads three values. Use `-n, --no-clip` to never read the
@@ -7884,7 +7892,9 @@ was read reports `"status": "read"` plus `mode` (`"inline"`, `"lines"`,
 `"attachments"`, `"snippet"`, or `"history"`), `lines` (the exact rendered
 child lines), `attachments`, and `entries`. Leaf clips emit `entries: []`.
 Each attachment has `source`, vault-relative `saved`, `kind` (`"image"`,
-`"video"`, or `"file"`), `reused`, and `size_bytes` fields. Snippet
+`"video"`, or `"file"`), `reused`, and `size_bytes` fields. Large
+attachments add `warnings[]` entries with code `attachment_large`; refused
+attachments use `attachment_too_large` or `attachment_not_synced`. Snippet
 results also include the vault-relative `snippet` path. There is no
 `header` field.
 

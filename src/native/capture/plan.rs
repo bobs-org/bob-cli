@@ -3,6 +3,30 @@ use super::keep_moving_net::KeepMovingTrace;
 use super::*;
 use std::collections::HashSet;
 
+pub(super) fn clip_plan_error(
+    error: capture_clip::ClipPlanError,
+) -> CaptureError {
+    let message = error.to_string();
+    match error.capture_code() {
+        Some(code) => CaptureError::io_code(message, code),
+        None => CaptureError::io(message),
+    }
+}
+
+pub(super) fn append_clip_plan_warnings(
+    plan: &capture_clip::ClipPlan,
+    warnings: &mut Vec<CaptureWarning>,
+) {
+    warnings.extend(plan.warnings.iter().map(|warning| {
+        CaptureWarning::Structured(StructuredCaptureWarning {
+            code: warning.code,
+            label: None,
+            count: None,
+            message: warning.message.clone(),
+        })
+    }));
+}
+
 pub(super) struct PlannedCaptureBatch {
     pub(super) items: Vec<PlannedCaptureItem>,
     pub(super) text_files: Vec<StagedTextFile>,
@@ -3040,16 +3064,16 @@ pub(super) fn plan_capture_item(
                     "clipboard capture invariant failed: current clipboard read expected",
                 ));
             };
-            Some(
-                capture_clip::plan_with_reservations(
-                    &request.bob_dir,
-                    &clipboard,
-                    now,
-                    clip_indent,
-                    clip_reservations,
-                )
-                .map_err(CaptureError::io)?,
+            let plan = capture_clip::plan_with_reservations(
+                &request.bob_dir,
+                &clipboard,
+                now,
+                clip_indent,
+                clip_reservations,
             )
+            .map_err(clip_plan_error)?;
+            append_clip_plan_warnings(&plan, warnings);
+            Some(plan)
         }
         Some(clip @ ClipRequest::History { .. }) => {
             let read = read_capture_clipboard(clip_snapshot, clip)?;
@@ -3058,16 +3082,16 @@ pub(super) fn plan_capture_item(
                     "clipboard capture invariant failed: history clipboard read expected",
                 ));
             };
-            Some(
-                capture_clip::plan_history_with_reservations(
-                    &request.bob_dir,
-                    &clipboards,
-                    now,
-                    clip_indent,
-                    clip_reservations,
-                )
-                .map_err(CaptureError::io)?,
+            let plan = capture_clip::plan_history_with_reservations(
+                &request.bob_dir,
+                &clipboards,
+                now,
+                clip_indent,
+                clip_reservations,
             )
+            .map_err(clip_plan_error)?;
+            append_clip_plan_warnings(&plan, warnings);
+            Some(plan)
         }
         None => None,
     };

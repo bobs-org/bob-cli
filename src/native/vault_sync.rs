@@ -30,7 +30,7 @@ use super::{
 const COMMAND_NAME: &str = "bob vault-sync";
 const REMOTE: &str = "origin";
 const BRANCH: &str = "master";
-const LARGE_FILE_WARNING_BYTES: u64 = 50 * 1024 * 1024;
+pub(crate) const LARGE_FILE_WARNING_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const LARGE_FILE_LIMIT_BYTES: u64 = 95 * 1024 * 1024;
 const MAX_PUSH_RETRIES: usize = 3;
 const RECENT_CLOBBER_CAP: usize = 10;

@@ -24,14 +24,18 @@ pub(crate) use clipboard::{
     AgreedClipboardHistory, ClipboardHistoryError, ClipboardProviderStatus,
     ClipboardStatusReport,
 };
-pub(crate) use files::{attachment_reference, sanitize_file_name, sha256_hex};
+pub(crate) use files::{
+    attachment_reference, hash_file, sanitize_file_name, sha256_hex,
+};
 #[cfg(test)]
 pub(crate) use model::ClipHistoryEntryOutput;
 pub(crate) use model::{
     AttachmentKind, AttachmentOutput, ClipHistoryOutput, ClipMode, ClipOutput,
-    ClipPlan, ClipReservations, ClipStatus,
+    ClipPlan, ClipPlanError, ClipReservations, ClipStatus,
 };
 pub(crate) use persist::{append_cleanup_message, cleanup_created};
+#[cfg(test)]
+pub(crate) use plan::plan_with_limits;
 #[cfg(test)]
 pub(crate) use plan::{plan, plan_history};
 pub(crate) use plan::{

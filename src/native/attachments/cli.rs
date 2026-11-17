@@ -92,7 +92,9 @@ an identical existing file is reused, and a name conflict gains an \
 eight-character SHA-256 suffix. It never edits notes. Every copied \
 attachment appends one `attachment.import` origin event to \
 `.bob/attachments/<host>.jsonl` under `bob_sync.lock` (wait at most 3s); \
-a failed append removes the files this import created.",
+a failed append removes the files this import created. Attachments at or \
+above 50 MiB produce a warning; attachments at or above 95 MiB and \
+destinations ignored by the vault `.gitignore` are refused.",
         )
         .after_help(
             "Examples:\n  \
@@ -106,7 +108,7 @@ HOME                      Home directory for the ~ display form\n  \
 NO_COLOR                  Disable colored output\n\n\
 Exit codes:\n  \
 0  imported every path\n  \
-1  missing, not_a_file, not_absolute, too_many, lock_busy, or I/O failure\n  \
+1  missing, not_a_file, not_absolute, too_many, too_large, not_synced, lock_busy, or I/O failure\n  \
 2  usage error\n\n\
 See docs/attachments.md for the origin journal contract.",
         )
@@ -279,6 +281,7 @@ struct ImportedAttachment {
 
 struct ImportReport {
     attachments: Vec<ImportedAttachment>,
+    warnings: Vec<String>,
 }
 
 fn execute_import(matches: &ArgMatches) -> Result<ImportReport, CommandError> {
@@ -344,6 +347,11 @@ fn execute_import(matches: &ArgMatches) -> Result<ImportReport, CommandError> {
         return Err(CommandError::failure("io", message));
     }
     Ok(ImportReport {
+        warnings: plan
+            .warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect(),
         attachments: plan
             .output
             .attachments
@@ -395,11 +403,15 @@ fn print_import_success(report: &ImportReport, format: OutputFormat) {
                 json!({
                     "schema_version": SCHEMA_VERSION,
                     "attachments": attachments,
+                    "warnings": report.warnings,
                 })
             );
         }
         OutputFormat::Human => {
             let styler = Styler::detect();
+            for warning in &report.warnings {
+                eprintln!("{}", styler.yellow(&format!("⚠ {warning}")));
+            }
             for attachment in &report.attachments {
                 let verb = if attachment.reused {
                     styler.yellow(&format!("{:<10}", "reused"))

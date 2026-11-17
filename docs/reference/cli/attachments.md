@@ -39,7 +39,7 @@ Run 'bob attachments <command> --help' for more information on a command.
 Copy image, video, and file paths into the vault
 
 ```text title="bob attachments import --help"
-Copy one to ten explicit paths into the vault exactly as a `%c` clipboard line would: images land in `img/` (embedded at 400px), videos land in `vid/` (embedded at 400px), other files land in `file/`, an identical existing file is reused, and a name conflict gains an eight-character SHA-256 suffix. It never edits notes. Every copied attachment appends one `attachment.import` origin event to `.bob/attachments/<host>.jsonl` under `bob_sync.lock` (wait at most 3s); a failed append removes the files this import created.
+Copy one to ten explicit paths into the vault exactly as a `%c` clipboard line would: images land in `img/` (embedded at 400px), videos land in `vid/` (embedded at 400px), other files land in `file/`, an identical existing file is reused, and a name conflict gains an eight-character SHA-256 suffix. It never edits notes. Every copied attachment appends one `attachment.import` origin event to `.bob/attachments/<host>.jsonl` under `bob_sync.lock` (wait at most 3s); a failed append removes the files this import created. Attachments at or above 50 MiB produce a warning; attachments at or above 95 MiB and destinations ignored by the vault `.gitignore` are refused.
 
 Usage: bob attachments import [OPTIONS] <PATH>...
 
@@ -73,7 +73,7 @@ Environment:
 
 Exit codes:
   0  imported every path
-  1  missing, not_a_file, not_absolute, too_many, lock_busy, or I/O failure
+  1  missing, not_a_file, not_absolute, too_many, too_large, not_synced, lock_busy, or I/O failure
   2  usage error
 
 See docs/attachments.md for the origin journal contract.

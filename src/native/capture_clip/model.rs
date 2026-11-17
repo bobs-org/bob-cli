@@ -127,6 +127,8 @@ impl ClipPlan {
         Self {
             output: ClipOutput::not_read(count),
             files: Vec::new(),
+            attachment_source_checks: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 }
@@ -204,9 +206,75 @@ impl ClipOutput {
 #[derive(Debug, Clone)]
 pub(super) struct PlannedFile {
     pub(super) destination: PathBuf,
-    pub(super) contents: Vec<u8>,
+    pub(super) source: PlannedFileSource,
+    pub(super) size: u64,
+    pub(super) sha256: String,
     pub(super) reused: bool,
     pub(super) kind: PlannedFileKind,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PlannedAttachmentSource {
+    pub(super) path: PathBuf,
+    pub(super) size: u64,
+    pub(super) sha256: String,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum PlannedFileSource {
+    Path(PathBuf),
+    Inline(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AttachmentWarning {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClipPlanError {
+    Other(String),
+    TooLarge { message: String },
+    NotSynced { message: String },
+}
+
+impl ClipPlanError {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::Other(message)
+            | Self::TooLarge { message }
+            | Self::NotSynced { message } => message,
+        }
+    }
+
+    pub(crate) fn capture_code(&self) -> Option<&'static str> {
+        match self {
+            Self::TooLarge { .. } => Some("attachment_too_large"),
+            Self::NotSynced { .. } => Some("attachment_not_synced"),
+            Self::Other(_) => None,
+        }
+    }
+
+    pub(crate) fn import_code(&self) -> &'static str {
+        match self {
+            Self::TooLarge { .. } => "too_large",
+            Self::NotSynced { .. } => "not_synced",
+            Self::Other(_) => "io",
+        }
+    }
+}
+
+impl std::fmt::Display for ClipPlanError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl From<String> for ClipPlanError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +287,8 @@ pub(super) enum PlannedFileKind {
 pub(crate) struct ClipPlan {
     pub(crate) output: ClipOutput,
     pub(super) files: Vec<PlannedFile>,
+    pub(super) attachment_source_checks: Vec<PlannedAttachmentSource>,
+    pub(crate) warnings: Vec<AttachmentWarning>,
 }
 
 #[derive(Debug, Default)]
@@ -229,6 +299,8 @@ pub(crate) struct ClipReservations {
 #[derive(Debug, Default)]
 pub(super) struct FileReservations {
     pub(super) files: Vec<PlannedFile>,
+    pub(super) attachment_source_checks: Vec<PlannedAttachmentSource>,
+    pub(super) warnings: Vec<AttachmentWarning>,
     by_destination: HashMap<PathBuf, usize>,
 }
 
@@ -246,7 +318,9 @@ impl FileReservations {
     pub(super) fn reserve(
         &mut self,
         destination: PathBuf,
-        contents: Vec<u8>,
+        source: PlannedFileSource,
+        size: u64,
+        sha256: String,
         reused: bool,
         kind: PlannedFileKind,
     ) {
@@ -254,9 +328,24 @@ impl FileReservations {
         self.by_destination.insert(destination.clone(), index);
         self.files.push(PlannedFile {
             destination,
-            contents,
+            source,
+            size,
+            sha256,
             reused,
             kind,
+        });
+    }
+
+    pub(super) fn check_attachment_source(
+        &mut self,
+        source: &Path,
+        size: u64,
+        sha256: &str,
+    ) {
+        self.attachment_source_checks.push(PlannedAttachmentSource {
+            path: source.to_path_buf(),
+            size,
+            sha256: sha256.to_string(),
         });
     }
 }

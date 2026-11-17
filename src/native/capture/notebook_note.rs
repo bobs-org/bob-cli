@@ -387,6 +387,7 @@ fn clip_lines_for_note(
     clip_reservations: &mut capture_clip::ClipReservations,
     now: chrono::NaiveDateTime,
     indent: &str,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<Option<capture_clip::ClipPlan>, CaptureError> {
     let effective = parsed_clip.or(request.forced_clip.as_ref());
     let Some(clip) = effective else {
@@ -409,16 +410,16 @@ fn clip_lines_for_note(
                     "clipboard capture invariant failed: current clipboard read expected",
                 ));
             };
-            Ok(Some(
-                capture_clip::plan_with_reservations(
-                    &request.bob_dir,
-                    &clipboard,
-                    now,
-                    indent,
-                    clip_reservations,
-                )
-                .map_err(CaptureError::io)?,
-            ))
+            let plan = capture_clip::plan_with_reservations(
+                &request.bob_dir,
+                &clipboard,
+                now,
+                indent,
+                clip_reservations,
+            )
+            .map_err(plan::clip_plan_error)?;
+            plan::append_clip_plan_warnings(&plan, warnings);
+            Ok(Some(plan))
         }
         ClipRequest::History { .. } => {
             let read = plan::read_capture_clipboard(clip_snapshot, clip)?;
@@ -427,16 +428,16 @@ fn clip_lines_for_note(
                     "clipboard capture invariant failed: history clipboard read expected",
                 ));
             };
-            Ok(Some(
-                capture_clip::plan_history_with_reservations(
-                    &request.bob_dir,
-                    &clipboards,
-                    now,
-                    indent,
-                    clip_reservations,
-                )
-                .map_err(CaptureError::io)?,
-            ))
+            let plan = capture_clip::plan_history_with_reservations(
+                &request.bob_dir,
+                &clipboards,
+                now,
+                indent,
+                clip_reservations,
+            )
+            .map_err(plan::clip_plan_error)?;
+            plan::append_clip_plan_warnings(&plan, warnings);
+            Ok(Some(plan))
         }
     }
 }
@@ -530,6 +531,7 @@ pub(super) fn plan_notebook_note_item(
                 planner,
                 clip_reservations,
                 clip_snapshot,
+                warnings,
                 &target,
                 &relative,
             )
@@ -656,6 +658,7 @@ fn plan_notebook_note(
         clip_reservations,
         now,
         &child_indent,
+        warnings,
     )?;
     let mut clip_output = None;
     if let Some(plan) = clip_plan.as_ref() {
@@ -699,7 +702,6 @@ fn plan_notebook_note(
         }
     }
     // Warn when clipboard history fell back, matching task-clip behavior.
-    let _ = warnings;
     let mut staged = lines.clone();
     // Insert with a blank separator above when needed; the block itself
     // carries no trailing blank (the region's existing blanks stay).
@@ -780,6 +782,7 @@ fn plan_notebook_sub_note(
     planner: &mut CaptureBatchPlanner,
     clip_reservations: &mut capture_clip::ClipReservations,
     clip_snapshot: &mut plan::ClipSnapshot,
+    warnings: &mut Vec<CaptureWarning>,
     target: &Path,
     relative: &Path,
 ) -> Result<PlannedCaptureItem, CaptureError> {
@@ -813,6 +816,7 @@ fn plan_notebook_sub_note(
         clip_reservations,
         now,
         &detail_indent,
+        warnings,
     )?;
     let mut clip_output = None;
     if let Some(plan) = clip_plan.as_ref() {

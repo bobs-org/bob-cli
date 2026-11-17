@@ -4,9 +4,10 @@ use chrono::NaiveDateTime;
 
 use super::{
     files::{
-        classify_path_candidate, plan_attachments, plan_snippet, PathState,
+        classify_path_candidate, plan_attachments, plan_snippet,
+        AttachmentLimits, PathState,
     },
-    model::FileReservations,
+    model::{ClipPlanError, FileReservations},
     render::{inline_output, lines_output},
     AgreedClipboardHistory, ClipHistoryOutput, ClipMode, ClipOutput, ClipPlan,
     ClipReservations, ClipStatus,
@@ -82,14 +83,19 @@ pub(crate) fn plan_explicit_paths(
         sources.iter().map(|path| path.as_path()),
         "",
         &mut reservations.files,
+        AttachmentLimits::default(),
     )
     .map(|output| ClipPlan {
         files: std::mem::take(&mut reservations.files.files),
+        attachment_source_checks: std::mem::take(
+            &mut reservations.files.attachment_source_checks,
+        ),
         output,
+        warnings: std::mem::take(&mut reservations.files.warnings),
     })
-    .map_err(|message| ExplicitPathError {
-        code: "io",
-        message,
+    .map_err(|error| ExplicitPathError {
+        code: error.import_code(),
+        message: error.to_string(),
     })
 }
 
@@ -102,6 +108,7 @@ pub(crate) fn plan(
 ) -> Result<ClipPlan, String> {
     let mut reservations = ClipReservations::default();
     plan_with_reservations(bob_dir, clipboard, now, indent, &mut reservations)
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn plan_with_reservations(
@@ -110,13 +117,62 @@ pub(crate) fn plan_with_reservations(
     now: NaiveDateTime,
     indent: &str,
     reservations: &mut ClipReservations,
-) -> Result<ClipPlan, String> {
+) -> Result<ClipPlan, ClipPlanError> {
+    plan_with_reservations_and_limits(
+        bob_dir,
+        clipboard,
+        now,
+        indent,
+        reservations,
+        AttachmentLimits::default(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn plan_with_limits(
+    bob_dir: &Path,
+    clipboard: &str,
+    now: NaiveDateTime,
+    indent: &str,
+    limits: AttachmentLimits,
+) -> Result<ClipPlan, ClipPlanError> {
+    let mut reservations = ClipReservations::default();
+    plan_with_reservations_and_limits(
+        bob_dir,
+        clipboard,
+        now,
+        indent,
+        &mut reservations,
+        limits,
+    )
+}
+
+fn plan_with_reservations_and_limits(
+    bob_dir: &Path,
+    clipboard: &str,
+    now: NaiveDateTime,
+    indent: &str,
+    reservations: &mut ClipReservations,
+    limits: AttachmentLimits,
+) -> Result<ClipPlan, ClipPlanError> {
     let start = reservations.files.files.len();
-    let output =
-        plan_entry(bob_dir, clipboard, now, indent, &mut reservations.files)?;
+    let source_check_start = reservations.files.attachment_source_checks.len();
+    let warning_start = reservations.files.warnings.len();
+    let output = plan_entry(
+        bob_dir,
+        clipboard,
+        now,
+        indent,
+        &mut reservations.files,
+        limits,
+    )?;
     Ok(ClipPlan {
         output,
         files: reservations.files.files[start..].to_vec(),
+        attachment_source_checks: reservations.files.attachment_source_checks
+            [source_check_start..]
+            .to_vec(),
+        warnings: reservations.files.warnings[warning_start..].to_vec(),
     })
 }
 
@@ -136,6 +192,7 @@ pub(crate) fn plan_history(
         &mut reservations,
         None,
     )
+    .map_err(|error| error.to_string())
 }
 
 pub(crate) fn plan_history_with_reservations(
@@ -144,7 +201,7 @@ pub(crate) fn plan_history_with_reservations(
     now: NaiveDateTime,
     indent: &str,
     reservations: &mut ClipReservations,
-) -> Result<ClipPlan, String> {
+) -> Result<ClipPlan, ClipPlanError> {
     plan_history_values_with_reservations(
         bob_dir,
         &history.values,
@@ -166,16 +223,28 @@ fn plan_history_values_with_reservations(
     indent: &str,
     reservations: &mut ClipReservations,
     history: Option<ClipHistoryOutput>,
-) -> Result<ClipPlan, String> {
+) -> Result<ClipPlan, ClipPlanError> {
     let start = reservations.files.files.len();
+    let source_check_start = reservations.files.attachment_source_checks.len();
+    let warning_start = reservations.files.warnings.len();
     let entries = clipboards
         .iter()
         .enumerate()
         .map(|(index, clipboard)| {
-            plan_entry(bob_dir, clipboard, now, indent, &mut reservations.files)
-                .map_err(|error| {
-                    format!("clipboard history entry {}: {error}", index + 1)
-                })
+            plan_entry(
+                bob_dir,
+                clipboard,
+                now,
+                indent,
+                &mut reservations.files,
+                AttachmentLimits::default(),
+            )
+            .map_err(|error| {
+                ClipPlanError::Other(format!(
+                    "clipboard history entry {}: {error}",
+                    index + 1
+                ))
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let lines = entries
@@ -198,6 +267,10 @@ fn plan_history_values_with_reservations(
             history,
         },
         files: reservations.files.files[start..].to_vec(),
+        attachment_source_checks: reservations.files.attachment_source_checks
+            [source_check_start..]
+            .to_vec(),
+        warnings: reservations.files.warnings[warning_start..].to_vec(),
     })
 }
 
@@ -207,19 +280,21 @@ fn plan_entry(
     now: NaiveDateTime,
     indent: &str,
     reservations: &mut FileReservations,
-) -> Result<ClipOutput, String> {
+    limits: AttachmentLimits,
+) -> Result<ClipOutput, ClipPlanError> {
     let lines = clipboard.split('\n').collect::<Vec<_>>();
     let path_states = lines
         .iter()
         .map(|line| classify_path_candidate(line))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ClipPlanError::Other)?;
 
     for state in &path_states {
         if let PathState::Missing(path) = state {
-            return Err(format!(
+            return Err(ClipPlanError::Other(format!(
                 "clipboard attachment does not exist: {}",
                 path.display()
-            ));
+            )));
         }
     }
 
@@ -229,10 +304,10 @@ fn plan_entry(
         });
     if all_nonempty_attachments {
         if lines.len() > MAX_ATTACHMENT_COUNT {
-            return Err(format!(
+            return Err(ClipPlanError::Other(format!(
                 "clipboard contains {} attachments; at most {MAX_ATTACHMENT_COUNT} are supported",
                 lines.len()
-            ));
+            )));
         }
         return plan_attachments(
             bob_dir,
@@ -242,6 +317,7 @@ fn plan_entry(
             }),
             indent,
             reservations,
+            limits,
         );
     }
 
@@ -252,6 +328,7 @@ fn plan_entry(
     if lines.len() == 1 {
         return if lines[0].chars().count() > MAX_INLINE_CHARACTERS {
             plan_snippet(bob_dir, clipboard, now, indent, reservations)
+                .map_err(ClipPlanError::Other)
         } else {
             Ok(inline_output(lines[0], indent))
         };
@@ -261,7 +338,8 @@ fn plan_entry(
         || lines.iter().any(|line| line.trim().is_empty())
         || lines.iter().any(|line| is_structural_line(line))
     {
-        return plan_snippet(bob_dir, clipboard, now, indent, reservations);
+        return plan_snippet(bob_dir, clipboard, now, indent, reservations)
+            .map_err(ClipPlanError::Other);
     }
 
     Ok(lines_output(&lines, indent))

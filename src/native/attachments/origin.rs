@@ -15,7 +15,7 @@ use std::{fs, io, path::Path};
 use chrono::{DateTime, FixedOffset};
 
 use super::journal::{self, OriginEvent};
-use crate::native::capture_clip::sha256_hex;
+use crate::native::capture_clip::hash_file;
 use crate::native::pref_journal;
 
 /// One resolved origin: the recorded copy plus its current state.
@@ -82,17 +82,16 @@ pub(crate) fn resolve_origin(
     saved: &str,
     current_host: &str,
 ) -> Result<(Option<OriginReport>, Vec<String>), OriginError> {
-    let bytes = fs::read(vault.join(saved)).map_err(|error| {
+    let (_, digest) = hash_file(&vault.join(saved)).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
             OriginError::NotFound(format!("no such vault file: {saved}"))
         } else {
             OriginError::Io(format!(
-                "read vault file {}: {error}",
+                "hash vault file {}: {error}",
                 vault.join(saved).display()
             ))
         }
     })?;
-    let digest = sha256_hex(&bytes);
     let (mut events, warnings) =
         journal::read_journal(vault).map_err(|error| {
             OriginError::Io(format!(
@@ -154,10 +153,8 @@ fn report_for(event: &OriginEvent, current_host: &str) -> OriginReport {
     } else if event.host != current_host {
         OriginState::Elsewhere
     } else {
-        match fs::read(&event.source) {
-            Ok(contents) if sha256_hex(&contents) == event.sha256 => {
-                OriginState::Present
-            }
+        match hash_file(Path::new(&event.source)) {
+            Ok((_, digest)) if digest == event.sha256 => OriginState::Present,
             Ok(_) => OriginState::Changed,
             Err(_) => OriginState::Missing,
         }

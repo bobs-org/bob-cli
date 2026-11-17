@@ -1,7 +1,10 @@
 use std::{
     cell::Cell,
-    env, fs,
+    env,
+    ffi::OsStr,
+    fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::atomic::Ordering,
     time::{Duration, SystemTime},
 };
@@ -13,6 +16,7 @@ use super::{
     alfred::read_alfred_history,
     clipboard::{normalize_clipboard_output, read_agreed_history},
     clipy::read_clipy_history,
+    files::AttachmentLimits,
     files::{
         classify_path_candidate, percent_decode, sanitize_file_name,
         sha256_hex, snippet_slug, PathState,
@@ -21,14 +25,17 @@ use super::{
         CommandOrigin, EntryKind, HistoryEntry, HistoryProvider, ProviderError,
         SelectionSource,
     },
+    model::PlannedFileSource,
     persist::TEMP_COUNTER,
     plan::{
         is_structural_line, MAX_ATTACHMENT_COUNT, MAX_INLINE_CHARACTERS,
         MAX_LINES,
     },
     render::rendered_lines,
-    ClipMode, ClipPlan,
+    ClipMode, ClipPlan, ClipReservations,
 };
+
+use crate::native::env::TestEnvGuard;
 
 fn plan(
     bob_dir: &Path,
@@ -1700,5 +1707,260 @@ fn vid_copies_reuse_identical_files_and_suffix_clashes() {
         format!("vid/clip-{expected_hash}.mp4")
     );
     differing.save().expect("save hashed video");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn attachment_plans_keep_only_a_path_and_dry_run_creates_nothing() {
+    let root = test_root("streamed-plan");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let source = root.join("image.png");
+    fs::write(&source, b"source bytes for bounded streaming")
+        .expect("attachment source");
+
+    let planned = plan(&vault, None, &source.display().to_string(), test_now())
+        .expect("streaming plan");
+    assert!(matches!(
+        &planned.files[0].source,
+        PlannedFileSource::Path(path) if path == &source
+    ));
+    assert_eq!(planned.files[0].size, 34);
+    assert!(!vault.join("img/image.png").exists());
+    assert!(!vault.join("img").exists());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn source_change_after_planning_aborts_and_leaves_no_attachment() {
+    let root = test_root("streamed-source-change");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let source = root.join("image.png");
+    fs::write(&source, b"planned source bytes").expect("source");
+    let planned = plan(&vault, None, &source.display().to_string(), test_now())
+        .expect("streaming plan");
+    fs::write(&source, b"mutated source bytes").expect("mutate source");
+
+    let error = planned.save().expect_err("changed source must abort");
+    assert!(error.contains("clipboard attachment changed after planning"));
+    assert!(!vault.join("img/image.png").exists());
+    assert_eq!(
+        fs::read_dir(vault.join("img")).map_or(0, |entries| entries.count()),
+        0,
+        "failed streamed saves leave no temporary or destination files"
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn reused_attachment_source_is_still_validated_after_planning() {
+    let root = test_root("reused-source-change");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let source = root.join("image.png");
+    fs::write(&source, b"planned bytes").expect("source");
+    plan(&vault, None, &source.display().to_string(), test_now())
+        .expect("initial plan")
+        .save()
+        .expect("initial save");
+
+    let reused = plan(&vault, None, &source.display().to_string(), test_now())
+        .expect("reuse plan");
+    assert!(reused.output.attachments[0].reused);
+    fs::write(&source, b"mutated bytes").expect("mutate source");
+    let error = reused.save().expect_err("changed reused source must abort");
+    assert!(error.contains("clipboard attachment changed after planning"));
+    assert_eq!(
+        fs::read(vault.join("img/image.png"))
+            .expect("reused copy stays intact"),
+        b"planned bytes"
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn deduped_secondary_source_is_validated_before_any_copy() {
+    let root = test_root("deduped-secondary-source-change");
+    let vault = root.join("vault");
+    let first_dir = root.join("first");
+    let second_dir = root.join("second");
+    fs::create_dir_all(&vault).expect("vault");
+    fs::create_dir_all(&first_dir).expect("first dir");
+    fs::create_dir_all(&second_dir).expect("second dir");
+    let first = first_dir.join("image.png");
+    let second = second_dir.join("image.png");
+    fs::write(&first, b"same bytes").expect("first source");
+    fs::write(&second, b"same bytes").expect("second source");
+    let planned = plan(
+        &vault,
+        None,
+        &format!("{}\n{}", first.display(), second.display()),
+        test_now(),
+    )
+    .expect("deduplicated plan");
+    assert_eq!(planned.files.len(), 1);
+    fs::write(&second, b"new bytes!").expect("mutate secondary source");
+
+    let error = planned.save().expect_err("changed secondary source aborts");
+    assert!(error.contains("clipboard attachment changed after planning"));
+    assert!(!vault.join("img/image.png").exists());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn fanout_plan_validates_a_deduped_source_from_a_later_item() {
+    let root = test_root("fanout-secondary-source-change");
+    let vault = root.join("vault");
+    let first_dir = root.join("first");
+    let second_dir = root.join("second");
+    fs::create_dir_all(&vault).expect("vault");
+    fs::create_dir_all(&first_dir).expect("first dir");
+    fs::create_dir_all(&second_dir).expect("second dir");
+    let first = first_dir.join("image.png");
+    let second = second_dir.join("image.png");
+    fs::write(&first, b"same bytes").expect("first source");
+    fs::write(&second, b"same bytes").expect("second source");
+
+    let mut reservations = ClipReservations::default();
+    let first_plan = super::plan_with_reservations(
+        &vault,
+        &first.display().to_string(),
+        test_now(),
+        "",
+        &mut reservations,
+    )
+    .expect("first fanout plan");
+    let second_plan = super::plan_with_reservations(
+        &vault,
+        &second.display().to_string(),
+        test_now(),
+        "",
+        &mut reservations,
+    )
+    .expect("second fanout plan");
+    assert_eq!(first_plan.files.len(), 1);
+    assert!(second_plan.files.is_empty());
+    fs::write(&second, b"new bytes!").expect("mutate secondary source");
+
+    let error = second_plan
+        .save()
+        .expect_err("later fanout source change must abort");
+    assert!(error.contains("clipboard attachment changed after planning"));
+    assert!(!vault.join("img/image.png").exists());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn attachment_size_limits_refuse_before_hashing_and_warn_below_limit() {
+    let root = test_root("attachment-size-limits");
+    let vault = root.join("vault");
+    fs::create_dir_all(&vault).expect("vault");
+    let too_large = root.join("large.mp4");
+    fs::File::create(&too_large)
+        .expect("sparse source")
+        .set_len(95)
+        .expect("sparse size");
+    let limits = AttachmentLimits {
+        warning_bytes: 50,
+        limit_bytes: 95,
+    };
+    let error = super::plan_with_limits(
+        &vault,
+        &too_large.display().to_string(),
+        test_now(),
+        "",
+        limits,
+    )
+    .expect_err("limit-sized source must be refused");
+    assert_eq!(error.capture_code(), Some("attachment_too_large"));
+    assert!(error.to_string().contains("95 B or more"));
+    assert!(!vault.join("vid/large.mp4").exists());
+
+    let warning_source = root.join("warning.png");
+    fs::write(&warning_source, [7u8; 64]).expect("warning source");
+    let planned = super::plan_with_limits(
+        &vault,
+        &warning_source.display().to_string(),
+        test_now(),
+        "",
+        limits,
+    )
+    .expect("warning size stays importable");
+    assert_eq!(planned.warnings.len(), 1);
+    assert_eq!(planned.warnings[0].code, "attachment_large");
+    assert!(planned.warnings[0].message.contains("warns at 50 B"));
+    planned.save().expect("save warned attachment");
+    assert!(vault.join("img/warning.png").exists());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn gitignored_attachments_refuse_and_reincluded_paths_pass() {
+    let root = test_root("attachment-gitignore");
+    let vault = root.join("vault");
+    let home = root.join("home");
+    fs::create_dir_all(&vault).expect("vault");
+    fs::create_dir_all(&home).expect("isolated home");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&vault)
+        .args(["init", "--quiet"])
+        .env("HOME", &home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .expect("git init");
+    assert!(status.success());
+    fs::write(vault.join(".gitignore"), "*\n!*/\n!*.png\n").expect("gitignore");
+
+    let ignored = root.join("IMG_0042.heic");
+    let allowed = root.join("photo.png");
+    fs::write(&ignored, b"heic").expect("ignored source");
+    fs::write(&allowed, b"png").expect("allowed source");
+    let _env = TestEnvGuard::set(&[
+        ("HOME", Some(home.as_os_str())),
+        ("GIT_CONFIG_NOSYSTEM", Some(OsStr::new("1"))),
+    ]);
+
+    let error =
+        super::plan_explicit_paths(&vault, &[ignored.display().to_string()])
+            .expect_err("ignored destination must refuse");
+    assert_eq!(error.code, "not_synced");
+    assert!(error.message.contains("img/IMG_0042.heic"));
+    assert!(error.message.contains(".gitignore"));
+
+    let allowed_plan =
+        super::plan_explicit_paths(&vault, &[allowed.display().to_string()])
+            .expect("re-included png should pass");
+    assert_eq!(allowed_plan.output.attachments[0].saved, "img/photo.png");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn ignored_guard_skips_non_git_vaults_and_missing_git() {
+    let root = test_root("attachment-no-git");
+    let vault = root.join("vault");
+    let home = root.join("home");
+    let empty_path = root.join("no-bin");
+    fs::create_dir_all(&vault).expect("vault");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&empty_path).expect("empty PATH");
+    fs::write(vault.join(".gitignore"), "*\n").expect("gitignore");
+    let source = root.join("photo.png");
+    fs::write(&source, b"bytes").expect("source");
+
+    // No `.git` entry means the ignore guard is intentionally skipped.
+    super::plan_explicit_paths(&vault, &[source.display().to_string()])
+        .expect("non-git vault");
+
+    // A git metadata entry with no executable `git` also fails open.
+    fs::create_dir(vault.join(".git")).expect("git marker");
+    let _env = TestEnvGuard::set(&[
+        ("HOME", Some(home.as_os_str())),
+        ("GIT_CONFIG_NOSYSTEM", Some(OsStr::new("1"))),
+        ("PATH", Some(empty_path.as_os_str())),
+    ]);
+    super::plan_explicit_paths(&vault, &[source.display().to_string()])
+        .expect("missing git fails open");
     fs::remove_dir_all(root).expect("cleanup");
 }

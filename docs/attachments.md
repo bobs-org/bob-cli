@@ -31,6 +31,32 @@ player and the vault's git allowlist: `m4v` renders as a generic file,
 `avi` does not play in Chromium, and the live vault `.gitignore`
 ignores `ogv`.
 
+## Copy safeguards
+
+`%c` and `bob attachments import` check every source's metadata before
+hashing or writing any attachment. At 50 MiB or more, they continue and
+report an `attachment_large` warning with the planned vault path and
+size. At 95 MiB or more, they refuse the whole operation: vault-sync
+would refuse the same file, so Bob will not create an embed that cannot
+sync. Capture reports `attachment_too_large`; import reports
+`too_large`.
+
+When the vault has a `.git` entry, the shared planner asks Git about all
+planned destinations in one `check-ignore` call, including reused files.
+An ignored destination is refused because it would stay on this host;
+capture reports `attachment_not_synced`, and import reports
+`not_synced`. Previews run the same checks. A non-Git vault, an
+unavailable `git`, or a Git exit-128 error skips this guard so a Git
+problem does not block capture.
+
+Planning hashes source files through a 64 KiB buffer and retains their
+paths, sizes, and hashes rather than their bytes. Saves stream to a
+temporary file and verify the copied size and hash before installing it.
+If a source changes after planning, Bob removes the temporary file and
+aborts with `clipboard attachment changed after planning`. Existing
+destination comparisons and origin lookups also hash through a bounded
+buffer. Small generated snippets remain in memory.
+
 ## Origin journal
 
 The journal is `.bob/attachments/<host>.jsonl`, written through
@@ -96,14 +122,14 @@ gets a short alias, and options are sorted alphabetically.
     are saved. If the append fails, it removes the files it created
     (reuse `capture_clip::cleanup_created`) and fails.
   - JSON output:
-    `{"schema_version":1,"attachments":[{"source","display","saved","kind","reused","embed","size_bytes","sha256"}]}`.
+    `{"schema_version":1,"attachments":[{"source","display","saved","kind","reused","embed","size_bytes","sha256"}],"warnings":[string]}`.
     `kind` is `"image"`, `"video"`, or `"file"`. `embed` is
     `attachment_reference` output (`![[img/x.png|400]]` /
     `![[vid/x.mp4|400]]` / `[[file/x.pdf]]`). `size_bytes` is the
     copied file's size in bytes.
   - Failures reuse the `bob relations hide -f json` error envelope,
     with codes `missing`, `not_a_file`, `not_absolute`, `too_many`,
-    `lock_busy`, and `io`.
+    `too_large`, `not_synced`, `lock_busy`, and `io`.
   - Exit codes: 0 ok, 1 failure, 2 usage.
   - Human output is one colored line per file:
     `imported  ~/tmp/…/x.png → img/x.png · 242.8 KiB` or

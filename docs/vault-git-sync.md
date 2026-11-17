@@ -611,6 +611,10 @@ The journal contract lives in
 
 `vid/` clips sync through the same extension allowlist as images:
 `!*.mp4 !*.mov !*.webm !*.mkv` keep every copied clip on every host.
+Attachment capture and import follow vault-sync's 50 MiB warning and
+95 MiB refusal thresholds, and refuse destinations the vault
+`.gitignore` would keep local. See the shared
+[attachment safeguards](attachments.md#copy-safeguards).
 
 `.bob/attachments/<host>.jsonl` is the per-host attachment origin
 journal: where each image, video, or file `%c` or `bob attachments import`

@@ -135,6 +135,10 @@ mod vault_links;
 mod vault_merge_union;
 mod vault_rewrite;
 mod vault_sync;
+pub(crate) use vault_sync::{
+    LARGE_FILE_LIMIT_BYTES as VAULT_SYNC_LARGE_FILE_LIMIT_BYTES,
+    LARGE_FILE_WARNING_BYTES as VAULT_SYNC_LARGE_FILE_WARNING_BYTES,
+};
 mod vault_task_loss;
 pub(crate) mod yaml_spans;
 
