@@ -908,3 +908,71 @@ fn agenda_plan_budget_leaves_out_off_clock_links() {
     assert_eq!(json["plan_budget"]["links"]["off_clock"], 1);
     assert_eq!(json["plan_budget"]["status"], "ok");
 }
+
+#[test]
+fn agenda_headline_is_display_null_or_omitted() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-headline");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_tasks_vault(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n\n",
+            "**Headline:** Ship [[bob#^x|the alias]] today\n\n",
+            "## Pomodoros\n",
+            "- [ ] () — LATER\n",
+        ),
+    );
+    let json = agenda_json(&vault, &day_file, &[]);
+    assert_eq!(json["headline"], "Ship the alias today");
+    assert_eq!(json["schema_version"], 1);
+
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-t")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", PINNED_NOW)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("human capture-pomodoros --tasks");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("Ship the alias today"),
+        "human prints the headline:\n{human}"
+    );
+
+    let without_tasks = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("capture-pomodoros json");
+    assert_success(&without_tasks);
+    let omitted: Value =
+        serde_json::from_str(stdout(&without_tasks).trim()).expect("json");
+    assert!(
+        omitted.get("headline").is_none(),
+        "without --tasks the key is absent: {omitted}"
+    );
+
+    write_file(&day_file, "# Day\n\n**Headline:**\n\n## Pomodoros\n");
+    let empty = agenda_json(&vault, &day_file, &[]);
+    assert!(empty["headline"].is_null(), "empty slot is null: {empty}");
+
+    let missing_dir = temp.path().join("missing");
+    let missing_day = missing_dir.join("2026/20260828.md");
+    write_tasks_vault(&missing_dir);
+    let missing = agenda_json(&missing_dir, &missing_day, &[]);
+    assert!(
+        missing["headline"].is_null(),
+        "missing note is null: {missing}"
+    );
+}

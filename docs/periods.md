@@ -149,14 +149,15 @@ vault-rewrite transaction (`bob types rename`, relation-label renames,
 `review_digest` so the state stays `drafted`. `review_drafted` keeps
 its day. An `edited` or `reflected` note is never restamped.
 
-Headline: the whole paragraph that opens with the first Review line
-starting `**Headline:**`, with soft-wrapped lines joined by single
-spaces, else none. The paragraph ends at a blank line, a list item, or
-the next bold `**Part:**` label, so a hard-wrapped Headline still
-reaches parents as one sentence. Reflection lead: the first sentence
-of `## Reflection`, capped at 40 words with `…`. Instructions version:
-parsed from the callout title `Agent instructions · <kind> v<N>`
-(currently v2).
+Headline: the one line a parent shows for its child. A week, quarter, or
+year gets it from the opening `**Headline:**` paragraph of its `## Review`
+(soft-wrapped lines joined by single spaces; the paragraph ends at a blank
+line, a list item, a heading, a fence, or the next bold `**Part:**` label).
+A day gets it from the `**Headline:**` (or `**Headline**:`) line in the
+daily note's preamble; bob reads that line and never writes it. Days have
+no Review. Reflection lead: the first sentence of `## Reflection`, capped
+at 40 words with `…`. Instructions version: parsed from the callout title
+`Agent instructions · <kind> v<N>` (currently v2).
 
 ## Agent instruction callouts (v2)
 
@@ -454,19 +455,22 @@ observed column and child, and for the whole period, Σ `stacks.roots` = Σ
 `columns` include the date/period id, kind, labels, path and existence, start
 and end, state, Worked value/display/`display_short`/quality, a root-parent
 `stack`, chart `stacks`, mark, month `tick`, and parent `group` where relevant.
-Day marks are `met`, `missed`, `open`, or null; period marks use the child
-note's review state. Current columns include today's provisional value. Future
-columns remain identifiable and carry no values.
+Week-report day columns also carry `headline` (the day's display string, or
+`null`). Day marks are `met`, `missed`, `open`, or null; period marks use the
+child note's review state. Current columns include today's provisional value.
+Future columns remain identifiable and carry no values, except a future day's
+`headline` when that day's note already has one.
 
 `children` rows carry their id, kind, label, range label, note path and
 existence, and state. Non-future rows add Worked and Done, review state,
 Headline and Reflection lead, closeout for days, and the top three
-root-parent `mostly` shares plus their automatic `mostly_display`. A future
-row contains only its link identity and dates. The weekly `columns` and
-`children` repeat the same day data; quarter columns and children repeat the
-same week data. Year columns are weeks grouped by quarter and all-time columns
-are quarters grouped by year. `groups` carry `key`, `label`, and
-`worked_display`.
+root-parent `mostly` shares plus their automatic `mostly_display`. Week-report
+day children also carry `headline` (display string or `null`) for past,
+current, and future days. A future row otherwise contains only its link
+identity and dates. The weekly `columns` and `children` repeat the same day
+data; quarter columns and children repeat the same week data. Year columns
+are weeks grouped by quarter and all-time columns are quarters grouped by
+year. `groups` carry `key`, `label`, and `worked_display`.
 
 Future periods show a `Starts …` coverage line and do not run Stats. A current
 week reads `so far · Mon–Tue`; a current quarter or year reads
@@ -507,10 +511,12 @@ caveats, are trimmed. Sections:
 4. **Parts**: one line per child with Worked, review state, Headline,
    and Reflection lead. A week, quarter, or year child without a
    review reads "not reviewed". Days have no Review, so day rows carry
-   no review state (JSON day parts omit `review_state`, `headline`, and
-   `reflection_lead`) and get `mostly` and closeout instead. The dates
-   segment is omitted when the child carries none, so day rows never
-   print an empty `·  ·`.
+   no review state (JSON day parts omit `review_state` and
+   `reflection_lead`) and get `mostly`, closeout, and Bryan's `headline`
+   (an empty string when none) instead. Markdown day rows, including
+   "not started" future rows, append `Bryan's headline: “…”` when one is
+   present. The dates segment is omitted when the child carries none, so
+   day rows never print an empty `·  ·`.
 5. **Finished**: the completions the Done fact counts. A completion
    counts when its status is DONE, its done date is well formed, not in
    the future, and in the period, and it is not routine. Routine rows

@@ -10751,7 +10751,9 @@ untypeable slugs stay in the list with `selectable: false`.
 
 With `-t/--tasks`, `capture-pomodoros` resolves each listed entry's Task Links
 into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
-name or today) and `completed_summary` (`count` of completed ledger entries and
+name or today), `headline` (today's Daily Headline display text, or `null`
+when the daily note is missing or the slot is empty; omitted without
+`--tasks`), and `completed_summary` (`count` of completed ledger entries and
 their summed `minutes`: each worked entry's recorded `[t:: Nm]` or stopwatch
 duration; off-clock sessions contribute to neither Worked count nor minutes).
 Its deprecated `untracked_count` remains, and new `off_clock: {count, minutes}`
@@ -10762,9 +10764,10 @@ Each entry adds a derived `homes` object (the shared R9 shape from
 [Pomodoro homes](pomodoro-homes.md): `state`,
 `kind`, `label`, nullable `chip` and `hue`, and `parts`). Open entries are a
 forecast; completed entries are an attribution with `minutes` on each part.
-Human output appends a dim chip with its forecast `○` or attributed `●` dot
-after the entry name when `chip` is set. The schema stays version `1`. Calls
-without `--tasks` omit `homes`. When the day note has an `## Events` section,
+Human output prints the Daily Headline as one bold line under the header
+when present, and appends a dim chip with its forecast `○` or attributed `●`
+dot after the entry name when `chip` is set. The schema stays version `1`.
+Calls without `--tasks` omit `homes`. When the day note has an `## Events` section,
 `--tasks` also adds a top-level `events` object; without that section the key is
 omitted. Human output places a compact Calendar block before the Pomodoro rows.
 The Calendar block appends each buffer label after its meeting time and keeps an

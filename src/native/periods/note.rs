@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use sha2::{Digest, Sha256};
 
 use super::calendar::PeriodId;
+use crate::native::daily_headline::ends_headline_paragraph;
 
 /// Review state, computed by first match: reflected, drafted, edited,
 /// then empty.
@@ -222,26 +223,6 @@ pub(crate) fn unwrap_headline(text: &str) -> Option<String> {
         out.push_str(line);
     }
     Some(out)
-}
-
-/// Whether `line` ends the Headline paragraph: a blank line, a list
-/// item, or another bold `**Part:**` label.
-fn ends_headline_paragraph(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-        return true;
-    }
-    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
-    if digits > 0 && trimmed[digits..].starts_with(". ") {
-        return true;
-    }
-    trimmed.starts_with("**")
-        && trimmed[2..]
-            .find("**")
-            .is_some_and(|end| trimmed[2..2 + end].ends_with(':'))
 }
 
 /// First sentence of `## Reflection`: ends at `.`, `?`, or `!`

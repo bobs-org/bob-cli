@@ -24,7 +24,9 @@ use super::{
     cli, note, report,
 };
 use crate::native::{
-    config, env as bob_env,
+    config,
+    daily_headline::{flatten_wikilinks, wikilink_display},
+    env as bob_env,
     pomodoro_homes::split_minutes,
     stats::{
         clock::StatsClock,
@@ -590,44 +592,6 @@ fn is_bare_wikilink(text: &str) -> bool {
     !inner.contains("[[") && !inner.contains("]]")
 }
 
-/// Display text for one `[[...]]` span: the alias, else the last path
-/// segment without any `#section` or `#^block` suffix.
-fn wikilink_display(span: &str) -> String {
-    let inner = span
-        .strip_prefix("[[")
-        .unwrap_or(span)
-        .strip_suffix("]]")
-        .unwrap_or(span);
-    if let Some((_, alias)) = inner.split_once('|') {
-        return alias.trim().to_string();
-    }
-    let target = inner.split('#').next().unwrap_or(inner);
-    target
-        .rsplit('/')
-        .next()
-        .unwrap_or(target)
-        .trim()
-        .to_string()
-}
-
-/// Replace every `[[...]]` span with its display text and drop stray
-/// brackets, so a quote carrying links never nests inside an alias.
-fn flatten_wikilinks(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find("[[") {
-        let Some(relative_end) = rest[start + 2..].find("]]") else {
-            break;
-        };
-        let end = start + 2 + relative_end + 2;
-        out.push_str(&rest[..start]);
-        out.push_str(&wikilink_display(&rest[start..end]));
-        rest = &rest[end..];
-    }
-    out.push_str(rest);
-    out.replace(['[', ']'], "")
-}
-
 fn build_json(ctx: &mut Ctx) -> Result<Value, BriefError> {
     let header = header_section(ctx);
     let facts = facts_section(ctx);
@@ -1031,12 +995,17 @@ fn parts_section(ctx: &Ctx) -> Value {
                     .unwrap_or_default(),
             });
             if str_field(child, "kind") == "day" {
-                // Days have no Review: no review state, Headline, or lead.
+                // Days have no Review: no review state or lead. The
+                // day's own Headline is Bryan's plan for that day.
                 if let Some(object) = part.as_object_mut() {
                     object.remove("review_state");
-                    object.remove("headline");
                     object.remove("reflection_lead");
                 }
+                part["headline"] = child
+                    .get("headline")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .into();
                 part["closeout"] =
                     child.get("closeout").cloned().unwrap_or(Value::Null);
                 part["mostly_display"] =
@@ -2974,7 +2943,9 @@ fn render_part(out: &mut String, part: &Value) {
         if !dates.is_empty() {
             line.push_str(&format!(" · {dates}"));
         }
-        line.push_str(" (not started)\n");
+        line.push_str(" (not started)");
+        append_bryans_headline(&mut line, part);
+        line.push('\n');
         out.push_str(&line);
         return;
     }
@@ -3017,9 +2988,17 @@ fn render_part(out: &mut String, part: &Value) {
         if !closeout.is_empty() {
             line.push_str(&format!(" · {closeout}"));
         }
+        append_bryans_headline(&mut line, part);
     }
     line.push('\n');
     out.push_str(&line);
+}
+
+fn append_bryans_headline(line: &mut String, part: &Value) {
+    let headline = str_field(part, "headline");
+    if !headline.is_empty() {
+        line.push_str(&format!(" · Bryan's headline: “{headline}”"));
+    }
 }
 
 /// The `+N more` tail behind a capped row list.

@@ -21,8 +21,8 @@ use super::{
         SessionClock,
     },
     capture_drawers, capture_language, capture_pomodoro_close,
-    capture_pomodoros_agenda, config, env as bob_env, markdown, note_tasks,
-    plan_budget, pomodoro, pomodoro_homes,
+    capture_pomodoros_agenda, config, daily_headline, env as bob_env, markdown,
+    note_tasks, plan_budget, pomodoro, pomodoro_homes,
     pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
     style::{display_width, pad_right, Styler},
 };
@@ -84,7 +84,10 @@ It also reports max_task_link_count, the largest numbered Task Link lineup among
 open entries. Open entries are listed by default; use \
 --all to include completed entries. A missing daily note or missing \
 Pomodoros section returns a successful empty list with a warning.\n\n\
-With --tasks, each listed entry also carries its agenda payload: the entry \
+With --tasks, the top-level headline is today's Daily Headline display text, \
+or null when the daily note is missing or the slot is empty. Human output prints \
+it as one bold line under the header when present. Without --tasks the key is \
+omitted. Each listed entry also carries its agenda payload: the entry \
 role, naive start/end datetimes, clock classification, the retired-link count, session \
 notes, the resolved Task Link lineup with operator numbers, clean titles, \
 statuses, task-block lines, event chips for links to today's Event Tasks, and \
@@ -211,6 +214,8 @@ struct CapturePomodorosResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    headline: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     completed_summary: Option<capture_pomodoros_agenda::CompletedSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_budget: Option<CapturePomodorosPlanBudget>,
@@ -303,6 +308,7 @@ fn list_capture_pomodoros(
                 pomodoros: Vec::new(),
                 warnings,
                 date: request.include_tasks.then(|| agenda_date.to_string()),
+                headline: request.include_tasks.then_some(None),
                 completed_summary: empty_summary(),
                 plan_budget: None,
                 events: None,
@@ -512,6 +518,9 @@ fn list_capture_pomodoros(
         pomodoros,
         warnings,
         date: request.include_tasks.then(|| agenda_date.to_string()),
+        headline: request.include_tasks.then(|| {
+            daily_headline::parse(&contents).map(|headline| headline.display)
+        }),
         completed_summary,
         plan_budget,
         events,
@@ -1215,7 +1224,11 @@ fn human_success(result: &CapturePomodorosResult, styler: &Styler) -> String {
             )),
         ));
     }
-    let mut output = format!("{header}\n\n");
+    let mut output = format!("{header}\n");
+    if let Some(Some(headline)) = &result.headline {
+        output.push_str(&format!("{}\n", styler.bold(headline)));
+    }
+    output.push('\n');
 
     for warning in &result.warnings {
         output.push_str(&format!(
@@ -1997,6 +2010,7 @@ mod tests {
             }],
             warnings: Vec::new(),
             date: None,
+            headline: None,
             completed_summary: None,
             plan_budget: None,
             events: None,
@@ -2041,6 +2055,7 @@ mod tests {
             );
         }
         assert!(value.get("date").is_none());
+        assert!(value.get("headline").is_none());
         assert!(value.get("completed_summary").is_none());
         assert!(value.get("plan_budget").is_none());
         assert!(value.get("events").is_none());
@@ -2076,6 +2091,80 @@ mod tests {
         assert_eq!(sectionless.count, 0);
         assert_eq!(sectionless.max_task_link_count, 0);
         assert!(sectionless.warnings[0].contains("no Pomodoros section"));
+        assert_eq!(sectionless.headline, None);
+    }
+
+    #[test]
+    fn tasks_headline_is_display_null_or_omitted() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-headline");
+        let day_path = temp.path().join("2026/20260828.md");
+        write_file(
+            &day_path,
+            concat!(
+                "# Day\n\n",
+                "**Headline:** Ship [[bob#^x|the alias]]\n\n",
+                "## Pomodoros\n",
+                "- [ ] () — LATER\n",
+            ),
+        );
+        let with_tasks =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: false,
+                    include_tasks: true,
+                })
+            })
+            .expect("headline success");
+        assert_eq!(
+            with_tasks.headline,
+            Some(Some("Ship the alias".to_string()))
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&success_json(&with_tasks)).expect("json");
+        assert_eq!(value["headline"], "Ship the alias");
+
+        let without_tasks =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: false,
+                    include_tasks: false,
+                })
+            })
+            .expect("no-tasks success");
+        assert_eq!(without_tasks.headline, None);
+        let omitted: serde_json::Value =
+            serde_json::from_str(&success_json(&without_tasks)).expect("json");
+        assert!(omitted.get("headline").is_none());
+
+        write_file(&day_path, "# Day\n\n**Headline:**\n\n## Pomodoros\n");
+        let empty =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: false,
+                    include_tasks: true,
+                })
+            })
+            .expect("empty slot success");
+        assert_eq!(empty.headline, Some(None));
+        let empty_json: serde_json::Value =
+            serde_json::from_str(&success_json(&empty)).expect("json");
+        assert!(empty_json["headline"].is_null());
+
+        let missing = list_capture_pomodoros(&CapturePomodorosRequest {
+            bob_dir: temp.path().join("missing"),
+            include_all: false,
+            include_tasks: true,
+        })
+        .expect("missing note success");
+        assert_eq!(missing.headline, Some(None));
+        let human = human_success(&with_tasks, &Styler::plain());
+        assert!(
+            human.contains("Ship the alias"),
+            "human prints the headline:\n{human}"
+        );
     }
 
     #[test]
@@ -2151,6 +2240,7 @@ mod tests {
             ],
             warnings: vec!["watch out".to_string()],
             date: None,
+            headline: None,
             completed_summary: None,
             plan_budget: None,
             events: None,

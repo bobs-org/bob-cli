@@ -544,12 +544,31 @@ parent: "[[2026/2026-W43]]"
 ---
 # Daily note
 
+**Headline:**
+
 ## Pomodoros
 
 - [ ] (**1200-1215** [t:: 15m]) — WORK
 	- [[work#^outline]]
 - [ ] () — LATER
 ```
+
+The optional `**Headline:**` line sits in the preamble (after frontmatter,
+before the first `## ` heading). It is the day's **Daily Headline**: one
+Bryan-written sentence naming the result that would make the day count.
+bob, plugins, the Mac app, and agents only read it; no bob command creates,
+fills, or edits it (a vault-wide link repair such as `bob task archive` may
+update a link inside it like any other link). Writing, changing, or deleting
+it never changes a task's lane, Today membership, freshness, priority, or
+schedule. An empty or missing slot is valid. Parse looks only at the
+preamble, skips fenced blocks, matches `**Headline:**` or `**Headline**:`
+ASCII-case-insensitively, joins soft-wrapped continuation lines, and stops
+at a blank line, list item, heading, fence, or another bold `**Label:**`.
+The first non-empty Headline wins. Screens show a flattened `display` form
+(wiki-link aliases, Markdown link labels, emphasis stripped). It appears on
+the week note's Days table and strip, in `bob periods show` / `brief` day
+rows, and at the top of the Bob Mac Capture idle agenda
+(`bob capture-pomodoros --tasks`).
 
 Column-0 checkbox items are Pomodoro entries. A timespan is a timed
 session; `()` is a placeholder. `[t:: Nm]` (or the legacy stopwatch) marks a

@@ -58,6 +58,7 @@ mod clock_tags;
 mod collect_done;
 pub(crate) mod completion;
 mod config;
+mod daily_headline;
 mod dataview;
 pub(crate) mod desktop_notify;
 pub(crate) mod done_archive;

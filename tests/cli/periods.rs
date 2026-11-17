@@ -771,9 +771,13 @@ fn brief_closed_week_reports_every_section() {
     let parts = body["parts"].as_array().expect("parts");
     assert_eq!(parts.len(), 7, "seven day rows: {}", body["parts"]);
     assert!(
-        parts.iter().all(|part| part.get("review_state").is_none()
-            && part.get("headline").is_none()),
-        "days have no Review: {}",
+        parts.iter().all(|part| {
+            part.get("review_state").is_none()
+                && part.get("reflection_lead").is_none()
+                && part.get("headline").and_then(|value| value.as_str())
+                    == Some("")
+        }),
+        "days have no Review and an empty headline: {}",
         body["parts"]
     );
     let finished = body["finished"].as_array().expect("finished");
@@ -2690,4 +2694,155 @@ fn periods_show_human_output_is_unchanged_by_charts() {
     assert!(text.contains("2026-W45"), "{text}");
     assert!(!text.contains("\"charts\""), "{text}");
     assert_stdout_has_no_ansi(&output);
+}
+
+fn write_headline_day(vault: &std::path::Path, date: &str, headline: &str) {
+    let compact = date.replace('-', "");
+    let year = &date[..4];
+    let body = if headline.is_empty() {
+        format!("# {date}\n\n**Headline:**\n\n## Pomodoros\n")
+    } else {
+        format!("# {date}\n\n**Headline:** {headline}\n\n## Pomodoros\n")
+    };
+    write_file(&vault.join(format!("{year}/{compact}.md")), &body);
+}
+
+#[test]
+fn week_report_and_brief_carry_day_headlines() {
+    let vault = vault_dir("day-headlines");
+    write_dataview_tasks_settings(vault.path());
+    let config = vault.path().join("bob-config.yml");
+    write_charts_config(&config, "");
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-11-10", "-q"]);
+    // 2026-W46: Mon 9 – Sun 15 Nov. REVIEWS_NOW is Tue 10.
+    write_headline_day(
+        vault.path(),
+        "2026-11-09",
+        "Capture merge-in arrow shipped",
+    );
+    write_headline_day(
+        vault.path(),
+        "2026-11-10",
+        "Daily headline designed and planned",
+    );
+    write_headline_day(
+        vault.path(),
+        "2026-11-11",
+        "Converge take-home submitted",
+    );
+    write_headline_day(vault.path(), "2026-11-12", "");
+
+    let week = show_json(vault.path(), &config, "2026-W46");
+    let by_id = |rows: &serde_json::Value, id: &str| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {id} in {rows}"))
+    };
+    for collection in ["columns", "children"] {
+        let rows = &week[collection];
+        assert_eq!(
+            by_id(rows, "2026-11-09")["headline"],
+            "Capture merge-in arrow shipped",
+            "{collection}"
+        );
+        assert_eq!(
+            by_id(rows, "2026-11-10")["headline"],
+            "Daily headline designed and planned",
+            "{collection}"
+        );
+        assert_eq!(
+            by_id(rows, "2026-11-11")["headline"],
+            "Converge take-home submitted",
+            "{collection}"
+        );
+        assert!(
+            by_id(rows, "2026-11-12")["headline"].is_null(),
+            "empty slot is null in {collection}"
+        );
+        assert!(
+            by_id(rows, "2026-11-13")["headline"].is_null(),
+            "missing note is null in {collection}"
+        );
+    }
+
+    let quarter = show_json(vault.path(), &config, "2026-Q4");
+    assert!(
+        quarter["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|child| child.get("headline").is_none()),
+        "quarter children keep Headline under review: {}",
+        quarter["children"]
+    );
+
+    let mut command = bob_command();
+    command
+        .args(["periods", "show", "2026-W46"])
+        .env("BOB_DIR", vault.path())
+        .env("BOB_NOW", REVIEWS_NOW)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("NO_COLOR", "1");
+    let human = command.output().expect("human show");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(
+        text.contains("Capture merge-in arrow shipped"),
+        "past day prefers headline:\n{text}"
+    );
+    assert!(
+        text.contains("Daily headline designed and planned"),
+        "today prefers headline:\n{text}"
+    );
+    assert!(
+        text.contains("Converge take-home submitted"),
+        "future day appends headline:\n{text}"
+    );
+
+    let brief = brief_json(vault.path(), "2026-W46");
+    let part = |id: &str| {
+        brief["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|part| part["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing part {id}"))
+    };
+    assert_eq!(
+        part("2026-11-09")["headline"],
+        "Capture merge-in arrow shipped"
+    );
+    assert_eq!(
+        part("2026-11-10")["headline"],
+        "Daily headline designed and planned"
+    );
+    assert_eq!(
+        part("2026-11-11")["headline"],
+        "Converge take-home submitted"
+    );
+    assert_eq!(part("2026-11-12")["headline"], "");
+    assert_eq!(part("2026-11-13")["headline"], "");
+    assert!(part("2026-11-09").get("review_state").is_none());
+
+    let markdown = periods_command(vault.path(), "brief", &["2026-W46"]);
+    assert_success(&markdown);
+    let md = stdout(&markdown);
+    assert!(
+        md.contains("Bryan's headline: “Capture merge-in arrow shipped”"),
+        "past day brief:\n{md}"
+    );
+    assert!(
+        md.contains("Bryan's headline: “Daily headline designed and planned”"),
+        "today brief:\n{md}"
+    );
+    assert!(
+        md.contains("(not started)")
+            && md.contains("Bryan's headline: “Converge take-home submitted”"),
+        "future day brief:\n{md}"
+    );
 }

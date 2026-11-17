@@ -245,6 +245,21 @@ free-text `bob capture TEXT` is refused here, and a capture draft's leading `:` 
 the task-link picker instead. Not the SASE TUI's command-mode panel. See
 `docs/guides/run-bob-from-obsidian.md`.
 
+### Daily Headline {#daily-headline}
+
+*Aliases: day headline.*
+
+One Bryan-written `**Headline:**` (or `**Headline**:`) sentence in a daily
+note's preamble — after YAML frontmatter and before the first `## ` heading,
+skipping fenced blocks — naming the result that would make that day count. bob,
+plugins, the Mac app, and agents only read it; Bryan types it. Empty is valid.
+It has no task-state effects and does not carry forward.
+
+It shows in the week [Period Note](#period-note) Days table and strip, `bob periods show` /
+`brief` day rows, and the top of the Bob Mac Capture idle agenda. Not a period
+Review's agent-drafted Headline, a [Pomodoro](#pomodoro) entry line, or the ★ type
+highlight. Not the [Day Strip](#day-strip).
+
 ### Day Strip {#day-strip}
 
 *Aliases: day stats.*

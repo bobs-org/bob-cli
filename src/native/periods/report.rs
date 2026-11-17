@@ -24,7 +24,7 @@ use super::{
 };
 use crate::native::{
     config::{self, load_stats_config, load_theme_sources_from},
-    env as bob_env,
+    daily_headline, env as bob_env,
     stats::{
         clock::StatsClock,
         compute::compute,
@@ -345,8 +345,9 @@ pub(crate) fn build_report(
             json!({ "root_parent": [], "theme": [], "types_folded": false });
         report["charts"] =
             charts::charts_json(&charts::empty(top_roots, types_policy), 0);
-        report["columns"] = Value::Array(empty_future_columns(id, span));
-        report["children"] = Value::Array(empty_future_children(id, span));
+        report["columns"] = Value::Array(empty_future_columns(vault, id, span));
+        report["children"] =
+            Value::Array(empty_future_children(vault, id, span));
         report["groups"] = json!([]);
         report["homes"] = daily.homes;
         report["theme_hues"] = daily.theme_hues;
@@ -1195,6 +1196,7 @@ fn build_column(
                 "caption": day_caption(day), "path": path, "exists": path_exists,
                 "start": date_text(day), "end": date_text(day), "state": "future", "partial": null,
                 "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": null,
+                "headline": day_headline_json(vault, day),
             }));
         }
         let worked = daily
@@ -1209,6 +1211,7 @@ fn build_column(
             "worked": worked.as_ref().map(worked_column), "stack": worked.as_ref().map(|value| stack_value(value, homes)).unwrap_or_default(),
             "stacks": worked.as_ref().map(|value| charts::stacks_json(period_charts, &value.parts)).unwrap_or_else(charts::empty_stacks),
             "mark": closeout, "tick": null, "group": spec.group,
+            "headline": day_headline_json(vault, day),
         }));
     }
     let child_id = spec.id.expect("period column has a period id");
@@ -1281,6 +1284,7 @@ fn build_child(
                 "exists": exists,
                 "state": "future",
                 "stacks": charts::empty_stacks(),
+                "headline": day_headline_json(vault, day),
             }));
         }
         let mut child = build_column(
@@ -1560,10 +1564,10 @@ fn group_row(
     })
 }
 
-fn empty_future_columns(id: PeriodId, span: Span) -> Vec<Value> {
+fn empty_future_columns(vault: &Path, id: PeriodId, span: Span) -> Vec<Value> {
     column_specs(id, span).into_iter().map(|spec| {
         if let Some(day) = spec.day {
-            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": day_caption(day), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
+            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": day_caption(day), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group, "headline": day_headline_json(vault, day) })
         } else {
             let child = spec.id.expect("period spec id");
             json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "caption": labels::short_label(child), "path": child.path().to_string_lossy(), "exists": false, "start": date_text(spec.span.start), "end": date_text(spec.span.end), "state": "future", "partial": false, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
@@ -1571,10 +1575,10 @@ fn empty_future_columns(id: PeriodId, span: Span) -> Vec<Value> {
     }).collect()
 }
 
-fn empty_future_children(id: PeriodId, span: Span) -> Vec<Value> {
+fn empty_future_children(vault: &Path, id: PeriodId, span: Span) -> Vec<Value> {
     child_specs(id, span).into_iter().map(|spec| {
         if let Some(day) = spec.day {
-            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "range_label": date_text(day), "path": daily_path(day), "exists": false, "state": "future", "stacks": charts::empty_stacks() })
+            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "range_label": date_text(day), "path": daily_path(day), "exists": false, "state": "future", "stacks": charts::empty_stacks(), "headline": day_headline_json(vault, day) })
         } else {
             let child = spec.id.expect("period child id");
             json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "range_label": labels::range_label(spec.span.start, spec.span.end), "path": child.path().to_string_lossy(), "exists": false, "state": "future", "stacks": charts::empty_stacks() })
@@ -1724,6 +1728,15 @@ fn daily_path(day: NaiveDate) -> String {
         day.month(),
         day.day()
     )
+}
+
+fn day_headline_json(vault: &Path, day: NaiveDate) -> Value {
+    match fs::read_to_string(vault.join(daily_path(day))) {
+        Ok(contents) => daily_headline::parse(&contents)
+            .map(|headline| json!(headline.display))
+            .unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    }
 }
 
 fn date_text(date: NaiveDate) -> String {
@@ -1910,18 +1923,23 @@ fn render_human(report: &Value, styler: &Styler) -> String {
         lines.push(String::new());
         for child in children {
             if child["state"].as_str() == Some("future") {
-                lines.push(format!(
+                let mut line = format!(
                     "{}  {}",
                     child["label"].as_str().unwrap_or(""),
                     child["range_label"].as_str().unwrap_or("")
-                ));
+                );
+                if let Some(headline) = child["headline"].as_str() {
+                    line.push_str(&format!("  {headline}"));
+                }
+                lines.push(line);
                 continue;
             }
             let label = child["label"].as_str().unwrap_or("");
             let worked = child["worked"]["display"].as_str().unwrap_or("–");
             let review = child["review"]["state"].as_str().unwrap_or("");
-            let summary = child["review"]["headline"]
+            let summary = child["headline"]
                 .as_str()
+                .or_else(|| child["review"]["headline"].as_str())
                 .or_else(|| child["mostly_display"].as_str())
                 .unwrap_or("");
             let mark = match review {
