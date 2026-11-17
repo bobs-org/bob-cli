@@ -236,6 +236,7 @@ impl AlbumReport {
         json!({
             "ok": self.ok(),
             "schema_version": SCHEMA_VERSION,
+            "capabilities": ["record_values_v1"],
             "albums": self.albums.iter().map(AlbumReportEntry::to_json).collect::<Vec<_>>(),
             "catalogs": self.catalogs.iter().map(AlbumCatalogRecord::to_json).collect::<Vec<_>>(),
             "counts": {

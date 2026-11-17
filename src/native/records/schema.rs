@@ -654,6 +654,10 @@ pub(crate) enum FieldInputState {
     /// Each item is one occurrence from the caller. List fields also accept
     /// comma-separated members inside each occurrence.
     SuppliedValues(Vec<String>),
+    /// Each item is one literal value: list members are never comma-split.
+    /// The `bob records update -i` envelope uses this so list items may
+    /// contain commas; `-s` keeps comma splitting.
+    SuppliedLiteralValues(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -675,7 +679,44 @@ pub(crate) fn validate_field_input(
             validate_field_values(field, values, today)
                 .map(ValidatedFieldInput::Value)
         }
+        FieldInputState::SuppliedLiteralValues(values) => {
+            validate_literal_values(field, values, today)
+                .map(ValidatedFieldInput::Value)
+        }
     }
+}
+
+/// Validate envelope values without comma splitting: each raw value is one
+/// literal list member (or the scalar). Mirrors [`validate_field_values`]
+/// member validation exactly, minus [`split_list_members`].
+pub(crate) fn validate_literal_values(
+    field: &RecordField,
+    raw_values: &[String],
+    today: NaiveDate,
+) -> Result<RecordValue, RecordDiagnostic> {
+    if raw_values.is_empty() {
+        return Err(RecordDiagnostic::value(
+            field,
+            RecordDiagnosticCode::InvalidValue,
+            "expected at least one supplied value",
+        ));
+    }
+    if !field.list {
+        if raw_values.len() != 1 {
+            return Err(RecordDiagnostic::value(
+                field,
+                RecordDiagnosticCode::InvalidValue,
+                "scalar fields accept exactly one value",
+            ));
+        }
+        return validate_scalar(field, &raw_values[0], today)
+            .map(RecordValue::Scalar);
+    }
+    raw_values
+        .iter()
+        .map(|member| validate_scalar(field, member, today))
+        .collect::<Result<Vec<_>, _>>()
+        .map(RecordValue::List)
 }
 
 pub(crate) fn validate_field_values(

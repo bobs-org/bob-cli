@@ -955,7 +955,7 @@ fn parse_choice_remove(
 /// `serde_json` keeps the last duplicate, so scan the raw text: a string
 /// followed by `:` inside an object is a key; two identical keys in one
 /// object refuse the whole envelope.
-fn check_duplicate_keys(text: &str) -> Result<(), ProtocolError> {
+pub(crate) fn check_duplicate_keys(text: &str) -> Result<(), ProtocolError> {
     let bytes = text.as_bytes();
     let mut index = 0;
     let mut stack: Vec<ObjectFrame> = Vec::new();

@@ -2,7 +2,9 @@
 
 use std::{
     ffi::OsString,
-    fs, io, iter,
+    fs,
+    io::{self, Read as _},
+    iter,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -259,10 +261,10 @@ pub(crate) fn build_cli_update() -> ClapCommand {
     ClapCommand::new("bob records update")
         .about("Update one existing Record Note in place")
         .long_about(
-            "Resolve an existing record by TYPE and STEM, then edit only the supplied YAML value spans and append notes with repeated --note arguments. TYPE accepts a noun or album stem. Field-only and note-only updates work without repeating required creation fields. --dry-run prints the exact Markdown without writing.",
+            "Resolve an existing record by TYPE and STEM, then edit only the supplied YAML value spans and append notes with repeated --note arguments. TYPE accepts a noun or album stem. Field-only and note-only updates work without repeating required creation fields. With -i FILE, apply a guarded JSON envelope of field.set/field.unset ops against an expect fingerprint instead of --set and --note. --dry-run prints the exact Markdown without writing.",
         )
         .after_help(
-            "Examples:\n  bob records update restaurant ninja_sushi -s status=liked -n 'Went back, still great'\n  bob records update eat ninja_sushi -s status=liked\n  bob records update restaurant ninja_sushi -s location= -d\n  bob records update podcast talk_python -n 'Listened to the async episode' -d -f json\n\nSee docs/records.md for update semantics, optional clearing, and failure behavior.",
+            "Examples:\n  bob records update restaurant ninja_sushi -s status=liked -n 'Went back, still great'\n  bob records update eat ninja_sushi -s status=liked\n  bob records update restaurant ninja_sushi -s location= -d\n  bob records update podcast talk_python -n 'Listened to the async episode' -d -f json\n  bob records update eat ninja_sushi -i envelope.json -f json\n\nSee docs/records.md for update semantics, the guarded envelope, optional clearing, and failure behavior.",
         )
         .disable_help_flag(true)
         .arg(record_type_arg(true))
@@ -277,6 +279,16 @@ pub(crate) fn build_cli_update() -> ClapCommand {
         .arg(dry_run_arg())
         .arg(format_arg())
         .arg(help_arg())
+        .arg(
+            Arg::new("input")
+                .short('i')
+                .long("input")
+                .value_name("FILE")
+                .value_parser(OsStringValueParser::new())
+                .conflicts_with("note")
+                .conflicts_with("set")
+                .help("Guarded JSON envelope file; - reads stdin"),
+        )
         .arg(
             Arg::new("note")
                 .short('n')
@@ -761,6 +773,15 @@ fn execute_update(matches: &ArgMatches) -> i32 {
         output_format,
         &kind_warnings(&context, type_id),
     );
+    if matches.get_one::<OsString>("input").is_some() {
+        return execute_update_envelope(
+            matches,
+            output_format,
+            &vault,
+            &context,
+            &kind,
+        );
+    }
     let config = config_from_kind(&kind);
     let fields = match parse_field_inputs(matches) {
         Ok(fields) => fields,
@@ -925,6 +946,827 @@ fn execute_update(matches: &ArgMatches) -> i32 {
     );
     if matches.get_flag("open")
         && let Err(message) = open_in_obsidian(&vault, &plan.path)
+    {
+        eprintln!("bob records update: warning: {message}");
+    }
+    0
+}
+
+/// Typed envelope-path failure: semantic refusals exit 2, runtime and guard
+/// failures exit 1.
+struct EnvelopeError {
+    code: String,
+    message: String,
+    field: Option<String>,
+    hint: Option<String>,
+    exit: i32,
+}
+
+impl EnvelopeError {
+    fn refusal(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            field: None,
+            hint: None,
+            exit: 2,
+        }
+    }
+
+    fn runtime(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            field: None,
+            hint: None,
+            exit: 1,
+        }
+    }
+
+    fn with_field(mut self, field: impl Into<String>) -> Self {
+        self.field = Some(field.into());
+        self
+    }
+
+    fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+}
+
+impl From<super::protocol::ProtocolError> for EnvelopeError {
+    fn from(error: super::protocol::ProtocolError) -> Self {
+        let mut refusal = Self::refusal(error.code, error.to_string());
+        if let Some(field) = error.field {
+            refusal = refusal.with_field(field);
+        }
+        if let Some(hint) = error.hint {
+            refusal = refusal.with_hint(hint);
+        }
+        refusal
+    }
+}
+
+/// Guarded `bob records update -i FILE` writer: a typed JSON envelope of
+/// `field.set`/`field.unset` ops applied against an `expect` fingerprint,
+/// with inverse ops, group consequence, and typed refusals. Without `-i`
+/// the classic `--set`/`--note` path above runs byte-identical.
+fn execute_update_envelope(
+    matches: &ArgMatches,
+    format: OutputFormat,
+    vault: &Path,
+    context: &RecordContext,
+    kind: &ResolvedRecordKind,
+) -> i32 {
+    let dry_run = matches.get_flag("dry-run");
+    let type_id = matches.get_one::<String>("type").expect("required by clap");
+    let stem = matches.get_one::<String>("stem").expect("required by clap");
+    let config = config_from_kind(kind);
+    let record_type = kind.record_type();
+    let failed = |error: EnvelopeError, fingerprints: (&str, &str)| -> i32 {
+        emit_envelope_refusal(
+            format,
+            dry_run,
+            type_id,
+            stem,
+            "",
+            fingerprints,
+            error,
+            Vec::new(),
+            Vec::new(),
+            (Value::Null, Value::Null),
+            None,
+        )
+        .into()
+    };
+
+    let text = match read_envelope_text(matches.get_one("input")) {
+        Ok(text) => text,
+        Err(error) => return failed(error, ("", "")),
+    };
+    let envelope = match super::protocol::parse_envelope(&text) {
+        Ok(envelope) => envelope,
+        Err(error) => return failed(error.into(), ("", "")),
+    };
+
+    let today = bob_env::current_datetime().date();
+    let mut catalog = RecordCatalog::new(vault);
+    let target = match super::plan::resolve_update_target(
+        &config,
+        &mut catalog,
+        &kind.record_type().id,
+        stem,
+    ) {
+        Ok(target) => target,
+        Err(error) => {
+            return failed(
+                EnvelopeError::refusal(
+                    error.code.diagnostic_code(),
+                    error.to_string(),
+                ),
+                ("", ""),
+            );
+        }
+    };
+    let failed_at_target =
+        |error: EnvelopeError, fingerprints: (&str, &str)| -> EnvelopeRefusal {
+            emit_envelope_refusal(
+                format,
+                dry_run,
+                type_id,
+                stem,
+                &target.path.display().to_string(),
+                fingerprints,
+                error,
+                Vec::new(),
+                Vec::new(),
+                (Value::Null, Value::Null),
+                None,
+            )
+        };
+    let absolute = vault.join(&target.path);
+    let original = match fs::read_to_string(&absolute) {
+        Ok(original) => original,
+        Err(error) => {
+            return failed_at_target(
+                EnvelopeError::runtime(
+                    "record_unreadable",
+                    format!(
+                        "could not read record {}: {error}",
+                        target.path.display()
+                    ),
+                ),
+                ("", ""),
+            )
+            .into();
+        }
+    };
+    let (fingerprint_before, _schema_fp) =
+        super::show::current_record_fingerprint(context, kind, &original);
+    if envelope.expect != fingerprint_before {
+        let record = match super::show::record_json_for(
+            vault,
+            context,
+            kind,
+            &target,
+            &original,
+            &mut catalog,
+        ) {
+            Ok(record) => record,
+            Err(message) => {
+                return failed_at_target(
+                    EnvelopeError::runtime("record_unreadable", message),
+                    (&fingerprint_before, &fingerprint_before),
+                )
+                .into();
+            }
+        };
+        // The current record object rides along so the Record Card
+        // repaints in one call.
+        let group = record.get("group").cloned().unwrap_or(Value::Null);
+        return emit_envelope_refusal(
+            format,
+            dry_run,
+            type_id,
+            stem,
+            &target.path.display().to_string(),
+            (&fingerprint_before, &fingerprint_before),
+            EnvelopeError::refusal(
+                "stale_record",
+                format!(
+                    "record {} changed on disk after the envelope was read; nothing was written",
+                    target.path.display()
+                ),
+            )
+            .with_hint(
+                "re-read with `bob records show TYPE STEM -f json` and retry with the new fingerprint",
+            ),
+            Vec::new(),
+            Vec::new(),
+            (group.clone(), group),
+            Some(record),
+        )
+        .into();
+    }
+    let refuse_with_plan = |error: EnvelopeError,
+                            plan: &super::plan::RecordUpdatePlan|
+     -> EnvelopeRefusal {
+        let current =
+            envelope_group_json(record_type, &plan.properties, false, today);
+        let groups = (current.clone(), current);
+        emit_envelope_refusal(
+            format,
+            dry_run,
+            type_id,
+            stem,
+            &target.path.display().to_string(),
+            (&fingerprint_before, &fingerprint_before),
+            error,
+            envelope_plan_properties(plan),
+            envelope_plan_warnings(plan),
+            groups,
+            None,
+        )
+    };
+    let inputs =
+        match super::protocol::ops_to_inputs(record_type, &envelope.ops) {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                return failed_at_target(
+                    error.into(),
+                    (&fingerprint_before, &fingerprint_before),
+                )
+                .into();
+            }
+        };
+    let plan = match super::plan::plan_update(super::plan::PlanUpdateRequest {
+        target: &target,
+        original: &original,
+        fields: &inputs,
+        notes: &[],
+        today,
+    }) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return failed_at_target(
+                apply_envelope_error(&error),
+                (&fingerprint_before, &fingerprint_before),
+            )
+            .into();
+        }
+    };
+    if !plan.missing.is_empty() {
+        let first = plan.missing.first().cloned().unwrap_or_default();
+        let message = if plan.missing.len() == 1 {
+            format!("field `{first}` is required")
+        } else {
+            format!(
+                "{} required fields are empty: {}",
+                plan.missing.len(),
+                plan.missing
+                    .iter()
+                    .map(|key| format!("`{key}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        return refuse_with_plan(
+            EnvelopeError::refusal("record_required_empty", message)
+                .with_field(first),
+            &plan,
+        )
+        .into();
+    }
+    if !plan.invalid.is_empty() {
+        let diagnostic = &plan.invalid[0];
+        let hint = if diagnostic.suggestions.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "did you mean {}?",
+                diagnostic
+                    .suggestions
+                    .iter()
+                    .map(|value| format!("`{value}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        };
+        let mut error = EnvelopeError::refusal(
+            diagnostic.diagnostic_code(),
+            diagnostic.message.clone(),
+        );
+        if let Some(field) = &diagnostic.field {
+            error = error.with_field(field.clone());
+        }
+        if let Some(hint) = hint {
+            error = error.with_hint(hint);
+        }
+        return refuse_with_plan(error, &plan).into();
+    }
+    let Some(markdown) = plan.markdown.as_deref() else {
+        return failed_at_target(
+            EnvelopeError::runtime(
+                "write_failed",
+                "the planned update produced no Markdown; nothing was written",
+            ),
+            (&fingerprint_before, &fingerprint_before),
+        )
+        .into();
+    };
+    let (fingerprint_after, _) =
+        super::show::current_record_fingerprint(context, kind, markdown);
+    // Plan the album before the no-op early return so a no-op record update
+    // still repairs a stale index. Index planning never writes.
+    let album = match plan_album_write_for_record(
+        vault,
+        &mut catalog,
+        kind,
+        &[(plan.path.clone(), markdown.to_owned())],
+    ) {
+        Ok(album) => album,
+        Err(message) => {
+            return refuse_with_plan(
+                EnvelopeError::runtime("album_stale", message),
+                &plan,
+            )
+            .into();
+        }
+    };
+    let edited_album = album.as_ref().filter(|album| album.edit.is_some());
+    if dry_run {
+        return emit_envelope_success(
+            matches,
+            format,
+            kind,
+            &plan,
+            &envelope,
+            &fingerprint_before,
+            &fingerprint_after,
+            edited_album,
+            true,
+        );
+    }
+    // A current index contributes no write; the album read guard still
+    // applies below.
+    if markdown == original && edited_album.is_none() {
+        return emit_envelope_success(
+            matches,
+            format,
+            kind,
+            &plan,
+            &envelope,
+            &fingerprint_before,
+            &fingerprint_after,
+            None,
+            false,
+        );
+    }
+    let mut staged = Vec::new();
+    if markdown != original {
+        staged.push(StagedTextFile {
+            target: absolute.clone(),
+            target_existed: true,
+            original_target: original.clone(),
+            updated_target: markdown.to_owned(),
+        });
+    }
+    if let Some(album) = edited_album
+        && let Some(edit) = &album.edit
+    {
+        staged.push(StagedTextFile {
+            target: vault.join(&album.relative),
+            target_existed: true,
+            original_target: edit.before.clone(),
+            updated_target: edit.after.clone(),
+        });
+    }
+    // Guard the album on every write, and the untouched record on an
+    // album-only repair, so a concurrent edit refuses instead of
+    // publishing a stale index.
+    let mut extra = Vec::new();
+    if markdown == original {
+        extra.push((plan.path.clone(), original.clone()));
+    }
+    let deps = album_read_dependencies(album.as_ref(), &extra);
+    if let Err(error) =
+        write_staged_files_guarded(&staged, || deps.validate(vault))
+    {
+        return refuse_with_plan(
+            EnvelopeError::runtime("write_failed", error.message),
+            &plan,
+        )
+        .into();
+    }
+    emit_envelope_success(
+        matches,
+        format,
+        kind,
+        &plan,
+        &envelope,
+        &fingerprint_before,
+        &fingerprint_after,
+        edited_album,
+        false,
+    )
+}
+
+/// `properties[]` in today's shape for a refused envelope plan.
+fn envelope_plan_properties(
+    plan: &super::plan::RecordUpdatePlan,
+) -> Vec<Value> {
+    plan.properties.iter().map(update_property_json).collect()
+}
+
+/// `warnings[]` for a refused envelope plan.
+fn envelope_plan_warnings(plan: &super::plan::RecordUpdatePlan) -> Vec<Value> {
+    plan.warnings
+        .iter()
+        .map(|warning| {
+            json!({
+                "field": warning.field,
+                "code": warning.diagnostic_code(),
+                "message": warning.message,
+            })
+        })
+        .collect()
+}
+
+/// Human output for a refused envelope plus the typed JSON document.
+#[allow(clippy::too_many_arguments)]
+fn emit_envelope_refusal(
+    format: OutputFormat,
+    dry_run: bool,
+    type_id: &str,
+    stem: &str,
+    path: &str,
+    fingerprints: (&str, &str),
+    error: EnvelopeError,
+    properties: Vec<Value>,
+    warnings: Vec<Value>,
+    groups: (Value, Value),
+    record: Option<Value>,
+) -> EnvelopeRefusal {
+    let exit = error.exit;
+    let message = error.message.clone();
+    let hint = error.hint.clone();
+    let mut payload = json!({
+        "schema_version": SCHEMA_VERSION,
+        "ok": false,
+        "command": "update",
+        "dry_run": dry_run,
+        "type": type_id,
+        "stem": stem,
+        "path": path,
+        "changed": Vec::<String>::new(),
+        "properties": properties,
+        "changes": Vec::<Value>::new(),
+        "fingerprint_before": fingerprints.0,
+        "fingerprint_after": fingerprints.1,
+        "inverse_ops": Vec::<Value>::new(),
+        "group_before": groups.0,
+        "group_after": groups.1,
+        "consequence": "",
+        "warnings": warnings,
+        "error": {
+            "code": error.code,
+            "message": error.message,
+            "field": error.field,
+            "hint": error.hint,
+        },
+    });
+    // The stale refusal embeds the current record object so the Record
+    // Card repaints in one call.
+    if let Some(record) = record
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("record".to_owned(), record);
+    }
+    if format == OutputFormat::Json {
+        println!("{payload}");
+    } else {
+        eprintln!("bob records update: {message}");
+        if let Some(hint) = &hint {
+            eprintln!("  hint: {hint}");
+        }
+    }
+    EnvelopeRefusal { payload, exit }
+}
+
+/// Refusal outcome; the stale refusal also carries the current record
+/// object inside its JSON payload.
+struct EnvelopeRefusal {
+    payload: Value,
+    exit: i32,
+}
+
+impl From<EnvelopeRefusal> for i32 {
+    fn from(refusal: EnvelopeRefusal) -> i32 {
+        refusal.exit
+    }
+}
+
+/// Read the JSON envelope: `-i FILE`, `-i -` for stdin.
+fn read_envelope_text(
+    input: Option<&OsString>,
+) -> Result<String, EnvelopeError> {
+    match input {
+        Some(raw) if raw == "-" => {
+            let mut text = String::new();
+            std::io::stdin().read_to_string(&mut text).map_err(|error| {
+                EnvelopeError::refusal(
+                    "envelope_unreadable",
+                    format!(
+                        "could not read the envelope from stdin: {error}"
+                    ),
+                )
+                .with_hint(
+                    "pass a JSON file with -i FILE or pipe the envelope on stdin",
+                )
+            })?;
+            Ok(text)
+        }
+        Some(raw) => {
+            let path = PathBuf::from(raw);
+            fs::read_to_string(&path).map_err(|error| {
+                EnvelopeError::refusal(
+                    "envelope_unreadable",
+                    format!(
+                        "could not read input {}: {error}",
+                        path.display()
+                    ),
+                )
+                .with_hint(
+                    "pass a JSON file with -i FILE or pipe the envelope on stdin",
+                )
+            })
+        }
+        None => Err(EnvelopeError::runtime(
+            "envelope_unreadable",
+            "the envelope branch requires -i FILE",
+        )),
+    }
+}
+
+/// Map a span-writer apply failure to the envelope's typed error.
+fn apply_envelope_error(
+    error: &super::render::RecordUpdateError,
+) -> EnvelopeError {
+    use super::render::RecordUpdateErrorCode as Code;
+    match error.code {
+        Code::RequiredEmpty => {
+            let mut refusal = EnvelopeError::refusal(
+                "record_required_empty",
+                error.message.clone(),
+            );
+            if let Some(field) = &error.field {
+                refusal = refusal.with_field(field.clone());
+            }
+            refusal
+        }
+        Code::InvalidValue => {
+            let mut refusal = EnvelopeError::refusal(
+                "record_invalid_value",
+                error.message.clone(),
+            );
+            if let Some(field) = &error.field {
+                refusal = refusal.with_field(field.clone());
+            }
+            refusal
+        }
+        Code::MissingFrontmatter
+        | Code::MalformedFrontmatter
+        | Code::DuplicateKey
+        | Code::UnsupportedYaml => {
+            let mut refusal = EnvelopeError::refusal(
+                "record_uneditable",
+                error.message.clone(),
+            )
+            .with_hint("repair the note's frontmatter, then retry");
+            if let Some(field) = &error.field {
+                refusal = refusal.with_field(field.clone());
+            }
+            refusal
+        }
+    }
+}
+
+/// Group identity (`{field, value, label}` or null) from the plan's current
+/// values (`after == false`) or effective post-update values.
+fn envelope_group_json(
+    record_type: &super::schema::RecordType,
+    properties: &[super::plan::PlannedUpdateProperty],
+    after: bool,
+    today: chrono::NaiveDate,
+) -> Value {
+    use crate::native::albums::grouping::group_field;
+    let Some(field) = group_field(&record_type.fields) else {
+        return Value::Null;
+    };
+    let Some(property) = properties.iter().find(|row| row.key == field.key)
+    else {
+        return Value::Null;
+    };
+    let effective = if after {
+        property.value.as_ref()
+    } else {
+        property.current.as_ref()
+    };
+    let display = if after {
+        property.display.as_ref()
+    } else {
+        property.current_display.as_ref()
+    };
+    let (Some(value), Some(label)) = (effective, display) else {
+        return Value::Null;
+    };
+    // Group fields are choices-kind, so only scalar text lands here; other
+    // shapes (including lists) report no group like `show` does.
+    let text = match value {
+        super::schema::RecordValue::Scalar(scalar) => match scalar {
+            super::schema::RecordScalar::Text(text)
+            | super::schema::RecordScalar::Choice(text)
+            | super::schema::RecordScalar::Link(text) => text.clone(),
+            super::schema::RecordScalar::Url(url) => url.to_string(),
+            super::schema::RecordScalar::Number(number) => number.to_string(),
+            super::schema::RecordScalar::Date(date) => date
+                .resolve(today)
+                .map(|resolved| resolved.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+        },
+        super::schema::RecordValue::List(_) => return Value::Null,
+    };
+    if text.is_empty() {
+        return Value::Null;
+    }
+    json!({
+        "field": field.key,
+        "value": text,
+        "label": label,
+    })
+}
+
+/// Changed-key rows with before/after display strings.
+fn envelope_changes(plan: &super::plan::RecordUpdatePlan) -> Vec<Value> {
+    plan.changed
+        .iter()
+        .filter_map(|key| {
+            plan.properties
+                .iter()
+                .find(|row| &row.key == key)
+                .map(|property| {
+                    json!({
+                        "key": property.key,
+                        "label": property.label,
+                        "before_display": property.current_display,
+                        "after_display": property.display,
+                    })
+                })
+        })
+        .collect()
+}
+
+/// Inverse ops in reverse op order, restricted to changed fields, so Undo
+/// replays with `expect` = `fingerprint_after` and `ops` = `inverse_ops`.
+/// Typed priors come from the snapshot currents; absent priors unset.
+fn envelope_inverse_ops(
+    ops: &[super::protocol::Op],
+    plan: &super::plan::RecordUpdatePlan,
+) -> Vec<Value> {
+    ops.iter()
+        .rev()
+        .filter_map(|op| {
+            let field = op.field();
+            if !plan.changed.iter().any(|key| key == field) {
+                return None;
+            }
+            let current = plan
+                .properties
+                .iter()
+                .find(|row| row.key == field)
+                .and_then(|row| row.current.as_ref());
+            match current {
+                Some(value) => Some(json!({
+                    "op": "field.set",
+                    "field": field,
+                    "value": crate::native::capture_record::record_value_json(value),
+                })),
+                None => Some(json!({
+                    "op": "field.unset",
+                    "field": field,
+                })),
+            }
+        })
+        .collect()
+}
+
+/// One human sentence for the status rule: what changed and where the
+/// record groups now.
+fn envelope_consequence(
+    ops_empty: bool,
+    changes: &[Value],
+    group_before: &Value,
+    group_after: &Value,
+) -> String {
+    if ops_empty {
+        return "no-op: the envelope carries no operations".to_owned();
+    }
+    let group_suffix = if group_before != group_after {
+        match group_after.get("label").and_then(Value::as_str) {
+            Some(label) => format!("; moves to the {label} group"),
+            None => "; leaves its group".to_owned(),
+        }
+    } else {
+        String::new()
+    };
+    if changes.is_empty() {
+        return "no changes: the record already matches".to_owned();
+    }
+    if changes.len() == 1 {
+        let row = &changes[0];
+        let label = row["label"].as_str().unwrap_or("field");
+        let edit = match (
+            row["before_display"].as_str(),
+            row["after_display"].as_str(),
+        ) {
+            (Some(before), Some(after)) => format!("{before} → {after}"),
+            (Some(before), None) => format!("cleared (was {before})"),
+            (None, Some(after)) => format!("set to {after}"),
+            (None, None) => "touched".to_owned(),
+        };
+        return format!("{label}: {edit}{group_suffix}");
+    }
+    let labels = changes
+        .iter()
+        .filter_map(|row| row["label"].as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{} fields updated ({labels}){group_suffix}", changes.len())
+}
+
+/// Assemble and print the success/no-op/dry-run JSON document; human output
+/// reuses the classic update printers.
+#[allow(clippy::too_many_arguments)]
+fn emit_envelope_success(
+    matches: &ArgMatches,
+    format: OutputFormat,
+    kind: &ResolvedRecordKind,
+    plan: &super::plan::RecordUpdatePlan,
+    envelope: &super::protocol::Envelope,
+    fingerprint_before: &str,
+    fingerprint_after: &str,
+    album: Option<&PlannedAlbumWrite>,
+    dry_run: bool,
+) -> i32 {
+    let config = config_from_kind(kind);
+    if format == OutputFormat::Human {
+        if dry_run {
+            print_update_dry_run(
+                &config,
+                plan,
+                plan.markdown.as_deref().unwrap_or(""),
+                Some(kind),
+                album,
+                format,
+            );
+            return 0;
+        }
+        print_update_success(&config, plan, &[], Some(kind), album, format);
+        if matches.get_flag("open")
+            && let Err(message) =
+                open_in_obsidian(&vault_from(matches), &plan.path)
+        {
+            eprintln!("bob records update: warning: {message}");
+        }
+        return 0;
+    }
+    let changes = envelope_changes(plan);
+    let record_type = kind.record_type();
+    let today = bob_env::current_datetime().date();
+    let group_before =
+        envelope_group_json(record_type, &plan.properties, false, today);
+    let group_after =
+        envelope_group_json(record_type, &plan.properties, true, today);
+    let mut consequence = envelope_consequence(
+        envelope.ops.is_empty(),
+        &changes,
+        &group_before,
+        &group_after,
+    );
+    if dry_run {
+        consequence = format!("would apply: {consequence}");
+    }
+    let mut payload = json!({
+        "schema_version": SCHEMA_VERSION,
+        "ok": true,
+        "command": "update",
+        "dry_run": dry_run,
+        "type": plan.record_type,
+        "stem": plan.stem,
+        "path": plan.path.display().to_string(),
+        "changed": plan.changed,
+        "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
+        "changes": changes,
+        "fingerprint_before": fingerprint_before,
+        "fingerprint_after": fingerprint_after,
+        "inverse_ops": envelope_inverse_ops(&envelope.ops, plan),
+        "group_before": group_before,
+        "group_after": group_after,
+        "consequence": consequence,
+        "warnings": plan.warnings.iter().map(|warning| json!({
+            "field": warning.field,
+            "code": warning.diagnostic_code(),
+            "message": warning.message,
+        })).collect::<Vec<_>>(),
+        "error": Value::Null,
+    });
+    if let Some(album) = album {
+        merge_album_index(&mut payload, album);
+    }
+    merge_kind_metadata(&mut payload, kind);
+    println!("{payload}");
+    if matches.get_flag("open")
+        && let Err(message) = open_in_obsidian(&vault_from(matches), &plan.path)
     {
         eprintln!("bob records update: warning: {message}");
     }

@@ -175,6 +175,40 @@ fn parent_mismatch(
     Ok(())
 }
 
+/// Current semantic fingerprint for the note bytes plus the album schema
+/// fingerprint it was hashed with. Shared by `show` and the guarded
+/// `update -i` expect check so the card's fingerprint always matches.
+pub(crate) fn current_record_fingerprint(
+    context: &RecordContext,
+    kind: &ResolvedRecordKind,
+    contents: &str,
+) -> (String, String) {
+    let record_type = kind.record_type();
+    let schema_fp = album_schema_fingerprint(context, kind, record_type);
+    let fingerprint = match parse_frontmatter_mapping(contents) {
+        Some(mapping) => record_fingerprint(&mapping, &schema_fp),
+        None => empty_record_fingerprint(&schema_fp),
+    };
+    (fingerprint, schema_fp)
+}
+
+/// The `record` object from the per-record read, cloned for the
+/// `stale_record` refusal so the Record Card repaints in one call. Unlike
+/// `execute_show_record` this never refuses a parent mismatch: the update
+/// path resolves exactly like `update` and only needs current values.
+pub(crate) fn record_json_for(
+    vault: &Path,
+    context: &RecordContext,
+    kind: &ResolvedRecordKind,
+    target: &ResolvedUpdateTarget,
+    contents: &str,
+    catalog: &mut RecordCatalog,
+) -> Result<Value, String> {
+    let payload =
+        build_payload(vault, context, kind, target, contents, catalog)?;
+    Ok(payload["record"].clone())
+}
+
 fn build_payload(
     vault: &Path,
     context: &RecordContext,
@@ -195,11 +229,8 @@ fn build_payload(
     .ok();
     let mapping = parse_frontmatter_mapping(contents);
     let key_lines = top_level_key_lines(contents);
-    let schema_fp = album_schema_fingerprint(context, kind, record_type);
-    let fingerprint = match &mapping {
-        Some(mapping) => record_fingerprint(mapping, &schema_fp),
-        None => empty_record_fingerprint(&schema_fp),
-    };
+    let (fingerprint, schema_fp) =
+        current_record_fingerprint(context, kind, contents);
     let (fields, count) = {
         let folder = catalog.folder(&record_type.dir);
         let fields: Vec<Value> = record_type
@@ -340,7 +371,8 @@ fn record_properties(
                         (RecordPropertyState::None, Value::Null, None)
                     }
                 }
-                FieldInputState::SuppliedValues(_) => {
+                FieldInputState::SuppliedValues(_)
+                | FieldInputState::SuppliedLiteralValues(_) => {
                     match validate_field_input(field, &state_input, today) {
                         Ok(ValidatedFieldInput::Value(validated)) => {
                             let display = planned_row

@@ -224,6 +224,12 @@ const TABLE: &[Entry] = &[
         arg: "note",
         kind: Kind::FreeText,
     },
+    // A guarded JSON envelope file, or `-` for stdin.
+    Entry {
+        path: &["records", "update"],
+        arg: "input",
+        kind: Kind::Files(None),
+    },
     // One id, two meanings: a _new_ ID here ...
     Entry {
         path: &["capture-task-id"],

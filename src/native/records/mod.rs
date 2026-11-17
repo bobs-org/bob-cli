@@ -10,6 +10,7 @@ pub(crate) mod context;
 pub(crate) mod fingerprint;
 pub(crate) mod init;
 pub(crate) mod plan;
+pub(crate) mod protocol;
 pub(crate) mod render;
 pub(crate) mod schema;
 pub(crate) mod show;

@@ -157,7 +157,7 @@ sets `one_off: true`.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob albums list` | `-f json` | Albums, groups, counts, issues, and owner `catalogs` | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums list` | `-f json` | Albums, groups, counts, issues, owner `catalogs`, and `capabilities` | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums sync` | `-f json` | Index entries, owner `catalogs`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
@@ -168,6 +168,7 @@ sets `one_off: true`.
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob records show` | `-f json` | Schema for `TYPE`; with `STEM`, one record's properties, identity, findings, full suggestions, and fingerprint. Refusals add `error.code` | `schema_version: 1` | [Reading one record](../records.md#reading-one-record) |
+| `bob records update` | `-i FILE -f json` | Guarded envelope: `changed[]`, `changes[]`, fingerprints, `inverse_ops`, groups, `consequence`, and typed `error` | `schema_version: 1` | [Updating with an envelope](../records.md#updating-with-an-envelope) |
 
 ### Area reports {#area-reports}
 

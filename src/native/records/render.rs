@@ -1774,9 +1774,17 @@ pub(crate) fn apply_record_update(
             .iter()
             .any(|state| matches!(state, FieldInputState::SuppliedEmpty));
         let mut collected: Vec<String> = Vec::new();
+        let mut collected_literal = false;
         for state in states {
-            if let FieldInputState::SuppliedValues(values) = state {
-                collected.extend(values.iter().cloned());
+            match state {
+                FieldInputState::SuppliedValues(values) => {
+                    collected.extend(values.iter().cloned());
+                }
+                FieldInputState::SuppliedLiteralValues(values) => {
+                    collected.extend(values.iter().cloned());
+                    collected_literal = true;
+                }
+                FieldInputState::Absent | FieldInputState::SuppliedEmpty => {}
             }
         }
         if has_empty && !collected.is_empty() {
@@ -1798,7 +1806,13 @@ pub(crate) fn apply_record_update(
         if collected.is_empty() {
             continue;
         }
-        let state = FieldInputState::SuppliedValues(collected);
+        // Literal envelope values stay literal through the span writer so a
+        // list member containing a comma is never split.
+        let state = if collected_literal {
+            FieldInputState::SuppliedLiteralValues(collected)
+        } else {
+            FieldInputState::SuppliedValues(collected)
+        };
         match validate_field_input(field, &state, request.today) {
             Ok(validated) => {
                 edits.insert(field.key.clone(), validated);
@@ -1830,7 +1844,10 @@ pub(crate) fn apply_record_update(
                         original,
                     ));
                 }
-                FieldInputState::SuppliedValues(_) => saw_value = true,
+                FieldInputState::SuppliedValues(_)
+                | FieldInputState::SuppliedLiteralValues(_) => {
+                    saw_value = true;
+                }
             }
         }
         if saw_value {

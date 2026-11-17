@@ -2494,3 +2494,589 @@ fn show_one_record_fingerprint_ignores_format_and_tracks_value_and_schema() {
         changed["record"]["fingerprint"]
     );
 }
+
+fn envelope_fixture() -> RecordsFixture {
+    let fixture = update_fixture();
+    write_ninja_update(&fixture.vault);
+    fixture
+}
+
+fn update_with_envelope(
+    fixture: &RecordsFixture,
+    args: &[&str],
+) -> std::process::Output {
+    records_command(fixture)
+        .args(args)
+        .output()
+        .expect("bob records update")
+}
+
+fn envelope_json(output: &std::process::Output) -> Value {
+    json(output)
+}
+
+fn show_fingerprint(fixture: &RecordsFixture, stem: &str) -> String {
+    let output = update_with_envelope(
+        fixture,
+        &["show", "restaurant", stem, "-f", "json"],
+    );
+    assert_success(&output);
+    json(&output)["record"]["fingerprint"]
+        .as_str()
+        .expect("record fingerprint")
+        .to_owned()
+}
+
+fn write_envelope(vault: &Path, name: &str, text: &str) -> PathBuf {
+    let path = vault.join(name);
+    write_file(&path, text);
+    path
+}
+
+fn envelope_run(
+    fixture: &RecordsFixture,
+    envelope: &str,
+    extra: &[&str],
+) -> std::process::Output {
+    let path = write_envelope(&fixture.vault, "envelope.json", envelope);
+    let path_text = path.to_string_lossy().into_owned();
+    let mut args =
+        vec!["update", "restaurant", "ninja_sushi", "-i", &path_text];
+    args.extend(extra);
+    update_with_envelope(fixture, &args)
+}
+
+fn envelope_doc(fingerprint: &str, ops: &str) -> String {
+    format!(
+        "{{\"schema_version\":1,\"expect\":\"{fingerprint}\",\"ops\":[{ops}]}}"
+    )
+}
+
+#[test]
+fn update_envelope_set_unset_and_list_replace() {
+    let fixture = envelope_fixture();
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"status","value":"liked"},{"op":"field.unset","field":"location"},{"op":"field.set","field":"tags","value":["spicy","lunch"]}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "update");
+    assert_eq!(payload["dry_run"], false);
+    assert_eq!(payload["type"], "restaurant");
+    assert_eq!(payload["stem"], "ninja_sushi");
+    assert_eq!(payload["path"], "eat/ninja_sushi.md");
+    assert_eq!(payload["error"], Value::Null);
+    assert_eq!(
+        payload["changed"],
+        serde_json::json!(["status", "location", "tags"])
+    );
+    let changes = payload["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 3);
+    assert_eq!(changes[0]["key"], "status");
+    assert_eq!(changes[0]["before_display"], "To try");
+    assert_eq!(changes[0]["after_display"], "Liked");
+    assert_eq!(changes[1]["key"], "location");
+    assert_eq!(changes[1]["before_display"], "Clark");
+    assert_eq!(changes[1]["after_display"], Value::Null);
+    assert!(
+        payload["fingerprint_before"].as_str().unwrap()
+            != payload["fingerprint_after"].as_str().unwrap()
+    );
+    fingerprint_ok(&payload["fingerprint_after"]);
+    assert_eq!(payload["group_before"]["value"], "to_try");
+    assert_eq!(payload["group_after"]["value"], "liked");
+    assert_eq!(payload["group_after"]["label"], "Liked");
+    assert_eq!(
+        payload["consequence"],
+        "3 fields updated (Status, Location, Tags); moves to the Liked group"
+    );
+    let inverse = payload["inverse_ops"].as_array().expect("inverse");
+    assert_eq!(inverse.len(), 3);
+    assert_eq!(
+        inverse[0],
+        serde_json::json!({"op":"field.unset","field":"tags"})
+    );
+    assert_eq!(
+        inverse[1],
+        serde_json::json!({"op":"field.set","field":"location","value":"Clark"})
+    );
+    assert_eq!(
+        inverse[2],
+        serde_json::json!({"op":"field.set","field":"status","value":"to_try"})
+    );
+    // The album index rebuilds in the same guarded write.
+    assert_eq!(payload["album_index"]["path"], "eat.md");
+
+    let markdown =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    assert!(markdown.contains("status: liked"), "{markdown}");
+    assert!(!markdown.contains("location:"), "{markdown}");
+    assert!(markdown.contains("category: Sushi"), "{markdown}");
+    let index = fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    assert!(index.contains("[[eat/ninja_sushi|Ninja Sushi]]"), "{index}");
+}
+
+#[test]
+fn update_envelope_empty_ops_is_noop() {
+    let fixture = envelope_fixture();
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let before =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(&fingerprint, ""),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["changed"], serde_json::json!([]));
+    assert_eq!(payload["changes"], serde_json::json!([]));
+    assert_eq!(payload["inverse_ops"], serde_json::json!([]));
+    assert_eq!(payload["fingerprint_after"], payload["fingerprint_before"]);
+    assert_eq!(
+        payload["consequence"],
+        "no-op: the envelope carries no operations"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap(),
+        before,
+        "no-op preserves bytes"
+    );
+}
+
+#[test]
+fn update_envelope_stale_repaints_in_one_call() {
+    let fixture = envelope_fixture();
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let before =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    // A concurrent edit lands after the envelope was read.
+    let classic = update_with_envelope(
+        &fixture,
+        &["update", "restaurant", "ninja_sushi", "-s", "status=liked"],
+    );
+    assert_success(&classic);
+
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"status","value":"to_try"}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let payload = envelope_json(&output);
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["code"], "stale_record");
+    assert!(payload["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("nothing was written"));
+    assert!(
+        payload["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("fingerprint"),
+        "{payload}"
+    );
+    let current = show_fingerprint(&fixture, "ninja_sushi");
+    assert_ne!(current, fingerprint);
+    assert_eq!(payload["record"]["fingerprint"], current);
+    assert_eq!(payload["fingerprint_before"], current);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap(),
+        before.replace("status: to_try", "status: liked"),
+        "stale writes nothing"
+    );
+
+    let human = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"status","value":"to_try"}"#,
+        ),
+        &[],
+    );
+    assert_eq!(human.status.code(), Some(2));
+    assert!(
+        stderr(&human).contains("changed on disk"),
+        "{}",
+        format_output(&human)
+    );
+    assert!(
+        stderr(&human).contains("hint: re-read"),
+        "{}",
+        format_output(&human)
+    );
+}
+
+#[test]
+fn update_envelope_typed_refusals() {
+    let fixture = envelope_fixture();
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let before =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    let cases = [
+        (
+            r#"{"op":"field.set","field":"status","value":"bogus"}"#,
+            "record_invalid_value",
+            "status",
+        ),
+        (
+            r#"{"op":"field.unset","field":"status"}"#,
+            "record_required_empty",
+            "status",
+        ),
+        (
+            r#"{"op":"field.set","field":"statu","value":"liked"}"#,
+            "record_unknown_field",
+            "statu",
+        ),
+        (
+            r#"{"op":"field.set","field":"location","value":""}"#,
+            "envelope_empty_value",
+            "location",
+        ),
+    ];
+    for (ops, code, field) in cases {
+        let output = envelope_run(
+            &fixture,
+            &envelope_doc(&fingerprint, ops),
+            &["-f", "json"],
+        );
+        assert_eq!(output.status.code(), Some(2), "{ops}");
+        let payload = envelope_json(&output);
+        assert_eq!(payload["ok"], false, "{ops}");
+        assert_eq!(payload["error"]["code"], code, "{ops}");
+        assert_eq!(payload["error"]["field"], field, "{ops}");
+        assert_eq!(payload["changed"], serde_json::json!([]), "{ops}");
+        assert_eq!(
+            fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md"))
+                .unwrap(),
+            before,
+            "refusal writes nothing: {ops}"
+        );
+    }
+    let unknown = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"statu","value":"liked"}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert!(envelope_json(&unknown)["error"]["hint"]
+        .as_str()
+        .unwrap()
+        .contains("status"));
+    let empty = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"location","value":""}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert!(envelope_json(&empty)["error"]["hint"]
+        .as_str()
+        .unwrap()
+        .contains("field.unset"));
+}
+
+#[test]
+fn update_envelope_protocol_refusals() {
+    let fixture = envelope_fixture();
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let before =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    let cases = [
+        (
+            r#"{"op":"field.set","field":"status","value":"liked"},{"op":"field.unset","field":"status"}"#,
+            "envelope_duplicate_field",
+        ),
+        (
+            r#"{"op":"field.add","field":"status"}"#,
+            "envelope_unknown_op",
+        ),
+        (
+            r#"{"op":"field.set","field":"status","value":["liked"]}"#,
+            "envelope_wrong_type",
+        ),
+        (
+            r#"{"op":"field.set","field":"tags","value":"spicy"}"#,
+            "envelope_wrong_type",
+        ),
+    ];
+    for (ops, code) in cases {
+        let output = envelope_run(
+            &fixture,
+            &envelope_doc(&fingerprint, ops),
+            &["-f", "json"],
+        );
+        assert_eq!(output.status.code(), Some(2), "{ops}");
+        assert_eq!(envelope_json(&output)["error"]["code"], code, "{ops}");
+    }
+    let duplicate_key = format!(
+        "{{\"schema_version\":1,\"expect\":\"{fingerprint}\",\"ops\":[],\"ops\":[]}}"
+    );
+    let output = envelope_run(&fixture, &duplicate_key, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        envelope_json(&output)["error"]["code"],
+        "envelope_duplicate_key"
+    );
+    let wrong_version = format!(
+        "{{\"schema_version\":2,\"expect\":\"{fingerprint}\",\"ops\":[]}}"
+    );
+    let output = envelope_run(&fixture, &wrong_version, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        envelope_json(&output)["error"]["code"],
+        "envelope_unknown_version"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap(),
+        before,
+        "protocol refusals write nothing"
+    );
+}
+
+#[test]
+fn update_envelope_typed_numbers_and_comma_lists_round_trip() {
+    let fixture = envelope_fixture();
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"rating","value":4.5}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    assert_eq!(payload["changes"][0]["after_display"], "4.5", "{payload}");
+    assert_eq!(payload["consequence"], "Rating: set to 4.5");
+
+    let second = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &second,
+            r#"{"op":"field.set","field":"rating","value":"4"}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    assert_eq!(envelope_json(&output)["changes"][0]["after_display"], "4");
+
+    let third = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &third,
+            r#"{"op":"field.set","field":"tags","value":["a,b","c"]}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    let markdown =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    assert!(markdown.contains("  - \"a,b\"\n  - \"c\"\n"), "{markdown}");
+    let tags = payload["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["key"] == "tags")
+        .expect("tags property");
+    assert_eq!(tags["value"], serde_json::json!(["a,b", "c"]));
+
+    // Undo replays with expect = fingerprint_after and ops = inverse_ops.
+    let after = payload["fingerprint_after"].as_str().unwrap().to_owned();
+    let inverse = payload["inverse_ops"].clone();
+    let replay = format!(
+        "{{\"schema_version\":1,\"expect\":\"{after}\",\"ops\":{inverse}}}"
+    );
+    let output = envelope_run(&fixture, &replay, &["-f", "json"]);
+    assert_success(&output);
+    let replayed = envelope_json(&output);
+    // Only the tags op replays; the earlier rating edit stays applied.
+    assert_eq!(replayed["fingerprint_after"], third);
+    let restored =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    assert!(!restored.contains("tags:"), "{restored}");
+    assert!(restored.contains("rating: 4"), "{restored}");
+}
+
+#[test]
+fn update_envelope_dry_run_and_stdin() {
+    let fixture = envelope_fixture();
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let before =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    let album_before =
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"location","value":"Queens"}"#,
+        ),
+        &["-d", "-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(
+        payload["consequence"],
+        "would apply: Location: Clark → Queens"
+    );
+    assert_ne!(payload["fingerprint_after"], payload["fingerprint_before"]);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap(),
+        before,
+        "dry run writes nothing"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
+        album_before,
+        "dry run leaves the index alone"
+    );
+
+    let path = write_envelope(
+        &fixture.vault,
+        "stdin-envelope.json",
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"location","value":"Queens"}"#,
+        ),
+    );
+    let stdin_text = fs::read_to_string(&path).unwrap();
+    let mut command = records_command(&fixture);
+    let output = command
+        .args([
+            "update",
+            "restaurant",
+            "ninja_sushi",
+            "-i",
+            "-",
+            "-f",
+            "json",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child
+                .stdin
+                .as_mut()
+                .expect("piped stdin")
+                .write_all(stdin_text.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("bob records update over stdin");
+    assert_success(&output);
+    assert_eq!(envelope_json(&output)["ok"], true);
+
+    let conflicted = update_with_envelope(
+        &fixture,
+        &[
+            "update",
+            "restaurant",
+            "ninja_sushi",
+            "-i",
+            "envelope.json",
+            "-s",
+            "status=liked",
+            "-f",
+            "json",
+        ],
+    );
+    assert_eq!(conflicted.status.code(), Some(2));
+    assert!(stderr(&conflicted).contains("cannot be used with"));
+}
+
+#[test]
+fn update_envelope_preserves_crlf_and_refuses_bom() {
+    let fixture = envelope_fixture();
+    let original =
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    write_file(
+        &fixture.vault.join("eat/ninja_sushi.md"),
+        &original.replace('\n', "\r\n"),
+    );
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"status","value":"liked"}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let bytes = fs::read(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
+    let text = String::from_utf8(bytes).expect("utf8 record");
+    assert!(text.contains("\r\n"), "CRLF preserved");
+    assert!(!text.contains("status: to_try"), "{text}");
+    assert!(text.contains("status: liked"), "{text}");
+    assert!(text.contains("category: Sushi\r\n"), "{text}");
+
+    // A BOM note refuses like the classic path and keeps every byte.
+    let bom = format!("\u{feff}{original}");
+    write_file(&fixture.vault.join("eat/ninja_sushi.md"), &bom);
+    let bom_fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &bom_fingerprint,
+            r#"{"op":"field.set","field":"status","value":"liked"}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(envelope_json(&output)["error"]["code"], "record_uneditable");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap(),
+        bom,
+        "BOM refusal writes nothing"
+    );
+}
+
+#[test]
+fn update_envelope_capability_in_album_reports() {
+    let fixture = envelope_fixture();
+    for command in ["list", "check"] {
+        let mut albums = bob_command();
+        let output = albums
+            .arg("albums")
+            .arg(command)
+            .env("BOB_DIR", &fixture.vault)
+            .env("BOB_CONFIG_FILE", &fixture.config)
+            .env("BOB_NOW", "2026-10-07 13:40:00")
+            .env("NO_COLOR", "1")
+            .arg("-f")
+            .arg("json")
+            .output()
+            .expect("bob albums report");
+        assert_success(&output);
+        assert_eq!(
+            json(&output)["capabilities"],
+            serde_json::json!(["record_values_v1"]),
+            "{command} carries the capability flag"
+        );
+        assert_eq!(json(&output)["schema_version"], 1);
+    }
+}

@@ -173,7 +173,9 @@ warning summary.
 List and check share one JSON envelope (`schema_version: 1`). Albums are
 ordered by path. `parent` is the parent stem. `ok` is false when error
 findings exist or runtime I/O failed. Each album carries `noun`, `label`,
-`plural`, and the additive display `singular`. See
+`plural`, and the additive display `singular`. The top level also carries
+`capabilities: ["record_values_v1"]`, which the Record Card reads before
+enabling edits. See
 [JSON outputs](reference/json-outputs.md#album-reports).
 
 Each album's ordered `fields[]` includes its label, kind, flags, typed default
@@ -534,7 +536,7 @@ the noun or folder stem, such as `restaurant` or `eat`. It is separate from
 | `bob records list` | Show kinds, albums, folders, note counts, and required fields. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
 | `bob records show TYPE [STEM]` | Show the schema, choice labels, defaults, and common suggested values; with STEM, read one record. |
-| `bob records update TYPE STEM` | Edit one existing record in place through the shared update planner. |
+| `bob records update TYPE STEM` | Edit one existing record in place through the shared update planner, or apply a guarded JSON envelope with `-i FILE`. |
 
 Every command accepts `-f json`. The human output is intended for a terminal;
 JSON output is stable for scripts. `-b/--bob-dir` selects a vault root, defaulting
@@ -596,6 +598,61 @@ with a stale-note error and installs nothing. Dry-run shows the planned album
 bytes alongside the record Markdown and writes nothing; JSON adds `album_index`
 (`path`, `state`, `before`, `after`) only when the index changes. The owner and
 unrelated albums stay byte-identical.
+
+### Updating with an envelope
+
+`bob records update TYPE STEM -i FILE` applies one guarded JSON envelope of
+field ops instead of `--set`/`--note` (the flags conflict). `-i -` reads
+stdin. The envelope carries the semantic `expect` fingerprint from
+`bob records show TYPE STEM -f json` plus the ordered `ops` array. Each
+field appears at most once per envelope; an empty `ops` array is a valid
+no-op.
+
+```json
+{
+  "schema_version": 1,
+  "expect": "sha256:…",
+  "ops": [
+    { "op": "field.set", "field": "status", "value": "ready" },
+    { "op": "field.set", "field": "match", "value": ["ANTHROPIC* CLAUDE", "CLAUDE.AI SUBSCRIP"] },
+    { "op": "field.unset", "field": "url" }
+  ]
+}
+```
+
+| Operation | Inputs and behavior |
+| --------- | ------------------- |
+| `field.set` | Field key plus the typed JSON `value`: strings for text, choice keys, dates, links, and URLs; a number or numeric string for numbers; a string array for list fields. List members are literal and never comma-split. An empty string refuses and points to `field.unset`. |
+| `field.unset` | Field key; removes its YAML key. Required fields refuse with `record_required_empty`. |
+
+Values feed the same planner, span writer, and in-batch index rebuild as
+`--set`; no second validator exists and defaults never apply. The `expect`
+check runs before planning: a mismatch refuses `stale_record` with the
+current `record` object, so the Record Card repaints in one call. Dry run,
+apply, no-op, and refusal all return one JSON document: `ok`,
+`command: "update"`, `dry_run`, `type`, `stem`, `path`, `changed[]`,
+`properties[]` (the update shape), `changes[]` (`key`, `label`,
+`before_display`, `after_display`), `fingerprint_before` /
+`fingerprint_after`, `inverse_ops` (`field.set` with the typed prior value,
+or `field.unset`, in reverse order), `group_before` / `group_after`
+(`{field, value, label}` or null), one human `consequence` sentence,
+`album_index` when it changes, `warnings[]`, and a nullable typed `error`
+(`code`, `message`, `field`, `hint`).
+
+Error codes are `stale_record`, `record_invalid_value`,
+`record_required_empty`, `record_unknown_field`, `envelope_*` (malformed,
+duplicate key or field, unknown key/version/op, wrong type, empty-string
+value, unreadable input), and the target-resolution codes. Exit 0 for
+success or no-op, 2 for refusals, 1 for runtime or guard failures. Human
+output reuses the classic printers; refusals print the message plus hint to
+stderr.
+
+Undo replays the returned `inverse_ops` with the returned
+`fingerprint_after` as its new `expect`:
+
+```json
+{ "schema_version": 1, "expect": "<fingerprint_after>", "ops": "<inverse_ops>" }
+```
 
 ### Reading one record
 

@@ -404,15 +404,24 @@ fn combine_field_inputs(
         .iter()
         .any(|input| input.state == FieldInputState::SuppliedEmpty);
     let mut values = Vec::new();
+    let mut literal_values = Vec::new();
     let mut has_values = false;
+    let mut has_literal_values = false;
     for input in matching {
-        if let FieldInputState::SuppliedValues(items) = &input.state {
-            has_values = true;
-            values.extend(items.iter().cloned());
+        match &input.state {
+            FieldInputState::SuppliedValues(items) => {
+                has_values = true;
+                values.extend(items.iter().cloned());
+            }
+            FieldInputState::SuppliedLiteralValues(items) => {
+                has_literal_values = true;
+                literal_values.extend(items.iter().cloned());
+            }
+            FieldInputState::Absent | FieldInputState::SuppliedEmpty => {}
         }
     }
 
-    if has_empty && has_values {
+    if has_empty && (has_values || has_literal_values) {
         return Err(RecordDiagnostic {
             code: RecordDiagnosticCode::InvalidValue,
             config_path: None,
@@ -429,7 +438,12 @@ fn combine_field_inputs(
             key_path: None,
         });
     }
-    if has_values {
+    // Literal envelope values never merge into comma-split `-s` values: any
+    // literal contribution keeps the whole field literal.
+    if has_literal_values {
+        values.extend(literal_values);
+        Ok(FieldInputState::SuppliedLiteralValues(values))
+    } else if has_values {
         Ok(FieldInputState::SuppliedValues(values))
     } else if has_empty {
         Ok(FieldInputState::SuppliedEmpty)
@@ -1095,7 +1109,8 @@ pub(crate) fn plan_update(
                 }
                 let _ = ranges;
             }
-            Ok(FieldInputState::SuppliedValues(_)) => {
+            Ok(FieldInputState::SuppliedValues(_))
+            | Ok(FieldInputState::SuppliedLiteralValues(_)) => {
                 let combined = combine_field_inputs(
                     field,
                     request.fields,

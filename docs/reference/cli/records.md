@@ -201,7 +201,7 @@ See docs/records.md for the schema contract and reading one record.
 Update one existing Record Note in place
 
 ```text title="bob records update --help"
-Resolve an existing record by TYPE and STEM, then edit only the supplied YAML value spans and append notes with repeated --note arguments. TYPE accepts a noun or album stem. Field-only and note-only updates work without repeating required creation fields. --dry-run prints the exact Markdown without writing.
+Resolve an existing record by TYPE and STEM, then edit only the supplied YAML value spans and append notes with repeated --note arguments. TYPE accepts a noun or album stem. Field-only and note-only updates work without repeating required creation fields. With -i FILE, apply a guarded JSON envelope of field.set/field.unset ops against an expect fingerprint instead of --set and --note. --dry-run prints the exact Markdown without writing.
 
 Usage: bob records update [OPTIONS] <TYPE> <STEM>
 
@@ -228,6 +228,9 @@ Options:
   -h, --help
           Show help
 
+  -i, --input <FILE>
+          Guarded JSON envelope file; - reads stdin
+
   -n, --note <TEXT>
           Append a note bullet; may be repeated
 
@@ -242,8 +245,9 @@ Examples:
   bob records update eat ninja_sushi -s status=liked
   bob records update restaurant ninja_sushi -s location= -d
   bob records update podcast talk_python -n 'Listened to the async episode' -d -f json
+  bob records update eat ninja_sushi -i envelope.json -f json
 
-See docs/records.md for update semantics, optional clearing, and failure behavior.
+See docs/records.md for update semantics, the guarded envelope, optional clearing, and failure behavior.
 ```
 
 ## Related
