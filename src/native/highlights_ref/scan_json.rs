@@ -491,8 +491,53 @@ pub(super) fn scan_library_json(
         completed_intake = intake.len();
     }
 
-    let pdfs = match collect_pdf_paths(config, options.dry_run) {
-        Ok(pdfs) => pdfs,
+    // Shared preparation with immediate revalidation (or lib+xlib for dry
+    // runs): ordered discovery, one locator index plus one invocation date
+    // (stable across the retry), parallel planning, and canonical
+    // finalization. This unifies the former JSON reserve-then-finalize order
+    // with the human finalize-then-reserve order without changing final IDs
+    // or task links. The work predicate and unchanged assembly are
+    // established for the locked-apply fast path; this phase retains
+    // execution regardless.
+    let prepared = match (|| -> Result<PreparedFullScan> {
+        let pdfs = collect_pdf_paths(config, options.dry_run)?;
+        let mut first = prepare_from_inputs(
+            config,
+            options,
+            jobs,
+            intake.clone(),
+            pdfs,
+            None,
+        )?;
+        match validate_prepared_scan(&first) {
+            PreparedValidation::Unchanged => Ok(first),
+            PreparedValidation::Failed(error) => Err(error),
+            PreparedValidation::Stale { .. } => {
+                reset_prepared_finalization(&mut first);
+                let date = first.invocation_date.clone();
+                let pdfs = collect_pdf_paths(config, options.dry_run)?;
+                let rebuilt = prepare_from_inputs(
+                    config,
+                    options,
+                    jobs,
+                    intake.clone(),
+                    pdfs,
+                    Some(date),
+                )?;
+                match validate_prepared_scan(&rebuilt) {
+                    PreparedValidation::Unchanged => Ok(rebuilt),
+                    PreparedValidation::Stale { reason } => {
+                        Err(CommandError::new(format!(
+                            "scan inputs changed during planning ({reason}); rerun bob ref scan"
+                        ))
+                        .with_code("scan_failed"))
+                    }
+                    PreparedValidation::Failed(error) => Err(error),
+                }
+            }
+        }
+    })() {
+        Ok(prepared) => prepared,
         Err(error) => {
             return print_scan_error_envelope(
                 config,
@@ -505,53 +550,11 @@ pub(super) fn scan_library_json(
             );
         }
     };
-    if let Err(error) = validate_output_collisions(config, &pdfs) {
-        return print_scan_error_envelope(
-            config,
-            options,
-            mode,
-            &intake,
-            completed_intake,
-            &error,
-            true,
-        );
-    }
-
-    let ctx = ScanContext::build(config);
-    let mut plan_outcomes = plan_pdfs(config, &pdfs, options, jobs, &ctx);
-    let mut plans_to_finalize = plan_outcomes
-        .iter_mut()
-        .filter_map(|outcome| match outcome {
-            ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
-            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
-        })
-        .collect::<Vec<_>>();
-    if let Err(error) =
-        reserve_preview_ids(config, &mut plans_to_finalize, &ctx)
-    {
-        return print_scan_error_envelope(
-            config,
-            options,
-            mode,
-            &intake,
-            completed_intake,
-            &error,
-            true,
-        );
-    }
-    if let Err(error) =
-        finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)
-    {
-        return print_scan_error_envelope(
-            config,
-            options,
-            mode,
-            &intake,
-            completed_intake,
-            &error,
-            true,
-        );
-    }
+    let _actual_work = prepared_scan_has_actual_work(&prepared);
+    let _unchanged_fallback =
+        unchanged_write_outcomes_for(&prepared.plan_outcomes);
+    let pdfs = prepared.pdfs;
+    let plan_outcomes = prepared.plan_outcomes;
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -559,17 +562,6 @@ pub(super) fn scan_library_json(
             ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
-    if let Err(error) = validate_planned_asset_collisions(&plans) {
-        return print_scan_error_envelope(
-            config,
-            options,
-            mode,
-            &intake,
-            completed_intake,
-            &error,
-            true,
-        );
-    }
     let plan_failures = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {

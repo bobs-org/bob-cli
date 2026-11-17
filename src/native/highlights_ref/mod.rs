@@ -95,6 +95,7 @@ mod report;
 // This phase defines the planner seam consumed by the later render phase.
 pub(crate) mod return_links;
 mod scan_json;
+mod scan_plan;
 mod scan_receipt;
 pub(crate) mod sections;
 mod sidecar;
@@ -137,6 +138,7 @@ use reading_execute::*;
 use reading_plan::*;
 use report::*;
 use scan_json::*;
+use scan_plan::*;
 use scan_receipt::*;
 use sidecar::*;
 use sidecar_render::*;

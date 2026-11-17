@@ -121,28 +121,14 @@ fn scan_library_dry_run(
 ) -> Result<()> {
     let pre_scan_hook = configured_pre_scan_hook(no_hooks)?;
     run_pre_scan_hook(config, pre_scan_hook.as_ref(), options.dry_run)?;
-    let intake = plan_xlib_intake(config)?;
-    let pdfs = collect_pdf_paths(config, options.dry_run)?;
-    validate_output_collisions(config, &pdfs)?;
-
-    // One locator index for the whole scan, shared across scoped planning
-    // threads (plus the invocation date). Planning never mutates it.
-    let ctx = ScanContext::build(config);
-    // `plan_pdf_sync` is a pure, read-only computation over an independent
-    // `&Config`, one PDF path, and the shared context, so planning is
-    // embarrassingly parallel. We collect into a position-keyed vector and
-    // reassemble in `pdfs` order so reporting output stays deterministic
-    // regardless of completion order.
-    let mut plan_outcomes = plan_pdfs(config, &pdfs, options, jobs, &ctx);
-    let mut plans_to_finalize = plan_outcomes
-        .iter_mut()
-        .filter_map(|outcome| match outcome {
-            ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
-            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
-        })
-        .collect::<Vec<_>>();
-    finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)?;
-    reserve_preview_ids(config, &mut plans_to_finalize, &ctx)?;
+    // Shared read-only preparation with bounded retry: ordered discovery,
+    // one locator index plus one invocation date (stable across the retry),
+    // parallel planning, canonical finalization, and collision checks.
+    // Planning never prints and never executes; reporting stays below.
+    let prepared = prepare_full_scan_with_retry(config, options, jobs)?;
+    let intake = prepared.intake;
+    let pdfs = prepared.pdfs;
+    let plan_outcomes = prepared.plan_outcomes;
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -150,7 +136,6 @@ fn scan_library_dry_run(
             ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
-    validate_planned_asset_collisions(&plans)?;
     let plan_failures = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -238,46 +223,67 @@ fn scan_library_write(
         return Err(error);
     }
     receipt.set_intake(intake.clone(), intake.len());
-    let pdfs = match collect_pdf_paths(config, options.dry_run) {
-        Ok(pdfs) => pdfs,
+    // Shared preparation over the post-intake library with immediate
+    // revalidation: ordered discovery, one locator index plus one invocation
+    // date, parallel planning, and canonical finalization. Intake execution
+    // stays under the same locks in this phase; planning never prints and
+    // never executes PDF writes. A stale validation rebuilds once under the
+    // same date; persistent churn returns the generic `scan_failed` envelope.
+    // The actual-work predicate and read-only unchanged assembly are
+    // established here for the locked-apply fast path; this phase retains
+    // execution regardless so the lock window is unchanged.
+    let prepared = match (|| -> Result<PreparedFullScan> {
+        let pdfs = collect_pdf_paths(config, options.dry_run)?;
+        let mut first = prepare_from_inputs(
+            config,
+            options,
+            jobs,
+            intake.clone(),
+            pdfs,
+            None,
+        )?;
+        match validate_prepared_scan(&first) {
+            PreparedValidation::Unchanged => Ok(first),
+            PreparedValidation::Failed(error) => Err(error),
+            PreparedValidation::Stale { .. } => {
+                reset_prepared_finalization(&mut first);
+                let date = first.invocation_date.clone();
+                let pdfs = collect_pdf_paths(config, options.dry_run)?;
+                let rebuilt = prepare_from_inputs(
+                    config,
+                    options,
+                    jobs,
+                    intake.clone(),
+                    pdfs,
+                    Some(date),
+                )?;
+                match validate_prepared_scan(&rebuilt) {
+                    PreparedValidation::Unchanged => Ok(rebuilt),
+                    PreparedValidation::Stale { reason } => {
+                        Err(CommandError::new(format!(
+                            "scan inputs changed during planning ({reason}); rerun bob ref scan"
+                        ))
+                        .with_code("scan_failed"))
+                    }
+                    PreparedValidation::Failed(error) => Err(error),
+                }
+            }
+        }
+    })() {
+        Ok(prepared) => prepared,
         Err(error) => {
             receipt.write_error(&error);
             return Err(error);
         }
     };
-    if let Err(error) = validate_output_collisions(config, &pdfs) {
-        receipt.write_error(&error);
-        return Err(error);
-    }
-
-    // One locator index for the whole scan, shared across scoped planning
-    // threads (plus the invocation date). Planning never mutates it.
-    let ctx = ScanContext::build(config);
-    // `plan_pdf_sync` is a pure, read-only computation over an independent
-    // `&Config`, one PDF path, and the shared context, so planning is
-    // embarrassingly parallel. We collect into a position-keyed vector and
-    // reassemble in `pdfs` order so reporting output stays deterministic
-    // regardless of completion order.
-    let mut plan_outcomes = plan_pdfs(config, &pdfs, options, jobs, &ctx);
-    let mut plans_to_finalize = plan_outcomes
-        .iter_mut()
-        .filter_map(|outcome| match outcome {
-            ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
-            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
-        })
-        .collect::<Vec<_>>();
-    if let Err(error) =
-        finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)
-    {
-        receipt.write_error(&error);
-        return Err(error);
-    }
-    if let Err(error) =
-        reserve_preview_ids(config, &mut plans_to_finalize, &ctx)
-    {
-        receipt.write_error(&error);
-        return Err(error);
-    }
+    // Established for locked-apply: exhaustive work check plus a read-only
+    // unchanged assembly that never calls the mutation executor. Retained
+    // execution below keeps this phase's lock window unchanged.
+    let _actual_work = prepared_scan_has_actual_work(&prepared);
+    let _unchanged_fallback =
+        unchanged_write_outcomes_for(&prepared.plan_outcomes);
+    let pdfs = prepared.pdfs;
+    let plan_outcomes = prepared.plan_outcomes;
     let plans = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -285,10 +291,6 @@ fn scan_library_write(
             ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
-    if let Err(error) = validate_planned_asset_collisions(&plans) {
-        receipt.write_error(&error);
-        return Err(error);
-    }
     let plan_failures = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
