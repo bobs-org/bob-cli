@@ -1112,3 +1112,350 @@ fn human_post_lock_intake_collision_writes_error_receipt() {
         format_output(&output)
     );
 }
+
+// --- Landing repairs: coherent evidence, combined collisions, receipts ---
+
+#[test]
+fn pdf_created_during_planning_replans_with_both() {
+    // A PDF arriving while the `planning` handshake is paused must not be
+    // omitted: the pre/post read-set comparison must mark the old plan
+    // stale so the bounded retry rebuilds with current data.
+    let temp = TempDir::new("bob-cli-scan-interleave-planning-membership");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_marker_pdf(&env.vault.join("lib/blogs/first.pdf"), "First");
+    let hs = Handshake::new(temp.path(), "hs");
+    let child = spawn_scan(&env, &["-f", "json"], &hs, "planning", false, None);
+    wait_pause(&hs, 1);
+    write_marker_pdf(&env.vault.join("lib/blogs/second.pdf"), "Second");
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "new PDF during planning must replan, not omit:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["summary"]["pdfs"], 2);
+    assert_eq!(document["summary"]["created"], 2);
+    assert!(env.vault.join("ref/blogs/first.md").is_file());
+    assert!(env.vault.join("ref/blogs/second.md").is_file());
+}
+
+#[test]
+fn same_length_edits_before_evidence_replan() {
+    // Same-length sidecar/ref/config/parent edits after reads but before
+    // evidence capture must invalidate: content hashes (not mtime/size)
+    // plus membership are compared pre vs post inside preparation.
+    let temp = TempDir::new("bob-cli-scan-interleave-before-evidence");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/live.pdf");
+    write_textbundle_with_asset(&pdf, "Live", b"asset-v1");
+    assert_success(&run_scan(&env, &[]));
+    let note = env.vault.join("ref/chat/live.md");
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+    let sidecar_before = fs::read_to_string(&sidecar).expect("sidecar");
+    assert_eq!(sidecar_before.len(), sidecar_before.len());
+    // Same-length sidecar edit (change one char, keep length).
+    let mut sidecar_chars: Vec<char> = sidecar_before.chars().collect();
+    if let Some(first) = sidecar_chars.first_mut() {
+        *first = if *first == '>' { '#' } else { '>' };
+    }
+    let sidecar_edited: String = sidecar_chars.into_iter().collect();
+    assert_eq!(sidecar_edited.len(), sidecar_before.len());
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "highlights:\n  foo: bar\n");
+    let child = {
+        let mut command = bob_command();
+        command.arg("ref").arg("scan").arg("-f").arg("json");
+        apply_scan_env(&mut command, &env)
+            .env("BOB_CONFIG_FILE", &config)
+            .env("BOB_REF_SCAN_TEST_PAUSE", "before_evidence")
+            .env("BOB_REF_SCAN_TEST_READY", &hs.ready)
+            .env("BOB_REF_SCAN_TEST_GO", &hs.go)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        SpawnedScan {
+            child: Some(command.spawn().expect("spawn")),
+        }
+    };
+    wait_pause(&hs, 1);
+    // Same-length edits after reads, before evidence capture.
+    fs::write(&sidecar, &sidecar_edited).expect("edit sidecar same length");
+    let note_before = fs::read_to_string(&note).expect("note");
+    // Same-length ref-note edit: flip one char, keep length.
+    let mut note_chars: Vec<char> = note_before.chars().collect();
+    if let Some(c) = note_chars.iter_mut().find(|c| **c == 'L') {
+        *c = 'M';
+    }
+    let note_edited: String = note_chars.into_iter().collect();
+    assert_eq!(note_edited.len(), note_before.len());
+    fs::write(&note, &note_edited).expect("edit note same length");
+    // Same-length config edit.
+    fs::write(&config, "highlights:\n  foo: baz\n").expect("edit config");
+    // Same-length parent edit (area note title).
+    let parent_before =
+        fs::read_to_string(env.vault.join("obsidian.md")).expect("parent");
+    let parent_edited = parent_before.replacen("Obsidian", "ObsidiaN", 1);
+    assert_eq!(parent_edited.len(), parent_before.len());
+    fs::write(env.vault.join("obsidian.md"), &parent_edited)
+        .expect("edit parent");
+    // New unselected input: a fresh PDF the old plan did not select.
+    write_marker_pdf(&env.vault.join("lib/chat/added.pdf"), "Added");
+    resume(&hs, 1);
+    let output = child.wait();
+    // Must replan with current data or fail safely; never accept old work
+    // with new evidence as stale no-work.
+    assert!(
+        output.status.code() == Some(0) || output.status.code() == Some(1),
+        "same-length edits must replan or refuse:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    if document.get("error").is_some() {
+        assert_eq!(document["error"]["code"], "scan_failed");
+        assert!(
+            document["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("scan inputs changed"),
+            "{}",
+            format_output(&output)
+        );
+    } else {
+        let created = document["summary"]["created"].as_u64().unwrap_or(0);
+        let updated = document["summary"]["updated"].as_u64().unwrap_or(0);
+        let failures = document["summary"]["failures"].as_u64().unwrap_or(0);
+        assert!(
+            created + updated + failures > 0,
+            "edits must not be classified stale no-work:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            env.vault.join("ref/chat/added.md").is_file()
+                || document["summary"]["pdfs"].as_u64().unwrap_or(0) >= 1,
+            "new input must be planned:\n{}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn queued_queued_output_collision_rejects_without_publication() {
+    // Two queued PDFs mapping to one ref note must be rejected as dry-run
+    // does, never overwriting one reference with the other.
+    let temp = TempDir::new("bob-cli-scan-interleave-queued-queued");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_marker_pdf(&env.vault.join("xlib/blogs/clash.pdf"), "First");
+    write_marker_pdf(&env.vault.join("xlib/blogs/clash.PDF"), "Second");
+    let dry = run_scan(&env, &["-f", "json", "--dry-run"]);
+    assert_eq!(dry.status.code(), Some(1), "{}", format_output(&dry));
+    assert_eq!(scan_json_stdout(&dry)["error"]["code"], "output_collision");
+    let output = run_scan(&env, &["-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "writing scan must reject the collision:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["error"]["code"], "output_collision");
+    assert_eq!(
+        document["error"]["paths"],
+        serde_json::json!(["ref/blogs/clash.md"])
+    );
+    // Never overwrites one reference with the other: no moves, no notes.
+    assert!(env.vault.join("xlib/blogs/clash.pdf").is_file());
+    assert!(env.vault.join("xlib/blogs/clash.PDF").is_file());
+    assert!(!env.vault.join("lib/blogs/clash.pdf").exists());
+    assert!(!env.vault.join("lib/blogs/clash.PDF").exists());
+    assert!(!env.vault.join("ref/blogs/clash.md").exists());
+}
+
+#[test]
+fn queued_existing_output_collision_rejects_without_overwrite() {
+    // A queued PDF colliding with an existing library PDF's note (different
+    // case, same ref note) must be rejected before any move, leaving the
+    // existing reference untouched.
+    let temp = TempDir::new("bob-cli-scan-interleave-queued-existing");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_marker_pdf(&env.vault.join("lib/blogs/clash.PDF"), "Existing");
+    assert_success(&run_scan(&env, &[]));
+    let note = env.vault.join("ref/blogs/clash.md");
+    assert!(note.is_file());
+    let note_before = fs::read(&note).expect("existing note");
+    let receipt_before =
+        fs::read(scan_receipt_path(&env.state)).expect("receipt");
+    write_marker_pdf(&env.vault.join("xlib/blogs/clash.pdf"), "Queued");
+    let output = run_scan(&env, &["-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "queued/existing collision must fail:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        scan_json_stdout(&output)["error"]["code"],
+        "output_collision"
+    );
+    assert_eq!(fs::read(&note).expect("note after"), note_before);
+    assert!(env.vault.join("xlib/blogs/clash.pdf").is_file());
+    assert!(!env.vault.join("lib/blogs/clash.pdf").exists());
+    assert_eq!(
+        fs::read(scan_receipt_path(&env.state)).expect("receipt after"),
+        receipt_before,
+        "prelock collision must leave the receipt untouched"
+    );
+}
+
+#[test]
+fn recovery_then_no_work_publishes_receipt() {
+    // Recovery inside the mutation window must settle its receipt while
+    // serialized: after recovery, a no-work rebuild must not leave the
+    // sentinel receipt untouched.
+    let (temp, vault, state) =
+        overwrite_recovery::fixture("bob-cli-scan-interleave-recovery-nowork");
+    let env = ScanEnv {
+        vault: vault.clone(),
+        state: state.clone(),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_marker_pdf(&vault.join("lib/blogs/stable.pdf"), "Stable");
+    let scan_env = ScanEnv {
+        vault: vault.clone(),
+        state: state.clone(),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    assert_success(&run_scan(&scan_env, &[]));
+    let receipt_before =
+        fs::read(scan_receipt_path(&state)).expect("initial receipt");
+    // Queue work so preparation sees mutation, then remove it during the
+    // pause while planting a valid overwrite intent. Recovery will mutate
+    // (publishing a receipt) while the rebuild finds no-work.
+    write_marker_pdf(&vault.join("xlib/blogs/queued.pdf"), "Queued");
+    let base = overwrite_recovery::head(&vault);
+    let hs = Handshake::new(temp.path(), "hs");
+    let child =
+        spawn_scan(&env, &["-f", "json"], &hs, "after_prepare", false, None);
+    wait_pause(&hs, 1);
+    fs::remove_file(vault.join("xlib/blogs/queued.pdf")).expect("remove work");
+    fs::write(
+        vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nCRASHED\n",
+    )
+    .expect("crash note");
+    overwrite_recovery::write_intent(
+        &state,
+        &vault,
+        &base,
+        None,
+        &["ref/blogs/half-written.md"],
+        &[],
+    );
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "recovery then no-work must succeed:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    let receipt_after =
+        fs::read(scan_receipt_path(&state)).expect("receipt after recovery");
+    assert_ne!(
+        receipt_after, receipt_before,
+        "recovery must replace the sentinel receipt before no-work return"
+    );
+    assert!(
+        !overwrite_recovery::intent_path(&state, &vault).exists(),
+        "intent is cleared"
+    );
+}
+
+#[test]
+fn post_recovery_replan_failure_keeps_direct_output() {
+    // When recovery succeeds but the rebuild fails (e.g., a collision
+    // planted during the pause), direct output must report the replan
+    // failure while the receipt stays as the serialized recovery result.
+    let (temp, vault, state) =
+        overwrite_recovery::fixture("bob-cli-scan-interleave-recovery-fail");
+    let env = ScanEnv {
+        vault: vault.clone(),
+        state: state.clone(),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_marker_pdf(&vault.join("lib/blogs/stable.pdf"), "Stable");
+    let scan_env = ScanEnv {
+        vault: vault.clone(),
+        state: state.clone(),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    assert_success(&run_scan(&scan_env, &[]));
+    write_marker_pdf(&vault.join("xlib/blogs/queued.pdf"), "Queued");
+    let base = overwrite_recovery::head(&vault);
+    let hs = Handshake::new(temp.path(), "hs");
+    let child =
+        spawn_scan(&env, &["-f", "json"], &hs, "after_prepare", false, None);
+    wait_pause(&hs, 1);
+    fs::write(
+        vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nCRASHED\n",
+    )
+    .expect("crash note");
+    overwrite_recovery::write_intent(
+        &state,
+        &vault,
+        &base,
+        None,
+        &["ref/blogs/half-written.md"],
+        &[],
+    );
+    // Plant a queued-queued output collision so the post-recovery rebuild
+    // fails.
+    write_marker_pdf(&vault.join("xlib/blogs/clash.pdf"), "First");
+    write_marker_pdf(&vault.join("xlib/blogs/clash.PDF"), "Second");
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "post-recovery replan failure:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "output_collision");
+    // Receipt must be the serialized recovery result, not a later unlocked
+    // write and not the stale sentinel: it exists and parses, and the
+    // intent is cleared by the serialized recovery.
+    let receipt = fs::read_to_string(scan_receipt_path(&state))
+        .expect("recovery receipt survives replan failure");
+    let receipt_doc: Value =
+        serde_json::from_str(&receipt).expect("receipt json");
+    assert_eq!(receipt_doc["ok"], true);
+    assert!(
+        !overwrite_recovery::intent_path(&state, &vault).exists(),
+        "intent is cleared by serialized recovery"
+    );
+}

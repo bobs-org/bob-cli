@@ -280,6 +280,14 @@ fn lock_validate_intake_and_execute(
                     Ok(notice) => {
                         if let Some(notice) = notice {
                             eprintln!("{notice}");
+                            // Settle recovery-only work while serialized:
+                            // publish the receipt while both locks are still
+                            // held so a no-work/error rebuild cannot leave
+                            // real recovery mutations with a stale sentinel.
+                            // A later execution overwrites this with the
+                            // complete result; an abandoned retry never
+                            // publishes on its own.
+                            emit_recovery_receipt(config, options);
                         }
                     }
                     Err(error) => {
@@ -374,6 +382,29 @@ fn lock_validate_intake_and_execute(
             continue;
         }
 
+        // Validate prospective note outputs for the existing library plus
+        // all queued destination PDFs under the mutation locks, before the
+        // first move. This restores the former collision guard for
+        // intake-only initial libraries and for conflicts between existing
+        // and new PDFs. Uses the existing guard helpers so code, paths, and
+        // human/JSON behavior stay identical to dry-run.
+        {
+            let mut combined = prepared.pdfs.clone();
+            combined.extend(intake_affected_pdfs(&intake));
+            combined.sort();
+            combined.dedup();
+            if let Err(error) = validate_output_collisions(config, &combined) {
+                return Err(finish_locked_error(
+                    config,
+                    options,
+                    error,
+                    intake.clone(),
+                    0,
+                    locks,
+                ));
+            }
+        }
+
         let (moved, result) = execute_xlib_intake_counting(&intake);
         if let Err(error) = result {
             return Err(finish_locked_error(
@@ -394,6 +425,50 @@ fn lock_validate_intake_and_execute(
                 intake.len(),
                 locks,
             ));
+        }
+
+        // Recheck the combined final plans for output and asset collisions
+        // before any plan executes. Intake planning alone cannot see
+        // conflicts across the combined set (e.g., two queued PDFs mapping
+        // to one ref note, or a queued/existing note collision). New retry
+        // branches are forbidden after any owned move; failures use the
+        // existing protected failure/cleanup semantics and never erase
+        // intervening data.
+        {
+            if let Err(error) =
+                validate_output_collisions(config, &prepared.pdfs)
+            {
+                return Err(finish_locked_error(
+                    config,
+                    options,
+                    error,
+                    intake.clone(),
+                    intake.len(),
+                    locks,
+                ));
+            }
+            let combined_plans = prepared
+                .plan_outcomes
+                .iter()
+                .filter_map(|outcome| match outcome {
+                    ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
+                    ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            if let Err(error) =
+                validate_planned_asset_collisions(&combined_plans)
+            {
+                return Err(finish_locked_error(
+                    config,
+                    options,
+                    error,
+                    intake.clone(),
+                    intake.len(),
+                    locks,
+                ));
+            }
         }
 
         let executed = match execute_prepared_plans(

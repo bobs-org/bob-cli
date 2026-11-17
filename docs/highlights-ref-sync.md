@@ -1270,8 +1270,10 @@ exact envelope line JSON mode would print to
 `~/.local/state`). That covers human and JSON modes, full and
 `--intake-only` drains, success, partial success, and hard failures after
 the lock (where the receipt holds the error envelope, including a
-post-lock `intake_collision`). In JSON mode the
-receipt bytes are identical to stdout. Per-PDF dirty holds appear in the
+post-lock `intake_collision` or `output_collision`). In JSON mode the
+receipt bytes are identical to stdout, except when recovery alone runs:
+the direct command result stays the no-work/error report while the
+serialized receipt is the recovery result. Per-PDF dirty holds appear in the
 normal completed-scan receipt, including when every PDF is held; they do not
 replace it with a scan-wide error. Dry runs, `ref sync`, lock-free no-work
 scans, and failures before lock acquisition (including a prelock
