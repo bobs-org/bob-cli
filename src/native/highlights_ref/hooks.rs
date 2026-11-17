@@ -1,4 +1,10 @@
 //! Pre-scan hook configuration and execution.
+//!
+//! Full scans run the hook from `BOB_DIR` with neither `bob_sync.lock` nor
+//! `scan.lock` held, after pending overwrite recovery has already
+//! released those locks. Vault-sync invoked by the hook owns the
+//! maintenance lock itself. Nested writing scans see
+//! `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` and fail with `lock_busy`.
 use super::*;
 use crate::native::env as bob_env;
 

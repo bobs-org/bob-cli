@@ -436,10 +436,12 @@ highlights:
 empty value to disable a configured hook. The hook runs as `sh -c <command>`
 from `BOB_DIR` and inherits stdout/stderr, so scheduled logs include its output.
 Bob exports `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook child. If it exits
-non-zero, `scan` reports the exit code and aborts before intake. A writing scan
-holds `bob_sync.lock` before the hook runs, so a hook that itself runs
-`bob vault-sync` is a silent no-op: vault-sync skips when that lock is already
-held.
+non-zero, `scan` reports the exit code and aborts before intake. The hook runs
+with neither `bob_sync.lock` nor `scan.lock` held, after pending overwrite
+recovery has already released those locks, so a hook that itself runs
+`bob vault-sync` lets vault-sync own the maintenance lock and complete before
+planning. A nested writing scan from the hook fails immediately with
+`lock_busy` rather than recursing.
 `scan --dry-run` reports the hook it would run without executing it. Pass
 `-n, --no-hooks` to `scan` or `doctor`, or place it on the parent command
 before that subcommand, to ignore the hook from every source. The same
@@ -1036,8 +1038,10 @@ marker-write runs are auditable. Dry runs do not create directories, move
 intake files, write notes, write PDFs, or run the pre-scan hook, even when
 combined with `--write-pdfs`.
 
-Before planning notes, writing scans run the optional pre-scan hook and then
-preflight intake. Pass `-n, --no-hooks` to skip the hook. Intake moves each PDF under `xlib` to the mirrored `lib` path
+Writing scans run the optional pre-scan hook and plan the existing library
+with neither writer lock held. Pass `-n, --no-hooks` to skip the hook. When
+intake or a vault write remains, the scan then takes both locks and
+preflights intake. Intake moves each PDF under `xlib` to the mirrored `lib` path
 and moves same-stem Markdown sidecars, TextBundle directories, and companion
 audio with the PDF, so annotation text, image assets, and the listen-card
 player are not orphaned. Late-pair audio (intake audio whose PDF is already in
@@ -1075,8 +1079,8 @@ byte-identical to the existing file.
 For PDFs under `xlib`, `bob ref create` runs vault-sync before intake and
 again after its scoped commit while holding `bob_sync.lock`. A PDF created
 directly under `lib/` skips the pull so vault-sync cannot commit it without
-its note. Writing scans hold the same maintenance lock through intake and
-note writes, but do not sync themselves. `bob nightly` runs vault-sync
+its note. Mutating writing scans hold the same maintenance lock through
+intake and note writes, but do not sync themselves. `bob nightly` runs vault-sync
 before and after its maintenance commands. Every sync rewrites the
 `source_pdf` field, so a direct `bob ref sync ~/bob/xlib/...` dry run or
 one-off sync self-heals to the library-relative path on the next scan after
@@ -1210,29 +1214,32 @@ contract migration.
 | `pre_sync_failed` | `scan --intake-only` could not pull from the remote, or the pull left conflicts |
 | `not_a_worktree`, `other_vault`, `outside_vault` | `scan --intake-only` refused the vault: it is not a Git worktree, differs from `BOB_DIR`, or has a configured directory outside it |
 | `hook_failed` | The pre-scan hook failed to spawn or exited non-zero |
-| `intake_collision` | An intake destination already exists (`paths`: the colliding destinations) |
+| `intake_collision` | An intake destination already exists (`paths`: the colliding destinations). Discovered during unlocked planning this is a prelock failure and leaves the receipt untouched; discovered after the writer lock is held it writes the error receipt |
 | `output_collision` | Two PDFs map to one note or asset path (`paths`: the colliding targets) |
 | `dirty_targets` | A targeted `ref sync` refused a protected dirty write target, or an older bob version returned its scan-wide dirty-preflight error (`paths`: the dirty files). Current writing full scans report this reason in `held[]` and succeed when no genuine failures occur |
 | `scan_failed` | Every other hard failure |
 
 ### Writer lock
 
-A writing scan (not a dry run) takes two exclusive locks after layout
-validation and before the pre-scan hook runs, and holds both until the
-scan returns:
+A writing scan that will mutate — pending xlib intake, overwrite recovery,
+or an actual vault/PDF write — takes two exclusive locks after unlocked
+layout validation, recovery, the pre-scan hook, and library planning, and
+holds both through intake and writes:
 
 1. the shared vault-maintenance lock (`bob_sync.lock`, or
    `BOB_VAULT_SYNC_LOCK_FILE` when set);
 2. the scan writer lock (`<state>/bob-cli/ref/scan.lock`).
 
 The order is always `bob_sync.lock` then `scan.lock`. That serializes
-writing scans with vault-sync, nightly, and rename so vault-sync cannot
-push a library PDF without its ref note, and serializes two writing scans
+mutating scans with vault-sync, nightly, and rename so vault-sync cannot
+push a library PDF without its ref note, and serializes two mutating scans
 (for example Bob Refs ⌘S, Bob Mac Capture's scan after ⌘S in Highlights,
 and the 15-minute cron) so they do not race on intake moves. A dry run
-takes neither lock. Writing scans never run vault-sync
-themselves; vault-sync's next cycle after the scan releases the lock
-commits the PDF and note together.
+takes neither lock. A converged writing scan with no intake, recovery, or
+actual writes also takes neither lock: it completes even when either lock
+is held, prints no wait line, and leaves the previous receipt untouched.
+Writing scans never run vault-sync themselves; vault-sync's next cycle
+after the scan releases the lock commits the PDF and note together.
 
 The scan lock file is mode 0600 and the directory 0700. While another
 command holds the maintenance lock, a scan prints `waiting for another
@@ -1248,13 +1255,12 @@ Both waits are overridable with the internal
 the shorter create-time waits (60 s and 30 s, overridable with
 `BOB_REF_INTAKE_LOCK_WAIT_SECONDS`) and holds them for the whole drain.
 
-The pre-scan hook runs under `bob_sync.lock`. A hook that itself runs
-`bob vault-sync` is a silent no-op: vault-sync skips when that lock is
-already held. Bob exports `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` so a hook
-can detect it and avoid shelling back into `bob ref scan`. A nested
-writing scan would wait on the held locks and fail with `lock_busy`.
-Human mode is otherwise byte-identical, except for the lock-wait lines
-on stderr and the `lock_busy` / `scan_busy` failures.
+The pre-scan hook runs with neither scan-owned lock held. A hook that
+itself runs `bob vault-sync` lets vault-sync own the maintenance lock and
+finish before planning. Bob exports `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` so
+a nested writing scan fails immediately with `lock_busy` rather than
+recursing. Human mode is otherwise byte-identical, except for the
+lock-wait lines on stderr and the `lock_busy` / `scan_busy` failures.
 
 ### Scan receipt
 
@@ -1263,12 +1269,15 @@ exact envelope line JSON mode would print to
 `<state>/bob-cli/ref/last-scan.json` (`$XDG_STATE_HOME`, else
 `~/.local/state`). That covers human and JSON modes, full and
 `--intake-only` drains, success, partial success, and hard failures after
-the lock (where the receipt holds the error envelope). In JSON mode the
+the lock (where the receipt holds the error envelope, including a
+post-lock `intake_collision`). In JSON mode the
 receipt bytes are identical to stdout. Per-PDF dirty holds appear in the
 normal completed-scan receipt, including when every PDF is held; they do not
-replace it with a scan-wide error. Dry runs, `ref sync`, and scans that
-never got the lock write no receipt. The receipt is written by temp file
-plus rename, mode 0600, in a 0700 directory. A receipt failure prints one
+replace it with a scan-wide error. Dry runs, `ref sync`, lock-free no-work
+scans, and failures before lock acquisition (including a prelock
+`intake_collision` or `output_collision`) write no receipt and leave the
+previous file untouched. The receipt is written by temp file plus rename,
+mode 0600, in a 0700 directory. A receipt failure prints one
 `bob ref: could not write scan receipt: …` line to stderr and never changes
 stdout or the exit code.
 
@@ -2583,8 +2592,9 @@ command fails before guessing where generated content belongs.
 `-f overwrite` writes a host-local intent under
 `$XDG_STATE_HOME/bob-cli/ref/overwrite-intents/` before it mutates the vault.
 The next writing `bob ref create` or `bob ref scan` on that host recovers under
-`bob_sync.lock` then `scan.lock` before any pre-sync can commit half-applied
-files: a proved overwrite commit is kept; otherwise the recorded base HEAD is
+`bob_sync.lock` then `scan.lock` before the pre-scan hook and before any
+pre-sync can commit half-applied files: a proved overwrite commit is kept;
+otherwise the recorded base HEAD is
 restored and the intent is cleared. Annotated version-2 intents reverse
 proven PDF and asset moves first, so generic cleanup cannot delete the
 only annotated copy, and a late editor save that no longer matches the
@@ -2744,7 +2754,7 @@ overwrite keep their existing refusal or queue behavior.
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
 | `The file has been changed by another application` | Highlights opened its save-conflict dialog: an uncoordinated bob write raced the open document (the key is off or the write predates coordination). | Prefer **Save Anyway** so your annotations are kept. The next `-w` scan restores the marker with no hand edit. Enable `highlights.coordinate_pdf_writes` after the acceptance test passes so future writes coordinate instead. |
 | `scan completed with ... per-PDF failure(s)` | A recursive scan finished reporting or writing valid PDFs, but at least one PDF had a `plan_error` or `write_failure`. | Fix the named PDFs and rerun; review successful writes before assuming the scan wrote nothing. |
-| `could not acquire the vault maintenance lock` | A writing scan found `bob_sync.lock` held past the 120 s wait. | Wait for vault-sync, nightly, or rename to finish, then scan again. |
-| `another bob ref scan is still running` | A writing scan found the `scan.lock` writer lock held past the 120 s wait. | Wait for the other scan to finish, then scan again. |
+| `could not acquire the vault maintenance lock` | A mutating writing scan found `bob_sync.lock` held past the 120 s wait. Converged no-work scans ignore a held lock. | Wait for vault-sync, nightly, or rename to finish, then scan again. |
+| `another bob ref scan is still running` | A mutating writing scan found the `scan.lock` writer lock held past the 120 s wait. Converged no-work scans ignore a held lock. | Wait for the other scan to finish, then scan again. |
 | `existing reference note is missing the managed Highlights region` | An existing ref note lacks `<!-- highlights:begin -->` and `<!-- highlights:end -->`. | Add both markers around the generated section or move the note aside and regenerate. |
 | `unsupported textbundle sidecar` | The `.textbundle` has no `text.md` or `text.markdown`. | Verify the bundle contains `text.md` or `text.markdown`; manually re-export/create a valid TextBundle beside the PDF if it does not. See [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug). |

@@ -58,13 +58,27 @@ struct MutationLocks {
     _maintenance: Option<fs::File>,
 }
 
+impl MutationLocks {
+    fn held(scan: Option<fs::File>, maintenance: Option<fs::File>) -> Self {
+        scan_test::enter_mutation_window();
+        Self {
+            _scan: scan,
+            _maintenance: maintenance,
+        }
+    }
+}
+
+impl Drop for MutationLocks {
+    fn drop(&mut self) {
+        scan_test::leave_mutation_window();
+    }
+}
+
 fn acquire_mutation_locks() -> Result<MutationLocks> {
+    scan_test::pause("before_lock");
     let maintenance = acquire_scan_maintenance_lock(false)?;
     let scan = acquire_scan_writer_lock(false)?;
-    Ok(MutationLocks {
-        _scan: scan,
-        _maintenance: maintenance,
-    })
+    Ok(MutationLocks::held(scan, maintenance))
 }
 
 /// Shared full-scan lifecycle for human and JSON entry points.
@@ -88,6 +102,7 @@ pub(super) fn apply_full_scan(
 
     let prepared = prepare_full_scan_with_retry(config, options, jobs)
         .map_err(ApplyError::prelock)?;
+    scan_test::pause("after_prepare");
 
     if options.dry_run {
         return Ok(AppliedFullScan {
@@ -328,6 +343,7 @@ fn lock_validate_intake_and_execute(
             PreparedValidation::Unchanged => {}
         }
 
+        scan_test::pause("before_intake");
         let intake = match plan_xlib_intake(config) {
             Ok(intake) => intake,
             Err(error) => {
@@ -365,6 +381,7 @@ fn lock_validate_intake_and_execute(
             ));
         }
         prepared.intake = intake.clone();
+        scan_test::pause("after_intake_move");
 
         if let Err(error) =
             integrate_intake_plans(&mut prepared, &intake, options, jobs)

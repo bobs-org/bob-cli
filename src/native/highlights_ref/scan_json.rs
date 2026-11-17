@@ -5,6 +5,9 @@
 //! envelope instead of printing display lines. Stdout carries exactly one
 //! compact JSON line; hook chatter goes to stderr, and hard failures print
 //! a coded error envelope with exit 1 and no `bob ref:` stderr line.
+//! Lock-free no-work scans and prelock failures leave `last-scan.json`
+//! untouched; post-lock success, partial success, and hard failures still
+//! write the receipt while `scan.lock` is held.
 use super::sections::SectionDiagnosticKind;
 use super::*;
 

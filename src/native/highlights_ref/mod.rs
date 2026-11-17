@@ -98,6 +98,7 @@ mod scan_apply;
 mod scan_json;
 mod scan_plan;
 mod scan_receipt;
+mod scan_test;
 pub(crate) mod sections;
 mod sidecar;
 mod sidecar_render;

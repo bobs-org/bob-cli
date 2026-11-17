@@ -2964,6 +2964,8 @@ fn ref_scan_json_lock_busy_writes_no_receipt() {
 
 #[test]
 fn ref_scan_json_hard_failure_writes_error_receipt() {
+    // Output collisions are now prelock: they must not replace the receipt.
+    // Post-lock hard-failure receipt coverage lives in scan_interleave.
     let temp = TempDir::new("bob-cli-ref-scan-json-collision-receipt");
     let vault = temp.path().join("vault");
     let first_pdf = vault.join("lib/chat/memo.pdf");

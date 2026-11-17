@@ -31,8 +31,9 @@ The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, live
 `bob task reconcile` runs, `bob task reroll`, `bob task move`, writing `bob ref scan`, `bob ref rename`, and
 `bob areas sync`, `bob projects sync`, `bob notebooks sync` / `bob notebooks create`, so background sync, nightly maintenance, task-status writes,
 reroll re-rolls, writing scans, and reference renames do not mutate the vault
-concurrently. Writing `bob ref scan` takes `bob_sync.lock` then `scan.lock` and
-holds both through intake and note writes; it never syncs. `bob ref rename`
+concurrently. A mutating `bob ref scan` takes `bob_sync.lock` then `scan.lock`
+and holds both through intake and note writes after unlocked planning; a
+converged no-work scan takes neither lock. Writing scans never sync. `bob ref rename`
 already uses that same lock order. `bob task reroll` holds the maintenance lock
 across a sync-sandwiched scoped commit: it runs a vault-sync cycle, writes only
 the re-rolled notes, commits exactly those notes as one `bob task reroll`
@@ -825,8 +826,9 @@ so Mac-local queued creates are not missed. See
 
 The old `bob_xlib_pull` bridge and its `pre_scan_hook` configuration are retired. Each
 host now has exactly one intake drainer: the local timer on athena/apollo and the local
-full scan on the Mac. Keep any custom pre-scan hook independent of intake; writing scans
-already hold the maintenance and scan locks while it runs.
+full scan on the Mac. Keep any custom pre-scan hook independent of intake; the
+hook runs with neither scan-owned lock held, so a hook that runs
+`bob vault-sync` lets vault-sync complete before planning.
 
 Useful checks:
 

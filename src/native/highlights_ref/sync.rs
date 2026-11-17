@@ -281,6 +281,8 @@ pub(super) fn plan_pdfs(
     jobs: usize,
     ctx: &ScanContext,
 ) -> Vec<ScanPlanOutcome> {
+    scan_test::log_plan_pdfs(pdfs);
+    scan_test::pause("planning");
     if jobs <= 1 || pdfs.len() <= 1 {
         return pdfs
             .iter()
