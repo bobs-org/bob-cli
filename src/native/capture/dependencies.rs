@@ -2079,6 +2079,20 @@ fn relocate_task_block_ref(
     Ok(found)
 }
 
+/// Open identities only: closed, cancelled, and missing rows never
+/// seed promotion. Callers still keep those rows on the Depends-On
+/// line as history.
+fn open_promotion_seeds(
+    graph: &DependencyGraph,
+    identities: &[(String, String)],
+) -> Vec<(String, String)> {
+    identities
+        .iter()
+        .filter(|identity| graph.open.get(*identity).copied().unwrap_or(false))
+        .cloned()
+        .collect()
+}
+
 /// Raise open prerequisites to at least the dependent's lane (Ready 0,
 /// Next 1, In Progress 2), transitively along staged edges. Effectively
 /// Blocked nodes are never rewritten, but promotion walks through them
@@ -2135,12 +2149,22 @@ pub(super) fn plan_promotions(
         if graph.never_raise.contains(&identity) {
             continue;
         }
-        let current = graph.status.get(&identity).copied().unwrap_or(' ');
-        if lane_for_status(current).is_some_and(|known| known >= lane) {
+        // Closed and cancelled seeds never rewrite: `lane_for_status`
+        // returns None for x/X/-, so they would otherwise fall through
+        // to `replace_status_char`. Archive rows stay frozen even when
+        // an open_task_in_archive row is still marked open.
+        if !graph.open.get(&identity).copied().unwrap_or(false) {
             continue;
         }
         let (note_display, block_id) = (&identity.0, identity.1.as_str());
         let relative = PathBuf::from(note_display);
+        if task_dependencies::is_archive_path(&relative) {
+            continue;
+        }
+        let current = graph.status.get(&identity).copied().unwrap_or(' ');
+        if lane_for_status(current).is_some_and(|known| known >= lane) {
+            continue;
+        }
         let absolute = absolute_note(bob_dir, &relative);
         // Preimage check: the staged task must still carry the status
         // the promotion was decided from.
@@ -2933,16 +2957,12 @@ pub(super) fn plan_existing_task_dependencies(
     {
         let here = display_relative(&dep_rel);
         let seeds: Vec<(String, String)> = if prj_project.is_some() {
-            merged_identities
-                .iter()
-                .filter(|identity| {
-                    identity.0 != here
-                        && graph.open.get(*identity).copied().unwrap_or(false)
-                })
-                .cloned()
+            open_promotion_seeds(&graph, &merged_identities)
+                .into_iter()
+                .filter(|identity| identity.0 != here)
                 .collect()
         } else {
-            merged_identities.clone()
+            open_promotion_seeds(&graph, &merged_identities)
         };
         let promoted = plan_promotions(
             ctx, planner, bob_dir, &graph, &extra, lane, &seeds, &dep_desc,
@@ -3217,15 +3237,9 @@ pub(super) fn plan_new_task_dependencies(
     if let Some(lane) = lane_for_status(capture_status)
         && lane > 0
     {
+        let seeds = open_promotion_seeds(&graph, &merged_identities);
         let promoted = plan_promotions(
-            ctx,
-            planner,
-            bob_dir,
-            &graph,
-            &extra,
-            lane,
-            &merged_identities,
-            &dep_desc,
+            ctx, planner, bob_dir, &graph, &extra, lane, &seeds, &dep_desc,
         )?;
         touches.extend(promoted);
     }

@@ -1237,6 +1237,183 @@ fn capture_promotion_walks_through_prj_without_raising_it() {
     );
 }
 
+// Closed, archived, and cancelled prerequisites stay on the Depends-On
+// line as history and are never rewritten to the dependent's lane.
+#[test]
+fn capture_does_not_promote_closed_done_or_cancelled_prerequisites() {
+    struct Case {
+        name: &'static str,
+        dependent_status: char,
+        prereq_path: &'static str,
+        prereq_line: &'static str,
+        prereq_ref: &'static str,
+        expected_open: char,
+    }
+    let cases = [
+        Case {
+            name: "next-live-closed",
+            dependent_status: '*',
+            prereq_path: "job.md",
+            prereq_line: "- [x] #task Old [completion:: 2026-10-01] [id:: job__old] ^old\n",
+            prereq_ref: "job:old",
+            expected_open: '*',
+        },
+        Case {
+            name: "next-archived",
+            dependent_status: '*',
+            prereq_path: "done/old_done.md",
+            prereq_line: "- [x] #task Old [completion:: 2026-10-01] [id:: old-id] ^old\n",
+            prereq_ref: "done/old_done:old",
+            expected_open: '*',
+        },
+        Case {
+            name: "next-cancelled",
+            dependent_status: '*',
+            prereq_path: "job.md",
+            prereq_line: "- [-] #task Old [cancelled:: 2026-10-01] [id:: job__old] ^old\n",
+            prereq_ref: "job:old",
+            expected_open: '*',
+        },
+        Case {
+            name: "wip-live-closed",
+            dependent_status: '/',
+            prereq_path: "job.md",
+            prereq_line: "- [x] #task Old [completion:: 2026-10-01] [id:: job__old] ^old\n",
+            prereq_ref: "job:old",
+            expected_open: '/',
+        },
+        Case {
+            name: "wip-archived",
+            dependent_status: '/',
+            prereq_path: "done/old_done.md",
+            prereq_line: "- [x] #task Old [completion:: 2026-10-01] [id:: old-id] ^old\n",
+            prereq_ref: "done/old_done:old",
+            expected_open: '/',
+        },
+        Case {
+            name: "wip-cancelled",
+            dependent_status: '/',
+            prereq_path: "job.md",
+            prereq_line: "- [-] #task Old [cancelled:: 2026-10-01] [id:: job__old] ^old\n",
+            prereq_ref: "job:old",
+            expected_open: '/',
+        },
+    ];
+    for case in cases {
+        let temp = TempDir::new(&format!(
+            "bob-cli-capture-closed-prereq-{}",
+            case.name
+        ));
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("create vault");
+        write_blocked_tasks_settings(&vault);
+        write_file(
+            &vault.join("area.md"),
+            &format!(
+                concat!(
+                    "---\n",
+                    "type: [[area]]\n",
+                    "---\n",
+                    "- [{status}] #task Dependent ^dep\n",
+                ),
+                status = case.dependent_status
+            ),
+        );
+        write_file(&vault.join("open.md"), "- [ ] #task Open work ^open\n");
+        write_file(&vault.join(case.prereq_path), case.prereq_line);
+        let prereq_before = fs::read_to_string(vault.join(case.prereq_path))
+            .expect("read closed prerequisite");
+
+        let draft = format!("&{} &open:open @area+dep", case.prereq_ref);
+        let output = capture_with_now(&vault, &draft);
+        assert_success(&output);
+        let after = fs::read_to_string(vault.join(case.prereq_path))
+            .expect("read closed prerequisite after capture");
+        assert_eq!(
+            after, prereq_before,
+            "{}: closed prerequisite line must stay byte-identical:\n{after}",
+            case.name
+        );
+        let area =
+            fs::read_to_string(vault.join("area.md")).expect("read area");
+        assert!(
+            area.contains("⛓️ **DEPENDS ON:**"),
+            "{}: Depends-On line is still written:\n{area}",
+            case.name
+        );
+        assert!(
+            area.contains(&format!(
+                "[[{}#^old]]",
+                case.prereq_path.trim_end_matches(".md")
+            )),
+            "{}: closed prerequisite stays on the line:\n{area}",
+            case.name
+        );
+        assert!(
+            area.contains("[[open#^open]]"),
+            "{}: open prerequisite is still linked:\n{area}",
+            case.name
+        );
+        let open =
+            fs::read_to_string(vault.join("open.md")).expect("read open");
+        assert!(
+            open.contains(&format!(
+                "- [{}] #task Open work",
+                case.expected_open
+            )),
+            "{}: open prerequisites still promote:\n{open}",
+            case.name
+        );
+    }
+}
+
+// New-task (Pomodoro Next) capture uses the same open-only seed rule.
+#[test]
+fn capture_new_task_does_not_promote_a_closed_prerequisite() {
+    let temp = TempDir::new("bob-cli-capture-new-task-closed-prereq");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    let closed =
+        "- [x] #task Old [completion:: 2026-10-01] [id:: job__old] ^old\n";
+    write_file(&vault.join("job.md"), closed);
+    write_file(&vault.join("open.md"), "- [ ] #task Open work ^open\n");
+    write_file(&vault.join("area.md"), "---\ntype: [[area]]\n---\n# Area\n");
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n- [ ] (0900-0930) — CURRENT\n");
+
+    let output = bob_command()
+        .env("BOB_NOW", DEPENDENCY_NOW)
+        .env("BOB_DAY_FILE", &day_file)
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("Ship it @area:ship &job:old &open:open")
+        .output()
+        .expect("run new-task capture with closed prerequisite");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read closed"),
+        closed,
+        "closed prerequisite line must stay byte-identical"
+    );
+    let area = fs::read_to_string(vault.join("area.md")).expect("read area");
+    assert!(
+        area.contains("⛓️ **DEPENDS ON:**"),
+        "Depends-On line is still written:\n{area}"
+    );
+    assert!(
+        area.contains("[[job#^old]]"),
+        "closed prerequisite stays on the line:\n{area}"
+    );
+    let open = fs::read_to_string(vault.join("open.md")).expect("read open");
+    assert!(
+        open.contains("- [*] #task Open work"),
+        "open prerequisites still promote:\n{open}"
+    );
+}
+
 // §13.6: cycle detection includes the implicit resident → `^prj`
 // edges. Here `work` reaches `dee` only through its implicit edge to
 // `^prj`'s target `tee`, so depending `dee` on `work` must refuse.
