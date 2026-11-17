@@ -332,6 +332,21 @@ fn lock_validate_intake_and_execute(
                     locks,
                 ));
             }
+            PreparedValidation::Stale { reason }
+                if is_destination_asset_stale(&reason) =>
+            {
+                // Dest-asset vandalism cannot be restored: overwrite
+                // protection refuses Copy onto existing different bytes, so
+                // a rebuild would collide at write. Fail closed.
+                return Err(finish_locked_error(
+                    config,
+                    options,
+                    scan_inputs_changed_error(&reason),
+                    prepared.intake.clone(),
+                    0,
+                    locks,
+                ));
+            }
             PreparedValidation::Stale { reason } => {
                 drop(locks);
                 if retried {

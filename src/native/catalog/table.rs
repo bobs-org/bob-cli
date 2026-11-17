@@ -759,6 +759,20 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         fixed: JSON,
+        preview: Some(DRY_RUN),
+        slots: &[("TYPE", "record-type"), ("type", "record-type")],
+        ..writes(
+            "records-tidy",
+            &["records", "tidy"],
+            "Tidy empty Notes sections",
+            &["records", "tidy", "notes", "empty", "cleanup"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
+        fixed: JSON,
         slots: &[("ROOT", "album-root"), ("root", "album-root")],
         ..reads(
             "albums-list",

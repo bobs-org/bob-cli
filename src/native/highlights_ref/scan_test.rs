@@ -1,11 +1,11 @@
 //! Debug-only handshake and plan-log seams for adversarial scan tests.
 //!
 //! CLI tests set `BOB_REF_SCAN_TEST_PAUSE` to a stage name (`planning`,
-//! `after_prepare`, `before_lock`, `before_intake`, `after_intake_move`)
-//! plus ready/go
-//! files. The child writes `<seq>:<stage>` to the ready path and waits
-//! until the go path contains that seq, so waits are handshake-bounded
-//! rather than sleep-and-hope. Release builds compile these into no-ops.
+//! `after_snapshot`, `before_evidence`, `after_prepare`, `before_lock`,
+//! `before_intake`, `after_intake_move`) plus ready/go files. The child
+//! writes `<seq>:<stage>` to the ready path and waits until the go path
+//! contains that seq, so waits are handshake-bounded rather than
+//! sleep-and-hope. Release builds compile these into no-ops.
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

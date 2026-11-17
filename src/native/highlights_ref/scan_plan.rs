@@ -9,6 +9,15 @@
 //! and applies the result inside a bounded mutation window.
 use super::*;
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_INVOCATION_DATE: Cell<Option<&'static str>> = const { Cell::new(None) };
+    static TEST_INVOCATION_DATE_READS: Cell<usize> = const { Cell::new(0) };
+}
+
 /// Content fingerprint for one evidence file: existence plus, when present,
 /// the full content hash. Existence and path membership are checked, never
 /// only mtime/size.
@@ -60,6 +69,34 @@ fn fingerprint_file(path: &Path) -> Result<EvidenceFileState> {
             ))),
         },
     }
+}
+
+fn track_file(
+    file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+    path: PathBuf,
+) -> Result<()> {
+    if !file_states.contains_key(&path) {
+        let state = fingerprint_file(&path)?;
+        file_states.insert(path, state);
+    }
+    Ok(())
+}
+
+/// Pin one invocation date for every retry, rebuild, and recovery path.
+/// `None` resolves the clock once; `Some` is reused verbatim.
+fn pin_invocation_date(invocation_date: Option<String>) -> String {
+    invocation_date.unwrap_or_else(scan_invocation_date)
+}
+
+fn scan_invocation_date() -> String {
+    #[cfg(test)]
+    {
+        TEST_INVOCATION_DATE_READS.with(|reads| reads.set(reads.get() + 1));
+        if let Some(date) = TEST_INVOCATION_DATE.with(|cell| cell.get()) {
+            return date.to_string();
+        }
+    }
+    current_local_date()
 }
 
 /// Validation evidence captured together with the bytes/index used for
@@ -357,39 +394,163 @@ pub(super) fn validate_prepared_scan(
         };
     }
     if current.file_states != prepared.evidence.file_states {
+        let dest_roots = dest_asset_roots(&prepared.config, &prepared.pdfs);
         let reason = first_state_mismatch(
             &prepared.evidence.file_states,
             &current.file_states,
+            &dest_roots,
         );
         return PreparedValidation::Stale { reason };
     }
     PreparedValidation::Unchanged
 }
 
+fn dest_asset_roots(config: &Config, pdfs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for pdf in pdfs {
+        if let Ok(note_path) = super::io::ref_note_path(config, pdf)
+            && let Ok(assets_dir) = ref_note_assets_dir(&note_path)
+        {
+            roots.push(assets_dir);
+        }
+    }
+    roots
+}
+
+fn is_dest_asset_path(path: &Path, dest_roots: &[PathBuf]) -> bool {
+    dest_roots
+        .iter()
+        .any(|root| path == root || path.starts_with(root))
+}
+
+fn file_mismatch_reason(
+    path: &Path,
+    kind: &str,
+    dest_roots: &[PathBuf],
+) -> String {
+    if is_dest_asset_path(path, dest_roots) {
+        format!("destination asset changed: {}", path.display())
+    } else {
+        format!("input {kind}: {}", path.display())
+    }
+}
+
 fn first_state_mismatch(
     prepared: &BTreeMap<PathBuf, EvidenceFileState>,
     current: &BTreeMap<PathBuf, EvidenceFileState>,
+    dest_roots: &[PathBuf],
 ) -> String {
     for (path, old) in prepared {
         match current.get(path) {
             Some(new) if new == old => {}
             Some(_) => {
-                return format!("input changed: {}", path.display());
+                return file_mismatch_reason(path, "changed", dest_roots);
             }
             None => {
-                return format!("input removed: {}", path.display());
+                return file_mismatch_reason(path, "removed", dest_roots);
             }
         }
     }
     for path in current.keys() {
         if !prepared.contains_key(path) {
-            return format!("input added: {}", path.display());
+            return file_mismatch_reason(path, "added", dest_roots);
         }
     }
     "inputs changed".to_string()
 }
 
-/// Ordered shared preparation from explicit intake and PDF lists.
+/// Compare a pre-planning snapshot to post-planning evidence.
+///
+/// Post evidence tracks additional absent (`exists: false`) paths the
+/// planner names; those are not creations. Newly present files that the
+/// snapshot missed — including `text.markdown`, nested assets, and dest
+/// copies — are stale. Intake destinations that were absent before a
+/// move are expected and skipped.
+fn read_set_changed(
+    pre: &BTreeMap<PathBuf, EvidenceFileState>,
+    post: &BTreeMap<PathBuf, EvidenceFileState>,
+    intake: &[IntakeMove],
+    dest_roots: &[PathBuf],
+) -> Option<String> {
+    for (path, old) in pre {
+        match post.get(path) {
+            Some(new) if new == old => {}
+            Some(_) => {
+                return Some(file_mismatch_reason(path, "changed", dest_roots));
+            }
+            None => {
+                return Some(file_mismatch_reason(path, "removed", dest_roots));
+            }
+        }
+    }
+    for (path, new) in post {
+        if pre.contains_key(path) || !new.exists {
+            continue;
+        }
+        let was_intake_dest = intake.iter().any(|item| {
+            &item.destination == path
+                || item.companions.iter().any(|(_, dest)| dest == path)
+        });
+        if !was_intake_dest {
+            return Some(file_mismatch_reason(path, "added", dest_roots));
+        }
+    }
+    None
+}
+
+fn pdfs_only(members: &[PathBuf]) -> Vec<PathBuf> {
+    let mut pdfs = members
+        .iter()
+        .filter(|path| is_pdf_path(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    pdfs.sort();
+    pdfs
+}
+
+fn missing_library_error(config: &Config) -> CommandError {
+    CommandError::new(format!(
+        "library directory does not exist or is not a directory: {}",
+        config.lib_dir.display()
+    ))
+}
+
+/// Derive the planned PDF list from the membership snapshot so discovery
+/// and the pre-planning read-set are the same enumeration. Audio members
+/// stay on the membership lists and never enter `pdfs`.
+fn planned_pdfs_from_membership(
+    config: &Config,
+    options: SyncOptions,
+    intake: &[IntakeMove],
+    lib_members: &[PathBuf],
+    xlib_members: &[PathBuf],
+) -> Result<Vec<PathBuf>> {
+    let lib_pdfs = pdfs_only(lib_members);
+    let xlib_pdfs = pdfs_only(xlib_members);
+    if options.dry_run {
+        if config.lib_dir.is_dir() {
+            let mut paths = lib_pdfs;
+            paths.extend(xlib_pdfs);
+            paths.sort();
+            return Ok(paths);
+        }
+        if !config.xlib_dir.is_dir() {
+            return Err(missing_library_error(config));
+        }
+        return Ok(xlib_pdfs);
+    }
+    if config.lib_dir.is_dir() {
+        return Ok(lib_pdfs);
+    }
+    if intake.is_empty() {
+        return Err(missing_library_error(config));
+    }
+    Ok(Vec::new())
+}
+
+/// Ordered shared preparation from intake plus a coherent pre-planning
+/// read-set snapshot. Library/xlib discovery is that snapshot: the planned
+/// PDF list is the PDF subset of the same membership enumeration.
 ///
 /// `invocation_date` pins one date across retries; pass `None` for a fresh
 /// scan and `Some(date)` to rebuild under the same date. Never prints and
@@ -400,9 +561,16 @@ pub(super) fn prepare_from_inputs(
     options: SyncOptions,
     jobs: usize,
     intake: Vec<IntakeMove>,
-    pdfs: Vec<PathBuf>,
     invocation_date: Option<String>,
 ) -> Result<PreparedFullScan> {
+    // Membership snapshot is discovery. A PDF that arrives after this
+    // enumeration cannot sit in both pre/post snapshots while missing
+    // from the planned list.
+    let pre_lib = collect_lib_membership(config)?;
+    let pre_xlib = collect_xlib_membership(config)?;
+    let pdfs = planned_pdfs_from_membership(
+        config, options, &intake, &pre_lib, &pre_xlib,
+    )?;
     // Prospective output check for the combined intake/library set before
     // any planning: two queued PDFs (or a queued and an existing PDF) that
     // map to the same ref note must fail here, matching dry-run, without
@@ -422,23 +590,27 @@ pub(super) fn prepare_from_inputs(
             validate_output_collisions(config, &combined)?;
         }
     }
-    // Coherent optimistic read set: snapshot membership and content before
-    // the pure planning pass so a source changing during planning cannot
-    // attach newer evidence to an older plan. Compared after planning;
-    // any mismatch is a stale read that the bounded retry rebuilds.
-    let pre_lib = collect_lib_membership(config)?;
-    let pre_xlib = collect_xlib_membership(config)?;
-    let mut pre_vault_md = snapshot_vault_md_states(config)?;
+    // Coherent optimistic read set: snapshot membership and every input
+    // the planner may read — both TextBundle text filenames, present or
+    // absent sidecars, nested source assets, dest asset trees, image-note
+    // source files named in those sidecars, audio companions, archive
+    // metadata, vault Markdown, and config — before the pure planning
+    // pass. Compared after planning; a source mismatch is a stale read
+    // that the bounded retry rebuilds, and a dest-asset mismatch fails
+    // closed because overwrite protection cannot restore.
+    let mut pre_file_states = snapshot_vault_md_states(config)?;
     let pre_config = fingerprint_file(&super::bob_config::config_path())?;
-    // Include the config file in the Markdown snapshot so a missing config
-    // (the test default) is not misread as a newly created input.
-    pre_vault_md.insert(super::bob_config::config_path(), pre_config.clone());
+    pre_file_states
+        .insert(super::bob_config::config_path(), pre_config.clone());
+    snapshot_pdf_companion_states(config, &pdfs, &mut pre_file_states)?;
+    snapshot_intake_states(&intake, &mut pre_file_states)?;
     let mut pre_pdf_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
     for pdf in &pdfs {
         if let Ok(hash) = super::io::sha256_file(pdf) {
             pre_pdf_hashes.insert(pdf.clone(), hash);
         }
     }
+    scan_test::pause("after_snapshot");
     let ctx = match invocation_date {
         Some(invocation_date) => ScanContext {
             index: crate::native::ref_tasks::RefTaskIndex::build(
@@ -507,10 +679,9 @@ pub(super) fn prepare_from_inputs(
     // newer evidence to an older plan. Compare the pre-planning read set
     // to the post-planning evidence; any membership or content mismatch
     // (including a PDF arriving mid-planning, same-length sidecar/ref/
-    // config/parent edits, or a newly created input the old plan did not
-    // select) is stale so the bounded retry rebuilds with current data.
-    // Membership is compared via the post evidence (which re-enumerates
-    // the trees) against the pre snapshot; content via file hashes.
+    // config/parent/asset edits, or a newly created input the old plan
+    // did not select) is stale so the bounded retry rebuilds with current
+    // data.
     {
         let mut pre_sorted = pre_lib.clone();
         pre_sorted.sort();
@@ -526,75 +697,28 @@ pub(super) fn prepare_from_inputs(
                 "xlib membership changed during planning",
             ));
         }
-        // Vault Markdown trees (ref notes, routed/reading destinations,
-        // parent notes, archive records) plus config: any added/removed/
-        // edited input during planning invalidates the plan, even when the
-        // old plan did not select the new file.
-        for (path, pre_state) in &pre_vault_md {
-            match evidence.file_states.get(path) {
-                Some(post_state) if post_state == pre_state => {}
-                Some(_) => {
-                    return Err(scan_inputs_changed_error(&format!(
-                        "input changed during planning: {}",
-                        path.display()
-                    )));
-                }
-                None => {
-                    // A pre-existing Markdown input vanished from the post
-                    // evidence (deleted, or the new plan no longer tracks
-                    // it because an earlier version was absent). Either way
-                    // the read set is incoherent.
-                    return Err(scan_inputs_changed_error(&format!(
-                        "input removed during planning: {}",
-                        path.display()
-                    )));
-                }
-            }
+        let expected_pdfs = planned_pdfs_from_membership(
+            config,
+            options,
+            &intake,
+            &evidence.lib_pdfs,
+            &evidence.xlib_members,
+        )?;
+        if expected_pdfs != pdfs {
+            return Err(scan_inputs_changed_error(
+                "planned PDF list does not match snapshot membership",
+            ));
         }
-        for (path, post_state) in &evidence.file_states {
-            // New Markdown inputs the old plan did not select are stale:
-            // they were absent pre-planning but present post-planning.
-            // Restrict to Markdown/config trees so unrelated media never
-            // triggers a rebuild. Missing files tracked as absent post
-            // (exists=false) are not creations: the pre snapshot only
-            // contains existing files, so absent-post entries must be
-            // ignored here (they are covered by the pre-vs-post loop above
-            // when the pre file actually existed).
-            if !post_state.exists {
-                continue;
-            }
-            let is_md = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-            let is_config = path == &super::bob_config::config_path();
-            if (is_md || is_config) && !pre_vault_md.contains_key(path) {
-                // The post evidence tracks this Markdown/config input but
-                // the pre snapshot did not contain it: it was created
-                // during planning.
-                // Companion sidecars under lib/xlib are .md as well; they
-                // are covered here when the plan selected them post.
-                // To avoid false positives from plan-selected outputs that
-                // legitimately appear only post (e.g., prospective intake
-                // destinations that did not exist pre), skip paths that
-                // are intake destinations absent pre-planning: those are
-                // membership, already compared via lib/xlib, and their
-                // absence pre is expected.
-                let was_intake_dest = intake.iter().any(|item| {
-                    &item.destination == path
-                        || item.companions.iter().any(|(_, dest)| dest == path)
-                });
-                if !was_intake_dest {
-                    // Distinguish truly new inputs from files the pre
-                    // snapshot missed because vault enumeration failed
-                    // silently: pre snapshot propagates errors, so any
-                    // missing key here is a genuine creation.
-                    return Err(scan_inputs_changed_error(&format!(
-                        "input added during planning: {}",
-                        path.display()
-                    )));
-                }
-            }
+        let dest_roots = dest_asset_roots(config, &pdfs);
+        if let Some(reason) = read_set_changed(
+            &pre_file_states,
+            &evidence.file_states,
+            &intake,
+            &dest_roots,
+        ) {
+            return Err(scan_inputs_changed_error(&format!(
+                "{reason} during planning"
+            )));
         }
         if fingerprint_file(&super::bob_config::config_path())? != pre_config {
             return Err(scan_inputs_changed_error(
@@ -680,10 +804,11 @@ pub(super) fn prepare_from_inputs(
     })
 }
 
-/// Convenience read-only preparation: discover intake plus ordered PDFs,
-/// then plan. Dry runs include xlib in the PDF list. Write mode lists the
-/// existing library only (empty when `lib/` is missing and intake is
-/// pending, so an xlib-only vault can still prepare outside the locks).
+/// Convenience read-only preparation: discover intake, then snapshot
+/// membership and plan from that same enumeration. Dry runs include xlib
+/// PDFs. Write mode lists the existing library only (empty when `lib/` is
+/// missing and intake is pending, so an xlib-only vault can still prepare
+/// outside the locks).
 pub(super) fn prepare_full_scan(
     config: &Config,
     options: SyncOptions,
@@ -691,23 +816,17 @@ pub(super) fn prepare_full_scan(
     invocation_date: Option<String>,
 ) -> Result<PreparedFullScan> {
     let intake = plan_xlib_intake(config)?;
-    let pdfs = if options.dry_run {
-        collect_pdf_paths(config, true)?
-    } else if config.lib_dir.is_dir() {
-        collect_pdf_paths(config, false)?
-    } else if intake.is_empty() {
-        collect_pdf_paths(config, false)?
-    } else {
-        Vec::new()
-    };
-    prepare_from_inputs(config, options, jobs, intake, pdfs, invocation_date)
+    prepare_from_inputs(config, options, jobs, intake, invocation_date)
 }
 
 /// Bounded preparation retry: on an immediately stale validation (a source
 /// changing during the pure planning pass), rebuild once outside any new
-/// locks under the same invocation date. Persistent churn returns the
-/// existing generic `scan_failed` envelope with a rerun hint; it never
-/// spins and never parses the whole library while locked.
+/// locks under the same invocation date. Destination-asset existence or
+/// bytes changing during that pass fail closed without a retry: overwrite
+/// protection cannot restore dest from source, and a retry would treat the
+/// vandalized dest as the new baseline then collide at write. Persistent
+/// churn returns the existing generic `scan_failed` envelope with a rerun
+/// hint; it never spins and never parses the whole library while locked.
 pub(super) fn prepare_full_scan_with_retry(
     config: &Config,
     options: SyncOptions,
@@ -716,11 +835,16 @@ pub(super) fn prepare_full_scan_with_retry(
     prepare_full_scan_with_retry_date(config, options, jobs, None)
 }
 
+pub(super) fn is_destination_asset_stale(reason: &str) -> bool {
+    reason.contains("destination asset changed")
+}
+
 fn is_inputs_changed_during_planning(error: &CommandError) -> bool {
     error.code == Some("scan_failed")
         && error
             .message
             .contains("scan inputs changed during planning")
+        && !is_destination_asset_stale(&error.message)
 }
 
 pub(super) fn prepare_full_scan_with_retry_date(
@@ -729,28 +853,36 @@ pub(super) fn prepare_full_scan_with_retry_date(
     jobs: usize,
     invocation_date: Option<String>,
 ) -> Result<PreparedFullScan> {
+    // Resolve the clock once. Every retry, rebuild, and recovery path
+    // reuses this exact value so a None call cannot pick a second date
+    // across midnight. The finite retry budget stays one coherence retry
+    // here plus the mutation-window rebuild in scan_apply; no retry runs
+    // after an owned intake move.
+    let invocation_date = pin_invocation_date(invocation_date);
     let first =
-        prepare_full_scan(config, options, jobs, invocation_date.clone());
+        prepare_full_scan(config, options, jobs, Some(invocation_date.clone()));
     let mut prepared = match first {
         Ok(prepared) => prepared,
         Err(error) => {
             // During-preparation coherence failure (a source changing during
             // the pure planning pass) rebuilds once outside any new locks
-            // under the same invocation date. Other errors (output
-            // collisions, intake collisions, hard snapshot failures) fail
-            // immediately without a retry.
+            // under the same invocation date. Destination-asset changes and
+            // other errors (output collisions, intake collisions, hard
+            // snapshot failures) fail immediately without a retry.
             if !is_inputs_changed_during_planning(&error) {
                 return Err(error);
             }
-            // Retry once with the same caller date so one invocation date
-            // is preserved; `current_local_date` is day-granular, so a None
-            // retry keeps the same date as the first attempt.
-            prepare_full_scan(config, options, jobs, invocation_date)?
+            prepare_full_scan(config, options, jobs, Some(invocation_date))?
         }
     };
     match validate_prepared_scan(&prepared) {
         PreparedValidation::Unchanged => Ok(prepared),
         PreparedValidation::Failed(error) => Err(error),
+        PreparedValidation::Stale { reason }
+            if is_destination_asset_stale(&reason) =>
+        {
+            Err(scan_inputs_changed_error(&reason))
+        }
         PreparedValidation::Stale { .. } => {
             // Clear stale reservations before the single rebuild so a
             // combined intake/library finalization later cannot duplicate
@@ -916,16 +1048,6 @@ fn capture_scan_evidence(
 ) -> Result<ScanInputEvidence> {
     let mut pdf_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut file_states: BTreeMap<PathBuf, EvidenceFileState> = BTreeMap::new();
-    fn track(
-        file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
-        path: PathBuf,
-    ) -> Result<()> {
-        if !file_states.contains_key(&path) {
-            let state = fingerprint_file(&path)?;
-            file_states.insert(path, state);
-        }
-        Ok(())
-    }
 
     for outcome in plan_outcomes {
         if let ScanPlanOutcome::Planned(plan) = outcome {
@@ -943,18 +1065,8 @@ fn capture_scan_evidence(
                 pdf_hashes.insert(pdf.clone(), hash);
             }
         }
-        track(&mut file_states, pdf.clone())?;
-        // Present/absent sidecar and source companions for this PDF.
-        let mut sidecar = pdf.clone();
-        sidecar.set_extension("md");
-        track(&mut file_states, sidecar)?;
-        let mut textbundle = pdf.clone();
-        textbundle.set_extension("textbundle");
-        track_textbundle_contents(&mut file_states, &textbundle)?;
-        for companion in audio_companion_candidates(pdf) {
-            track(&mut file_states, companion)?;
-        }
     }
+    snapshot_pdf_companion_states(config, pdfs, &mut file_states)?;
     for outcome in plan_outcomes {
         let (plan, hold_note, failed_pdf) = match outcome {
             ScanPlanOutcome::Planned(plan) => (Some(plan.as_ref()), None, None),
@@ -964,26 +1076,26 @@ fn capture_scan_evidence(
             }
         };
         if let Some(plan) = plan {
-            track(&mut file_states, plan.note_path.clone())?;
+            track_file(&mut file_states, plan.note_path.clone())?;
             if let Some(sidecar) = plan.sidecar_path.as_ref() {
-                track(&mut file_states, sidecar.clone())?;
+                track_file(&mut file_states, sidecar.clone())?;
             }
             for asset in &plan.image_assets {
-                track(&mut file_states, asset.dest_path.clone())?;
-                track(&mut file_states, asset.source_path.clone())?;
+                track_file(&mut file_states, asset.dest_path.clone())?;
+                track_file(&mut file_states, asset.source_path.clone())?;
             }
             for write in &plan.routed_task_note_writes {
-                track(&mut file_states, write.path.clone())?;
+                track_file(&mut file_states, write.path.clone())?;
             }
             for intent in &plan.routed_intents {
-                track(&mut file_states, intent.path.clone())?;
+                track_file(&mut file_states, intent.path.clone())?;
             }
             if let Some(reading) = plan.reading_task_plan.as_ref() {
                 match &reading.action {
                     ReadingTaskAction::Insert {
                         destination_route, ..
                     } => {
-                        track(
+                        track_file(
                             &mut file_states,
                             config
                                 .bob_dir
@@ -992,7 +1104,7 @@ fn capture_scan_evidence(
                     }
                     ReadingTaskAction::LineEdit { .. } => {
                         if let Some(located) = plan.reading_located.as_ref() {
-                            track(
+                            track_file(
                                 &mut file_states,
                                 config.bob_dir.join(&located.path),
                             )?;
@@ -1007,7 +1119,7 @@ fn capture_scan_evidence(
             track_archive_for_note(config, &mut file_states, &plan.note_path)?;
         }
         if let Some(hold) = hold_note {
-            track(&mut file_states, hold.note_path.clone())?;
+            track_file(&mut file_states, hold.note_path.clone())?;
             // Holds consult the same archive metadata (replaced-capture
             // holds) and ID-occupancy inputs; a hold caused by an earlier
             // version being absent must still invalidate when that input
@@ -1021,7 +1133,7 @@ fn capture_scan_evidence(
             // that later appears invalidates instead of staying failed.
             if let Ok(note_path) = super::io::ref_note_path(config, failed_pdf)
             {
-                track(&mut file_states, note_path.clone())?;
+                track_file(&mut file_states, note_path.clone())?;
                 track_archive_for_note(config, &mut file_states, &note_path)?;
             }
         }
@@ -1031,7 +1143,7 @@ fn capture_scan_evidence(
     // parent/alias/routing inputs, archive/capture metadata, ID-occupancy
     // inputs). Explicitly enumerated relevant trees; unrelated vault media
     // is never hashed.
-    track(&mut file_states, super::bob_config::config_path())?;
+    track_file(&mut file_states, super::bob_config::config_path())?;
     {
         let vault_md = snapshot_vault_md_states(config)?;
         for (path, state) in vault_md {
@@ -1041,18 +1153,10 @@ fn capture_scan_evidence(
     // Library and xlib membership plus prospective destination absence.
     // Propagate membership errors instead of treating unreadable trees as
     // empty/unchanged.
-    let mut lib_pdfs = Vec::new();
-    if config.lib_dir.is_dir() {
-        let mut paths = collect_lib_membership(config)?;
-        paths.sort();
-        lib_pdfs = paths;
-    }
-    let mut xlib_members = Vec::new();
-    if config.xlib_dir.is_dir() {
-        let mut members = collect_xlib_membership(config)?;
-        members.sort();
-        xlib_members = members;
-    }
+    let mut lib_pdfs = collect_lib_membership(config)?;
+    lib_pdfs.sort();
+    let mut xlib_members = collect_xlib_membership(config)?;
+    xlib_members.sort();
     let mut intake_destinations = intake
         .iter()
         .flat_map(|item| {
@@ -1062,16 +1166,7 @@ fn capture_scan_evidence(
         })
         .collect::<Vec<_>>();
     intake_destinations.sort();
-    for dest in &intake_destinations {
-        track(&mut file_states, dest.clone())?;
-    }
-    for item in intake {
-        track(&mut file_states, item.source.clone())?;
-        for (source, dest) in &item.companions {
-            track(&mut file_states, source.clone())?;
-            track(&mut file_states, dest.clone())?;
-        }
-    }
+    snapshot_intake_states(intake, &mut file_states)?;
     Ok(ScanInputEvidence {
         pdf_hashes,
         file_states,
@@ -1132,50 +1227,141 @@ fn snapshot_vault_md_states(
     Ok(states)
 }
 
-/// Track a TextBundle's nested inputs with content hashes, not just
-/// directory existence: `text.md`/`text.markdown` plus source assets the
-/// planner renders. A same-length edit inside the bundle must invalidate.
-fn track_textbundle_contents(
+/// Snapshot present/absent sidecars, both TextBundle text filenames,
+/// nested source assets, dest asset trees, image-note source files named
+/// in those sidecars, audio companions, prospective notes, and archive
+/// metadata for each planned PDF. Conservative: inputs the planner may
+/// later name are hashed here so a post-planning capture cannot attach
+/// newer bytes to an older plan.
+fn snapshot_pdf_companion_states(
+    config: &Config,
+    pdfs: &[PathBuf],
     file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
-    bundle: &Path,
 ) -> Result<()> {
-    let state = fingerprint_file(bundle)?;
-    file_states.entry(bundle.to_path_buf()).or_insert(state);
-    if bundle.is_dir() {
-        let mut stack = vec![bundle.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let entries = fs::read_dir(&dir).map_err(|error| {
+    let home = bob_env::home_dir();
+    for pdf in pdfs {
+        track_file(file_states, pdf.clone())?;
+        let mut sidecar = pdf.clone();
+        sidecar.set_extension("md");
+        track_file(file_states, sidecar)?;
+        let mut textbundle = pdf.clone();
+        textbundle.set_extension("textbundle");
+        track_tree_contents(file_states, &textbundle, "TextBundle")?;
+        snapshot_image_note_sources(pdf, &home, file_states)?;
+        for companion in audio_companion_candidates(pdf) {
+            track_file(file_states, companion)?;
+        }
+        if let Ok(note_path) = super::io::ref_note_path(config, pdf) {
+            track_file(file_states, note_path.clone())?;
+            if let Ok(assets_dir) = ref_note_assets_dir(&note_path) {
+                track_tree_contents(file_states, &assets_dir, "asset tree")?;
+            }
+            track_archive_for_note(config, file_states, &note_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fingerprint image-note source files the sidecar already names, including
+/// a present or absent `~/tmp/screenshots/...` path. Planning later tracks
+/// those same paths on `plan.image_assets`; without this, a file that
+/// existed before planning looks like `input added` in the post evidence.
+fn snapshot_image_note_sources(
+    pdf: &Path,
+    home: &Path,
+    file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+) -> Result<()> {
+    let mut candidates = vec![pdf.with_extension("md")];
+    let bundle = pdf.with_extension("textbundle");
+    for name in super::TEXTBUNDLE_TEXT_FILES {
+        candidates.push(bundle.join(name));
+    }
+    for path in candidates {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                continue;
+            }
+            Err(error) => {
+                return Err(CommandError::new(format!(
+                    "read image-note sidecar {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        for line in text.lines() {
+            for image_note in parse_image_note_refs(line) {
+                let source =
+                    expand_image_note_source(&image_note.source_text, home);
+                track_file(file_states, source)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn snapshot_intake_states(
+    intake: &[IntakeMove],
+    file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+) -> Result<()> {
+    for item in intake {
+        track_file(file_states, item.source.clone())?;
+        track_file(file_states, item.destination.clone())?;
+        for (source, dest) in &item.companions {
+            track_file(file_states, source.clone())?;
+            track_file(file_states, dest.clone())?;
+        }
+    }
+    Ok(())
+}
+
+/// Track a directory tree's nested files with content hashes, not just
+/// directory existence. `text.md`/`text.markdown` plus source or dest
+/// assets the planner reads must invalidate on a same-length edit.
+/// Enumeration errors fail closed instead of reading as unchanged.
+fn track_tree_contents(
+    file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+    root: &Path,
+    what: &str,
+) -> Result<()> {
+    let state = fingerprint_file(root)?;
+    file_states.entry(root.to_path_buf()).or_insert(state);
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).map_err(|error| {
+            CommandError::new(format!("scan {what} {}: {error}", dir.display()))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
                 CommandError::new(format!(
-                    "scan TextBundle {}: {error}",
+                    "scan {what} {}: {error}",
                     dir.display()
                 ))
             })?;
-            for entry in entries {
-                let entry = entry.map_err(|error| {
-                    CommandError::new(format!(
-                        "scan TextBundle {}: {error}",
-                        dir.display()
-                    ))
-                })?;
-                let path = entry.path();
-                let kind = entry.file_type().map_err(|error| {
-                    CommandError::new(format!(
-                        "stat TextBundle input {}: {error}",
-                        path.display()
-                    ))
-                })?;
-                if kind.is_dir() {
-                    if path
-                        .file_name()
-                        .is_some_and(|name| name == ".git" || name == ".bob")
-                    {
-                        continue;
-                    }
-                    stack.push(path);
-                } else if kind.is_file() && !file_states.contains_key(&path) {
-                    let state = fingerprint_file(&path)?;
-                    file_states.insert(path, state);
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|error| {
+                CommandError::new(format!(
+                    "stat {what} input {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if kind.is_dir() {
+                if path
+                    .file_name()
+                    .is_some_and(|name| name == ".git" || name == ".bob")
+                {
+                    continue;
                 }
+                stack.push(path);
+            } else if kind.is_file() && !file_states.contains_key(&path) {
+                let state = fingerprint_file(&path)?;
+                file_states.insert(path, state);
             }
         }
     }
@@ -1236,14 +1422,23 @@ fn collect_audio_under(directory: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             directory.display()
         ))
     })?;
-    let mut entries =
-        entries.filter_map(|entry| entry.ok()).collect::<Vec<_>>();
+    let mut entries = entries
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| {
+            CommandError::new(format!(
+                "scan audio membership {}: {error}",
+                directory.display()
+            ))
+        })?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let path = entry.path();
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
+        let kind = entry.file_type().map_err(|error| {
+            CommandError::new(format!(
+                "stat audio membership {}: {error}",
+                path.display()
+            ))
+        })?;
         if kind.is_dir() {
             if path
                 .file_name()
@@ -1805,5 +2000,248 @@ mod tests {
         let plans_ok = [&existing, &intake_plan];
         validate_planned_asset_collisions(&plans_ok)
             .expect("distinct assets must not collide");
+    }
+
+    fn set_test_invocation_date(date: Option<&'static str>) {
+        TEST_INVOCATION_DATE.with(|cell| cell.set(date));
+        TEST_INVOCATION_DATE_READS.with(|reads| reads.set(0));
+    }
+
+    fn test_invocation_date_reads() -> usize {
+        TEST_INVOCATION_DATE_READS.with(|reads| reads.get())
+    }
+
+    #[test]
+    fn invocation_date_is_pinned_before_the_first_prepare() {
+        set_test_invocation_date(Some("2026-11-17"));
+        let first = pin_invocation_date(None);
+        TEST_INVOCATION_DATE.with(|cell| cell.set(Some("2026-11-18")));
+        let retry = pin_invocation_date(Some(first.clone()));
+        assert_eq!(first, "2026-11-17");
+        assert_eq!(retry, "2026-11-17");
+        assert_eq!(
+            test_invocation_date_reads(),
+            1,
+            "a Some retry must not reread the clock"
+        );
+        set_test_invocation_date(None);
+    }
+
+    #[test]
+    fn prepare_retry_wrapper_reads_the_clock_once() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        fs::create_dir_all(bob_dir.join("lib")).expect("lib");
+        let config = test_config(bob_dir);
+        set_test_invocation_date(Some("2026-11-17"));
+        let prepared = prepare_full_scan_with_retry_date(
+            &config,
+            SyncOptions {
+                dry_run: false,
+                write_pdf: false,
+                prefer: None,
+                ignore_unannotated_sidecar: false,
+            },
+            1,
+            None,
+        )
+        .expect("empty library prepares");
+        assert_eq!(prepared.invocation_date, "2026-11-17");
+        assert_eq!(
+            test_invocation_date_reads(),
+            1,
+            "None must resolve the clock once for every retry path"
+        );
+        set_test_invocation_date(None);
+    }
+
+    #[test]
+    fn pre_snapshot_tracks_text_markdown_and_nested_assets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let config = test_config(bob_dir);
+        let pdf = bob_dir.join("lib/chat/live.pdf");
+        fs::create_dir_all(pdf.parent().expect("parent")).expect("mkdir");
+        fs::write(&pdf, b"%PDF-1.4 fake").expect("pdf");
+        let bundle = pdf.with_extension("textbundle");
+        let sidecar = bundle.join("text.markdown");
+        let source = bundle.join("assets/figure.png");
+        fs::create_dir_all(source.parent().expect("assets")).expect("assets");
+        fs::write(&sidecar, "Comment: Old content.\n").expect("sidecar");
+        fs::write(&source, b"asset-v1").expect("source");
+        let dest_dir = bob_dir.join("ref/chat/live.assets");
+        fs::create_dir_all(&dest_dir).expect("dest dir");
+        let dest = dest_dir.join("fig.png");
+        fs::write(&dest, b"dest-v1").expect("dest");
+        let mut states = BTreeMap::new();
+        snapshot_pdf_companion_states(
+            &config,
+            std::slice::from_ref(&pdf),
+            &mut states,
+        )
+        .expect("snapshot");
+        assert!(
+            states.get(&sidecar).is_some_and(|state| state.exists),
+            "text.markdown must be in the pre-planning read set"
+        );
+        assert!(
+            states.get(&source).is_some_and(|state| state.exists),
+            "nested source assets must be in the pre-planning read set"
+        );
+        assert!(
+            states.get(&dest).is_some_and(|state| state.exists),
+            "destination assets must be in the pre-planning read set"
+        );
+        let before = states.get(&sidecar).cloned().expect("sidecar state");
+        fs::write(&sidecar, "Comment: New content.\n").expect("edit sidecar");
+        let mut after = BTreeMap::new();
+        snapshot_pdf_companion_states(
+            &config,
+            std::slice::from_ref(&pdf),
+            &mut after,
+        )
+        .expect("resnapshot");
+        assert_ne!(
+            after.get(&sidecar),
+            Some(&before),
+            "same-length text.markdown edits must change the snapshot"
+        );
+    }
+
+    #[test]
+    fn pre_snapshot_tracks_image_note_sources() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let bob_dir = temp.path().join("vault");
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            "HOME",
+            Some(home.as_os_str()),
+        )]);
+        let screenshot = home.join("tmp/screenshots/20261018_104022.png");
+        fs::create_dir_all(screenshot.parent().expect("parent"))
+            .expect("screenshot dir");
+        fs::write(&screenshot, b"image-note-source-bytes").expect("screenshot");
+        let config = test_config(&bob_dir);
+        let pdf = bob_dir.join("lib/papers/example.pdf");
+        fs::create_dir_all(pdf.parent().expect("parent")).expect("mkdir");
+        fs::write(&pdf, b"%PDF-1.4 fake").expect("pdf");
+        fs::write(
+            pdf.with_extension("md"),
+            "\
+## Page 1
+
+~/tmp/screenshots/20261018_104022.png
+",
+        )
+        .expect("sidecar");
+        let mut states = BTreeMap::new();
+        snapshot_pdf_companion_states(
+            &config,
+            std::slice::from_ref(&pdf),
+            &mut states,
+        )
+        .expect("snapshot");
+        assert!(
+            states.get(&screenshot).is_some_and(|state| state.exists),
+            "image-note source must be in the pre-planning read set"
+        );
+    }
+
+    #[test]
+    fn planned_pdfs_keep_audio_out_of_the_pdf_list() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let config = test_config(bob_dir);
+        let pdf = bob_dir.join("lib/chat/live.pdf");
+        let audio = bob_dir.join("lib/chat/live.mp3");
+        fs::create_dir_all(pdf.parent().expect("parent")).expect("mkdir");
+        fs::write(&pdf, b"%PDF").expect("pdf");
+        fs::write(&audio, b"ID3").expect("audio");
+        let members = vec![pdf.clone(), audio.clone()];
+        let pdfs = planned_pdfs_from_membership(
+            &config,
+            SyncOptions {
+                dry_run: false,
+                write_pdf: false,
+                prefer: None,
+                ignore_unannotated_sidecar: false,
+            },
+            &[],
+            &members,
+            &[],
+        )
+        .expect("pdfs");
+        assert_eq!(pdfs, vec![pdf]);
+    }
+
+    #[test]
+    fn read_set_changed_detects_markdown_sidecar_bytes() {
+        let mut pre = BTreeMap::new();
+        let path = PathBuf::from("/tmp/live.textbundle/text.markdown");
+        pre.insert(
+            path.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("old".to_string()),
+            },
+        );
+        let mut post = pre.clone();
+        assert_eq!(read_set_changed(&pre, &post, &[], &[]), None);
+        post.insert(
+            path.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("new".to_string()),
+            },
+        );
+        assert_eq!(
+            read_set_changed(&pre, &post, &[], &[]),
+            Some(format!("input changed: {}", path.display()))
+        );
+    }
+
+    #[test]
+    fn dest_asset_byte_change_is_not_retryable() {
+        let dest_root = PathBuf::from("/tmp/ref/chat/live.assets");
+        let dest = dest_root.join("fig.png");
+        let mut pre = BTreeMap::new();
+        pre.insert(
+            dest.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("old".to_string()),
+            },
+        );
+        let mut post = pre.clone();
+        post.insert(
+            dest.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("new".to_string()),
+            },
+        );
+        let reason = read_set_changed(
+            &pre,
+            &post,
+            &[],
+            std::slice::from_ref(&dest_root),
+        )
+        .expect("dest change");
+        assert!(
+            reason.contains("destination asset changed"),
+            "dest vandalism must be classified as a destination-asset change: {reason}"
+        );
+        let error =
+            scan_inputs_changed_error(&format!("{reason} during planning"));
+        assert_eq!(error.code, Some("scan_failed"));
+        assert!(error.message.contains("scan inputs changed"));
+        assert!(
+            !is_inputs_changed_during_planning(&error),
+            "dest-asset changes must fail closed without a source retry"
+        );
+        let source = scan_inputs_changed_error(
+            "input changed: /tmp/text.markdown during planning",
+        );
+        assert!(is_inputs_changed_during_planning(&source));
     }
 }

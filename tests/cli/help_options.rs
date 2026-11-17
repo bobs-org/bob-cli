@@ -685,13 +685,15 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("List, inspect, check, create, and update Record Notes")
-            && help.contains("Bare `bob records` runs the read-only list")
+        help.contains(
+            "List, inspect, check, create, update, and tidy Record Notes",
+        ) && help.contains("Bare `bob records` runs the read-only list")
             && help.contains("(default)")
             && help.contains("\n  check ")
             && help.contains("\n  list ")
             && help.contains("\n  new ")
             && help.contains("\n  show ")
+            && help.contains("\n  tidy ")
             && help.contains("\n  update ")
             && !help.contains("\n  init "),
         "expected records help and default command:\n{help}"
@@ -703,6 +705,7 @@ fn records_help_lists_subcommands_and_options_alphabetically() {
             "\n  list ",
             "\n  new ",
             "\n  show ",
+            "\n  tidy ",
             "\n  update ",
         ],
     );

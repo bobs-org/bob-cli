@@ -205,6 +205,11 @@ const TABLE: &[Entry] = &[
         kind: Kind::RecordStem,
     },
     Entry {
+        path: &["records", "tidy"],
+        arg: "type",
+        kind: Kind::RecordType,
+    },
+    Entry {
         path: &["records", "update"],
         arg: "type",
         kind: Kind::RecordType,

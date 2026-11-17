@@ -2724,6 +2724,7 @@ mod tests {
             NativeCommand::RecordsList,
             NativeCommand::RecordsNew,
             NativeCommand::RecordsShow,
+            NativeCommand::RecordsTidy,
             NativeCommand::RecordsUpdate,
             NativeCommand::Stats,
             NativeCommand::StatsMetrics,

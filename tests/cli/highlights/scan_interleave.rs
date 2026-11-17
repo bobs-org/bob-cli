@@ -217,10 +217,23 @@ fn assert_no_lock_wait(output: &Output) {
 }
 
 fn write_textbundle_with_asset(pdf: &Path, title: &str, asset_bytes: &[u8]) {
+    write_textbundle(pdf, title, asset_bytes, "text.md", None);
+}
+
+fn write_textbundle(
+    pdf: &Path,
+    title: &str,
+    asset_bytes: &[u8],
+    text_file: &str,
+    comment: Option<&str>,
+) {
     write_marker_pdf(pdf, title);
     let bundle = pdf.with_extension("textbundle");
-    let sidecar = bundle.join("text.md");
+    let sidecar = bundle.join(text_file);
     let asset = bundle.join("assets/figure.png");
+    let comment_block = comment
+        .map(|text| format!("\nComment: {text}.\n"))
+        .unwrap_or_default();
     write_file(
         &sidecar,
         &format!(
@@ -233,12 +246,92 @@ fn write_textbundle_with_asset(pdf: &Path, title: &str, asset_bytes: &[u8]) {
 ---
 
 ![{title} figure](assets/figure.png)
-"
+{comment_block}"
         ),
     );
     fs::create_dir_all(asset.parent().expect("asset parent"))
         .expect("asset dir");
     fs::write(&asset, asset_bytes).expect("write asset");
+}
+
+fn spawn_scan_extra(
+    env: &ScanEnv,
+    extra: &[&str],
+    hs: &Handshake,
+    pause: &str,
+    extra_env: &[(&str, &std::ffi::OsStr)],
+) -> SpawnedScan {
+    let mut command = bob_command();
+    command.arg("ref").arg("scan");
+    for arg in extra {
+        command.arg(arg);
+    }
+    apply_scan_env(&mut command, env)
+        .env("BOB_REF_SCAN_TEST_PAUSE", pause)
+        .env("BOB_REF_SCAN_TEST_READY", &hs.ready)
+        .env("BOB_REF_SCAN_TEST_GO", &hs.go)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    SpawnedScan {
+        child: Some(command.spawn().expect("spawn ref scan")),
+    }
+}
+
+fn edit_at_pause(
+    env: &ScanEnv,
+    temp: &Path,
+    pause: &str,
+    extra_env: &[(&str, &std::ffi::OsStr)],
+    edit: impl FnOnce(),
+) -> std::process::Output {
+    let hs = Handshake::new(temp, "hs");
+    let child = spawn_scan_extra(env, &["-f", "json"], &hs, pause, extra_env);
+    wait_pause(&hs, 1);
+    edit();
+    resume(&hs, 1);
+    child.wait()
+}
+
+fn assert_inputs_changed_or_imported(
+    output: &std::process::Output,
+    note: &Path,
+    before: &str,
+    imported_needle: &str,
+) {
+    assert!(
+        output.status.code() == Some(0) || output.status.code() == Some(1),
+        "handshake mutation must replan or refuse:\n{}",
+        format_output(output)
+    );
+    let document = scan_json_stdout(output);
+    if document.get("error").is_some() {
+        assert_eq!(document["error"]["code"], "scan_failed");
+        assert!(
+            document["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("scan inputs changed"),
+            "{}",
+            format_output(output)
+        );
+        assert_eq!(
+            fs::read_to_string(note).expect("note after refusal"),
+            before,
+            "scan_failed must not mutate the note"
+        );
+    } else {
+        assert_eq!(output.status.code(), Some(0), "{}", format_output(output));
+        let after = fs::read_to_string(note).expect("note after import");
+        assert!(
+            after.contains(imported_needle),
+            "replan must import current bytes:\n{}\nnote:\n{after}",
+            format_output(output)
+        );
+        assert_ne!(after, before, "imported note must change");
+    }
 }
 
 // --- 1. lock-free no-work under held locks ---
@@ -1249,6 +1342,298 @@ fn same_length_edits_before_evidence_replan() {
             format_output(&output)
         );
     }
+}
+
+fn run_scan_extra(
+    env: &ScanEnv,
+    extra: &[&str],
+    extra_env: &[(&str, &std::ffi::OsStr)],
+) -> std::process::Output {
+    let mut command = bob_command();
+    command.arg("ref").arg("scan");
+    for arg in extra {
+        command.arg(arg);
+    }
+    apply_scan_env(&mut command, env);
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    command.output().expect("run ref scan")
+}
+
+fn same_length_replace(text: &str, from: &str, to: &str) -> String {
+    let edited = text.replacen(from, to, 1);
+    assert_eq!(
+        edited.len(),
+        text.len(),
+        "replacement must keep the same length: {from:?} -> {to:?}"
+    );
+    edited
+}
+
+#[test]
+fn text_markdown_edit_before_evidence_imports_or_refuses() {
+    // Same-length text.markdown comment edit after planning reads and
+    // before evidence capture. Uses an absolute lib path outside bob_dir
+    // so vault-only Markdown enumeration cannot provide false coverage.
+    let temp = TempDir::new("bob-cli-scan-interleave-text-markdown");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    let lib = temp.path().join("external-lib");
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    write_marker_pdf(&lib.join("chat/stable.pdf"), "Stable");
+    let pdf = lib.join("chat/live.pdf");
+    write_textbundle(
+        &pdf,
+        "Live",
+        b"asset-v1",
+        "text.markdown",
+        Some("Old content"),
+    );
+    let lib_env = [("BOB_HIGHLIGHTS_LIB_DIR", lib.as_os_str())];
+    assert_success(&run_scan_extra(&env, &[], &lib_env));
+    let note = env.vault.join("ref/chat/live.md");
+    let stable = env.vault.join("ref/chat/stable.md");
+    let before = fs::read_to_string(&note).expect("note");
+    let stable_before = fs::read_to_string(&stable).expect("stable note");
+    assert!(
+        before.contains("Old content"),
+        "initial import must include the sidecar comment:\n{before}"
+    );
+    let sidecar = pdf.with_extension("textbundle").join("text.markdown");
+    let output =
+        edit_at_pause(&env, temp.path(), "before_evidence", &lib_env, || {
+            let body = fs::read_to_string(&sidecar).expect("sidecar");
+            fs::write(
+                &sidecar,
+                same_length_replace(&body, "Old content", "New content"),
+            )
+            .expect("edit text.markdown");
+        });
+    assert_inputs_changed_or_imported(&output, &note, &before, "New content");
+    assert_eq!(
+        fs::read_to_string(&stable).expect("stable after"),
+        stable_before,
+        "no-work candidate must stay untouched"
+    );
+}
+
+#[test]
+fn text_md_edit_before_evidence_imports_or_refuses() {
+    let temp = TempDir::new("bob-cli-scan-interleave-text-md");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    write_marker_pdf(&env.vault.join("lib/chat/stable.pdf"), "Stable");
+    let pdf = env.vault.join("lib/chat/live.pdf");
+    write_textbundle(&pdf, "Live", b"asset-v1", "text.md", Some("Old content"));
+    assert_success(&run_scan(&env, &[]));
+    let note = env.vault.join("ref/chat/live.md");
+    let before = fs::read_to_string(&note).expect("note");
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+    let output =
+        edit_at_pause(&env, temp.path(), "before_evidence", &[], || {
+            let body = fs::read_to_string(&sidecar).expect("sidecar");
+            fs::write(
+                &sidecar,
+                same_length_replace(&body, "Old content", "New content"),
+            )
+            .expect("edit text.md");
+        });
+    assert_inputs_changed_or_imported(&output, &note, &before, "New content");
+}
+
+#[test]
+fn source_image_edit_before_evidence_copies_or_refuses() {
+    let temp = TempDir::new("bob-cli-scan-interleave-source-image");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/live.pdf");
+    write_textbundle_with_asset(&pdf, "Live", b"asset-v1");
+    assert_success(&run_scan(&env, &[]));
+    let note = env.vault.join("ref/chat/live.md");
+    let before = fs::read_to_string(&note).expect("note");
+    let source = pdf.with_extension("textbundle").join("assets/figure.png");
+    let assets = env.vault.join("ref/chat/live.assets");
+    let dest_before = first_asset_bytes(&assets);
+    let output =
+        edit_at_pause(&env, temp.path(), "before_evidence", &[], || {
+            fs::write(&source, b"asset-v2").expect("edit source image");
+        });
+    assert!(
+        output.status.code() == Some(0) || output.status.code() == Some(1),
+        "{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    if document.get("error").is_some() {
+        assert_eq!(document["error"]["code"], "scan_failed");
+        assert!(
+            document["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("scan inputs changed"),
+            "{}",
+            format_output(&output)
+        );
+        assert_eq!(fs::read_to_string(&note).expect("note"), before);
+        assert_eq!(first_asset_bytes(&assets), dest_before);
+        assert!(
+            !asset_dir_contains(&assets, b"asset-v2"),
+            "refusal must not copy the edited source"
+        );
+    } else {
+        assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+        assert!(
+            asset_dir_contains(&assets, b"asset-v2"),
+            "replan must copy the current source asset:\n{}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn dest_asset_edit_before_evidence_restores_or_refuses() {
+    let temp = TempDir::new("bob-cli-scan-interleave-dest-asset");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/live.pdf");
+    write_textbundle_with_asset(&pdf, "Live", b"asset-v1");
+    assert_success(&run_scan(&env, &[]));
+    let note = env.vault.join("ref/chat/live.md");
+    let before = fs::read_to_string(&note).expect("note");
+    let assets = env.vault.join("ref/chat/live.assets");
+    let dest = first_asset_path(&assets);
+    let dest_before = fs::read(&dest).expect("dest bytes");
+    assert_eq!(dest_before, b"asset-v1");
+    let output =
+        edit_at_pause(&env, temp.path(), "before_evidence", &[], || {
+            fs::write(&dest, b"asset-vX").expect("edit dest asset");
+        });
+    assert!(
+        output.status.code() == Some(0) || output.status.code() == Some(1),
+        "{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    let dest_after = fs::read(&dest).expect("dest after");
+    if document.get("error").is_some() {
+        assert_eq!(document["error"]["code"], "scan_failed");
+        assert!(
+            document["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("scan inputs changed"),
+            "{}",
+            format_output(&output)
+        );
+        assert_eq!(fs::read_to_string(&note).expect("note"), before);
+        assert_eq!(dest_after, b"asset-vX");
+    } else {
+        assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+        assert_eq!(
+            dest_after,
+            b"asset-v1",
+            "replan must restore dest from the unchanged source:\n{}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn pdf_added_after_snapshot_replans_with_both_or_refuses() {
+    // Membership at the discovery/snapshot boundary: the planned PDF list
+    // is derived from the membership snapshot, so a PDF planted after that
+    // snapshot must invalidate instead of being omitted.
+    let temp = TempDir::new("bob-cli-scan-interleave-after-snapshot");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    write_marker_pdf(&env.vault.join("lib/chat/stable.pdf"), "Stable");
+    assert_success(&run_scan(&env, &[]));
+    let stable = env.vault.join("ref/chat/stable.md");
+    let stable_before = fs::read_to_string(&stable).expect("stable");
+    let added = env.vault.join("lib/chat/added.pdf");
+    let added_note = env.vault.join("ref/chat/added.md");
+    let output =
+        edit_at_pause(&env, temp.path(), "after_snapshot", &[], || {
+            write_marker_pdf(&added, "Added");
+        });
+    assert!(
+        output.status.code() == Some(0) || output.status.code() == Some(1),
+        "{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    if document.get("error").is_some() {
+        assert_eq!(document["error"]["code"], "scan_failed");
+        assert!(
+            document["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("scan inputs changed"),
+            "{}",
+            format_output(&output)
+        );
+        assert!(!added_note.exists(), "refusal must not create the new note");
+        assert_eq!(fs::read_to_string(&stable).expect("stable"), stable_before);
+    } else {
+        assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+        assert_eq!(document["summary"]["pdfs"], 2);
+        assert!(
+            added_note.is_file(),
+            "replan must include the PDF that arrived at the snapshot boundary:\n{}",
+            format_output(&output)
+        );
+        assert_eq!(
+            fs::read_to_string(&stable).expect("stable after"),
+            stable_before
+        );
+    }
+}
+
+fn first_asset_path(dir: &Path) -> PathBuf {
+    let mut files = fs::read_dir(dir)
+        .expect("assets dir")
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            entry.file_type().ok()?.is_file().then(|| entry.path())
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.into_iter().next().unwrap_or_else(|| {
+        panic!("expected an image asset in {}", dir.display())
+    })
+}
+
+fn first_asset_bytes(dir: &Path) -> Vec<u8> {
+    fs::read(first_asset_path(dir)).expect("read dest asset")
+}
+
+fn asset_dir_contains(dir: &Path, bytes: &[u8]) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        fs::read(entry.path()).is_ok_and(|contents| contents == bytes)
+    })
 }
 
 #[test]
