@@ -62,7 +62,8 @@ fn assert_alias_applied(raw: &str, rewrite: &DraftRewrite) -> AliasId {
     let cursor = rewrite
         .cursor
         .unwrap_or_else(|| panic!("{raw:?} alias lost the cursor"));
-    let tip = sigil_alias_tip_with(&rewrite.text, cursor, None);
+    let tip =
+        sigil_alias_tip_with(&rewrite.text, cursor, RewritePolicies::default());
     if stamp.id.tipped() {
         let tip = tip.unwrap_or_else(|| {
             panic!(

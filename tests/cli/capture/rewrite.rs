@@ -748,6 +748,29 @@ fn capture_rewrite_never_touches_the_vault_or_clipboard() {
         !missing.exists(),
         "capture-rewrite must not create the vault directory"
     );
+
+    let album_missing = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("5")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@eat/")
+        .env("BOB_DIR", &missing)
+        .output()
+        .expect("run bob capture-rewrite album slash without a vault");
+    assert_success(&album_missing);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&album_missing).trim())
+            .expect("capture-rewrite JSON");
+    assert_eq!(json["text"], "@eat#");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert!(
+        !missing.exists(),
+        "capture-rewrite must not create the vault directory"
+    );
 }
 
 #[test]
@@ -1897,5 +1920,59 @@ fn capture_rewrite_json_teaches_slash_for_hash_in_a_notebook_body() {
         json.get("sigil_alias_tip"),
         Some(&serde_json::Value::Null),
         "{draft:?}: {json}"
+    );
+}
+
+fn album_alias_vault(temp: &TempDir) -> std::path::PathBuf {
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: \"[[area]]\"\n---\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: \"[[album]]\"\n",
+            "parent: \"[[body]]\"\n",
+            "record:\n",
+            "  noun: restaurant\n",
+            "---\n\n",
+            "# Eat\n",
+        ),
+    );
+    write_file(
+        &vault.join("notes.md"),
+        "---\ntype: \"[[area]]\"\n---\n# Notes\n",
+    );
+    vault
+}
+
+#[test]
+fn capture_rewrite_json_keeps_slash_literal_after_an_album_route() {
+    let temp = TempDir::new("bob-cli-rewrite-album-slash");
+    let vault = album_alias_vault(&temp);
+    let json = rewrite_with_vault_json("@eat/", Some(5), &vault);
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], "@eat/", "{json}");
+    assert_eq!(
+        json.get("sigil_alias_tip"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+
+    let json = rewrite_with_vault_json("@notes/", Some(7), &vault);
+    assert_eq!(json["changed"], true, "{json}");
+    assert_eq!(json["text"], "@notes#", "{json}");
+    assert_eq!(json["rule"], "expand_sigil_alias", "{json}");
+
+    let json = rewrite_with_vault_json("@eat#", Some(5), &vault);
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], "@eat#", "{json}");
+    assert_eq!(
+        json.get("sigil_alias_tip"),
+        Some(&serde_json::Value::Null),
+        "{json}"
     );
 }

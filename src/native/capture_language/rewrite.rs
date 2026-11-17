@@ -14,8 +14,19 @@ use super::item::{
 };
 use super::markers::is_route_token;
 use super::model::*;
+use super::notebook::NotebookRoutePolicy;
 use super::project_tasks::{lex_project_task_id, TaskIdLex};
+use super::record::RecordRoutePolicy;
 use super::tokens::{is_block_id, link_eq_suffix};
+
+/// Optional vault-backed policies for the `/` -> `#` alias and its typing
+/// tip. The caller performs any I/O; rewrite itself never touches the
+/// filesystem.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RewritePolicies<'a> {
+    pub(crate) notebook: Option<&'a NotebookRoutePolicy>,
+    pub(crate) record: Option<&'a RecordRoutePolicy>,
+}
 
 /// The result of applying the capture grammar's automatic draft rewrites to
 /// `raw_text`. See [`rewrite_draft`].
@@ -100,22 +111,23 @@ pub(crate) fn rewrite_draft(
     raw_text: &str,
     cursor: Option<usize>,
 ) -> DraftRewrite {
-    rewrite_draft_with(raw_text, cursor, None)
+    rewrite_draft_with(raw_text, cursor, RewritePolicies::default())
 }
 
-/// Apply the capture grammar's editor typing assists with an optional
-/// notebook route policy.
+/// Apply the capture grammar's editor typing assists with optional
+/// notebook and record route policies.
 ///
-/// The only policy-aware assist is the `/` -> `#` alias at a first-level
-/// bullet start: with a policy it opens the `notebook_section_bullet` menu
-/// in a notebook body and stays literal under a notebook note, exactly like
-/// a typed `#`. Every other assist stays lexical. The caller performs any
-/// vault I/O (see [`bullet_sigil_may_need_notebook_policy`]); this function
-/// itself never touches the filesystem.
+/// Policy-aware assists are the `/` -> `#` alias at a first-level bullet
+/// start (notebook section menu) and the same alias glued to `@route`
+/// (literal `/` on an album record route). Every other assist stays
+/// lexical. The caller performs any vault I/O (see
+/// [`bullet_sigil_may_need_notebook_policy`] and
+/// [`slash_route_may_need_album_policy`]); this function itself never
+/// touches the filesystem.
 pub(crate) fn rewrite_draft_with(
     raw_text: &str,
     cursor: Option<usize>,
-    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
+    policies: RewritePolicies<'_>,
 ) -> DraftRewrite {
     if super::template::analyze(raw_text).directive.is_some() {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
@@ -147,8 +159,7 @@ pub(crate) fn rewrite_draft_with(
         return rewrite;
     }
     if let Some(position) = cursor
-        && let Some(rewrite) =
-            expand_sigil_alias(raw_text, position, notebook_policy)
+        && let Some(rewrite) = expand_sigil_alias(raw_text, position, policies)
     {
         return rewrite;
     }
@@ -160,7 +171,7 @@ pub(crate) fn rewrite_draft_with(
 /// true when the byte before `cursor` is `/` or `#` sitting at a
 /// first-level bullet start (`- /`, `* /`, `+ /`, and the `#` forms) inside
 /// a list or below an item header, where the section-bullet menu could open.
-/// The `capture-rewrite` adapter builds its one bounded notebook policy read
+/// The `capture-rewrite` adapter builds its bounded notebook policy read
 /// only when this returns true; every other rewrite stays filesystem-free.
 /// A doubled `//` (which stays literal), a glued `-/`, and a first-line
 /// `/` after body text (`Buy milk /`) all return false.
@@ -222,6 +233,46 @@ pub(crate) fn bullet_sigil_may_need_notebook_policy(
         AuthoredLineClass::Item(authored)
             if authored.depth == AuthoredDepth::First
     )
+}
+
+/// Cheap lexical preflight for the album-aware `/` (and `#` tip) alias:
+/// returns the route when the byte before `cursor` is `/` or `#` glued to
+/// a single-`@` `@<route>` token, where `<route>` satisfies
+/// [`is_route_token`]. The `@` sits at a token boundary (start of text or
+/// after whitespace) and is not `@@`. The `capture-rewrite` adapter builds
+/// its one bounded album-head read only when this returns a route.
+pub(crate) fn slash_route_may_need_album_policy(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<String> {
+    if cursor == 0 || cursor > raw_text.len() {
+        return None;
+    }
+    if !raw_text.is_char_boundary(cursor)
+        || !raw_text.is_char_boundary(cursor - 1)
+    {
+        return None;
+    }
+    match raw_text.as_bytes().get(cursor - 1) {
+        Some(b'/') | Some(b'#') => {}
+        _ => return None,
+    }
+    let prefix = raw_text.get(..cursor - 1)?;
+    let at = prefix.rfind('@')?;
+    if at > 0 && prefix.as_bytes().get(at - 1) == Some(&b'@') {
+        return None;
+    }
+    if at > 0 {
+        let before = prefix[..at].chars().next_back()?;
+        if !before.is_whitespace() {
+            return None;
+        }
+    }
+    let route = prefix.get(at + 1..)?;
+    if !is_route_token(route) {
+        return None;
+    }
+    Some(route.to_string())
 }
 
 /// Typing `.`, `;`, `,`, `-`, `\`, `/`, `=`, `x`, or `s` in a position where
@@ -444,7 +495,7 @@ fn collapse_global_destination(
 fn expand_sigil_alias(
     raw_text: &str,
     cursor: usize,
-    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
+    policies: RewritePolicies<'_>,
 ) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
@@ -462,7 +513,7 @@ fn expand_sigil_alias(
         return expand_directive_alias(raw_text, start, cursor);
     }
     if alias == "/" {
-        return expand_hash_alias(raw_text, start, cursor, notebook_policy);
+        return expand_hash_alias(raw_text, start, cursor, policies);
     }
     if alias == "," {
         let token = tokenize_with_spans(raw_text)
@@ -1376,9 +1427,11 @@ fn expand_merge_in_source_comma_alias(
 /// physical line never aliases, so a blank draft keeps opening Go To and a
 /// later line's leading sigil stays literal. A `/` also stays literal where
 /// bob already reads it as part of a field (Go To, the `=/` split, wikilink
-/// note paths, `@@` routes, section and Pomodoro names). The candidate is
-/// checked by the ordinary completion grammar: wikilink headings first
-/// (matching the engine's precedence), then the marker grammar's `#` menus.
+/// note paths, `@@` routes, section and Pomodoro names), and when it is
+/// glued to a single-`@` album route (`@eat/` keeps the record route). The
+/// candidate is checked by the ordinary completion grammar: wikilink
+/// headings first (matching the engine's precedence), then the marker
+/// grammar's `#` menus.
 ///
 /// Typing `\` where a bare `%` would open the directive menu swaps that byte
 /// to `%` instead (see [`expand_directive_alias`]); `\` never types `#`.
@@ -1386,8 +1439,15 @@ fn expand_hash_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
-    notebook_policy: Option<&super::notebook::NotebookRoutePolicy>,
+    policies: RewritePolicies<'_>,
 ) -> Option<DraftRewrite> {
+    if let Some(route) = slash_route_may_need_album_policy(raw_text, cursor)
+        && policies
+            .record
+            .is_some_and(|policy| policy.is_album_route(&route))
+    {
+        return None;
+    }
     let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
     if raw_text
         .get(line_start..start)
@@ -1449,7 +1509,7 @@ fn expand_hash_alias(
     let field = super::completion::completion_field_at_with(
         &candidate,
         cursor,
-        notebook_policy,
+        policies.notebook,
     )?;
     use super::completion::CompletionContext;
     let allowed = match field.context {

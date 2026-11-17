@@ -14,7 +14,8 @@ use serde_json::json;
 use super::{
     capture_flag_guard,
     capture_language::{
-        self, AliasStamp, DraftRewrite, RewriteRule, SigilAliasTip, TextEdit,
+        self, AliasStamp, DraftRewrite, RewritePolicies, RewriteRule,
+        SigilAliasTip, TextEdit,
     },
     env as bob_env,
     style::Styler,
@@ -97,10 +98,12 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Apply the capture grammar's editor typing assists to TEXT and \
 report the resulting edits, cursor, and a human summary.\n\n\
 The command is read-only and takes no --bob-dir: every rewrite is purely \
-lexical except one bounded vault read. When the byte before --cursor is `/` \
+lexical except two bounded vault reads. When the byte before --cursor is `/` \
 at a first-level bullet start (`- /`), it reads notebook route frontmatter \
-from the configured vault (BOB_DIR) to decide whether `- /` becomes `- #`; \
-every other rewrite never opens the vault, never reads the clipboard, and \
+from the configured vault (BOB_DIR) to decide whether `- /` becomes `- #`. \
+When the byte before --cursor is `/` or `#` glued to a single-`@` route \
+(`@eat/`), it reads that one album head to decide whether `/` stays literal. \
+Every other rewrite never opens the vault, never reads the clipboard, and \
 never touches the filesystem. It implements five rules.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
@@ -173,8 +176,12 @@ named-start and past-session name, split type, merge destination, and \
 wikilink heading. A '/' at a first-level bullet start in a notebook body \
 becomes '#' exactly where the section menu opens, so `- /` becomes `- #`; \
 under a notebook note it stays literal. Deciding that reads notebook route \
-frontmatter from the configured vault (BOB_DIR): the command's one bounded \
-vault read, and a draft with no such bullet reads no files. A '/' at a line \
+frontmatter from the configured vault (BOB_DIR). A '/' glued to a \
+single-`@` album route stays literal (`@eat/` keeps the record route); a \
+typed '#' still opens the section menu. Deciding that reads one album head \
+from the configured vault. Those are the command's two bounded vault reads, \
+and a draft with neither a notebook bullet nor an album-route '/' or '#' \
+reads no files. A '/' at a line \
 start, glued to a word, or right after another '/' stays literal. A \
 '/' also stays literal where bob already reads it as part of a field (Go \
 To, the '=/' split, wikilink note paths, section and Pomodoro \
@@ -258,7 +265,9 @@ means no tip is proved and marks a bob that reports tips; the field is \
 absent without --cursor or when the draft changed. Every rewrite that fires \
 the sigil alias rule also carries an 'alias' object with its 'id', 'key', \
 and 'sigil'. For a typed `- #` in a notebook body the proof uses the same \
-bounded vault read, so the tip teaches `/`. Human output keeps 'no rewrite' \
+notebook read, so the tip teaches `/`. For a typed `@eat#` after an album \
+route the proof uses the same album-head read, so the tip stays silent. \
+Human output keeps 'no rewrite' \
 and adds one dim 'tip' line.\n\n\
 These assists are editor-only: 'bob capture' and 'bob capture-parse' keep \
 the literal TEXT, so '@file:id^' is not silently rewritten there. Only a \
@@ -417,37 +426,46 @@ struct SourceRange {
 
 impl CaptureRewriteResult {
     fn new(input: String, cursor: Option<usize>) -> Self {
-        // The one bounded vault read this command performs: only when a
-        // `/` or `#` sits at a first-level bullet start, so `- /` becomes
-        // `- #` exactly where the notebook section menu opens and stays
-        // literal under a notebook note. Every other rewrite stays
+        // Two bounded vault reads: notebook frontmatter when a `/` or `#`
+        // sits at a first-level bullet start, and one album head when a
+        // `/` or `#` is glued to `@route`. Every other rewrite stays
         // filesystem-free.
-        let policy;
-        let notebook_policy = match cursor {
+        let notebook_store = match cursor {
             Some(position)
                 if capture_language::bullet_sigil_may_need_notebook_policy(
                     &input, position,
                 ) =>
             {
-                policy = super::capture_notebooks::notebook_policy_for_draft(
+                Some(super::capture_notebooks::notebook_policy_for_draft(
                     &bob_env::bob_dir(),
                     &input,
-                );
-                Some(&policy)
+                ))
             }
             _ => None,
         };
-        let rewrite = capture_language::rewrite_draft_with(
-            &input,
-            cursor,
-            notebook_policy,
-        );
+        let record_store = match cursor.and_then(|position| {
+            capture_language::slash_route_may_need_album_policy(
+                &input, position,
+            )
+        }) {
+            Some(route) => {
+                Some(super::capture_record::record_policy_for_draft(
+                    &bob_env::bob_dir(),
+                    &format!("@{route}/"),
+                ))
+            }
+            None => None,
+        };
+        let policies = RewritePolicies {
+            notebook: notebook_store.as_ref(),
+            record: record_store.as_ref(),
+        };
+        let rewrite =
+            capture_language::rewrite_draft_with(&input, cursor, policies);
         let sigil_alias_tip = match cursor {
             Some(position) if rewrite.rule.is_none() => Some(
                 capture_language::sigil_alias_tip_with(
-                    &input,
-                    position,
-                    notebook_policy,
+                    &input, position, policies,
                 )
                 .map(tip_json),
             ),

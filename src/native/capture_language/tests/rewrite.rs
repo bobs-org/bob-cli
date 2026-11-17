@@ -3,8 +3,12 @@
 use super::super::alias_tip::AliasId;
 use super::super::editor_model::{EditorMode, Severity, SpanKind};
 use super::super::editor_parse::*;
+use super::super::record::{
+    AlbumRouteMeta, PerRouteDecision, RecordRoutePolicy,
+};
 use super::super::rewrite::*;
 use super::assert_alias_applied;
+use crate::native::records::schema::RecordType;
 
 #[test]
 fn rewrite_draft_absorbs_a_trailing_local_marker() {
@@ -2855,7 +2859,7 @@ fn rewrite_draft_close_outcome_alias_leaves_templates() {
 #[test]
 fn slash_alias_notebook_preflight_only_fires_at_first_level_bullets() {
     // A `/` or `#` at a first-level bullet start may need the notebook
-    // policy: the one bounded vault read happens only for these drafts.
+    // policy: the notebook bounded vault read happens only for these drafts.
     for raw in [
         "@dev_tools\n- /",
         "@dev_tools\n- #",
@@ -2888,4 +2892,138 @@ fn slash_alias_notebook_preflight_only_fires_at_first_level_bullets() {
             "{raw:?} must not gate the notebook policy read"
         );
     }
+}
+
+fn album_valid_decision() -> PerRouteDecision {
+    PerRouteDecision::AlbumValid {
+        record_type: RecordType {
+            id: "restaurant".to_string(),
+            dir: "eat".to_string(),
+            label: "Restaurant".to_string(),
+            emoji: None,
+            parent: None,
+            dated_notes: false,
+            fields: Vec::new(),
+            legacy: Vec::new(),
+        },
+        album: AlbumRouteMeta {
+            stem: "eat".to_string(),
+            title: "Eat".to_string(),
+            owner: None,
+            breadcrumb: Vec::new(),
+        },
+    }
+}
+
+fn album_invalid_decision() -> PerRouteDecision {
+    PerRouteDecision::AlbumInvalid {
+        paths: vec!["eat.md".to_string()],
+        findings: Vec::new(),
+    }
+}
+
+fn record_policies(policy: &RecordRoutePolicy) -> RewritePolicies<'_> {
+    RewritePolicies {
+        notebook: None,
+        record: Some(policy),
+    }
+}
+
+#[test]
+fn slash_route_album_preflight_only_fires_on_glued_single_at_routes() {
+    for (raw, cursor, route) in [
+        ("@eat/", 5, "eat"),
+        ("@Eat/", 5, "Eat"),
+        ("Buy milk @eat/", 14, "eat"),
+        ("@eat#", 5, "eat"),
+        ("@eat/ Title", 5, "eat"),
+        ("  @eat/", 7, "eat"),
+        ("Buy milk\n@eat/", 14, "eat"),
+    ] {
+        assert_eq!(
+            slash_route_may_need_album_policy(raw, cursor).as_deref(),
+            Some(route),
+            "{raw:?} at {cursor}"
+        );
+    }
+    for (raw, cursor) in [
+        ("@@eat/", 6),
+        ("Buy milk /", 10),
+        ("@eat /", 6),
+        ("foo@eat/", 8),
+        ("@eat+id/", 8),
+        ("@cash+goog-exit/", 16),
+        ("Buy milk @eat/ Title", 20),
+        ("@dev_tools\n- /", 15),
+        ("/", 1),
+        ("@eat/", 0),
+        ("@eat/", 99),
+    ] {
+        assert_eq!(
+            slash_route_may_need_album_policy(raw, cursor),
+            None,
+            "{raw:?} at {cursor} must not gate the album policy read"
+        );
+    }
+}
+
+#[test]
+fn rewrite_draft_keeps_slash_literal_after_an_album_route() {
+    let valid = RecordRoutePolicy::absent()
+        .insert_route("eat".to_owned(), album_valid_decision());
+    let invalid = RecordRoutePolicy::absent()
+        .insert_route("eat".to_owned(), album_invalid_decision());
+    for (raw, cursor) in [
+        ("@eat/", 5),
+        ("Buy milk @eat/", 14),
+        ("@Eat/", 5),
+        ("@eat/ Title", 5),
+    ] {
+        for policy in [&valid, &invalid] {
+            let rewrite =
+                rewrite_draft_with(raw, Some(cursor), record_policies(policy));
+            assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+            assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+        }
+    }
+}
+
+#[test]
+fn rewrite_draft_still_aliases_slash_without_an_album_claim() {
+    let eat_only = RecordRoutePolicy::absent()
+        .insert_route("eat".to_owned(), album_valid_decision());
+    let unclaimed = RecordRoutePolicy::absent()
+        .insert_route("eat".to_owned(), PerRouteDecision::Unclaimed);
+    let incomplete = RecordRoutePolicy::absent().insert_route(
+        "eat".to_owned(),
+        PerRouteDecision::DiscoveryIncomplete {
+            errors: vec!["could not read album head".to_string()],
+        },
+    );
+    for raw in ["@eat/", "@dev/"] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_alias_applied(raw, &rewrite);
+        assert_eq!(rewrite.text, raw.replace('/', "#"), "no policy {raw:?}");
+    }
+    let rewrite =
+        rewrite_draft_with("@dev/", Some(5), record_policies(&eat_only));
+    assert_alias_applied("@dev/", &rewrite);
+    assert_eq!(rewrite.text, "@dev#", "policy lacks dev");
+    for policy in [&unclaimed, &incomplete] {
+        let rewrite =
+            rewrite_draft_with("@eat/", Some(5), record_policies(policy));
+        assert_alias_applied("@eat/", &rewrite);
+        assert_eq!(rewrite.text, "@eat#");
+    }
+}
+
+#[test]
+fn rewrite_draft_still_collapses_global_album_slash() {
+    let policy = RecordRoutePolicy::absent()
+        .insert_route("eat".to_owned(), album_valid_decision());
+    let rewrite =
+        rewrite_draft_with("@@eat/", Some(6), record_policies(&policy));
+    assert_eq!(rewrite.rule, Some(RewriteRule::CollapseGlobalDestination));
+    assert_eq!(rewrite.text, "@eat#");
+    assert_eq!(rewrite.alias, None);
 }

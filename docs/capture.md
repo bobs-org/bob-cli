@@ -6735,7 +6735,9 @@ claims the item as record creation **before** transfer,
 dependency, directive, type, task-ID, or ordinary task-bullet parsing.
 Route-first (`@eat/ Ramen Nagi`) and title-first (`Ramen Nagi @eat/`) are
 the same claim. A bare `@eat/` needs a title (`record_title`); it is never
-a task-list header or a note pull. `%t` expands across record rows. A local
+a task-list header or a note pull. In Bob Mac Capture, typing `/` after an
+album route keeps `@eat/`, and a draft that is only `@eat/` lists the
+album's records. `%t` expands across record rows. A local
 record route wins over a draft-wide `@@route`; sibling tasks still inherit
 that declaration.
 
@@ -9420,12 +9422,14 @@ Applies the capture grammar's automatic draft rewrites -- the
 block-ID separator toggle, relation-label pipe attach, sigil aliases, global
 destination collapse, relation direction toggle, and bare `@@` absorption -- and reports the
 resulting edits, cursor, and a human summary. It is read-only and takes no
-`--bob-dir`: every rewrite is purely lexical except one bounded vault read.
+`--bob-dir`: every rewrite is purely lexical except two bounded vault reads.
 When the byte before `--cursor` is `/` at a first-level bullet start
 (`- /`), it reads notebook route frontmatter from the configured vault
-(`BOB_DIR`) to decide whether `- /` becomes `- #`; every other rewrite never
-opens the vault, never reads the clipboard or the URL routing config, and
-never touches the filesystem. `bob capture-parse` reads that config unless
+(`BOB_DIR`) to decide whether `- /` becomes `- #`. When the byte before
+`--cursor` is `/` or `#` glued to a single-`@` route (`@eat/`), it reads
+that one album head to decide whether `/` stays literal. Every other rewrite
+never opens the vault, never reads the clipboard or the URL routing config,
+and never touches the filesystem. `bob capture-parse` reads that config unless
 `--no-ref` is set; see [above](#bob-capture-parse).
 If `TEXT` is omitted and stdin is piped, it reads the complete piped stdin
 stream. Missing `TEXT`, invalid options, or a cursor outside `TEXT` or
@@ -9537,9 +9541,12 @@ and past-session name, split type, merge destination, and wikilink heading. A
 `/` at a first-level bullet start in a notebook body becomes `#` exactly
 where the section menu opens, so `- /` becomes `- #`; under a notebook note
 it stays literal. Deciding that reads notebook route frontmatter from the
-configured vault (`BOB_DIR`): the command's one bounded vault read, and a
-draft with no such bullet reads no files. A typed `/` and a typed `#`
-converge on the same menu. A `/` at a line
+configured vault (`BOB_DIR`). A `/` glued to a single-`@` album route stays
+literal (`@eat/` keeps the record route); a typed `#` still opens the
+section menu. Deciding that reads one album head from the configured vault.
+Those are the command's two bounded vault reads, and a draft with neither a
+notebook bullet nor an album-route `/` or `#` reads no files. A typed `/`
+and a typed `#` converge on the same menu. A `/` at a line
 start, glued to a word, or right after another `/` stays literal. A
 `/` also stays literal where bob already reads it as part of a field (Go To,
 the `=/` split, wikilink note paths, section and Pomodoro names);
@@ -9547,7 +9554,9 @@ block-ID fields do not count. A `/` glued to a complete `@@route`
 collapses instead (see the global collapse below). For example, `Buy milk /` becomes `Buy milk #`
 and `Buy milk @cash+goog-exit/` becomes `Buy milk @cash+goog-exit#`, while
 `=/` stays the split. For a typed `- #` in a notebook body the typing tip
-uses the same bounded vault read, so the tip teaches `/`. Typing `\` becomes `%`
+uses the same notebook read, so the tip teaches `/`. For a typed `@eat#`
+after an album route the proof uses the same album-head read, so the tip
+stays silent. Typing `\` becomes `%`
 wherever a bare `%` would open the directive menu: at either edge of an
 item line, with only other markers between it and that edge. A `\` at a line
 start or after only spaces or tabs on its line, glued to a word, doubled

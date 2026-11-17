@@ -562,7 +562,7 @@ fn capture_rewrite_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("one bounded vault read")
+        help.contains("two bounded vault reads")
             && help.contains("absorb")
             && help.contains("switch")
             && help.contains("--cursor")

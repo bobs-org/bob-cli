@@ -215,6 +215,19 @@ impl RecordRoutePolicy {
             Some(PerRouteDecision::AlbumValid { .. })
         )
     }
+
+    /// Whether the record grammar claims this route as an album, valid or
+    /// broken. Unclaimed and discovery-incomplete routes keep the `/` ->
+    /// `#` alias.
+    pub(crate) fn is_album_route(&self, route: &str) -> bool {
+        matches!(
+            self.route_decision(route),
+            Some(
+                PerRouteDecision::AlbumValid { .. }
+                    | PerRouteDecision::AlbumInvalid { .. }
+            )
+        )
+    }
 }
 
 /// Pure lexical scan of a draft for record-candidate directories: the dir

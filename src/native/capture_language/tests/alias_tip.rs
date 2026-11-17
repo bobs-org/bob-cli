@@ -86,7 +86,7 @@ fn the_tipped_classification_matches_the_v1_lessons() {
 }
 
 fn tip_at_end(raw: &str) -> Option<SigilAliasTip> {
-    sigil_alias_tip_with(raw, raw.len(), None)
+    sigil_alias_tip_with(raw, raw.len(), RewritePolicies::default())
 }
 
 #[test]
@@ -262,16 +262,30 @@ fn sigil_alias_tip_only_looks_at_the_sigil_ending_at_the_cursor() {
     // is not something the forward alias fires on, so nothing is taught.
     let raw = "Buy milk @\nlater";
     let cursor = "Buy milk @".len();
-    let tip = sigil_alias_tip_with(raw, cursor, None)
+    let tip = sigil_alias_tip_with(raw, cursor, RewritePolicies::default())
         .expect("tip before a later line");
     assert_eq!(tip.id, AliasId::RouteAfterText);
     assert_eq!(tip.range, (cursor - 1, cursor));
-    assert!(sigil_alias_tip_with("Buy milk @ later", cursor, None).is_none());
-    assert!(sigil_alias_tip_with(raw, raw.len(), None).is_none());
-    assert!(sigil_alias_tip_with(raw, 0, None).is_none());
-    assert!(sigil_alias_tip_with("Buy milk @", 99, None).is_none());
+    assert!(sigil_alias_tip_with(
+        "Buy milk @ later",
+        cursor,
+        RewritePolicies::default()
+    )
+    .is_none());
+    assert!(
+        sigil_alias_tip_with(raw, raw.len(), RewritePolicies::default())
+            .is_none()
+    );
+    assert!(sigil_alias_tip_with(raw, 0, RewritePolicies::default()).is_none());
+    assert!(
+        sigil_alias_tip_with("Buy milk @", 99, RewritePolicies::default())
+            .is_none()
+    );
     // A cursor inside a multi-byte character is not a boundary.
-    assert!(sigil_alias_tip_with("caf\u{e9}", 4, None).is_none());
+    assert!(
+        sigil_alias_tip_with("caf\u{e9}", 4, RewritePolicies::default())
+            .is_none()
+    );
 }
 
 #[test]
@@ -308,7 +322,11 @@ fn sigil_alias_tip_stays_silent_for_the_negative_corpus() {
         ("Do work @file:{0}^ %t\n\nrow", "Do work @file:{0}^".len()),
     ] {
         assert!(raw.len() >= cursor, "{raw:?}");
-        assert!(sigil_alias_tip_with(raw, cursor, None).is_none(), "{raw:?}");
+        assert!(
+            sigil_alias_tip_with(raw, cursor, RewritePolicies::default())
+                .is_none(),
+            "{raw:?}"
+        );
     }
 }
 
@@ -342,4 +360,41 @@ fn sigil_alias_tip_agrees_with_the_forward_rewrite_for_every_prefix() {
         assert_eq!(rewrite.text, raw, "{raw:?}");
         assert_eq!(rewrite.cursor, Some(raw.len()), "{raw:?}");
     }
+}
+
+#[test]
+fn sigil_alias_tip_stays_silent_for_an_album_hash() {
+    let policy = RecordRoutePolicy::absent().insert_route(
+        "eat".to_owned(),
+        PerRouteDecision::AlbumValid {
+            record_type: crate::native::records::schema::RecordType {
+                id: "restaurant".to_string(),
+                dir: "eat".to_string(),
+                label: "Restaurant".to_string(),
+                emoji: None,
+                parent: None,
+                dated_notes: false,
+                fields: Vec::new(),
+                legacy: Vec::new(),
+            },
+            album: AlbumRouteMeta {
+                stem: "eat".to_string(),
+                title: "Eat".to_string(),
+                owner: None,
+                breadcrumb: Vec::new(),
+            },
+        },
+    );
+    let policies = RewritePolicies {
+        notebook: None,
+        record: Some(&policy),
+    };
+    assert!(
+        sigil_alias_tip_with("@eat#", 5, policies).is_none(),
+        "album @eat# must not teach /"
+    );
+    let tip = sigil_alias_tip_with("@dev#", 5, policies)
+        .expect("non-album @dev# still teaches /");
+    assert_eq!(tip.id, AliasId::HashMenu);
+    assert_eq!(tip.keys, ["/"]);
 }
