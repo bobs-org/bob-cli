@@ -214,19 +214,11 @@ Per-item session payloads are unversioned:
 | `=/` split | `kind: "pomodoro_split"`, with `pomodoro_split: {path, entry_line, before, after, base, created, stayed_links}`; `created[]` contains `type`, `line`, `name`, and `moved_links` |
 | `=*` merge | `kind: "pomodoro_merge"`, with `pomodoro_merge: {path, entry_line, before, after, source_role, explicit?, absorbed}`; `source_role` is `current`, `next_up`, or `named`, `explicit` is the equivalent fully named token when an implied choice round-trips, and `absorbed[]` contains `name`, `role` (`named` or `next`), `from_line`, `moved_lines`, and `dropped_duplicates` |
 
-Both return batch `pomodoro_blocks`; survivors show line changes, removed
-entries carry `removed: true`, and previous lines use `change: "removed"`.
-Parse modes are `pomodoro_split` and `pomodoro_merge`; a dest-less merge is
-complete, while a trailing `#` still needs `pomodoro_merge_dest`.
+Both return batch `pomodoro_blocks`.
 See [split](../capture.md#splitting-a-merged-pomodoro) and
 [merge](../capture.md#merging-pomodoros).
 
-Managed Done results include `keep_moving` beside `unblocked`;
-`keep_moving_folds` counts hidden, blocked, and future-scheduled candidates.
-Offers cover Pending, Next, and Ready residents of leaf projects whose last
-Task Link today was closed. A leaf project is a subproject with a different
-root parent (and may have subprojects); no dependency on the completed task is
-required. Offers join batch `pull_in` and link only when picked.
+Managed Done results include `keep_moving` beside `unblocked`.
 See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
 Relation successors connect a completed or parked Pending task, without a
@@ -242,18 +234,7 @@ Selection is explicit. Fields:
 | Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; optional `groups[]` and `copy: {title, capsule, glyph}` |
 | `pull_in.groups[]` | `group`, optional `project` or note-pull `note`, `copy: {title, why?, tag?, fold?, glyph}`, and optional `folded` counts; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, and `event` |
 
-Groups follow offer order: hand-offs, relations, projects, finished projects,
-keep-moving, then draft-ordered note pulls. `copy` uses Bob's display text.
-`offer_count` counts selectable rows (including relation successors and note pulls),
-not held rows. Empty `groups` and absent `copy` are omitted. Note-pull refusals
-use `nothing_to_pull_in` with `note_pull` fold data or `pull_note_missing`; only
-`pull_in_choice_required` includes flat `offers`. Success keeps rows on their
-owning capture items.
-
-Later batch items can remove an offer by linking, completing, blocking, or
-dropping its task, or re-linking a parked predecessor. A picked relation
-successor appears in `task_blocks` with `relation_successor` in `roles[]`; its
-Pomodoro line has `reason: "relation"`. See the [successor JSON contract](../task-dependencies.md#125-reporting-model)
+Empty `groups` and absent `copy` are omitted. See the [successor JSON contract](../task-dependencies.md#125-reporting-model)
 and [relation events](../task-dependencies.md#1218-relation-successors-starts-after).
 
 ### Move-choice results
@@ -319,38 +300,11 @@ in `copy`; `then` is a string or `null`. Example:
 ```
 
 Rows follow shared movable-root eligibility in parent order. Every field is
-present (`null` when inapplicable). Rows include ID-less and `#hide` roots but
-exclude `^prj`, closed or nested tasks, and the template placeholder.
-`open_count` counts movable roots; `n` is the 1-based position across all rows,
-including locked and disabled rows, so answer numbers stay stable. Keys are
-`path#^id`, or `path@<sha8>[~k]` for ID-less rows. `mint` is null for identified
-rows; otherwise it suggests an ID avoiding parent IDs, IDs authored in the new
-note, `prj`, other suggestions, and moved-block descendants. At execution Bob
-uses the suggestion if free or chooses the next suffix; an imported-descendant
-collision refuses with `move_task_id_collision`. The stable key is the preferred
-editor answer.
-
-Enabled, unlocked rows have `^` and `:` choices with Bob-authored
-`consequence` and `adds_link`; locked or disabled rows have none. `locked` is
-null or `{sigil, item_line}` for a same-parent explicit move in the draft;
-`disabled_reason` is Bob-authored. Rows include task text, status, section,
-source line, hidden and scheduled state, and today's Pomodoro chip (or null).
-After an answer, the slot has `answered: true`, moved and linked counts, and each
-row's `answer` (`^`, `:`, or null). Dry-run matches real JSON except `dry_run`.
-
-`name_needs_link` is true on the create form when the item has a `#name`, no
-other `:` link exists, and that name needs a link; the offer form defers this
-check. Under a `:` seal, `then` says `Then: choose today's links for N new
-tasks` when offers remain; otherwise it is null. `copy.slot` names the
-neighboring roots, or says `first` or `last` at an edge.
+present (`null` when inapplicable).
 
 Repeatable `-m, --move-in` values union selections: bare numbers or keys mean
 move (`^`), and a leading `:` means move and link. `all` moves every enabled,
-unlocked row; `none` moves none. `:all` is invalid. Numbers resolve against
-rows rebuilt from the staged parent at execution. Choice moves add
-`via: "choice"` to `project_note.moved_tasks[]`, with `draft_range` set to the
-`^^` range; authored moves keep `via: "bullet"`. Choice rows never become
-successor offers.
+unlocked row; `none` moves none.
 
 These write-free refusals follow Pomodoro-override, lexical, and move-bullet
 refusals, before `pull_in_choice_required` and `inbox_route_choice_required`:
@@ -365,9 +319,7 @@ refusals, before `pull_in_choice_required` and `inbox_route_choice_required`:
 | `move_choice_refused` | The answer selects a locked or disabled row |
 | `unused_project_note_pomodoro` | A required `#name` has no link after applying the answers |
 
-Exit codes match the pull-in and inbox-route refusals. Unanswered previews show
-every row, even above 20, with number, status, title, ID or suggestion, and its
-consequence or lock/disabled reason, then `choose with -m ...`.
+Exit codes match the pull-in and inbox-route refusals.
 
 ### Inbox-routing results
 
@@ -379,13 +331,7 @@ root or nested task changes status; new tasks are excluded. Each has an opaque
 `null`), and an `outcome` (`pending`, `kept`, or `moved`).
 `destinations` is present only when candidates exist.
 
-Repeatable `--inbox-route` answers select a destination or keep a candidate
-in place. A moved candidate gains `moved` with `destination`, `line`,
-`block_id`, `previous_block_id`, and `fresh` (a date or `null`). The
-`inbox_route` object adds `repaired_files`, `renamed_block_ids`, and
-`needs_reconcile`; top-level `task_blocks` and `open_notes` follow the move.
-Without an answer or `--require-inbox-route-choice`, a capture succeeds
-with pending candidates left in their inbox. See the
+See the
 [inbox-routing contract](../capture.md#routing-inbox-tasks-out) for answer
 syntax, guard errors, and atomic-write guarantees.
 
@@ -408,19 +354,7 @@ Templates and drafts without new tasks/records return `items: []`.
 | `matches[].scope` + record fields | Record rows only (`scope` `"record"`): type, stem, status/fields, `add_to` |
 | `linked` | Keys already referenced by the item, with their link kind |
 
-A candidate appears under only the item with its highest match score; ties
-go to the earliest eligible item. Tasks explicitly linked by any task-creating
-item are excluded from every item's matches. Record matches use the item's folder.
-Non-exact matches need at least
-two distinct meaningful terms. A `hold` row is below the display threshold;
-clients use it only to retain an already-visible suggestion while wording
-changes.
-Draft results omit scores. `--query TEXT` is a separate
-calibration shape with scores and without draft anchors or actions.
-
-`route_range` and `discard_range` use the same object shape as `range`.
-Draft offsets are valid only for the exact submitted text; match offsets
-index the returned `title`. End offsets are exclusive. The full
+Draft results omit scores. The full
 [capture-related contract](../capture.md#bob-capture-related) owns actions,
 candidate eligibility, and error behavior.
 
@@ -437,31 +371,10 @@ candidate eligibility, and error behavior.
 | `bob stats metrics` | `-f json` | Metric id, kind, and definition catalog | `schema_version: 1` | [Stats](../stats.md) |
 
 Do not copy the freshness `16` onto stored files: it is the command
-envelope version. The freshness contract owns the stored review state.
-
-`summary.headline.display` is the formatted headline; optional `suffix` is
-its display suffix, and optional `stat` identifies the calculation. For `net`,
-`value` sums complete, non-null daily values, excluding provisional today.
-With at least one such value, `stat` and `suffix` are both `"total"`;
-otherwise `value` is `null`, `display` is `"–"`, and both fields are omitted.
-When present, the net delta says `shrinking`, `growing`, or `flat` from the
-total's sign. Other numeric headlines use daily medians; ratios pool
-numerators and denominators, and booleans count met days over days with data.
-The envelope remains schema 1; see
-[Stats summaries](../stats.md#ranges-grouping-summaries-display).
-
-Stats reports add a top-level `clock` object (`value`, `label`, `since`, and
-the three `options` with window minutes) for the `-k worked|off-clock|total`
-lens, plus `off_clock` sub-shares on Pomodoro points and parts, `off_clock`
-on `sessions`, and clock diagnostics under `health.homes`. Overlap details
-are `{date, lines, minutes}` with optional `paths` on a cross-note pair;
-see [Clocks](../stats.md#clocks) and
-[Health](../stats.md#data-model-and-quality). The CSV form ends with a
-`clock` column.
-
-An unmet boolean for provisional today has `value: 0`, `display: "not yet"`,
-and `provisional: true`; a completed day can display `missed`. The Obsidian
-Day strip is a plugin view, not a `day_strip` field in CLI JSON. See
+envelope version. See
+[Stats summaries](../stats.md#ranges-grouping-summaries-display),
+[Clocks](../stats.md#clocks),
+[Health](../stats.md#data-model-and-quality), and
 [Daily Stats](../stats.md).
 
 ## Period notes
