@@ -1035,6 +1035,70 @@ fn is_record_field_key(key: &str) -> bool {
         })
 }
 
+/// Whether `start..cursor` (a typed `.`/`;` key) sits inside a first-level
+/// `key::` field value of a record-shaped item.
+///
+/// Lexical only, no policy: the parent must carry a `@dir/`-shaped route
+/// token (route-first or title-first, any stem shape) and the cursor's line
+/// must be a first-level field bullet with the key before `::`. Configured
+/// vs unconfigured routes are not distinguished; `@dir/` parents are record
+/// territory, so staying literal is safe either way (unconfigured routes
+/// error on capture). Ordinary task bullets without a `@dir/` parent, note
+/// bullets without `::`, and leading lines are never suppressed, so their
+/// aliases still fire.
+pub(crate) fn in_record_field_value(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> bool {
+    if start >= cursor
+        || cursor > raw_text.len()
+        || !raw_text.is_char_boundary(start)
+        || !raw_text.is_char_boundary(cursor)
+    {
+        return false;
+    }
+    let draft = super::draft::split_capture_draft(raw_text);
+    let Some(item) = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| start >= line.raw.start && start <= line.raw.end)
+    }) else {
+        return false;
+    };
+    let Some(parent) = item.lines.first().map(|line| line.raw) else {
+        return false;
+    };
+    if normalize_task_text(parent.text).is_empty() {
+        return false;
+    }
+    if find_record_route_token(parent.text, parent.start).is_none() {
+        return false;
+    }
+    let Some((line_index, line)) =
+        item.lines.iter().enumerate().find_map(|(index, line)| {
+            (start >= line.raw.start && start <= line.raw.end)
+                .then_some((index, line.raw))
+        })
+    else {
+        return false;
+    };
+    if line_index == 0 {
+        return false;
+    }
+    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+        return false;
+    };
+    if authored.depth != AuthoredDepth::First {
+        return false;
+    }
+    let Some(field) = parse_record_field(authored.body, authored.body_start)
+    else {
+        return false;
+    };
+    start >= field.value_range.0 && start < line.end && cursor <= line.end
+}
+
 fn note_line(
     body: &str,
     body_start: usize,

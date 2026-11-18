@@ -1580,6 +1580,75 @@ fn rewrite_draft_modifier_aliases_stay_literal() {
 }
 
 #[test]
+fn rewrite_draft_keeps_record_field_values_literal() {
+    // Record values are opaque: spaced `.`/`;` inside a first-level `key::`
+    // value never aliases, even where the same key would open a picker in
+    // ordinary task text. Covers create, explicit-stem, and update shapes,
+    // multiple fields, non-ASCII values, and title-first parents.
+    for raw in [
+        "Ninja Sushi @eat/\n- category:: sushi ;",
+        "Ninja Sushi @eat/\n- category:: sushi .",
+        "@eat/\n- category:: sushi ;",
+        "@eat/\n- category:: sushi .",
+        "@eat/^nagi-shop\n- category:: sushi ;",
+        "@eat/^nagi-shop\n- category:: sushi .",
+        "@eat/nagi\n- category:: sushi ;",
+        "@eat/nagi\n- category:: sushi .",
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen ;",
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen .",
+        "Caf\u{e9} Nagi @eat/\n- category:: sushi caf\u{e9} ;",
+        "Caf\u{e9} Nagi @eat/\n- category:: sushi caf\u{e9} .",
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        // End-of-draft cursor on the value's trailing key.
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+    }
+    // A cursor inside an earlier field's value also stays literal, with a
+    // later field below it.
+    let raw = "Ramen Nagi @eat/\n- category:: Ramen ;\n- status:: liked";
+    let cursor = raw.find(" ;").expect("spaced key") + 2;
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+    assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+
+    let raw = "Ramen Nagi @eat/\n- category:: Ramen .\n- status:: liked";
+    let cursor = raw.find(" .").expect("spaced key") + 2;
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+    assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+
+    // Ordinary task and note bullets keep their aliases: no `@dir/` parent,
+    // a note bullet without `::`, and a routed task child.
+    for (raw, expected) in [
+        ("Buy milk ;", "Buy milk *"),
+        ("Buy milk .", "Buy milk @"),
+        ("Buy milk @foo:bar .", "Buy milk @foo:bar &"),
+        (
+            "Title @eat/\n- note without separator ;",
+            "Title @eat/\n- note without separator *",
+        ),
+        ("Buy milk\n- note ;", "Buy milk\n- note *"),
+    ] {
+        let cursor = raw.len();
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+    }
+    // The item-start dot route alias still fires: it is never a field value.
+    let rewrite = rewrite_draft(".", Some(1));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(rewrite.text, "@");
+}
+
+#[test]
 fn rewrite_draft_expands_comma_to_parent_task_picker() {
     for (raw, expected) in [
         ("@cash,", "@cash+"),

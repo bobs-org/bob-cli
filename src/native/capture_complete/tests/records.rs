@@ -709,6 +709,37 @@ fn opaque_field_values_do_not_open_the_type_picker() {
 }
 
 #[test]
+fn trailing_sigils_inside_record_values_stay_record_values() {
+    // Parity with the rewrite guard: a spaced `.`/`;` (and the bare sigils
+    // they would become) inside a first-level `key::` value reports
+    // `record_value`, never a task/route/dependency picker.
+    let vault = RecordVault::new("bob-cli-complete-record-sigil-parity");
+    for suffix in [";", ":", "*", ".", "@", "&"] {
+        let raw = format!("Ninja Sushi @eat/\n- category:: sushi {suffix}");
+        let value = vault.complete(&raw, raw.len());
+        assert_eq!(
+            value.context,
+            Some(CompletionContext::RecordValue),
+            "{raw:?}"
+        );
+    }
+    // Explicit-stem, update, multi-field, and non-ASCII values agree.
+    for raw in [
+        "@eat/^nagi-shop\n- category:: sushi ;",
+        "@eat/nagi\n- category:: sushi .",
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen ;",
+        "Caf\u{e9} Nagi @eat/\n- category:: sushi caf\u{e9} .",
+    ] {
+        let value = vault.complete(raw, raw.len());
+        assert_eq!(
+            value.context,
+            Some(CompletionContext::RecordValue),
+            "{raw:?}"
+        );
+    }
+}
+
+#[test]
 fn empty_url_value_has_one_candidate_and_no_continuation() {
     let vault = RecordVault::new("bob-cli-complete-record-url");
     let raw = "Ramen Nagi @eat/\n- website:: ";

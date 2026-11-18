@@ -522,6 +522,13 @@ fn expand_sigil_alias(
         return expand_parent_task_comma_alias(raw_text, start, cursor, token);
     }
     if alias == "." {
+        // Record field values are opaque: a spaced `.` inside a first-level
+        // `key::` value never aliases, even where a bare sigil would open a
+        // picker in ordinary task text. Item-start dots are never field
+        // values, so that route alias still fires.
+        if super::record::in_record_field_value(raw_text, start, cursor) {
+            return None;
+        }
         if let Some(rewrite) =
             expand_dot_block_id_alias(raw_text, start, cursor)
         {
@@ -535,6 +542,11 @@ fn expand_sigil_alias(
             .or_else(|| expand_dot_dependency_alias(raw_text, start, cursor));
     }
     if alias == ";" {
+        // Same opacity as `.` above: a spaced `;` inside a record value
+        // stays literal instead of becoming `:` or `*`.
+        if super::record::in_record_field_value(raw_text, start, cursor) {
+            return None;
+        }
         return expand_semicolon_colon_alias(raw_text, start, cursor).or_else(
             || expand_semicolon_blocked_task_alias(raw_text, start, cursor),
         );
