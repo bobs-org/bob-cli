@@ -1737,7 +1737,13 @@ contain both signs. At the capture clock's local hour/minute, `start =
 ceil((nowMinutes - 5*earlierUnits + 5*laterUnits)/5)*5` and `end = start +
 5*durationUnits`, displayed modulo 24 hours as `(**HHMM-HHMM** [t:: Nm])`
 byte-for-byte like the snippet's range. `BOB_NOW`/Bob's existing clock sets
-the time; numeric overflow is a useful error rather than a wrong time.
+the time; numeric overflow is a useful error rather than a wrong time. A
+rounded `start` before today's midnight refuses before anything is written:
+the offset would reach the previous day, so the error names the wrapped
+`HHMM` and the largest offset that still stays today (for example `=-3` at
+00:05 refuses and teaches `=-1`). Later `+` starts that cross midnight
+forward stay valid, and a session that starts today and ends after midnight
+(such as `=` at 23:58 writing `0000-0025`) keeps working.
 
 The suffix is item-local and applies only to new `:` task captures — not
 `+` ensures, project-note `@` forms, global `@@` declarations, or ordinary

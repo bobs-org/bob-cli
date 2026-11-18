@@ -24,6 +24,9 @@ pub(super) fn compute_pomodoro_start_range(
         CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
     })?;
     let start_raw = start_block_minute(now, spec)?;
+    if start_raw < 0 {
+        return Err(refuse_past_midnight_start(now, spec, start_raw));
+    }
     let end_raw = start_raw.checked_add(duration_i64).ok_or_else(|| {
         CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
     })?;
@@ -33,6 +36,52 @@ pub(super) fn compute_pomodoro_start_range(
     let end = format!("{:02}{:02}", end_mod / 60, end_mod % 60);
     let time_range = format!("(**{start}-{end}** [t:: {duration_minutes}m])");
     Ok((start, end, duration_minutes, time_range))
+}
+
+/// Refuse a start whose rounded block falls before today's midnight.
+///
+/// `start_raw` is the `ceil5(now - 5·offset + 5·later)` minute from
+/// [`start_block_minute`]. A negative value is yesterday's clock misdated
+/// into today's ledger, so refuse before any edit with the wrapped `HHMM`
+/// and the largest offset that still stays today, derived from the same
+/// rounded anchor. Future `+later` starts that cross midnight stay valid.
+fn refuse_past_midnight_start(
+    now: chrono::NaiveDateTime,
+    spec: &PomodoroStartSpec,
+    start_raw: i64,
+) -> CaptureError {
+    use chrono::Timelike;
+    let wrapped = start_raw.rem_euclid(1440);
+    let start_fmt = format!("{:02}{:02}", wrapped / 60, wrapped % 60);
+    let now_minutes = (now.time().hour() * 60 + now.time().minute()) as i64;
+    let later_minutes: i64 = spec
+        .later_units
+        .checked_mul(5)
+        .and_then(|value| value.try_into().ok())
+        .unwrap_or(i64::MAX);
+    let base = now_minutes.saturating_add(later_minutes);
+    let max_offset: i64 = if base <= 0 { 0 } else { (base + 4) / 5 };
+    let duration_prefix: String = spec
+        .raw
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .map(|byte| byte as char)
+        .collect();
+    let suggestion = if max_offset <= 0 {
+        format!("={duration_prefix}")
+    } else {
+        format!("={duration_prefix}-{max_offset}")
+    };
+    let token = format!("={}", spec.raw);
+    if max_offset <= 0 {
+        CaptureError::usage(format!(
+            "`{token}` timing would start before midnight ({start_fmt}); the offset reaches the previous day — starts must stay today: use `{suggestion}` timing with no offset today (keep any name)"
+        ))
+    } else {
+        CaptureError::usage(format!(
+            "`{token}` timing would start before midnight ({start_fmt}); the offset reaches the previous day — starts must stay today: use at most `{suggestion}` timing today (keep any name)"
+        ))
+    }
 }
 
 /// Low-level link/task start used by Pomodoro task and link captures.

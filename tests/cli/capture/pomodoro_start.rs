@@ -1128,6 +1128,243 @@ fn glued_later_start_matches_start_then_shift_note_bytes() {
 }
 
 #[test]
+fn capture_pomodoro_start_refuses_past_midnight_offset() {
+    // bob-cli-h1: a past offset whose rounded start falls before today's
+    // midnight must refuse before any edit, naming the wrapped clock and the
+    // largest offset that still stays today. Valid overnight ends (start
+    // today, end after midnight) keep working.
+    let now = "2026-11-04 00:05:00";
+    // Bare, named, and task-link starts share the refusal.
+    for (name, args) in [
+        ("bare", vec!["=-3"]),
+        ("chain", vec!["=-3 x"]),
+        ("named", vec!["=FIX-3"]),
+        ("task-link", vec!["Work", "@sase:past1=-3"]),
+    ] {
+        let temp = TempDir::new(&format!("bob-cli-start-past-midnight-{name}"));
+        let vault = temp.path().join("vault");
+        let target = vault.join("sase.md");
+        let day_file = vault.join("day.md");
+        let target_before = "# S\n## Tasks\n";
+        let day_before = "## Pomodoros\n- [ ] () — FIX\n";
+        write_file(&target, target_before);
+        write_file(&day_file, day_before);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .args(&args)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run past-midnight start");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("refusal JSON");
+        assert_eq!(json["ok"], false, "{name}: {json}");
+        let error = json["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("would start before midnight"),
+            "{name}: {json}"
+        );
+        assert!(error.contains("(2350)"), "{name}: {json}");
+        assert!(error.contains("previous day"), "{name}: {json}");
+        assert!(error.contains("`=-1`"), "{name}: {json}");
+        assert_eq!(
+            fs::read_to_string(&target).expect("untouched target"),
+            target_before,
+            "{name}"
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("untouched day"),
+            day_before,
+            "{name}"
+        );
+        // Dry-run agrees and also leaves every file unchanged.
+        let dry = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-d")
+            .arg("-f")
+            .arg("json")
+            .args(&args)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run past-midnight dry-run");
+        assert_eq!(
+            dry.status.code(),
+            Some(2),
+            "{name} dry: {}",
+            format_output(&dry)
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("untouched day dry"),
+            day_before,
+            "{name} dry"
+        );
+    }
+
+    // Exact-midnight boundary: `=-1` at 00:05 starts at 0000; zero offset
+    // and plain starts stay valid.
+    for (name, suffix, expect_start, expect_end) in [
+        ("boundary-offset", "=-1", "0000", "0025"),
+        ("boundary-duration", "=3-1", "0000", "0015"),
+        ("zero-offset", "=", "0005", "0030"),
+        ("later-offset", "=+2", "0015", "0040"),
+    ] {
+        let temp = TempDir::new(&format!("bob-cli-start-midnight-ok-{name}"));
+        let vault = temp.path().join("vault");
+        let day_file = vault.join("day.md");
+        write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+        write_file(&day_file, "## Pomodoros\n- [ ] ()\n");
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg(suffix)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run boundary start");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("boundary JSON");
+        assert_eq!(json["pomodoro_start"]["start"], expect_start, "{name}");
+        assert_eq!(json["pomodoro_start"]["end"], expect_end, "{name}");
+    }
+
+    // Just-too-large offset and zero-room midnight refuse with teaching.
+    for (name, at, suffix, expect_hint) in [
+        ("just-too-large", "2026-11-04 00:05:00", "=-2", "`=-1`"),
+        ("zero-room", "2026-11-04 00:00:00", "=-", "`=`"),
+    ] {
+        let temp = TempDir::new(&format!("bob-cli-start-midnight-{name}"));
+        let vault = temp.path().join("vault");
+        let day_file = vault.join("day.md");
+        let day_before = "## Pomodoros\n- [ ] ()\n";
+        write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+        write_file(&day_file, day_before);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg(suffix)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", at)
+            .output()
+            .expect("run too-large start");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{name}: {}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("would start before midnight"),
+            "{name}: {}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains(expect_hint),
+            "{name}: {}",
+            format_output(&output)
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("untouched day"),
+            day_before,
+            "{name}"
+        );
+    }
+
+    // Large past offsets refuse with the same cap; numeric overflow keeps
+    // the existing too-large error.
+    let temp = TempDir::new("bob-cli-start-midnight-large");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] ()\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("=-1000")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", now)
+        .output()
+        .expect("run large offset start");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("would start before midnight"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("`=-1`"),
+        "{}",
+        format_output(&output)
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("=99999999999999999999")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", now)
+        .output()
+        .expect("run overflow start");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("too large"),
+        "{}",
+        format_output(&output)
+    );
+
+    // A valid start-and-close chain still works after the gate.
+    let temp = TempDir::new("bob-cli-start-midnight-chain-ok");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] ()\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("=-1")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", now)
+        .output()
+        .expect("run valid start");
+    assert_success(&output);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("x")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-11-04 00:20:00")
+        .output()
+        .expect("run valid close");
+    assert_success(&output);
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("(**0000-0020** [t:: 20m])"),
+        "{day_after}"
+    );
+}
+
+#[test]
 fn later_start_matches_start_then_shift_for_each_base_spelling() {
     let now = "2026-07-10 09:42:00";
     for (base, template) in [
