@@ -20,7 +20,7 @@ use crate::native::env as bob_env;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
-    if let Some(hit) = capture_flag_guard::find_unknown_long_flag(
+    if let Some(hit) = capture_flag_guard::find_unknown_flag(
         &args,
         &capture_flag_guard::capture_complete_spec(),
     ) {
@@ -470,8 +470,9 @@ pub(super) fn text_arg() -> Arg {
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
         .help(
-            "Capture text; multiple args are joined with spaces; an unknown \
-             `--flag` where TEXT would begin is rejected, later tokens stay literal",
+            "Capture text; multiple args are joined with spaces; an unknown alphabetic \
+             option such as `--flag` or `-z` where TEXT would begin is rejected, \
+             later tokens stay literal",
         )
 }
 

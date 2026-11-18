@@ -1,13 +1,13 @@
-//! Pre-clap guard against unknown alphabetic long options where
-//! capture-style TEXT would begin.
+//! Pre-clap guard against unknown alphabetic options where capture-style
+//! TEXT would begin.
 //!
 //! Every capture-style TEXT positional is declared
 //! `trailing_var_arg(true)` plus `allow_hyphen_values(true)`, so clap can
 //! never report an unknown `--flag` for these commands: the flag becomes the
 //! start of TEXT and the caller files it as an ordinary task. Scan `argv`
-//! before clap runs and reject `--` plus an ASCII letter that no declared
-//! long flag owns, unless a `--` end-of-options marker or an earlier TEXT
-//! token already claimed the rest of the line.
+//! before clap runs and reject an ASCII-alphabetic long or short option that
+//! no declared flag owns, unless a `--` end-of-options marker or an earlier
+//! TEXT token already claimed the rest of the line.
 //!
 //! Kept working unchanged: every declared flag, Pomodoro shift tokens such
 //! as `--2` and `--1` (`--` plus a non-letter starts TEXT), a bare `--`, and
@@ -37,7 +37,7 @@ pub(crate) struct GuardSpec {
     pub equals_only_shorts: &'static str,
 }
 
-/// An unknown long option found where TEXT would begin.
+/// An unknown long or short option found where TEXT would begin.
 pub(crate) struct GuardHit {
     /// The offending token as typed (including any `=value` suffix).
     pub flag: String,
@@ -46,7 +46,7 @@ pub(crate) struct GuardHit {
     pub format_json: bool,
 }
 
-/// Clap's unexpected-argument wording for a rejected long option.
+/// Clap's unexpected-argument wording for a rejected option.
 pub(crate) fn unexpected_argument_message(flag: &str) -> String {
     format!("unexpected argument '{flag}' found")
 }
@@ -154,22 +154,25 @@ pub(crate) fn capture_templates_save_spec() -> GuardSpec {
     }
 }
 
+enum ShortClusterResult {
+    Known { consumes_next: bool },
+    Text,
+    Unknown,
+}
+
 /// Walk one short cluster the way clap does: switches keep going, a
 /// value-taking flag consumes the rest of the cluster as an attached
 /// value (or the next argv token when it is last), and an equals-only
 /// flag (`-c`, `-c=HDR`) never takes a separate argv token. Remaining
 /// characters after an equals-only flag that are not an attached `=value`
-/// stay clustered flags (`-cn`, `-cf json`). An unknown short is TEXT.
-///
-/// Returns `Some(true)` when a trailing value-taking flag consumed the
-/// next argv token, `Some(false)` when the cluster itself was options,
-/// and `None` when an unknown short starts TEXT.
+/// stay clustered flags (`-cn`, `-cf json`). Unknown ASCII letters are
+/// rejected; punctuation and non-ASCII characters begin TEXT.
 fn consume_short_cluster(
     body: &str,
     spec: &GuardSpec,
     next_argv: Option<&OsString>,
     format_json: &mut bool,
-) -> Option<bool> {
+) -> ShortClusterResult {
     let chars: Vec<char> = body.chars().collect();
     let mut index = 0;
     while index < chars.len() {
@@ -185,36 +188,50 @@ fn consume_short_cluster(
                     if flag == 'f' && value.to_string_lossy() == "json" {
                         *format_json = true;
                     }
-                    return Some(true);
+                    return ShortClusterResult::Known {
+                        consumes_next: true,
+                    };
                 }
-                return Some(false);
+                return ShortClusterResult::Known {
+                    consumes_next: false,
+                };
             }
             let value = rest.strip_prefix('=').unwrap_or(rest.as_str());
             if flag == 'f' && value == "json" {
                 *format_json = true;
             }
-            return Some(false);
+            return ShortClusterResult::Known {
+                consumes_next: false,
+            };
         }
         if spec.equals_only_shorts.contains(flag) {
             if rest.is_empty() || rest.starts_with('=') {
-                return Some(false);
+                return ShortClusterResult::Known {
+                    consumes_next: false,
+                };
             }
             index += 1;
             continue;
         }
-        return None;
+        return if flag.is_ascii_alphabetic() {
+            ShortClusterResult::Unknown
+        } else {
+            ShortClusterResult::Text
+        };
     }
-    Some(false)
+    ShortClusterResult::Known {
+        consumes_next: false,
+    }
 }
 
 /// Scan `args` (argv after the subcommand name) for an unknown alphabetic
-/// long option where TEXT would begin. Returns the first hit, if any.
+/// option where TEXT would begin. Returns the first hit, if any.
 ///
 /// The scan mirrors clap's option region: declared flags (and their
 /// separate values) are skipped, a bare `--` ends the scan, and the first
 /// TEXT token — including `--` plus a non-letter such as `--2` — ends the
 /// scan because `trailing_var_arg` makes the rest of the line TEXT.
-pub(crate) fn find_unknown_long_flag(
+pub(crate) fn find_unknown_flag(
     args: &[OsString],
     spec: &GuardSpec,
 ) -> Option<GuardHit> {
@@ -269,21 +286,39 @@ pub(crate) fn find_unknown_long_flag(
                 // A bare `-` is TEXT.
                 return None;
             }
+            if !body
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+            {
+                // Numeric forms, operators, and quoted `- foo` are TEXT.
+                return None;
+            }
             match consume_short_cluster(
                 body,
                 spec,
                 args.get(index + 1),
                 &mut format_json,
             ) {
-                Some(true) => {
+                ShortClusterResult::Known {
+                    consumes_next: true,
+                } => {
                     index += 2;
                     continue;
                 }
-                Some(false) => {
+                ShortClusterResult::Known {
+                    consumes_next: false,
+                } => {
                     index += 1;
                     continue;
                 }
-                None => return None,
+                ShortClusterResult::Text => return None,
+                ShortClusterResult::Unknown => {
+                    return Some(GuardHit {
+                        flag: token.to_string(),
+                        format_json,
+                    });
+                }
             }
         }
         // A non-option token starts TEXT; the rest of the line is literal.
@@ -307,7 +342,7 @@ mod tests {
     #[test]
     fn unknown_long_flag_before_text_is_rejected() {
         let spec = capture_spec();
-        let hit = find_unknown_long_flag(
+        let hit = find_unknown_flag(
             &args(&[
                 "--format",
                 "json",
@@ -334,11 +369,19 @@ mod tests {
             vec!["--2"],
             vec!["--", "--2"],
             vec!["-2"],
+            vec!["-5"],
+            vec!["--5"],
+            vec!["-"],
+            vec!["- foo"],
+            vec!["-b", "-o", "hello"],
             vec!["hello", "--world"],
+            vec!["café"],
+            vec!["- café"],
             vec!["--dry-run", "--1"],
+            vec!["--", "-o"],
         ] {
             assert!(
-                find_unknown_long_flag(&args(&argv), &spec).is_none(),
+                find_unknown_flag(&args(&argv), &spec).is_none(),
                 "should pass: {argv:?}"
             );
         }
@@ -347,7 +390,7 @@ mod tests {
     #[test]
     fn text_starting_with_a_flag_word_needs_the_delimiter() {
         let spec = capture_spec();
-        let hit = find_unknown_long_flag(&args(&["--hi"]), &spec)
+        let hit = find_unknown_flag(&args(&["--hi"]), &spec)
             .expect("leading flag word");
         assert_eq!(hit.flag, "--hi");
         assert!(!hit.format_json);
@@ -356,10 +399,52 @@ mod tests {
     #[test]
     fn short_format_json_with_unknown_flag_reports_json() {
         let spec = capture_spec();
-        let hit = find_unknown_long_flag(&args(&["-fjson", "--bogus"]), &spec)
+        let hit = find_unknown_flag(&args(&["-fjson", "--bogus"]), &spec)
             .expect("unknown flag");
         assert_eq!(hit.flag, "--bogus");
         assert!(hit.format_json);
+    }
+
+    #[test]
+    fn unknown_short_flag_before_text_is_rejected() {
+        let spec = capture_spec();
+        for argv in [
+            ["-f", "json", "-o", "--", "hello"].as_slice(),
+            ["-fjson", "-o"].as_slice(),
+        ] {
+            let hit = find_unknown_flag(&args(argv), &spec)
+                .unwrap_or_else(|| panic!("should reject: {argv:?}"));
+            assert_eq!(hit.flag, "-o", "{argv:?}");
+            assert!(hit.format_json, "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_short_in_mixed_known_cluster_is_rejected() {
+        let spec = capture_spec();
+        let hit = find_unknown_flag(&args(&["-nz"]), &spec)
+            .expect("unknown member of short cluster");
+        assert_eq!(hit.flag, "-nz");
+        assert!(!hit.format_json);
+    }
+
+    #[test]
+    fn command_specific_known_shorts_are_kept_and_unknown_shorts_refused() {
+        let cases = [
+            (capture_complete_spec(), vec!["-a", "hello"]),
+            (capture_parse_spec(), vec!["-R", "hello"]),
+            (capture_rewrite_spec(), vec!["-c", "1", "hello"]),
+            (capture_templates_save_spec(), vec!["-f", "json", "hello"]),
+        ];
+        for (spec, argv) in cases {
+            assert!(
+                find_unknown_flag(&args(&argv), &spec).is_none(),
+                "declared short should pass: {argv:?}"
+            );
+            let hit = find_unknown_flag(&args(&["-z"]), &spec)
+                .expect("unknown short should be refused");
+            assert_eq!(hit.flag, "-z");
+        }
     }
 
     #[test]
@@ -372,7 +457,7 @@ mod tests {
             ["-n", "-f", "json", "--bogus"].as_slice(),
             ["-dnf", "json", "--bogus"].as_slice(),
         ] {
-            let hit = find_unknown_long_flag(&args(argv), &spec)
+            let hit = find_unknown_flag(&args(argv), &spec)
                 .unwrap_or_else(|| panic!("should reject: {argv:?}"));
             assert_eq!(hit.flag, "--bogus", "{argv:?}");
             assert!(hit.format_json, "{argv:?}");
@@ -389,12 +474,12 @@ mod tests {
             ["-c", "-f", "json", "--bogus"].as_slice(),
             ["-cf", "json", "--bogus"].as_slice(),
         ] {
-            let hit = find_unknown_long_flag(&args(argv), &spec)
+            let hit = find_unknown_flag(&args(argv), &spec)
                 .unwrap_or_else(|| panic!("should reject: {argv:?}"));
             assert_eq!(hit.flag, "--bogus", "{argv:?}");
         }
         let json_hit =
-            find_unknown_long_flag(&args(&["-cf", "json", "--bogus"]), &spec)
+            find_unknown_flag(&args(&["-cf", "json", "--bogus"]), &spec)
                 .expect("equals-only plus format");
         assert!(json_hit.format_json);
     }
@@ -403,20 +488,19 @@ mod tests {
     fn value_taking_short_with_attached_cluster_rest_is_the_value() {
         let spec = capture_spec();
         assert!(
-            find_unknown_long_flag(&args(&["-fn", "json", "--bogus"]), &spec)
+            find_unknown_flag(&args(&["-fn", "json", "--bogus"]), &spec)
                 .is_none(),
             "-fn consumes n as format, so json --bogus is TEXT"
         );
     }
 
     #[test]
-    fn undeclared_short_cluster_is_text() {
+    fn unknown_first_short_in_cluster_is_rejected_before_later_known_short() {
         let spec = capture_parse_spec();
-        assert!(
-            find_unknown_long_flag(&args(&["-nf", "json", "--bogus"]), &spec)
-                .is_none(),
-            "capture-parse does not declare -n, so the cluster is TEXT"
-        );
+        let hit = find_unknown_flag(&args(&["-nf", "json"]), &spec)
+            .expect("unknown first short");
+        assert_eq!(hit.flag, "-nf");
+        assert!(!hit.format_json);
     }
 
     #[test]

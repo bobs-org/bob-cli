@@ -7824,9 +7824,11 @@ an argument needs its own shell quoting, for example
 `bob capture -- "$(printf 'parent\n- child\n')"`. Before draft text begins,
 an unknown alphabetic `--flag` is rejected with exit 2
 (`unexpected argument '--flag' found`, JSON `ok: false` under `-f json`)
-and writes nothing. After `--` or an earlier text argument it stays literal:
+and writes nothing. The same applies to unknown short options such as `-o`,
+including an unknown letter in a mixed short cluster. After `--` or an earlier
+text argument, flag-looking text stays literal:
 `bob capture -- --anything` and `bob capture hello --world` both capture text.
-`--` plus a non-letter (such as `--2`) and a bare `-` also begin
+A leading digit form (`-2` or `--2`) and a bare `-` also begin
 text. Embedded newlines inside a
 single `TEXT` argument stay intact; multiple `TEXT` arguments are still
 joined with single spaces, never newlines. Editor clients such as Bob Mac Capture should
@@ -10950,8 +10952,9 @@ the deleted ids and any unresolved selector strings in `missing`; clear
 returns the number of entries removed. Error JSON includes `ok: false`,
 `error`, and `code`: `saved_template_not_found` exits 1; `saved_template_not_template`,
 `saved_templates_disabled`, existing `template_*` definition errors, and an
-unknown `--flag` where the draft would begin (`saved_templates_unknown_flag`) exit
-2; `saved_templates_newer_schema`, `saved_templates_busy`, and
+unknown alphabetic option such as `--flag` or `-z` where the draft would begin
+(`saved_templates_unknown_flag`) exit 2; `saved_templates_newer_schema`,
+`saved_templates_busy`, and
 `saved_templates_io` exit 1.
 
 ## `bob capture-task-id`

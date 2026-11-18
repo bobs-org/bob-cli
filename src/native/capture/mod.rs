@@ -232,11 +232,11 @@ pub(crate) fn restamp_named_pomodoro_clock(
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
-    if let Some(hit) = super::capture_flag_guard::find_unknown_long_flag(
+    if let Some(hit) = super::capture_flag_guard::find_unknown_flag(
         &args,
         &super::capture_flag_guard::capture_spec(),
     ) {
-        return reject_unknown_long_flag(hit, &mut command);
+        return reject_unknown_flag(hit, &mut command);
     }
     let matches = match command.try_get_matches_from_mut(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
@@ -300,10 +300,10 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     }
 }
 
-/// Reject an unknown alphabetic long option found where TEXT would begin:
-/// exit 2 with clap's unexpected-argument wording, or the JSON error
-/// envelope when `--format json` preceded the flag. Nothing is written.
-fn reject_unknown_long_flag(
+/// Reject an unknown alphabetic option found where TEXT would begin: exit 2
+/// with clap's unexpected-argument wording, or the JSON error envelope when
+/// `--format json` preceded the flag. Nothing is written.
+fn reject_unknown_flag(
     hit: super::capture_flag_guard::GuardHit,
     command: &mut ClapCommand,
 ) -> i32 {

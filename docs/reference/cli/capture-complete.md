@@ -31,7 +31,7 @@ Usage: bob capture-complete [OPTIONS] --cursor <BYTE> [TEXT]...
 
 Arguments:
   [TEXT]...
-          Capture text; multiple args are joined with spaces; an unknown `--flag` where TEXT would begin is rejected, later tokens stay literal
+          Capture text; multiple args are joined with spaces; an unknown alphabetic option such as `--flag` or `-z` where TEXT would begin is rejected, later tokens stay literal
 
 Options:
   -a, --all-tasks

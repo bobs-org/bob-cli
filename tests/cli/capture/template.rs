@@ -463,8 +463,6 @@ fn non_saving_runs_leave_the_shelf_absent() {
         let mut command = bob_command();
         command
             .arg("capture-parse")
-            .arg("-b")
-            .arg(&vault)
             .env("BOB_NOW", NOW)
             .env("XDG_STATE_HOME", temp.path().join("state"))
             .args(["-f", "json"])

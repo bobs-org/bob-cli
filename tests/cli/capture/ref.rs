@@ -335,12 +335,13 @@ fn capture_url_with_markers_or_flags_stays_a_task() {
         &hex::encode(sha2::Sha256::digest(task_line.trim_end().as_bytes()))
             [..8]
     );
-    // `-s` forces a section bullet, the others force task placement;
-    // all opt out of ref claiming (no `ref` object, never `ref` kind).
+    // `-s` forces a section bullet, the other declared options force task
+    // placement; the option-looking `-S` body uses `--` as its text boundary.
+    // All keep the item out of ref claiming (no `ref` object, never `ref` kind).
     let flag_sets: Vec<Vec<String>> = vec![
         vec!["-r", "notes", "-s", "Sec"],
         vec!["-r", "notes", "-t", "test-id"],
-        vec!["-r", "notes", "-t", "test-id", "-S", "SEC"],
+        vec!["-r", "notes", "-t", "test-id", "--", "-S", "SEC"],
         vec!["-r", "notes", "--task-ref", &task_ref],
     ]
     .into_iter()

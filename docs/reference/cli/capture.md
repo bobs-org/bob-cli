@@ -85,7 +85,7 @@ Usage: bob capture [OPTIONS] [TEXT]...
 
 Arguments:
   [TEXT]...
-          Task text; multiple args are joined with spaces; an unknown `--flag` where TEXT would begin is rejected, later tokens stay literal
+          Task text; multiple args are joined with spaces; an unknown alphabetic option such as `--flag` or `-z` where TEXT would begin is rejected, later tokens stay literal
 
 Options:
   -b, --bob-dir <DIR>

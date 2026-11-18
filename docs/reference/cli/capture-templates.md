@@ -124,7 +124,7 @@ Usage: bob capture-templates save [OPTIONS] [TEXT]...
 
 Arguments:
   [TEXT]...
-          Template draft; multiple args are joined with spaces; an unknown `--flag` where TEXT would begin is rejected, later tokens stay literal
+          Template draft; multiple args are joined with spaces; an unknown alphabetic option such as `--flag` or `-z` where TEXT would begin is rejected, later tokens stay literal
 
 Options:
   -f, --format <FORMAT>

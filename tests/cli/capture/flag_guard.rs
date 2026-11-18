@@ -79,6 +79,41 @@ fn capture_unknown_long_flag_human_error_writes_nothing() {
 }
 
 #[test]
+fn capture_unknown_short_flag_is_rejected_with_json_and_writes_nothing() {
+    let (_temp, vault) = inbox_vault("bob-cli-capture-flag-guard-short");
+    let inbox = vault.join("mac_inbox.md");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("-o")
+        .arg("--")
+        .arg("hello")
+        .env("BOB_NOW", "2026-10-24")
+        .output()
+        .expect("run capture with unknown short flag");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("guard rejection should be JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"], "unexpected argument '-o' found");
+    assert_eq!(
+        fs::read_to_string(&inbox).expect("read inbox"),
+        "# Tasks\n",
+        "rejected capture must not write"
+    );
+    assert_eq!(
+        fs::read_dir(&vault).expect("list vault").count(),
+        1,
+        "rejected capture must not create any vault files"
+    );
+}
+
+#[test]
 fn capture_delimiter_literal_and_trailing_flag_word_still_capture() {
     let (_temp, vault) = inbox_vault("bob-cli-capture-flag-guard-text");
 
@@ -130,6 +165,26 @@ fn capture_parse_unknown_long_flag_is_rejected_with_json() {
         .expect("guard rejection should be JSON");
     assert_eq!(json["ok"], false);
     assert_eq!(json["error"], "unexpected argument '--bogus' found");
+}
+
+#[test]
+fn capture_parse_unknown_short_flag_is_rejected_before_literal_text() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("-b")
+        .arg("/tmp")
+        .arg("--")
+        .arg("@a+x > @c")
+        .output()
+        .expect("run capture-parse with unknown short flag");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("guard rejection should be JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"], "unexpected argument '-b' found");
 }
 
 #[test]
@@ -228,26 +283,32 @@ fn capture_templates_save_unknown_flag_leaves_the_shelf_unchanged() {
     let original = "{\"schema_version\":1,\"templates\":[]}\n";
     fs::write(&shelf, original).expect("write shelf");
 
-    let output = bob_command()
-        .arg("capture-templates")
-        .arg("save")
-        .arg("-f")
-        .arg("json")
-        .arg("--bogus")
-        .arg("--")
-        .arg("Apply to {0} %t\n\n")
-        .env("BOB_CAPTURE_TEMPLATES_FILE", &shelf)
-        .output()
-        .expect("run capture-templates save with unknown flag");
+    for flag in ["--bogus", "-z"] {
+        let output = bob_command()
+            .arg("capture-templates")
+            .arg("save")
+            .arg("-f")
+            .arg("json")
+            .arg(flag)
+            .arg("--")
+            .arg("Apply to {0} %t\n\n")
+            .env("BOB_CAPTURE_TEMPLATES_FILE", &shelf)
+            .output()
+            .expect("run capture-templates save with unknown flag");
 
-    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("guard rejection should be JSON");
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["error"], "unexpected argument '--bogus' found");
-    assert_eq!(
-        fs::read_to_string(&shelf).expect("read shelf"),
-        original,
-        "rejected save must not rewrite the shelf"
-    );
+        assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("guard rejection should be JSON");
+        assert_eq!(json["ok"], false);
+        assert_eq!(
+            json["error"],
+            format!("unexpected argument '{flag}' found")
+        );
+        assert_eq!(
+            fs::read_to_string(&shelf).expect("read shelf"),
+            original,
+            "rejected save must not rewrite the shelf"
+        );
+    }
 }

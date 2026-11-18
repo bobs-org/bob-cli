@@ -97,7 +97,7 @@ fn run(command_kind: Command, args: Vec<OsString>) -> i32 {
     // Only `save` takes a capture-style TEXT positional; the other
     // commands' template positionals already reject hyphen values in clap.
     if matches!(command_kind, Command::Save)
-        && let Some(hit) = capture_flag_guard::find_unknown_long_flag(
+        && let Some(hit) = capture_flag_guard::find_unknown_flag(
             &args,
             &capture_flag_guard::capture_templates_save_spec(),
         )
@@ -251,8 +251,9 @@ fn text_arg() -> Arg {
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
         .help(
-            "Template draft; multiple args are joined with spaces; an unknown \
-             `--flag` where TEXT would begin is rejected, later tokens stay literal",
+            "Template draft; multiple args are joined with spaces; an unknown alphabetic \
+             option such as `--flag` or `-z` where TEXT would begin is rejected, \
+             later tokens stay literal",
         )
 }
 
