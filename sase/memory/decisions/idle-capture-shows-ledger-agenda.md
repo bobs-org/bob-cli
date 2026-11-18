@@ -12,6 +12,10 @@ summary:
 metadata:
   status: accepted
   decided: 2026-10-09
+metadata:
+  status: superseded-in-part
+  superseded_by:
+    - decisions:idle-capture-mirrors-walk-attention
 ---
 
 **Applies to.** Bob Mac Capture (agenda cache, fit planner, panel layout) and bob-cli
@@ -77,3 +81,7 @@ when a refresh fails — yesterday's plan is never shown, but a broken link or a
 **Reopens when.** The agenda needs to write the vault (row clicks, `⌘1…9` insertion),
 navigate by keyboard, or show completed Pomodoros — any of which changes what the
 cache must hold and what a row may do.
+
+Superseded in part: [[decisions:idle-capture-mirrors-walk-attention]] records the
+separate `bob walks` source for idle-agenda walk-attention marks; the ledger agenda
+facts and folding rules here remain in force.
