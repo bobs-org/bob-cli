@@ -3,6 +3,7 @@
 //! `s` review, `w` lanes, and `b` bank share the predicates in
 //! `docs/walks.md` with the walker footer. A failure in one family
 //! leaves the others free to report.
+//! `w` reports `counts.excess`, the Mac `w` count.
 //!
 //! The `s` mark is on exactly when `]s` has a row to land on: attention
 //! iff `walk > 0`, with `tier` set to the first non-empty group in walk
@@ -51,6 +52,7 @@ pub(crate) enum FamilyBody {
     },
     Lanes {
         lanes: Vec<LaneCount>,
+        excess: u32,
     },
     Bank {
         waiting: u32,
@@ -186,8 +188,18 @@ fn lanes_family(
         tier: attention.then_some("over"),
         label,
         reason: None,
-        body: Some(FamilyBody::Lanes { lanes }),
+        body: Some(FamilyBody::Lanes {
+            excess: lanes_excess(&lanes),
+            lanes,
+        }),
     }
+}
+
+fn lanes_excess(lanes: &[LaneCount]) -> u32 {
+    lanes
+        .iter()
+        .map(|lane| lane.count.saturating_sub(lane.cap))
+        .sum()
 }
 
 fn count_lane<'a, I, F>(rows: I, extra: F) -> u32
@@ -421,7 +433,8 @@ fn family_json(family: &FamilyReport) -> Value {
                 json!({ "walk": walk, "commitments": commitments }),
             );
         }
-        Some(FamilyBody::Lanes { lanes }) => {
+        Some(FamilyBody::Lanes { lanes, excess }) => {
+            object.insert("counts".to_string(), json!({ "excess": excess }));
             object.insert(
                 "lanes".to_string(),
                 json!(lanes
@@ -483,6 +496,27 @@ mod tests {
             "Bank: 3 waiting · oldest Tue Nov 3"
         );
         assert_eq!(bank_label(3, None), "Bank: 3 waiting");
+    }
+
+    #[test]
+    fn lane_excess_sums_only_over_cap_rows() {
+        let over = [
+            lane("pending", "WIP", 12, 10),
+            lane("next", "NEXT", 3, 15),
+            lane("ready", "READY", 101, 100),
+        ];
+        let over_count = over.iter().filter(|item| item.over).count();
+        assert_eq!(lanes_excess(&over), 3);
+        assert_eq!(over_count > 0, lanes_excess(&over) > 0);
+
+        let at_or_under = [
+            lane("pending", "WIP", 10, 10),
+            lane("next", "NEXT", 0, 15),
+            lane("ready", "READY", 0, 100),
+        ];
+        let over_count = at_or_under.iter().filter(|item| item.over).count();
+        assert_eq!(lanes_excess(&at_or_under), 0);
+        assert_eq!(over_count > 0, lanes_excess(&at_or_under) > 0);
     }
 
     #[test]

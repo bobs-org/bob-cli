@@ -260,9 +260,9 @@ edited in place.
     Hiding a theme removes it from Recent suggestion rows only; today, Stats, colors,
     and typing the name stay unchanged, and using it never unhides it.
 32. **Idle Capture Mirrors Walk Attention** (`idle-capture-mirrors-walk-attention`) -
-    _[partly superseded by `decisions:review-attention-follows-the-walk`]_ Today's Bob
-    walk attention appears as s/w/b marks in the idle agenda title row, from an
-    independent `bob walks` refresh lane.
+    _[partly superseded by `decisions:review-attention-follows-the-walk`,
+    `decisions:w-count-reads-lane-excess`]_ Today's Bob walk attention appears as s/w/b
+    marks in the idle agenda title row, from an independent `bob walks` refresh lane.
 33. **meet-filing-follows-google-until-edited**
     (`meet-filing-follows-google-until-edited`) - _[partly superseded by
     `decisions:past-day-sync-closes-bob-filed-meetings`]_ Google time or parsed buffer
@@ -424,35 +424,37 @@ edited in place.
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-68. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
+68. **The Mac `w` Mark Counts Lane Excess** (`w-count-reads-lane-excess`) - The Mac `w`
+    mark shows Bob's summed WIP/NEXT/READY lane excess.
+69. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
     (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
     color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
     top-level area stem, then name hash; clients render the hue Bob reports.
-69. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
+70. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
     (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
     `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
     then plan.exempt mute, then top-level area stem, then name hash; clients render the
     hue Bob reports.
-70. **Theme Preferences Live In A Per-Host Journal**
+71. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
     the only writer.
-71. **Today Is Read From The Ledger, Never Written To Tasks**
+72. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-72. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+73. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-73. **Unblocked Tasks Resurface As Ticklers**
+74. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`,
     `decisions:gmail-reply-wait-is-a-tagged-hold`]_ Every automatic Blocked-to-Ready
     recovery records [unblocked:: today] unless a WRITE skip applies, so the task is
     TICKLER in the next morning review; a keep on that row leaves the streak unchanged.
-74. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
+75. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
     _[superseded by `decisions:off-clock-pomodoros-count-apart`]_ A timed ledger row
     without [t::] is an untracked session; writers decide trackedness when they write a
     span and readers only look at the row.

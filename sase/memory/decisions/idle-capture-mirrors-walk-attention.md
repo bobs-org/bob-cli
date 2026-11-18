@@ -5,6 +5,7 @@ metadata:
   status: superseded-in-part
   superseded_by:
     - decisions:review-attention-follows-the-walk
+    - decisions:w-count-reads-lane-excess
 ---
 *Accepted · project*
 
@@ -73,3 +74,6 @@ Superseded in part: [[decisions:review-attention-follows-the-walk]] retires the
 commitment-count `s` claim — `s` is now lit whenever `]s` has a row to land on
 and its count reads the walk total; the refresh lane and the `w`/`b` rules here
 remain in force.
+
+Superseded in part: [[decisions:w-count-reads-lane-excess]] retires the
+bare-`w` half of claim 3; `w` now shows Bob's `counts.excess`.

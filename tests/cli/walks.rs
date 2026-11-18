@@ -263,6 +263,7 @@ fn w1_pending_over_cap_is_on() {
     assert_eq!(w["lanes"][0]["count"], 11);
     assert_eq!(w["lanes"][0]["cap"], 10);
     assert_eq!(w["lanes"][0]["over"], true);
+    assert_eq!(w["counts"]["excess"], 1);
 }
 
 #[test]
@@ -275,6 +276,7 @@ fn w2_pending_at_cap_is_off() {
     let (_, value) = walks_json(&temp);
     let w = family(&value, "w");
     assert_eq!(w["attention"], false);
+    assert_eq!(w["counts"]["excess"], 0);
     assert_eq!(w["lanes"][0]["count"], 10);
     assert_eq!(w["lanes"][0]["over"], false);
 }
@@ -296,6 +298,7 @@ fn w3_today_linked_pending_is_not_counted() {
     let w = family(&value, "w");
     assert_eq!(w["lanes"][0]["count"], 1);
     assert_eq!(w["attention"], false);
+    assert_eq!(w["counts"]["excess"], 0);
 }
 
 #[test]
@@ -381,6 +384,35 @@ fn w8_ready_over_cap_is_on() {
     assert_eq!(w["label"], "Lanes over limit: READY 101/100");
     assert_eq!(w["lanes"][2]["count"], 101);
     assert_eq!(w["lanes"][2]["over"], true);
+    assert_eq!(w["counts"]["excess"], 1);
+}
+
+#[test]
+fn w9_excess_sums_every_over_lane() {
+    let temp = empty_vault("bob-cli-walks-w9");
+    let vault = vault_dir(&temp);
+    write_tasks(
+        &vault,
+        &format!(
+            "{}{}",
+            n_lines("Pending", "/", 11, " [fresh:: 2026-11-17]"),
+            n_lines("Next", "*", 22, ""),
+        ),
+    );
+    let config = temp.path().join("config.yml");
+    write_file(&config, "plan:\n  max_next: 20\n");
+    let output = walks_command(&temp, &["-f", "json"])
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run bob walks");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("walks JSON");
+    let w = family(&value, "w");
+    assert_eq!(w["attention"], true);
+    assert_eq!(w["label"], "Lanes over limit: WIP 11/10 · NEXT 22/20");
+    assert_eq!(w["lanes"][1]["cap"], 20);
+    assert_eq!(w["counts"]["excess"], 3);
 }
 
 #[test]

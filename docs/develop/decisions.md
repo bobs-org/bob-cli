@@ -1134,7 +1134,7 @@ outside `[scheduled::]`.
 
 ## Idle Capture Mirrors Walk Attention {#idle-capture-mirrors-walk-attention}
 
-**Status:** Superseded in part by [Review Attention Follows The ]s Walk](#review-attention-follows-the-walk)
+**Status:** Superseded in part by [Review Attention Follows The ]s Walk](#review-attention-follows-the-walk), [The Mac `w` Mark Counts Lane Excess](#w-count-reads-lane-excess)
 
 Today's Bob walk attention appears as s/w/b marks in the idle agenda title row, from an independent `bob walks` refresh lane.
 
@@ -1205,6 +1205,9 @@ Superseded in part: [Review Attention Follows The ]s Walk](#review-attention-fol
 commitment-count `s` claim — `s` is now lit whenever `]s` has a row to land on
 and its count reads the walk total; the refresh lane and the `w`/`b` rules here
 remain in force.
+
+Superseded in part: [The Mac `w` Mark Counts Lane Excess](#w-count-reads-lane-excess) retires the
+bare-`w` half of claim 3; `w` now shows Bob's `counts.excess`.
 
 ## An Empty Capture Draft Shows Today's Ledger Agenda {#idle-capture-shows-ledger-agenda}
 
@@ -4085,3 +4088,36 @@ Evidence: `plan:202611/untracked_calendar_events.md`; `docs/gcal.md`
 [Off-Clock Pomodoros Are Recorded And Counted Apart](#off-clock-pomodoros-count-apart) retires this decision: absence
 of `[t::]` no longer means off the clock; off-clock time is recorded and
 counted on its own clock.
+
+## The Mac `w` Mark Counts Lane Excess {#w-count-reads-lane-excess}
+
+**Status:** Accepted
+
+The Mac `w` mark shows Bob's summed WIP/NEXT/READY lane excess.
+
+**Applies to.** bob-cli `bob walks` and `docs/walks.md`, and Bob Mac Capture's
+idle-agenda `w` mark.
+
+**Claim.** An available `w` reports `counts.excess = Σ max(0, count − cap)` over
+WIP, NEXT, and READY, which is the fewest task changes that silence `w`. The Mac
+`w` shows it the way `s` shows `counts.walk`. An older bob without the field keeps
+a bare `w`. The label and walker footer are unchanged.
+
+**Why.** Bryan's 2026-11-18 request, including the WIP 11/10 and NEXT 22/20 → `3`
+example. Rejected alternatives:
+
+- Keeping `w` bare.
+- Having Swift sum `lanes`, which breaks the thin-client rule.
+- Counting only WIP and NEXT, since READY over its cap also lights `w`.
+- Putting the number in the shared label, which breaks byte-equality with the
+  walker footer.
+
+**Cost.** One more JSON field.
+
+Evidence: approved plan `plan:202611/w_walk_excess_count.md` and W9 in
+`docs/walks.md`.
+
+**Reopens when.** The `w` predicate changes, a lane joins or leaves `w`, or the
+footer gains its own `w` count.
+
+[Idle Capture Mirrors Walk Attention](#idle-capture-mirrors-walk-attention)

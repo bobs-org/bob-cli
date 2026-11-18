@@ -63,8 +63,11 @@ All three exclude Today-linked rows (`is_today`) and the vault-root
 `dash.md` (case-insensitive). Caps come from `plan.max_pending` (10),
 `plan.max_next` (15), and `plan.max_ready` (100). **over** iff
 `count > cap`; exactly at cap is not attention. **attention** iff any
-lane is over. **tier** is `over`. **label** lists over lanes only, in
-lane order: `Lanes over limit: WIP 12/10 · NEXT 16/15`.
+lane is over. **excess** = `Σ max(0, count − cap)` over all three lanes;
+it is the fewest task changes that silence `w`. **attention** iff
+`excess > 0`. **tier** is `over`. **label** lists over lanes only, in
+lane order: `Lanes over limit: WIP 12/10 · NEXT 16/15`. `counts.excess`
+is the Mac `w` count.
 
 ### b — bank
 
@@ -88,7 +91,8 @@ New optional fields keep version 1; only a breaking change bumps it.
 `walks` is always `s`, `w`, `b`. `tier` and `label` are non-null exactly
 when `attention` is true. An available `s` carries
 `"counts": {"walk": N, "commitments": N}`. An available `w` carries
-`lanes` (all three, each with `lane`, `label`, `count`, `cap`, `over`).
+`"counts": {"excess": N}` and `lanes` (all three, each with `lane`,
+`label`, `count`, `cap`, `over`).
 An available `b` carries `"counts": {"waiting": N}` and
 `"oldest_waiting": "YYYY-MM-DD" | null`. `date` is the local today the
 evaluation used. Unavailable families add `reason` and omit family extras.
@@ -115,6 +119,7 @@ evaluation used. Unavailable families add `reason` and omit family extras.
       "attention": true,
       "tier": "over",
       "label": "Lanes over limit: WIP 12/10",
+      "counts": { "excess": 2 },
       "lanes": [
         { "lane": "pending", "label": "WIP", "count": 12, "cap": 10, "over": true },
         { "lane": "next", "label": "NEXT", "count": 9, "cap": 15, "over": false },
@@ -167,18 +172,22 @@ JS tests do the same in a later phase. Goldens live in
 | S5  | TICKLER 2                                                           | on, tier `tickler`, label ends `TICKS first`                                               |
 | S6  | ROTTEN 2, POST 1                                                    | on, tier `rotten`, walk 3, commitments 0, `Review: 3 due · commitments done — ROTTEN first` |
 | S7  | nothing due                                                         | off, `tier`/`label` null, walk 0; human line `· Review clear`                              |
-| W1  | PENDING 11, cap 10                                                  | on, `WIP 11/10`                             |
-| W2  | PENDING 10, cap 10                                                  | off                                         |
+| W1  | PENDING 11, cap 10                                                  | on, `WIP 11/10`, excess 1                   |
+| W2  | PENDING 10, cap 10                                                  | off, excess 0                               |
 | W3  | a Today-linked `[/]` task                                           | not counted                                 |
 | W4  | an unstamped (NEW) Ready task                                       | not in READY                                |
 | W5  | a ROTTEN Ready task                                                 | not in READY                                |
 | W6  | rows in `dash.md`                                                   | not counted                                 |
 | W7  | future-scheduled, `#hide`, dependency-blocked, or `_templates` rows | not counted                                 |
-| W8  | READY 101, cap 100                                                  | on, `READY 101/100`                         |
+| W8  | READY 101, cap 100                                                  | on, `READY 101/100`, excess 1               |
+| W9  | PENDING 11, NEXT 22, plan.max_next 20                               | on, WIP 11/10 · NEXT 22/20, excess 3        |
 | B1  | one `[ ]` row under a day heading                                   | waiting 1                                   |
 | B2  | `[x]` and `[X]` rows                                                | waiting 0                                   |
 | B3  | waiting rows in two months                                          | oldest comes from the earlier month         |
 | B4  | invalid bank config                                                 | `b` unavailable; `s` and `w` still reported |
+
+`excess` expectations are bob-only, because the walker footer renders no
+`w` count.
 
 ## Related
 

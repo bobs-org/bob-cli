@@ -18,6 +18,9 @@
     {
       "attention": false,
       "available": true,
+      "counts": {
+        "excess": 0
+      },
       "family": "w",
       "label": null,
       "lanes": [
