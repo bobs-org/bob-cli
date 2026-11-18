@@ -926,3 +926,179 @@ fn record_earlier_member_classifies_event_tasks_at_its_own_end() {
         )
     );
 }
+
+#[test]
+fn ledger_identity_reports_settled_name_and_keeps_next_identity() {
+    // bob-cli-ht: `x=read2` under `plan.default_type: CHORE` renames the
+    // READ placeholder to CHORE through open-name agreement. The preview,
+    // JSON names and written row must agree on the settled CHORE name, the
+    // continuation must keep explicit identity at its remapped line (not
+    // steal an earlier same-name placeholder), and unrelated PLAN/BUILD
+    // rows must stay byte-identical.
+    let temp = TempDir::new("bob-cli-past-ledger-identity");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(vault.join("2026")).expect("create vault");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "plan:\n  default_type: CHORE\ntypes:\n  CHORE: magenta\n  READ: green\n",
+    );
+    write_file(
+        &vault.join("bob.md"),
+        "## Tasks\n\n- [ ] #task First [created::2026-11-01] ^t1\n- [ ] #task Second [created::2026-11-01] ^t2\n",
+    );
+    let day_body = "## Pomodoros\n- [x] (**0730-0800** [t:: 30m]) — PLAN\n- [x] (**0830-0900** [t:: 30m]) — BUILD\n- [ ] () — CHORE\n\t- [[bob#^t1]]\n- [ ] () — READ\n\t- [[bob#^t2]]\n";
+    let day = write_day(&vault, day_body);
+    let run_json = |args: &[&str]| {
+        let output = bob_command()
+            .env("BOB_NOW", "2026-11-04 09:13:00")
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_CONFIG_FILE", &config)
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg("--")
+            .args(args)
+            .output()
+            .expect("run bob capture");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture JSON")
+    };
+    // Basic `x=read2`: settled CHORE, correct lines, meaningful previews.
+    let value = run_json(&["x=read2"]);
+    assert_eq!(value["kind"], "pomodoro_past");
+    assert_eq!(value["pomodoro_name"], "CHORE", "{value}");
+    assert_eq!(value["pomodoro_past"]["name"], "CHORE", "{value}");
+    assert_eq!(
+        value["task_line"], "- [x] (**0905-0915** [t:: 10m]) — CHORE",
+        "{value}"
+    );
+    let close = &value["pomodoro_past"]["close"];
+    assert_eq!(close["pomodoro_name"], "READ", "{close}");
+    assert_eq!(close["closed_name"], "CHORE", "{close}");
+    assert_eq!(
+        close["entry_line"], "- [x] (**0905-0915** [t:: 10m]) — CHORE",
+        "{close}"
+    );
+    assert_eq!(close["next_pomodoro"]["line"], 8, "{close}");
+    assert_eq!(close["next_pomodoro"]["name"], "CHORE", "{close}");
+    // Human agrees on the settled name while noting the READ source.
+    let human = {
+        let output = bob_command()
+            .env("BOB_NOW", "2026-11-04 09:13:00")
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_CONFIG_FILE", &config)
+            .env("NO_COLOR", "1")
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--dry-run")
+            .arg("--")
+            .arg("x=read2")
+            .output()
+            .expect("human");
+        assert_success(&output);
+        stdout(&output).trim().to_string()
+    };
+    assert!(human.contains("record CHORE 0905-0915"), "{human}");
+    assert!(human.contains("from READ"), "{human}");
+    assert!(human.contains("line 4"), "{human}");
+    // Previews are meaningful (changed/added), never the unchanged
+    // fallback for a rewritten headline with no ref.
+    let blocks = value["pomodoro_blocks"].as_array().expect("blocks");
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert_eq!(blocks[0]["line"], 4);
+    assert_eq!(blocks[0]["name"], "CHORE");
+    assert_eq!(blocks[0]["roles"], serde_json::json!(["recorded"]));
+    assert!(blocks[0]["lines"][0]["change"] == "changed", "{blocks:?}");
+    assert_eq!(blocks[0]["lines"][0]["before"], "- [ ] () — READ");
+    assert_eq!(blocks[1]["line"], 8);
+    assert_eq!(blocks[1]["name"], "CHORE");
+    assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
+    assert!(
+        blocks[1]["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|line| line["change"] == "added"),
+        "{blocks:?}"
+    );
+    // Segment-pinned, chained and close-part forms keep the same contract:
+    // no panic, settled CHORE for the read2 member, explicit next identity.
+    for args in [&["x=read2~2"][..], &["x=read2=!1"][..]] {
+        let single = run_json(args);
+        assert_eq!(single["pomodoro_name"], "CHORE", "{args:?} {single}");
+        assert_eq!(
+            single["pomodoro_past"]["name"], "CHORE",
+            "{args:?} {single}"
+        );
+    }
+    {
+        // Chained batch: two members, second is the read2 record.
+        let output = bob_command()
+            .env("BOB_NOW", "2026-11-04 09:13:00")
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_CONFIG_FILE", &config)
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg("--")
+            .arg("x=chore1")
+            .arg("x=read2")
+            .output()
+            .expect("chained");
+        assert_success(&output);
+        let batch: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
+        let items = record_items(&batch);
+        assert_eq!(items.len(), 2, "{batch}");
+        let read2 = items
+            .iter()
+            .find(|item| item["pomodoro_past"]["raw"] == "x=read2")
+            .expect("read2 member");
+        assert_eq!(read2["pomodoro_name"], "CHORE", "{read2}");
+        assert_eq!(read2["pomodoro_past"]["name"], "CHORE", "{read2}");
+    }
+    // Dry-run/write parity: a real write produces the previewed bytes and
+    // leaves PLAN/BUILD untouched.
+    let write_output = bob_command()
+        .env("BOB_NOW", "2026-11-04 09:13:00")
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_CONFIG_FILE", &config)
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("x=read2")
+        .output()
+        .expect("write");
+    assert_success(&write_output);
+    let after = fs::read_to_string(&day).expect("read day");
+    assert!(
+        after.contains("- [x] (**0730-0800** [t:: 30m]) — PLAN\n"),
+        "{after}"
+    );
+    assert!(
+        after.contains("- [x] (**0830-0900** [t:: 30m]) — BUILD\n"),
+        "{after}"
+    );
+    assert!(
+        after.contains("- [x] (**0905-0915** [t:: 10m]) — CHORE\n"),
+        "{after}"
+    );
+    assert!(
+        after.contains("- [ ] () — CHORE\n\t- [[bob#^t1]]\n"),
+        "{after}"
+    );
+    assert!(
+        after.contains("- [ ] () — CHORE\n\t- [[bob#^t2]]\n"),
+        "{after}"
+    );
+}

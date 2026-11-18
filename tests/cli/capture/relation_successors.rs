@@ -1630,6 +1630,160 @@ fn sa32_next_or_ready_unlink_is_relation_silent() {
     }
 }
 
+// bob-cli-dq: a cancel-label rewrite of a `#task` row inside today's
+// `## Pomodoros` must not trip the PomodoroBlockTracker vanished-entry
+// guard. The task row is not a session (no placeholder, no time range),
+// so the tracker skips it; an unrelated BUILD session stays byte-identical
+// and dry-run matches the write.
+#[test]
+fn cancel_label_on_task_inside_pomodoros_keeps_session_identity() {
+    let temp = TempDir::new("bob-cli-dq-cancel-in-pomodoros");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create vault");
+    let day_file = vault.join("2026-10-28.md");
+    write_file(
+        &day_file,
+        "# 2026-10-28\n\n## Pomodoros\n\n- [ ] (**0900-0930** [t:: 30m]) \u{2014} BUILD\n- [ ] #task Day task ^daytask\n",
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Other ^other\n");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n",
+    );
+    let run = |flags: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .args(flags)
+            .arg("--")
+            .arg("@2026-10-28+daytask ~b:other|\"duplicate of\"")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-10-28 10:00:00")
+            .env("BOB_CONFIG_FILE", &config);
+        let output = command.output().expect("run bob capture");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture JSON")
+    };
+    // Dry-run succeeds (no debug panic) and reports the cancel.
+    let dry = run(&["--dry-run"]);
+    assert_eq!(
+        dry["relation_cancels"][0]["previous_status_name"], "Ready",
+        "{dry}"
+    );
+    // No session changed, so no pomodoro block is reported; the BUILD
+    // headline is untouched in the preview.
+    assert!(
+        dry.get("pomodoro_blocks").is_none()
+            || dry["pomodoro_blocks"]
+                .as_array()
+                .is_none_or(|blocks| blocks.is_empty()),
+        "{dry}"
+    );
+    // Write parity: the day file flips only the task row, BUILD stays.
+    let before = vault_bytes(&vault);
+    let write_output = {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg("@2026-10-28+daytask ~b:other|\"duplicate of\"")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-10-28 10:00:00")
+            .env("BOB_CONFIG_FILE", &config);
+        command.output().expect("write")
+    };
+    assert_success(&write_output);
+    let after_text = std::fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        after_text.contains("- [ ] (**0900-0930** [t:: 30m]) \u{2014} BUILD\n"),
+        "{after_text}"
+    );
+    assert!(after_text.contains("- [-] #task Day task"), "{after_text}");
+    assert!(after_text.contains("^daytask"), "{after_text}");
+    let _ = before;
+}
+
+// bob-cli-dq: an ordinary `!` completion of a `#task` row inside today's
+// `## Pomodoros` flips the status in place. The tracker must skip the
+// non-session row instead of reporting a vanished entry, and the unrelated
+// BUILD session must stay byte-identical.
+#[test]
+fn complete_task_inside_pomodoros_keeps_session_identity() {
+    let temp = TempDir::new("bob-cli-dq-complete-in-pomodoros");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create vault");
+    let day_file = vault.join("2026-10-28.md");
+    write_file(
+        &day_file,
+        "# 2026-10-28\n\n## Pomodoros\n\n- [ ] (**0900-0930** [t:: 30m]) \u{2014} BUILD\n- [ ] #task Day task ^daytask\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n",
+    );
+    let run = |flags: &[&str], draft: &str| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .args(flags)
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-10-28 10:00:00")
+            .env("BOB_CONFIG_FILE", &config);
+        let output = command.output().expect("run bob capture");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture JSON")
+    };
+    let dry = run(&["--dry-run"], "!2026-10-28:daytask");
+    assert_eq!(dry["task_complete"]["action"], "completed", "{dry}");
+    assert!(
+        dry.get("pomodoro_blocks").is_none()
+            || dry["pomodoro_blocks"]
+                .as_array()
+                .is_none_or(|blocks| blocks.is_empty()),
+        "{dry}"
+    );
+    let write_output = {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg("!2026-10-28:daytask")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-10-28 10:00:00")
+            .env("BOB_CONFIG_FILE", &config);
+        command.output().expect("write")
+    };
+    assert_success(&write_output);
+    let after_text = std::fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        after_text.contains("- [ ] (**0900-0930** [t:: 30m]) \u{2014} BUILD\n"),
+        "{after_text}"
+    );
+    assert!(after_text.contains("- [x] #task Day task"), "{after_text}");
+}
+
 // Later re-linking a parked T via `@route+id!` drops that T's parked group.
 #[test]
 fn unlink_then_relink_drops_parked_group() {

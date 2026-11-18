@@ -1272,11 +1272,17 @@ fn close_selection_from_spec(
 }
 
 /// File a completed block chronologically on the remaining ledger.
+///
+/// When `old_next_0based` names a post-day line outside the moved block
+/// (the created continuation), also return its remapped filed index so the
+/// caller reports block identity without a by-name search that collides
+/// when several placeholders share one name.
 fn file_recorded_block(
     post_day: &str,
     closed_index: usize,
     new_start_min: i64,
-) -> Result<(String, usize, usize), CaptureError> {
+    old_next_0based: Option<usize>,
+) -> Result<(String, usize, usize, Option<usize>), CaptureError> {
     let lines: Vec<&str> = post_day.lines().collect();
     let section =
         pomodoro::pomodoros_section_range(&lines).ok_or_else(|| {
@@ -1339,7 +1345,26 @@ fn file_recorded_block(
     // holds what followed it (the continuation when carry, else the
     // next block). Report it for block tracking.
     let source_slot = block_range.start.min(filed.len().saturating_sub(1));
-    Ok((filed_text, new_headline, source_slot))
+    // Remap a continuation line outside the moved block through the same
+    // drain-then-insert so the caller keeps explicit identity without a
+    // by-name search. A line inside the moved block has no survivor.
+    let new_next_0based = old_next_0based.and_then(|old| {
+        if block_range.contains(&old) {
+            return None;
+        }
+        let remaining_idx = if old >= block_range.end {
+            old.saturating_sub(block_range.len())
+        } else {
+            old
+        };
+        let shifted = if remaining_idx >= insert_at {
+            remaining_idx.saturating_add(block_lines.len())
+        } else {
+            remaining_idx
+        };
+        (shifted < filed.len()).then_some(shifted)
+    });
+    Ok((filed_text, new_headline, source_slot, new_next_0based))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1499,11 +1524,21 @@ pub(super) fn record_one_member(
         &post_day,
         &mut summary,
     );
-    // File the completed block chronologically; the carried
-    // continuation stays in the vacated source slot.
+    // File the completed block chronologically; remap the created
+    // continuation through the same move so block identity does not rely
+    // on a by-name search that collides when placeholders share a name.
     let new_start: i64 = member.start_min;
-    let (filed_text, new_headline_idx, _source_slot) =
-        file_recorded_block(&post_day, closed_line_idx, new_start)?;
+    let old_next_0based = summary
+        .next_pomodoro
+        .as_ref()
+        .map(|next| next.line.saturating_sub(1));
+    let (filed_text, new_headline_idx, _source_slot, new_next_0based) =
+        file_recorded_block(
+            &post_day,
+            closed_line_idx,
+            new_start,
+            old_next_0based,
+        )?;
     planner.stage(day_file, filed_text.clone())?;
     // Remap the summary through the move.
     summary.pomodoro_line = new_headline_idx + 1;
@@ -1512,19 +1547,25 @@ pub(super) fn record_one_member(
         .nth(new_headline_idx)
         .unwrap_or("")
         .to_string();
-    // Continuation (when created) stays at the vacated source slot:
-    // re-locate it by name after the move when it was created.
+    // Continuation keeps explicit identity through the chronological move:
+    // use the remapped filed index instead of a by-name search.
     if let Some(next) = summary.next_pomodoro.as_mut() {
         if next.created {
-            // The created continuation is the open untimed row with the
-            // continuation name nearest the source slot.
-            let scan = capture_pomodoros::scan(&filed_text);
-            if let Some(found) = scan.entries.iter().find(|e| {
-                e.state == PomodoroState::Open
-                    && e.time_range.is_none()
-                    && e.name == next.name
-            }) {
-                next.line = found.line;
+            if let Some(remapped) = new_next_0based {
+                next.line = remapped + 1;
+            } else {
+                // Fall back to a by-name search only when the move left no
+                // survivor (should not happen for a created continuation):
+                // prefer the last match so an earlier same-name placeholder
+                // does not steal the continuation's identity.
+                let scan = capture_pomodoros::scan(&filed_text);
+                if let Some(found) = scan.entries.iter().rev().find(|e| {
+                    e.state == PomodoroState::Open
+                        && e.time_range.is_none()
+                        && e.name == next.name
+                }) {
+                    next.line = found.line;
+                }
             }
         } else if let Some(line) = next.line.checked_sub(0) {
             // Existing next: re-resolve by scan (line may have shifted).
@@ -1680,9 +1721,21 @@ pub(super) fn record_one_member(
     } else {
         None
     };
+    // Settle the reported name from the actual filed row: the close may
+    // have narrowed READ to CHORE through default-type agreement, so the
+    // initial placeholder name (READ) must not be reported when the ledger
+    // now says CHORE. Prefer the filed scan, then the close's closed name.
+    let filed_scan = capture_pomodoros::scan(&filed_text);
+    let settled_name = filed_scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == new_headline_idx + 1)
+        .and_then(|entry| entry.name.clone())
+        .or_else(|| summary.closed_name.clone())
+        .or(entry_name.clone());
     let past_json = super::output::PomodoroPastSummaryJson {
         raw: member.spec.raw.clone(),
-        name: entry_name.clone(),
+        name: settled_name.clone(),
         target: super::output::PomodoroPastTargetJson {
             source: source.as_str().to_string(),
             line: source_line_one_based,

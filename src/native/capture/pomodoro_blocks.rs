@@ -801,6 +801,14 @@ fn autodetect(
         .collect::<std::collections::BTreeSet<_>>();
     for entry in &post_scan.entries {
         let headline = entry.line.saturating_sub(1);
+        // Task rows inside ## Pomodoros are not sessions: they carry no
+        // placeholder and no time range, so status rewrites of those rows
+        // must not participate in session identity. Skipping them here (and
+        // in the vanished loop below) keeps the tracker consistent without
+        // requiring explicit refs for every task edit.
+        if !entry.placeholder && entry.time_range.is_none() {
+            continue;
+        }
         if claimed.contains(&headline) {
             continue;
         }
@@ -881,6 +889,12 @@ fn autodetect(
     // headline lost.
     for entry in &pre_scan.entries {
         let headline = entry.line.saturating_sub(1);
+        // Task rows are not sessions (see post loop above): an in-place
+        // status flip of a `#task` row inside ## Pomodoros changes no
+        // session headline, so it must not trip the vanished-entry guard.
+        if !entry.placeholder && entry.time_range.is_none() {
+            continue;
+        }
         if tracked_current.contains(&headline) {
             continue;
         }
