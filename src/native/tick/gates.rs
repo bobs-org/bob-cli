@@ -218,6 +218,8 @@ pub(super) fn refs_gate(
         .unwrap_or_else(|| "never".into());
     let detail = if hook && open {
         "pre-scan hook configured".into()
+    } else if changed && state.fingerprint.is_none() {
+        "first scan on this host".into()
     } else if changed {
         format!("lib/ changed since {clock_label}")
     } else if !open {

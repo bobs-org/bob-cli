@@ -821,7 +821,7 @@ fn per_step_summaries_come_from_real_json_shapes() {
     .to_string();
     let refs = serde_json::json!({
         "schema_version": 1, "ok": true, "summary": {
-            "pdfs": 2, "created": 1, "updated": 1, "unchanged": 0,
+            "pdfs": 40, "created": 1, "updated": 1, "unchanged": 37,
             "markers": 3, "tasks": 2, "failures": 0, "held": 1,
         },
     })
@@ -873,10 +873,10 @@ fn per_step_summaries_come_from_real_json_shapes() {
         .as_str()
         .unwrap()
         .contains("2 PDFs changed"));
-    assert!(by_name("refs")["summary"]
-        .as_str()
-        .unwrap()
-        .contains("1 held"));
+    assert_eq!(
+        by_name("refs")["summary"],
+        "2 PDFs changed · 2 notes updated · 3 markers · 2 tasks · 1 held"
+    );
     assert!(by_name("projects")["summary"]
         .as_str()
         .unwrap()

@@ -1257,7 +1257,8 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 [Writing and sending](#writing-and-sending) describe the compose documents.
 `bob gmail sync -f json` prints the schema-1 sync document (`ok`,
 `dry_run`, `pulled`, `results`, `warnings`, `watch`, `problems`, and
-`summary`) plus additive `archive[]`, `archive_hints[]`, `archive_enabled`,
+`summary`) plus additive `busy` (true when a busy guard or vault lock skipped
+the run), `archive[]`, `archive_hints[]`, `archive_enabled`,
 `archive_label`, `archive_max`, and `archive_skipped`. Archive rows carry
 `thread_id`, `note`, `action`, `reason`, `decision`, exact sorted message IDs,
 and task path/line/block-ID locators, never task text. Review rows also carry

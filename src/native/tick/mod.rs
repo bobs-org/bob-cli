@@ -27,10 +27,10 @@ pub(super) struct Options {
     quiet: bool,
 }
 const AFTER_HELP: &str = "Steps, in run order (default cadence · ceiling):
-  gcal      bob gcal sync       1h · 10m   calendar intake
-  gmail     bob gmail sync      1h · 20m   file threads, watch replies
-  gkeep     bob gkeep pull      manual · 20m   drain the Keep inbox
-  refs      bob ref scan -w     15m · 30m  sync references
+  gcal      bob gcal sync       1h · 10m   today; yesterday too on the day's first run
+  gmail     bob gmail sync      1h · 20m   file bob-labelled threads, watch replies
+  gkeep     bob gkeep pull      manual     drain the Keep inbox
+  refs      bob ref scan -w     15m · 30m  when lib/ or xlib/ changed, or every 6h
   projects  bob projects sync   15m · 10m  also after any intake step ran
   tasks     bob task reconcile  15m · 10m  also after any intake step ran
 

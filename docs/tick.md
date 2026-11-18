@@ -87,15 +87,39 @@ not due; 1 when a step failed; and 2 for usage/configuration errors or a
 writer-host mismatch. A step timeout fails that step and the later steps
 continue after its process group is stopped.
 
+Reasons are stable codes: `due`, `never_ran`, `follows_intake`, `follow_up`,
+`named`, and `all` explain a run; `not_due`, `manual`, `off`, and `unchanged`
+explain a skip; `note_missing`, `note_unrendered`, `pomodoros_missing`, and
+`vault_busy` explain a wait; `exit_nonzero`, `timeout`, `spawn_failed`, and
+`interrupted` explain a failure.
+
+Only one run proceeds at a time. A second non-interactive run prints
+`already running` with the step in flight and exits 0 without writing state
+or a receipt; an interactive run waits for the first to finish.
+
 Scheduler state and the latest receipt are stored per host under
 `$XDG_STATE_HOME/bob-cli/tick/`. The state records per-step starts, outcomes,
 successes, and pending follow-ups. `bob tick --status` displays the step
 board; `bob tick --format json` emits the receipt. On macOS, each locked run
 also posts `org.bobs.bob.tick-finished`.
 
+The receipt (`last.json`) carries `schema_version`, `command`, `host`,
+`vault`, `trigger`, `started_at`, `finished_at`, `exit_code`, and `steps[]`.
+Each step row carries `name`, `cadence`, `outcome`, `reason`, `detail`,
+`started_at`, `duration_ms`, `exit_code`, `summary`, `next_due_at`,
+`last_success_at`, and, for gated steps, a `gate` object with `kind`, `open`,
+`reason`, and `detail`. Summaries are counts only; no mail or calendar text
+is recorded.
+
 `SIGINT`, `SIGTERM`, and `SIGHUP` stop the active child process group and
 record an interrupted failure. If `bob tick` itself receives `SIGKILL`, the
 child may outlive it.
+
+## Troubleshooting
+
+- `bob tick -d` shows what would run now and which gate holds each step.
+- `bob tick -s` shows each step's last result, last success, and next run.
+- `cronctl logs bob-tick --machine mac` shows the Mac's recent tick history.
 
 ## Related command contracts
 

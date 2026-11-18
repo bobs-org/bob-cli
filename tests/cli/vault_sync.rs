@@ -1167,6 +1167,13 @@ fn renamed_old_top_level_commands_are_unknown() {
             "expected clap unknown-command error:\n{}",
             format_output(&output)
         );
+        let tick_hint = "hint: use `bob vault-sync` for vault Git sync, or `bob tick` for frequent background work";
+        assert_eq!(
+            stderr(&output).contains(tick_hint),
+            command == "sync",
+            "only retired `bob sync` points at vault-sync and tick:\n{}",
+            format_output(&output)
+        );
     }
 }
 

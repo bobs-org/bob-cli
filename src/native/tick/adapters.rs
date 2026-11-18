@@ -455,17 +455,23 @@ pub(super) fn refs(output: &RawRunOutput, reason: &str) -> Adapted {
             consumes_interval: true,
         };
     }
+    // `summary.pdfs` counts every PDF the full scan visited, so a changed PDF
+    // is one whose note was not `unchanged` and that neither failed nor was held.
     let pdfs = get_u64(&value, &["summary", "pdfs"]);
     let created = get_u64(&value, &["summary", "created"]);
     let updated = get_u64(&value, &["summary", "updated"]);
+    let unchanged = get_u64(&value, &["summary", "unchanged"]);
     let markers = get_u64(&value, &["summary", "markers"]);
     let tasks = get_u64(&value, &["summary", "tasks"]);
+    let failures = get_u64(&value, &["summary", "failures"]);
     let held = get_u64(&value, &["summary", "held"]);
+    let changed = pdfs.saturating_sub(unchanged + failures + held);
     let mut summary = counts(vec![
-        (pdfs, "PDF changed", "PDFs changed"),
+        (changed, "PDF changed", "PDFs changed"),
         (created + updated, "note updated", "notes updated"),
         (markers, "marker", "markers"),
         (tasks, "task", "tasks"),
+        (failures, "failure", "failures"),
     ]);
     if held > 0 {
         if summary == "no changes" {
