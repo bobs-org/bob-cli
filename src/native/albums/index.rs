@@ -22,7 +22,7 @@ use crate::native::{
     },
 };
 
-const ALIAS_DROP: &[char] = &['|', '[', ']', '#', '^'];
+pub(crate) const ALIAS_DROP: &[char] = &['|', '[', ']', '#', '^'];
 
 /// Documented JSON/report states for one album's records index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

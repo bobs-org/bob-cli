@@ -11,6 +11,9 @@ pub(crate) mod registry;
 pub(crate) mod report;
 pub(crate) mod sync;
 pub(crate) mod update;
+#[allow(dead_code)]
+// Consumed by the dependent walk sync, report, and writer phases.
+pub(crate) mod walk;
 pub(crate) mod write;
 
 pub(crate) use cli::{

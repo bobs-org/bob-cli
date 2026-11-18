@@ -401,7 +401,7 @@ fn is_wikilink(value: &str) -> bool {
         .is_some_and(|inner| !inner.contains("[["))
 }
 
-fn title_order(
+pub(crate) fn title_order(
     left: &GroupingRecord,
     right: &GroupingRecord,
 ) -> std::cmp::Ordering {

@@ -1,0 +1,131 @@
+{
+  "order": [
+    {
+      "name": "lowercase-title-then-path",
+      "records": [
+        { "path": "eat/z.md", "stem": "z", "title": "alpha" },
+        { "path": "eat/b.md", "stem": "b", "title": "ALPHA" },
+        { "path": "eat/a.md", "stem": "a", "title": "Alpha" },
+        { "path": "eat/beta.md", "stem": "beta", "title": "Beta" }
+      ],
+      "expected": ["a", "b", "z", "beta"]
+    },
+    {
+      "name": "blank-title-falls-back-to-humanized-stem",
+      "records": [
+        { "path": "eat/zebra.md", "stem": "zebra", "title": "" },
+        { "path": "eat/apple.md", "stem": "apple", "title": "" },
+        { "path": "eat/the_bear.md", "stem": "the_bear", "title": "" }
+      ],
+      "expected": ["apple", "the_bear", "zebra"]
+    },
+    {
+      "name": "unicode-scalars-and-the-cluster",
+      "records": [
+        { "path": "eat/emoji.md", "stem": "emoji", "title": "😀 Cat" },
+        { "path": "eat/sigma.md", "stem": "sigma", "title": "Σigma" },
+        { "path": "eat/final_sigma.md", "stem": "final_sigma", "title": "ςigma" },
+        { "path": "eat/accent.md", "stem": "accent", "title": "Éclair" },
+        { "path": "eat/zebra.md", "stem": "zebra", "title": "Zebra" },
+        { "path": "eat/small_sigma.md", "stem": "small_sigma", "title": "sigma" },
+        { "path": "eat/the_2.md", "stem": "the_2", "title": "The 2" },
+        { "path": "eat/the_10.md", "stem": "the_10", "title": "The 10" },
+        { "path": "eat/the_bear.md", "stem": "the_bear", "title": "the Bear" }
+      ],
+      "expected": [
+        "small_sigma",
+        "the_10",
+        "the_2",
+        "the_bear",
+        "zebra",
+        "accent",
+        "final_sigma",
+        "sigma",
+        "emoji"
+      ]
+    }
+  ],
+  "labels": [
+    { "name": "trim-typographic-arrows", "title": "‹ Ramen Ya ›", "stem": "ramen_ya", "expected": "Ramen Ya" },
+    { "name": "trim-ascii-arrows", "title": "< Pho House >", "stem": "pho_house", "expected": "Pho House" },
+    { "name": "drop-wikilink-syntax", "title": "Ramen |[Nagi] #^", "stem": "ramen", "expected": "Ramen Nagi" },
+    { "name": "empty-title-uses-humanized-stem", "title": "|[]#^", "stem": "the_taste", "expected": "the taste" },
+    { "name": "empty-humanized-stem-uses-bare-stem", "title": "‹›", "stem": "!!!", "expected": "!!!" }
+  ],
+  "lines": [
+    {
+      "name": "singleton",
+      "album": { "stem": "eat", "title": "Eat" },
+      "members": [{ "path": "eat/only.md", "stem": "only", "title": "Only" }],
+      "expected": ["[[eat|↑ Eat]]"]
+    },
+    {
+      "name": "two-member-ring",
+      "album": { "stem": "eat", "title": "Eat" },
+      "members": [
+        { "path": "eat/pho.md", "stem": "pho", "title": "Pho" },
+        { "path": "eat/ramen.md", "stem": "ramen", "title": "Ramen" }
+      ],
+      "expected": [
+        "[[eat/ramen|‹ Ramen]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+        "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/pho|Pho ›]]"
+      ]
+    },
+    {
+      "name": "three-member-ring-and-wraps",
+      "album": { "stem": "eat", "title": "Eat" },
+      "members": [
+        { "path": "eat/a.md", "stem": "a", "title": "A" },
+        { "path": "eat/b.md", "stem": "b", "title": "B" },
+        { "path": "eat/c.md", "stem": "c", "title": "C" }
+      ],
+      "expected": [
+        "[[eat/c|‹ C]] · [[eat|↑ Eat]] · [[eat/b|B ›]]",
+        "[[eat/a|‹ A]] · [[eat|↑ Eat]] · [[eat/c|C ›]]",
+        "[[eat/b|‹ B]] · [[eat|↑ Eat]] · [[eat/a|A ›]]"
+      ]
+    }
+  ],
+  "recognition": [
+    {
+      "name": "canonical",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n",
+      "state": "current",
+      "reason": null
+    },
+    {
+      "name": "stale-label",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Old Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n",
+      "state": "stale",
+      "reason": null
+    },
+    {
+      "name": "extra-text",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\nBefore [[eat|↑ Eat]] after\n",
+      "state": "damaged",
+      "reason": "extra_text"
+    },
+    {
+      "name": "duplicate-lines",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n",
+      "state": "damaged",
+      "reason": "duplicate_lines"
+    },
+    {
+      "name": "fenced-example-is-missing",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n```md\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n```\n",
+      "state": "missing",
+      "reason": null
+    }
+  ]
+}
