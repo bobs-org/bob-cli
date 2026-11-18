@@ -663,6 +663,45 @@ fn warnings_and_byte_identity() {
     let _ = fs::remove_file(vault.path().join("locked.md"));
 }
 
+/// A vault reached through a symlinked path (macOS `/var` → `/private/var`
+/// temp vaults, or a user `BOB_DIR` behind a symlink) must classify library
+/// tiers exactly like the real path: canonical and un-canonical roots agree.
+#[cfg(unix)]
+#[test]
+fn symlinked_vault_root_keeps_library_tiers_hidden() {
+    let vault = tier_vault();
+    let parent = tempfile::tempdir().expect("alias parent");
+    let alias = parent.path().join("vault-alias");
+    std::os::unix::fs::symlink(vault.path(), &alias).expect("symlink vault");
+    let (_config, _guard) = scan_env("2026-11-14T10:00:00-05:00");
+    let tiers = super::TierContext::for_vault(&alias);
+    assert_eq!(
+        super::path_tier(&alias, Path::new("xlib/q.md"), &tiers),
+        super::NoteTier::Hidden,
+        "xlib behind a symlinked vault root stays hidden"
+    );
+    assert_eq!(
+        super::path_tier(&alias, Path::new("lib/papers/p.md"), &tiers),
+        super::NoteTier::Hidden,
+        "lib behind a symlinked vault root stays hidden"
+    );
+    let catalog = scan(&alias);
+    let expected_root =
+        fs::canonicalize(vault.path()).expect("canonical vault");
+    assert_eq!(catalog.vault_root, expected_root);
+    assert!(
+        !catalog.rows.iter().any(|row| row.note_path == "xlib/q.md"),
+        "symlinked scan must not list xlib/q.md"
+    );
+    assert!(
+        catalog
+            .rows
+            .iter()
+            .any(|row| row.note_path == "ref/papers/a.md"),
+        "symlinked scan keeps ref rows"
+    );
+}
+
 /// Live-vault budget probe (ignored by default): row count, warm scan
 /// time, and JSON size. Run with `BOB_DIR` set against the real vault.
 #[test]

@@ -314,14 +314,17 @@ fn capture_complete_note_goto_reports_shape_without_query() {
     fs::create_dir_all(&vault).expect("create vault");
     write_catalog_vault(&vault);
 
+    // `vault_root` is canonicalized by the catalog, so compare canonical
+    // forms: on macOS the temp vault sits under the `/var` → `/private/var`
+    // symlink and the as-passed path never equals the reported root.
+    let expected_root = std::fs::canonicalize(&vault)
+        .unwrap_or_else(|_| vault.clone())
+        .display()
+        .to_string();
     for (text, cursor, end) in [("//", 2, 2), ("//ca", 4, 4)] {
         let json = complete_json(&vault, cursor, text);
         assert_note_goto_picker(&json, end);
-        assert_eq!(
-            json["note_goto"]["vault_root"],
-            vault.display().to_string(),
-            "{json}"
-        );
+        assert_eq!(json["note_goto"]["vault_root"], expected_root, "{json}");
         let listed =
             json["note_goto"]["listed"].as_u64().expect("listed count");
         assert!(listed >= 1, "{json}");

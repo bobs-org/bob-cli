@@ -177,8 +177,12 @@ pub(crate) fn scan(bob_dir: &Path) -> NoteCatalog {
     collect.run();
     let highlights = HighlightsConfig::for_vault(bob_dir);
     let tiers = TierContext::for_vault(bob_dir);
-    let context =
-        ClassifyContext::new(&vault_root, &highlights, &gmail_folder());
+    let context = ClassifyContext::new(
+        &vault_root,
+        bob_dir,
+        &highlights,
+        &gmail_folder(),
+    );
 
     // Read, parse, and classify every candidate in parallel; chunks
     // hold contiguous path ranges so the merged result stays sorted.
@@ -1029,11 +1033,16 @@ struct ClassifyContext {
 impl ClassifyContext {
     fn new(
         vault_root: &Path,
+        bob_dir: &Path,
         highlights: &HighlightsConfig,
         gmail_folder: &str,
     ) -> Self {
         Self {
-            ref_dir: relativize(vault_root, &highlights.ref_dir),
+            ref_dir: relativize_under_vault(
+                vault_root,
+                bob_dir,
+                &highlights.ref_dir,
+            ),
             gmail_folder: PathBuf::from(gmail_folder),
         }
     }
@@ -1043,6 +1052,26 @@ fn relativize(vault_root: &Path, absolute: &Path) -> PathBuf {
     absolute
         .strip_prefix(vault_root)
         .map_or_else(|_| absolute.to_path_buf(), Path::to_path_buf)
+}
+
+/// Canonical-aware relativization for vault-owned config paths (see
+/// `tiers::relativize_under_vault`): canonicalize `absolute` first so a
+/// symlinked `bob_dir` still yields a vault-relative `ref_dir`, with a
+/// lexical `bob_dir` fallback when the path does not exist yet.
+fn relativize_under_vault(
+    vault_root: &Path,
+    bob_dir: &Path,
+    absolute: &Path,
+) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(absolute)
+        && let Ok(relative) = canonical.strip_prefix(vault_root)
+    {
+        return relative.to_path_buf();
+    }
+    if let Ok(relative) = absolute.strip_prefix(bob_dir) {
+        return relative.to_path_buf();
+    }
+    relativize(vault_root, absolute)
 }
 
 fn gmail_folder() -> String {

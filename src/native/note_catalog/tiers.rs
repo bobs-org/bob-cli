@@ -34,7 +34,7 @@ impl TierContext {
             .unwrap_or_else(|_| bob_dir.to_path_buf());
         let library_roots = [&highlights.lib_dir, &highlights.xlib_dir]
             .into_iter()
-            .map(|path| relativize(&vault_root, path))
+            .map(|path| relativize_under_vault(&vault_root, bob_dir, path))
             .filter(|path| !path.as_os_str().is_empty())
             .collect();
         Self { library_roots }
@@ -160,4 +160,31 @@ fn relativize(vault_root: &Path, absolute: &Path) -> PathBuf {
     absolute
         .strip_prefix(vault_root)
         .map_or_else(|_| absolute.to_path_buf(), Path::to_path_buf)
+}
+
+/// Relativize a vault-owned absolute path against the canonical vault
+/// root, tolerating a symlinked `bob_dir` (for example macOS
+/// `/var` → `/private/var` temp vaults).
+///
+/// `vault_root` is already canonicalized, while `absolute` (derived from
+/// `bob_dir`) may still carry the un-canonicalized symlink prefix.
+/// Canonicalize `absolute` first so `xlib`/`lib` resolve to `xlib`/`lib`
+/// instead of falling back to an absolute path that never matches a
+/// vault-relative tier check. When the path does not exist (so it cannot
+/// be canonicalized), fall back to a lexical strip against the
+/// as-passed `bob_dir`.
+fn relativize_under_vault(
+    vault_root: &Path,
+    bob_dir: &Path,
+    absolute: &Path,
+) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(absolute)
+        && let Ok(relative) = canonical.strip_prefix(vault_root)
+    {
+        return relative.to_path_buf();
+    }
+    if let Ok(relative) = absolute.strip_prefix(bob_dir) {
+        return relative.to_path_buf();
+    }
+    relativize(vault_root, absolute)
 }
