@@ -1,6 +1,7 @@
 //! Public `bob records` commands.
 
 use std::{
+    collections::HashSet,
     ffi::OsString,
     fs,
     io::{self, Read as _},
@@ -31,6 +32,7 @@ use crate::native::{
         index::IndexState,
         parse_album_declaration,
         registry::{AlbumEntry, DiscoveryHealth, RecordTypeSource},
+        walk::WalkWarning,
         write as album_write, AlbumFinding, AlbumIssueSeverity,
     },
     capture::{write_staged_files_guarded, StagedTextFile},
@@ -647,6 +649,7 @@ fn execute_new(matches: &ArgMatches) -> i32 {
     let Some(markdown) = plan.markdown.as_deref() else {
         return report_incomplete(&config, &plan, output_format);
     };
+    let mut markdown = markdown.to_owned();
     // Plan the album write set before any dry-run output, directory
     // creation, or real write, so dry-run and commit share bytes and an
     // incomplete record never stages an album edit.
@@ -654,21 +657,27 @@ fn execute_new(matches: &ArgMatches) -> i32 {
         &vault,
         &mut catalog,
         &kind,
-        &[(plan.path.clone(), markdown.to_owned())],
+        &[(plan.path.clone(), markdown.clone())],
+        Some(&plan.path),
     ) {
         Ok(album) => album,
         Err(message) => {
             return report_error("bob records new", output_format, &message, 2);
         }
     };
-    let edited_album = album.as_ref().filter(|album| album.edit.is_some());
+    if let Some(walk) = album.as_ref()
+        && let Some(edit) =
+            walk.walk_edits.iter().find(|edit| edit.path == plan.path)
+    {
+        markdown = edit.after.clone();
+    }
     let target = vault.join(&plan.path);
     if matches.get_flag("dry-run") {
         print_new_dry_run(
             &plan,
-            markdown,
+            &markdown,
             Some(&kind),
-            edited_album,
+            album.as_ref(),
             output_format,
         );
         return 0;
@@ -691,9 +700,9 @@ fn execute_new(matches: &ArgMatches) -> i32 {
         target: target.clone(),
         target_existed: false,
         original_target: String::new(),
-        updated_target: markdown.to_owned(),
+        updated_target: markdown.clone(),
     }];
-    if let Some(album) = edited_album
+    if let Some(album) = album.as_ref()
         && let Some(edit) = &album.edit
     {
         staged.push(StagedTextFile {
@@ -702,6 +711,20 @@ fn execute_new(matches: &ArgMatches) -> i32 {
             original_target: edit.before.clone(),
             updated_target: edit.after.clone(),
         });
+    }
+    if let Some(album) = album.as_ref() {
+        staged.extend(
+            album
+                .walk_edits
+                .iter()
+                .filter(|edit| edit.path != plan.path)
+                .map(|edit| StagedTextFile {
+                    target: vault.join(&edit.path),
+                    target_existed: true,
+                    original_target: edit.before.clone(),
+                    updated_target: edit.after.clone(),
+                }),
+        );
     }
     let deps = album_read_dependencies(album.as_ref(), &[]);
     if let Err(error) =
@@ -721,6 +744,9 @@ fn execute_new(matches: &ArgMatches) -> i32 {
         "type": plan.record_type,
         "title": plan.title,
         "path": plan.path.display().to_string(),
+        "markdown": markdown,
+        "walk_files": album.as_ref().map(planned_walk_files_json).unwrap_or_default(),
+        "warnings": album.as_ref().map(planned_walk_warnings_json).unwrap_or_default(),
         "properties": plan.properties.iter().map(|property| json!({
             "key": property.key,
             "label": property.label,
@@ -734,10 +760,10 @@ fn execute_new(matches: &ArgMatches) -> i32 {
         })).collect::<Vec<_>>(),
     });
     merge_kind_metadata(&mut payload, &kind);
-    if let Some(album) = edited_album {
+    if let Some(album) = album.as_ref() {
         merge_album_index(&mut payload, album);
     }
-    print_new_success(&payload, &plan, &kind, edited_album, output_format);
+    print_new_success(&payload, &plan, &kind, album.as_ref(), output_format);
     if matches.get_flag("open")
         && let Err(message) = open_in_obsidian(&vault, &plan.path)
     {
@@ -863,6 +889,7 @@ fn execute_update(matches: &ArgMatches) -> i32 {
         &mut catalog,
         &kind,
         &[(plan.path.clone(), markdown.to_owned())],
+        None,
     ) {
         Ok(album) => album,
         Err(message) => {
@@ -1263,6 +1290,7 @@ fn execute_update_envelope(
         &mut catalog,
         kind,
         &[(plan.path.clone(), markdown.to_owned())],
+        None,
     ) {
         Ok(album) => album,
         Err(message) => {
@@ -2353,6 +2381,8 @@ fn print_new_dry_run(
             "title": plan.title,
             "path": plan.path.display().to_string(),
             "markdown": markdown,
+            "walk_files": album.map(planned_walk_files_json).unwrap_or_default(),
+            "warnings": album.map(planned_walk_warnings_json).unwrap_or_default(),
             "properties": plan.properties.iter().map(|property| json!({
                 "key": property.key,
                 "label": property.label,
@@ -2374,7 +2404,77 @@ fn print_new_dry_run(
         {
             print_album_dry_run(album, &edit.after);
         }
+        if let Some(album) = album {
+            print_walk_files_human(album);
+            print_walk_warnings_human(album);
+        }
     }
+}
+
+fn planned_walk_files_json(album: &PlannedAlbumWrite) -> Vec<Value> {
+    album
+        .walk_files
+        .iter()
+        .map(|file| {
+            json!({
+                "path": file.path,
+                "before": file.before,
+                "after": file.after,
+            })
+        })
+        .collect()
+}
+
+fn planned_walk_warnings_json(album: &PlannedAlbumWrite) -> Vec<Value> {
+    album
+        .walk_warnings
+        .iter()
+        .map(|warning| {
+            json!({
+                "code": "record_walk_damaged",
+                "path": warning.path,
+                "reason": warning.reason.as_str(),
+                "message": format!(
+                    "{}: left damaged record walk line untouched ({})",
+                    warning.path,
+                    warning.reason.as_str(),
+                ),
+            })
+        })
+        .collect()
+}
+
+fn print_walk_files_human(album: &PlannedAlbumWrite) {
+    let styler = Styler::detect();
+    let album_stem = album
+        .relative
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    for file in &album.walk_files {
+        println!("  {}  {}", styler.dim("walk"), file.path);
+        if let Some(line) = walk_line_for_record(&file.after, album_stem) {
+            println!("    {line}");
+        }
+    }
+}
+
+fn print_walk_warnings_human(album: &PlannedAlbumWrite) {
+    for warning in &album.walk_warnings {
+        eprintln!(
+            "bob records new: warning: {}: left damaged record walk line untouched ({})",
+            warning.path,
+            warning.reason.as_str(),
+        );
+    }
+}
+
+fn walk_line_for_record<'a>(
+    markdown: &'a str,
+    album_stem: &str,
+) -> Option<&'a str> {
+    let hub = format!("[[{album_stem}|↑ ");
+    markdown.lines().find(|line| line.contains(&hub))
 }
 
 /// Show a planned album index change alongside record dry-run output.
@@ -2447,6 +2547,10 @@ fn print_new_success(
             album.relative.display(),
         );
     }
+    if let Some(album) = album {
+        print_walk_files_human(album);
+        print_walk_warnings_human(album);
+    }
 }
 
 pub(crate) fn config_from_kind(kind: &ResolvedRecordKind) -> RecordsConfig {
@@ -2463,6 +2567,15 @@ struct PlannedAlbumWrite {
     before: String,
     edit: Option<PlannedAlbumEdit>,
     state: IndexState,
+    walk_edits: Vec<crate::native::host_catalog::FileEdit>,
+    walk_files: Vec<PlannedWalkFile>,
+    walk_warnings: Vec<WalkWarning>,
+}
+
+struct PlannedWalkFile {
+    path: String,
+    before: String,
+    after: String,
 }
 
 struct PlannedAlbumEdit {
@@ -2479,6 +2592,7 @@ fn plan_album_write_for_record(
     catalog: &mut RecordCatalog,
     kind: &ResolvedRecordKind,
     overlays: &[(PathBuf, String)],
+    created_path: Option<&Path>,
 ) -> Result<Option<PlannedAlbumWrite>, String> {
     let RecordTypeSource::Album { path } = &kind.sourced.source;
     let record_type = kind.record_type();
@@ -2519,6 +2633,40 @@ fn plan_album_write_for_record(
             });
         return Err(reason);
     }
+    let created: HashSet<String> = created_path
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .into_iter()
+        .collect();
+    let walk = created_path.map(|_| {
+        album_write::plan_album_walk_radius(
+            &declaration,
+            folder,
+            overlays,
+            created.clone(),
+            |relative| fs::read_to_string(vault.join(relative)).ok(),
+        )
+    });
+    let (walk_edits, walk_files, walk_warnings) = match walk {
+        Some(walk) => {
+            let mut files: Vec<_> = walk
+                .edits
+                .iter()
+                .filter(|edit| {
+                    !created.contains(
+                        &edit.path.to_string_lossy().replace('\\', "/"),
+                    )
+                })
+                .map(|edit| PlannedWalkFile {
+                    path: edit.path.to_string_lossy().replace('\\', "/"),
+                    before: edit.before.clone(),
+                    after: edit.after.clone(),
+                })
+                .collect();
+            files.sort_by(|left, right| left.path.cmp(&right.path));
+            (walk.edits, files, walk.warnings)
+        }
+        None => (Vec::new(), Vec::new(), Vec::new()),
+    };
     Ok(Some(PlannedAlbumWrite {
         relative: album_relative,
         before,
@@ -2527,6 +2675,9 @@ fn plan_album_write_for_record(
             after: edit.after,
         }),
         state: planned.state,
+        walk_edits,
+        walk_files,
+        walk_warnings,
     }))
 }
 
@@ -2576,7 +2727,9 @@ pub(crate) fn merge_kind_metadata(
 /// when the index actually changes, with the path and exact before/after
 /// bytes; the record's own keys are untouched.
 fn merge_album_index(payload: &mut Value, album: &PlannedAlbumWrite) {
-    if let Some(object) = payload.as_object_mut() {
+    if album.edit.is_some()
+        && let Some(object) = payload.as_object_mut()
+    {
         object.insert("album_index".to_owned(), album_index_json(album));
     }
 }

@@ -401,6 +401,7 @@ fn json_success_shape_is_stable() {
         crate::native::capture::move_choice::MoveChoiceReport::empty(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
     );
 
     let legacy_json = serde_json::to_string(&result)

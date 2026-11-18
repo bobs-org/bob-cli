@@ -15,6 +15,7 @@ use super::{
     grouping::{group_records, GroupingRecord},
     index::{plan_index, IndexState, RecordNouns},
     report::{resolved_plural, resolved_singular},
+    walk::{self, AlbumWalkPlan, WalkScope},
     AlbumDeclaration, AlbumFinding,
 };
 use crate::native::{
@@ -34,6 +35,28 @@ pub(crate) struct AlbumWritePlan {
     pub(crate) state: IndexState,
     pub(crate) edit: Option<FileEdit>,
     pub(crate) findings: Vec<AlbumFinding>,
+}
+
+/// Plan the bounded walk edits made by a record create. The same cached
+/// folder slice and staged postimages feed both the records index and walk;
+/// callers supply their transaction snapshot for unchanged member bytes.
+pub(crate) fn plan_album_walk_radius<F>(
+    declaration: &AlbumDeclaration,
+    folder: &FolderIndex,
+    overlays: &[(PathBuf, String)],
+    created: std::collections::HashSet<String>,
+    text_of: F,
+) -> AlbumWalkPlan
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    walk::plan_album_walk(
+        declaration,
+        folder,
+        overlays,
+        text_of,
+        WalkScope::Radius { created },
+    )
 }
 
 /// Shared folder/member completeness rule with the report path: the folder

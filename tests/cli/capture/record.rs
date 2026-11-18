@@ -190,6 +190,11 @@ fn capture_record_dry_run_and_commit_share_markdown() {
     assert!(markdown.contains("location: \"Clark\""));
     assert!(markdown.contains("visited: 2026-10-07"));
     assert!(markdown.contains("- 2026-10-07: Spicy tuna was great."));
+    assert!(markdown.contains("[[eat|↑ Restaurants]]"), "{markdown}");
+    assert_eq!(files[0]["lines"][0]["text"], "[[eat|↑ Restaurants]]");
+    assert!(dry_json
+        .get("walk_files")
+        .is_none_or(|files| files.as_array().unwrap().is_empty()));
     assert!(!vault.join("eat").exists(), "dry-run creates no folder");
     assert!(!vault.join("mac_inbox.md").exists(), "no inbox task");
     assert!(!daily_note(&vault).exists(), "no daily note");
@@ -213,6 +218,108 @@ fn capture_record_dry_run_and_commit_share_markdown() {
     );
     assert!(!vault.join("mac_inbox.md").exists(), "no inbox task");
     assert!(!daily_note(&vault).exists(), "no daily note");
+}
+
+#[test]
+fn capture_create_stages_the_existing_neighbour_with_the_new_record() {
+    let (_temp, vault, config) = complete_fixture();
+    let neighbor = write_ninja(&vault);
+    let before = fs::read_to_string(&neighbor).expect("read neighbour");
+    let draft = "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark";
+
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("dry-run create with neighbour");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    assert!(dry_json["note_files"][0]["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("[[eat/ninja_sushi|‹ Ninja Sushi]]"));
+    let walk_files = dry_json["walk_files"].as_array().unwrap();
+    assert_eq!(walk_files.len(), 1, "{dry_json}");
+    assert_eq!(walk_files[0]["path"], "eat/ninja_sushi.md");
+    assert_eq!(walk_files[0]["before"], before);
+    assert!(walk_files[0]["after"]
+        .as_str()
+        .unwrap()
+        .contains("[[eat/ramen_nagi|‹ Ramen Nagi]]"));
+    assert_eq!(fs::read_to_string(&neighbor).unwrap(), before);
+
+    let committed = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("commit create with neighbour");
+    assert_success(&committed);
+    let committed_json = json_output(&committed);
+    assert_eq!(
+        committed_json["walk_files"], dry_json["walk_files"],
+        "dry-run and commit share neighbour bytes"
+    );
+    assert_eq!(
+        fs::read_to_string(&neighbor).unwrap(),
+        dry_json["walk_files"][0]["after"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn bulk_capture_plans_the_final_ring_once_for_adjacent_creates() {
+    let (_temp, vault, config) = complete_fixture();
+    let draft = concat!(
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+        "\n\n",
+        "Pho House @eat/\n- status:: liked\n- category:: Pho\n- location:: Clark",
+    );
+    let output = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("bulk record dry-run");
+    assert_success(&output);
+    let payload = json_output(&output);
+    let files = payload["note_files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{payload}");
+    assert!(files[0]["markdown"].as_str().unwrap().contains(
+        "[[eat/pho_house|‹ Pho House]] · [[eat|↑ Restaurants]] · [[eat/pho_house|Pho House ›]]"
+    ));
+    assert!(files[1]["markdown"].as_str().unwrap().contains(
+        "[[eat/ramen_nagi|‹ Ramen Nagi]] · [[eat|↑ Restaurants]] · [[eat/ramen_nagi|Ramen Nagi ›]]"
+    ));
+    assert!(payload
+        .get("walk_files")
+        .is_none_or(|files| files.as_array().unwrap().is_empty()));
+    assert!(!vault.join("eat/ramen_nagi.md").exists());
+    assert!(!vault.join("eat/pho_house.md").exists());
+}
+
+#[test]
+fn capture_warns_and_preserves_a_damaged_neighbour() {
+    let (_temp, vault, config) = complete_fixture();
+    let neighbor = write_ninja(&vault);
+    let damaged = NINJA
+        .replace("## Notes", "[[eat|↑ Old Restaurants]] extra\n\n## Notes");
+    write_file(&neighbor, &damaged);
+    let draft = "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark";
+    let output = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("create beside damaged neighbour");
+    assert_success(&output);
+    let payload = json_output(&output);
+    assert!(
+        payload["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning["code"] == "record_walk_damaged"
+                    && warning["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("eat/ninja_sushi.md")
+            }),
+        "{payload}"
+    );
+    assert_eq!(fs::read_to_string(&neighbor).unwrap(), damaged);
+    assert!(payload
+        .get("walk_files")
+        .is_none_or(|files| files.as_array().unwrap().is_empty()));
 }
 
 #[test]

@@ -6789,6 +6789,15 @@ the owner the same way. Album creates write `parent: "[[<album>]]"` and
 `type: "[[record]]"`, carry album metadata through parse, items, and
 note_files, and complete field/shell targets album-aware.
 
+Each album-backed record create plans the title-order ring from the final
+capture overlay. Bob puts the new record's walk line in its first body slot and
+stages only pre-existing neighbours whose canonical lines change in the same
+guarded transaction. The additive top-level `walk_files[]` gives those
+neighbours' `path`, exact `before`, and exact `after` Markdown; a damaged line
+is skipped with a `record_walk_damaged` warning. Record updates do not write
+walk lines. The created `note_files[].body` stays the authored body, while
+`note_files[].markdown` contains the final bytes Bob writes.
+
 `@eat/ramen_nagi` without a caret is an existing-record update. `capture-parse`
 reports mode `record_update`, resolves the exact stem, and shows the stored
 title, current field values, proposed values, and historical warnings. Parent

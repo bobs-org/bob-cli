@@ -45,7 +45,7 @@ bob plan -f json -b /path/to/synthetic-vault
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, the selected provider and entry ages on success, or a refusal `code` and message. Clipboard and history text are never included | `schema_version: 1` | [Capture](../capture.md#clipboard) |
-| `bob capture` | `-f json` | Attachment warning `attachment_large`; refusals `attachment_too_large`, `attachment_not_synced`. Notebook notes add `kind: notebook_note` / `notebook_sub_note` / `notebook_create` plus a `notebook` object (`route`, `title`, `breadcrumb`, `section`, `section_action`, `block_id`, `parent_block_id`); creates add `note_files[]`. | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [task relations](../task-relations.md) |
+| `bob capture` | `-f json` | Attachment warning `attachment_large`; refusals `attachment_too_large`, `attachment_not_synced`. Notebook notes add `kind: notebook_note` / `notebook_sub_note` / `notebook_create` plus a `notebook` object (`route`, `title`, `breadcrumb`, `section`, `section_action`, `block_id`, `parent_block_id`); creates add `note_files[]`. Album record creates add the final walk line to `note_files[].markdown`, leave authored text in `body`, and report changed pre-existing neighbours in `walk_files[]` (`path`, `before`, `after`). | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [task relations](../task-relations.md) |
 | `bob capture-parse` | `-f json` | Per-item modes, spans, diagnostics, and needs (`grammar: 28`). Notebook routes add `notebook_note` / `notebook_sub_note` / `notebook_create`, `notebook: true` span labels, and opaque bodies. Other modes cover Pomodoro timing, Gmail, records, transfers, moves, lists, note pulls, sections, relations, drawers, and merge-ins. | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
 | `bob capture-complete` | `-f json` | Completion contexts, candidates, ranges, pickers (`note_goto`), selection, effects, and creation choices. Notebook routes add 📓 rows, H2 sections plus `notebook_section_create`, `destination_kind: "notebook"` on `^` fields, `item_kind: "note"` on `@nb+`, and a `%n` New notebook row. `-n` walks required fields; `-F` adds record-value assistance. | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
@@ -90,13 +90,17 @@ bob capture -f json --dry-run -- "$(printf '%s\n' 'Ramen Nagi @eat/' '- status::
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"dry_run":true,"kind":"record_note","placement":"created","relative_target":"eat/ramen_nagi.md","record_note":{"action":"create","label":"Restaurant","emoji":"🍽️","path":"eat/ramen_nagi.md","notes":0,"properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed"}]},"note_files":[{"path":"eat/ramen_nagi.md","action":"create","record_type":"restaurant","properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed"}],"markdown":"---\n…\n"}]}
+{"ok":true,"dry_run":true,"kind":"record_note","placement":"created","relative_target":"eat/ramen_nagi.md","record_note":{"action":"create","label":"Restaurant","emoji":"🍽️","path":"eat/ramen_nagi.md","notes":0,"properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed"}]},"note_files":[{"path":"eat/ramen_nagi.md","action":"create","record_type":"restaurant","body":"","properties":[{"key":"status","label":"Status","value":"liked","display":"💚 Liked","source":"typed"}],"markdown":"---\n…\n\n[[eat|↑ Eat]]\n","lines":[{"text":"[[eat|↑ Eat]]","depth":0,"change":"added"}]}]}
 ```
 
 Record items add `record_note` summaries; incomplete drafts include `draft`,
 `missing[]`, `invalid[]`. Targets enrich identity fields. Album-backed writes add top-level `album_files[]` (`path`, `state`,
-`before`, `after`) whenever the records index changes; dry-run and commit
-share those bytes. `album_schema_invalid`, `record_discovery_incomplete`.
+`before`, `after`) whenever the records index changes. Record creates also add
+`walk_files[]` for pre-existing neighbours whose walk line changes; each entry
+contains the original and final Markdown. The created record's `markdown` is the
+exact committed text, including its walk line, while `body` remains authored
+content. Damaged neighbours appear as `record_walk_damaged` warnings and are not
+rewritten. Dry-run and commit share those bytes.
 
 ```bash
 bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/ninja_sushi' '- status:: liked')"
@@ -168,6 +172,7 @@ sets `one_off: true`.
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob records show` | `-f json` | Schema for `TYPE`; with `STEM`, one record's properties, identity, findings, full suggestions, and fingerprint. Refusals add `error.code` | `schema_version: 1` | [Reading one record](../records.md#reading-one-record) |
+| `bob records new` | `-f json` | Created record's exact `markdown`, optional `album_index`, `walk_files[]` for changed pre-existing neighbours, and `record_walk_damaged` warnings | `schema_version: 1` | [`bob records`](../records.md#bob-records) |
 | `bob records tidy` | `-f json` | Tidied notes, counts, and transaction results | `schema_version: 1` | [Tidying empty Notes sections and redundant H1s](../records.md#tidying-empty-notes-sections-and-redundant-h1s) |
 | `bob records update` | `-i FILE -f json` | Guarded envelope: `changed[]`, `changes[]`, fingerprints, `inverse_ops`, groups, `consequence`, and typed `error` | `schema_version: 1` | [Updating with an envelope](../records.md#updating-with-an-envelope) |
 

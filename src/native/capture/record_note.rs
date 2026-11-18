@@ -123,6 +123,7 @@ fn plan_record_create_item(
     let target = request.bob_dir.join(&plan.path);
     planner.stage(&target, markdown.clone())?;
     if source == "album" {
+        record_context.record_created_record(&record_type.dir, &plan.path);
         stage_album_index(request, planner, record_context, &record_type)?;
     }
     let relative = plan.path.display().to_string().replace('\\', "/");
@@ -182,6 +183,158 @@ fn plan_record_create_item(
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
     })
+}
+
+/// Plan the final radius once per album after every capture item has
+/// contributed its postimage. All edits join the batch planner, so the new
+/// records and their changed neighbours commit or roll back together.
+pub(super) fn stage_record_walks(
+    request: &CaptureRequest,
+    planner: &mut CaptureBatchPlanner,
+    record_context: &mut CaptureRecordContext,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<Vec<super::output::WalkFileJson>, CaptureError> {
+    let mut created_by_album: Vec<_> =
+        record_context.take_created_records().into_iter().collect();
+    created_by_album.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut walk_files = Vec::new();
+
+    for (directory, created) in created_by_album {
+        let Some((record_type, source, _)) =
+            record_context.route_kind_for(&directory)
+        else {
+            continue;
+        };
+        if source != "album" {
+            continue;
+        }
+
+        let album_relative = PathBuf::from(format!("{directory}.md"));
+        let album_path = request.bob_dir.join(&album_relative);
+        let Some((album_before, _)) = planner.loaded_texts(&album_path) else {
+            return Err(stale_album_error(
+                &album_relative,
+                "was not guarded while planning its record walk",
+            ));
+        };
+        let declaration =
+            parse_album_declaration(&album_relative, &album_before)
+                .filter(|declaration| {
+                    declaration.record_type.as_ref() == Some(&record_type)
+                })
+                .ok_or_else(|| {
+                    stale_album_error(
+                        &album_relative,
+                        "changed after its record walk was planned",
+                    )
+                })?;
+
+        let folder = record_context.catalog_mut().folder(&directory).clone();
+        if !album_write::folder_complete(&folder) {
+            continue;
+        }
+        let overlays = record_overlays(planner, &request.bob_dir);
+        let mut text_by_path = std::collections::HashMap::new();
+        let mut text_unavailable = false;
+        for member in folder.notes() {
+            let relative =
+                member.relative_path.to_string_lossy().replace('\\', "/");
+            let absolute = request.bob_dir.join(&member.relative_path);
+            let contents = match planner.current_contents(&absolute) {
+                Ok(Some(contents)) => contents,
+                Ok(None) | Err(_) => {
+                    text_unavailable = true;
+                    break;
+                }
+            };
+            text_by_path.insert(relative, contents);
+        }
+        if text_unavailable {
+            continue;
+        }
+        let walk = album_write::plan_album_walk_radius(
+            &declaration,
+            &folder,
+            &overlays,
+            created.clone(),
+            |relative| text_by_path.get(relative).cloned(),
+        );
+
+        for damaged in &walk.warnings {
+            warnings.push(CaptureWarning::Structured(
+                super::output::StructuredCaptureWarning {
+                    code: "record_walk_damaged",
+                    label: Some(damaged.path.clone()),
+                    count: None,
+                    message: format!(
+                        "{}: left damaged record walk line untouched ({})",
+                        damaged.path,
+                        damaged.reason.as_str(),
+                    ),
+                },
+            ));
+        }
+
+        for edit in walk.edits {
+            let relative = edit.path.to_string_lossy().replace('\\', "/");
+            let absolute = request.bob_dir.join(&edit.path);
+            planner.stage(&absolute, edit.after)?;
+            if created.contains(&relative) {
+                continue;
+            }
+            if let Some((before, after)) = planner.loaded_texts(&absolute)
+                && before != after
+            {
+                walk_files.push(super::output::WalkFileJson {
+                    path: relative,
+                    before,
+                    after,
+                });
+            }
+        }
+    }
+    walk_files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(walk_files)
+}
+
+/// Update created record previews from the batch's final postimages. The
+/// authored `body` stays untouched; `markdown` includes Bob's walk line.
+pub(super) fn refresh_record_create_markdown(
+    items: &mut [PlannedCaptureItem],
+    planner: &CaptureBatchPlanner,
+    bob_dir: &Path,
+) {
+    for item in items {
+        let Some(record) = item.result.record_note.as_mut() else {
+            continue;
+        };
+        if record.action != "create" {
+            continue;
+        }
+        let path = bob_dir.join(&record.path);
+        let Some(contents) = planner.peek_text(&path) else {
+            continue;
+        };
+        record.markdown = contents.clone();
+        record.note_file.markdown = contents.clone();
+        if let Some(line) = walk_line_in_body(&contents) {
+            record.note_file.lines = vec![BlockLineJson {
+                text: line,
+                depth: 0,
+                change: BlockLineChange::Added,
+                before: None,
+                reason: None,
+                origin: None,
+            }];
+        }
+    }
+}
+
+fn walk_line_in_body(markdown: &str) -> Option<String> {
+    let (_, body) = crate::native::highlights_ref::split_frontmatter(markdown)?;
+    body.lines()
+        .find(|line| line.contains("|↑ ") && line.starts_with("[["))
+        .map(str::to_owned)
 }
 
 fn plan_record_update_item(

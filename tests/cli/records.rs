@@ -1471,6 +1471,173 @@ fn record_writes_new_stages_record_and_index_together() {
 }
 
 #[test]
+fn record_writes_create_the_ring_and_report_the_existing_neighbour() {
+    let fixture = album_fixture();
+    let first = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&first);
+    let first_json = json(&first);
+    let first_markdown = first_json["markdown"].as_str().unwrap();
+    assert!(
+        first_markdown.contains("[[eat|↑ Restaurants]]"),
+        "{first_json}"
+    );
+    assert!(first_json["walk_files"].as_array().unwrap().is_empty());
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap(),
+        first_markdown
+    );
+
+    let before = first_markdown.to_owned();
+    let second = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Udon",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Udon",
+            "-s",
+            "location=Main",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&second);
+    let second_json = json(&second);
+    let second_markdown = second_json["markdown"].as_str().unwrap();
+    assert!(
+        second_markdown.contains(
+            "[[eat/ramen_nagi|‹ Ramen Nagi]] · [[eat|↑ Restaurants]] · [[eat/ramen_nagi|Ramen Nagi ›]]"
+        ),
+        "{second_json}"
+    );
+    let walk_files = second_json["walk_files"].as_array().unwrap();
+    assert_eq!(walk_files.len(), 1, "{second_json}");
+    assert_eq!(walk_files[0]["path"], "eat/ramen_nagi.md");
+    assert_eq!(walk_files[0]["before"], before);
+    let neighbor_after = walk_files[0]["after"].as_str().unwrap();
+    assert!(neighbor_after.contains(
+        "[[eat/udon|‹ Udon]] · [[eat|↑ Restaurants]] · [[eat/udon|Udon ›]]"
+    ));
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap(),
+        neighbor_after
+    );
+}
+
+#[test]
+fn records_new_and_capture_create_identical_record_bytes() {
+    let records = album_fixture();
+    let records_output = record_writes_new(
+        &records,
+        &[
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-d",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&records_output);
+    let records_markdown = json(&records_output)["markdown"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let capture = album_fixture();
+    let capture_output = capture_command(&capture)
+        .args([
+            "capture",
+            "--dry-run",
+            "-f",
+            "json",
+            "--",
+            "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+        ])
+        .output()
+        .expect("capture dry-run");
+    assert_success(&capture_output);
+    let capture_markdown = json(&capture_output)["note_files"][0]["markdown"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(records_markdown, capture_markdown);
+}
+
+#[test]
+fn record_writes_touch_only_two_neighbours_in_a_large_unbackfilled_album() {
+    let fixture = album_fixture();
+    let mut before = BTreeMap::new();
+    for index in 0..104 {
+        let title = format!("Record {index:03}");
+        let path = fixture.vault.join(format!("eat/record_{index:03}.md"));
+        let markdown = album_record("eat", "record", &title, "");
+        write_file(&path, &markdown);
+        before.insert(path, markdown);
+    }
+
+    let output = record_writes_new(
+        &fixture,
+        &[
+            "new",
+            "restaurant",
+            "Record 050.5",
+            "-s",
+            "status=liked",
+            "-s",
+            "category=New",
+            "-s",
+            "location=Clark",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&output);
+    let payload = json(&output);
+    let walk_files = payload["walk_files"].as_array().unwrap();
+    assert_eq!(walk_files.len(), 2, "{payload}");
+    assert_eq!(walk_files[0]["path"], "eat/record_050.md");
+    assert_eq!(walk_files[1]["path"], "eat/record_051.md");
+
+    let mut changed = Vec::new();
+    for (path, original) in before {
+        let current = fs::read_to_string(&path).unwrap();
+        if &current != original {
+            changed
+                .push(path.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    changed.sort();
+    assert_eq!(changed, ["record_050.md", "record_051.md"]);
+    let created = fixture.vault.join(payload["path"].as_str().unwrap());
+    assert!(created.exists());
+}
+
+#[test]
 fn record_writes_update_regroups_the_index() {
     let fixture = album_fixture();
     write_file(
@@ -1522,6 +1689,9 @@ fn record_writes_notes_only_update_keeps_current_album_identical() {
             "location=Clark",
         ],
     ));
+    let record_before =
+        fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap();
+    assert!(record_before.contains("[[eat|↑ Restaurants]]"));
     let album_before =
         fs::read_to_string(fixture.vault.join("eat.md")).unwrap();
 
@@ -1543,6 +1713,7 @@ fn record_writes_notes_only_update_keeps_current_album_identical() {
         payload.get("album_index").is_none(),
         "current index contributes no write: {payload}"
     );
+    assert!(payload.get("walk_files").is_none());
     assert_eq!(
         fs::read_to_string(fixture.vault.join("eat.md")).unwrap(),
         album_before,
@@ -1551,6 +1722,7 @@ fn record_writes_notes_only_update_keeps_current_album_identical() {
     let record =
         fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md")).unwrap();
     assert!(record.contains("Went back, still great"), "{record}");
+    assert!(record.contains("[[eat|↑ Restaurants]]"), "{record}");
 }
 
 #[test]

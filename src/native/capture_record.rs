@@ -38,6 +38,7 @@ pub(crate) struct CaptureRecordContext {
     vault_root: PathBuf,
     catalog: Option<RecordCatalog>,
     album_edits: Vec<AlbumIndexEdit>,
+    created_records: HashMap<String, HashSet<String>>,
 }
 
 /// One staged album records-index edit reported for batch output.
@@ -57,6 +58,7 @@ impl CaptureRecordContext {
             vault_root: vault_root.to_path_buf(),
             catalog: None,
             album_edits: Vec::new(),
+            created_records: HashMap::new(),
         }
     }
 
@@ -133,6 +135,25 @@ impl CaptureRecordContext {
 
     pub(crate) fn take_album_edits(&mut self) -> Vec<AlbumIndexEdit> {
         std::mem::take(&mut self.album_edits)
+    }
+
+    /// Remember record creates for one batch-final walk plan. Updates never
+    /// enter this set, so they cannot change walk lines.
+    pub(crate) fn record_created_record(
+        &mut self,
+        directory: &str,
+        relative_path: &Path,
+    ) {
+        self.created_records
+            .entry(directory.to_owned())
+            .or_default()
+            .insert(relative_path.to_string_lossy().replace('\\', "/"));
+    }
+
+    pub(crate) fn take_created_records(
+        &mut self,
+    ) -> HashMap<String, HashSet<String>> {
+        std::mem::take(&mut self.created_records)
     }
 }
 

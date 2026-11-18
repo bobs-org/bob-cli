@@ -556,18 +556,23 @@ location: "Clark"
 created: 2026-11-08T12:41:07-0500
 ---
 
+[[eat/pho_house|‹ Pho House]] · [[eat|↑ Eat]] · [[eat/ramen_ya|Ramen Ya ›]]
+
 ## Notes
 
 - Spicy tuna was great; Kelly loved the salmon.
 ```
 
 Record notes carry no H1: the frontmatter `title` is the title's one home
-(the record sheet renders it). `created` uses Bob's configured timezone and
+(the record sheet renders it). Each album-backed record also has one Bob-owned
+walk line as its first body line. The `‹` and `›` links follow the album's
+title order; `↑` opens the album. A one-record album has only the `↑` link.
+The position and album size render live and are never stored. `created` uses Bob's configured timezone and
 `BOB_NOW` when set. `## Notes` exists only when the new note holds ordinary
 bullets. With `dated_notes: true`, each first-level note bullet gets today's
 date; nested bullets stay nested. An all-caps first-level bullet with nested
 bullets becomes a title-cased section. A note with no ordinary bullets and no
-sections ends right after the closing `---`:
+sections contains only its walk line:
 
 ```markdown
 ---
@@ -579,6 +584,8 @@ category: "Ramen"
 location: "Clark"
 created: 2026-11-08T12:41:07-0500
 ---
+
+[[eat|↑ Eat]]
 ```
 
 ## Updating notes
@@ -642,8 +649,15 @@ put. `capture-parse` and `bob capture --dry-run` show the same planned
 Markdown that commit writes. For a healthy album, `Blaze @eat` refuses with
 `album_holds_no_tasks` and teaches `@eat/`.
 
+Capture plans created records' walk lines from the final batch overlay. It
+stages each created record and only the pre-existing neighbours whose lines
+change in the same guarded transaction; updates do not stage walk edits.
+JSON `walk_files[]` lists each changed pre-existing record with its exact
+`before` and `after` Markdown. A damaged neighbour is left untouched and
+reported as `record_walk_damaged`.
+
 `--dry-run` prints the exact bytes commit writes, including the staged album
-index edit (`album_files` in JSON). A later-item failure,
+index edit (`album_files` in JSON) and neighbour edits (`walk_files`). A later-item failure,
 including an incomplete record after a task, writes nothing. Duplicate paths
 refuse with `record_exists` and never add a suffix. See
 [Capture](capture.md#record-notes) and
@@ -683,12 +697,16 @@ bob records new restaurant 'Ramen Nagi' \
 stem or need a curated name. Duplicate paths are refused. Missing required fields
 and invalid values exit 2; bob prints a ready-to-copy draft for missing fields.
 `-d/--dry-run` prints the exact planned Markdown without writing, plus the staged
-album index edit, and `-o/--open` opens a successfully created note in Obsidian.
+album index edit and each changed neighbour's new walk line. JSON includes the
+new note's final `markdown` and `walk_files[]` (`path`, `before`, `after`) for
+pre-existing neighbours. `-o/--open` opens a successfully created note in Obsidian.
 
 The planner applies defaults only to fields that were not supplied, validates all
 provided values, and never writes incomplete notes. A completed write goes through
 the same staged writer as capture, including its no-replace install guard, plus
-the album index edit with its own preimage guard.
+the album index edit with its own preimage guard. It plans the final title-order
+ring once and installs the new note plus changed neighbours in that transaction;
+damaged neighbours remain untouched with a warning.
 
 Update one record with repeated `-s/--set KEY=VALUE` fields and optional repeated
 `-n/--note TEXT` bullets. Only supplied fields change; defaults never apply to an

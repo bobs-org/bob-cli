@@ -564,6 +564,10 @@ pub(super) struct CaptureResult {
     /// omitted when empty; dry-run and commit share these bytes.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) album_files: Vec<AlbumFileJson>,
+    /// Pre-existing record neighbours rewritten by a record create.
+    /// Additive and omitted when empty; dry-run and commit share these bytes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) walk_files: Vec<WalkFileJson>,
 }
 
 /// One Pomodoro name agreement applied to today's daily note.
@@ -600,6 +604,7 @@ impl CaptureResult {
         move_choice: super::move_choice::MoveChoiceReport,
         type_agreement: Vec<TypeAgreementJson>,
         album_files: Vec<AlbumFileJson>,
+        walk_files: Vec<WalkFileJson>,
     ) -> Self {
         let note_files = items
             .iter()
@@ -642,6 +647,7 @@ impl CaptureResult {
             type_agreement,
             note_files,
             album_files,
+            walk_files,
         }
     }
 }
@@ -680,6 +686,32 @@ fn print_album_files(result: &CaptureResult) {
     }
     for album in &result.album_files {
         println!("  {}  {}", styler.dim("index"), album.path);
+    }
+}
+
+fn print_walk_files(result: &CaptureResult) {
+    if result.walk_files.is_empty() {
+        return;
+    }
+    let styler = Styler::detect();
+    for file in &result.walk_files {
+        if result.dry_run {
+            println!();
+            println!("{}  {}", styler.dim("walk"), file.path);
+            print!(
+                "{}",
+                similar::TextDiff::from_lines(&file.before, &file.after)
+                    .unified_diff()
+                    .context_radius(2)
+                    .header(
+                        &format!("a/{}", file.path),
+                        &format!("b/{}", file.path),
+                    )
+                    .to_string()
+            );
+        } else {
+            println!("  {}  {}", styler.dim("walk"), file.path);
+        }
     }
 }
 
@@ -1044,6 +1076,16 @@ pub(super) struct RecordAlbumJson {
 pub(super) struct AlbumFileJson {
     pub(super) path: String,
     pub(super) state: String,
+    pub(super) before: String,
+    pub(super) after: String,
+}
+
+/// One pre-existing record whose Bob-owned walk line changed in a create
+/// transaction. Newly created records are represented by their final
+/// `note_files[].markdown` instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct WalkFileJson {
+    pub(super) path: String,
     pub(super) before: String,
     pub(super) after: String,
 }
@@ -2443,6 +2485,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         print_move_choice_report(result);
         print_type_agreement(result);
         print_album_files(result);
+        print_walk_files(result);
         return;
     }
 
@@ -2485,6 +2528,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     print_move_choice_report(result);
     print_type_agreement(result);
     print_album_files(result);
+    print_walk_files(result);
 }
 
 fn print_type_agreement(result: &CaptureResult) {

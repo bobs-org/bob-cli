@@ -68,6 +68,8 @@ pub(super) struct PlannedCaptureBatch {
     /// Staged album records-index edits, in path order. Dry-run and commit
     /// share these bytes through the result's `album_files`.
     pub(super) album_files: Vec<AlbumFileJson>,
+    /// Pre-existing album neighbours whose walk lines changed in this batch.
+    pub(super) walk_files: Vec<super::output::WalkFileJson>,
 }
 
 /// One reference item's staged ref job plus its position in the
@@ -1107,6 +1109,17 @@ pub(super) fn plan_capture_batch_with_config_path(
         &planner,
         &request.bob_dir,
     );
+    let walk_files = super::record_note::stage_record_walks(
+        request,
+        &mut planner,
+        &mut record_context,
+        &mut warnings,
+    )?;
+    super::record_note::refresh_record_create_markdown(
+        &mut items,
+        &planner,
+        &request.bob_dir,
+    );
     #[cfg(test)]
     let (record_folders, record_files_opened) = record_context.catalog_stats();
     // Derive the final album report from the planner's original/current
@@ -1171,6 +1184,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         #[cfg(test)]
         record_files_opened,
         album_files,
+        walk_files,
         global_destination,
         offer_closes,
         warnings,
