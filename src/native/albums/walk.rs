@@ -664,13 +664,6 @@ fn allowed_target(target: &str, album_stem: &str) -> Option<bool> {
     (!child.is_empty() && !child.contains('/')).then_some(false)
 }
 
-fn insert_walk_line_for_test(
-    markdown: &str,
-    canonical: &str,
-) -> Option<String> {
-    insert_walk_line(markdown, canonical)
-}
-
 fn normalized_path(path: &Path) -> Option<String> {
     Some(normalize_slashes(path.to_str()?))
 }
@@ -753,17 +746,14 @@ mod tests {
         let source = "\u{feff}---\r\ntype: record\r\n---\r\n\r\n# Sheet\r\n";
         let expected =
             "\u{feff}---\r\ntype: record\r\n---\r\n\r\nWALK\r\n\r\n# Sheet\r\n";
-        assert_eq!(
-            insert_walk_line_for_test(source, "WALK").as_deref(),
-            Some(expected)
-        );
+        assert_eq!(insert_walk_line(source, "WALK").as_deref(), Some(expected));
     }
 
     #[test]
     fn singleton_blank_body_gets_one_trailing_newline() {
         let source = "---\n\ntype: record\n---\n\n  \n";
         assert_eq!(
-            insert_walk_line_for_test(source, "WALK").as_deref(),
+            insert_walk_line(source, "WALK").as_deref(),
             Some("---\n\ntype: record\n---\n\nWALK\n")
         );
     }
@@ -857,16 +847,12 @@ mod tests {
     #[test]
     fn insertion_without_a_frontmatter_newline_uses_lf_and_preserves_prose() {
         assert_eq!(
-            insert_walk_line_for_test("---\ntype: record\n---", "WALK")
-                .as_deref(),
+            insert_walk_line("---\ntype: record\n---", "WALK").as_deref(),
             Some("---\ntype: record\n---\n\nWALK\n")
         );
         assert_eq!(
-            insert_walk_line_for_test(
-                "---\ntype: record\n---\n\n prose\n",
-                "WALK"
-            )
-            .as_deref(),
+            insert_walk_line("---\ntype: record\n---\n\n prose\n", "WALK")
+                .as_deref(),
             Some("---\ntype: record\n---\n\nWALK\n\n prose\n")
         );
     }
