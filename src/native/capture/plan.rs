@@ -1115,7 +1115,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         &mut record_context,
         &mut warnings,
     )?;
-    super::record_note::refresh_record_create_markdown(
+    super::record_note::refresh_record_markdown(
         &mut items,
         &planner,
         &request.bob_dir,

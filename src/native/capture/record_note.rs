@@ -297,9 +297,9 @@ pub(super) fn stage_record_walks(
     Ok(walk_files)
 }
 
-/// Update created record previews from the batch's final postimages. The
-/// authored `body` stays untouched; `markdown` includes Bob's walk line.
-pub(super) fn refresh_record_create_markdown(
+/// Update record previews with the final Bob-owned walk line. Each item keeps
+/// its own property/body postimage when a later item updates that record.
+pub(super) fn refresh_record_markdown(
     items: &mut [PlannedCaptureItem],
     planner: &CaptureBatchPlanner,
     bob_dir: &Path,
@@ -308,24 +308,40 @@ pub(super) fn refresh_record_create_markdown(
         let Some(record) = item.result.record_note.as_mut() else {
             continue;
         };
-        if record.action != "create" {
-            continue;
-        }
         let path = bob_dir.join(&record.path);
         let Some(contents) = planner.peek_text(&path) else {
             continue;
         };
-        record.markdown = contents.clone();
-        record.note_file.markdown = contents.clone();
-        if let Some(line) = walk_line_in_body(&contents) {
-            record.note_file.lines = vec![BlockLineJson {
+        let Some(line) = walk_line_in_body(&contents) else {
+            continue;
+        };
+        let Some(album_stem) =
+            record.album.as_ref().map(|album| album.stem.as_str())
+        else {
+            continue;
+        };
+        // The item Markdown is its own postimage; only the Bob-owned walk
+        // line comes from the batch's final staged bytes. This also inserts
+        // the line into new records, whose engine-rendered Markdown has none.
+        let had_walk_line = walk_line_in_body(&record.markdown).is_some();
+        let Some(markdown) = crate::native::albums::walk::plan_line_edit(
+            &record.markdown,
+            album_stem,
+            &line,
+        ) else {
+            continue;
+        };
+        record.markdown = markdown.clone();
+        record.note_file.markdown = markdown;
+        if !had_walk_line {
+            record.note_file.lines.push(BlockLineJson {
                 text: line,
                 depth: 0,
                 change: BlockLineChange::Added,
                 before: None,
                 reason: None,
                 origin: None,
-            }];
+            });
         }
     }
 }

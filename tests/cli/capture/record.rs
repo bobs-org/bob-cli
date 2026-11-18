@@ -1552,11 +1552,18 @@ fn capture_create_then_update_aligns_parse_dry_run_and_commit() {
     assert_eq!(files[1]["action"], "update");
     let created = files[0]["markdown"].as_str().unwrap();
     let updated = files[1]["markdown"].as_str().unwrap();
-    // A created record previews the final batch bytes, including later
-    // updates and the walk line planned after all items.
-    assert!(created.contains("location: \"Westfield\""), "{created}");
+    // Each action keeps its own fields and notes while sharing the walk line
+    // planned after all items.
+    assert!(created.contains("location: \"Clark\""), "{created}");
     assert!(created.contains("[[eat|↑ Restaurants]]"), "{created}");
+    assert!(
+        created.contains("- 2026-10-07: Spicy tuna was great."),
+        "{created}"
+    );
+    assert!(!created.contains("Westfield"), "{created}");
+    assert!(!created.contains("Went back for extra spice"), "{created}");
     assert!(updated.contains("location: \"Westfield\""), "{updated}");
+    assert!(updated.contains("[[eat|↑ Restaurants]]"), "{updated}");
     assert!(
         updated.contains("- 2026-10-07: Went back for extra spice"),
         "{updated}"
@@ -1574,7 +1581,7 @@ fn capture_create_then_update_aligns_parse_dry_run_and_commit() {
     assert_eq!(committed_json["note_files"], dry_json["note_files"]);
     assert_eq!(
         fs::read_to_string(vault.join("eat/ramen_nagi.md")).unwrap(),
-        created
+        updated
     );
 }
 

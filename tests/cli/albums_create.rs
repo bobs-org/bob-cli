@@ -1202,6 +1202,14 @@ fn created_album_accepts_records_and_stays_clean() {
     // Record creation and capture keep the walk current atomically.
     assert_eq!(payload["counts"]["warnings"], 0, "{payload}");
     assert_eq!(payload["albums"][0]["walk"]["state"], "current");
+    assert!(
+        !payload["albums"][0]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "album_walk_stale"),
+        "walk lines are current at creation: {payload}"
+    );
     let payload = check_json(&vault, &temp, &["sync", "-f", "json"]);
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["counts"]["walk_lines"], 0, "{payload}");

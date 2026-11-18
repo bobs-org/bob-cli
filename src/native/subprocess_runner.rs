@@ -270,12 +270,31 @@ fn receive_before<T: Send + 'static>(
     deadline: Instant,
 ) -> Option<T> {
     let (sender, receiver) = mpsc::sync_channel(1);
+    #[cfg(test)]
+    let tracker = tests::PIPE_DRAIN_READER_TRACKER
+        .with(|tracker| tracker.borrow().clone());
+    #[cfg(test)]
+    if let Some(tracker) = &tracker {
+        tracker.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     thread::spawn(move || {
+        #[cfg(test)]
+        let _finished = tracker.map(DrainReaderFinished);
         let value = reader.join().ok();
         let _ = sender.send(value);
     });
     let remaining = deadline.saturating_duration_since(Instant::now());
     receiver.recv_timeout(remaining).ok().flatten()
+}
+
+#[cfg(test)]
+struct DrainReaderFinished(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(test)]
+impl Drop for DrainReaderFinished {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// Kill stragglers in the child's process group after the leader exits.
@@ -408,6 +427,19 @@ fn spawn_raw(spec: &RawRunSpec) -> io::Result<std::process::Child> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        cell::RefCell,
+        fs,
+        panic::{catch_unwind, AssertUnwindSafe},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
+
+    thread_local! {
+        pub(super) static PIPE_DRAIN_READER_TRACKER: RefCell<Option<Arc<AtomicUsize>>> = const { RefCell::new(None) };
+    }
 
     fn raw_spec(program: &str, args: &[&str], timeout_ms: u64) -> RawRunSpec {
         RawRunSpec {
@@ -509,100 +541,346 @@ mod tests {
         assert!(began.elapsed() < Duration::from_secs(2));
     }
 
-    /// Guard that SIGKILLs a detached pipe-holder on drop, so the holder
-    /// is reaped even when an assertion panics.
+    /// The detached supervisor owns and reaps the pipe holder. The fixture
+    /// proves cleanup even when assertions unwind; its control and identity
+    /// files stay outside the pipes being tested.
     #[cfg(unix)]
-    struct DetachedHolderGuard {
-        pid: Option<u32>,
+    const PIPE_DRAIN_HOLDER_SCRIPT: &str = r#"
+import json, os, subprocess, time
+
+ready = os.environ["BOB_PIPE_DRAIN_READY"]
+started = os.environ["BOB_PIPE_DRAIN_STARTED"]
+identity = os.environ["BOB_PIPE_DRAIN_IDENTITY"]
+exited = os.environ["BOB_PIPE_DRAIN_EXITED"]
+open(started, "w").close()
+
+if os.fork() == 0:
+    os.setsid()
+
+    def save(path, value):
+        temporary = path + ".tmp"
+        with open(temporary, "w") as file:
+            json.dump(value, file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+
+    supervisor_pid = os.getpid()
+    save(identity, {"supervisor_pid": supervisor_pid})
+    holder_code = """
+import os, time
+release = os.environ["BOB_PIPE_DRAIN_RELEASE"]
+deadline = time.monotonic() + 30
+while not os.path.exists(release) and time.monotonic() < deadline:
+    time.sleep(0.01)
+"""
+    holder = subprocess.Popen(["python3", "-c", holder_code])
+    save(identity, {"supervisor_pid": supervisor_pid, "holder_pid": holder.pid})
+    open(ready, "w").close()
+    for descriptor in (0, 1, 2):
+        os.close(descriptor)
+    return_code = holder.wait()
+    save(exited, {"holder_pid": holder.pid, "return_code": return_code})
+    os._exit(0)
+
+deadline = time.monotonic() + 3
+while not os.path.exists(ready) and time.monotonic() < deadline:
+    time.sleep(0.01)
+leader_done = os.environ["BOB_PIPE_DRAIN_LEADER_DONE"]
+open(leader_done, "w").close()
+os._exit(0 if os.path.exists(ready) else 1)
+"#;
+
+    #[cfg(unix)]
+    struct PipeDrainFixture {
+        root: PathBuf,
+        readers: Arc<AtomicUsize>,
+        previous_tracker: Option<Arc<AtomicUsize>>,
+        cleaned: bool,
     }
 
     #[cfg(unix)]
-    impl DetachedHolderGuard {
-        fn armed(stdout: &str) -> Self {
+    impl PipeDrainFixture {
+        fn new(root: PathBuf) -> Self {
+            let readers = Arc::new(AtomicUsize::new(0));
+            let previous_tracker = PIPE_DRAIN_READER_TRACKER
+                .with(|tracker| tracker.replace(Some(readers.clone())));
             Self {
-                pid: stdout.trim().parse::<u32>().ok(),
+                root,
+                readers,
+                previous_tracker,
+                cleaned: false,
             }
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.root.join(name)
+        }
+
+        fn env(&self) -> Vec<(OsString, OsString)> {
+            [
+                ("BOB_PIPE_DRAIN_READY", "ready"),
+                ("BOB_PIPE_DRAIN_STARTED", "started"),
+                ("BOB_PIPE_DRAIN_LEADER_DONE", "leader-done"),
+                ("BOB_PIPE_DRAIN_IDENTITY", "identity.json"),
+                ("BOB_PIPE_DRAIN_EXITED", "exited.json"),
+                ("BOB_PIPE_DRAIN_RELEASE", "release"),
+            ]
+            .into_iter()
+            .map(|(key, file)| {
+                (OsString::from(key), self.path(file).into_os_string())
+            })
+            .collect()
+        }
+
+        fn run_spec(&self) -> RunSpec {
+            RunSpec {
+                program: PathBuf::from("python3"),
+                args: ["-c", PIPE_DRAIN_HOLDER_SCRIPT]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+                stdin: None,
+                env: self.env(),
+                env_remove: Vec::new(),
+                timeout: Duration::from_secs(5),
+            }
+        }
+
+        fn raw_spec(&self) -> RawRunSpec {
+            RawRunSpec {
+                program: PathBuf::from("python3"),
+                args: ["-c", PIPE_DRAIN_HOLDER_SCRIPT]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+                env: self.env(),
+                env_remove: Vec::new(),
+                timeout: Duration::from_secs(5),
+                term_grace: None,
+                interrupt: None,
+                stdout_cap: 1024,
+                stderr_cap: 1024,
+            }
+        }
+
+        fn cleanup(&mut self) -> Result<(), String> {
+            if self.cleaned {
+                return Ok(());
+            }
+            fs::write(self.path("release"), "release")
+                .map_err(|error| format!("write release sentinel: {error}"))?;
+
+            let startup_deadline = Instant::now() + Duration::from_secs(4);
+            while !self.path("identity.json").exists()
+                && self.path("started").exists()
+                && !self.path("leader-done").exists()
+                && Instant::now() < startup_deadline
+            {
+                thread::sleep(Duration::from_millis(5));
+            }
+
+            if self.path("identity.json").exists() {
+                self.wait_for_holder_exit()?;
+            } else if self.path("started").exists()
+                && !self.path("leader-done").exists()
+            {
+                return Err("fixture leader did not finish startup".to_owned());
+            }
+
+            let readers_deadline = Instant::now() + Duration::from_secs(2);
+            while self.readers.load(Ordering::SeqCst) != 0
+                && Instant::now() < readers_deadline
+            {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if self.readers.load(Ordering::SeqCst) != 0 {
+                return Err(
+                    "pipe reader wrapper thread remained after release"
+                        .to_owned(),
+                );
+            }
+
+            fs::write(self.path("cleanup-complete"), "clean")
+                .map_err(|error| format!("write cleanup proof: {error}"))?;
+            self.cleaned = true;
+            Ok(())
+        }
+
+        fn wait_for_holder_exit(&self) -> Result<(), String> {
+            let identity_path = self.path("identity.json");
+            let identity: serde_json::Value =
+                serde_json::from_slice(&fs::read(&identity_path).map_err(
+                    |error| format!("read holder identity: {error}"),
+                )?)
+                .map_err(|error| format!("parse holder identity: {error}"))?;
+            let supervisor_pid = identity["supervisor_pid"]
+                .as_u64()
+                .ok_or_else(|| "identity has no supervisor pid".to_owned())?
+                as u32;
+            let holder_pid =
+                identity["holder_pid"].as_u64().map(|pid| pid as u32);
+            let exit_path = self.path("exited.json");
+            let exit_deadline = Instant::now() + Duration::from_secs(2);
+            while !exit_path.exists() && Instant::now() < exit_deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if !exit_path.exists() {
+                if let Some(pid) = holder_pid {
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                    }
+                }
+                let reap_deadline = Instant::now() + Duration::from_secs(2);
+                while !exit_path.exists() && Instant::now() < reap_deadline {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+            if !exit_path.exists() {
+                return Err("detached supervisor did not acknowledge waitpid"
+                    .to_owned());
+            }
+
+            let exited: serde_json::Value = serde_json::from_slice(
+                &fs::read(&exit_path).map_err(|error| {
+                    format!("read holder exit acknowledgement: {error}")
+                })?,
+            )
+            .map_err(|error| {
+                format!("parse holder exit acknowledgement: {error}")
+            })?;
+            if exited["holder_pid"].as_u64()
+                != Some(holder_pid.unwrap_or_default() as u64)
+            {
+                return Err(
+                    "exit acknowledgement names a different holder".to_owned()
+                );
+            }
+            if exited["return_code"].as_i64() != Some(0) {
+                return Err(
+                    "holder did not exit from the release sentinel".to_owned()
+                );
+            }
+
+            let gone_deadline = Instant::now() + Duration::from_secs(2);
+            while (process_exists(supervisor_pid)
+                || holder_pid.is_some_and(process_exists))
+                && Instant::now() < gone_deadline
+            {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if holder_pid.is_some_and(process_exists) {
+                return Err(
+                    "supervisor waitpid acknowledged but holder still exists"
+                        .to_owned(),
+                );
+            }
+            if process_exists(supervisor_pid) {
+                return Err("detached supervisor remained after its exit acknowledgement".to_owned());
+            }
+            Ok(())
         }
     }
 
     #[cfg(unix)]
-    impl Drop for DetachedHolderGuard {
+    impl Drop for PipeDrainFixture {
         fn drop(&mut self) {
-            if let Some(pid) = self.pid {
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            let _ = self.cleanup();
+            PIPE_DRAIN_READER_TRACKER.with(|tracker| {
+                tracker.replace(self.previous_tracker.take());
+            });
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: u32) -> bool {
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        result == 0
+            || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    #[cfg(unix)]
+    fn assert_cleanup_proven(root: &std::path::Path) {
+        assert_eq!(
+            fs::read_to_string(root.join("cleanup-complete"))
+                .expect("fixture cleanup proof exists"),
+            "clean",
+            "fixture Drop did not prove holder and reader cleanup"
+        );
+        if let Ok(bytes) = fs::read(root.join("identity.json")) {
+            let identity: serde_json::Value = serde_json::from_slice(&bytes)
+                .expect("cleanup identity is valid JSON");
+            for key in ["supervisor_pid", "holder_pid"] {
+                if let Some(pid) = identity[key].as_u64() {
+                    assert!(
+                        !process_exists(pid as u32),
+                        "{key} {pid} survived cleanup"
+                    );
                 }
             }
         }
     }
 
-    /// Portable detached-holder fixture. A python3 grandchild calls
-    /// setsid(2) itself, signals readiness through
-    /// `$BOB_PIPE_DRAIN_READY`, then sleeps holding the inherited pipes.
-    /// The leader waits for the sentinel before exiting, so the runner's
-    /// process-group kill cannot win a race, and no setsid(1) binary is
-    /// needed (macOS ships none).
-    #[cfg(unix)]
-    const PIPE_DRAIN_HOLDER_SCRIPT: &str = r#"python3 -c 'import os,time; os.setsid(); open(os.environ["BOB_PIPE_DRAIN_READY"],"w").write("ready"); time.sleep(8)' & i=0; while [ ! -f "$BOB_PIPE_DRAIN_READY" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i+1)); done; [ -f "$BOB_PIPE_DRAIN_READY" ] || exit 1; echo $!; exit 0"#;
-
     #[cfg(unix)]
     #[test]
     fn run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
         let temp =
-            tempfile::TempDir::new().expect("tempdir for pipe-drain sentinel");
-        let ready = temp.path().join("ready");
-        let spec = RunSpec {
-            program: PathBuf::from("sh"),
-            args: ["-c", PIPE_DRAIN_HOLDER_SCRIPT]
-                .into_iter()
-                .map(OsString::from)
-                .collect(),
-            stdin: None,
-            env: vec![(
-                OsString::from("BOB_PIPE_DRAIN_READY"),
-                ready.clone().into_os_string(),
-            )],
-            env_remove: Vec::new(),
-            timeout: Duration::from_secs(5),
-        };
+            tempfile::TempDir::new().expect("tempdir for pipe-drain fixture");
+        let root = temp.path().to_path_buf();
+        let mut fixture = PipeDrainFixture::new(root);
         let started = Instant::now();
-        let output = run(&spec).expect("shell runs");
-        let _guard = DetachedHolderGuard::armed(&output.stdout);
+        let output = run(&fixture.run_spec()).expect("fixture leader runs");
         assert!(started.elapsed() < Duration::from_secs(4));
         assert!(output.stderr.contains("output truncated"));
+        fixture.cleanup().expect("release and reap detached holder");
+        assert_cleanup_proven(temp.path());
     }
 
     #[cfg(unix)]
     #[test]
     fn raw_run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
         let temp =
-            tempfile::TempDir::new().expect("tempdir for pipe-drain sentinel");
-        let ready = temp.path().join("ready");
-        let spec = RawRunSpec {
-            program: PathBuf::from("sh"),
-            args: ["-c", PIPE_DRAIN_HOLDER_SCRIPT]
-                .into_iter()
-                .map(OsString::from)
-                .collect(),
-            env: vec![(
-                OsString::from("BOB_PIPE_DRAIN_READY"),
-                ready.clone().into_os_string(),
-            )],
-            env_remove: Vec::new(),
-            timeout: Duration::from_secs(5),
-            term_grace: None,
-            interrupt: None,
-            stdout_cap: 1024,
-            stderr_cap: 1024,
-        };
+            tempfile::TempDir::new().expect("tempdir for pipe-drain fixture");
+        let mut fixture = PipeDrainFixture::new(temp.path().to_path_buf());
         let started = Instant::now();
-        let output = run_raw(&spec).expect("shell runs");
-        let stdout = std::str::from_utf8(&output.stdout).unwrap_or_default();
-        // Hold the parsed pid in a local before moving it into the guard so
-        // the guard lives past the assertions and still kills on panic.
-        let pid_text = stdout.to_owned();
-        let _guard = DetachedHolderGuard::armed(&pid_text);
+        let output = run_raw(&fixture.raw_spec()).expect("fixture leader runs");
         assert!(started.elapsed() < Duration::from_secs(4));
         assert!(output.output_incomplete);
+        fixture.cleanup().expect("release and reap detached holder");
+        assert_cleanup_proven(temp.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_drain_fixture_cleans_up_during_assertion_unwind() {
+        let temp =
+            tempfile::TempDir::new().expect("tempdir for pipe-drain unwind");
+        let root = temp.path().to_path_buf();
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            let fixture = PipeDrainFixture::new(root);
+            let output = run(&fixture.run_spec()).expect("fixture leader runs");
+            assert!(output.stderr.contains("output truncated"));
+            panic!("exercise fixture cleanup during assertion unwind");
+        }));
+        assert!(unwound.is_err());
+        assert_cleanup_proven(temp.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_drain_fixture_cleans_up_when_runner_fails_early() {
+        let temp =
+            tempfile::TempDir::new().expect("tempdir for early runner failure");
+        let mut fixture = PipeDrainFixture::new(temp.path().to_path_buf());
+        let mut spec = fixture.run_spec();
+        spec.program =
+            PathBuf::from("bob-definitely-missing-pipe-drain-fixture");
+        let error =
+            run(&spec).expect_err("missing fixture program must fail to spawn");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        fixture
+            .cleanup()
+            .expect("early failure has no holder or reader threads");
+        assert_cleanup_proven(temp.path());
     }
 }

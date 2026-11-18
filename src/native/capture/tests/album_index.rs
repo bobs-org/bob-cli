@@ -180,11 +180,20 @@ fn album_create_reads_only_its_slice_and_stages_one_edit() {
     assert_eq!(
         staged.len(),
         3,
-        "record, neighbour walk line, and one album edit: {staged:?}"
+        "record, walk neighbour, and one album edit: {staged:?}"
     );
     assert!(staged.contains_key(&vault.join("eat/ramen_nagi.md")));
-    assert!(staged[&vault.join("eat/ninja_sushi.md")]
-        .contains("[[eat/ramen_nagi|Ramen Nagi ›]]"));
+    let neighbour = staged
+        .get(&vault.join("eat/ninja_sushi.md"))
+        .expect("existing record's walk line edit");
+    assert!(
+        neighbour.contains("[[eat/ramen_nagi|‹ Ramen Nagi]]"),
+        "previous arm points to Ramen Nagi: {neighbour}"
+    );
+    assert!(
+        neighbour.contains("[[eat/ramen_nagi|Ramen Nagi ›]]"),
+        "next arm points to Ramen Nagi: {neighbour}"
+    );
     let album_after = staged.get(&vault.join("eat.md")).expect("album edit");
     assert!(album_after.contains("Ramen Nagi"), "{album_after}");
     assert!(album_after.contains("Ninja Sushi"), "{album_after}");
@@ -211,7 +220,7 @@ fn album_batch_reuses_one_folder_scan_for_two_creates() {
     assert_eq!(
         staged.len(),
         4,
-        "two records, neighbour walk line, and one album edit"
+        "two records, one walk neighbour, and one album edit"
     );
     assert!(staged[&vault.join("eat/ninja_sushi.md")]
         .contains("[[eat/udon|‹ Udon]]"));

@@ -83,6 +83,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     # macOS lint plus a cold test build can exceed 45 minutes before tests start.
     timeout-minutes: ${{ matrix.os == 'macos-latest' && 90 || 45 }}
+    env:
+      # MacOS tests build the real bob binary from inside ref-jobs tests. Keep
+      # that nested dev build on the same debug-info setting as the test build,
+      # so it reuses the restored dependency artifacts instead of recompiling
+      # them with full symbols. Debug info does not affect optimization,
+      # assertions, or overflow checks.
+      CARGO_PROFILE_DEV_DEBUG: ${{ matrix.os == 'macos-latest' && '0' || '2' }}
+      # The macOS job exhausted its 45-minute deadline compiling tests with full
+      # debug information. Reduce symbols on macOS while preserving the test
+      # profile's optimization, assertions, and overflow checks.
+      CARGO_PROFILE_TEST_DEBUG: ${{ matrix.os == 'macos-latest' && '0' || '2' }}
     strategy:
       fail-fast: false
       matrix:
