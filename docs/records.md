@@ -453,6 +453,10 @@ A single-record album carries only `[[eat|↑ Eat]]`, with no arms. No count
 is ever written into Markdown: `N of M` is painted live by the plugin rail
 and the `n` links footer, never stored.
 
+In Obsidian, the [Record Card reference](reference/plugins/record-card.md#record-walk-rail)
+shows the rendered rail, and the [navigation hotkeys reference](reference/plugins/bob-navigation-hotkeys.md#bracket-repeat)
+documents `[n` / `]n` and the missing-record guard.
+
 - **Order and membership.** Members are the immediate Markdown children of
   the album folder, including readable members whose YAML is invalid. Nested
   files, non-Markdown files, `.base` files, and the album note are excluded.
