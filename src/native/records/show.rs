@@ -30,7 +30,8 @@ use super::{
 use crate::native::{
     albums::{
         grouping::group_field, registry::RecordTypeSource,
-        report::schema_fingerprint,
+        report::schema_fingerprint, walk as album_walk, write as album_write,
+        AlbumDeclaration,
     },
     env as bob_env,
     notebooks::rules,
@@ -315,6 +316,10 @@ fn build_payload(
         .and_then(|mapping| yaml_string(mapping, "created"));
     let heading = first_heading(contents);
     let path = target.path.to_string_lossy().replace('\\', "/");
+    let walk = {
+        let folder = catalog.folder(&record_type.dir);
+        record_walk_value(vault, context, kind, folder, &path, contents)
+    };
     let mut payload = json!({
         "schema_version": SCHEMA_VERSION,
         "type": record_type.id,
@@ -338,10 +343,105 @@ fn build_payload(
             "identity": identity,
             "other": other,
             "findings": findings,
+            "walk": walk,
         },
     });
     super::cli::merge_kind_metadata(&mut payload, kind);
     Ok(payload)
+}
+
+/// The `record.walk` object for one record, or null when the album is held.
+/// Computed from the album's `scope: All` walk plan over current disk bytes,
+/// with the shown note's in-memory bytes standing in for its own path.
+fn record_walk_value(
+    vault: &Path,
+    context: &RecordContext,
+    kind: &ResolvedRecordKind,
+    folder: &super::catalog::FolderIndex,
+    target_path: &str,
+    target_contents: &str,
+) -> Value {
+    let declaration = album_declaration_for(context, kind);
+    let Some(declaration) = declaration else {
+        return Value::Null;
+    };
+    if !album_write::folder_complete(folder) {
+        return Value::Null;
+    }
+    let members = album_write::overlay_folder_members(folder, &[]);
+    if members.is_empty() {
+        return Value::Null;
+    }
+    let mut texts: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for member in &members {
+        let slash = member.relative_path.to_string_lossy().replace('\\', "/");
+        if slash == target_path {
+            texts.insert(slash, target_contents.to_owned());
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(vault.join(&member.relative_path))
+        else {
+            return Value::Null;
+        };
+        texts.insert(slash, text);
+    }
+    let plan = album_walk::plan_album_walk(
+        &declaration,
+        folder,
+        &[],
+        |path| texts.get(path).cloned(),
+        album_walk::WalkScope::All,
+    );
+    if matches!(
+        plan.state,
+        album_walk::AlbumWalkState::Held | album_walk::AlbumWalkState::Empty
+    ) {
+        return Value::Null;
+    }
+    let Some(record) = plan
+        .records
+        .iter()
+        .find(|record| record.slot.member.path == target_path)
+    else {
+        return Value::Null;
+    };
+    let prev = record.slot.prev.as_ref().map(|prev| {
+        json!({
+            "stem": prev.stem,
+            "path": prev.path,
+            "title": prev.title,
+        })
+    });
+    let next = record.slot.next.as_ref().map(|next| {
+        json!({
+            "stem": next.stem,
+            "path": next.path,
+            "title": next.title,
+        })
+    });
+    let reason = record
+        .reason
+        .map(|reason| Value::String(reason.as_str().to_owned()))
+        .unwrap_or(Value::Null);
+    json!({
+        "state": record.state.as_str(),
+        "reason": reason,
+        "position": record.slot.position,
+        "total": record.slot.total,
+        "prev": prev.unwrap_or(Value::Null),
+        "next": next.unwrap_or(Value::Null),
+    })
+}
+
+fn album_declaration_for(
+    context: &RecordContext,
+    kind: &ResolvedRecordKind,
+) -> Option<AlbumDeclaration> {
+    let RecordTypeSource::Album { path } = &kind.sourced.source;
+    context.album_claims().iter().find_map(|entry| {
+        (entry.declaration.path == *path).then(|| entry.declaration.clone())
+    })
 }
 
 fn record_properties(
@@ -743,6 +843,29 @@ fn first_heading(contents: &str) -> Option<String> {
     None
 }
 
+/// Human `N of M` summary for the card. Singleton rings show only the
+/// count; larger rings name both neighbours with sanitized labels.
+fn walk_summary(walk: &Value) -> Option<String> {
+    let position = walk.get("position")?.as_u64()?;
+    let total = walk.get("total")?.as_u64()?;
+    let prev = walk.get("prev").and_then(|prev| {
+        let title = prev.get("title")?.as_str()?;
+        let stem = prev.get("stem")?.as_str().unwrap_or("");
+        Some(album_walk::sanitize_walk_label(title, stem))
+    });
+    let next = walk.get("next").and_then(|next| {
+        let title = next.get("title")?.as_str()?;
+        let stem = next.get("stem")?.as_str().unwrap_or("");
+        Some(album_walk::sanitize_walk_label(title, stem))
+    });
+    match (prev, next) {
+        (Some(prev), Some(next)) => {
+            Some(format!("{position} of {total} · ‹ {prev} · {next} ›"))
+        }
+        _ => Some(format!("{position} of {total}")),
+    }
+}
+
 fn parse_h1(line: &str) -> Option<String> {
     if !line.starts_with("# ") && line != "#" {
         return None;
@@ -776,6 +899,17 @@ fn print_record(payload: &Value, kind: &ResolvedRecordKind, json_output: bool) {
         record_type.label
     );
     println!("{}", styler.dim(record["path"].as_str().unwrap_or("")));
+    if let Some(summary) = walk_summary(&record["walk"]) {
+        println!("  {summary}");
+        if let Some(state) = record["walk"]["state"].as_str()
+            && state != "current"
+        {
+            println!(
+                "  {}",
+                styler.dim(&format!("walk line {state} — bob albums sync"))
+            );
+        }
+    }
     println!();
     let properties =
         record["properties"].as_array().cloned().unwrap_or_default();

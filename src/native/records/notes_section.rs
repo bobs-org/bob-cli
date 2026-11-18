@@ -102,7 +102,22 @@ pub(crate) struct H1Strip {
 /// differs from the title, an H1 that is not the first body content, and
 /// any later H1 are kept. Lines inside fenced code never count as headings
 /// or content. Frontmatter, CRLF, and BOM bytes are preserved.
+///
+/// When `album_stem` is present, walk lines and nav-like `↑` lines for that
+/// album are skipped when looking for the first body content, so an H1
+/// directly below the walk line is still redundant and is stripped, leaving
+/// `---␤␤<walk>␤␤## Notes…`. Tidy never inserts, rewrites, or removes walk
+/// lines; the blank-body collapse never fires while a walk line exists.
 pub(crate) fn strip_redundant_h1(original: &str, title: &str) -> H1Strip {
+    strip_redundant_h1_for_album(original, title, None)
+}
+
+/// Album-aware redundant-H1 pass for tidy. See [`strip_redundant_h1`].
+pub(crate) fn strip_redundant_h1_for_album(
+    original: &str,
+    title: &str,
+    album_stem: Option<&str>,
+) -> H1Strip {
     let absent = H1Strip {
         after: None,
         kept: None,
@@ -145,6 +160,14 @@ pub(crate) fn strip_redundant_h1(original: &str, title: &str) -> H1Strip {
             continue;
         }
         if line.content.trim().is_empty() {
+            continue;
+        }
+        if let Some(stem) = album_stem
+            && crate::native::albums::walk::is_walk_or_nav_line(
+                &line.content,
+                stem,
+            )
+        {
             continue;
         }
         if first_content_line.is_none() {
@@ -333,7 +356,10 @@ pub(crate) fn strip_empty_notes_sections(original: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_empty_notes_sections, strip_redundant_h1, H1Strip};
+    use super::{
+        strip_empty_notes_sections, strip_redundant_h1,
+        strip_redundant_h1_for_album, H1Strip,
+    };
 
     fn note(body: &str) -> String {
         format!("---\ntype: \"[[record]]\"\ntitle: \"T\"\n---\n{body}")
@@ -559,5 +585,60 @@ mod tests {
         let before = note("# T\n\n## Notes\n");
         let once = strip_empty_notes_sections(&before).expect("first strip");
         assert_eq!(strip_empty_notes_sections(&once), None);
+    }
+
+    #[test]
+    fn h1_below_walk_line_is_still_redundant() {
+        let walk = "[[eat|↑ Eat]]";
+        let before = note(&format!("{walk}\n\n# T\n\n## Notes\n\n- a\n"));
+        let strip = strip_redundant_h1_for_album(&before, "T", Some("eat"));
+        assert_eq!(strip.kept, None);
+        assert_eq!(
+            strip.after.as_deref(),
+            Some(note(&format!("{walk}\n\n## Notes\n\n- a\n")).as_str())
+        );
+        // Without the album stem the same H1 is kept, since the walk line
+        // counts as the first body content.
+        assert_eq!(
+            strip_redundant_h1(&before, "T"),
+            H1Strip {
+                after: None,
+                kept: Some("the H1 is not the first body content"),
+            }
+        );
+    }
+
+    #[test]
+    fn prose_before_walk_keeps_h1() {
+        let walk = "[[eat|↑ Eat]]";
+        let before = note(&format!("Intro.\n\n{walk}\n\n# T\n"));
+        assert_eq!(
+            strip_redundant_h1_for_album(&before, "T", Some("eat")),
+            H1Strip {
+                after: None,
+                kept: Some("the H1 is not the first body content"),
+            }
+        );
+    }
+
+    #[test]
+    fn walk_line_crlf_and_bom_survive_h1_strip() {
+        let walk = "[[eat|↑ Eat]]";
+        let before = format!(
+            "\u{feff}---\r\ntype: \"[[record]]\"\r\ntitle: \"T\"\r\n---\r\n\r\n{walk}\r\n\r\n# T\r\n\r\n## Notes\r\n"
+        );
+        let strip = strip_redundant_h1_for_album(&before, "T", Some("eat"));
+        let after = strip.after.expect("removed");
+        assert!(after.starts_with('\u{feff}'));
+        assert!(after.contains(walk));
+        assert!(!after.contains("# T\r\n"));
+        assert!(
+            after
+                .match_indices('\n')
+                .all(|(index, _)| index > 0
+                    && after.as_bytes()[index - 1] == b'\r'),
+            "every newline stays CRLF:\n{}",
+            after.replace('\r', "\\r")
+        );
     }
 }

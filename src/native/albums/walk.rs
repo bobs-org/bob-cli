@@ -382,18 +382,16 @@ where
                     .reason
                     .expect("damaged classification has a reason"),
             });
-        } else if should_edit {
-            if let Some(after) =
+        } else if should_edit
+            && let Some(after) =
                 plan_line_edit(text, &declaration.stem, &canonical)
-            {
-                if after != *text {
-                    edits.push(FileEdit {
-                        path: PathBuf::from(&path),
-                        before: text.clone(),
-                        after,
-                    });
-                }
-            }
+            && after != *text
+        {
+            edits.push(FileEdit {
+                path: PathBuf::from(&path),
+                before: text.clone(),
+                after,
+            });
         }
         records.push(WalkRecord {
             slot,
@@ -637,16 +635,23 @@ fn has_nav_like_link(line: &str, album_stem: &str) -> bool {
         let Some(close) = after_open.find("]]") else {
             return false;
         };
-        if let Some(link) = parse_link_inner(&after_open[..close]) {
-            if allowed_target(link.target, album_stem) == Some(true)
-                && link.label.starts_with('↑')
-            {
-                return true;
-            }
+        if let Some(link) = parse_link_inner(&after_open[..close])
+            && allowed_target(link.target, album_stem) == Some(true)
+            && link.label.starts_with('↑')
+        {
+            return true;
         }
         remaining = &after_open[close + 2..];
     }
     false
+}
+
+/// True when a body line is the album's walk line or carries a nav-like
+/// `↑` link. Tidy's probes skip such lines when they look for the first
+/// body content, so an H1 directly below the walk line is still redundant.
+pub(crate) fn is_walk_or_nav_line(line: &str, album_stem: &str) -> bool {
+    let trimmed = line.trim();
+    is_walk_line(trimmed, album_stem) || has_nav_like_link(line, album_stem)
 }
 
 /// `Some(true)` means the album note; `Some(false)` means a direct child.
@@ -988,9 +993,9 @@ mod tests {
         let mut catalog = RecordCatalog::new(temp.path());
         let folder = catalog.folder("eat");
         let path = PathBuf::from("eat/record_0505.md");
-        let created = format!(
+        let created =
             "---\nparent: \"[[eat]]\"\ntype: \"[[item]]\"\ntitle: \"Record 050.5\"\n---\n\n"
-        );
+                .to_string();
         let overlay = vec![(path.clone(), created)];
         let created_paths = HashSet::from(["eat/record_0505.md".to_owned()]);
         let plan = plan_album_walk(

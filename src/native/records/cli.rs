@@ -32,8 +32,10 @@ use crate::native::{
         index::IndexState,
         parse_album_declaration,
         registry::{AlbumEntry, DiscoveryHealth, RecordTypeSource},
+        walk as album_walk,
         walk::WalkWarning,
-        write as album_write, AlbumFinding, AlbumIssueSeverity,
+        write as album_write, AlbumDeclaration, AlbumFinding,
+        AlbumIssueSeverity,
     },
     capture::{write_staged_files_guarded, StagedTextFile},
     env as bob_env,
@@ -534,6 +536,7 @@ fn execute_check(matches: &ArgMatches) -> i32 {
         reports.push(check_collection(
             collection,
             &vault,
+            &context,
             &mut catalog,
             &resolver,
             today,
@@ -2965,6 +2968,7 @@ fn report_discovery_errors(
 fn check_collection(
     collection: &Collection,
     vault: &Path,
+    context: &super::context::RecordContext,
     catalog: &mut RecordCatalog,
     resolver: &VaultLinkResolver,
     today: chrono::NaiveDate,
@@ -3004,6 +3008,14 @@ fn check_collection(
                     None,
                     format!("required album note is missing: {path}"),
                 );
+            }
+            let declaration = context
+                .album_claims()
+                .iter()
+                .find(|entry| entry.declaration.path == *path)
+                .map(|entry| entry.declaration.clone());
+            if let Some(declaration) = declaration {
+                push_walk_findings(vault, &declaration, folder, &mut report);
             }
             report
         }
@@ -3053,8 +3065,91 @@ fn check_collection(
                     finding.message.clone(),
                 );
             }
+            push_walk_findings(vault, &entry.declaration, folder, &mut report);
             report
         }
+    }
+}
+
+/// Read-only walk health for `records check`: one `record_walk_damaged`
+/// warning per damaged record and one `record_walk_stale` warning per album
+/// with missing or stale lines. Both are warnings, so the exit code is
+/// unchanged; `bob albums sync` is the repair owner.
+fn push_walk_findings(
+    vault: &Path,
+    declaration: &AlbumDeclaration,
+    folder: &super::catalog::FolderIndex,
+    report: &mut super::check::TypeReport,
+) {
+    if !album_write::folder_complete(folder) {
+        return;
+    }
+    let members = album_write::overlay_folder_members(folder, &[]);
+    if members.is_empty() {
+        return;
+    }
+    let mut texts: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for member in &members {
+        let slash = member.relative_path.to_string_lossy().replace('\\', "/");
+        let Ok(text) = fs::read_to_string(vault.join(&member.relative_path))
+        else {
+            return;
+        };
+        texts.insert(slash, text);
+    }
+    let plan = album_walk::plan_album_walk(
+        declaration,
+        folder,
+        &[],
+        |path| texts.get(path).cloned(),
+        album_walk::WalkScope::All,
+    );
+    if matches!(
+        plan.state,
+        album_walk::AlbumWalkState::Held
+            | album_walk::AlbumWalkState::Empty
+            | album_walk::AlbumWalkState::Current
+    ) {
+        return;
+    }
+    let mut stale = 0usize;
+    for record in &plan.records {
+        match record.state {
+            album_walk::WalkLineState::Damaged => {
+                let reason = record
+                    .reason
+                    .map(|reason| reason.as_str())
+                    .unwrap_or("damaged");
+                report.push(
+                    "warning",
+                    "record_walk_damaged",
+                    Some(&record.slot.member.path),
+                    None,
+                    format!(
+                        "walk line {reason} in {}; delete the line and run `bob albums sync`",
+                        record.slot.member.path,
+                    ),
+                );
+            }
+            album_walk::WalkLineState::Missing
+            | album_walk::WalkLineState::Stale => {
+                stale += 1;
+            }
+            album_walk::WalkLineState::Current => {}
+        }
+    }
+    if stale > 0 {
+        report.push(
+            "warning",
+            "record_walk_stale",
+            None,
+            None,
+            format!(
+                "{stale} record(s) need walk lines in {}; run `bob albums sync`",
+                declaration.stem,
+            ),
+        );
     }
 }
 

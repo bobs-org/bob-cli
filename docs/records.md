@@ -164,7 +164,11 @@ bullets, prose, a `###` subheading, `%%` or HTML comments, a fence, or a block
 id. A redundant H1 is the first non-blank body line outside fenced code when
 it is a level-1 heading whose text equals the frontmatter `title` exactly. A
 differing H1, an H1 that is not the first body content, and any later H1 are
-kept. `bob records tidy [TYPE]` removes every empty `## Notes` section and
+kept. The H1 probe skips the album's walk line and nav-like `↑` lines, so an
+H1 directly below the walk line is still redundant and is stripped, leaving
+`---␤␤<walk>␤␤## Notes…`. Tidy never inserts, rewrites, or removes walk
+lines, and the blank-body collapse never fires while a walk line exists.
+`bob records tidy [TYPE]` removes every empty `## Notes` section and
 every redundant H1 from record bodies in one pass:
 
 ```sh
@@ -598,7 +602,8 @@ field to follow. Notes append under an existing `## Notes` section; otherwise
 Bob creates the section at the top of the body, before the first other
 `##` section. An empty or whitespace-only body gets a canonical blank line
 followed by `## Notes`. Named sections reuse a matching heading instead of creating a
-duplicate.
+duplicate. When a walk line is present, notes land below it: a walk-only body
+becomes walk, blank, `## Notes`, bullets, and updates never stage walk edits.
 
 Bob edits the original YAML spans and preserves every untouched key, comment,
 body byte, and line ending. Existing unrelated schema problems are returned as
@@ -672,7 +677,7 @@ the noun or folder stem, such as `restaurant` or `eat`. It is separate from
 
 | Command | Purpose |
 | --- | --- |
-| `bob records check [TYPE]` | Lint record folders, album membership, and typed records filed outside their folder. Exits 1 on errors. |
+| `bob records check [TYPE]` | Lint record folders, album membership, typed records filed outside their folder, and walk lines (`record_walk_damaged` per damaged record, `record_walk_stale` per album; warnings only, exit 1 on errors). |
 | `bob records init TYPE` | Retired hidden command; always refuses and points to `bob albums create`. |
 | `bob records list` | Show kinds, albums, folders, note counts, and required fields. |
 | `bob records new TYPE TITLE` | Create one record through the same planner used by capture. |
@@ -826,6 +831,12 @@ suggestions; `top_values` stays capped at five) plus a `record` object:
 - `other[]`: remaining keys, each with a `legacy` flag from the album's
   `legacy` patterns
 - `findings[]`: this note's `bob records check` diagnostics
+- `walk`: `{state, reason, position, total, prev, next}` from the album's
+  title-ordered ring (`prev`/`next` are `{stem, path, title}` or `null`),
+  or `null` when the album is held. `state` is `current`, `missing`,
+  `stale`, or `damaged`; `reason` names the damage (`extra_text`,
+  `duplicate_lines`, `no_frontmatter`) or is `null`. The count is rendered
+  live and never stored.
 
 `state` is `set`, `missing` (empty required), `none` (empty optional), or
 `invalid` (the stored value fails validation; `raw` keeps it). The record
@@ -839,7 +850,10 @@ parent mismatch, or a record outside its album folder exits 2 with a typed
 JSON `error` (`code`, `message`): `record_not_found`,
 `record_parent_mismatch`, or `record_outside_album`. It never impersonates
 an empty record. Human output is a colored card: title, album crumb,
-label/value rows, missing marks, findings, and the other-key count.
+`N of M · ‹ prev · next ›` (or `1 of 1` for singleton rings, omitted when
+held), a muted `walk line {state} — bob albums sync` hint when the line is
+not current, label/value rows, missing marks, findings, and the other-key
+count.
 
 ## Adding a record kind
 

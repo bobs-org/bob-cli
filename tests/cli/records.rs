@@ -370,7 +370,12 @@ fn new_writes_no_h1_and_update_inserts_notes_into_empty_body() {
     let bare_markdown =
         fs::read_to_string(fixture.vault.join("eat/udon_house.md"))
             .expect("read bare record");
-    assert!(bare_markdown.ends_with("---\n"), "{bare_markdown}");
+    assert!(
+        bare_markdown.ends_with(
+            "[[eat/ramen_nagi|‹ Ramen Nagi]] · [[eat|↑ Restaurants]] · [[eat/ramen_nagi|Ramen Nagi ›]]\n"
+        ),
+        "{bare_markdown}"
+    );
     assert!(!bare_markdown.contains('#'), "{bare_markdown}");
 
     // Updating the bare note inserts a canonical Notes section.
@@ -391,7 +396,9 @@ fn new_writes_no_h1_and_update_inserts_notes_into_empty_body() {
         fs::read_to_string(fixture.vault.join("eat/udon_house.md"))
             .expect("read updated record");
     assert!(
-        updated_markdown.contains("---\n\n## Notes\n\n- First visit\n"),
+        updated_markdown.contains(
+            "[[eat/ramen_nagi|‹ Ramen Nagi]] · [[eat|↑ Restaurants]] · [[eat/ramen_nagi|Ramen Nagi ›]]\n\n## Notes\n\n- First visit\n"
+        ),
         "{updated_markdown}"
     );
 }
@@ -1626,7 +1633,7 @@ fn record_writes_touch_only_two_neighbours_in_a_large_unbackfilled_album() {
     let mut changed = Vec::new();
     for (path, original) in before {
         let current = fs::read_to_string(&path).unwrap();
-        if &current != original {
+        if current != original {
             changed
                 .push(path.file_name().unwrap().to_string_lossy().to_string());
         }
@@ -3651,5 +3658,252 @@ fn tidy_update_inserts_notes_above_source() {
             "## Notes\n\n- 2026-10-07: Revisit was great\n\n## Source"
         ),
         "Notes inserted above Source: {markdown}"
+    );
+}
+
+fn walk_vault() -> RecordsFixture {
+    let temp = TempDir::new("bob-cli-records-walk");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write_file(&config, RECORDS_CONFIG);
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places to eat.\nemoji: \"🍽️\"\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields:\n    status:\n      required: true\n      values: {to_try: \"To try\", liked: \"Liked\"}\n    category: {required: true}\n    location: {required: true}\n---\n\n# Eat\n",
+    );
+    RecordsFixture {
+        _temp: temp,
+        vault,
+        config,
+    }
+}
+
+fn write_walk_record(vault: &Path, stem: &str, title: &str, body: &str) {
+    write_file(
+        &vault.join(format!("eat/{stem}.md")),
+        &format!(
+            "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: \"{title}\"\nstatus: liked\ncategory: Sushi\nlocation: Clark\n---\n{body}"
+        ),
+    );
+}
+
+#[test]
+fn walk_show_reports_ring_positions() {
+    let fixture = walk_vault();
+    write_walk_record(
+        &fixture.vault,
+        "apple",
+        "Apple",
+        "\n[[eat/zebra|‹ Zebra]] · [[eat|↑ Eat]] · [[eat/mango|Mango ›]]\n",
+    );
+    write_walk_record(
+        &fixture.vault,
+        "mango",
+        "Mango",
+        "\n[[eat/apple|‹ Apple]] · [[eat|↑ Eat]] · [[eat/zebra|Zebra ›]]\n",
+    );
+    write_walk_record(
+        &fixture.vault,
+        "zebra",
+        "Zebra",
+        "\n[[eat/mango|‹ Mango]] · [[eat|↑ Eat]] · [[eat/apple|Apple ›]]\n",
+    );
+    let output = records_command(&fixture)
+        .args(["show", "restaurant", "mango", "-f", "json"])
+        .output()
+        .expect("show mango");
+    assert_success(&output);
+    let payload = json(&output);
+    let walk = &payload["record"]["walk"];
+    assert_eq!(walk["state"], "current");
+    assert_eq!(walk["position"], 2);
+    assert_eq!(walk["total"], 3);
+    assert_eq!(walk["prev"]["stem"], "apple");
+    assert_eq!(walk["next"]["stem"], "zebra");
+    let human = records_command(&fixture)
+        .args(["show", "restaurant", "mango"])
+        .output()
+        .expect("show mango human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("2 of 3 · ‹ Apple · Zebra ›"), "{text}");
+    assert!(!text.contains("walk line"), "{text}");
+
+    // Singleton rings carry only the album link and a bare count.
+    let solo = walk_vault();
+    write_walk_record(&solo.vault, "only", "Only", "\n[[eat|↑ Eat]]\n");
+    let output = records_command(&solo)
+        .args(["show", "restaurant", "only", "-f", "json"])
+        .output()
+        .expect("show only");
+    assert_success(&output);
+    let payload = json(&output);
+    assert_eq!(payload["record"]["walk"]["state"], "current");
+    assert_eq!(payload["record"]["walk"]["position"], 1);
+    assert_eq!(payload["record"]["walk"]["total"], 1);
+    assert!(payload["record"]["walk"]["prev"].is_null());
+    let human = records_command(&solo)
+        .args(["show", "restaurant", "only"])
+        .output()
+        .expect("show only human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("1 of 1"), "{text}");
+
+    // Missing lines report the ring slot plus a muted repair hint.
+    let missing = walk_vault();
+    write_walk_record(&missing.vault, "apple", "Apple", "\n");
+    write_walk_record(&missing.vault, "mango", "Mango", "\n");
+    let output = records_command(&missing)
+        .args(["show", "restaurant", "mango", "-f", "json"])
+        .output()
+        .expect("show missing");
+    assert_success(&output);
+    let payload = json(&output);
+    assert_eq!(payload["record"]["walk"]["state"], "missing");
+    assert_eq!(payload["record"]["walk"]["position"], 2);
+    let human = records_command(&missing)
+        .args(["show", "restaurant", "mango"])
+        .output()
+        .expect("show missing human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("2 of 2"), "{text}");
+    assert!(
+        text.contains("walk line missing — bob albums sync"),
+        "{text}"
+    );
+}
+
+#[test]
+fn walk_check_reports_stale_and_damaged() {
+    let fixture = walk_vault();
+    write_walk_record(&fixture.vault, "apple", "Apple", "\n");
+    write_walk_record(&fixture.vault, "mango", "Mango", "\n");
+    let output = records_command(&fixture)
+        .args(["check", "restaurant", "-f", "json"])
+        .output()
+        .expect("check stale");
+    assert_success(&output);
+    let payload = json(&output);
+    let findings = payload["types"][0]["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["code"] == "record_walk_stale"),
+        "{payload}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["code"] == "record_walk_damaged"),
+        "{payload}"
+    );
+
+    write_file(
+        &fixture.vault.join("eat/apple.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: \"Apple\"\nstatus: liked\ncategory: Sushi\nlocation: Clark\n---\n\n[[eat/mango|‹ Mango]] · [[eat|↑ Eat]] · [[eat/mango|Mango ›]]\n\n[[eat|↑ Eat]] extra\n",
+    );
+    let output = records_command(&fixture)
+        .args(["check", "restaurant", "-f", "json"])
+        .output()
+        .expect("check damaged");
+    assert_success(&output);
+    let payload = json(&output);
+    let findings = payload["types"][0]["findings"].as_array().unwrap();
+    let damaged = findings
+        .iter()
+        .find(|finding| finding["code"] == "record_walk_damaged")
+        .expect("damaged finding");
+    assert_eq!(damaged["file"], "eat/apple.md");
+    assert!(damaged["severity"] == "warning", "{payload}");
+}
+
+#[test]
+fn walk_tidy_skips_walk_line_and_update_appends_after_it() {
+    let fixture = walk_vault();
+    let walk = "[[eat/apple|‹ Apple]] · [[eat|↑ Eat]] · [[eat/zebra|Zebra ›]]";
+    // H1 directly below the walk line is still redundant.
+    write_walk_record(
+        &fixture.vault,
+        "mango",
+        "Mango",
+        &format!("\n{walk}\n\n# Mango\n\n## Notes\n\n- hello\n"),
+    );
+    // Walk-only bodies gain Notes below the walk line.
+    write_walk_record(
+        &fixture.vault,
+        "zebra",
+        "Zebra",
+        "\n[[eat/mango|‹ Mango]] · [[eat|↑ Eat]] · [[eat/apple|Apple ›]]\n",
+    );
+    write_walk_record(&fixture.vault, "apple", "Apple", "\n# Apple\n");
+    let dry = records_command(&fixture)
+        .args(["tidy", "restaurant", "-d"])
+        .output()
+        .expect("tidy dry-run");
+    assert_success(&dry);
+    let text = stdout(&dry);
+    assert!(text.contains("eat/mango.md"), "{text}");
+    assert!(text.contains("redundant H1"), "{text}");
+
+    // CRLF walk lines survive tidy with their endings intact.
+    let crlf = walk_vault();
+    let body =
+        format!("\r\n{walk}\r\n\r\n# Mango\r\n\r\n## Notes\r\n\r\n- hello\r\n");
+    write_file(
+        &crlf.vault.join("eat/mango.md"),
+        &format!(
+            "---\r\nparent: \"[[eat]]\"\r\ntype: \"[[record]]\"\r\ntitle: \"Mango\"\r\nstatus: liked\r\ncategory: Sushi\r\nlocation: Clark\r\n---{body}"
+        ),
+    );
+    write_walk_record(&crlf.vault, "apple", "Apple", "\n# Apple\n");
+    let dry = records_command(&crlf)
+        .args(["tidy", "restaurant", "-d"])
+        .output()
+        .expect("tidy crlf");
+    assert_success(&dry);
+
+    // Updates append notes after the walk line and stage no walk edits.
+    let updated = records_command(&fixture)
+        .args(["update", "restaurant", "zebra", "-n", "Back again"])
+        .output()
+        .expect("update zebra");
+    assert_success(&updated);
+    let markdown =
+        fs::read_to_string(fixture.vault.join("eat/zebra.md")).unwrap();
+    assert!(
+        markdown.contains(
+            "[[eat/mango|‹ Mango]] · [[eat|↑ Eat]] · [[eat/apple|Apple ›]]\n\n## Notes\n\n- Back again"
+        ),
+        "Notes appended below walk line: {markdown}"
+    );
+    let legacy = walk_vault();
+    write_walk_record(
+        &legacy.vault,
+        "apple",
+        "Apple",
+        "\n[[eat/zebra|‹ Zebra]] · [[eat|↑ Eat]] · [[eat/mango|Mango ›]]\n\n# Apple\n\n## Source\n\n```text\nrow\n```\n",
+    );
+    let updated = records_command(&legacy)
+        .args(["update", "restaurant", "apple", "-n", "Tasty"])
+        .output()
+        .expect("update apple");
+    assert_success(&updated);
+    let markdown =
+        fs::read_to_string(legacy.vault.join("eat/apple.md")).unwrap();
+    assert!(
+        markdown.contains("## Notes\n\n- Tasty\n\n## Source"),
+        "Notes inserted before sections: {markdown}"
+    );
+    assert!(
+        markdown.contains(
+            "[[eat/zebra|‹ Zebra]] · [[eat|↑ Eat]] · [[eat/mango|Mango ›]]\n\n# Apple"
+        ),
+        "walk line kept above H1: {markdown}"
     );
 }

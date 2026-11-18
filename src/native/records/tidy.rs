@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use similar::TextDiff;
 
 use super::notes_section::{
-    strip_empty_notes_sections, strip_redundant_h1, H1Strip,
+    strip_empty_notes_sections, strip_redundant_h1_for_album, H1Strip,
 };
 use crate::native::{
     albums::registry::{AlbumRegistry, DiscoveryHealth},
@@ -859,7 +859,7 @@ fn plan_tidy(
             }
             scanned += 1;
             let title = record_title(&contents);
-            let pass = tidy_note(&contents, title.as_deref());
+            let pass = tidy_note(&contents, title.as_deref(), Some(&folder));
             if let Some(reason) = pass.kept {
                 kept_h1.push(KeptH1 {
                     path: slash(&relative),
@@ -870,7 +870,10 @@ fn plan_tidy(
                 continue;
             };
             // Defensive: a planned write must itself be clean.
-            if tidy_note(&after, title.as_deref()).after.is_some() {
+            if tidy_note(&after, title.as_deref(), Some(&folder))
+                .after
+                .is_some()
+            {
                 continue;
             }
             changes.push(ChangedFile {
@@ -905,8 +908,14 @@ fn plan_tidy(
 }
 
 /// One tidy pass over a single record note: empty-`## Notes` removal first,
-/// then redundant-H1 removal, both in one pass.
-fn tidy_note(contents: &str, title: Option<&str>) -> TidyPass {
+/// then redundant-H1 removal, both in one pass. The H1 probe skips the
+/// album's walk line and nav-like lines so an H1 directly below the walk
+/// line is still redundant. Tidy never writes walk lines.
+fn tidy_note(
+    contents: &str,
+    title: Option<&str>,
+    album_stem: Option<&str>,
+) -> TidyPass {
     let mut notes_removed = false;
     let mut current = contents.to_owned();
     if let Some(stripped) = strip_empty_notes_sections(&current) {
@@ -916,7 +925,8 @@ fn tidy_note(contents: &str, title: Option<&str>) -> TidyPass {
     let mut h1_removed = false;
     let mut kept = None;
     if let Some(title) = title {
-        let strip: H1Strip = strip_redundant_h1(&current, title);
+        let strip: H1Strip =
+            strip_redundant_h1_for_album(&current, title, album_stem);
         if let Some(after) = strip.after {
             h1_removed = true;
             current = after;
@@ -991,7 +1001,11 @@ fn verify_clean(vault: &Path, hosts: Vec<PathBuf>) -> Result<(), String> {
             ));
         }
         let title = record_title(&contents);
-        if tidy_note(&contents, title.as_deref()).after.is_some() {
+        let stem = relative
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|stem| stem.to_str());
+        if tidy_note(&contents, title.as_deref(), stem).after.is_some() {
             return Err(format!(
                 "{} still holds a redundant H1 after the write",
                 slash(&relative)
@@ -1336,7 +1350,9 @@ mod tests {
         };
         let before =
             "---\ntype: \"[[record]]\"\ntitle: \"One\"\n---\n\n# One\n\n## Notes\n";
-        let after = tidy_note(before, Some("One")).after.expect("tidies");
+        let after = tidy_note(before, Some("One"), Some("eat"))
+            .after
+            .expect("tidies");
         assert_ne!(before, after);
         let schema = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
         let left = parse_frontmatter_mapping(before).expect("frontmatter");
