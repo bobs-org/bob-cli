@@ -1740,6 +1740,62 @@ fn vault_sync_ignores_legitimate_rewrites() {
 }
 
 #[test]
+fn vault_sync_does_not_quarantine_an_unrelated_note_with_a_shared_created_minute(
+) {
+    let temp = TempDir::new("bob-cli-vault-sync-shared-created-minute");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let shared_created = "2026-06-11T13:07-04:00";
+    let head = "---\ncreated: 2026-06-11T13:06-04:00\n---\n\
+    Original meal note line one\nOriginal meal note line two\n\
+    Original meal note line three\nOriginal meal note line four\n\
+    Original meal note line five\nOriginal meal note line six\n";
+    let foreign = format!(
+        "---\ncreated: {shared_created}\n---\n\
+        Unrelated project note alpha\nUnrelated project note beta\n\
+        Unrelated project note gamma\nUnrelated project note delta\n"
+    );
+    let work = format!(
+        "---\ncreated: {shared_created}\n---\n\
+        Edited meal note alpha\nEdited meal note beta\nEdited meal note gamma\n"
+    );
+    write_file(&vault.join("eat.md"), head);
+    write_file(&vault.join("project.md"), &foreign);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed shared created minute"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    write_file(&vault.join("eat.md"), &work);
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run shared-created vault-sync");
+
+    assert_success(&output);
+    assert!(
+        !stderr(&output).contains("quarantined clobber"),
+        "a shared minute alone must not quarantine the edited note:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("eat.md")).expect("read edited note"),
+        work,
+        "the valid body edit should remain in place"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("project.md"))
+            .expect("read foreign note"),
+        foreign,
+        "the unrelated note should remain untouched"
+    );
+    assert!(
+        quarantined_conflict_files(&vault).is_empty(),
+        "created equality alone must not create a quarantine copy"
+    );
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["clobbers"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
 fn vault_sync_detects_clobber_when_shared_ids_sort_last() {
     let temp = TempDir::new("bob-cli-vault-sync-clobber-sort-last");
     let (vault, remote, _peer) = init_vault_sync_pair(&temp);

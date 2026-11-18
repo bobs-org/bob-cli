@@ -240,11 +240,13 @@ struct IdentityMatch {
 
 impl IdentityMatch {
     fn matches(self) -> bool {
-        self.created || self.prj || self.shared_new_ids >= 3
+        self.prj
+            || self.shared_new_ids >= 3
+            || (self.created && self.shared_new_ids > 0)
     }
 
     fn score(self) -> u8 {
-        u8::from(self.created)
+        u8::from(self.created && self.shared_new_ids > 0)
             + u8::from(self.prj)
             + u8::from(self.shared_new_ids >= 3)
     }
@@ -260,10 +262,16 @@ impl IdentityMatch {
         if self.prj {
             parts.push("^prj line".to_string());
         }
-        if self.shared_new_ids >= 3 {
+        if self.shared_new_ids >= 3 || (self.created && self.shared_new_ids > 0)
+        {
+            let id_label = if self.shared_new_ids == 1 {
+                "task block ID"
+            } else {
+                "task block IDs"
+            };
             parts.push(format!(
-                "{} task block IDs shared with {matched}",
-                self.shared_new_ids
+                "{} {id_label} shared with {matched}",
+                self.shared_new_ids,
             ));
         }
         parts.join(", ")
@@ -475,6 +483,59 @@ mod tests {
         let mut other = sase_note();
         other = other.replace("- [ ] #task Task alpha ^alpha\n", "");
         assert!(identity_match(&head, &work, &other).is_none());
+    }
+
+    #[test]
+    fn a_created_match_alone_is_not_identity_at_minute_or_second_precision() {
+        let head = "---\ncreated: 2026-06-11T13:06-04:00\n---\n\
+old alpha\nold beta\nold gamma\nold delta\nold epsilon\n";
+
+        for created in ["2026-06-11T13:07-04:00", "2026-06-11T13:07:42-04:00"] {
+            let work = format!(
+                "---\ncreated: {created}\n---\n\
+                replacement alpha\nreplacement beta\nreplacement gamma\n"
+            );
+            let other = format!(
+                "---\ncreated: {created}\n---\n\
+                unrelated one\nunrelated two\nunrelated three\n"
+            );
+
+            let identity = identity_match(head, &work, &other);
+            assert!(
+                identity.is_none(),
+                "created alone must not identify a note at {created} precision: {identity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn created_match_with_one_new_shared_task_id_is_corroborated() {
+        let head = "---\ncreated: 2026-06-11T13:06-04:00\n---\nold\n";
+        let work = "---\ncreated: 2026-06-11T13:07-04:00\n---\n- [ ] #task Copied task ^copied\n";
+        let other = "---\ncreated: 2026-06-11T13:07-04:00\n---\n- [ ] #task Original task ^copied\n";
+
+        let identity =
+            identity_match(head, work, other).expect("corroborated identity");
+        assert!(identity.created);
+        assert!(!identity.prj);
+        assert_eq!(identity.shared_new_ids, 1);
+        assert!(identity.matches());
+        assert!(identity
+            .evidence(Some("2026-06-11T13:07-04:00"), "other.md")
+            .contains("1 task block ID shared with other.md"));
+    }
+
+    #[test]
+    fn matching_prj_identity_stands_alone() {
+        let head = "---\ncreated: 2026-06-11T13:06-04:00\n---\n- [ ] #task Old project #prj ^prj\n";
+        let work = "---\ncreated: 2026-06-11T13:07-04:00\n---\n- [ ] #task Other project #prj ^prj\n";
+        let other = "---\ncreated: 2026-06-11T13:08-04:00\n---\n- [ ] #task Other project #prj ^prj\n";
+
+        let identity =
+            identity_match(head, work, other).expect("matching ^prj identity");
+        assert!(!identity.created);
+        assert!(identity.prj);
+        assert_eq!(identity.shared_new_ids, 0);
     }
 
     #[test]
