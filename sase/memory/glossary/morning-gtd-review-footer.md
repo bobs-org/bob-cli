@@ -28,4 +28,4 @@ hides when Tasks is unavailable. When nothing is due, it reads `⟳ Review clear
 on an open task with a priority.
 `]s` notices and
 `bob freshness list` keep full tier names, and dashboard ROTTEN chips fold TICKLER
-into ROTTEN where the footer splits them; see [[decisions/review-walk-is-tiered]]. While review commitments are due off-`s`, a quiet dot on the selector's `s` letter marks them.
+into ROTTEN where the footer splits them; see [[decisions/review-walk-is-tiered]]. While `]s` has any row to land on off-`s`, a quiet dot in the first due group's hue marks the selector's `s` letter.

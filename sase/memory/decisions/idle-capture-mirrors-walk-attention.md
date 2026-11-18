@@ -2,7 +2,9 @@
 keyword: Idle Capture Mirrors Walk Attention
 summary: Today's Bob walk attention appears as s/w/b marks in the idle agenda title row, from an independent `bob walks` refresh lane.
 metadata:
-  status: accepted
+  status: superseded-in-part
+  superseded_by:
+    - decisions:review-attention-follows-the-walk
 ---
 *Accepted · project*
 
@@ -66,3 +68,8 @@ master `a19bdd0a`.
 **Reopens when.** The `bob walks` attention predicate or JSON contract changes, the
 idle agenda starts writing the vault or deriving attention locally, or walk marks gain
 an action beyond displaying Bob's report.
+
+Superseded in part: [[decisions:review-attention-follows-the-walk]] retires the
+commitment-count `s` claim — `s` is now lit whenever `]s` has a row to land on
+and its count reads the walk total; the refresh lane and the `w`/`b` rules here
+remain in force.

@@ -260,8 +260,9 @@ edited in place.
     Hiding a theme removes it from Recent suggestion rows only; today, Stats, colors,
     and typing the name stay unchanged, and using it never unhides it.
 32. **Idle Capture Mirrors Walk Attention** (`idle-capture-mirrors-walk-attention`) -
-    Today's Bob walk attention appears as s/w/b marks in the idle agenda title row, from
-    an independent `bob walks` refresh lane.
+    _[partly superseded by `decisions:review-attention-follows-the-walk`]_ Today's Bob
+    walk attention appears as s/w/b marks in the idle agenda title row, from an
+    independent `bob walks` refresh lane.
 33. **meet-filing-follows-google-until-edited**
     (`meet-filing-follows-google-until-edited`) - _[partly superseded by
     `decisions:past-day-sync-closes-bob-filed-meetings`]_ Google time or parsed buffer
@@ -372,82 +373,86 @@ edited in place.
     (`relation-label-rename-rewrites-history`) - bob relations rename rewrites matching
     label spans everywhere, including done/ and the previous daily note, in one
     previewed transaction and one revertable commit.
-58. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) -
+58. **Review Attention Follows The ]s Walk** (`review-attention-follows-the-walk`) - The
+    `s` mark is on exactly when `]s` has a row to land on, wearing the hue of the group
+    `]s` enters first; PRE and POST share cyan as bookends and the Mac `s` count reads
+    the walk total.
+59. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) -
     _[partly superseded by `recurring-occurrences-walk-when-due`]_ The ]s walk visits
     one shared queue in explicit tiers PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER →
     REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist rows resolve only by
     completion; Pending and Next come due daily under pending_interval / next_interval
     (default 1, false walks that lane off); tiers never feed buckets or chips; upkeep
     outside the lanes counts the budget; stamps stay and the seed never re-runs.
-59. **Rotten Keeps Are Logged** (`rotten-keeps-are-logged`) - _[partly superseded by
+60. **Rotten Keeps Are Logged** (`rotten-keeps-are-logged`) - _[partly superseded by
     `next-keeps-ask-an-optional-rotten-reason`, `task-decay-is-one-ladder`]_ Every
     counted keep — Alt+F/Ctrl+Alt+F on an exact due Ready ROTTEN or scheduled TICKLER
     row, or the decay card's Keep — asks an optional reason and writes one dated 🥀
     ROTTEN LOG entry with the stamp; the entry count is display-only history, never a
     field or a decay input.
-60. **Rotten Keeps Decay Through The Priority Ladder**
+61. **Rotten Keeps Decay Through The Priority Ladder**
     (`rotten-keeps-use-priority-decay`) - _[partly superseded by
     `decay-decisions-are-available-immediately`, `unblocked-tasks-resurface-as-ticklers`
     , `rotten-keeps-are-logged`, `task-decay-is-one-ladder`]_ Repeated due-Ready keeps
     earn an explicit approved decision that enters the existing priority ladder; nothing
     decays silently and freshness itself still never changes priority or schedule.
-61. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
+62. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
     Capture shows a "Similar tasks" band only after typing settles and only when a match
     clears bob's calibrated bars; every row action is an explicit draft edit and Return
     never changes.
-62. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`) -
+63. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`) -
     _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ A blocked project
     passes its dependency or schedule reason through its project descendants, with
     reconcile as the authority and the ^prj tag as the proxy for other engines.
-63. **sync-sorts-event-task-links** (`sync-sorts-event-task-links`) - Every bob gcal
+64. **sync-sorts-event-task-links** (`sync-sorts-event-task-links`) - Every bob gcal
     sync run reorders each Pomodoro entry's same-note Event Task links by meeting span;
     other children keep their slots.
-64. **Synced Meetings Are Linked By Phase At Birth** (`synced-meetings-link-by-phase`) -
+65. **Synced Meetings Are Linked By Phase At Birth** (`synced-meetings-link-by-phase`) -
     _[partly superseded by `decisions:untracked-sessions-omit-t-field`,
     `decisions:event-buffers-widen-the-span`, `decisions:sync-sorts-event-task-links`,
     `decisions:ended-synced-meetings-are-born-done`,
     `decisions:meet-filing-follows-google-until-edited`]_ A new Event Task is filed
     under a past, running, or planned MEET at birth: closed clusters for ended meetings,
     one open MEET for current and future.
-65. **Task Decay Is One Ladder** (`task-decay-is-one-ladder`) - Repeated freshness keeps
+66. **Task Decay Is One Ladder** (`task-decay-is-one-ladder`) - Repeated freshness keeps
     on WIP, Next, Ready, and P-level tasks follow one consent-based decay ladder (WIP →
     Next → Ready → P1 → … → P4): each rung allows a configured number of due keeps, then
     the next due keep opens one rung-aware card whose Enter steps exactly one rung down
     and whose Alt+F stays and restarts the count.
-66. **Task Dependencies Are Links On One Depends-On Line**
+67. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-67. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
+68. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
     (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
     color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
     top-level area stem, then name hash; clients render the hue Bob reports.
-68. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
+69. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
     (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
     `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
     then plan.exempt mute, then top-level area stem, then name hash; clients render the
     hue Bob reports.
-69. **Theme Preferences Live In A Per-Host Journal**
+70. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
     the only writer.
-70. **Today Is Read From The Ledger, Never Written To Tasks**
+71. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-71. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+72. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-72. **Unblocked Tasks Resurface As Ticklers**
+73. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`,
     `decisions:gmail-reply-wait-is-a-tagged-hold`]_ Every automatic Blocked-to-Ready
     recovery records [unblocked:: today] unless a WRITE skip applies, so the task is
     TICKLER in the next morning review; a keep on that row leaves the streak unchanged.
-73. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
+74. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
     _[superseded by `decisions:off-clock-pomodoros-count-apart`]_ A timed ledger row
     without [t::] is an untracked session; writers decide trackedness when they write a
     span and readers only look at the row.
