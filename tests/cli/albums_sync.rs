@@ -35,6 +35,28 @@ fn fixture(temp: &TempDir, with_broken: bool) -> PathBuf {
     vault
 }
 
+fn walk_fixture(temp: &TempDir, records: &[(&str, &str)]) -> PathBuf {
+    let (vault, _remote, _peer) = init_vault_sync_pair(temp);
+    fs::create_dir_all(vault.join("eat")).expect("eat folder");
+    write(&vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+    write(&vault, "eat.md", ALBUM);
+    for (stem, title) in records {
+        let record = RECORD.replace("title: One", &format!("title: {title}"));
+        write(&vault, &format!("eat/{stem}.md"), &record);
+    }
+    commit_all(&vault, "walk fixture");
+    vault
+}
+
+fn walk_line(vault: &Path, relative: &str) -> String {
+    fs::read_to_string(vault.join(relative))
+        .expect("record")
+        .lines()
+        .find(|line| line.contains("|↑ "))
+        .unwrap_or_else(|| panic!("missing walk line in {relative}"))
+        .to_owned()
+}
+
 fn commit_all(vault: &Path, message: &str) {
     git_in(vault, ["add", "-A"]);
     git_in(vault, ["commit", "-q", "-m", message]);
@@ -189,6 +211,220 @@ fn real_sync_commits_indexes_and_catalogs_then_becomes_a_noop() {
 }
 
 #[test]
+fn walk_sync_writes_two_and_three_member_rings() {
+    let temp = TempDir::new("album-sync-walk-rings");
+    let vault = walk_fixture(&temp, &[("apple", "Apple"), ("mango", "Mango")]);
+
+    let first = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(first.status.code(), Some(0), "{}", format_output(&first));
+    let payload = json(&first);
+    assert_eq!(payload["counts"]["walk_lines"], 2);
+    assert_eq!(
+        walk_line(&vault, "eat/apple.md"),
+        "[[eat/mango|‹ Mango]] · [[eat|↑ Restaurants]] · [[eat/mango|Mango ›]]"
+    );
+    assert_eq!(
+        walk_line(&vault, "eat/mango.md"),
+        "[[eat/apple|‹ Apple]] · [[eat|↑ Restaurants]] · [[eat/apple|Apple ›]]"
+    );
+    let lime = RECORD.replace("title: One", "title: Lime");
+    write(&vault, "eat/lime.md", &lime);
+    commit_all(&vault, "add third record");
+    let second = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(second.status.code(), Some(0), "{}", format_output(&second));
+    let payload = json(&second);
+    assert_eq!(payload["counts"]["walk_lines"], 3);
+    let changed_walk_lines = payload["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["kind"] == "walk")
+        .count();
+    assert_eq!(payload["counts"]["walk_lines"], changed_walk_lines);
+    assert_eq!(
+        walk_line(&vault, "eat/apple.md"),
+        "[[eat/mango|‹ Mango]] · [[eat|↑ Restaurants]] · [[eat/lime|Lime ›]]"
+    );
+    assert_eq!(
+        walk_line(&vault, "eat/lime.md"),
+        "[[eat/apple|‹ Apple]] · [[eat|↑ Restaurants]] · [[eat/mango|Mango ›]]"
+    );
+    assert_eq!(
+        walk_line(&vault, "eat/mango.md"),
+        "[[eat/lime|‹ Lime]] · [[eat|↑ Restaurants]] · [[eat/apple|Apple ›]]"
+    );
+
+    let third = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(third.status.code(), Some(0), "{}", format_output(&third));
+    let payload = json(&third);
+    assert_eq!(changed_paths(&payload), Vec::<String>::new());
+    assert_eq!(payload["commit"], Value::Null);
+    assert_eq!(payload["sync"]["post"], "skipped");
+}
+
+#[test]
+fn walk_sync_repairs_only_the_retitle_and_delete_radius() {
+    let temp = TempDir::new("album-sync-walk-radius");
+    let vault = walk_fixture(
+        &temp,
+        &[
+            ("alpha", "Alpha"),
+            ("bravo", "Bravo"),
+            ("charlie", "Charlie"),
+            ("delta", "Delta"),
+            ("echo", "Echo"),
+        ],
+    );
+    let initial = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(
+        initial.status.code(),
+        Some(0),
+        "{}",
+        format_output(&initial)
+    );
+    let charlie_before = fs::read(vault.join("eat/charlie.md")).unwrap();
+    let echo_path = vault.join("eat/echo.md");
+    let echo = fs::read_to_string(&echo_path).unwrap();
+    write(
+        &vault,
+        "eat/echo.md",
+        &echo.replace("title: Echo", "title: Between"),
+    );
+    commit_all(&vault, "retitle echo between alpha and bravo");
+    let retitle = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(
+        retitle.status.code(),
+        Some(0),
+        "{}",
+        format_output(&retitle)
+    );
+    let payload = json(&retitle);
+    assert!(payload["counts"]["walk_lines"].as_u64().unwrap() <= 5);
+    assert_eq!(
+        fs::read(vault.join("eat/charlie.md")).unwrap(),
+        charlie_before,
+        "Charlie is outside the old and new neighbourhoods"
+    );
+
+    fs::remove_file(&echo_path).expect("delete retitled record");
+    commit_all(&vault, "delete between record");
+    let delete = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(delete.status.code(), Some(0), "{}", format_output(&delete));
+    let payload = json(&delete);
+    assert_eq!(payload["counts"]["walk_lines"], 2);
+    let walk_paths = payload["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["kind"] == "walk")
+        .map(|change| change["path"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(walk_paths, ["eat/alpha.md", "eat/bravo.md"]);
+}
+
+#[test]
+fn walk_sync_leaves_a_damaged_line_and_warns() {
+    let temp = TempDir::new("album-sync-walk-damaged");
+    let vault = walk_fixture(&temp, &[("apple", "Apple"), ("mango", "Mango")]);
+    let damaged_line =
+        "[[eat/mango|‹ Mango]] · [[eat|↑ Restaurants]] · [[eat/mango|Mango ›]] extra";
+    let apple = format!(
+        "{}\n{damaged_line}\n",
+        RECORD.replace("title: One", "title: Apple")
+    );
+    write(&vault, "eat/apple.md", &apple);
+    commit_all(&vault, "add damaged walk line");
+    let apple_before = fs::read(vault.join("eat/apple.md")).unwrap();
+
+    let check = run(&vault, &temp, &["check", "-f", "json"]);
+    assert_eq!(check.status.code(), Some(0), "{}", format_output(&check));
+    let payload = json(&check);
+    let album = payload["albums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|album| album["stem"] == "eat")
+        .unwrap();
+    assert_eq!(album["walk"]["state"], "damaged");
+    assert_eq!(album["walk"]["counts"]["damaged"], 1);
+    let warning = album["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "album_walk_damaged")
+        .expect("damaged walk warning");
+    assert!(warning["message"].as_str().unwrap().contains("1 records"));
+    assert!(warning["message"]
+        .as_str()
+        .unwrap()
+        .contains("eat/apple.md"));
+
+    let sync = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(sync.status.code(), Some(0), "{}", format_output(&sync));
+    let payload = json(&sync);
+    assert_eq!(payload["counts"]["walk_lines"], 1);
+    assert_eq!(fs::read(vault.join("eat/apple.md")).unwrap(), apple_before);
+    assert_eq!(
+        walk_line(&vault, "eat/mango.md"),
+        "[[eat/apple|‹ Apple]] · [[eat|↑ Restaurants]] · [[eat/apple|Apple ›]]"
+    );
+}
+
+#[test]
+fn walk_sync_holds_an_album_with_an_unreadable_member() {
+    let temp = TempDir::new("album-sync-walk-held");
+    let vault = fixture(&temp, false);
+    let held_member_before = fs::read(vault.join("eat/one.md")).unwrap();
+    let unreadable = b"---\ntitle: \xff\n---\n";
+    fs::write(vault.join("eat/unreadable.md"), unreadable).unwrap();
+    fs::create_dir_all(vault.join("movies")).expect("movies folder");
+    write(
+        &vault,
+        "movies.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Films.\nrecord:\n  noun: movie\n---\n\n# Movies\n",
+    );
+    write(
+        &vault,
+        "movies/film.md",
+        &RECORD
+            .replace("[[eat]]", "[[movies]]")
+            .replace("title: One", "title: Film"),
+    );
+    commit_all(&vault, "add unreadable and healthy albums");
+
+    let listed = run(&vault, &temp, &["list", "-f", "json"]);
+    let payload = json(&listed);
+    let held = payload["albums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|album| album["stem"] == "eat")
+        .unwrap();
+    assert_eq!(held["walk"]["state"], "held");
+    assert_eq!(held["walk"]["order"], serde_json::json!([]));
+
+    let sync = run(&vault, &temp, &["sync", "-f", "json"]);
+    let payload = json(&sync);
+    assert_eq!(
+        payload["counts"]["walk_lines"],
+        1,
+        "{}",
+        format_output(&sync)
+    );
+    assert_eq!(
+        fs::read(vault.join("eat/one.md")).unwrap(),
+        held_member_before
+    );
+    assert_eq!(
+        fs::read(vault.join("eat/unreadable.md")).unwrap(),
+        unreadable
+    );
+    assert_eq!(walk_line(&vault, "movies/film.md"), "[[movies|↑ Movies]]");
+    assert!(changed_paths(&payload).contains(&"movies/film.md".to_owned()));
+    assert!(!changed_paths(&payload).contains(&"eat/one.md".to_owned()));
+}
+
+#[test]
 fn damaged_album_stays_unchanged_while_healthy_indexes_commit() {
     let temp = TempDir::new("album-sync-partial");
     let vault = fixture(&temp, true);
@@ -273,6 +509,8 @@ fn nightly_continues_after_album_failure_and_publishes_healthy_indexes() {
     );
     let body = fs::read_to_string(vault.join("body.md")).unwrap();
     assert!(body.contains("> [!albums]"), "{body}");
+    let record = fs::read_to_string(vault.join("eat/one.md")).unwrap();
+    assert!(record.contains("[[eat|↑ Restaurants]]"), "{record}");
     assert!(
         stdout(&git_in(
             &vault,

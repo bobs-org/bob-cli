@@ -361,6 +361,56 @@ fn album_edit_after_planning_refuses_and_writes_nothing() {
 }
 
 #[test]
+fn walk_neighbour_edit_after_planning_refuses_and_writes_nothing() {
+    let (_temp, vault, config) = album_vault();
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_NOW", Some(OsStr::new("2026-10-07 13:40:00"))),
+        ("TZ", Some(OsStr::new("UTC0"))),
+    ]);
+    let request = record_request(
+        &vault,
+        false,
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+    );
+    let mut batch =
+        plan_capture_batch_with_config_path(&request, None, Some(&config))
+            .expect("album capture plans");
+    let neighbor_path = vault.join("eat/ninja_sushi.md");
+    assert!(
+        batch
+            .text_files
+            .iter()
+            .any(|file| file.target == neighbor_path),
+        "the existing neighbour walk edit is staged"
+    );
+
+    let album_path = vault.join("eat.md");
+    let album_before = std::fs::read(&album_path).expect("album preimage");
+    let mut neighbor_foreign =
+        std::fs::read(&neighbor_path).expect("neighbour preimage");
+    neighbor_foreign.extend_from_slice(b"Foreign neighbour edit\n");
+    std::fs::write(&neighbor_path, &neighbor_foreign)
+        .expect("concurrent neighbour edit");
+
+    let error = commit_capture_batch(&mut batch, &vault)
+        .expect_err("a changed neighbour refuses the capture");
+    assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+    assert!(
+        error.message.contains("eat/ninja_sushi.md"),
+        "names the neighbour: {}",
+        error.message
+    );
+    assert!(
+        !vault.join("eat/ramen_nagi.md").exists(),
+        "the new record was not installed"
+    );
+    assert_eq!(std::fs::read(&neighbor_path).unwrap(), neighbor_foreign);
+    assert_eq!(std::fs::read(&album_path).unwrap(), album_before);
+    no_capture_litter(&vault);
+    no_capture_litter(&vault.join("eat"));
+}
+
+#[test]
 fn damaged_folder_refuses_batch_and_writes_nothing() {
     let (_temp, vault, config) = album_vault();
     std::fs::create_dir_all(vault.join("eat/blocked.md"))

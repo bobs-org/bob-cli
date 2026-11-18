@@ -14,13 +14,15 @@ use super::{
     write::folder_complete,
     AlbumDeclaration, AlbumFinding, AlbumIssueSeverity,
 };
-use crate::native::notebooks::snapshot::VaultSnapshot;
 use crate::native::records::{
     schema::{
         album_label, album_schema_fingerprint, album_singular,
         RecordDiagnosticCode, RecordField, RecordType,
     },
     FolderIndex, RecordCatalog,
+};
+use crate::native::{
+    host_catalog::FileEdit, notebooks::snapshot::VaultSnapshot,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -215,6 +217,7 @@ pub(crate) struct AlbumReport {
 pub(crate) struct AlbumProjection {
     pub(crate) entry: AlbumReportEntry,
     pub(crate) index_plan: index::IndexPlan,
+    pub(crate) walk_edits: Vec<FileEdit>,
     pub(crate) io_errors: Vec<String>,
 }
 
@@ -568,6 +571,7 @@ pub(crate) fn project_album_from_folder(
             issues,
         },
         index_plan: plan,
+        walk_edits: walk_plan.edits,
         io_errors,
     }
 }

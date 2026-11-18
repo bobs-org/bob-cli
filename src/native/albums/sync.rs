@@ -36,6 +36,23 @@ use crate::native::{
 
 const SCHEMA_VERSION: u32 = 1;
 
+fn only_known_album_member_read_errors(
+    errors: &[String],
+    registry: &AlbumRegistry,
+) -> bool {
+    !errors.is_empty()
+        && errors.iter().all(|error| {
+            let Some((path, _)) = error.split_once(": failed to read file:")
+            else {
+                return false;
+            };
+            let path = Path::new(path);
+            registry.albums.iter().any(|album| {
+                path.parent() == Some(Path::new(&album.declaration.stem))
+            })
+        })
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ChangedFile {
     pub(crate) path: String,
@@ -218,12 +235,17 @@ pub(crate) fn plan_indexes(
     snapshot: &VaultSnapshot,
 ) -> Result<IndexSyncPlan, TxnFailure> {
     if let DiscoveryHealth::Partial(errors) = &registry.health {
-        let first = errors
-            .first()
-            .map(String::as_str)
-            .unwrap_or("unknown I/O error");
-        let more = errors.len().saturating_sub(1);
-        return Err(TxnFailure::new(
+        if only_known_album_member_read_errors(errors, registry) {
+            // A known album's folder projection marks that album held and
+            // skips its walk/index edits. Other complete albums remain safe
+            // to plan and write independently.
+        } else {
+            let first = errors
+                .first()
+                .map(String::as_str)
+                .unwrap_or("unknown I/O error");
+            let more = errors.len().saturating_sub(1);
+            return Err(TxnFailure::new(
             "io",
             if more == 0 {
                 format!("the vault scan was incomplete: {first}")
@@ -234,6 +256,7 @@ pub(crate) fn plan_indexes(
                 "fix unreadable vault paths, then retry; no index was written",
             ),
         ));
+        }
     }
 
     let mut catalog = RecordCatalog::new(vault);
@@ -274,14 +297,7 @@ pub(crate) fn plan_indexes(
         if let Some(edit) = projection.index_plan.edit {
             edits.push(edit);
         }
-        let walk_plan = plan_album_walk(
-            &album.declaration,
-            folder,
-            &[],
-            |relative| std::fs::read_to_string(vault.join(relative)).ok(),
-            WalkScope::All,
-        );
-        walk_edits.extend(walk_plan.edits);
+        walk_edits.extend(projection.walk_edits);
         albums.push(projection.entry);
     }
     albums.sort_by(|left, right| left.path.cmp(&right.path));
@@ -446,10 +462,12 @@ fn verify_current_hosts(
     hosts: Vec<PathBuf>,
 ) -> Result<(), String> {
     let snapshot = VaultSnapshot::load(vault);
-    if let Some(error) = snapshot.io_errors.first() {
+    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
+    if let Some(error) = snapshot.io_errors.first()
+        && !only_known_album_member_read_errors(&snapshot.io_errors, &registry)
+    {
         return Err(error.clone());
     }
-    let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     let report = report::build_report(&registry, &snapshot);
     let catalogs = catalog::plan_catalogs(&snapshot, &registry);
     let mut record_hosts: Vec<String> = Vec::new();
@@ -941,5 +959,46 @@ mod tests {
             .unwrap();
         assert!(body.after.contains("> [!albums]"), "{}", body.after);
         assert!(body.after.contains("[[eat|Restaurants]]"), "{}", body.after);
+    }
+
+    #[test]
+    fn walk_member_body_edit_after_planning_refuses_and_writes_nothing() {
+        let (_temp, vault) = fixture();
+        let plan = planned(&vault);
+        let txn = planned_txn(&vault, plan);
+        assert!(
+            txn.files
+                .iter()
+                .any(|file| file.target == vault.join("eat/one.md")),
+            "the missing walk line is staged"
+        );
+
+        let album_path = vault.join("eat.md");
+        let owner_path = vault.join("body.md");
+        let member_path = vault.join("eat/one.md");
+        let album_before = fs::read(&album_path).expect("album preimage");
+        let owner_before = fs::read(&owner_path).expect("owner preimage");
+        let mut member_edited =
+            fs::read(&member_path).expect("member preimage");
+        member_edited.extend_from_slice(b"Foreign body edit\n");
+        fs::write(&member_path, &member_edited).expect("concurrent body edit");
+
+        let error = crate::native::capture::write_staged_files_guarded(
+            &txn.files,
+            || txn.deps.validate(&vault),
+        )
+        .expect_err("stale walk host refuses before installing any edit");
+        assert_eq!(
+            error.typed,
+            Some(crate::native::capture::CaptureFailureKind::NoteChanged)
+        );
+        assert!(
+            error.message.contains("eat/one.md"),
+            "names the edited record: {}",
+            error.message
+        );
+        assert_eq!(fs::read(&album_path).unwrap(), album_before);
+        assert_eq!(fs::read(&owner_path).unwrap(), owner_before);
+        assert_eq!(fs::read(&member_path).unwrap(), member_edited);
     }
 }

@@ -3779,6 +3779,34 @@ fn walk_show_reports_ring_positions() {
 }
 
 #[test]
+fn walk_show_is_null_when_the_album_is_held() {
+    let fixture = walk_vault();
+    write_walk_record(&fixture.vault, "apple", "Apple", "\n");
+    fs::write(
+        fixture.vault.join("eat/unreadable.md"),
+        b"---\ntitle: \xff\n---\n".as_slice(),
+    )
+    .expect("unreadable member");
+
+    let output = records_command(&fixture)
+        .args(["show", "restaurant", "apple", "-f", "json"])
+        .output()
+        .expect("show held album record");
+    assert_success(&output);
+    let payload = json(&output);
+    assert_eq!(payload["record"]["walk"], Value::Null);
+
+    let human = records_command(&fixture)
+        .args(["show", "restaurant", "apple"])
+        .output()
+        .expect("show held album record human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(!text.contains("1 of 1"), "{text}");
+    assert!(!text.contains("N of M"), "{text}");
+}
+
+#[test]
 fn walk_check_reports_stale_and_damaged() {
     let fixture = walk_vault();
     write_walk_record(&fixture.vault, "apple", "Apple", "\n");
