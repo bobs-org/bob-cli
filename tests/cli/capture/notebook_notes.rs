@@ -2,6 +2,7 @@
 
 use crate::support::*;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 
 const NOW: &str = "2026-11-09 12:00:00";
@@ -46,6 +47,36 @@ fn run_capture(
         .env("BOB_NOW", NOW)
         .env("TZ", "UTC0");
     command.output().expect("run capture")
+}
+
+fn run_capture_parse(
+    vault: &std::path::Path,
+    draft: &str,
+) -> std::process::Output {
+    bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", NOW)
+        .env("TZ", "UTC0")
+        .output()
+        .expect("run capture-parse")
+}
+
+fn snapshot_vault(vault: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
+    fs::read_dir(vault)
+        .expect("read vault directory")
+        .map(|entry| {
+            let entry = entry.expect("read vault entry");
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                fs::read(entry.path()).expect("read vault file"),
+            )
+        })
+        .collect()
 }
 
 fn dry_single(vault: &std::path::Path, draft: &str) -> Value {
@@ -195,6 +226,83 @@ fn test_list_and_global_inheritance() {
         serde_json::from_str(stdout(&output).trim()).expect("json");
     let captures = json["captures"].as_array().expect("captures");
     assert_eq!(captures.len(), 2);
+}
+
+#[test]
+fn test_global_notebook_bullet_refusal_is_shared_and_atomic() {
+    let temp = TempDir::new("bob-cli-capture-notebook-global-bullet");
+    let vault = vault_with_notebook(&temp);
+    let ambiguous = "@@dev_tools\n\n- a\n- b";
+
+    let parsed = run_capture_parse(&vault, ambiguous);
+    assert_success(&parsed);
+    let parsed_json: Value =
+        serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
+    assert!(
+        serde_json::to_string(&parsed_json)
+            .expect("serialize parsed JSON")
+            .contains("notebook_global_bullet_requires_list"),
+        "{parsed_json}"
+    );
+
+    let before = snapshot_vault(&vault);
+    for write in [false, true] {
+        let mixed = run_capture(
+            &vault,
+            "Good task @dev\n\n@@dev_tools\n\n- a\n- b",
+            &[],
+            write,
+        );
+        assert_eq!(mixed.status.code(), Some(2), "write={write}: {mixed:?}");
+        let result: Value =
+            serde_json::from_str(stdout(&mixed).trim()).expect("refusal JSON");
+        assert_eq!(result["code"], "notebook_global_bullet_requires_list");
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("use `@dev_tools` on its own line"),
+            "{result}"
+        );
+        assert_eq!(snapshot_vault(&vault), before, "write={write}");
+    }
+
+    // A route-only @ form is the explicit list syntax and writes note bullets.
+    let listed = run_capture(&vault, "@dev_tools\n- a\n- b", &[], true);
+    assert_success(&listed);
+    let notebook = read_notebook(&vault);
+    assert!(
+        notebook.contains(&format!("- a [created::{DATE}]")),
+        "{notebook}"
+    );
+    assert!(
+        notebook.contains(&format!("- b [created::{DATE}]")),
+        "{notebook}"
+    );
+    assert!(!notebook.contains("#task - a"), "{notebook}");
+
+    // Ordinary notebook prose and authored child notes still inherit @@.
+    let prose = run_capture(
+        &vault,
+        "@@dev_tools\n\nA useful note\n- detail",
+        &[],
+        true,
+    );
+    assert_success(&prose);
+    let notebook = read_notebook(&vault);
+    assert!(
+        notebook.contains(&format!(
+            "- A useful note [created::{DATE}]\n\t- detail"
+        )),
+        "{notebook}"
+    );
+
+    // A counted session operator is still parsed by the Pomodoro grammar.
+    let session = run_capture_parse(&vault, "@@dev_tools\n-2");
+    assert_success(&session);
+    let session_json: Value =
+        serde_json::from_str(stdout(&session).trim()).expect("session JSON");
+    assert_eq!(session_json["mode"], "pomodoro_adjust", "{session_json}");
 }
 
 #[test]

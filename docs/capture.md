@@ -534,6 +534,16 @@ items plus `@@dev_tools` become two notebook notes, preserving order and
 local-route overrides. Authored children stay nested under their own capture
 parent. Route validation matches `@route`.
 
+`@@` stays draft-wide and does not start a notebook list. A dash-led item
+under a notebook `@@` route is ambiguous and refuses; use an explicit route-only
+`@notes` header for list notes:
+
+```text
+@dev_tools
+- a
+- b
+```
+
 The declaration is metadata, never capture text: it is absent from item counts,
 semantic capture text, preview bodies, and note contents. A draft that contains
 only a declaration fails with an actionable "add a capture item" error. `@@` is

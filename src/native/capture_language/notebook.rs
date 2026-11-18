@@ -1472,9 +1472,6 @@ fn classify_item(
             RouteScan::NotNotebookRoute => Ok(None),
         };
     }
-    if item_has_explicit_operation(item) {
-        return Ok(None);
-    }
     let Some(route) = global_route else {
         return Ok(None);
     };
@@ -1483,6 +1480,21 @@ fn classify_item(
         .first()
         .map(|line| (line.raw.start, line.raw.end))
         .unwrap_or((item.start, item.end));
+    if item_starts_with_bullet_text(item)
+        && lookup_route(policy, route, item.start, range)?.is_some()
+    {
+        return Err(RouteScan::Unsupported {
+            route: route.to_ascii_lowercase(),
+            range,
+            code: "notebook_global_bullet_requires_list",
+            message: format!(
+                "`@@{route}` is draft-wide and does not start a notebook list; use `@{route}` on its own line before the bullets to file notes into it"
+            ),
+        });
+    }
+    if item_has_explicit_operation(item) {
+        return Ok(None);
+    }
     let Some(info) = lookup_route(policy, route, item.start, range)? else {
         return Ok(None);
     };
@@ -1494,9 +1506,22 @@ fn classify_item(
     }))
 }
 
-/// Global notebook routes apply only to ordinary text and URL notes. Keep
-/// lexical operation claims on their established parser path before the
-/// notebook can reinterpret an unrouted item.
+/// A leading Markdown dash followed by text is ambiguous under a global
+/// notebook route: it can be a list member, but `@@` only routes ordinary
+/// items. Bare and counted session operators are kept on their parser path.
+fn item_starts_with_bullet_text(item: &CaptureItem<'_>) -> bool {
+    let Some(parent) = item.lines.first() else {
+        return false;
+    };
+    let text = parent.raw.text.trim_start_matches([' ', '\t']);
+    text.strip_prefix('-').is_some_and(|tail| {
+        tail.starts_with([' ', '\t']) && !tail.trim().is_empty()
+    })
+}
+
+/// Whether the item's first token is an explicit lexical operation that
+/// should stay on its parser path under `@@`. Dash-led text is checked
+/// separately because it can also be an implicit notebook list.
 fn item_has_explicit_operation(item: &CaptureItem<'_>) -> bool {
     if super::tokens::task_link_query_token(item).is_some()
         || super::tokens::task_goto_query_token(item).is_some()

@@ -217,6 +217,8 @@ fn global_notebook_route_skips_capture_operations() {
         "@@dev\nx",
         "@@dev\n=3",
         "@@dev\n+2",
+        "@@dev\n-2",
+        "@@dev\n- x",
     ] {
         let parsed =
             draft(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
@@ -235,6 +237,37 @@ fn global_notebook_route_skips_capture_operations() {
         explicit.items[0].parsed.kind,
         CaptureKind::NotebookSubNote { .. }
     ));
+}
+
+#[test]
+fn global_notebook_route_refuses_bullet_led_items() {
+    let raw = "@@dev\n\n- a\n- b";
+    assert_eq!(
+        draft_code(raw),
+        "notebook_global_bullet_requires_list",
+        "{raw}"
+    );
+    let error = draft_coded(raw).expect_err("ambiguous notebook list");
+    assert!(
+        error.message.contains("use `@dev` on its own line"),
+        "{}",
+        error.message
+    );
+    let editor = editor_full(raw);
+    assert!(
+        editor.items.iter().any(|item| {
+            item.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "notebook_global_bullet_requires_list"
+            })
+        }),
+        "{editor:?}"
+    );
+
+    // A non-notebook global route keeps its ordinary task semantics.
+    let area = draft("@@work\n\n- a")
+        .unwrap_or_else(|error| panic!("area route changed: {error}"));
+    assert!(matches!(area.items[0].parsed.kind, CaptureKind::Task));
+    assert_eq!(area.items[0].parsed.body, "- a");
 }
 
 #[test]
