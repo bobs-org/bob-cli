@@ -1220,7 +1220,7 @@ host, and the typed checks.
 
 Any logged-in host may read Gmail. Save, sync, and attachment writes run only
 on `gmail.writer` when that key is set; the docs recommend the Mac. On the Mac,
-cron runs `bob gmail sync -q` hourly at `:07`; see
+[`bob tick`](tick.md) runs sync hourly (at most) as its `gmail` step; see
 [Mac scheduled maintenance](vault-git-sync.md#mac-scheduled-maintenance). Agent
 hosts stay read-only: grant modify only to the approved writer. `doctor`
 reports granted scopes, archive state, the writer pin, and the current host.

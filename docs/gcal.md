@@ -1155,8 +1155,8 @@ Two triggers run sync on the writer:
   note is created in Obsidian
   ([Calendar Events](reference/plugins/calendar-events.md)).
 
-There is no periodic sync, so invitations accepted later in the day land
-on the next run.
+On the Mac, [`bob tick`](tick.md) runs sync hourly (at most) as its `gcal`
+step, so invitations accepted later in the day land on the next tick.
 
 ## Event inclusion
 
@@ -1199,9 +1199,8 @@ invalid default. Root sources are reported as `✎ @family`, `✎ all events @ab
 beside the note.
 
 Adding, changing, or removing a token, or a colour, calendar, or default
-change, reroutes unedited existing rows on the next sync. Sync has no
-periodic trigger, so run `bob gcal sync` or wait for the next daily-note
-sync.
+change, reroutes unedited existing rows on the next sync. Outside the hourly [`bob tick`](tick.md) schedule, run `bob gcal sync`
+manually or wait for the next daily-note sync.
 
 ## Exit status
 

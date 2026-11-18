@@ -351,62 +351,53 @@ Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttl
 
 ## Mac scheduled maintenance
 
-The MacBook also runs three independent 15-minute cron jobs plus an hourly Gmail
-sync, staggered by minute so their writes do not collide with each other or with
-the 15-second `bob-vault-sync` LaunchAgent. They live in the `cron:` data of `home/.chezmoidata.yaml`
-in the chezmoi dotfiles repo, the only source of truth for every machine's user crontab
-(see `cronctl`):
+The MacBook runs one cron job, `bob-tick`, every 5 minutes. Each run calls
+[`bob tick`](tick.md), which runs every due step in one fixed order
+(gcal → gmail → gkeep → refs → projects → tasks), each on its own cadence from
+`tick.steps` in `~/.config/bob/config.yml`: gcal and gmail hourly; refs,
+projects, and tasks every 15 minutes; gkeep manual. The job lives in the `cron:`
+data of `home/.chezmoidata.yaml` in the chezmoi dotfiles repo, the only source
+of truth for every machine's user crontab (see `cronctl`):
 
 ```yaml
-- name: bob-highlights-sync
+- name: bob-tick
   machines: [mac]
-  schedule: "0,15,30,45 * * * *"
-  command: maybe_bob_highlights_sync -w
-- name: bob-projects-sync
-  machines: [mac]
-  schedule: "5,20,35,50 * * * *"
-  command: bob projects sync
-- name: bob-gmail-sync
-  machines: [mac]
-  schedule: "7 * * * *"
-  command: bob gmail sync -q
-- name: bob-task-reconcile
-  machines: [mac]
-  schedule: "10,25,40,55 * * * *"
-  command: bob task reconcile --retry-timeout 120
+  schedule: "*/5 * * * *"
+  description: Run Bob's due background work in one ordered pass
+  command: bob tick
 ```
+
+Plain `bob tick`, not `-q`: a nothing-due tick is one line, so
+`cronctl logs bob-tick` stays a readable history, and cron mails only on exit
+1 or 2.
 
 The old command name `bob task-status-hooks` keeps working as a permanent silent alias.
 
-Highlights intake precedes project reconciliation, then Gmail filing at `:07` once
-an hour, then task-status reconciliation, so reconcile tidies the same Gmail-filed
-rows minutes later. The hourly cadence keeps an awake Mac inside
-[Bob Gmail](gmail.md#where-it-runs)'s two-hour `sync` staleness warning, and a run
-that keeps busy-skipping exits 1, so cron mails it, only after more than two hours
-without a success. The 2-minute `--retry-timeout` on `bob task reconcile` fits
-comfortably inside the 15-minute cadence and absorbs transient maintenance-lock
-contention and concurrent-save races against the 15-second sync LaunchAgent; see
-[Retries](task-status-hooks.md#retries) for the backoff policy and its allowed failure
-reasons. Offsetting the four jobs by minutes reduces collisions between them, but
-cannot guarantee exclusion from an open editor, a slow job, or the sync LaunchAgent —
-correctness comes from the existing lock and guarded-write checks plus the fresh-attempt
-retry behavior, not from the schedule alone.
+Because every step runs inside one tick, intake always precedes derivation:
+gcal and gmail file first, then refs, projects, and tasks tidy the same rows
+later in the same pass. The hourly gcal/gmail cadence keeps an awake Mac inside
+[Bob Gmail](gmail.md#where-it-runs)'s two-hour `sync` staleness warning, and
+`bob tick -d` shows what is due and why. Since one tick holds no vault lock
+across steps — each child takes it itself — the 15-second `bob-vault-sync`
+LaunchAgent and an open editor stay responsive; correctness comes from the
+existing lock and guarded-write checks plus each step's retry behavior, not
+from the schedule alone.
 
-chezmoi installs these jobs as the marked `# BEGIN chezmoi-cron` block of the Mac's user
-crontab and leaves every line outside the block alone. Each line runs its command
+chezmoi installs this job as the marked `# BEGIN chezmoi-cron` block of the Mac's user
+crontab and leaves every line outside the block alone. The line runs its command
 through `~/bin/cronrun`, which sources `~/.profile` for `PATH`, skips a run while the
 previous run of the same job still holds its lock, and appends the command's stdout and
-stderr to `~/.local/state/cron/<job>.log` (rotated past 1 MiB). cronrun is silent on
+stderr to `~/.local/state/cron/bob-tick.log` (rotated past 1 MiB). cronrun is silent on
 success, so cron mails only failures: when a command exits non-zero, cronrun prints a
 one-line summary and the last 40 lines of that run's log to stderr. Warnings and retry
 progress from a run that succeeds stay in the log.
 
-Inspect the Mac's jobs from any machine:
+Inspect the Mac's job from any machine:
 
 ```bash
-cronctl status mac                             # live state and each job's last run
-cronctl diff mac                               # wanted block vs live block
-cronctl logs bob-task-reconcile --machine mac  # tail one job's log
+cronctl status mac                 # live state and the job's last run
+cronctl diff mac                   # wanted block vs live block
+cronctl logs bob-tick --machine mac  # tail the job's log
 ```
 
 The Mac is often asleep, so `pending` means unreachable or not yet applied, not broken.
@@ -821,10 +812,10 @@ ssh athena 'bob ref scan -i'
 ssh apollo 'bob ref scan -i'
 ```
 
-The MacBook's staggered 15-minute `maybe_bob_highlights_sync -w` cron job remains the
-full annotation scan. It also drains files in the Mac's own `xlib/`; it never pulls the
-Linux queues. The gate runs when `lib/` changed today or when `xlib/` contains a file,
-so Mac-local queued creates are not missed. See
+The MacBook's `bob-tick` cron job runs the full annotation scan as its `refs`
+step (at most every 15 minutes, and only when `lib/` or `xlib/` changed or the
+6-hour full-scan ceiling hits). It also drains files in the Mac's own `xlib/`;
+it never pulls the Linux queues, so Mac-local queued creates are not missed. See
 [Mac scheduled maintenance](#mac-scheduled-maintenance) for its exact schedule.
 
 The old `bob_xlib_pull` bridge and its `pre_scan_hook` configuration are retired. Each

@@ -2539,9 +2539,11 @@ behave when a PDF is open.
 
 ## Scheduled Scan
 
-The MacBook's staggered cron job runs the full `bob ref scan` for annotation
-sync and also processes the Mac's own `xlib/` queue. It does not pull or read
-athena's or apollo's queue. See
+On the MacBook, [`bob tick`](tick.md) runs the full `bob ref scan` as its
+`refs` step: at most every 15 minutes, and only when `lib/` or `xlib/` changed,
+a pre-scan hook is configured, or the 6-hour full-scan ceiling hits. It also
+processes the Mac's own `xlib/` queue. It does not pull or read athena's or
+apollo's queue. See
 [vault-git-sync.md](vault-git-sync.md#mac-scheduled-maintenance) for the
 managed schedule; do not replace it with a LaunchAgent.
 
