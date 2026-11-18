@@ -12,7 +12,10 @@ use std::{
     io::{self, Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -55,6 +58,10 @@ pub(crate) struct RawRunSpec {
     /// Variables removed from the child's inherited environment.
     pub env_remove: Vec<OsString>,
     pub timeout: Duration,
+    /// Optional SIGTERM grace before SIGKILL; None preserves immediate kill.
+    pub term_grace: Option<Duration>,
+    /// Signal-safe cancellation flag, polled alongside the deadline.
+    pub interrupt: Option<&'static AtomicBool>,
     /// Retained stdout bytes; one byte past the cap is kept to detect the
     /// overage. The rest is drained and discarded.
     pub stdout_cap: usize,
@@ -69,6 +76,7 @@ pub(crate) struct RawRunOutput {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub timed_out: bool,
+    pub interrupted: bool,
     /// True when stdout held more than `stdout_cap` bytes.
     pub stdout_truncated: bool,
     /// True when either pipe remained open past the post-exit drain grace.
@@ -169,32 +177,29 @@ pub(crate) fn run_raw(spec: &RawRunSpec) -> io::Result<RawRunOutput> {
         thread::spawn(move || drain_pipe_capped(stdout_pipe, stdout_cap));
     let stderr_reader =
         thread::spawn(move || drain_pipe_capped(stderr_pipe, stderr_cap));
+    let mut timed_out = false;
+    let mut interrupted;
     let status = loop {
-        match exited_without_reaping(&mut child)? {
-            true => {
+        interrupted = spec
+            .interrupt
+            .is_some_and(|flag| flag.load(Ordering::Acquire));
+        if interrupted || Instant::now() >= deadline {
+            timed_out = !interrupted;
+            terminate_tree(&mut child, spec.term_grace);
+            break None;
+        }
+        match exited_without_reaping(&mut child) {
+            Ok(true) => {
                 kill_stragglers(child.id());
-                break child.wait()?;
+                break child.wait()?.code();
             }
-            false => {
-                if Instant::now() >= deadline {
-                    kill_tree(&mut child);
-                    let drain_deadline = Instant::now() + PIPE_DRAIN_GRACE;
-                    let stdout = receive_before(stdout_reader, drain_deadline);
-                    let stderr = receive_before(stderr_reader, drain_deadline);
-                    let output_incomplete =
-                        stdout.is_none() || stderr.is_none();
-                    let (stdout, stdout_truncated) = stdout.unwrap_or_default();
-                    let (stderr, _) = stderr.unwrap_or_default();
-                    return Ok(RawRunOutput {
-                        status: None,
-                        stdout,
-                        stderr,
-                        timed_out: true,
-                        stdout_truncated,
-                        output_incomplete,
-                    });
-                }
-                thread::sleep(Duration::from_millis(10));
+            Ok(false) => thread::sleep(Duration::from_millis(10)),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                continue
+            }
+            Err(error) => {
+                terminate_tree(&mut child, spec.term_grace);
+                return Err(error);
             }
         }
     };
@@ -205,13 +210,34 @@ pub(crate) fn run_raw(spec: &RawRunSpec) -> io::Result<RawRunOutput> {
     let (stdout, stdout_truncated) = stdout.unwrap_or_default();
     let (stderr, _) = stderr.unwrap_or_default();
     Ok(RawRunOutput {
-        status: status.code(),
+        status,
         stdout,
         stderr,
-        timed_out: false,
+        timed_out,
+        interrupted,
         stdout_truncated,
         output_incomplete,
     })
+}
+
+fn terminate_tree(child: &mut std::process::Child, grace: Option<Duration>) {
+    #[cfg(unix)]
+    if let Some(grace) = grace {
+        // Keep the leader unreaped until the final group kill to prevent PID reuse.
+        unsafe {
+            libc::kill(-(child.id() as libc::pid_t), libc::SIGTERM);
+        }
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if matches!(exited_without_reaping(child), Ok(true)) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = grace;
+    kill_tree(child);
 }
 
 /// Poll for child exit without reaping it, keeping its process-group ID from
@@ -390,6 +416,8 @@ mod tests {
             env: Vec::new(),
             env_remove: Vec::new(),
             timeout: Duration::from_millis(timeout_ms),
+            term_grace: None,
+            interrupt: None,
             stdout_cap: 1024,
             stderr_cap: 128,
         }
@@ -440,6 +468,45 @@ mod tests {
             run_raw(&raw_spec("bob-definitely-missing-binary", &[], 5_000))
                 .expect_err("missing binary fails to spawn");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_grace_allows_term_cleanup_and_escalates_if_ignored() {
+        let mut spec = raw_spec("sh", &["-c", "trap 'echo cleaned; exit 0' TERM; while :; do sleep 0.02; done"], 300);
+        spec.term_grace = Some(Duration::from_secs(1));
+        let out = run_raw(&spec).unwrap();
+        assert!(out.timed_out);
+        assert!(!out.interrupted);
+        assert!(String::from_utf8_lossy(&out.stdout).contains("cleaned"));
+        let mut spec = raw_spec(
+            "sh",
+            &["-c", "trap '' TERM; while :; do sleep 0.02; done"],
+            100,
+        );
+        spec.term_grace = Some(Duration::from_millis(100));
+        let began = Instant::now();
+        assert!(run_raw(&spec).unwrap().timed_out);
+        assert!(began.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_interrupt_stops_before_deadline() {
+        static STOP: AtomicBool = AtomicBool::new(false);
+        let mut spec = raw_spec("sleep", &["60"], 60_000);
+        spec.interrupt = Some(&STOP);
+        spec.term_grace = Some(Duration::from_millis(100));
+        let setter = thread::spawn(|| {
+            thread::sleep(Duration::from_millis(100));
+            STOP.store(true, Ordering::Relaxed);
+        });
+        let began = Instant::now();
+        let out = run_raw(&spec).unwrap();
+        setter.join().unwrap();
+        assert!(out.interrupted);
+        assert!(!out.timed_out);
+        assert!(began.elapsed() < Duration::from_secs(2));
     }
 
     /// Guard that SIGKILLs a detached pipe-holder on drop, so the holder
@@ -523,6 +590,8 @@ mod tests {
             )],
             env_remove: Vec::new(),
             timeout: Duration::from_secs(5),
+            term_grace: None,
+            interrupt: None,
             stdout_cap: 1024,
             stderr_cap: 1024,
         };

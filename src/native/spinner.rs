@@ -13,7 +13,7 @@ use std::{
         Arc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Braille progress frames drawn by [`Spinner`].
@@ -34,6 +34,14 @@ impl Spinner {
     /// Start spinning `label` on stderr, or print a single progress line
     /// when `BOB_PROGRESS=1` and stderr is not a TTY.
     pub(crate) fn start(label: &str) -> Self {
+        Self::start_with_elapsed(label, false)
+    }
+
+    pub(crate) fn start_elapsed(label: &str) -> Self {
+        Self::start_with_elapsed(label, true)
+    }
+
+    fn start_with_elapsed(label: &str, elapsed: bool) -> Self {
         if !std::io::stderr().is_terminal() {
             crate::native::style::stderr_progress_line(&format!("{label}…"));
             return Self { running: None };
@@ -43,9 +51,17 @@ impl Spinner {
         let label = label.to_string();
         let handle = thread::spawn(move || {
             let mut frame = 0;
+            let began = Instant::now();
             while !thread_stop.load(Ordering::Relaxed) {
                 let glyph = SPINNER_FRAMES[frame % SPINNER_FRAMES.len()];
-                eprint!("\r{glyph} {label}…");
+                if elapsed {
+                    eprint!(
+                        "\r{glyph} {label} · {}s",
+                        began.elapsed().as_secs()
+                    );
+                } else {
+                    eprint!("\r{glyph} {label}…");
+                }
                 let _ = std::io::stderr().flush();
                 frame += 1;
                 thread::sleep(Duration::from_millis(80));

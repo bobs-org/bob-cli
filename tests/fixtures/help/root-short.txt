@@ -35,6 +35,8 @@ Vault:
   records      List, inspect, check, create, update, and tidy Record Notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
+  tick         Run Bob's due background work in order: gcal, gmail, gkeep, refs,
+               projects, tasks
   vault-sync   Reconcile the vault through Git (default: run) or show status
 
 Integrations:

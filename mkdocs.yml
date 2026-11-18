@@ -257,6 +257,7 @@ nav:
               - "bob query": reference/cli/query.md
               - "bob records": reference/cli/records.md
               - "bob ref": reference/cli/ref.md
+              - "bob tick": reference/cli/tick.md
               - "bob vault-sync": reference/cli/vault-sync.md
           - "Integrations":
               - "bob bank": reference/cli/bank.md

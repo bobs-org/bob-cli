@@ -426,8 +426,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 105);
-    assert_eq!(ENTRIES.len(), 105);
+    assert_eq!(catalog.entries.len(), 106);
+    assert_eq!(ENTRIES.len(), 106);
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "bank-config-show"
             && entry.path == ["bank", "config", "show"]

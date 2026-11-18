@@ -137,7 +137,7 @@ fn receipt_nonce() -> u64 {
 fn post_scan_finished_notification() {
     #[cfg(target_os = "macos")]
     {
-        if !darwin::post(SCAN_FINISHED_NOTIFICATION) {
+        if !crate::native::darwin_notify::post(SCAN_FINISHED_NOTIFICATION) {
             eprintln!(
                 "bob ref: could not post scan-finished notification: {SCAN_FINISHED_NOTIFICATION}"
             );
@@ -147,24 +147,5 @@ fn post_scan_finished_notification() {
     {
         // No listeners off macOS; the receipt alone is the channel.
         let _ = SCAN_FINISHED_NOTIFICATION;
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod darwin {
-    use std::ffi::CString;
-    use std::os::raw::c_char;
-
-    #[link(name = "System")]
-    unsafe extern "C" {
-        fn notify_post(name: *const c_char) -> i32;
-    }
-
-    pub(super) fn post(name: &str) -> bool {
-        let Ok(name) = CString::new(name) else {
-            return false;
-        };
-        // `notify_post` returns 0 on success.
-        unsafe { notify_post(name.as_ptr()) == 0 }
     }
 }

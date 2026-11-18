@@ -1210,6 +1210,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "tick",
+        about: "Run Bob's due background work in order: gcal, gmail, gkeep, refs, projects, tasks",
+        section: Section::Vault,
+        target: Target::Leaf(Leaf { native_command: NativeCommand::Tick, script_command: None }),
+    },
+    Subcommand {
         name: "vault-sync",
         about: "Reconcile the vault through Git (default: run) or show status",
         section: Section::Vault,
@@ -2708,6 +2714,7 @@ mod tests {
             NativeCommand::TaskRestore,
             NativeCommand::TaskSplit,
             NativeCommand::Nightly,
+            NativeCommand::Tick,
             NativeCommand::NotebooksCheck,
             NativeCommand::NotebooksCreate,
             NativeCommand::NotebooksList,

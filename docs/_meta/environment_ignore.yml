@@ -14,3 +14,6 @@ BOB_HIGHLIGHTS_PRE_SCAN_COMMAND: "Retired setting detected only to reject old co
 BOB_HIGHLIGHTS_RESOLVE: "Private DNS fixture override for URL-fetch tests; production downloads resolve and validate DNS directly."
 BOB_REF_SCAN_LOCK_WAIT_SECONDS: "Internal test override for scan-writer lock timing; normal scans use the fixed wait."
 BOB_TEST_FIXTURE_PDF: "Fake-pandoc fixture marker in create tests; source-store capture skips its pandoc --version probe so the fake's args log survives."
+BOB_TICK_NOW: "Hidden RFC 3339 scheduler-clock override for hermetic tick tests; does not use the children's BOB_NOW."
+BOB_TICK_STEP_EXE: "Hidden fake-child executable override for tick supervision and scheduling integration tests."
+BOB_TICK_STEP_TIMEOUT_SECS: "Hidden ceiling override for tick timeout integration tests; production ceilings come from the fixed catalog."

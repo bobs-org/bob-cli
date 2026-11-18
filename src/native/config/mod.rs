@@ -493,6 +493,8 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     pub(crate) gmail: Option<serde_yaml::Value>,
     #[serde(default)]
+    pub(crate) tick: Option<serde_yaml::Value>,
+    #[serde(default)]
     pub(crate) capture: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) plan: Option<serde_yaml::Value>,

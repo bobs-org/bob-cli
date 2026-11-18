@@ -1,0 +1,10 @@
+  ✗ gcal      exit 7                                   <time>
+      │ detail 4
+      │ detail 5
+      │ detail 6
+      │ detail 7
+      │ detail 8
+      │ detail 9
+      │ detail 10
+      │ detail 11
+  failed · 1 ran in <time> · next projects, tasks due · refs 10:15 · gmail 11:00 · gcal 11:10

@@ -81,7 +81,8 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # macOS lint plus a cold test build can exceed 45 minutes before tests start.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 90 || 45 }}
     strategy:
       fail-fast: false
       matrix:

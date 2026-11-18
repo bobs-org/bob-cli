@@ -494,7 +494,7 @@ pub(crate) fn project_album_from_folder(
                 .or_else(|| {
                     walk_plan.records.iter().find_map(|record| {
                         (record.state == WalkLineState::Damaged)
-                            .then(|| record.slot.member.path.as_str())
+                            .then_some(record.slot.member.path.as_str())
                     })
                 })
                 .unwrap_or("unknown");

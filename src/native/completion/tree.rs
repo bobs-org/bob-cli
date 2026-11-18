@@ -134,6 +134,7 @@ impl NativeCommand {
             NativeCommand::MoveDoneTasks => {
                 crate::native::collect_done::completion_descriptor()
             }
+            NativeCommand::Tick => crate::native::tick::completion_descriptor(),
             NativeCommand::Nightly => {
                 crate::native::nightly::completion_descriptor()
             }

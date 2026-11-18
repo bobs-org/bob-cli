@@ -887,6 +887,16 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        fixed: JSON,
+        invalidates: &["tasks", "references", "gkeep", "stats"],
+        network: true,
+        ..syncs(
+            "tick", &["tick"], "Run due background work",
+            &["tick", "background", "cron", "calendar", "mail", "references"],
+            Policy::PreviewFirst, Some(DRY_RUN), 7200,
+        )
+    },
+    Row {
         confirm: Some(
             "Run nightly maintenance (vault-sync, task archive, articles, \
              period notes, areas, projects, notebooks, albums, vault-sync). Athena's timer already runs this.",

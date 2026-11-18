@@ -814,6 +814,8 @@ pub(super) fn run_bounded_argv(
         env: Vec::new(),
         env_remove: Vec::new(),
         timeout: CLIPBOARD_TIMEOUT,
+        term_grace: None,
+        interrupt: None,
         stdout_cap: CLIPBOARD_STDOUT_CAP,
         stderr_cap: CLIPBOARD_STDERR_CAP,
     })

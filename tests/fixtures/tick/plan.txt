@@ -1,0 +1,8 @@
+bob tick · plan · Wed Nov 18 10:05 · test-host
+  · gcal      1h      11:00      not due · last ✓ 10:00 · done
+  · gmail     1h      11:00      not due · last ✓ 10:00 · done
+  – gkeep     manual  —          manual
+  · refs      15m     10:15      not due · last ✓ 10:00 · done
+  · projects  15m     10:15      not due · last ✓ 10:00 · done
+  · tasks     15m     10:15      not due · last ✓ 10:00 · done
+  0 steps would run · dry run, nothing written

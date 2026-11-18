@@ -130,7 +130,7 @@ fn help_and_usage_are_listed_under_integrations() {
     assert!(root_help.contains("Integrations:"));
     assert_text_order(
         &root_help,
-        &["Integrations:", "clipboard", "gcal", "gkeep"],
+        &["Integrations:", "\n  clipboard ", "\n  gcal ", "\n  gkeep "],
     );
 
     let help = bob_command()

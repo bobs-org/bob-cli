@@ -70,6 +70,7 @@ pub(crate) mod file_coordination;
 mod freshness;
 mod gcal;
 // Consumer: the Gmail renderer phases bob-cli-hg.3.1.2–.4 consume this pure model.
+mod darwin_notify;
 mod gkeep;
 pub(crate) mod gmail;
 pub(crate) mod google;
@@ -106,6 +107,7 @@ mod spinner;
 mod stats;
 pub(crate) mod style;
 mod subprocess_runner;
+mod tick;
 // Shared cancel-label policy and pure effect engine.
 // Later epic phases connect these primitives to explicit relation gestures.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -196,6 +198,7 @@ pub(crate) enum NativeCommand {
     TaskRestore,
     TaskSplit,
     Nightly,
+    Tick,
     NotebooksCheck,
     NotebooksCreate,
     NotebooksList,
@@ -314,6 +317,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::TaskRestore => task_move::run_restore(args),
         NativeCommand::TaskSplit => task_split::run(args),
         NativeCommand::Nightly => nightly::run(args),
+        NativeCommand::Tick => tick::run(args),
         NativeCommand::NotebooksCheck => notebooks::cli::run_check(args),
         NativeCommand::NotebooksCreate => notebooks::cli::run_create(args),
         NativeCommand::NotebooksList => notebooks::cli::run_list(args),

@@ -1,0 +1,9 @@
+bob tick · status · Wed Nov 18 10:05 · test-host
+  last tick 10:05 (ok)
+  STEP      EVERY   LAST      RESULT                         LAST OK  NEXT
+  gcal      1h      10:00 ✓   done                           10:00    11:00
+  gmail     1h      10:00 ✓   done                           10:00    11:00
+  gkeep     manual  —     –   never ran                      —        —
+  refs      15m     10:00 ✓   done                           10:00    10:15
+  projects  15m     10:00 ✓   done                           10:00    10:15
+  tasks     15m     10:00 ✓   done                           10:00    10:15

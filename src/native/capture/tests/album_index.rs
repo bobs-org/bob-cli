@@ -177,8 +177,14 @@ fn album_create_reads_only_its_slice_and_stages_one_edit() {
     assert_eq!(batch.record_folders, vec!["eat".to_string()]);
     assert_eq!(batch.record_files_opened, 1, "one scan of the eat folder");
     let staged = staged_map(&batch);
-    assert_eq!(staged.len(), 2, "record plus one album edit: {staged:?}");
+    assert_eq!(
+        staged.len(),
+        3,
+        "record, neighbour walk line, and one album edit: {staged:?}"
+    );
     assert!(staged.contains_key(&vault.join("eat/ramen_nagi.md")));
+    assert!(staged[&vault.join("eat/ninja_sushi.md")]
+        .contains("[[eat/ramen_nagi|Ramen Nagi ›]]"));
     let album_after = staged.get(&vault.join("eat.md")).expect("album edit");
     assert!(album_after.contains("Ramen Nagi"), "{album_after}");
     assert!(album_after.contains("Ninja Sushi"), "{album_after}");
@@ -202,7 +208,13 @@ fn album_batch_reuses_one_folder_scan_for_two_creates() {
         "two items still scan the folder once"
     );
     let staged = staged_map(&batch);
-    assert_eq!(staged.len(), 3, "two records plus one album edit");
+    assert_eq!(
+        staged.len(),
+        4,
+        "two records, neighbour walk line, and one album edit"
+    );
+    assert!(staged[&vault.join("eat/ninja_sushi.md")]
+        .contains("[[eat/udon|‹ Udon]]"));
     let album_after = staged.get(&vault.join("eat.md")).expect("album edit");
     for title in ["Ramen Nagi", "Udon", "Ninja Sushi"] {
         assert!(album_after.contains(title), "{album_after}");

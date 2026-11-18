@@ -322,7 +322,7 @@ fn new_dry_run_then_write_and_duplicate_refusal() {
 }
 
 #[test]
-fn new_writes_no_h1_and_update_inserts_notes_into_empty_body() {
+fn new_writes_no_h1_and_update_inserts_notes_after_walk_line() {
     let fixture = fixture();
     let created = records_command(&fixture)
         .args([
@@ -349,7 +349,7 @@ fn new_writes_no_h1_and_update_inserts_notes_into_empty_body() {
     assert!(markdown.contains("## Notes"), "{markdown}");
     assert!(markdown.contains("Spicy broth"), "{markdown}");
 
-    // A note with no ordinary bullets ends right after the frontmatter.
+    // A note with no ordinary bullets has only its managed walk line.
     let bare = records_command(&fixture)
         .args([
             "new",
@@ -370,10 +370,9 @@ fn new_writes_no_h1_and_update_inserts_notes_into_empty_body() {
     let bare_markdown =
         fs::read_to_string(fixture.vault.join("eat/udon_house.md"))
             .expect("read bare record");
+    let walk_line = "[[eat/ramen_nagi|‹ Ramen Nagi]] · [[eat|↑ Restaurants]] · [[eat/ramen_nagi|Ramen Nagi ›]]";
     assert!(
-        bare_markdown.ends_with(
-            "[[eat/ramen_nagi|‹ Ramen Nagi]] · [[eat|↑ Restaurants]] · [[eat/ramen_nagi|Ramen Nagi ›]]\n"
-        ),
+        bare_markdown.ends_with(&format!("---\n\n{walk_line}\n")),
         "{bare_markdown}"
     );
     assert!(!bare_markdown.contains('#'), "{bare_markdown}");
@@ -396,9 +395,9 @@ fn new_writes_no_h1_and_update_inserts_notes_into_empty_body() {
         fs::read_to_string(fixture.vault.join("eat/udon_house.md"))
             .expect("read updated record");
     assert!(
-        updated_markdown.contains(
-            "[[eat/ramen_nagi|‹ Ramen Nagi]] · [[eat|↑ Restaurants]] · [[eat/ramen_nagi|Ramen Nagi ›]]\n\n## Notes\n\n- First visit\n"
-        ),
+        updated_markdown.contains(&format!(
+            "---\n\n{walk_line}\n\n## Notes\n\n- First visit\n"
+        )),
         "{updated_markdown}"
     );
 }

@@ -49,5 +49,6 @@ mod themes;
 mod themes_migrate;
 mod themes_rename;
 mod themes_split;
+mod tick;
 mod vault_sync;
 mod walks;
