@@ -102,7 +102,7 @@ pub(crate) const OPEN_QUERY: &str = "not done";
 /// the native Tasks engine so custom statuses, blocked derivation,
 /// and the vault's Tasks settings are honored exactly as in
 /// `bob plan`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RichTask {
     /// Vault-relative path with forward slashes.
     pub(crate) path: String,
@@ -125,8 +125,77 @@ pub(crate) struct RichTask {
     pub(crate) block_id: Option<String>,
 }
 
+/// One Tasks settings read and parsed vault index shared by callers that
+/// need several rich task views of the same snapshot.
+pub(crate) struct RichTaskIndex {
+    settings: TasksSettings,
+    index: TaskIndex,
+    now: chrono::NaiveDateTime,
+}
+
+impl RichTaskIndex {
+    /// Read the Tasks settings and parse the vault once.
+    pub(crate) fn read(
+        vault: &Path,
+        now: chrono::NaiveDateTime,
+    ) -> Result<Self, DataviewError> {
+        let settings = TasksSettings::read(vault)?;
+        let index = TaskIndex::read(vault, &settings, now)?;
+        Ok(Self {
+            settings,
+            index,
+            now,
+        })
+    }
+
+    pub(crate) fn task_format(&self) -> TaskFormat {
+        self.settings.task_format
+    }
+
+    /// Return rich rows matching a native Tasks query. Queries still make
+    /// their own sandbox decision, so ordinary queries never build JS.
+    pub(crate) fn query(
+        &self,
+        vault: &Path,
+        query: &str,
+    ) -> Result<Vec<RichTask>, DataviewError> {
+        let parsed = parse::parse(
+            vault,
+            None,
+            query,
+            &self.settings,
+            parse::ParseDialect::Native,
+        )?;
+        let mut javascript =
+            maybe_sandbox(&parsed, &self.index.tasks, self.now)?;
+        let execution = execute_query(
+            parsed,
+            &self.settings,
+            &self.index,
+            self.now,
+            javascript.as_mut(),
+        )?;
+        Ok(execution
+            .result
+            .tasks
+            .iter()
+            .map(|task| rich_task(task, &self.settings))
+            .collect())
+    }
+
+    /// Return every indexed task without applying a query.
+    pub(crate) fn all(&self) -> Vec<RichTask> {
+        self.index
+            .tasks
+            .iter()
+            .map(|task| rich_task(task, &self.settings))
+            .collect()
+    }
+}
+
 /// The vault's Tasks format, so `bob freshness` can refuse to run on
 /// a non-Dataview vault (see `docs/freshness.md` rule 1).
+#[allow(dead_code)]
 pub(crate) fn read_task_format(
     vault: &Path,
 ) -> Result<TaskFormat, DataviewError> {
@@ -135,17 +204,12 @@ pub(crate) fn read_task_format(
 
 /// Every task in the vault, unfiltered: the base for
 /// `refreshed_today` (tasks of any status) and freshness warnings.
+#[allow(dead_code)]
 pub(crate) fn scan_all_rich_tasks(
     vault: &Path,
     now: chrono::NaiveDateTime,
 ) -> Result<Vec<RichTask>, DataviewError> {
-    let settings = TasksSettings::read(vault)?;
-    let index = TaskIndex::read(vault, &settings, now)?;
-    Ok(index
-        .tasks
-        .iter()
-        .map(|task| rich_task(task, &settings))
-        .collect())
+    Ok(RichTaskIndex::read(vault, now)?.all())
 }
 
 /// The descriptions of the tasks matching `query` through the native
@@ -179,29 +243,13 @@ pub(crate) fn query_matching_descriptions(
 
 /// The rich rows matching `query` through the native Tasks engine.
 /// See [`query_matching_descriptions`] for the engine contract.
+#[allow(dead_code)]
 pub(crate) fn query_rich_tasks(
     vault: &Path,
     query: &str,
     now: chrono::NaiveDateTime,
 ) -> Result<Vec<RichTask>, DataviewError> {
-    let settings = TasksSettings::read(vault)?;
-    let index = TaskIndex::read(vault, &settings, now)?;
-    let parsed = parse::parse(
-        vault,
-        None,
-        query,
-        &settings,
-        parse::ParseDialect::Native,
-    )?;
-    let mut javascript = maybe_sandbox(&parsed, &index.tasks, now)?;
-    let execution =
-        execute_query(parsed, &settings, &index, now, javascript.as_mut())?;
-    Ok(execution
-        .result
-        .tasks
-        .iter()
-        .map(|task| rich_task(task, &settings))
-        .collect())
+    RichTaskIndex::read(vault, now)?.query(vault, query)
 }
 
 /// Build the JavaScript sandbox only when `query` needs it: a query
@@ -729,6 +777,29 @@ mod tests {
         let rich = query_rich_tasks(&vault, "not done", now)
             .expect("a rich query without by function skips the sandbox");
         assert_eq!(rich.len(), descriptions.len());
+    }
+
+    #[test]
+    fn shared_rich_task_index_matches_independent_reads() {
+        let vault = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tasks_parity/vault");
+        let now = bob_env::current_datetime();
+        let shared =
+            RichTaskIndex::read(&vault, now).expect("read shared Tasks index");
+
+        for query in [READY_QUERY, PENDING_QUERY, NEXT_QUERY, OPEN_QUERY] {
+            assert_eq!(
+                shared.query(&vault, query).expect("shared query"),
+                query_rich_tasks(&vault, query, now)
+                    .expect("independent query read"),
+                "shared results differ for {query}"
+            );
+        }
+        assert_eq!(
+            shared.all(),
+            scan_all_rich_tasks(&vault, now)
+                .expect("independent all-task read")
+        );
     }
 
     #[test]

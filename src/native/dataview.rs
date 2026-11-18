@@ -42,12 +42,13 @@ use sources::{
 };
 #[cfg(test)]
 pub(crate) use tasks::{parse_details, TaskDetails};
+#[allow(unused_imports)]
 pub(crate) use tasks::{
     query_matching_descriptions, query_rich_tasks, read_task_format,
-    scan_all_rich_tasks, tasks_fingerprint, RichTask, StatsTaskParser,
-    TaskFormat, NEXT_QUERY, OPEN_QUERY, PENDING_QUERY, READY_QUERY,
+    scan_all_rich_tasks, tasks_fingerprint, RichTask, RichTaskIndex,
+    StatsTaskParser, TaskFormat, NEXT_QUERY, OPEN_QUERY, PENDING_QUERY,
+    READY_QUERY,
 };
-
 const COMMAND_NAME: &str = "bob query";
 const ENV_OBSIDIAN_COMMAND: &str = "BOB_DATAVIEW_OBSIDIAN_COMMAND";
 const ENV_VAULT: &str = "BOB_DATAVIEW_VAULT";

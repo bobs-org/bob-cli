@@ -149,9 +149,10 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
             ConfigError::Invalid(message) => ScanError::Usage(message),
         })?;
 
-    let format = dataview::read_task_format(bob_dir)
+    let now = bob_env::current_datetime();
+    let task_index = dataview::RichTaskIndex::read(bob_dir, now)
         .map_err(|error| ScanError::Io(dataview_message(&error)))?;
-    if format != TaskFormat::Dataview {
+    if task_index.task_format() != TaskFormat::Dataview {
         return Err(ScanError::Usage(
             "bob freshness needs the vault's Tasks task format to be \
             Dataview (docs/freshness.md rule 1); refusing to run"
@@ -159,24 +160,22 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         ));
     }
 
-    let now = bob_env::current_datetime();
     let today = now.date();
     let weekday = today.format("%a").to_string();
 
-    let ready_tasks =
-        dataview::query_rich_tasks(bob_dir, dataview::READY_QUERY, now)
-            .map_err(|error| ScanError::Io(dataview_message(&error)))?;
-    let pending_tasks =
-        dataview::query_rich_tasks(bob_dir, dataview::PENDING_QUERY, now)
-            .map_err(|error| ScanError::Io(dataview_message(&error)))?;
-    let next_tasks =
-        dataview::query_rich_tasks(bob_dir, dataview::NEXT_QUERY, now)
-            .map_err(|error| ScanError::Io(dataview_message(&error)))?;
-    let open_tasks =
-        dataview::query_rich_tasks(bob_dir, dataview::OPEN_QUERY, now)
-            .map_err(|error| ScanError::Io(dataview_message(&error)))?;
-    let all_tasks = dataview::scan_all_rich_tasks(bob_dir, now)
+    let ready_tasks = task_index
+        .query(bob_dir, dataview::READY_QUERY)
         .map_err(|error| ScanError::Io(dataview_message(&error)))?;
+    let pending_tasks = task_index
+        .query(bob_dir, dataview::PENDING_QUERY)
+        .map_err(|error| ScanError::Io(dataview_message(&error)))?;
+    let next_tasks = task_index
+        .query(bob_dir, dataview::NEXT_QUERY)
+        .map_err(|error| ScanError::Io(dataview_message(&error)))?;
+    let open_tasks = task_index
+        .query(bob_dir, dataview::OPEN_QUERY)
+        .map_err(|error| ScanError::Io(dataview_message(&error)))?;
+    let all_tasks = task_index.all();
 
     let day_file = pomodoro::day_file_for(bob_dir);
     let daily_relative = relative_path(&day_file, bob_dir);
