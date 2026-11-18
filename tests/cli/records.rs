@@ -3149,7 +3149,7 @@ fn update_envelope_capability_in_album_reports() {
         assert_success(&output);
         assert_eq!(
             json(&output)["capabilities"],
-            serde_json::json!(["record_values_v1"]),
+            serde_json::json!(["record_values_v1", "record_walk_v1"]),
             "{command} carries the capability flag"
         );
         assert_eq!(json(&output)["schema_version"], 1);

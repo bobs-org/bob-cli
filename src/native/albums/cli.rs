@@ -123,9 +123,9 @@ pub(crate) fn build_cli_check() -> ClapCommand {
 
 pub(crate) fn build_cli_sync() -> ClapCommand {
     ClapCommand::new("bob albums sync")
-        .about("Repair generated records indexes and album catalogs")
+        .about("Repair generated records indexes, record walks, and album catalogs")
         .long_about(
-            "Repair each album's generated [!records] index and each owner's generated `## Albums` catalog from one snapshot. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, folder membership, and the owner/ancestor/declaration inputs catalog rows use, then makes one scoped commit `albums: sync (N notes)` when indexes or catalogs change. Current indexes and catalogs write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums and damaged catalogs are left intact, healthy regions continue, and any damaged region or runtime failure exits 1.",
+            "Repair each album's generated [!records] index, each record's walk line, and each owner's generated `## Albums` catalog from one snapshot. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, folder membership, and the owner/ancestor/declaration inputs catalog rows use, then makes one scoped commit `albums: sync (N notes)` when indexes, walk lines, or catalogs change. Current indexes, walk lines, and catalogs write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums, damaged walk lines, and damaged catalogs are left intact, healthy regions continue, and any damaged region or runtime failure exits 1.",
         )
         .after_help(
             "Examples:\n  bob albums sync\n  bob albums sync -d\n  bob albums sync -b ~/bob-work -f json\n\nSee docs/records.md for the index, catalog, and sync contract.",

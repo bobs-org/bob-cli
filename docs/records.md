@@ -139,15 +139,15 @@ bob albums update STEM [-b DIR] [-d] [-f human|json] [-i FILE]
 
 ### Syncing records indexes
 
-`bob albums sync` plans every album index and every owner catalog from one
-coherent snapshot and album inventory. `-d` prints the unified diffs without
-taking the maintenance lock, writing files, running Git, or syncing the vault.
-A real run takes the shared maintenance lock, pre-syncs the vault, guards
-album preimages, record frontmatter, folder membership, and the
-owner/ancestor/declaration inputs catalog rows use, writes all healthy
-indexes and catalogs, then makes one scoped `albums: sync (N notes)` commit.
-It runs a post-sync only when it made that commit. A current run writes and
-commits nothing and skips post-sync.
+`bob albums sync` plans every album index, every record walk line, and every
+owner catalog from one coherent snapshot and album inventory. `-d` prints the
+unified diffs without taking the maintenance lock, writing files, running Git,
+or syncing the vault. A real run takes the shared maintenance lock, pre-syncs
+the vault, guards album preimages, record frontmatter, folder membership, and
+the owner/ancestor/declaration inputs catalog rows use, writes all healthy
+indexes, walk lines, and catalogs, then makes one scoped
+`albums: sync (N notes)` commit. It runs a post-sync only when it made that
+commit. A current run writes and commits nothing and skips post-sync.
 
 Damaged or invalid albums and damaged owner catalogs remain unchanged. Sync
 continues with healthy regions, reports each skipped damaged region, and
@@ -201,10 +201,11 @@ final publish.
 
 JSON uses schema version 1. `albums[]` repeats the list/check entry shape;
 `catalogs[]` repeats the owner-catalog report. `counts.damaged` counts unsafe
-or invalid indexes. `findings[]` flattens album and catalog issues, while
-`changes[]` includes path and dry-run diff. `commit`, `sync`, `warnings[]`,
-and `io_errors[]` report transaction state; `ok` is false on damage or runtime
-failure.
+or invalid indexes, and `counts.walk_lines` counts rewritten walk lines.
+`findings[]` flattens album and catalog issues, while `changes[]` includes
+path, `kind` (`index`, `catalog`, `walk`), and dry-run diff. `commit`,
+`sync`, `warnings[]`, and `io_errors[]` report transaction state; `ok` is
+false on damage or runtime failure.
 
 Human `list` groups albums by root with root hues, record and group counts,
 freshness (`today` / `Nd` / `Nw`, using `BOB_NOW` when set), and `!N` / `~N`
@@ -215,9 +216,11 @@ warning summary.
 List and check share one JSON envelope (`schema_version: 1`). Albums are
 ordered by path. `parent` is the parent stem. `ok` is false when error
 findings exist or runtime I/O failed. Each album carries `noun`, `label`,
-`plural`, and the additive display `singular`. The top level also carries
-`capabilities: ["record_values_v1"]`, which the Record Card reads before
-enabling edits. See
+`plural`, the additive display `singular`, and the `walk` object (`state`,
+`total`, `counts: {current, missing, stale, damaged}`, `order: [stem…]`,
+`[]` when held). The top level also carries
+`capabilities: ["record_values_v1", "record_walk_v1"]`, which the Record Card
+reads before enabling edits. See
 [JSON outputs](reference/json-outputs.md#album-reports).
 
 Each album's ordered `fields[]` includes its label, kind, flags, typed default
@@ -423,6 +426,72 @@ fingerprint as its new `expect`:
 A post-sync failure keeps success and local-commit evidence with
 `saved locally; sync failed` guidance; the recovery action is
 `bob vault-sync`, never replaying the ops.
+
+## Record walk
+
+Every record note carries one bob-maintained walk line as its first body
+line. It links the record to the previous and next records in its album, so
+`[n` / `]n` can follow the album ring with no key changes:
+
+```markdown
+---
+parent: "[[eat]]"
+type: "[[record]]"
+title: "Ramen Nagi"
+---
+
+[[eat/pho|‹ Pho House]] · [[eat|↑ Eat]] · [[eat/ramen_ya|Ramen Ya ›]]
+
+## Notes
+```
+
+A single-record album carries only `[[eat|↑ Eat]]`, with no arms. No count
+is ever written into Markdown: `N of M` is painted live by the plugin rail
+and the `n` links footer, never stored.
+
+- **Order and membership.** Members are the immediate Markdown children of
+  the album folder, including readable members whose YAML is invalid. Nested
+  files, non-Markdown files, `.base` files, and the album note are excluded.
+  Order is the album-wide `title_order` the `[!records]` index uses
+  (lowercase title, then vault-relative slash path, Unicode scalar order),
+  flat across status groups. The ring wraps at both ends; `M = 1` has no
+  arms and `M = 2` points both arms at the other record.
+- **Bytes.** The canonical line for `M >= 2` is
+  `[[<album>/<prev>|‹ <Prev>]] · [[<album>|↑ <Album>]] · [[<album>/<next>|<Next> ›]]`.
+  Separators are `·` (U+00B7 with one space on each side). Labels drop
+  `|[]#^`, trim leading `‹`/`<` and trailing `›`/`>` from both ends, then
+  escape active Markdown; an empty result falls back to the humanized stem,
+  then the bare stem. Nothing is written for `M = 0`.
+- **Placement.** The line is inserted as the first body line: closing `---`,
+  one blank line, the walk line, then (only when the body has non-blank
+  content) one blank line and the original body. After insertion the position
+  belongs to Bryan: a recognized line he moved is rewritten where it sits.
+- **States.** `current` (exactly one walk line, no nav-like line, content
+  equals the canonical line), `stale` (one walk line, content differs,
+  rewritten in place), `missing` (no walk line, inserted per placement), and
+  `damaged` (reported, never written: `extra_text`, `duplicate_lines`, or
+  `no_frontmatter`). Deleting the offending line heals a damaged record on
+  the next sync.
+- **Owners and radius.** `bob albums sync` is the only repair owner. Capture
+  creates and `bob records new` stage only the lines their batch changes
+  (the new records plus neighbours whose canonical line differs); updates
+  and `bob records tidy` never touch walk lines. Tidy learns to see past
+  walk lines instead.
+- **Churn.** One create rewrites 3 record files, a delete rewrites 2, a
+  retitle that keeps its position rewrites 2, a retitle that reorders
+  rewrites at most 5, a status or field edit rewrites 0, and an album retitle
+  rewrites M (rare).
+- **Backfill.** The first real sync after this release backfills every
+  record in one scoped commit, from nightly or the plugin watcher. After
+  that the steady state is quiet: a second sync is a byte-identical no-op.
+
+`bob albums list|check` report each album's `walk` object (`state`, `total`,
+`counts`, `order`) and the `record_walk_v1` capability, with warnings
+`album_walk_stale` (missing or stale lines, hint `bob albums sync`) and
+`album_walk_damaged` (damaged lines, count and first path). `bob albums sync`
+tags `changes[]` with `kind: "index" | "catalog" | "walk"` and counts
+`walk_lines`. Human sync output summarizes walk repairs as one line per
+album (`eat — 104 walk lines`).
 
 ## Schema
 

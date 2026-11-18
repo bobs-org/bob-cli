@@ -10,6 +10,7 @@ use super::{
     grouping::{group_records, GroupingRecord, RecordGroup},
     index::{self, IndexState},
     registry::{AlbumEntry, AlbumRegistry, DiscoveryHealth},
+    walk::{self, AlbumWalkState, WalkLineState, WalkScope},
     write::folder_complete,
     AlbumDeclaration, AlbumFinding, AlbumIssueSeverity,
 };
@@ -118,7 +119,40 @@ pub(crate) struct AlbumReportEntry {
     pub(crate) needs_status: usize,
     pub(crate) last_record: Option<String>,
     pub(crate) index: IndexState,
+    pub(crate) walk: AlbumWalkReport,
     pub(crate) issues: Vec<AlbumIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AlbumWalkCounts {
+    pub(crate) current: usize,
+    pub(crate) missing: usize,
+    pub(crate) stale: usize,
+    pub(crate) damaged: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AlbumWalkReport {
+    pub(crate) state: AlbumWalkState,
+    pub(crate) total: usize,
+    pub(crate) counts: AlbumWalkCounts,
+    pub(crate) order: Vec<String>,
+}
+
+impl AlbumWalkReport {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "state": self.state.as_str(),
+            "total": self.total,
+            "counts": {
+                "current": self.counts.current,
+                "missing": self.counts.missing,
+                "stale": self.counts.stale,
+                "damaged": self.counts.damaged,
+            },
+            "order": self.order,
+        })
+    }
 }
 
 impl AlbumReportEntry {
@@ -155,6 +189,7 @@ impl AlbumReportEntry {
             "needs_status": self.needs_status,
             "last_record": self.last_record,
             "index": { "state": self.index.as_str() },
+            "walk": self.walk.to_json(),
             "issues": self.issues.iter().map(AlbumIssue::to_json).collect::<Vec<_>>(),
         })
     }
@@ -236,7 +271,7 @@ impl AlbumReport {
         json!({
             "ok": self.ok(),
             "schema_version": SCHEMA_VERSION,
-            "capabilities": ["record_values_v1"],
+            "capabilities": ["record_values_v1", "record_walk_v1"],
             "albums": self.albums.iter().map(AlbumReportEntry::to_json).collect::<Vec<_>>(),
             "catalogs": self.catalogs.iter().map(AlbumCatalogRecord::to_json).collect::<Vec<_>>(),
             "counts": {
@@ -293,13 +328,16 @@ pub(crate) fn project_album(
     entry: &AlbumEntry,
     catalog: &mut RecordCatalog,
 ) -> AlbumProjection {
+    let vault_root = catalog.vault_root().to_path_buf();
     let folder = catalog.folder(&entry.declaration.stem);
-    project_album_from_folder(entry, folder)
+    let folder_owned = folder.clone();
+    project_album_from_folder(entry, &folder_owned, &vault_root)
 }
 
 pub(crate) fn project_album_from_folder(
     entry: &AlbumEntry,
     folder: &FolderIndex,
+    vault_root: &Path,
 ) -> AlbumProjection {
     let declaration = &entry.declaration;
     let record_type = declaration.record_type.as_ref().or_else(|| {
@@ -403,10 +441,85 @@ pub(crate) fn project_album_from_folder(
             });
         }
     }
+    let walk_plan = walk::plan_album_walk(
+        declaration,
+        folder,
+        &[],
+        |relative| std::fs::read_to_string(vault_root.join(relative)).ok(),
+        WalkScope::All,
+    );
+    let mut walk_counts = AlbumWalkCounts {
+        current: 0,
+        missing: 0,
+        stale: 0,
+        damaged: 0,
+    };
+    for record in &walk_plan.records {
+        match record.state {
+            WalkLineState::Current => walk_counts.current += 1,
+            WalkLineState::Missing => walk_counts.missing += 1,
+            WalkLineState::Stale => walk_counts.stale += 1,
+            WalkLineState::Damaged => walk_counts.damaged += 1,
+        }
+    }
+    let walk_report = AlbumWalkReport {
+        state: walk_plan.state,
+        total: walk_plan.total,
+        counts: walk_counts,
+        order: walk_plan.order.clone(),
+    };
+    let mut walk_findings: Vec<AlbumFinding> = Vec::new();
+    match walk_plan.state {
+        AlbumWalkState::Stale => {
+            let pending = walk_report.counts.missing + walk_report.counts.stale;
+            walk_findings.push(AlbumFinding {
+                code: "album_walk_stale",
+                severity: AlbumIssueSeverity::Warning,
+                path: declaration.path.clone(),
+                line_number: None,
+                key_path: None,
+                message: format!(
+                    "the record walk in {} is stale ({pending} of {} need lines); run `bob albums sync`",
+                    declaration.path,
+                    walk_report.total,
+                ),
+                suggestions: vec!["bob albums sync".to_owned()],
+            });
+        }
+        AlbumWalkState::Damaged => {
+            let first = walk_plan
+                .warnings
+                .first()
+                .map(|warning| warning.path.as_str())
+                .or_else(|| {
+                    walk_plan.records.iter().find_map(|record| {
+                        (record.state == WalkLineState::Damaged)
+                            .then(|| record.slot.member.path.as_str())
+                    })
+                })
+                .unwrap_or("unknown");
+            walk_findings.push(AlbumFinding {
+                code: "album_walk_damaged",
+                severity: AlbumIssueSeverity::Warning,
+                path: declaration.path.clone(),
+                line_number: None,
+                key_path: None,
+                message: format!(
+                    "{} has {} records with damaged walk lines (first: {first}); delete the offending lines and run `bob albums sync`",
+                    declaration.path, walk_report.counts.damaged,
+                ),
+                suggestions: vec!["bob albums sync".to_owned()],
+            });
+        }
+        AlbumWalkState::Held
+        | AlbumWalkState::Empty
+        | AlbumWalkState::Current => {}
+    }
     let mut issues: Vec<AlbumIssue> = entry
         .findings
         .iter()
         .chain(plan.findings.iter())
+        .chain(walk_findings.iter())
         .map(AlbumIssue::from_finding)
         .collect();
     issues.sort_by(|left, right| {
@@ -451,6 +564,7 @@ pub(crate) fn project_album_from_folder(
             needs_status: grouping.needs_status,
             last_record: grouping.last_record,
             index: plan.state,
+            walk: walk_report,
             issues,
         },
         index_plan: plan,

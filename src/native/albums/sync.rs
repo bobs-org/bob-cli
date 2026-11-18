@@ -20,6 +20,7 @@ use super::{
     index::IndexState,
     registry::{AlbumRegistry, DiscoveryHealth},
     report::{self, AlbumIssue, AlbumReportEntry},
+    walk::{plan_album_walk, WalkScope},
 };
 use crate::native::{
     host_catalog::{
@@ -40,6 +41,7 @@ pub(crate) struct ChangedFile {
     pub(crate) path: String,
     pub(crate) before: String,
     pub(crate) after: String,
+    pub(crate) kind: &'static str,
 }
 
 impl ChangedFile {
@@ -58,6 +60,7 @@ impl ChangedFile {
 pub(crate) struct IndexSyncPlan {
     pub(crate) albums: Vec<AlbumReportEntry>,
     pub(crate) edits: Vec<FileEdit>,
+    pub(crate) walk_edits: Vec<FileEdit>,
     pub(crate) dependencies: ReadDependencies,
     pub(crate) io_errors: Vec<String>,
 }
@@ -170,7 +173,7 @@ impl SyncReport {
             "dry_run": self.dry_run,
             "changed": self.changes.iter().map(|change| change.path.clone()).collect::<Vec<_>>(),
             "changes": self.changes.iter().map(|change| {
-                let mut item = json!({"path": change.path, "action": "update"});
+                let mut item = json!({"path": change.path, "action": "update", "kind": change.kind});
                 if self.dry_run {
                     item["diff"] = Value::String(change.diff());
                 }
@@ -187,6 +190,7 @@ impl SyncReport {
                 "damaged": self.albums.iter().filter(|album| album.index == IndexState::Damaged).count(),
                 "errors": errors,
                 "warnings": warnings,
+                "walk_lines": self.changes.iter().filter(|change| change.kind == "walk").count(),
             },
             "findings": findings,
             "io_errors": self.io_errors,
@@ -236,6 +240,7 @@ pub(crate) fn plan_indexes(
     let mut dependencies = ReadDependencies::default();
     let mut albums = Vec::with_capacity(registry.albums.len());
     let mut edits = Vec::new();
+    let mut walk_edits = Vec::new();
     let mut io_errors = Vec::new();
     for album in &registry.albums {
         if let Some(contents) = &album.contents {
@@ -263,15 +268,25 @@ pub(crate) fn plan_indexes(
                 );
             }
         }
-        let projection = report::project_album_from_folder(album, folder);
+        let projection =
+            report::project_album_from_folder(album, folder, vault);
         io_errors.extend(projection.io_errors);
         if let Some(edit) = projection.index_plan.edit {
             edits.push(edit);
         }
+        let walk_plan = plan_album_walk(
+            &album.declaration,
+            folder,
+            &[],
+            |relative| std::fs::read_to_string(vault.join(relative)).ok(),
+            WalkScope::All,
+        );
+        walk_edits.extend(walk_plan.edits);
         albums.push(projection.entry);
     }
     albums.sort_by(|left, right| left.path.cmp(&right.path));
     edits.sort_by(|left, right| left.path.cmp(&right.path));
+    walk_edits.sort_by(|left, right| left.path.cmp(&right.path));
 
     // The snapshot is the discovery source for album declarations; require
     // it to contain each declaration preimage used above.
@@ -292,6 +307,7 @@ pub(crate) fn plan_indexes(
     Ok(IndexSyncPlan {
         albums,
         edits,
+        walk_edits,
         dependencies,
         io_errors,
     })
@@ -313,15 +329,14 @@ pub(crate) fn plan_sync(
         .into_iter()
         .cloned()
         .collect::<Vec<FileEdit>>();
-    let edits = merge_edits(indexes.edits, catalog_edits);
-    let changes = edits
-        .iter()
-        .map(|edit| ChangedFile {
-            path: slash(&edit.path),
-            before: edit.before.clone(),
-            after: edit.after.clone(),
-        })
+    let tagged: Vec<(FileEdit, &'static str)> = indexes
+        .edits
+        .into_iter()
+        .map(|edit| (edit, "index"))
+        .chain(indexes.walk_edits.into_iter().map(|edit| (edit, "walk")))
+        .chain(catalog_edits.into_iter().map(|edit| (edit, "catalog")))
         .collect();
+    let (edits, changes) = merge_edits(tagged);
     Ok(CombinedSyncPlan {
         albums: indexes.albums,
         catalogs: catalogs.records(),
@@ -333,16 +348,31 @@ pub(crate) fn plan_sync(
 }
 
 fn merge_edits(
-    indexes: Vec<FileEdit>,
-    catalogs: Vec<FileEdit>,
-) -> Vec<FileEdit> {
-    let mut by_path = BTreeMap::new();
-    for edit in indexes.into_iter().chain(catalogs) {
+    tagged: Vec<(FileEdit, &'static str)>,
+) -> (Vec<FileEdit>, Vec<ChangedFile>) {
+    let mut by_path: BTreeMap<PathBuf, (FileEdit, &'static str)> =
+        BTreeMap::new();
+    for (edit, kind) in tagged {
         match by_path.remove(&edit.path) {
             None => {
-                by_path.insert(edit.path.clone(), edit);
+                by_path.insert(edit.path.clone(), (edit, kind));
             }
-            Some(existing) => {
+            Some((existing, existing_kind)) => {
+                debug_assert!(
+                    !(is_record_path(&existing.path)
+                        && !is_record_path(&edit.path)
+                        || !is_record_path(&existing.path)
+                            && is_record_path(&edit.path)),
+                    "record walk hosts never collide with index/catalog hosts"
+                );
+                let merged_kind = if existing_kind == kind {
+                    kind
+                } else {
+                    // Index and catalog hosts are distinct vault roots, and
+                    // walk hosts are always record files, so a collision
+                    // across kinds cannot happen; keep the first kind.
+                    existing_kind
+                };
                 let merged = if existing.after == edit.before {
                     FileEdit {
                         path: existing.path,
@@ -362,11 +392,28 @@ fn merge_edits(
                         after: edit.after,
                     }
                 };
-                by_path.insert(merged.path.clone(), merged);
+                by_path.insert(merged.path.clone(), (merged, merged_kind));
             }
         }
     }
-    by_path.into_values().collect()
+    let mut edits = Vec::with_capacity(by_path.len());
+    let mut changes = Vec::with_capacity(by_path.len());
+    for (edit, kind) in by_path.into_values() {
+        changes.push(ChangedFile {
+            path: slash(&edit.path),
+            before: edit.before.clone(),
+            after: edit.after.clone(),
+            kind,
+        });
+        edits.push(edit);
+    }
+    edits.sort_by(|left, right| left.path.cmp(&right.path));
+    changes.sort_by(|left, right| left.path.cmp(&right.path));
+    (edits, changes)
+}
+
+fn is_record_path(path: &Path) -> bool {
+    slash(path).contains('/')
 }
 
 fn planned_txn(
@@ -405,6 +452,7 @@ fn verify_current_hosts(
     let registry = AlbumRegistry::from_snapshot(vault, &snapshot);
     let report = report::build_report(&registry, &snapshot);
     let catalogs = catalog::plan_catalogs(&snapshot, &registry);
+    let mut record_hosts: Vec<String> = Vec::new();
     for host in hosts {
         let key = host.to_string_lossy().replace('\\', "/");
         if let Some(album) =
@@ -417,8 +465,51 @@ fn verify_current_hosts(
             }
             continue;
         }
-        if !catalog::host_catalog_is_current(catalogs.host(Path::new(&key))) {
+        if catalog::host_catalog_is_current(catalogs.host(Path::new(&key))) {
+            continue;
+        }
+        // Not an album or a current catalog host: it must be a record walk
+        // host. Catalog misses include absent hosts, so only treat slash
+        // paths as walk hosts and fail anything else.
+        if !key.contains('/') {
             return Err(format!("{key} is still not current after the write"));
+        }
+        record_hosts.push(key);
+    }
+    if !record_hosts.is_empty() {
+        let mut catalog = crate::native::records::RecordCatalog::new(vault);
+        for key in record_hosts {
+            let stem = Path::new(&key)
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            let Some(album) = registry
+                .albums
+                .iter()
+                .find(|entry| entry.declaration.stem == stem)
+            else {
+                return Err(format!(
+                    "{key} is still not current after the write"
+                ));
+            };
+            let folder = catalog.folder(&album.declaration.stem);
+            let plan = plan_album_walk(
+                &album.declaration,
+                folder,
+                &[],
+                |relative| std::fs::read_to_string(vault.join(relative)).ok(),
+                WalkScope::All,
+            );
+            let stale = plan.edits.iter().any(|edit| {
+                edit.path.to_string_lossy().replace('\\', "/") == key
+            });
+            if stale {
+                return Err(format!(
+                    "{key} is still not current after the write"
+                ));
+            }
         }
     }
     Ok(())
@@ -461,6 +552,24 @@ fn report_of(result: TxnResult<SyncContext>) -> SyncReport {
                 album
                     .issues
                     .retain(|issue| issue.code != "album_index_stale");
+            }
+            let walk_repaired = result.context.changes.iter().any(|change| {
+                change.kind == "walk"
+                    && Path::new(&change.path)
+                        .parent()
+                        .and_then(|parent| parent.file_name())
+                        .and_then(|name| name.to_str())
+                        == Some(album.stem.as_str())
+            });
+            if walk_repaired && album.walk.state.as_str() == "stale" {
+                album.walk.state =
+                    crate::native::albums::walk::AlbumWalkState::Current;
+                album.walk.counts.current = album.walk.total;
+                album.walk.counts.missing = 0;
+                album.walk.counts.stale = 0;
+                album
+                    .issues
+                    .retain(|issue| issue.code != "album_walk_stale");
             }
         }
         for catalog in &mut catalogs {
@@ -653,8 +762,26 @@ pub(crate) fn print_human(report: &SyncReport) {
                 },
                 &commit.sha[..commit.sha.len().min(9)]
             );
-            for change in &report.changes {
+            for change in
+                report.changes.iter().filter(|change| change.kind != "walk")
+            {
                 println!("  {}", change.path);
+            }
+            let mut walk_by_album: BTreeMap<&str, usize> = BTreeMap::new();
+            for change in
+                report.changes.iter().filter(|change| change.kind == "walk")
+            {
+                let album = Path::new(&change.path)
+                    .parent()
+                    .and_then(|parent| parent.to_str())
+                    .unwrap_or(&change.path);
+                *walk_by_album.entry(album).or_default() += 1;
+            }
+            for (album, count) in walk_by_album {
+                println!(
+                    "  {album} — {count} walk {}",
+                    if count == 1 { "line" } else { "lines" },
+                );
             }
         }
         None if !report.damaged() => {

@@ -62,7 +62,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob albums check`](albums.md#bob-albums-check) | Check albums against the contract |
 | [`bob albums create`](albums.md#bob-albums-create) | Create an album with its Base and catalog rows |
 | [`bob albums list`](albums.md#bob-albums-list) | List albums grouped by root (default) |
-| [`bob albums sync`](albums.md#bob-albums-sync) | Repair generated records indexes and album catalogs |
+| [`bob albums sync`](albums.md#bob-albums-sync) | Repair generated records indexes, record walks, and album catalogs |
 | [`bob albums update`](albums.md#bob-albums-update) | Update an album record schema through a guarded JSON envelope |
 | [`bob areas`](areas.md) | Inspect or maintain area notes |
 | [`bob areas check`](areas.md#bob-areas-check) | Check areas against the contract |

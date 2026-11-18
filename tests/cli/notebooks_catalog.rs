@@ -1156,7 +1156,7 @@ fn nightly_has_ten_ordered_steps_and_syncs_catalogs_once() {
             "step 5/10 · areas — Repair generated area catalogs",
             "step 6/10 · projects — Sync project lifecycles and sub-project catalogs",
             "step 7/10 · notebooks — Repair generated notebook catalogs",
-            "step 8/10 · albums — Repair generated records indexes and album catalogs",
+            "step 8/10 · albums — Repair generated records indexes, record walks, and album catalogs",
             "step 9/10 · records — Remove empty record Notes sections",
             "step 10/10 · vault-sync",
             "All steps passed",

@@ -461,7 +461,8 @@ const ALBUMS_MEMBERS: &[Member] = &[
     },
     Member {
         name: "sync",
-        about: "Repair generated records indexes and album catalogs",
+        about:
+            "Repair generated records indexes, record walks, and album catalogs",
         leaf: Leaf {
             native_command: NativeCommand::AlbumsSync,
             script_command: None,

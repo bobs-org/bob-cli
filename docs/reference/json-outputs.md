@@ -157,9 +157,9 @@ sets `one_off: true`.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob albums list` | `-f json` | Albums, groups, counts, issues, owner `catalogs`, and `capabilities` | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums list` | `-f json` | Albums, groups, counts, issues, owner `catalogs`, `walk`, and `capabilities` (`record_walk_v1`) | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
-| `bob albums sync` | `-f json` | Index entries, owner `catalogs`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
+| `bob albums sync` | `-f json` | Index entries, `walk`, owner `catalogs`, `kind`/`walk_lines`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
 | `bob albums update` | `-f json` | `stem`, fingerprints, `inverse_ops` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
 

@@ -255,10 +255,12 @@ pub(crate) fn plan_update(
             schema_edit,
             edit: None,
             deps,
-            index_state: report::project_album_from_folder(entry, folder)
-                .entry
-                .index
-                .as_str(),
+            index_state: report::project_album_from_folder(
+                entry, folder, vault,
+            )
+            .entry
+            .index
+            .as_str(),
         });
     }
 

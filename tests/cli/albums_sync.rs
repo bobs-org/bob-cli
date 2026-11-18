@@ -119,9 +119,25 @@ fn dry_run_shows_index_and_catalog_diffs_without_writing() {
     let payload = json(&output);
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["dry_run"], true);
-    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
+    assert_eq!(changed_paths(&payload), ["body.md", "eat.md", "eat/one.md"]);
     assert!(diff_for(&payload, "eat.md").contains("> [!records] 1 restaurant"));
     assert!(diff_for(&payload, "body.md").contains("> [!albums]"));
+    assert!(diff_for(&payload, "eat/one.md").contains("[[eat|↑"));
+    let kinds: Vec<(&str, &str)> = payload["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|change| {
+            (
+                change["path"].as_str().unwrap(),
+                change["kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(kinds.contains(&("eat.md", "index")));
+    assert!(kinds.contains(&("body.md", "catalog")));
+    assert!(kinds.contains(&("eat/one.md", "walk")));
+    assert_eq!(payload["counts"]["walk_lines"], 1);
     assert_eq!(payload["catalogs"][0]["path"], "body.md");
     assert_eq!(payload["catalogs"][0]["state"], "missing");
     assert_eq!(fs::read(vault.join("eat.md")).unwrap(), before_album);
@@ -140,22 +156,26 @@ fn real_sync_commits_indexes_and_catalogs_then_becomes_a_noop() {
     let payload = json(&first);
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "sync");
-    assert_eq!(payload["commit"]["subject"], "albums: sync (2 notes)");
-    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
+    assert_eq!(payload["commit"]["subject"], "albums: sync (3 notes)");
+    assert_eq!(changed_paths(&payload), ["body.md", "eat.md", "eat/one.md"]);
+    assert_eq!(payload["counts"]["walk_lines"], 1);
     assert_eq!(payload["albums"][0]["index"]["state"], "current");
+    assert_eq!(payload["albums"][0]["walk"]["state"], "current");
     assert_eq!(payload["catalogs"][0]["state"], "current");
     assert_ne!(head(&vault), before);
-    assert_eq!(subject(&vault), "albums: sync (2 notes)");
+    assert_eq!(subject(&vault), "albums: sync (3 notes)");
     let body = fs::read_to_string(vault.join("body.md")).unwrap();
     assert!(body.contains("> [!albums]"), "{body}");
     assert!(body.contains("[[eat|Restaurants]]"), "{body}");
+    let one = fs::read_to_string(vault.join("eat/one.md")).unwrap();
+    assert!(one.contains("[[eat|↑"), "{one}");
     assert_eq!(
         stdout(&git_in(
             &vault,
             ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
         ))
         .trim(),
-        "body.md\neat.md"
+        "body.md\neat.md\neat/one.md"
     );
 
     let after_first = head(&vault);
@@ -178,8 +198,12 @@ fn damaged_album_stays_unchanged_while_healthy_indexes_commit() {
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     let payload = json(&output);
     assert_eq!(payload["ok"], false);
-    assert_eq!(payload["commit"]["subject"], "albums: sync (2 notes)");
-    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
+    assert_eq!(payload["commit"]["subject"], "albums: sync (4 notes)");
+    assert_eq!(
+        changed_paths(&payload),
+        ["body.md", "broken/record.md", "eat.md", "eat/one.md"]
+    );
+    assert_eq!(payload["counts"]["walk_lines"], 2);
     let broken = payload["albums"]
         .as_array()
         .unwrap()
@@ -205,8 +229,10 @@ fn hand_edited_and_duplicate_index_regions_are_repaired() {
     let output = run(&vault, &temp, &["sync", "-f", "json"]);
     assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
     let payload = json(&output);
-    assert_eq!(changed_paths(&payload), ["body.md", "eat.md"]);
+    assert_eq!(changed_paths(&payload), ["body.md", "eat.md", "eat/one.md"]);
+    assert_eq!(payload["counts"]["walk_lines"], 1);
     assert_eq!(payload["albums"][0]["index"]["state"], "current");
+    assert_eq!(payload["albums"][0]["walk"]["state"], "current");
     let repaired = fs::read_to_string(vault.join("eat.md")).unwrap();
     assert_eq!(repaired.matches("> [!records]").count(), 1, "{repaired}");
     assert_eq!(repaired.matches("## Records").count(), 1, "{repaired}");

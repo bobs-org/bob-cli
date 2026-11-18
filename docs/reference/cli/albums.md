@@ -19,7 +19,7 @@ Commands:
   check   Check albums against the contract
   create  Create an album with its Base and catalog rows
   list    List albums grouped by root (default)
-  sync    Repair generated records indexes and album catalogs
+  sync    Repair generated records indexes, record walks, and album catalogs
   update  Update an album record schema through a guarded JSON envelope
 
 Options:
@@ -166,10 +166,10 @@ See docs/records.md for the album contract.
 
 ## bob albums sync
 
-Repair generated records indexes and album catalogs
+Repair generated records indexes, record walks, and album catalogs
 
 ```text title="bob albums sync --help"
-Repair each album's generated [!records] index and each owner's generated `## Albums` catalog from one snapshot. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, folder membership, and the owner/ancestor/declaration inputs catalog rows use, then makes one scoped commit `albums: sync (N notes)` when indexes or catalogs change. Current indexes and catalogs write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums and damaged catalogs are left intact, healthy regions continue, and any damaged region or runtime failure exits 1.
+Repair each album's generated [!records] index, each record's walk line, and each owner's generated `## Albums` catalog from one snapshot. A real run takes the shared vault lock, pre-syncs, guards album declarations, record frontmatter, folder membership, and the owner/ancestor/declaration inputs catalog rows use, then makes one scoped commit `albums: sync (N notes)` when indexes, walk lines, or catalogs change. Current indexes, walk lines, and catalogs write and commit nothing and skip post-sync. `--dry-run` plans diffs without a lock or sync cycle. Damaged albums, damaged walk lines, and damaged catalogs are left intact, healthy regions continue, and any damaged region or runtime failure exits 1.
 
 Usage: bob albums sync [OPTIONS]
 

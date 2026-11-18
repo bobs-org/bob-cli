@@ -65,7 +65,8 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "albums",
-        blurb: "Repair generated records indexes and album catalogs",
+        blurb:
+            "Repair generated records indexes, record walks, and album catalogs",
         run: run_albums_step,
     },
     Step {

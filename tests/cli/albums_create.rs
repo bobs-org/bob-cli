@@ -1149,8 +1149,7 @@ fn created_album_accepts_records_and_stays_clean() {
     assert!(
         ramen
             .lines()
-            .all(|line| line.starts_with("## ")
-                || !line.starts_with('#')),
+            .all(|line| line.starts_with("## ") || !line.starts_with('#')),
         "created record has no H1: {ramen}"
     );
     assert!(ramen.contains("## Notes"), "{ramen}");
@@ -1200,11 +1199,22 @@ fn created_album_accepts_records_and_stays_clean() {
     git_in(&vault, ["push", "-q"]);
     let payload = check_json(&vault, &temp, &["check", "-f", "json"]);
     assert_eq!(payload["counts"]["errors"], 0, "{payload}");
-    assert_eq!(payload["counts"]["warnings"], 0, "{payload}");
-    let sync_base = head(&vault);
+    // `records new` and capture do not write walk lines yet (walk-writers
+    // phase), so sync owns the backfill: one stale-walk warning stands.
+    assert_eq!(payload["counts"]["warnings"], 1, "{payload}");
+    assert!(
+        payload["albums"][0]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "album_walk_stale"),
+        "walk stale warning: {payload}"
+    );
     let payload = check_json(&vault, &temp, &["sync", "-f", "json"]);
     assert_eq!(payload["ok"], true);
-    assert_eq!(head(&vault), sync_base, "sync after records is a no-op");
+    assert_eq!(payload["counts"]["walk_lines"], 2, "{payload}");
+    let payload = check_json(&vault, &temp, &["check", "-f", "json"]);
+    assert_eq!(payload["counts"]["warnings"], 0, "{payload}");
 }
 
 // ------------------------------------------------------- help/completion

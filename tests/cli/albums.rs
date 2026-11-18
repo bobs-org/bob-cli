@@ -278,7 +278,27 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["counts"]["records"], 4);
     assert_eq!(payload["counts"]["roots"], 2);
     assert_eq!(payload["counts"]["errors"], 0);
-    assert_eq!(payload["counts"]["warnings"], 6);
+    assert_eq!(payload["counts"]["warnings"], 7);
+    assert_eq!(
+        payload["capabilities"],
+        serde_json::json!(["record_values_v1", "record_walk_v1"])
+    );
+    assert_eq!(eat["walk"]["state"], "stale");
+    assert_eq!(eat["walk"]["total"], 4);
+    assert_eq!(eat["walk"]["counts"]["missing"], 4);
+    assert_eq!(eat["walk"]["counts"]["current"], 0);
+    assert_eq!(
+        eat["walk"]["order"],
+        serde_json::json!(["ani_ramen_house", "bubble_tea", "cafe", "unknown"])
+    );
+    assert!(
+        eat["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "album_walk_stale"),
+        "eat walk stale finding: {eat}"
+    );
 
     let output = albums_command(&vault)
         .arg("check")
@@ -292,7 +312,7 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["schema_version"], 1);
     assert_eq!(payload["counts"]["errors"], 0);
-    assert_eq!(payload["counts"]["warnings"], 6);
+    assert_eq!(payload["counts"]["warnings"], 7);
 }
 
 #[test]
@@ -469,7 +489,7 @@ fn albums_root_filter_accepts_md_suffix() {
     assert_eq!(payload["counts"]["roots"], 1);
     assert_eq!(payload["catalogs"].as_array().unwrap().len(), 1);
     assert_eq!(payload["catalogs"][0]["path"], "body.md");
-    assert_eq!(payload["counts"]["warnings"], 4);
+    assert_eq!(payload["counts"]["warnings"], 5);
 }
 
 #[test]
