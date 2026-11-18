@@ -203,7 +203,7 @@ See docs/records.md for the schema contract and reading one record.
 Remove empty `## Notes` sections from Record Notes
 
 ```text title="bob records tidy --help"
-Remove every empty level-2 `## Notes` section from record notes: a Notes section is empty when every line after its heading until the next level-1 or level-2 heading (or EOF) is blank. Any other content keeps the section. Only record bodies change. A real run follows the shared maintenance lifecycle: it takes the shared vault lock, pre-syncs, guards each rewritten note by its full preimage, verifies that no rewritten note keeps an empty Notes section, makes one scoped `records: tidy (N notes)` commit when any note changed, and post-syncs only when it committed. TYPE accepts a noun or album stem, as `bob records check` does.
+Remove every empty level-2 `## Notes` section from record notes: a Notes section is empty when every line after its heading until the next level-1 or level-2 heading (or EOF) is blank. Any other content keeps the section. Also remove a redundant H1: the first non-blank body line outside fenced code, when it is a level-1 heading whose text equals the frontmatter `title` exactly. A differing H1, an H1 that is not the first body content, and any later H1 are kept. Only record bodies change. A real run follows the shared maintenance lifecycle: it takes the shared vault lock, pre-syncs, guards each rewritten note by its full preimage, verifies that no rewritten note keeps an empty Notes section or a redundant H1, makes one scoped `records: tidy (N notes)` commit when any note changed, and post-syncs only when it committed. TYPE accepts a noun or album stem, as `bob records check` does.
 
 Usage: bob records tidy [OPTIONS] [TYPE]
 

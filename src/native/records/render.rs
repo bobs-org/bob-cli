@@ -306,8 +306,11 @@ fn render_note_bullet(
 /// title, schema fields in schema order, then created. String scalars use
 /// safe double quoting, choice tokens and dates/URLs/numbers stay bare when
 /// YAML-safe, lists are block lists, empty optionals are omitted, and legacy
-/// keys are never written. The body always holds H1 and holds `## Notes`
-/// only when the new note has ordinary bullets.
+/// keys are never written. The body never holds an H1: the frontmatter
+/// `title` is the title's one home (the sheet renders it). The body holds
+/// `## Notes` only when the new note has ordinary bullets, holds each named
+/// section under its own level-2 heading, and is empty — so the note ends
+/// right after the closing `---` — when the new note has neither.
 pub(crate) fn render_record(
     request: &RecordRenderRequest<'_>,
 ) -> RenderedRecord {
@@ -385,7 +388,7 @@ pub(crate) fn render_record_with_identity(
         }
     }
 
-    let mut body = format!("# {}\n", request.title);
+    let mut body = String::new();
     if !ordinary.is_empty() {
         body.push_str("\n## Notes\n\n");
         for note in ordinary {
@@ -407,7 +410,7 @@ pub(crate) fn render_record_with_identity(
         }
     }
 
-    let markdown = format!("{frontmatter}\n{body}");
+    let markdown = format!("{frontmatter}{body}");
     RenderedRecord { markdown, body }
 }
 
@@ -1456,6 +1459,31 @@ fn append_bullets_under_notes(
     if rendered.is_empty() {
         return;
     }
+    if body_lines.iter().all(|line| line.content.trim().is_empty()) {
+        // An empty or whitespace-only body (an H1-less note with no body
+        // left) gets the canonical shape directly after the frontmatter:
+        // one blank line, then `## Notes`, with no stray blank lines.
+        body_lines.clear();
+        body_lines.push(SplitLine {
+            content: String::new(),
+            ending: newline.to_owned(),
+        });
+        body_lines.push(SplitLine {
+            content: "## Notes".to_owned(),
+            ending: newline.to_owned(),
+        });
+        body_lines.push(SplitLine {
+            content: String::new(),
+            ending: newline.to_owned(),
+        });
+        for line in rendered {
+            body_lines.push(SplitLine {
+                content: line.clone(),
+                ending: newline.to_owned(),
+            });
+        }
+        return;
+    }
     let headings = parse_body_headings(body_lines);
     let notes_at = headings
         .iter()
@@ -2321,8 +2349,13 @@ mod tests {
             rendered.markdown
         );
         assert!(
-            rendered.markdown.contains("# Ramen Nagi\n\n## Notes\n"),
-            "H1 and Notes present with ordinary bullets:\n{}",
+            rendered.markdown.contains("---\n\n## Notes\n"),
+            "Notes present with no H1:\n{}",
+            rendered.markdown
+        );
+        assert!(
+            !rendered.markdown.contains("# Ramen Nagi\n"),
+            "no H1 written:\n{}",
             rendered.markdown
         );
         assert!(
@@ -2371,11 +2404,21 @@ mod tests {
             })
         };
         let none = render(&[]);
-        assert_eq!(none.body, "# T\n", "no notes body:\n{}", none.markdown);
+        assert_eq!(none.body, "", "no notes body:\n{}", none.markdown);
+        assert!(
+            none.markdown.ends_with("---\n"),
+            "empty note ends at the closing fence:\n{}",
+            none.markdown
+        );
         let ordinary = render(&[RecordNoteInput::bullet("a")]);
         assert_eq!(
-            ordinary.body, "# T\n\n## Notes\n\n- 2026-11-08: a\n",
+            ordinary.body, "\n## Notes\n\n- 2026-11-08: a\n",
             "ordinary only body:\n{}",
+            ordinary.markdown
+        );
+        assert!(
+            ordinary.markdown.contains("---\n\n## Notes\n"),
+            "Notes mount after one blank line:\n{}",
             ordinary.markdown
         );
         let section = render(&[RecordNoteInput::section(
@@ -2383,7 +2426,7 @@ mod tests {
             vec!["Dragon roll".to_owned()],
         )]);
         assert_eq!(
-            section.body, "# T\n\n## Must Order\n\n- Dragon roll\n",
+            section.body, "\n## Must Order\n\n- Dragon roll\n",
             "section only body:\n{}",
             section.markdown
         );
@@ -2396,7 +2439,7 @@ mod tests {
         ]);
         assert_eq!(
             both.body,
-            "# T\n\n## Notes\n\n- 2026-11-08: a\n\n## Must Order\n\n- Dragon roll\n",
+            "\n## Notes\n\n- 2026-11-08: a\n\n## Must Order\n\n- Dragon roll\n",
             "ordinary plus section body:\n{}",
             both.markdown
         );
@@ -3099,11 +3142,13 @@ mod tests {
             )
             .expect("splits");
         assert!(
-            body.contains("# Round Trip"),
+            body.contains("## Notes\n\n- 2026-11-08: hello\n"),
             "body survives split:\n{body}"
         );
+        assert!(!body.contains("# Round Trip"), "no H1 in body:\n{body}");
         let parsed =
             crate::native::ref_library::ParsedFrontmatter::parse(&front);
+        assert_eq!(parsed.get_str("title"), Some("Round Trip"));
         assert_eq!(parsed.get_str("status"), Some("liked"));
         assert_eq!(parsed.get_str("category"), Some("Coffee"));
         assert_eq!(parsed.get_all("companions"), vec!["[[kelly]]".to_owned()]);
@@ -3403,6 +3448,40 @@ mod tests {
         assert!(
             fenced_out.contains("## Notes\n\n- 2026-11-17: x\n\n## Real\n"),
             "fenced Source ignored:\n{fenced_out}"
+        );
+        // H1-less bodies: an empty body, a whitespace-only body, a
+        // Source-only body, and a named-section-only body.
+        let empty = front.clone();
+        assert_eq!(
+            apply(empty),
+            format!("{front}\n## Notes\n\n- 2026-11-17: x\n"),
+            "empty body gets canonical Notes:\n{}",
+            apply(empty),
+        );
+        let whitespace = format!("{front}\n   \n");
+        assert_eq!(
+            apply(&whitespace),
+            format!("{front}\n## Notes\n\n- 2026-11-17: x\n"),
+            "whitespace-only body gets canonical Notes:\n{}",
+            apply(&whitespace),
+        );
+        let source_only = format!("{front}\n## Source\n\nrow\n");
+        assert_eq!(
+            apply(&source_only),
+            format!(
+                "{front}\n## Notes\n\n- 2026-11-17: x\n\n## Source\n\nrow\n"
+            ),
+            "Source-only body gets Notes first:\n{}",
+            apply(&source_only),
+        );
+        let named_only = format!("{front}\n## Must Order\n\n- Dragon roll\n");
+        assert_eq!(
+            apply(&named_only),
+            format!(
+                "{front}\n## Notes\n\n- 2026-11-17: x\n\n## Must Order\n\n- Dragon roll\n"
+            ),
+            "named-section-only body gets Notes first:\n{}",
+            apply(&named_only),
         );
         // Field-only updates leave body bytes identical.
         let body_only = format!("{front}\n# B\n\n## Source\n\nrow\n");

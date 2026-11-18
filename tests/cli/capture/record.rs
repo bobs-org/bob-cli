@@ -2039,6 +2039,14 @@ fn album_capture_create_stages_record_and_index() {
     let record =
         fs::read_to_string(vault.join("eat/ramen_nagi.md")).expect("record");
     assert!(record.contains("title: \"Ramen Nagi\""), "{record}");
+    assert!(
+        record
+            .lines()
+            .all(|line| line.starts_with("## ") || !line.starts_with('#')),
+        "created record has no H1: {record}"
+    );
+    assert!(record.contains("## Notes"), "{record}");
+    assert!(record.contains("Spicy tuna was great."), "{record}");
     let album = fs::read_to_string(vault.join("eat.md")).expect("album");
     assert!(album.contains("Ramen Nagi"), "{album}");
     assert_eq!(

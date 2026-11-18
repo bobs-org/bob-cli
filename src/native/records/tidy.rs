@@ -1,4 +1,5 @@
-//! `bob records tidy`: remove empty `## Notes` sections from record notes.
+//! `bob records tidy`: remove empty `## Notes` sections and redundant H1s
+//! from record notes.
 
 use std::{
     cell::RefCell,
@@ -14,7 +15,9 @@ use clap::{
 use serde_json::{json, Value};
 use similar::TextDiff;
 
-use super::notes_section::strip_empty_notes_sections;
+use super::notes_section::{
+    strip_empty_notes_sections, strip_redundant_h1, H1Strip,
+};
 use crate::native::{
     albums::registry::{AlbumRegistry, DiscoveryHealth},
     host_catalog::{
@@ -35,6 +38,9 @@ pub(crate) struct ChangedFile {
     pub(crate) path: String,
     pub(crate) before: String,
     pub(crate) after: String,
+    pub(crate) notes_removed: bool,
+    pub(crate) h1_removed: bool,
+    pub(crate) h1_kept_reason: Option<String>,
 }
 
 impl ChangedFile {
@@ -51,6 +57,7 @@ impl ChangedFile {
 struct TidyPlan {
     scanned: usize,
     changes: Vec<ChangedFile>,
+    kept_h1: Vec<KeptH1>,
     edits: Vec<FileEdit>,
     dependencies: ReadDependencies,
     io_errors: Vec<String>,
@@ -60,7 +67,14 @@ struct TidyPlan {
 struct TidyContext {
     scanned: usize,
     changes: Vec<ChangedFile>,
+    kept_h1: Vec<KeptH1>,
     io_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct KeptH1 {
+    pub(crate) path: String,
+    pub(crate) reason: String,
 }
 
 #[derive(Debug)]
@@ -68,6 +82,7 @@ pub(crate) struct TidyReport {
     dry_run: bool,
     scanned: usize,
     changes: Vec<ChangedFile>,
+    kept_h1: Vec<KeptH1>,
     commit: Option<CommitInfo>,
     sync_pre: Option<&'static str>,
     sync_post: Option<&'static str>,
@@ -82,6 +97,7 @@ impl TidyReport {
             dry_run,
             scanned: 0,
             changes: Vec::new(),
+            kept_h1: Vec::new(),
             commit: None,
             sync_pre: None,
             sync_post: None,
@@ -100,6 +116,11 @@ impl TidyReport {
     }
 
     pub(crate) fn to_json(&self) -> Value {
+        let h1_removed = self
+            .changes
+            .iter()
+            .filter(|change| change.h1_removed)
+            .count();
         let mut payload = json!({
             "schema_version": SCHEMA_VERSION,
             "ok": self.ok(),
@@ -108,13 +129,23 @@ impl TidyReport {
             "counts": {
                 "scanned": self.scanned,
                 "changed": self.changes.len(),
+                "h1_removed": h1_removed,
+                "h1_kept": self.kept_h1.len(),
             },
             "changes": self.changes.iter().map(|change| {
-                let mut item = json!({"path": change.path});
+                let mut item = json!({
+                    "path": change.path.clone(),
+                    "notes_removed": change.notes_removed,
+                    "h1_removed": change.h1_removed,
+                    "h1_kept_reason": change.h1_kept_reason.clone(),
+                });
                 if self.dry_run {
                     item["diff"] = Value::String(change.diff());
                 }
                 item
+            }).collect::<Vec<_>>(),
+            "kept_h1": self.kept_h1.iter().map(|kept| {
+                json!({"path": kept.path.clone(), "reason": kept.reason.clone()})
             }).collect::<Vec<_>>(),
             "commit": match &self.commit {
                 Some(commit) => json!({"sha": commit.sha, "subject": commit.subject}),
@@ -163,16 +194,31 @@ impl TidyReport {
                 );
             } else if !self.changes.is_empty() {
                 println!(
-                    "{} dry run: {} {} would change; nothing was written",
+                    "{} dry run: {} {} would change ({}; {}); nothing was written",
                     styler.yellow("!"),
                     self.changes.len(),
                     if self.changes.len() == 1 {
                         "note"
                     } else {
                         "notes"
-                    }
+                    },
+                    removal_summary(
+                        self.changes
+                            .iter()
+                            .filter(|change| change.notes_removed)
+                            .count(),
+                        "empty Notes section",
+                    ),
+                    removal_summary(
+                        self.changes
+                            .iter()
+                            .filter(|change| change.h1_removed)
+                            .count(),
+                        "redundant H1",
+                    ),
                 );
             }
+            self.print_kept(&styler);
             return;
         }
         if self.failure.is_some() {
@@ -181,7 +227,7 @@ impl TidyReport {
         match &self.commit {
             Some(commit) => {
                 println!(
-                    "{} tidied {} {} ({}): {} scanned",
+                    "{} tidied {} {} ({}): {} scanned, {}",
                     styler.green("✓"),
                     self.changes.len(),
                     if self.changes.len() == 1 {
@@ -190,10 +236,11 @@ impl TidyReport {
                         "notes"
                     },
                     &commit.sha[..commit.sha.len().min(9)],
-                    self.scanned
+                    self.scanned,
+                    removal_totals(&self.changes),
                 );
                 for change in &self.changes {
-                    println!("  {}", change.path);
+                    println!("  {} ({})", change.path, removal_names(change));
                 }
             }
             None => {
@@ -206,10 +253,77 @@ impl TidyReport {
                 }
             }
         }
+        self.print_kept(&styler);
         for warning in &self.warnings {
             println!("{} {warning}", styler.yellow("!"));
         }
     }
+
+    fn print_kept(&self, styler: &Styler) {
+        if self.kept_h1.is_empty() {
+            return;
+        }
+        println!(
+            "{}",
+            styler.dim(
+                format!(
+                    "{} {} keep{} {} H1:",
+                    self.kept_h1.len(),
+                    if self.kept_h1.len() == 1 {
+                        "note"
+                    } else {
+                        "notes"
+                    },
+                    if self.kept_h1.len() == 1 { "s" } else { "" },
+                    if self.kept_h1.len() == 1 {
+                        "its"
+                    } else {
+                        "their"
+                    },
+                )
+                .as_str()
+            )
+        );
+        for kept in &self.kept_h1 {
+            println!("  {} ({})", kept.path, styler.dim(&kept.reason));
+        }
+    }
+}
+
+/// `"N empty Notes sections"` / `"1 redundant H1"` for the summary lines.
+fn removal_summary(count: usize, kind: &str) -> String {
+    format!("{count} {kind}{}", if count == 1 { "" } else { "s" })
+}
+
+/// `"2 empty Notes sections, 1 redundant H1"` for the commit line.
+fn removal_totals(changes: &[ChangedFile]) -> String {
+    format!(
+        "{}, {}",
+        removal_summary(
+            changes.iter().filter(|change| change.notes_removed).count(),
+            "empty Notes section",
+        ),
+        removal_summary(
+            changes.iter().filter(|change| change.h1_removed).count(),
+            "redundant H1",
+        ),
+    )
+}
+
+/// `"empty Notes, redundant H1"` naming one changed note's removals.
+fn removal_names(change: &ChangedFile) -> String {
+    // Short labels: the pluralized counts ride the summary line.
+    let mut kinds = Vec::new();
+    if change.notes_removed {
+        kinds.push("empty Notes");
+    }
+    if change.h1_removed {
+        kinds.push("redundant H1");
+    }
+    if kinds.is_empty() {
+        kinds.push("unchanged");
+    }
+    kinds.join(", ")
 }
 
 fn color_diff(diff: &str, styler: &Styler) -> String {
@@ -234,9 +348,9 @@ fn color_diff(diff: &str, styler: &Styler) -> String {
 
 pub(crate) fn build_cli_tidy() -> ClapCommand {
     ClapCommand::new("bob records tidy")
-        .about("Remove empty `## Notes` sections from Record Notes")
+        .about("Remove empty `## Notes` sections and redundant H1s from Record Notes")
         .long_about(
-            "Remove every empty level-2 `## Notes` section from record notes: a Notes section is empty when every line after its heading until the next level-1 or level-2 heading (or EOF) is blank. Any other content keeps the section. Only record bodies change. A real run follows the shared maintenance lifecycle: it takes the shared vault lock, pre-syncs, guards each rewritten note by its full preimage, verifies that no rewritten note keeps an empty Notes section, makes one scoped `records: tidy (N notes)` commit when any note changed, and post-syncs only when it committed. TYPE accepts a noun or album stem, as `bob records check` does.",
+            "Remove every empty level-2 `## Notes` section from record notes: a Notes section is empty when every line after its heading until the next level-1 or level-2 heading (or EOF) is blank. Any other content keeps the section. Also remove a redundant H1: the first non-blank body line outside fenced code, when it is a level-1 heading whose text equals the frontmatter `title` exactly. A differing H1, an H1 that is not the first body content, and any later H1 are kept. Only record bodies change. A real run follows the shared maintenance lifecycle: it takes the shared vault lock, pre-syncs, guards each rewritten note by its full preimage, verifies that no rewritten note keeps an empty Notes section or a redundant H1, makes one scoped `records: tidy (N notes)` commit when any note changed, and post-syncs only when it committed. TYPE accepts a noun or album stem, as `bob records check` does.",
         )
         .after_help(
             "Examples:\n  bob records tidy\n  bob records tidy -d\n  bob records tidy eat -d\n  bob records tidy -f json\n\nSee docs/records.md for the Notes rule and lifecycle.",
@@ -385,6 +499,7 @@ fn execute_tidy(matches: &ArgMatches) -> i32 {
             *captured.borrow_mut() = Some(TidyContext {
                 scanned: plan.scanned,
                 changes: plan.changes.clone(),
+                kept_h1: plan.kept_h1.clone(),
                 io_errors: plan.io_errors.clone(),
             });
             Ok(planned_txn(&vault_clone, plan))
@@ -397,6 +512,7 @@ fn execute_tidy(matches: &ArgMatches) -> i32 {
             if let Some(context) = captured.into_inner() {
                 report.scanned = context.scanned;
                 report.changes = context.changes;
+                report.kept_h1 = context.kept_h1;
                 report.io_errors = context.io_errors;
             }
             // A usage error for an unknown TYPE is reported as exit 2 by
@@ -441,6 +557,7 @@ fn dry_run_report(vault: &Path, selector: Option<&str>) -> TidyReport {
         dry_run: true,
         scanned: plan.scanned,
         changes: plan.changes,
+        kept_h1: plan.kept_h1,
         commit: None,
         sync_pre: None,
         sync_post: None,
@@ -455,6 +572,7 @@ fn report_of(dry_run: bool, result: TxnResult<TidyContext>) -> TidyReport {
         dry_run,
         scanned: result.context.scanned,
         changes: result.context.changes,
+        kept_h1: result.context.kept_h1,
         commit: result.commit,
         sync_pre: Some(result.sync_pre),
         sync_post: Some(result.sync_post),
@@ -669,6 +787,7 @@ fn plan_tidy(
 
     let mut scanned = 0usize;
     let mut changes = Vec::new();
+    let mut kept_h1 = Vec::new();
     let mut edits = Vec::new();
     let mut dependencies = ReadDependencies::default();
     let mut io_errors = Vec::new();
@@ -725,7 +844,13 @@ fn plan_tidy(
                     }
                 },
             };
-            let Some(frontmatter) = parse_frontmatter(&contents) else {
+            // A BOM rides on the first line, so strip it for the
+            // frontmatter probe while keeping the original bytes for the
+            // guarded rewrite.
+            let probe = contents
+                .strip_prefix('\u{feff}')
+                .unwrap_or(contents.as_str());
+            let Some(frontmatter) = parse_frontmatter(probe) else {
                 continue;
             };
             let names = frontmatter_type_names(&frontmatter);
@@ -733,16 +858,27 @@ fn plan_tidy(
                 continue;
             }
             scanned += 1;
-            let Some(after) = strip_empty_notes_sections(&contents) else {
+            let title = record_title(&contents);
+            let pass = tidy_note(&contents, title.as_deref());
+            if let Some(reason) = pass.kept {
+                kept_h1.push(KeptH1 {
+                    path: slash(&relative),
+                    reason: reason.to_owned(),
+                });
+            }
+            let Some(after) = pass.after else {
                 continue;
             };
             // Defensive: a planned write must itself be clean.
-            if strip_empty_notes_sections(&after).is_some() {
+            if tidy_note(&after, title.as_deref()).after.is_some() {
                 continue;
             }
             changes.push(ChangedFile {
                 path: slash(&relative),
                 before: contents.clone(),
+                notes_removed: pass.notes_removed,
+                h1_removed: pass.h1_removed,
+                h1_kept_reason: pass.kept.map(str::to_owned),
                 after: after.clone(),
             });
             edits.push(FileEdit {
@@ -756,14 +892,68 @@ fn plan_tidy(
 
     changes.sort_by(|left, right| left.path.cmp(&right.path));
     edits.sort_by(|left, right| left.path.cmp(&right.path));
+    kept_h1.sort_by(|left, right| left.path.cmp(&right.path));
 
     Ok(TidyPlan {
         scanned,
         changes,
+        kept_h1,
         edits,
         dependencies,
         io_errors,
     })
+}
+
+/// One tidy pass over a single record note: empty-`## Notes` removal first,
+/// then redundant-H1 removal, both in one pass.
+fn tidy_note(contents: &str, title: Option<&str>) -> TidyPass {
+    let mut notes_removed = false;
+    let mut current = contents.to_owned();
+    if let Some(stripped) = strip_empty_notes_sections(&current) {
+        notes_removed = true;
+        current = stripped;
+    }
+    let mut h1_removed = false;
+    let mut kept = None;
+    if let Some(title) = title {
+        let strip: H1Strip = strip_redundant_h1(&current, title);
+        if let Some(after) = strip.after {
+            h1_removed = true;
+            current = after;
+        }
+        kept = strip.kept;
+    }
+    let after = if notes_removed || h1_removed {
+        Some(current)
+    } else {
+        None
+    };
+    TidyPass {
+        after,
+        notes_removed,
+        h1_removed,
+        kept,
+    }
+}
+
+#[derive(Debug)]
+struct TidyPass {
+    after: Option<String>,
+    notes_removed: bool,
+    h1_removed: bool,
+    kept: Option<&'static str>,
+}
+
+/// The record's frontmatter `title` as an exact string, for the redundant-H1
+/// comparison. Quoted titles (including escapes) decode through YAML so
+/// `"Ma \"Pa\" Deli"` matches its H1 `# Ma "Pa" Deli`.
+fn record_title(contents: &str) -> Option<String> {
+    let stripped = contents.strip_prefix('\u{feff}').unwrap_or(contents);
+    let (front, _) =
+        crate::native::highlights_ref::split_frontmatter(stripped)?;
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(&front.join("\n")).ok()?;
+    value.get("title")?.as_str().map(str::to_owned)
 }
 
 fn planned_txn(vault: &Path, plan: TidyPlan) -> PlannedTxn<TidyContext> {
@@ -781,6 +971,7 @@ fn planned_txn(vault: &Path, plan: TidyPlan) -> PlannedTxn<TidyContext> {
         context: TidyContext {
             scanned: plan.scanned,
             changes: plan.changes,
+            kept_h1: plan.kept_h1,
             io_errors: plan.io_errors,
         },
         kind: "record",
@@ -796,6 +987,13 @@ fn verify_clean(vault: &Path, hosts: Vec<PathBuf>) -> Result<(), String> {
         if strip_empty_notes_sections(&contents).is_some() {
             return Err(format!(
                 "{} still holds an empty ## Notes section after the write",
+                slash(&relative)
+            ));
+        }
+        let title = record_title(&contents);
+        if tidy_note(&contents, title.as_deref()).after.is_some() {
+            return Err(format!(
+                "{} still holds a redundant H1 after the write",
                 slash(&relative)
             ));
         }
@@ -847,6 +1045,7 @@ pub(crate) fn run_standalone(vault: &Path, json_mode: bool) -> TidyReport {
             *captured.borrow_mut() = Some(TidyContext {
                 scanned: plan.scanned,
                 changes: plan.changes.clone(),
+                kept_h1: plan.kept_h1.clone(),
                 io_errors: plan.io_errors.clone(),
             });
             Ok(planned_txn(vault, plan))
@@ -859,6 +1058,7 @@ pub(crate) fn run_standalone(vault: &Path, json_mode: bool) -> TidyReport {
             if let Some(context) = captured.into_inner() {
                 report.scanned = context.scanned;
                 report.changes = context.changes;
+                report.kept_h1 = context.kept_h1;
                 report.io_errors = context.io_errors;
             }
             report
@@ -919,6 +1119,12 @@ mod tests {
         (temp, vault)
     }
 
+    fn record(title: &str, body: &str, extra_frontmatter: &str) -> String {
+        format!(
+            "---\ntype: \"[[record]]\"\ntitle: {title:?}\n{extra_frontmatter}---\n{body}"
+        )
+    }
+
     #[test]
     fn dry_run_plans_and_leaves_head_unchanged() {
         let (_temp, vault) = fixture(
@@ -942,13 +1148,204 @@ mod tests {
         let report = dry_run_report(&vault, None);
         assert!(report.failure.is_none(), "{:?}", report.failure);
         assert_eq!(report.scanned, 2);
-        assert_eq!(report.changes.len(), 1);
+        assert_eq!(report.changes.len(), 2);
+        // `one` loses both its empty Notes and its redundant H1 in one
+        // pass; `two` keeps its Notes and loses only the H1.
         assert_eq!(report.changes[0].path, "eat/one.md");
+        assert!(report.changes[0].notes_removed);
+        assert!(report.changes[0].h1_removed);
+        assert_eq!(report.changes[0].h1_kept_reason, None);
+        assert_eq!(report.changes[1].path, "eat/two.md");
+        assert!(!report.changes[1].notes_removed);
+        assert!(report.changes[1].h1_removed);
+        assert!(report.kept_h1.is_empty());
+        let payload = report.to_json();
+        assert_eq!(payload["counts"]["scanned"], 2);
+        assert_eq!(payload["counts"]["changed"], 2);
+        assert_eq!(payload["counts"]["h1_removed"], 2);
+        assert_eq!(payload["counts"]["h1_kept"], 0);
+        assert_eq!(payload["changes"][0]["notes_removed"], true);
+        assert_eq!(payload["changes"][0]["h1_removed"], true);
+        assert!(payload["changes"][0]["h1_kept_reason"].is_null());
+        assert!(payload["changes"][1].get("diff").is_some());
+        assert_eq!(payload["kept_h1"].as_array().unwrap().len(), 0);
         assert_eq!(git_head(&vault), head_before);
         assert!(vault.join("eat/one.md").exists());
         let contents =
             fs::read_to_string(vault.join("eat/one.md")).expect("read");
         assert!(contents.contains("## Notes"));
+        assert!(contents.contains("# One"));
+    }
+
+    #[test]
+    fn kept_h1_cases_count_with_reasons() {
+        let (_temp, vault) = fixture(
+            "restaurant",
+            &[
+                (
+                    "differing",
+                    &record("Differing", "# Something Else\n\n- a\n", ""),
+                ),
+                ("buried", &record("Buried", "Intro.\n\n# Buried\n", "")),
+                (
+                    "fenced",
+                    &record("Fenced", "```text\n# Fenced\n```\n\n- a\n", ""),
+                ),
+                ("later", &record("Later", "# Later\n\n# Other\n", "")),
+                (
+                    "quoted",
+                    &record("Ma \"Pa\" Deli", "# Ma \"Pa\" Deli\n", ""),
+                ),
+            ],
+        );
+        let report = dry_run_report(&vault, None);
+        assert!(report.failure.is_none(), "{:?}", report.failure);
+        assert_eq!(report.scanned, 5);
+        // Only `later` (H1 + trailing H1) and `quoted` (H1 only) change.
+        let changed: Vec<&str> = report
+            .changes
+            .iter()
+            .map(|change| change.path.as_str())
+            .collect();
+        assert_eq!(changed, vec!["eat/later.md", "eat/quoted.md"]);
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .find(|change| change.path == "eat/quoted.md")
+                .expect("quoted changes")
+                .after,
+            record("Ma \"Pa\" Deli", "", "")
+        );
+        let payload = report.to_json();
+        assert_eq!(payload["counts"]["h1_removed"], 2);
+        assert_eq!(payload["counts"]["h1_kept"], 3);
+        let kept: Vec<(String, String)> = report
+            .kept_h1
+            .iter()
+            .map(|kept| (kept.path.clone(), kept.reason.clone()))
+            .collect();
+        assert_eq!(
+            kept,
+            vec![
+                (
+                    "eat/buried.md".to_owned(),
+                    "the H1 is not the first body content".to_owned(),
+                ),
+                (
+                    "eat/differing.md".to_owned(),
+                    "the H1 differs from the frontmatter title".to_owned(),
+                ),
+                ("eat/later.md".to_owned(), "a later H1 is kept".to_owned(),),
+            ]
+        );
+        assert_eq!(payload["kept_h1"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            payload["kept_h1"][1]["reason"],
+            "the H1 differs from the frontmatter title"
+        );
+        // The kept-with-change note also carries its reason per note.
+        let later = payload["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|change| change["path"] == "eat/later.md")
+            .expect("later change");
+        assert_eq!(later["h1_removed"], true);
+        assert_eq!(later["h1_kept_reason"], "a later H1 is kept");
+    }
+
+    #[test]
+    fn h1_only_body_ends_at_frontmatter_and_crlf_bom_survive() {
+        let (_temp, vault) = fixture(
+            "restaurant",
+            &[
+                (
+                    "bare",
+                    "---\ntype: \"[[record]]\"\ntitle: \"Bare\"\n---\n\n# Bare\n",
+                ),
+                (
+                    "crlf",
+                    "---\r\ntype: \"[[record]]\"\r\ntitle: \"Crlf\"\r\n---\r\n\r\n# Crlf\r\n\r\n## Notes\r\n\r\n- a\r\n",
+                ),
+                (
+                    "bom",
+                    "\u{feff}---\ntype: \"[[record]]\"\ntitle: \"Bom\"\n---\n\n# Bom\n\n## Notes\n\n- a\n",
+                ),
+            ],
+        );
+        let report = dry_run_report(&vault, None);
+        assert!(report.failure.is_none(), "{:?}", report.failure);
+        assert_eq!(report.scanned, 3);
+        assert_eq!(report.changes.len(), 3);
+        let bare = report
+            .changes
+            .iter()
+            .find(|change| change.path == "eat/bare.md")
+            .expect("bare changes");
+        assert_eq!(
+            bare.after,
+            "---\ntype: \"[[record]]\"\ntitle: \"Bare\"\n---\n"
+        );
+        let crlf = report
+            .changes
+            .iter()
+            .find(|change| change.path == "eat/crlf.md")
+            .expect("crlf changes");
+        assert!(!crlf.after.contains("# Crlf"));
+        assert!(crlf.after.contains("## Notes\r\n"));
+        assert!(
+            crlf.after.match_indices('\n').all(|(index, _)| index > 0
+                && crlf.after.as_bytes()[index - 1] == b'\r'),
+            "CRLF preserved: {}",
+            crlf.after.replace('\r', "\\r")
+        );
+        let bom = report
+            .changes
+            .iter()
+            .find(|change| change.path == "eat/bom.md")
+            .expect("bom changes");
+        assert!(bom.after.starts_with('\u{feff}'));
+        assert!(!bom.after.contains("# Bom"));
+    }
+
+    #[test]
+    fn tidy_uses_one_scoped_commit() {
+        let (_temp, vault) = fixture(
+            "restaurant",
+            &[(
+                "one",
+                "---\ntype: \"[[record]]\"\ntitle: \"One\"\n---\n\n# One\n\n## Notes\n",
+            )],
+        );
+        let snapshot = VaultSnapshot::load(&vault);
+        let registry = AlbumRegistry::from_snapshot(&vault, &snapshot);
+        let plan =
+            plan_tidy(&vault, &registry, &snapshot, None).expect("plans");
+        assert_eq!(plan.changes.len(), 1);
+        assert_eq!(
+            planned_txn(&vault, plan).subject,
+            "records: tidy (1 notes)"
+        );
+    }
+
+    #[test]
+    fn fingerprint_ignores_body_rewrites() {
+        use super::super::fingerprint::{
+            parse_frontmatter_mapping, record_fingerprint,
+        };
+        let before =
+            "---\ntype: \"[[record]]\"\ntitle: \"One\"\n---\n\n# One\n\n## Notes\n";
+        let after = tidy_note(before, Some("One")).after.expect("tidies");
+        assert_ne!(before, after);
+        let schema = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        let left = parse_frontmatter_mapping(before).expect("frontmatter");
+        let right = parse_frontmatter_mapping(&after).expect("frontmatter");
+        assert_eq!(
+            record_fingerprint(&left, schema),
+            record_fingerprint(&right, schema),
+            "frontmatter-only fingerprint survives tidy"
+        );
     }
 
     #[test]

@@ -1714,7 +1714,7 @@ records:
         assert_eq!(
             plan.markdown.as_deref(),
             Some(
-                "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: \"Nagi Ramen\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Cranford\"\ncompanions:\n  - \"[[kelly]]\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# Nagi Ramen\n"
+                "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: \"Nagi Ramen\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Cranford\"\ncompanions:\n  - \"[[kelly]]\"\ncreated: 2026-11-08T12:41:07-0500\n---\n"
             )
         );
     }

@@ -322,6 +322,81 @@ fn new_dry_run_then_write_and_duplicate_refusal() {
 }
 
 #[test]
+fn new_writes_no_h1_and_update_inserts_notes_into_empty_body() {
+    let fixture = fixture();
+    let created = records_command(&fixture)
+        .args([
+            "new",
+            "restaurant",
+            "Ramen Nagi",
+            "-s",
+            "status=to_try",
+            "-s",
+            "category=Ramen",
+            "-s",
+            "location=Clark",
+            "-n",
+            "Spicy broth",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("create new record");
+    assert_success(&created);
+    let markdown = fs::read_to_string(fixture.vault.join("eat/ramen_nagi.md"))
+        .expect("read created record");
+    assert!(!markdown.contains("# Ramen Nagi\n"), "{markdown}");
+    assert!(markdown.contains("## Notes"), "{markdown}");
+    assert!(markdown.contains("Spicy broth"), "{markdown}");
+
+    // A note with no ordinary bullets ends right after the frontmatter.
+    let bare = records_command(&fixture)
+        .args([
+            "new",
+            "restaurant",
+            "Udon House",
+            "-s",
+            "status=to_try",
+            "-s",
+            "category=Udon",
+            "-s",
+            "location=Main",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("create bare record");
+    assert_success(&bare);
+    let bare_markdown =
+        fs::read_to_string(fixture.vault.join("eat/udon_house.md"))
+            .expect("read bare record");
+    assert!(bare_markdown.ends_with("---\n"), "{bare_markdown}");
+    assert!(!bare_markdown.contains('#'), "{bare_markdown}");
+
+    // Updating the bare note inserts a canonical Notes section.
+    let updated = records_command(&fixture)
+        .args([
+            "update",
+            "restaurant",
+            "udon_house",
+            "-n",
+            "First visit",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("update bare record");
+    assert_success(&updated);
+    let updated_markdown =
+        fs::read_to_string(fixture.vault.join("eat/udon_house.md"))
+            .expect("read updated record");
+    assert!(
+        updated_markdown.contains("---\n\n## Notes\n\n- First visit\n"),
+        "{updated_markdown}"
+    );
+}
+
+#[test]
 fn update_matches_capture_for_fields_notes_dates_and_lists() {
     let fixture = update_fixture();
     write_ninja_update(&fixture.vault);
@@ -3105,6 +3180,22 @@ fn write_tidy_records(vault: &std::path::Path) {
         "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Kept\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n# Kept\n\n## Notes\n\n- hello\n",
     );
     write_file(
+        &vault.join("eat/differing.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Differing\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n# Something Else\n\n## Notes\n\n- hello\n",
+    );
+    write_file(
+        &vault.join("eat/buried.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Buried\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\nIntro prose.\n\n# Buried\n",
+    );
+    write_file(
+        &vault.join("eat/fenced.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: Fenced\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n```text\n# Fenced\n```\n\n- hello\n",
+    );
+    write_file(
+        &vault.join("eat/quoted.md"),
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: \"Ma \\\"Pa\\\" Deli\"\nstatus: to_try\ncategory: Ramen\nlocation: Clark\n---\n\n# Ma \"Pa\" Deli\n",
+    );
+    write_file(
         &vault.join("eat/not_a_record.md"),
         "---\nparent: \"[[eat]]\"\ntype: \"[[area]]\"\ntitle: Not A Record\n---\n\n# Not A Record\n\n## Notes\n",
     );
@@ -3203,8 +3294,17 @@ fn tidy_dry_run_writes_nothing_and_leaves_head_unchanged() {
     assert!(text.contains("empty_eof.md"), "{text}");
     assert!(text.contains("empty_source.md"), "{text}");
     assert!(text.contains("empty_cast.md"), "{text}");
-    assert!(!text.contains("kept.md"), "{text}");
+    // kept.md loses only its redundant H1; quoted.md loses its quoted H1.
+    assert!(text.contains("kept.md"), "{text}");
+    assert!(text.contains("quoted.md"), "{text}");
+    assert!(text.contains("3 empty Notes sections"), "{text}");
+    assert!(text.contains("5 redundant H1s"), "{text}");
     assert!(!text.contains("not_a_record.md"), "{text}");
+    assert!(!text.contains("fenced.md"), "{text}");
+    // Differing and buried H1s are kept, with reasons.
+    assert!(text.contains("2 notes keep their H1"), "{text}");
+    assert!(text.contains("differing.md"), "{text}");
+    assert!(text.contains("buried.md"), "{text}");
 }
 
 #[test]
@@ -3217,10 +3317,12 @@ fn tidy_real_run_commits_once_and_changes_only_record_bodies() {
         .expect("tidy real run");
     assert_success(&real);
     let text = stdout(&real);
-    assert!(text.contains("3"), "{text}");
+    assert!(text.contains("5 notes"), "{text}");
+    assert!(text.contains("3 empty Notes sections"), "{text}");
+    assert!(text.contains("5 redundant H1s"), "{text}");
 
     let log = stdout(&git_in(&vault, ["log", "--oneline", "-2"]));
-    assert!(log.contains("records: tidy (3 notes)"), "{log}");
+    assert!(log.contains("records: tidy (5 notes)"), "{log}");
 
     for path in [
         "eat/empty_eof.md",
@@ -3229,10 +3331,25 @@ fn tidy_real_run_commits_once_and_changes_only_record_bodies() {
     ] {
         let contents = fs::read_to_string(vault.join(path)).expect("read");
         assert!(!contents.contains("## Notes"), "{path}: {contents}");
+        assert!(
+            contents
+                .lines()
+                .all(|line| line.starts_with("## ") || !line.starts_with('#')),
+            "{path} lost its H1: {contents}"
+        );
     }
-    // Non-empty records, non-records, and album declarations stay put.
+    // The H1-only note ends right after the frontmatter.
+    let quoted = fs::read_to_string(vault.join("eat/quoted.md")).unwrap();
+    assert!(quoted.ends_with("location: Clark\n---\n"), "{quoted}");
+    // Non-empty records keep their Notes but lose the redundant H1;
+    // differing and buried H1s are kept; non-records stay put.
     let kept = fs::read_to_string(vault.join("eat/kept.md")).unwrap();
     assert!(kept.contains("- hello"), "{kept}");
+    assert!(!kept.contains("# Kept"), "{kept}");
+    let differing = fs::read_to_string(vault.join("eat/differing.md")).unwrap();
+    assert!(differing.contains("# Something Else"), "{differing}");
+    let buried = fs::read_to_string(vault.join("eat/buried.md")).unwrap();
+    assert!(buried.contains("# Buried"), "{buried}");
     let skipped =
         fs::read_to_string(vault.join("eat/not_a_record.md")).unwrap();
     assert!(skipped.contains("## Notes"), "{skipped}");
@@ -3270,16 +3387,36 @@ fn tidy_type_scoping_and_json_shape() {
     let payload = json(&scoped);
     assert_eq!(payload["command"], "tidy");
     assert_eq!(payload["dry_run"], true);
-    assert_eq!(payload["counts"]["scanned"], 3);
-    assert_eq!(payload["counts"]["changed"], 2);
+    assert_eq!(payload["counts"]["scanned"], 7);
+    assert_eq!(payload["counts"]["changed"], 4);
+    assert_eq!(payload["counts"]["h1_removed"], 4);
+    assert_eq!(payload["counts"]["h1_kept"], 2);
     let paths = payload["changes"]
         .as_array()
         .unwrap()
         .iter()
         .map(|change| change["path"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(paths, vec!["eat/empty_eof.md", "eat/empty_source.md"]);
+    assert_eq!(
+        paths,
+        vec![
+            "eat/empty_eof.md",
+            "eat/empty_source.md",
+            "eat/kept.md",
+            "eat/quoted.md"
+        ]
+    );
     assert!(payload["changes"][0].get("diff").is_some());
+    assert_eq!(payload["changes"][0]["notes_removed"], true);
+    assert_eq!(payload["changes"][0]["h1_removed"], true);
+    assert!(payload["changes"][0]["h1_kept_reason"].is_null());
+    assert_eq!(payload["changes"][2]["notes_removed"], false);
+    assert_eq!(payload["changes"][2]["h1_removed"], true);
+    assert_eq!(payload["kept_h1"][0]["path"], "eat/buried.md");
+    assert_eq!(
+        payload["kept_h1"][1]["reason"],
+        "the H1 differs from the frontmatter title"
+    );
     assert!(payload["commit"].is_null());
 
     let unknown = tidy_sync_command(
@@ -3304,7 +3441,11 @@ fn tidy_type_scoping_and_json_shape() {
     assert_success(&real);
     let real_json = json(&real);
     assert_eq!(real_json["counts"]["changed"], 1);
+    assert_eq!(real_json["counts"]["h1_removed"], 1);
+    assert_eq!(real_json["counts"]["h1_kept"], 0);
     assert!(real_json["changes"][0].get("diff").is_none());
+    assert_eq!(real_json["changes"][0]["notes_removed"], true);
+    assert_eq!(real_json["changes"][0]["h1_removed"], true);
     assert!(real_json["commit"]["subject"]
         .as_str()
         .unwrap()

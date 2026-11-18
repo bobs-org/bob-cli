@@ -82,6 +82,147 @@ fn is_notes_heading(heading: &Heading) -> bool {
     heading.level == 2 && heading.title.trim() == "Notes"
 }
 
+/// Outcome of the redundant-H1 pass over one record note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct H1Strip {
+    /// The rewritten note when the redundant H1 was removed.
+    pub(crate) after: Option<String>,
+    /// Why an H1 stays: the first H1 differs from the title, is not the
+    /// first body content, or a later H1 remains after the removal.
+    pub(crate) kept: Option<&'static str>,
+}
+
+/// Remove a redundant H1 from a record note.
+///
+/// A redundant H1 is the first non-blank body line outside fenced code, a
+/// level-1 ATX heading whose text — trimmed of surrounding whitespace and
+/// closing `#`s — equals the frontmatter `title` exactly. Removal deletes
+/// that line and the blank lines that follow it; when the body is then
+/// blank-only, the note ends right after the closing `---`. An H1 that
+/// differs from the title, an H1 that is not the first body content, and
+/// any later H1 are kept. Lines inside fenced code never count as headings
+/// or content. Frontmatter, CRLF, and BOM bytes are preserved.
+pub(crate) fn strip_redundant_h1(original: &str, title: &str) -> H1Strip {
+    let absent = H1Strip {
+        after: None,
+        kept: None,
+    };
+    let lines = split_preserving_ends(original);
+    if lines.is_empty() {
+        return absent;
+    }
+    let first_content = lines[0]
+        .content
+        .strip_prefix('\u{feff}')
+        .unwrap_or(lines[0].content.as_str());
+    if first_content != "---" {
+        return absent;
+    }
+    let mut closing: Option<usize> = None;
+    for (index, line) in lines.iter().enumerate().skip(1) {
+        if line.content == "---" {
+            closing = Some(index);
+            break;
+        }
+    }
+    let Some(closing_line) = closing else {
+        return absent;
+    };
+    let body_start = closing_line + 1;
+    let mut fence = None;
+    let mut first_content_line: Option<usize> = None;
+    let mut first_h1: Option<(usize, String)> = None;
+    for (index, line) in lines.iter().enumerate().skip(body_start) {
+        if let Some(open) = fence {
+            if crate::native::markdown::closes_fence(&line.content, open) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(open) = crate::native::markdown::fence_marker(&line.content)
+        {
+            fence = Some(open);
+            continue;
+        }
+        if line.content.trim().is_empty() {
+            continue;
+        }
+        if first_content_line.is_none() {
+            first_content_line = Some(index);
+        }
+        if first_h1.is_none()
+            && let Some((level, text)) =
+                crate::native::markdown::atx_heading(&line.content)
+            && level == 1
+        {
+            first_h1 = Some((index, text.to_owned()));
+        }
+    }
+    let Some((h1_line, h1_text)) = first_h1 else {
+        return absent;
+    };
+    if Some(h1_line) != first_content_line {
+        return H1Strip {
+            after: None,
+            kept: Some("the H1 is not the first body content"),
+        };
+    }
+    if h1_text != title {
+        return H1Strip {
+            after: None,
+            kept: Some("the H1 differs from the frontmatter title"),
+        };
+    }
+    let mut out: Vec<Line> = lines[..body_start].to_vec();
+    let mut cursor = h1_line + 1;
+    while cursor < lines.len() && lines[cursor].content.trim().is_empty() {
+        cursor += 1;
+    }
+    out.extend_from_slice(&lines[body_start..h1_line]);
+    out.extend_from_slice(&lines[cursor..]);
+    // A body left blank-only ends right after the closing `---`.
+    let body_blank = out[body_start..]
+        .iter()
+        .all(|line| line.content.trim().is_empty());
+    if body_blank {
+        out.truncate(body_start);
+    }
+    let mut after = String::new();
+    for line in &out {
+        after.push_str(&line.content);
+        after.push_str(&line.ending);
+    }
+    if after == original {
+        return absent;
+    }
+    // Any later H1 stays and counts as kept.
+    let mut rest_fence = None;
+    let mut later_h1 = false;
+    for line in out[body_start..].iter() {
+        if let Some(open) = rest_fence {
+            if crate::native::markdown::closes_fence(&line.content, open) {
+                rest_fence = None;
+            }
+            continue;
+        }
+        if let Some(open) = crate::native::markdown::fence_marker(&line.content)
+        {
+            rest_fence = Some(open);
+            continue;
+        }
+        if crate::native::markdown::atx_heading(&line.content)
+            .is_some_and(|(level, _)| level == 1)
+        {
+            later_h1 = true;
+            break;
+        }
+    }
+    H1Strip {
+        after: Some(after),
+        kept: later_h1.then_some("a later H1 is kept"),
+    }
+}
+
 /// Remove every empty `## Notes` section from a record note.
 ///
 /// Returns `None` when nothing changes or when the note has no closed
@@ -192,10 +333,136 @@ pub(crate) fn strip_empty_notes_sections(original: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_empty_notes_sections;
+    use super::{strip_empty_notes_sections, strip_redundant_h1, H1Strip};
 
     fn note(body: &str) -> String {
         format!("---\ntype: \"[[record]]\"\ntitle: \"T\"\n---\n{body}")
+    }
+
+    fn titled(title: &str, body: &str) -> String {
+        format!("---\ntype: \"[[record]]\"\ntitle: {title:?}\n---\n{body}")
+    }
+
+    #[test]
+    fn redundant_h1_removed_with_following_blanks() {
+        let before = note("# T\n\n## Notes\n\n- a\n");
+        let strip = strip_redundant_h1(&before, "T");
+        assert_eq!(strip.kept, None);
+        assert_eq!(
+            strip.after.as_deref(),
+            Some(note("## Notes\n\n- a\n").as_str())
+        );
+    }
+
+    #[test]
+    fn redundant_h1_with_closing_hashes_removed() {
+        let before = note("# T ##\n\n- a\n");
+        let strip = strip_redundant_h1(&before, "T");
+        assert_eq!(strip.after.as_deref(), Some(note("- a\n").as_str()));
+    }
+
+    #[test]
+    fn h1_only_body_ends_at_frontmatter() {
+        let before = note("# T\n");
+        let strip = strip_redundant_h1(&before, "T");
+        assert_eq!(strip.kept, None);
+        assert_eq!(
+            strip.after.as_deref(),
+            Some("---\ntype: \"[[record]]\"\ntitle: \"T\"\n---\n")
+        );
+    }
+
+    #[test]
+    fn differing_h1_is_kept() {
+        let before = note("# Other\n\n- a\n");
+        assert_eq!(
+            strip_redundant_h1(&before, "T"),
+            H1Strip {
+                after: None,
+                kept: Some("the H1 differs from the frontmatter title"),
+            }
+        );
+    }
+
+    #[test]
+    fn h1_after_prose_is_kept() {
+        let before = note("Intro.\n\n# T\n");
+        assert_eq!(
+            strip_redundant_h1(&before, "T"),
+            H1Strip {
+                after: None,
+                kept: Some("the H1 is not the first body content"),
+            }
+        );
+    }
+
+    #[test]
+    fn fenced_h1_is_ignored() {
+        let before = note("```text\n# T\n```\n\n- a\n");
+        assert_eq!(
+            strip_redundant_h1(&before, "T"),
+            H1Strip {
+                after: None,
+                kept: None,
+            }
+        );
+    }
+
+    #[test]
+    fn later_h1_is_kept_after_removal() {
+        let before = note("# T\n\n# Other\n");
+        let strip = strip_redundant_h1(&before, "T");
+        assert_eq!(strip.kept, Some("a later H1 is kept"));
+        assert_eq!(strip.after.as_deref(), Some(note("# Other\n").as_str()));
+    }
+
+    #[test]
+    fn h1_less_bodies_are_absent() {
+        for body in ["", "\n", "## Notes\n\n- a\n", "- stray\n"] {
+            let before = note(body);
+            assert_eq!(
+                strip_redundant_h1(&before, "T"),
+                H1Strip {
+                    after: None,
+                    kept: None,
+                },
+                "absent for {body:?}"
+            );
+        }
+        assert_eq!(
+            strip_redundant_h1("# T\n", "T"),
+            H1Strip {
+                after: None,
+                kept: None,
+            }
+        );
+    }
+
+    #[test]
+    fn redundant_h1_preserves_crlf_and_bom() {
+        let before =
+            "\u{feff}---\r\ntype: \"[[record]]\"\r\ntitle: \"T\"\r\n---\r\n\r\n# T\r\n\r\n## Notes\r\n\r\n- a\r\n";
+        let strip = strip_redundant_h1(before, "T");
+        let after = strip.after.expect("removed");
+        assert!(after.starts_with('\u{feff}'));
+        assert!(!after.contains("# T\r\n"));
+        assert!(after.contains("## Notes\r\n"));
+        assert!(
+            after
+                .match_indices('\n')
+                .all(|(index, _)| index > 0
+                    && after.as_bytes()[index - 1] == b'\r'),
+            "every newline stays CRLF:\n{}",
+            after.replace('\r', "\\r")
+        );
+    }
+
+    #[test]
+    fn quoted_title_matches_its_h1() {
+        let before = titled("Ma \"Pa\" Deli", "# Ma \"Pa\" Deli\n");
+        let strip = strip_redundant_h1(&before, "Ma \"Pa\" Deli");
+        assert!(strip.after.is_some(), "{strip:?}");
+        assert!(!strip.after.unwrap().contains("# Ma"));
     }
 
     #[test]

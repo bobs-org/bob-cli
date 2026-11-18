@@ -1146,7 +1146,14 @@ fn created_album_accepts_records_and_stays_clean() {
     let output = capture_command.output().expect("run bob capture");
     assert_success(&output);
     let ramen = read(&vault, "eat/ramen_nagi.md");
-    assert!(ramen.contains("# Ramen Nagi"), "{ramen}");
+    assert!(
+        ramen
+            .lines()
+            .all(|line| line.starts_with("## ")
+                || !line.starts_with('#')),
+        "created record has no H1: {ramen}"
+    );
+    assert!(ramen.contains("## Notes"), "{ramen}");
     assert_eq!(
         read(&vault, "body.md"),
         body_before,

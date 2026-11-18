@@ -168,7 +168,7 @@ sets `one_off: true`.
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob records show` | `-f json` | Schema for `TYPE`; with `STEM`, one record's properties, identity, findings, full suggestions, and fingerprint. Refusals add `error.code` | `schema_version: 1` | [Reading one record](../records.md#reading-one-record) |
-| `bob records tidy` | `-f json` | Tidied notes, counts, and transaction results | `schema_version: 1` | [Tidying empty Notes sections](../records.md#tidying-empty-notes-sections) |
+| `bob records tidy` | `-f json` | Tidied notes, counts, and transaction results | `schema_version: 1` | [Tidying empty Notes sections and redundant H1s](../records.md#tidying-empty-notes-sections-and-redundant-h1s) |
 | `bob records update` | `-i FILE -f json` | Guarded envelope: `changed[]`, `changes[]`, fingerprints, `inverse_ops`, groups, `consequence`, and typed `error` | `schema_version: 1` | [Updating with an envelope](../records.md#updating-with-an-envelope) |
 
 ### Area reports {#area-reports}
