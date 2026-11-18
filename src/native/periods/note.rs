@@ -514,6 +514,22 @@ mod tests {
             parse_headline("**Headline:** Shipped X.\n- [[a]]\n"),
             Some("Shipped X.".to_string())
         );
+        for marker in ["+ unrelated list", "1) unrelated list"] {
+            assert_eq!(
+                parse_headline(&format!(
+                    "**Headline:** Shipped X.\n{marker}\n"
+                )),
+                Some("Shipped X.".to_string()),
+                "{marker}"
+            );
+            assert_eq!(
+                unwrap_headline(&format!(
+                    "**Headline:** Shipped X.\n{marker}\n"
+                )),
+                Some(format!("**Headline:** Shipped X.\n{marker}")),
+                "{marker}"
+            );
+        }
         assert_eq!(
             unwrap_headline(
                 "**Headline:** One\ntwo  three\n\n**Shipped:**\n- x"
