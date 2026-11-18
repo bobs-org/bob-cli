@@ -63,6 +63,19 @@ pub(crate) fn bob_command() -> Command {
     command
 }
 
+/// Probe whether a directory distinguishes two paths that differ only by
+/// ASCII case, then remove the probe file.
+pub(crate) fn case_sensitive_filesystem(directory: &Path) -> bool {
+    fs::create_dir_all(directory).expect("create filesystem probe directory");
+    let lower = directory.join(".bob-cli-case-sensitivity-probe");
+    let upper = directory.join(".BOB-CLI-CASE-SENSITIVITY-PROBE");
+    assert!(!lower.exists() && !upper.exists(), "probe paths are unused");
+    fs::write(&lower, b"probe").expect("write filesystem probe");
+    let case_sensitive = !upper.exists();
+    fs::remove_file(&lower).expect("remove filesystem probe");
+    case_sensitive
+}
+
 /// Return missing packages from `bob highlights doctor`, or an error when
 /// the package check itself cannot be trusted.
 pub(crate) fn note_profile_package_skip(

@@ -1178,9 +1178,14 @@ mod tests {
         write(&vault.join("movies.md"), &album("movies", "film", ""));
         write(&vault.join("shows.md"), &album("shows", "movies", ""));
         write(&vault.join("Eat.md"), &album("Eat", "cuisine", ""));
-        write(&vault.join("eat.md"), &album("eat", "meal", ""));
 
-        let registry = AlbumRegistry::discover(&vault);
+        // Stage the second spelling in the snapshot so this collision is
+        // exercised even on filesystems that cannot store both paths.
+        let snapshot = VaultSnapshot::load(&vault).with_overlay([(
+            Path::new("eat.md").to_path_buf(),
+            album("eat", "meal", ""),
+        )]);
+        let registry = AlbumRegistry::from_snapshot(&vault, &snapshot);
         let paths_for = |route: &str| match registry.resolve_route(route) {
             RouteResolution::AlbumInvalid { paths, .. } => paths,
             other => panic!("expected invalid claim, got {other:?}"),

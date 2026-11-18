@@ -600,8 +600,22 @@ fn record_exists_fix_uses_a_staged_target_but_not_an_incomplete_or_unsafe_one()
         .expect("non-record path collision");
     assert!(collision.get("rewrite").is_none());
 
+    let case_sensitive = case_sensitive_filesystem(&vault);
     write_file(&vault.join("eat/ninja_sushi.md"), NINJA);
-    write_file(&vault.join("eat/NINJA_SUSHI.md"), NINJA);
+    if case_sensitive {
+        write_file(&vault.join("eat/NINJA_SUSHI.md"), NINJA);
+    }
+    let mut stored_record_names = fs::read_dir(vault.join("eat"))
+        .expect("read record folder")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.eq_ignore_ascii_case("ninja_sushi.md"))
+        .collect::<Vec<_>>();
+    stored_record_names.sort();
+    assert_eq!(
+        stored_record_names.len(),
+        if case_sensitive { 2 } else { 1 }
+    );
     let ambiguous = "Ninja Sushi @eat/\n- Another visit.";
     let parsed = json_output(&capture_parse(&vault, &config, ambiguous));
     let collision = parsed["diagnostics"]
@@ -610,7 +624,14 @@ fn record_exists_fix_uses_a_staged_target_but_not_an_incomplete_or_unsafe_one()
         .iter()
         .find(|entry| entry["code"] == "record_exists")
         .expect("ambiguous record collision");
-    assert!(collision.get("rewrite").is_none());
+    if case_sensitive {
+        assert!(collision.get("rewrite").is_none());
+    } else {
+        assert!(
+            collision.get("rewrite").is_some(),
+            "a single record on this filesystem is a safe update target: {collision}"
+        );
+    }
 }
 
 #[test]

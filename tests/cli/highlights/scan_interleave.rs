@@ -1636,18 +1636,75 @@ fn asset_dir_contains(dir: &Path, bytes: &[u8]) -> bool {
     })
 }
 
+fn entry_names(dir: &Path) -> Vec<String> {
+    let mut names = fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| {
+                    panic!("read entry in {}: {error}", dir.display())
+                })
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 #[test]
 fn queued_queued_output_collision_rejects_without_publication() {
     // Two queued PDFs mapping to one ref note must be rejected as dry-run
-    // does, never overwriting one reference with the other.
+    // does, never overwriting one reference with the other. On a volume
+    // that aliases the names, there is only one physical queued input.
     let temp = TempDir::new("bob-cli-scan-interleave-queued-queued");
     let env = ScanEnv {
         vault: temp.path().join("vault"),
         state: temp.path().join("state"),
         lock: temp.path().join("bob_sync.lock"),
     };
+    let case_sensitive = case_sensitive_filesystem(&env.vault);
     write_marker_pdf(&env.vault.join("xlib/blogs/clash.pdf"), "First");
     write_marker_pdf(&env.vault.join("xlib/blogs/clash.PDF"), "Second");
+
+    if !case_sensitive {
+        let queued_dir = env.vault.join("xlib/blogs");
+        let mut stored_names = entry_names(&queued_dir)
+            .into_iter()
+            .filter(|name| name.eq_ignore_ascii_case("clash.pdf"))
+            .collect::<Vec<_>>();
+        stored_names.sort();
+        assert_eq!(stored_names.len(), 1);
+        let stored_source = queued_dir.join(&stored_names[0]);
+        let source_before = fs::read(&stored_source)
+            .expect("read the one physical queued input");
+
+        let dry = run_scan(&env, &["-f", "json", "--dry-run"]);
+        assert_success(&dry);
+        assert_eq!(scan_json_stdout(&dry)["ok"], true);
+        assert_eq!(
+            fs::read(&stored_source).expect("queued input after dry-run"),
+            source_before,
+            "dry-run leaves the actual input untouched"
+        );
+        assert!(!env.vault.join("lib/blogs/clash.pdf").exists());
+        assert!(!env.vault.join("ref/blogs/clash.md").exists());
+
+        let output = run_scan(&env, &["-f", "json"]);
+        assert_success(&output);
+        assert_eq!(scan_json_stdout(&output)["ok"], true);
+        assert_eq!(
+            fs::read(env.vault.join("lib/blogs/clash.pdf"))
+                .expect("read published PDF"),
+            source_before,
+            "the one stored input is published intact"
+        );
+        assert!(env.vault.join("ref/blogs/clash.md").is_file());
+        assert!(!stored_source.exists());
+        return;
+    }
+
     let dry = run_scan(&env, &["-f", "json", "--dry-run"]);
     assert_eq!(dry.status.code(), Some(1), "{}", format_output(&dry));
     assert_eq!(scan_json_stdout(&dry)["error"]["code"], "output_collision");
@@ -1683,14 +1740,19 @@ fn queued_existing_output_collision_rejects_without_overwrite() {
         state: temp.path().join("state"),
         lock: temp.path().join("bob_sync.lock"),
     };
+    let case_sensitive = case_sensitive_filesystem(&env.vault);
     write_marker_pdf(&env.vault.join("lib/blogs/clash.PDF"), "Existing");
     assert_success(&run_scan(&env, &[]));
     let note = env.vault.join("ref/blogs/clash.md");
     assert!(note.is_file());
     let note_before = fs::read(&note).expect("existing note");
+    let existing_pdf_before = fs::read(env.vault.join("lib/blogs/clash.PDF"))
+        .expect("existing library PDF");
     let receipt_before =
         fs::read(scan_receipt_path(&env.state)).expect("receipt");
     write_marker_pdf(&env.vault.join("xlib/blogs/clash.pdf"), "Queued");
+    let queued_pdf_before =
+        fs::read(env.vault.join("xlib/blogs/clash.pdf")).expect("queued PDF");
     let output = run_scan(&env, &["-f", "json"]);
     assert_eq!(
         output.status.code(),
@@ -1698,13 +1760,40 @@ fn queued_existing_output_collision_rejects_without_overwrite() {
         "queued/existing collision must fail:\n{}",
         format_output(&output)
     );
-    assert_eq!(
-        scan_json_stdout(&output)["error"]["code"],
-        "output_collision"
-    );
+    let document = scan_json_stdout(&output);
+    let code = document["error"]["code"]
+        .as_str()
+        .expect("collision error code");
+    if case_sensitive {
+        assert_eq!(code, "output_collision");
+    } else {
+        assert!(
+            ["output_collision", "intake_collision"].contains(&code),
+            "case-insensitive refusal still names a collision: {}",
+            format_output(&output)
+        );
+    }
     assert_eq!(fs::read(&note).expect("note after"), note_before);
-    assert!(env.vault.join("xlib/blogs/clash.pdf").is_file());
-    assert!(!env.vault.join("lib/blogs/clash.pdf").exists());
+    assert_eq!(
+        fs::read(env.vault.join("lib/blogs/clash.PDF"))
+            .expect("library PDF after"),
+        existing_pdf_before,
+        "existing library bytes are preserved"
+    );
+    assert_eq!(
+        fs::read(env.vault.join("xlib/blogs/clash.pdf"))
+            .expect("queued PDF after"),
+        queued_pdf_before,
+        "queued PDF is left in place"
+    );
+    assert_eq!(
+        entry_names(&env.vault.join("lib/blogs"))
+            .into_iter()
+            .filter(|name| name.eq_ignore_ascii_case("clash.PDF"))
+            .count(),
+        1,
+        "there is one stored library input"
+    );
     assert_eq!(
         fs::read(scan_receipt_path(&env.state)).expect("receipt after"),
         receipt_before,
@@ -1790,13 +1879,19 @@ fn post_recovery_replan_failure_keeps_direct_output() {
         state: state.clone(),
         lock: temp.path().join("bob_sync.lock"),
     };
+    let case_sensitive = case_sensitive_filesystem(&vault);
     write_marker_pdf(&vault.join("lib/blogs/stable.pdf"), "Stable");
+    write_marker_pdf(&vault.join("lib/blogs/clash.PDF"), "Existing");
     let scan_env = ScanEnv {
         vault: vault.clone(),
         state: state.clone(),
         lock: temp.path().join("bob_sync.lock"),
     };
     assert_success(&run_scan(&scan_env, &[]));
+    let clash_note = vault.join("ref/blogs/clash.md");
+    let clash_note_before = fs::read(&clash_note).expect("filed clash note");
+    let library_clash_before = fs::read(vault.join("lib/blogs/clash.PDF"))
+        .expect("existing library clash PDF");
     write_marker_pdf(&vault.join("xlib/blogs/queued.pdf"), "Queued");
     let base = overwrite_recovery::head(&vault);
     let hs = Handshake::new(temp.path(), "hs");
@@ -1816,10 +1911,12 @@ fn post_recovery_replan_failure_keeps_direct_output() {
         &["ref/blogs/half-written.md"],
         &[],
     );
-    // Plant a queued-queued output collision so the post-recovery rebuild
-    // fails.
-    write_marker_pdf(&vault.join("xlib/blogs/clash.pdf"), "First");
-    write_marker_pdf(&vault.join("xlib/blogs/clash.PDF"), "Second");
+    // Plant a queued input for an already-filed library item. The separate
+    // folders make this collision real on case-sensitive and case-insensitive
+    // volumes alike.
+    write_marker_pdf(&vault.join("xlib/blogs/clash.pdf"), "Queued clash");
+    let queued_clash_before =
+        fs::read(vault.join("xlib/blogs/clash.pdf")).expect("queued clash PDF");
     resume(&hs, 1);
     let output = child.wait();
     assert_eq!(
@@ -1830,7 +1927,35 @@ fn post_recovery_replan_failure_keeps_direct_output() {
     );
     let document = scan_json_stdout(&output);
     assert_eq!(document["ok"], false);
-    assert_eq!(document["error"]["code"], "output_collision");
+    let code = document["error"]["code"]
+        .as_str()
+        .expect("replan collision error code");
+    if case_sensitive {
+        assert_eq!(code, "output_collision");
+    } else {
+        assert!(
+            ["output_collision", "intake_collision"].contains(&code),
+            "case-insensitive replan still refuses the collision: {}",
+            format_output(&output)
+        );
+    }
+    assert_eq!(
+        fs::read(&clash_note).expect("clash note after replan"),
+        clash_note_before,
+        "replan leaves the existing reference note untouched"
+    );
+    assert_eq!(
+        fs::read(vault.join("lib/blogs/clash.PDF"))
+            .expect("library clash after replan"),
+        library_clash_before,
+        "replan leaves the filed library input untouched"
+    );
+    assert_eq!(
+        fs::read(vault.join("xlib/blogs/clash.pdf"))
+            .expect("queued clash after replan"),
+        queued_clash_before,
+        "replan leaves the conflicting queued input untouched"
+    );
     // Receipt must be the serialized recovery result, not a later unlocked
     // write and not the stale sentinel: it exists and parses, and the
     // intent is cleared by the serialized recovery.

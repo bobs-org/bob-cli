@@ -693,7 +693,14 @@ fn create_normalizes_mixed_case_stems_and_takes_path_qualified_parents() {
     assert_eq!(payload["album"]["stem"], "eat");
     assert_eq!(payload["album"]["path"], "eat.md");
     assert!(vault.join("eat.md").exists());
-    assert!(!vault.join("Eat.md").exists());
+    let mut stored_album_names = fs::read_dir(&vault)
+        .expect("read vault directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.eq_ignore_ascii_case("eat.md"))
+        .collect::<Vec<_>>();
+    stored_album_names.sort();
+    assert_eq!(stored_album_names, ["eat.md"]);
 
     // Ambiguous stems need the path-qualified parent.
     write(

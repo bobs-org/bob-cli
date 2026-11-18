@@ -1082,7 +1082,12 @@ mod tests {
         std::fs::write(vault.join("EAT.base"), "filters: {}\n")
             .expect("plant base");
         let error = plan.deps.validate(&vault).expect_err("namespace changed");
-        assert!(error.message.contains("namespace"), "{}", error.message);
+        assert!(
+            error.message.contains("namespace")
+                || error.message.contains("appeared on disk after planning"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
