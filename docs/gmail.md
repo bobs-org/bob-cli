@@ -473,10 +473,12 @@ and HTML alternatives, validates and snapshots every declared attachment, and
 persists a body-free create marker. The body and attachment bytes go to gog
 through private temporary files. For replies, Bob checks the saved account,
 thread, and selected non-draft message, then verifies the returned draft still
-belongs to that thread. A Reply answers the selected message's sender; when
-you sent that message, it answers that message's To recipients instead, as
-Gmail does. Reply-all recipients are resolved by Gmail and are shown from the
-stored draft.
+belongs to that thread. A Reply uses the selected message's Reply-To recipients
+when a valid non-account mailbox is present. A missing, empty, or self-only
+Reply-To falls back to From; when you sent the message, Bob uses its To
+recipients instead. A malformed Reply-To fails validation rather than silently
+choosing another recipient. Reply-all recipients are resolved by Gmail and are
+shown from the stored draft.
 
 Bob reads the stored draft back without using gog's download cache. It hydrates
 both MIME alternatives and attachments in memory and refuses a preview if any

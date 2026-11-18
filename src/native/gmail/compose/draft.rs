@@ -566,24 +566,7 @@ fn compose_request(
                 source.kind,
                 source::ComposeKind::Reply { all: false }
             ) {
-                let from = target_message
-                    .first_header(HeaderKind::From)
-                    .ok_or_else(|| {
-                        GmailError::runtime(
-                            "reply_target_missing",
-                            "the selected reply message has no sender address"
-                                .to_string(),
-                        )
-                    })?;
-                let sender =
-                    source::parse_recipient_list(from).map_err(|_| {
-                        GmailError::runtime(
-                    "reply_target_invalid",
-                    "the selected reply message has an invalid sender address"
-                        .to_string(),
-                )
-                    })?;
-                reply_recipients(target_message, sender, account)?
+                reply_recipients(target_message, account)?
             } else {
                 Vec::new()
             };
@@ -623,20 +606,63 @@ fn compose_request(
     })
 }
 
-/// A plain Reply answers the selected message's sender. When the account sent
-/// that message, it answers the message's To recipients instead, as Gmail and
-/// gog do, rather than addressing the draft back to the account.
+/// A plain Reply uses a usable Reply-To before falling back to From. When the
+/// account sent that message, it answers the message's To recipients instead,
+/// as Gmail and gog do, rather than addressing the draft back to the account.
 fn reply_recipients(
     target: &GmailMessage,
-    sender: Vec<String>,
     account: &str,
 ) -> Result<Vec<String>, GmailError> {
     let is_account = |recipient: &String| {
         source::recipient_address(recipient).eq_ignore_ascii_case(account)
     };
-    if !sender.iter().all(is_account) {
+
+    let mut reply_to = Vec::new();
+    for value in target.header_values("Reply-To") {
+        if value.trim().is_empty() {
+            continue;
+        }
+        reply_to.extend(source::parse_recipient_list(value).map_err(|_| {
+            GmailError::runtime(
+                "reply_target_invalid",
+                "the selected reply message has an invalid Reply-To header"
+                    .to_string(),
+            )
+            .with_hint(
+                "correct the Reply-To header in Gmail, or remove it to reply to the sender",
+            )
+        })?);
+    }
+    let reply_to = reply_to
+        .into_iter()
+        .filter(|recipient| !is_account(recipient))
+        .collect::<Vec<_>>();
+    if !reply_to.is_empty() {
+        return Ok(reply_to);
+    }
+
+    let from = target.header_values("From").collect::<Vec<_>>().join(", ");
+    if from.trim().is_empty() {
+        return Err(GmailError::runtime(
+            "reply_target_missing",
+            "the selected reply message has no sender address".to_string(),
+        ));
+    }
+    let sender = source::parse_recipient_list(&from).map_err(|_| {
+        GmailError::runtime(
+            "reply_target_invalid",
+            "the selected reply message has an invalid sender address"
+                .to_string(),
+        )
+    })?;
+    let sender = sender
+        .into_iter()
+        .filter(|recipient| !is_account(recipient))
+        .collect::<Vec<_>>();
+    if !sender.is_empty() {
         return Ok(sender);
     }
+
     let to = target.header_values("To").collect::<Vec<_>>().join(", ");
     let recipients = source::parse_recipient_list(&to)
         .map_err(|_| {
