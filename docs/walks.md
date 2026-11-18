@@ -25,13 +25,29 @@ bank config makes only `b` unavailable. A teaching-empty bank (no
 One `freshness::scan::scan`. Counts come from the same helper
 `bob freshness list` uses, so `walk` and `by_tier` cannot disagree.
 
+The `s` mark is on exactly when `]s` has a row to land on: attention
+iff `walk > 0`, with the panel reading `Review clear` when there is
+nothing to land on.
+
 - **commitments** = pre + new + projects + pending + next + recurring +
-  tickler. ROTTEN and POST are upkeep and excluded.
-- **attention** iff `commitments > 0`.
-- **tier** = the first non-zero commitment tier in that order.
-- **label** (attention only): `Review: {walk} due · {commitments} commitments — {TIER} first`.
+  tickler.
+- **attention** iff `walk > 0`.
+- **tier** = the first non-zero of all nine groups in walk order: PRE →
+  NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN →
+  POST. That is where a fresh `]s` enters the walk.
+- **label** (attention only), in three forms:
+
+  | commitments | label |
+  | --- | --- |
+  | ≥ 2 | `Review: {walk} due · {commitments} commitments — {TIER} first` |
+  | 1 | `Review: {walk} due · 1 commitment — {TIER} first` |
+  | 0 | `Review: {walk} due · commitments done — {TIER} first` (echoes the walk's own "Commitments done" notice) |
+
   Footer labels: PRE, NEW, PROJECTS, WIP (pending), NEXT, RECUR
-  (recurring), TICKS (tickler).
+  (recurring), TICKS (tickler), ROTTEN, POST.
+
+PRE and POST share cyan; ROTTEN is orange. `counts.walk` is the Mac `s`
+count.
 
 ### w — lanes
 
@@ -142,13 +158,15 @@ JS tests do the same in a later phase. Goldens live in
 `tests/fixtures/walks/` (`walks-clear.json`, `walks-all.json`,
 `walks-bank-unavailable.json`).
 
-| Id  | Setup                                                               | Expected                                    |
-| --- | ------------------------------------------------------------------- | ------------------------------------------- |
-| S1  | only ROTTEN due                                                     | `s` off                                     |
-| S2  | only POST due                                                       | `s` off                                     |
-| S3  | NEW 1 and ROTTEN 1                                                  | on, tier `new`, walk 2, commitments 1       |
-| S4  | PRE 1 and NEXT 2                                                    | tier `pre`                                  |
-| S5  | TICKLER only                                                        | tier `tickler`, label ends `TICKS first`    |
+| Id  | Setup                                                               | Expected                                                                                 |
+| --- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| S1  | ROTTEN 1                                                            | on, tier `rotten`, walk 1, commitments 0, `Review: 1 due · commitments done — ROTTEN first` |
+| S2  | POST 1                                                              | on, tier `post`, walk 1, commitments 0, `Review: 1 due · commitments done — POST first`     |
+| S3  | NEW 1, ROTTEN 1                                                     | on, tier `new`, walk 2, commitments 1, `Review: 2 due · 1 commitment — NEW first`           |
+| S4  | PRE 1, NEXT 2                                                       | on, tier `pre`, `Review: 3 due · 3 commitments — PRE first`                                |
+| S5  | TICKLER 2                                                           | on, tier `tickler`, label ends `TICKS first`                                               |
+| S6  | ROTTEN 2, POST 1                                                    | on, tier `rotten`, walk 3, commitments 0, `Review: 3 due · commitments done — ROTTEN first` |
+| S7  | nothing due                                                         | off, `tier`/`label` null, walk 0; human line `· Review clear`                              |
 | W1  | PENDING 11, cap 10                                                  | on, `WIP 11/10`                             |
 | W2  | PENDING 10, cap 10                                                  | off                                         |
 | W3  | a Today-linked `[/]` task                                           | not counted                                 |

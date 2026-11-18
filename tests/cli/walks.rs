@@ -111,7 +111,7 @@ fn json_reports_schema_and_family_order() {
 }
 
 #[test]
-fn s1_only_rotten_due_is_off() {
+fn s1_only_rotten_due_lights_rotten() {
     let temp = empty_vault("bob-cli-walks-s1");
     write_tasks(
         &vault_dir(&temp),
@@ -119,13 +119,18 @@ fn s1_only_rotten_due_is_off() {
     );
     let (_, value) = walks_json(&temp);
     let s = family(&value, "s");
-    assert_eq!(s["attention"], false);
+    assert_eq!(s["attention"], true);
+    assert_eq!(s["tier"], "rotten");
     assert_eq!(s["counts"]["walk"], 1);
     assert_eq!(s["counts"]["commitments"], 0);
+    assert_eq!(
+        s["label"],
+        "Review: 1 due · commitments done — ROTTEN first"
+    );
 }
 
 #[test]
-fn s2_only_post_due_is_off() {
+fn s2_only_post_due_lights_post() {
     let temp = empty_vault("bob-cli-walks-s2");
     write_tasks(
         &vault_dir(&temp),
@@ -133,9 +138,11 @@ fn s2_only_post_due_is_off() {
     );
     let (_, value) = walks_json(&temp);
     let s = family(&value, "s");
-    assert_eq!(s["attention"], false);
+    assert_eq!(s["attention"], true);
+    assert_eq!(s["tier"], "post");
     assert_eq!(s["counts"]["walk"], 1);
     assert_eq!(s["counts"]["commitments"], 0);
+    assert_eq!(s["label"], "Review: 1 due · commitments done — POST first");
 }
 
 #[test]
@@ -152,7 +159,44 @@ fn s3_new_and_rotten_lights_new() {
     assert_eq!(s["tier"], "new");
     assert_eq!(s["counts"]["walk"], 2);
     assert_eq!(s["counts"]["commitments"], 1);
-    assert_eq!(s["label"], "Review: 2 due · 1 commitments — NEW first");
+    assert_eq!(s["label"], "Review: 2 due · 1 commitment — NEW first");
+}
+
+#[test]
+fn s6_rotten_and_post_lights_rotten() {
+    let temp = empty_vault("bob-cli-walks-s6");
+    write_tasks(
+        &vault_dir(&temp),
+        "- [ ] #task Rotten one [fresh:: 2026-10-01]\n\
+         - [ ] #task Rotten two [fresh:: 2026-10-02]\n\
+         - [?] #task #gtd #post Closeout [scheduled:: 2026-11-17]\n",
+    );
+    let (_, value) = walks_json(&temp);
+    let s = family(&value, "s");
+    assert_eq!(s["attention"], true);
+    assert_eq!(s["tier"], "rotten");
+    assert_eq!(s["counts"]["walk"], 3);
+    assert_eq!(s["counts"]["commitments"], 0);
+    assert_eq!(
+        s["label"],
+        "Review: 3 due · commitments done — ROTTEN first"
+    );
+}
+
+#[test]
+fn s7_nothing_due_is_clear() {
+    let temp = empty_vault("bob-cli-walks-s7");
+    let (_, value) = walks_json(&temp);
+    let s = family(&value, "s");
+    assert_eq!(s["attention"], false);
+    assert!(s["tier"].is_null());
+    assert!(s["label"].is_null());
+    assert_eq!(s["counts"]["walk"], 0);
+    assert_eq!(s["counts"]["commitments"], 0);
+    let output = walks_command(&temp, &[]).output().expect("run bob walks");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("s · Review clear"), "{text}");
 }
 
 #[test]
@@ -169,6 +213,7 @@ fn s4_pre_beats_next() {
     assert_eq!(s["attention"], true);
     assert_eq!(s["tier"], "pre");
     assert_eq!(s["counts"]["commitments"], 3);
+    assert_eq!(s["label"], "Review: 3 due · 3 commitments — PRE first");
 }
 
 #[test]
@@ -176,14 +221,30 @@ fn s5_tickler_label_ends_ticks_first() {
     let temp = empty_vault("bob-cli-walks-s5");
     write_tasks(
         &vault_dir(&temp),
-        "- [ ] #task Deferred pie [fresh:: 2026-11-10] [scheduled:: 2026-11-16]\n",
+        "- [ ] #task Deferred one [fresh:: 2026-11-10] [scheduled:: 2026-11-16]\n\
+         - [ ] #task Deferred two [fresh:: 2026-11-10] [scheduled:: 2026-11-16]\n",
     );
     let (_, value) = walks_json(&temp);
     let s = family(&value, "s");
     assert_eq!(s["attention"], true);
     assert_eq!(s["tier"], "tickler");
+    assert_eq!(s["counts"]["walk"], 2);
     let label = s["label"].as_str().expect("label");
     assert!(label.ends_with("TICKS first"), "tickler label: {label}");
+}
+
+#[test]
+fn human_post_only_shows_post_bullet() {
+    let temp = empty_vault("bob-cli-walks-human-post");
+    write_tasks(
+        &vault_dir(&temp),
+        "- [?] #task #gtd #post Closeout [scheduled:: 2026-11-17]\n",
+    );
+    let output = walks_command(&temp, &[]).output().expect("run bob walks");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("s ● Review: 1 due"), "{text}");
+    assert!(text.contains("POST first"), "{text}");
 }
 
 #[test]
@@ -524,7 +585,7 @@ fn help_names_the_contract() {
     let help = stdout(&output);
     assert!(help.contains("docs/walks.md"), "{help}");
     assert!(help.contains("read-only"), "{help}");
-    assert!(help.contains("s (review"), "{help}");
+    assert!(help.contains("s (any review row"), "{help}");
 }
 
 #[test]

@@ -3,6 +3,11 @@
 //! `s` review, `w` lanes, and `b` bank share the predicates in
 //! `docs/walks.md` with the walker footer. A failure in one family
 //! leaves the others free to report.
+//!
+//! The `s` mark is on exactly when `]s` has a row to land on: attention
+//! iff `walk > 0`, with `tier` set to the first non-empty group in walk
+//! order (PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER →
+//! ROTTEN → POST).
 
 pub(crate) mod cli;
 
@@ -119,12 +124,14 @@ fn review_family(snapshot: Result<&Snapshot, &String>) -> FamilyReport {
     };
     let counts = review_counts(snapshot);
     let commitments = commitment_total(&counts.by_tier);
-    let attention = commitments > 0;
-    let tier = if attention {
-        first_commitment_tier(&counts.by_tier)
+    let tier = if counts.walk > 0 {
+        first_walk_tier(&counts.by_tier)
     } else {
         None
     };
+    // `walk` is `by_tier.sum()`, so a positive walk with no tier is
+    // impossible; report calm rather than panic if it ever happens.
+    let attention = tier.is_some();
     let label = tier.map(|tier| {
         review_label(counts.walk, commitments, footer_tier_label(tier))
     });
@@ -314,7 +321,7 @@ fn commitment_total(by_tier: &ByTier) -> u32 {
         + by_tier.tickler
 }
 
-fn first_commitment_tier(by_tier: &ByTier) -> Option<&'static str> {
+fn first_walk_tier(by_tier: &ByTier) -> Option<&'static str> {
     [
         ("pre", by_tier.pre),
         ("new", by_tier.new),
@@ -323,6 +330,8 @@ fn first_commitment_tier(by_tier: &ByTier) -> Option<&'static str> {
         ("next", by_tier.next),
         ("recurring", by_tier.recurring),
         ("tickler", by_tier.tickler),
+        ("rotten", by_tier.rotten),
+        ("post", by_tier.post),
     ]
     .into_iter()
     .find(|(_, count)| *count > 0)
@@ -334,6 +343,8 @@ pub(crate) fn footer_tier_label(tier: &str) -> &'static str {
         "pending" => "WIP",
         "recurring" => "RECUR",
         "tickler" => "TICKS",
+        "rotten" => "ROTTEN",
+        "post" => "POST",
         "pre" => "PRE",
         "new" => "NEW",
         "projects" => "PROJECTS",
@@ -343,7 +354,13 @@ pub(crate) fn footer_tier_label(tier: &str) -> &'static str {
 }
 
 pub(crate) fn review_label(walk: u32, commitments: u32, first: &str) -> String {
-    format!("Review: {walk} due · {commitments} commitments — {first} first")
+    match commitments {
+        1 => format!("Review: {walk} due · 1 commitment — {first} first"),
+        0 => format!("Review: {walk} due · commitments done — {first} first"),
+        _ => format!(
+            "Review: {walk} due · {commitments} commitments — {first} first"
+        ),
+    }
 }
 
 pub(crate) fn lanes_over_label(over: &[&LaneCount]) -> String {
@@ -469,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn commitments_skip_rotten_and_post() {
+    fn first_walk_tier_covers_all_nine_in_walk_order() {
         let by_tier = ByTier {
             new: 1,
             rotten: 4,
@@ -478,6 +495,44 @@ mod tests {
             ..ByTier::default()
         };
         assert_eq!(commitment_total(&by_tier), 4);
-        assert_eq!(first_commitment_tier(&by_tier), Some("new"));
+        assert_eq!(first_walk_tier(&by_tier), Some("new"));
+        assert_eq!(
+            first_walk_tier(&ByTier {
+                rotten: 2,
+                post: 1,
+                ..ByTier::default()
+            }),
+            Some("rotten")
+        );
+        assert_eq!(
+            first_walk_tier(&ByTier {
+                post: 1,
+                ..ByTier::default()
+            }),
+            Some("post")
+        );
+        assert_eq!(first_walk_tier(&ByTier::default()), None);
+        assert_eq!(footer_tier_label("rotten"), "ROTTEN");
+        assert_eq!(footer_tier_label("post"), "POST");
+    }
+
+    #[test]
+    fn review_label_covers_all_three_commitment_forms() {
+        assert_eq!(
+            review_label(3, 3, "PRE"),
+            "Review: 3 due · 3 commitments — PRE first"
+        );
+        assert_eq!(
+            review_label(2, 1, "NEW"),
+            "Review: 2 due · 1 commitment — NEW first"
+        );
+        assert_eq!(
+            review_label(1, 0, "ROTTEN"),
+            "Review: 1 due · commitments done — ROTTEN first"
+        );
+        assert_eq!(
+            review_label(1, 0, "POST"),
+            "Review: 1 due · commitments done — POST first"
+        );
     }
 }

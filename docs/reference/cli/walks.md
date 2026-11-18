@@ -9,7 +9,7 @@ description: "Show which bracket walks need attention: s review, w lanes, b bank
 Show which bracket walks need attention: s review, w lanes, b bank
 
 ```text title="bob walks --help"
-Show which bracket walks need attention. The report has one row per family: s (review commitments), w (lanes over cap), and b (waiting bank rows). Each family is computed on its own, so a failure in one still reports the others.
+Show which bracket walks need attention. The report has one row per family: s (any review row ]s can land on), w (lanes over cap), and b (waiting bank rows). Each family is computed on its own, so a failure in one still reports the others.
 
 The command is read-only: it never stamps a task, never walks a queue, and never writes the vault. See docs/walks.md for the predicates, labels, and JSON schema.
 

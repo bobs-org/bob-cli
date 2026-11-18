@@ -74,7 +74,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .about("Show which bracket walks need attention: s review, w lanes, b bank")
         .long_about(
             "Show which bracket walks need attention. The report has one \
-            row per family: s (review commitments), w (lanes over cap), \
+            row per family: s (any review row ]s can land on), w (lanes over cap), \
             and b (waiting bank rows). Each family is computed on its \
             own, so a failure in one still reports the others.\n\n\
             The command is read-only: it never stamps a task, never \
@@ -188,12 +188,13 @@ fn calm_text(family: &str) -> &'static str {
 
 fn attention_bullet(styler: &Styler, tier: &str) -> String {
     let code = match tier {
-        "pre" => "36;1",
+        "pre" | "post" => "36;1",
         "new" | "over" => "31;1",
         "projects" | "recurring" => "35;1",
         "pending" | "waiting" => "33;1",
         "next" => "32;1",
         "tickler" => "34;1",
+        "rotten" => "38;5;208;1",
         _ => "1",
     };
     styler.paint(code, "●")
