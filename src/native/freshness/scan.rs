@@ -25,8 +25,8 @@ use super::super::{
 use super::{
     placement::read_freshness,
     state::{
-        checklist_from_tags, conflict_winner, evaluate, unused_stages,
-        ChecklistKind, FreshnessRow, StageMember,
+        checklist_from_tags, conflict_winner, counts, evaluate, unused_stages,
+        ChecklistKind, Counts, FreshnessRow, StageMember,
     },
 };
 
@@ -139,6 +139,29 @@ impl ScanError {
             Self::Usage(_) => 2,
         }
     }
+}
+
+/// Whole-vault review counts from one snapshot, shared by
+/// `bob freshness list` and `bob walks` so the two commands cannot
+/// disagree on `walk` or `by_tier`.
+pub(crate) fn review_counts(snapshot: &Snapshot) -> Counts {
+    let combined_eval_rows: Vec<_> = snapshot
+        .ready
+        .iter()
+        .chain(snapshot.pending.iter())
+        .chain(snapshot.next.iter())
+        .chain(snapshot.checklist.iter())
+        .map(|row| row.freshness_row(true))
+        .collect();
+    let mut counts =
+        counts(&combined_eval_rows, snapshot.today, &snapshot.config);
+    counts.refreshed_today = refreshed_today(&snapshot.all, snapshot.today);
+    counts.upkeep_today = upkeep_today(&snapshot.all, snapshot.today);
+    counts.budget_met = snapshot
+        .config
+        .rotten_daily_budget
+        .is_some_and(|goal| counts.upkeep_today >= goal && counts.new == 0);
+    counts
 }
 
 /// Scan the vault for a freshness review or seed.

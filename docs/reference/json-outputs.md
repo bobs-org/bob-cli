@@ -366,6 +366,7 @@ candidate eligibility, and error behavior.
 | `bob ready` | `-f json` | Per-note Ready lane against `max_ready_per_note` | `schema_version: 1` | [Plan](../plan.md) |
 | `bob freshness` and `bob freshness list` | `-f json` | Review queue (`config` stages/limits; per-row `keeps`/`decide`/`stage`/`stage_rank`/`stage_total`) | `schema_version: 16` | [Freshness](../freshness.md) |
 | `bob freshness seed` | `-f json` | Seed dry-run: stamped counts, buckets, skipped | `schema_version: 16` | [Freshness](../freshness.md) |
+| `bob walks` | `-f json` | `s`/`w`/`b` attention (`available`, `attention`, `tier`, `label`; family extras) | `schema_version: 1` | [Walk attention](../walks.md) |
 | `bob stats overview` | `-f json` | Weekly glance report | `schema_version: 1` | [Stats](../stats.md) |
 | `bob stats show` | `-f json` | One or more metric details | `schema_version: 1` | [Stats](../stats.md) |
 | `bob stats metrics` | `-f json` | Metric id, kind, and definition catalog | `schema_version: 1` | [Stats](../stats.md) |

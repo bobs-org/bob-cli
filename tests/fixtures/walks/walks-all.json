@@ -1,0 +1,62 @@
+{
+  "date": "2026-11-17",
+  "ok": true,
+  "schema_version": 1,
+  "walks": [
+    {
+      "attention": true,
+      "available": true,
+      "counts": {
+        "commitments": 16,
+        "walk": 16
+      },
+      "family": "s",
+      "label": "Review: 16 due · 16 commitments — NEXT first",
+      "name": "review",
+      "tier": "next"
+    },
+    {
+      "attention": true,
+      "available": true,
+      "family": "w",
+      "label": "Lanes over limit: NEXT 16/15",
+      "lanes": [
+        {
+          "cap": 10,
+          "count": 0,
+          "label": "WIP",
+          "lane": "pending",
+          "over": false
+        },
+        {
+          "cap": 15,
+          "count": 16,
+          "label": "NEXT",
+          "lane": "next",
+          "over": true
+        },
+        {
+          "cap": 100,
+          "count": 3,
+          "label": "READY",
+          "lane": "ready",
+          "over": false
+        }
+      ],
+      "name": "lanes",
+      "tier": "over"
+    },
+    {
+      "attention": true,
+      "available": true,
+      "counts": {
+        "waiting": 3
+      },
+      "family": "b",
+      "label": "Bank: 3 waiting · oldest Tue Nov 3",
+      "name": "bank",
+      "oldest_waiting": "2026-11-03",
+      "tier": "waiting"
+    }
+  ]
+}

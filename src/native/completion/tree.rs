@@ -261,6 +261,7 @@ impl NativeCommand {
             NativeCommand::VaultSync => {
                 crate::native::vault_sync::completion_command()
             }
+            NativeCommand::Walks => crate::native::walks::cli::build_cli(),
         }
     }
 }
@@ -395,6 +396,7 @@ mod tests {
         assert!(parses(&["bob", "clipboard", "-c", "4", "-f", "json"]));
         assert!(parses(&["bob", "freshness", "-f", "json"]));
         assert!(parses(&["bob", "freshness", "list", "-f", "json"]));
+        assert!(parses(&["bob", "walks", "-f", "json"]));
         assert!(parses(&["bob", "vault-sync", "--dry-run"]));
         assert!(parses(&["bob", "gkeep", "pull", "--dry-run"]));
         assert!(parses(&["bob", "gcal", "doctor", "-f", "json"]));

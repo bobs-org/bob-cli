@@ -1,0 +1,62 @@
+{
+  "date": "2026-11-17",
+  "ok": true,
+  "schema_version": 1,
+  "walks": [
+    {
+      "attention": false,
+      "available": true,
+      "counts": {
+        "commitments": 0,
+        "walk": 0
+      },
+      "family": "s",
+      "label": null,
+      "name": "review",
+      "tier": null
+    },
+    {
+      "attention": false,
+      "available": true,
+      "family": "w",
+      "label": null,
+      "lanes": [
+        {
+          "cap": 10,
+          "count": 0,
+          "label": "WIP",
+          "lane": "pending",
+          "over": false
+        },
+        {
+          "cap": 15,
+          "count": 0,
+          "label": "NEXT",
+          "lane": "next",
+          "over": false
+        },
+        {
+          "cap": 100,
+          "count": 0,
+          "label": "READY",
+          "lane": "ready",
+          "over": false
+        }
+      ],
+      "name": "lanes",
+      "tier": null
+    },
+    {
+      "attention": false,
+      "available": true,
+      "counts": {
+        "waiting": 0
+      },
+      "family": "b",
+      "label": null,
+      "name": "bank",
+      "oldest_waiting": null,
+      "tier": null
+    }
+  ]
+}

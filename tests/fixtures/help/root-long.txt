@@ -16,6 +16,8 @@ Daily workflow:
   ready        Show each area/project note's Ready lane against the per-note cap
   stats        Show derived daily metrics as a glance, detail chart, or catalog
   types        Manage task types and explain task suggestions
+  walks        Show which bracket walks need attention: s review, w lanes, b
+               bank
 
 Tasks and projects:
   projects     List and sync project notes via their ^prj tasks

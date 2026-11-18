@@ -587,8 +587,9 @@ daily note remain eligible); `#hide`; dependency-blocked tasks
 Today tasks (`isToday`); and any task whose read-time bucket is `new`
 or `rotten`. A null bucket alone never proves a task is Ready. The
 count is the Obsidian dashboard backlog and its feedback is the shared
-badge; this feature adds no native READY count, `bob plan` lint, capture
-enforcement, or tmux meter. The daily `bob-plan` block shows a
+badge; `bob walks` reports the READY lane count for attention, but there
+is still no `bob plan` lint, capture enforcement, or tmux meter. The daily
+`bob-plan` block shows a
 `ready_cap_exceeded` lint line beneath its chips when READY is strictly
 over the cap. A cap exactly met raises no lint.
 

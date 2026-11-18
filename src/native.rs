@@ -141,6 +141,7 @@ pub(crate) use vault_sync::{
     LARGE_FILE_WARNING_BYTES as VAULT_SYNC_LARGE_FILE_WARNING_BYTES,
 };
 mod vault_task_loss;
+mod walks;
 pub(crate) mod yaml_spans;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +238,7 @@ pub(crate) enum NativeCommand {
     RecordsUpdate,
     TmuxPomodoro,
     VaultSync,
+    Walks,
 }
 
 pub(crate) fn command_for_script(
@@ -354,6 +356,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::ThemesUnhide => pomodoro_themes::run_unhide(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
         NativeCommand::VaultSync => vault_sync::run(args),
+        NativeCommand::Walks => walks::cli::run(args),
     }
 }
 

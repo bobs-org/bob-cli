@@ -40,6 +40,7 @@ queued intake; full scans also synchronize annotations. The
 | [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates and recurrence rules |
 | [blocked-marks.md](blocked-marks.md) | Blocked-reason marks: display contract for the reason a Blocked checkbox shows, plus conformance vectors |
 | [freshness.md](freshness.md) | Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 16 |
+| [walks.md](walks.md) | `bob walks` s/w/b attention report, labels, JSON schema 1, and conformance vectors |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gcal.md](gcal.md) | `bob gcal` Google Calendar events as daily-note Event Tasks |
 | [gcal-acks.md](gcal-acks.md) | `bob gcal ack` review queue, warning tag ownership, receipts, stale notices, and JSON |

@@ -20,14 +20,11 @@ use super::super::{
 };
 use super::{
     scan::{
-        collect_warnings, lint_message, refreshed_today, scan, upkeep_today,
-        RowCtx, ScanError, Snapshot, Warning,
+        collect_warnings, lint_message, review_counts, scan, RowCtx, ScanError,
+        Snapshot, Warning,
     },
     seed::{run_seed, SeedError, SeedReport},
-    state::{
-        bucket_for_state, counts, evaluate, queue, Counts, Evaluated,
-        FreshState,
-    },
+    state::{bucket_for_state, evaluate, queue, Counts, Evaluated, FreshState},
 };
 
 const COMMAND_NAME: &str = "bob freshness";
@@ -447,22 +444,7 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         }
     }
 
-    let combined_eval_rows: Vec<_> = snapshot
-        .ready
-        .iter()
-        .chain(snapshot.pending.iter())
-        .chain(snapshot.next.iter())
-        .chain(snapshot.checklist.iter())
-        .map(|row| row.freshness_row(true))
-        .collect();
-    let mut counts = counts(&combined_eval_rows, today, config);
-    // Tier counts need ready ∪ pending ∪ next plus checklist rows;
-    // the meters need every status (S15, B1).
-    counts.refreshed_today = refreshed_today(&snapshot.all, today);
-    counts.upkeep_today = upkeep_today(&snapshot.all, today);
-    counts.budget_met = config
-        .rotten_daily_budget
-        .is_some_and(|goal| counts.upkeep_today >= goal && counts.new == 0);
+    let counts = review_counts(snapshot);
 
     let mut warnings = collect_warnings(&snapshot.all, today, config);
     // One deprecation diagnostic per loaded config — never one per

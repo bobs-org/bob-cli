@@ -812,6 +812,7 @@ mod tests {
         let values = values_of(&output);
         assert!(values.contains(&"capture"));
         assert!(values.contains(&"freshness"));
+        assert!(values.contains(&"walks"));
         assert!(values.contains(&"vault-sync"));
         assert!(values.contains(&"capture-complete"));
         assert!(!values.iter().any(|value| value.starts_with('-')));

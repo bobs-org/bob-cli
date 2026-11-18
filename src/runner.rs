@@ -1043,6 +1043,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "walks",
+        about: "Show which bracket walks need attention: s review, w lanes, b bank",
+        section: Section::DailyWorkflow,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Walks,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "projects",
         about: "List and sync project notes via their ^prj tasks",
         section: Section::TasksAndProjects,
@@ -2740,6 +2749,7 @@ mod tests {
             NativeCommand::ThemesUnhide,
             NativeCommand::TmuxPomodoro,
             NativeCommand::VaultSync,
+            NativeCommand::Walks,
         ];
         assert_eq!(commands.len(), expected.len());
         for command in expected {

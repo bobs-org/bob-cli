@@ -33,6 +33,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob types split`](types.md#bob-types-split) | Split one task type across selected entries in one commit |
 | [`bob types suggest`](types.md#bob-types-suggest) | Explain the suggested type for a task or capture route |
 | [`bob types unhide`](types.md#bob-types-unhide) | Show hidden types in Recent suggestion rows again |
+| [`bob walks`](walks.md) | Show which bracket walks need attention: s review, w lanes, b bank |
 
 ## Tasks and projects
 
@@ -163,6 +164,8 @@ Daily workflow:
   ready        Show each area/project note's Ready lane against the per-note cap
   stats        Show derived daily metrics as a glance, detail chart, or catalog
   types        Manage task types and explain task suggestions
+  walks        Show which bracket walks need attention: s review, w lanes, b
+               bank
 
 Tasks and projects:
   projects     List and sync project notes via their ^prj tasks

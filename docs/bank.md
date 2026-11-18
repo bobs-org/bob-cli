@@ -338,6 +338,8 @@ Historical `@BANK` `total:` lines are never rows.
 once nothing waits); `]B` / `[B` jump to the first row of the next /
 previous day that has rows in the active scope. See the Bank walk section in
 the [Bob Navigation Hotkeys reference](reference/plugins/bob-navigation-hotkeys.md#bank-walk).
+`bob walks` reports the same `b` attention fact (waiting rows > 0); see
+[Walk attention](walks.md).
 
 ## Ownership
 

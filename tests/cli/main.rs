@@ -50,3 +50,4 @@ mod themes_migrate;
 mod themes_rename;
 mod themes_split;
 mod vault_sync;
+mod walks;

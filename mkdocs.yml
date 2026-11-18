@@ -108,6 +108,7 @@ plugins:
           - date-marks.md
           - blocked-marks.md
           - freshness.md
+          - walks.md
           - plan.md
           - projects.md
           - pomodoro-homes.md
@@ -240,6 +241,7 @@ nav:
               - "bob ready": reference/cli/ready.md
               - "bob stats": reference/cli/stats.md
               - "bob types": reference/cli/types.md
+              - "bob walks": reference/cli/walks.md
           - "Tasks and projects":
               - "bob projects": reference/cli/projects.md
               - "bob relations": reference/cli/relations.md
@@ -335,6 +337,7 @@ nav:
               - "Task date marks": date-marks.md
               - "Blocked-reason marks": blocked-marks.md
               - "Task freshness": freshness.md
+              - "Walk attention": walks.md
               - "Plan budget, Today, and lanes": plan.md
               - "Project Task Sync": projects.md
               - "Pomodoro homes": pomodoro-homes.md

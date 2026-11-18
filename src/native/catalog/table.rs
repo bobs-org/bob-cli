@@ -247,6 +247,14 @@ pub(crate) const ENTRIES: &[Row] = &[
         Presentation::Report,
         60,
     ),
+    reads(
+        "walks",
+        &["walks"],
+        "Walk attention",
+        &["walks", "attention", "review", "lanes", "bank"],
+        Presentation::Report,
+        60,
+    ),
     Row {
         slots: &[("NOTE", "area-note"), ("note", "area-note")],
         ..reads(
