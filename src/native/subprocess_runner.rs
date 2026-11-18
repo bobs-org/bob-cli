@@ -442,41 +442,85 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
+    /// Guard that SIGKILLs a detached pipe-holder on drop, so the holder
+    /// is reaped even when an assertion panics.
+    #[cfg(unix)]
+    struct DetachedHolderGuard {
+        pid: Option<u32>,
+    }
+
+    #[cfg(unix)]
+    impl DetachedHolderGuard {
+        fn armed(stdout: &str) -> Self {
+            Self {
+                pid: stdout.trim().parse::<u32>().ok(),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for DetachedHolderGuard {
+        fn drop(&mut self) {
+            if let Some(pid) = self.pid {
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+        }
+    }
+
+    /// Portable detached-holder fixture. A python3 grandchild calls
+    /// setsid(2) itself, signals readiness through
+    /// `$BOB_PIPE_DRAIN_READY`, then sleeps holding the inherited pipes.
+    /// The leader waits for the sentinel before exiting, so the runner's
+    /// process-group kill cannot win a race, and no setsid(1) binary is
+    /// needed (macOS ships none).
+    #[cfg(unix)]
+    const PIPE_DRAIN_HOLDER_SCRIPT: &str = r#"python3 -c 'import os,time; os.setsid(); open(os.environ["BOB_PIPE_DRAIN_READY"],"w").write("ready"); time.sleep(8)' & i=0; while [ ! -f "$BOB_PIPE_DRAIN_READY" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i+1)); done; [ -f "$BOB_PIPE_DRAIN_READY" ] || exit 1; echo $!; exit 0"#;
+
     #[cfg(unix)]
     #[test]
     fn run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
+        let temp =
+            tempfile::TempDir::new().expect("tempdir for pipe-drain sentinel");
+        let ready = temp.path().join("ready");
         let spec = RunSpec {
             program: PathBuf::from("sh"),
-            args: ["-c", "setsid sleep 8 & echo $!; sleep 0.1; exit 0"]
+            args: ["-c", PIPE_DRAIN_HOLDER_SCRIPT]
                 .into_iter()
                 .map(OsString::from)
                 .collect(),
             stdin: None,
-            env: Vec::new(),
+            env: vec![(
+                OsString::from("BOB_PIPE_DRAIN_READY"),
+                ready.clone().into_os_string(),
+            )],
             env_remove: Vec::new(),
             timeout: Duration::from_secs(5),
         };
         let started = Instant::now();
         let output = run(&spec).expect("shell runs");
+        let _guard = DetachedHolderGuard::armed(&output.stdout);
         assert!(started.elapsed() < Duration::from_secs(4));
         assert!(output.stderr.contains("output truncated"));
-        if let Ok(pid) = output.stdout.trim().parse::<u32>() {
-            let _ = Command::new("kill")
-                .args(["-KILL", &pid.to_string()])
-                .status();
-        }
     }
 
     #[cfg(unix)]
     #[test]
     fn raw_run_bounds_pipe_drain_when_detached_grandchild_holds_output() {
+        let temp =
+            tempfile::TempDir::new().expect("tempdir for pipe-drain sentinel");
+        let ready = temp.path().join("ready");
         let spec = RawRunSpec {
             program: PathBuf::from("sh"),
-            args: ["-c", "setsid sleep 8 & echo $!; sleep 0.1; exit 0"]
+            args: ["-c", PIPE_DRAIN_HOLDER_SCRIPT]
                 .into_iter()
                 .map(OsString::from)
                 .collect(),
-            env: Vec::new(),
+            env: vec![(
+                OsString::from("BOB_PIPE_DRAIN_READY"),
+                ready.clone().into_os_string(),
+            )],
             env_remove: Vec::new(),
             timeout: Duration::from_secs(5),
             stdout_cap: 1024,
@@ -484,16 +528,12 @@ mod tests {
         };
         let started = Instant::now();
         let output = run_raw(&spec).expect("shell runs");
+        let stdout = std::str::from_utf8(&output.stdout).unwrap_or_default();
+        // Hold the parsed pid in a local before moving it into the guard so
+        // the guard lives past the assertions and still kills on panic.
+        let pid_text = stdout.to_owned();
+        let _guard = DetachedHolderGuard::armed(&pid_text);
         assert!(started.elapsed() < Duration::from_secs(4));
         assert!(output.output_incomplete);
-        if let Ok(pid) = std::str::from_utf8(&output.stdout)
-            .unwrap_or_default()
-            .trim()
-            .parse::<u32>()
-        {
-            let _ = Command::new("kill")
-                .args(["-KILL", &pid.to_string()])
-                .status();
-        }
     }
 }
