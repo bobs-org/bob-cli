@@ -123,6 +123,7 @@ plugins:
           - task-merge.md
           - task-split.md
           - task-status-hooks.md
+          - tick.md
           - task-link-marks.md
           - task-tag-marks.md
           - mail-link-marks.md
@@ -333,6 +334,7 @@ nav:
               - "Highlights Reference Note Sync": highlights-ref-sync.md
               - "Bob Plugins": plugins.md
               - "Command catalog protocol": command-catalog.md
+              - "`bob tick`": tick.md
           - "Tasks and projects":
               - "Dashboard navigation and child pages": dashboard.md
               - "Task date marks": date-marks.md

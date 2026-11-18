@@ -39,6 +39,8 @@ These top-level names also moved: `bob collect-done` is `bob task archive`,
 (`bob highlights` stays as a permanent alias). `bob sync`,
 `bob bulk-git-commit`, and the `bob_sync` binary were retired in favor of
 `bob vault-sync`. Those retired top-level names are no longer registered.
+For frequent background work, use [`bob tick`](../tick.md); for vault Git
+sync, use [`bob vault-sync`](../reference/cli/vault-sync.md).
 
 The original script implementations remain embedded as a rollback path.
 New integrations should rely on the native Rust command behavior. See

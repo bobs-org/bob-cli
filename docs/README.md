@@ -84,6 +84,7 @@ queued intake; full scans also synchronize annotations. The
 | [areas.md](areas.md) | `bob areas` list and check, nested `## Areas` catalogs, JSON, and findings |
 | [notebooks.md](notebooks.md) | `bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals |
 | [bank.md](bank.md) | Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON |
+| [tick.md](tick.md) | `bob tick` ordered background work, cadence, gates, and results |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and

@@ -18,6 +18,8 @@ an unannotated modern reference's files and updates links (preview with `-d`).
 `bob ref migrate-zorg`
 plans copies of zorg-era `status::` reading records into legacy notes under
 `ref/zorg/`. It is a dry run by default; `-w/--write` applies the plan.
+For scheduled reference scans and their change gate, see the
+[`bob tick` contract](tick.md).
 
 ## Choose a command
 

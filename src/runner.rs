@@ -1748,10 +1748,13 @@ fn invalid_help_path(path: &[OsString]) -> Option<String> {
 }
 
 fn run_bob_with_args(argv: Vec<OsString>) -> i32 {
+    let retired_sync = argv.get(1).is_some_and(|arg| arg == "sync");
     let matches = match build_cli().try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(error) => {
             let exit_code = error.exit_code();
+            let retired_sync =
+                error.kind() == ErrorKind::InvalidSubcommand && retired_sync;
             if let Err(print_error) = error.print() {
                 // A closed pipe renders nothing: stay quiet instead of
                 // reporting the failed render, but keep clap's own exit code
@@ -1764,6 +1767,9 @@ fn run_bob_with_args(argv: Vec<OsString>) -> i32 {
                 eprintln!(
                     "bob: failed to print command-line error: {print_error}"
                 );
+            }
+            if retired_sync {
+                eprintln!("hint: use `bob vault-sync` for vault Git sync, or `bob tick` for frequent background work");
             }
             return exit_code;
         }

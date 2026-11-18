@@ -6,6 +6,8 @@ Tasks promotions and structural cleanup. Run it after capturing or closing
 Pomodoro-linked work, after `bob projects sync` writes schedules, and as
 part of any vault maintenance that should leave Next, In Progress, and
 Blocked markers consistent with today's ledger.
+For scheduled task reconciliation and its daily-note readiness gate, see the
+[`bob tick` contract](tick.md).
 
 In practice it:
 

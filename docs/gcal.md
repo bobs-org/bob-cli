@@ -10,6 +10,8 @@ Typical order: `bob gcal login` once, `bob gcal doctor` to confirm the
 checklist, `bob gcal calendars` to copy calendar ids into config, then
 `bob gcal sync` to write today's Events. Tests never
 touch Google: set `BOB_GCAL_GOG` to a fake executable.
+For scheduled background runs and Calendar's shared cooldown, see the
+[`bob tick` contract](tick.md).
 
 ## Contents
 

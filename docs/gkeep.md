@@ -14,6 +14,8 @@ write without archiving, then `bob gkeep pull` to write and archive.
 setup. `bob gkeep status` prints the cached count of notes a pull would take
 plus the open `gkeep_inbox.md` task count, for status bars and scripts. Tests
 never touch live Keep: set `BOB_GKEEP_ADAPTER` to a fake adapter.
+For running Keep pulls as part of scheduled background work, see the
+[`bob tick` contract](tick.md).
 
 ## Contents
 

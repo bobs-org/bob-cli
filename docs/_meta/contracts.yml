@@ -51,6 +51,9 @@ groups:
         summary: "`bob plugins` list and vault deploy"
         order: 21
         reader: guides/deploy-obsidian-plugins.md
+      - stem: tick
+        summary: "`bob tick` ordered background work, cadence, gates, and results"
+        order: 53
   - title: "Tasks and projects"
     entries:
       - stem: dashboard

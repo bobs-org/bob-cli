@@ -20,6 +20,8 @@ command. See [Task Card](#task-card) and
 This mirrors the `bob ref` `^ref` convention for `[[ref]]` notes: the
 task line is the interaction point, and the command reconciles frontmatter from
 that task instead of asking users to edit machine-facing metadata directly.
+For scheduled project syncs after intake steps, see the
+[`bob tick` contract](tick.md).
 
 ## Contents
 

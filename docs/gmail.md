@@ -17,6 +17,8 @@ sends. `new` and `reply` write local notes without sending mail. Bare
 Typical order: `bob gmail login` once, `bob gmail doctor` until every check is
 `ok` or an explained skip. Tests never touch Google: set `BOB_GMAIL_GOG` to a
 fake executable.
+For scheduled background runs and the busy-vault gate, see the
+[`bob tick` contract](tick.md).
 
 ## Contents
 
