@@ -22,12 +22,30 @@ impl Fixture {
         };
         fs::create_dir(this.path("vault")).unwrap();
         this.config("");
+        // Readiness gate needs today's note to exist, be rendered, and have
+        // ## Pomodoros. The scheduler clock (BOB_TICK_NOW) is 2026-11-18 in
+        // these tests and the host runs the same day with timezone UTC.
+        fs::create_dir_all(this.path("vault/2026")).unwrap();
+        fs::write(
+            this.path("vault/2026/20261118.md"),
+            "# 2026-11-18\n## Pomodoros\n- [ ] 0900-0930 Test\n",
+        )
+        .unwrap();
         fs::write(this.path("step.py"), r#"#!/usr/bin/env python3
 import json, os, pathlib, signal, subprocess, sys, time
 name = {'ref':'refs', 'task':'tasks'}.get(sys.argv[1], sys.argv[1])
 root = pathlib.Path(os.environ['TICK_FIXTURE'])
 with (root/'calls').open('a') as f:
     f.write(json.dumps(sys.argv[1:]) + '\n')
+# Mid-scan mutation probe for the refs pre-scan fingerprint test.
+if os.environ.get('FAKE_REFS_TOUCH') == name:
+    try:
+        idx = sys.argv.index('--bob-dir')
+        vault = pathlib.Path(sys.argv[idx+1])
+        (vault/'lib').mkdir(parents=True, exist_ok=True)
+        (vault/'lib'/'mid-scan.pdf').write_text('%PDF-1.4 mid-scan')
+    except Exception:
+        pass
 if os.environ.get('FAKE_SLEEP') == name:
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     def stop(sig, frame):
@@ -40,7 +58,11 @@ if os.environ.get('FAKE_SLEEP') == name:
 if os.environ.get('FAKE_FAIL') == name:
     for i in range(12): print('detail '+str(i), file=sys.stderr)
     sys.exit(7)
-print('{}')
+custom = os.environ.get('FAKE_JSON_' + name.upper())
+if custom:
+    print(custom)
+else:
+    print('{}')
 "#).unwrap();
         fs::set_permissions(
             this.path("step.py"),
@@ -124,6 +146,14 @@ fn five_minute_ticks_preserve_cadence_and_floor_jitter() {
             minute % 60,
             if minute == 0 { 58 } else { 1 }
         );
+        // Refs change gate: touch lib/ so the fingerprint differs whenever
+        // refs is due; otherwise the gate correctly skips an unchanged library.
+        fs::create_dir_all(f.path("vault/lib")).unwrap();
+        fs::write(
+            f.path(&format!("vault/lib/tick-{minute}.pdf")),
+            format!("%PDF-1.4 tick {minute}"),
+        )
+        .unwrap();
         let r = f.json(&at, &[]);
         let expected = if minute % 60 == 0 {
             vec!["gcal", "gmail", "refs", "projects", "tasks"]
@@ -191,6 +221,8 @@ fn intake_pulls_derive_even_when_their_intervals_are_longer() {
     let f = Fixture::new();
     f.config("tick: {steps: {projects: 1d, tasks: 1d}}");
     f.json(T0, &[]);
+    fs::create_dir_all(f.path("vault/lib")).unwrap();
+    fs::write(f.path("vault/lib/tick-15.pdf"), "%PDF-1.4 tick 15").unwrap();
     let r = f.json("2026-11-18T10:15:00Z", &[]);
     assert_eq!(ran(&r), ["refs", "projects", "tasks"]);
     assert_eq!(r["steps"][4]["reason"], "follows_intake");
@@ -505,4 +537,366 @@ fn human_views_match_colorless_snapshots() {
             .output()
             .unwrap(),
     );
+}
+
+#[test]
+fn readiness_missing_then_ready_and_unrendered() {
+    let f = Fixture::new();
+    // Missing note: gcal and tasks wait, others run.
+    fs::remove_file(f.path("vault/2026/20261118.md")).unwrap();
+    let r = f.json(T0, &[]);
+    assert_eq!(r["steps"][0]["outcome"], "waiting");
+    assert_eq!(r["steps"][0]["reason"], "note_missing");
+    assert_eq!(r["steps"][5]["outcome"], "waiting");
+    assert_eq!(r["steps"][5]["reason"], "note_missing");
+    assert!(r["steps"][0]["started_at"].is_null());
+    assert_eq!(r["exit_code"], 0);
+    // Dry-run surfaces the gate reason without spawning.
+    let before = fs::read(f.path("calls")).ok();
+    let d = f.json(T0, &["-d"]);
+    assert_eq!(d["steps"][0]["would_run"], false);
+    assert!(d["steps"][0]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("doesn't exist"));
+    assert_eq!(before, fs::read(f.path("calls")).ok());
+    // Once the note appears, the next tick runs them.
+    fs::write(
+        f.path("vault/2026/20261118.md"),
+        "# 2026-11-18\n## Pomodoros\n- [ ] 0900-0930 Test\n",
+    )
+    .unwrap();
+    let r = f.json("2026-11-18T10:05:00Z", &["gcal", "tasks"]);
+    assert_eq!(ran(&r), ["gcal", "tasks"]);
+    // Unrendered note waits with note_unrendered.
+    fs::write(
+        f.path("vault/2026/20261118.md"),
+        "# 2026-11-18\n## Pomodoros\n<% tp.file.title %>\n",
+    )
+    .unwrap();
+    let r = f.json("2026-11-18T10:10:00Z", &["gcal"]);
+    assert_eq!(r["steps"][0]["outcome"], "waiting");
+    assert_eq!(r["steps"][0]["reason"], "note_unrendered");
+}
+
+#[test]
+fn gcal_yesterday_scope_cooldown_and_waiting_status() {
+    let f = Fixture::new();
+    // First run uses -n 2.
+    let r = f.json(T0, &["gcal"]);
+    assert_eq!(ran(&r), ["gcal"]);
+    let calls = fs::read_to_string(f.path("calls")).unwrap();
+    assert!(calls.contains("\"-n\", \"2\""), "{calls}");
+    let state: Value = serde_json::from_slice(&f.saved("state")).unwrap();
+    assert_eq!(state["steps"]["gcal"]["yesterday_synced_on"], "2026-11-18");
+    // Second run same day drops -n 2.
+    fs::write(f.path("calls"), "").unwrap();
+    let r = f.json("2026-11-18T11:00:00Z", &["gcal"]);
+    assert_eq!(ran(&r), ["gcal"]);
+    let calls = fs::read_to_string(f.path("calls")).unwrap();
+    assert!(!calls.contains("\"-n\""), "{calls}");
+    // Failed first run retries -n 2.
+    let f2 = Fixture::new();
+    let out = f2
+        .command(T0)
+        .arg("gcal")
+        .env("FAKE_FAIL", "gcal")
+        .args(["-f", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let calls = fs::read_to_string(f2.path("calls")).unwrap();
+    assert!(calls.contains("\"-n\", \"2\""), "{calls}");
+    fs::write(f2.path("calls"), "").unwrap();
+    let r = f2.json("2026-11-18T11:00:00Z", &["gcal"]);
+    assert_eq!(ran(&r), ["gcal"]);
+    assert!(fs::read_to_string(f2.path("calls"))
+        .unwrap()
+        .contains("\"-n\""));
+    // Host cooldown: a recent synced status suppresses automated gcal.
+    let f3 = Fixture::new();
+    f3.json(T0, &[]);
+    let status_dir = f3.path("state/bob/gcal");
+    fs::create_dir_all(&status_dir).unwrap();
+    fs::write(
+        status_dir.join("status.json"),
+        serde_json::json!({
+            "ts": "2026-11-18T10:50:00+00:00",
+            "host": "test-host",
+            "day": "2026-11-18",
+            "outcome": "synced",
+            "tasks_added": 0,
+            "context_added": 0,
+            "links_added": 0,
+            "links_refiled": 0,
+            "links_closed": 0,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let r = f3.json("2026-11-18T11:00:00Z", &[]);
+    assert!(!ran(&r).contains(&"gcal"), "cooldown should skip gcal");
+    // Explicit runs still count and a waiting status does not suppress.
+    let r = f3.json("2026-11-18T11:00:00Z", &["gcal"]);
+    assert_eq!(ran(&r), ["gcal"]);
+    fs::write(
+        status_dir.join("status.json"),
+        serde_json::json!({
+            "ts": "2026-11-18T10:50:00+00:00",
+            "host": "test-host",
+            "day": "2026-11-18",
+            "outcome": "waiting",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::create_dir_all(f3.path("vault/lib")).unwrap();
+    fs::write(f3.path("vault/lib/tick.pdf"), "%PDF-1.4 x").unwrap();
+    let r = f3.json("2026-11-18T12:00:00Z", &[]);
+    assert!(
+        ran(&r).contains(&"gcal"),
+        "waiting status must not suppress"
+    );
+}
+
+#[test]
+fn gmail_busy_waits_without_consuming_interval() {
+    let f = Fixture::new();
+    f.json(T0, &[]);
+    let busy = serde_json::json!({
+        "schema_version": 1,
+        "ok": true,
+        "busy": true,
+        "dry_run": false,
+        "pulled": 0,
+        "results": [],
+        "watch": [],
+        "problems": [],
+        "archive": [],
+        "archive_hints": [],
+        "summary": {"watching": 0, "awaiting": 0, "archived": 0},
+        "warnings": [],
+    })
+    .to_string();
+    let out = f
+        .command("2026-11-18T11:00:00Z")
+        .args(["-f", "json"])
+        .env("FAKE_JSON_GMAIL", &busy)
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let gmail = &r["steps"][1];
+    assert_eq!(gmail["name"], "gmail");
+    assert_eq!(gmail["outcome"], "waiting");
+    assert_eq!(gmail["reason"], "vault_busy");
+    // Clock untouched: still due on the next tick.
+    let state: Value = serde_json::from_slice(&f.saved("state")).unwrap();
+    assert_eq!(
+        state["steps"]["gmail"]["last_started_at"],
+        serde_json::from_slice::<Value>(&f.saved("state")).unwrap()["steps"]
+            ["gmail"]["last_started_at"]
+    );
+    let r2 = f.json("2026-11-18T11:05:00Z", &[]);
+    assert!(
+        ran(&r2).contains(&"gmail"),
+        "busy must not restart the clock"
+    );
+}
+
+#[test]
+fn refs_change_gate_outcomes_and_prescan_fingerprint() {
+    // Unchanged library skips when due.
+    let f = Fixture::new();
+    f.json(T0, &[]);
+    let r = f.json("2026-11-18T10:15:00Z", &[]);
+    assert!(!ran(&r).contains(&"refs"), "unchanged lib should skip");
+    assert_eq!(r["steps"][3]["reason"], "unchanged");
+    // PDF touched opens the gate.
+    fs::create_dir_all(f.path("vault/lib")).unwrap();
+    fs::write(f.path("vault/lib/a.pdf"), "%PDF-1.4 a").unwrap();
+    let r = f.json("2026-11-18T10:30:00Z", &[]);
+    assert!(ran(&r).contains(&"refs"), "touched PDF should run");
+    // xlib addition also opens the gate.
+    let f2 = Fixture::new();
+    f2.json(T0, &[]);
+    fs::create_dir_all(f2.path("vault/xlib")).unwrap();
+    fs::write(f2.path("vault/xlib/b.pdf"), "%PDF-1.4 b").unwrap();
+    let r = f2.json("2026-11-18T10:15:00Z", &[]);
+    assert!(ran(&r).contains(&"refs"), "xlib addition should run");
+    // Hook forces the gate open.
+    let f3 = Fixture::new();
+    f3.json(T0, &[]);
+    let r = f3
+        .command("2026-11-18T10:15:00Z")
+        .args(["-f", "json"])
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_HOOK", "true")
+        .output()
+        .unwrap();
+    assert_success(&r);
+    let v: Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert!(ran(&v).contains(&"refs"), "hook should force refs");
+    assert_eq!(v["steps"][3]["gate"]["hook"], true);
+    // 6h ceiling forces a full scan.
+    let f4 = Fixture::new();
+    f4.json(T0, &[]);
+    let r = f4.json("2026-11-18T16:15:00Z", &[]);
+    assert!(ran(&r).contains(&"refs"), "6h ceiling should run refs");
+    // Named refs always scans.
+    let f5 = Fixture::new();
+    f5.json(T0, &[]);
+    let r = f5.json("2026-11-18T10:05:00Z", &["refs"]);
+    assert_eq!(ran(&r), ["refs"]);
+    assert_eq!(r["steps"][3]["gate"]["open"], true);
+    // Stored fingerprint is the pre-scan one: a mid-scan write is not lost.
+    let f6 = Fixture::new();
+    fs::create_dir_all(f6.path("vault/lib")).unwrap();
+    fs::write(f6.path("vault/lib/before.pdf"), "%PDF-1.4 before").unwrap();
+    f6.json(T0, &[]);
+    let stored: Value = serde_json::from_slice(&f6.saved("state")).unwrap();
+    let fp_before = stored["steps"]["refs"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!fp_before.is_empty());
+    // Next run writes mid-scan.pdf during the scan; the stored fingerprint
+    // must stay the pre-scan value, so the following tick still sees a change.
+    // Touch trigger.pdf first so the gate opens (otherwise unchanged would skip).
+    fs::write(f6.path("vault/lib/trigger.pdf"), "%PDF-1.4 trigger").unwrap();
+    let out = f6
+        .command("2026-11-18T10:15:00Z")
+        .args(["-f", "json"])
+        .env("FAKE_REFS_TOUCH", "refs")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stored: Value = serde_json::from_slice(&f6.saved("state")).unwrap();
+    let fp_prescan = stored["steps"]["refs"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Pre-scan includes trigger.pdf (gate opener) but not mid-scan.pdf
+    // (written during the scan), so it must differ from the first run.
+    assert_ne!(fp_prescan, fp_before, "trigger should change fingerprint");
+    assert!(f6.path("vault/lib/mid-scan.pdf").exists());
+    // The following tick still sees a change (mid-scan not in stored),
+    // proving the stored fingerprint is the pre-scan one.
+    fs::remove_file(f6.path("calls")).ok();
+    let r = f6.json("2026-11-18T10:30:00Z", &[]);
+    assert!(
+        ran(&r).contains(&"refs"),
+        "mid-scan change must not be lost"
+    );
+    // Gate JSON is present for the mac_cutover probe: check the run receipt,
+    // since -d at 10:30 is not due (no gate evaluated).
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["steps"][3]["gate"]["kind"], "refs_change");
+}
+
+#[test]
+fn per_step_summaries_come_from_real_json_shapes() {
+    let f = Fixture::new();
+    let gcal = serde_json::json!({
+        "schema_version": 1, "ok": true, "day": "2026-11-18",
+        "path": "2026/20261118.md", "status": "synced", "force": false,
+        "rows": [], "in_sync": 0, "skipped": [], "counts": {"unacked": 0},
+        "pomodoro": {"links_added": 2, "links_refiled": 1, "links_closed": 1,
+            "links_sorted": 0, "entries": []},
+        "waiting": null, "warnings": [], "deprecations": [],
+    })
+    .to_string();
+    let gmail = serde_json::json!({
+        "schema_version": 1, "ok": true, "busy": false, "dry_run": false,
+        "pulled": 2, "results": [], "watch": [], "problems": [],
+        "archive": [], "archive_hints": [],
+        "summary": {"watching": 1, "awaiting": 1, "archived": 1},
+        "warnings": [],
+    })
+    .to_string();
+    let gkeep = serde_json::json!({
+        "schema_version": 1, "ok": true, "dry_run": false,
+        "summary": {"written": 2, "archived": 0, "skipped": 0, "failed": 0,
+            "refs": {}},
+    })
+    .to_string();
+    let refs = serde_json::json!({
+        "schema_version": 1, "ok": true, "summary": {
+            "pdfs": 2, "created": 1, "updated": 1, "unchanged": 0,
+            "markers": 3, "tasks": 2, "failures": 0, "held": 1,
+        },
+    })
+    .to_string();
+    let projects = serde_json::json!({
+        "schema_version": 1, "ok": true, "changed": [{"path": "a.md"}],
+    })
+    .to_string();
+    let tasks = serde_json::json!({
+        "ok": true, "marked_next": [{}, {}], "marked_in_progress": [],
+        "cleared": [{}], "marked_blocked": [], "unblocked": [{}],
+    })
+    .to_string();
+    let out = f
+        .command(T0)
+        .args(["-a", "-f", "json"])
+        .env("FAKE_JSON_GCAL", &gcal)
+        .env("FAKE_JSON_GMAIL", &gmail)
+        .env("FAKE_JSON_GKEEP", &gkeep)
+        .env("FAKE_JSON_REFS", &refs)
+        .env("FAKE_JSON_PROJECTS", &projects)
+        .env("FAKE_JSON_TASKS", &tasks)
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let by_name = |n: &str| {
+        r["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == n)
+            .unwrap()
+            .clone()
+    };
+    assert!(by_name("gcal")["summary"]
+        .as_str()
+        .unwrap()
+        .contains("2 added"));
+    assert!(by_name("gmail")["summary"]
+        .as_str()
+        .unwrap()
+        .contains("2 filed"));
+    assert!(by_name("gkeep")["summary"]
+        .as_str()
+        .unwrap()
+        .contains("2 notes pulled"));
+    assert!(by_name("refs")["summary"]
+        .as_str()
+        .unwrap()
+        .contains("2 PDFs changed"));
+    assert!(by_name("refs")["summary"]
+        .as_str()
+        .unwrap()
+        .contains("1 held"));
+    assert!(by_name("projects")["summary"]
+        .as_str()
+        .unwrap()
+        .contains("1 note changed"));
+    assert!(by_name("tasks")["summary"]
+        .as_str()
+        .unwrap()
+        .contains("4 status changes"));
+    // Gate reasons appear in -d and the gate object in JSON: the -a run
+    // receipt carries gates for the gated steps (gcal readiness, refs change).
+    assert!(r["steps"][0]["gate"].is_object());
+    assert_eq!(r["steps"][0]["gate"]["kind"], "readiness");
+    assert_eq!(r["steps"][3]["gate"]["kind"], "refs_change");
+    // -d at T0 on a fresh fixture shows gate reasons without spawning.
+    let f2 = Fixture::new();
+    fs::create_dir_all(f2.path("vault/lib")).unwrap();
+    fs::write(f2.path("vault/lib/a.pdf"), "%PDF-1.4 a").unwrap();
+    let d = f2.command(T0).args(["-d", "-f", "json"]).output().unwrap();
+    assert_success(&d);
+    let v: Value = serde_json::from_slice(&d.stdout).unwrap();
+    assert_eq!(v["steps"][3]["gate"]["kind"], "refs_change");
+    assert_eq!(v["steps"][3]["would_run"], true);
 }

@@ -19,6 +19,9 @@ pub(super) struct StepState {
     pub last_exit_code: Option<i32>,
     pub last_success_at: Option<DateTime<Utc>>,
     pub follow_up_pending: bool,
+    pub yesterday_synced_on: Option<String>,
+    pub fingerprint: Option<String>,
+    pub last_full_scan_at: Option<DateTime<Utc>>,
 }
 #[derive(Serialize, Deserialize)]
 pub(super) struct State {

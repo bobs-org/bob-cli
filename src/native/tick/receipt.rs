@@ -15,6 +15,19 @@ pub(super) enum Outcome {
     Skipped,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct GateInfo {
+    pub kind: String,
+    pub open: bool,
+    pub reason: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_scan_due_at: Option<DateTime<Utc>>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct StepReceipt {
     pub name: String,
     pub cadence: String,
@@ -33,6 +46,8 @@ pub(super) struct StepReceipt {
     /// Only plan mode uses this: it never claims work actually ran.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub would_run: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<GateInfo>,
     /// Child stderr is a transient human diagnostic, never persisted in receipts.
     #[serde(skip)]
     pub stderr_tail: Vec<String>,

@@ -778,6 +778,7 @@ fn json_document(report: &SyncReport) -> Value {
         "schema_version": 1,
         "ok": report.ok,
         "dry_run": report.dry_run,
+        "busy": report.busy,
         "pulled": report.pulled,
         "results": results,
         "watch": report.watch.iter().map(watch_json).collect::<Vec<_>>(),
@@ -1232,6 +1233,7 @@ mod tests {
         let value = json_document(&report);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["ok"], true);
+        assert_eq!(value["busy"], false);
         assert_eq!(value["pulled"], 1);
         assert_eq!(value["results"][0]["status"], "filed");
         assert_eq!(value["results"][0]["task_file"], "job.md");

@@ -1,6 +1,7 @@
 use super::{
     catalog::{StepContext, STEPS},
     config::{Cadence, Config},
+    gates,
     lock::RunLock,
     now,
     receipt::{Outcome, Receipt, StepReceipt},
@@ -150,9 +151,18 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
         let at = now().map_err(|e| (2, e))?;
         let prior = state.steps.get(step.name).cloned().unwrap_or_default();
         let cadence = config.steps[step.name];
+        // gcal's due-gate counts other callers via the host status.
+        let effective_prior = if step.name == "gcal" {
+            let mut adjusted = prior.clone();
+            adjusted.last_started_at =
+                gates::gcal_effective_last_started(&prior);
+            adjusted
+        } else {
+            prior.clone()
+        };
         let selection = schedule::decide(
             cadence,
-            &prior,
+            &effective_prior,
             at,
             options.trigger,
             options.names.iter().any(|n| n == step.name),
@@ -184,8 +194,10 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
             last_outcome: prior.last_outcome,
             last_summary: prior.last_summary.clone(),
             would_run: options.dry_run.then_some(selection.run),
+            gate: None,
             stderr_tail: Vec::new(),
         };
+        // Evaluate gates only when the step is selected to run.
         let gate = if selection.run {
             (step.gate)(&StepContext {
                 vault: &options.vault,
@@ -196,20 +208,112 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
         } else {
             None
         };
-        if let Some(gate) = gate {
-            row.outcome = gate.outcome;
-            row.reason = gate.reason;
-            row.detail = gate.detail;
-            row.summary = row.detail.clone();
-            row.would_run = options.dry_run.then_some(false);
+        if let Some((info, block)) = gate {
+            row.gate = Some(info.clone());
+            if let Some(block) = block {
+                row.outcome = block.outcome;
+                row.reason = block.reason;
+                row.detail = block.detail;
+                row.summary = row.detail.clone();
+                row.would_run = options.dry_run.then_some(false);
+                if !read_only {
+                    record_result(&mut state, &row, at, false);
+                }
+            } else if options.dry_run {
+                row.summary = info.detail.clone();
+                row.detail = info.detail.clone();
+                row.would_run = Some(true);
+            }
+        }
+        // Dry-run never spawns and never writes state.
+        if options.dry_run {
+            if selection.run {
+                if row.gate.is_some() {
+                    // Gate already set would_run above; track intake for open gates.
+                    if row.would_run == Some(true) && step.intake {
+                        intake_ran = true;
+                    }
+                } else if step.intake {
+                    intake_ran = true;
+                }
+            }
+            receipt.steps.push(row);
+            continue;
+        }
+        if options.status {
+            // Status is read-only: keep the evaluated gate, overwrite the
+            // outcome with the last persisted result.
+            let gate = row.gate.clone();
+            row.started_at = prior.last_started_at;
+            row.outcome = prior.last_outcome.unwrap_or(Outcome::Skipped);
+            row.reason = prior
+                .last_reason
+                .clone()
+                .unwrap_or_else(|| "never_ran".into());
+            row.summary = prior
+                .last_summary
+                .clone()
+                .unwrap_or_else(|| "never ran".into());
+            row.exit_code = prior.last_exit_code;
+            row.gate = gate;
+            if selection.run {
+                row.next_due_at = Some(at);
+            }
+            receipt.steps.push(row);
+            continue;
+        }
+        // Blocked gates never spawn; the result was recorded above.
+        if row.gate.is_some()
+            && matches!(row.outcome, Outcome::Waiting | Outcome::Skipped)
+            && row.started_at.is_none()
+            && !selection.run
+        {
+            receipt.steps.push(row);
+            continue;
+        }
+        // A gate that blocked this selected run already recorded its result.
+        // Detect it by the absence of a child start plus a gate object.
+        if selection.run
+            && row.gate.is_some()
+            && row.started_at.is_none()
+            && (row.outcome == Outcome::Waiting
+                || (row.outcome == Outcome::Skipped
+                    && row.reason == "unchanged"))
+        {
+            // Gate blocked: persist already handled; show and continue.
             if !read_only {
-                record_result(&mut state, &row, at, false);
+                state.save(&dir).map_err(io_error)?;
+                if row.outcome == Outcome::Failed {
+                    receipt.exit_code = 1;
+                }
+                if !options.json
+                    && (row.outcome == Outcome::Failed
+                        || (!options.quiet
+                            && (row.started_at.is_some()
+                                || row.outcome == Outcome::Waiting)))
+                {
+                    if !printed_header && !options.quiet {
+                        render::header(&receipt);
+                        printed_header = true;
+                    }
+                    render::run_row(&row);
+                }
             }
-        } else if selection.run && options.dry_run {
-            if step.intake {
-                intake_ran = true;
-            }
-        } else if selection.run && !options.status {
+            receipt.steps.push(row);
+            continue;
+        }
+        if selection.run {
+            // Compute the refs fingerprint before the scan; only a success
+            // persists it, so a mid-scan change is never lost.
+            let refs_pre = if step.name == "refs" {
+                gates::refs_fingerprint(&options.vault)
+            } else {
+                None
+            };
+            // gcal's yesterday scope: -n 2 until today's first success.
+            let today = gates::today_string_from(at);
+            let wants_yesterday = step.name == "gcal"
+                && gates::gcal_needs_yesterday(&prior, &today);
             lock.as_mut()
                 .expect("writing run holds lock")
                 .step(step.name)
@@ -260,9 +364,18 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
                 .map(Ok)
                 .unwrap_or_else(std::env::current_exe);
             let output = program.and_then(|program| {
+                let mut args = step.args(&options.vault);
+                if wants_yesterday {
+                    // Insert -n 2 before --bob-dir so clap parses it as gcal's flag.
+                    let pos = args
+                        .iter()
+                        .position(|a| a == "--bob-dir")
+                        .unwrap_or(args.len());
+                    args.splice(pos..pos, ["-n".into(), "2".into()]);
+                }
                 subprocess_runner::run_raw(&RawRunSpec {
                     program,
-                    args: step.args(&options.vault),
+                    args,
                     env: vec![(
                         "BOB_DIR".into(),
                         options.vault.as_os_str().to_owned(),
@@ -287,6 +400,7 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
                     row.outcome = adapted.outcome;
                     row.reason = adapted.reason;
                     row.summary = adapted.summary;
+                    row.detail = adapted.detail;
                     if step.intake {
                         intake_ran = true;
                     }
@@ -303,6 +417,31 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
                         .map(render::safe_text)
                         .collect();
                     row.stderr_tail.reverse();
+                    // Surface the child's hint when JSON carries one.
+                    if !row.detail.is_empty() && row.outcome == Outcome::Failed
+                    {
+                        for line in row.detail.lines().take(2) {
+                            row.stderr_tail.push(render::safe_text(line));
+                        }
+                    }
+                    // Step-specific persistence on success.
+                    if row.outcome == Outcome::Ok {
+                        if step.name == "gcal" {
+                            state
+                                .steps
+                                .entry("gcal".into())
+                                .or_default()
+                                .yesterday_synced_on = Some(today.clone());
+                        }
+                        if step.name == "refs"
+                            && let Some(fp) = refs_pre
+                        {
+                            let entry =
+                                state.steps.entry("refs".into()).or_default();
+                            entry.fingerprint = Some(fp);
+                            entry.last_full_scan_at = Some(at);
+                        }
+                    }
                     adapted.consumes_interval
                 }
                 Err(e) => {
@@ -346,23 +485,6 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
             row.last_finished_at = updated.last_finished_at;
             row.last_outcome = updated.last_outcome;
             row.last_summary = updated.last_summary.clone();
-        }
-        if options.status {
-            row.started_at = prior.last_started_at;
-            row.outcome = prior.last_outcome.unwrap_or(Outcome::Skipped);
-            row.reason = prior
-                .last_reason
-                .clone()
-                .unwrap_or_else(|| "never_ran".into());
-            row.summary = prior
-                .last_summary
-                .clone()
-                .unwrap_or_else(|| "never ran".into());
-            row.exit_code = prior.last_exit_code;
-            // Due now includes persisted follow-up, even if the cadence is later.
-            if selection.run {
-                row.next_due_at = Some(at);
-            }
         }
         if !read_only {
             state.save(&dir).map_err(io_error)?;

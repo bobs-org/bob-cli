@@ -1,6 +1,8 @@
 //! One ordered pass for Bob's frequent background work, without an outer vault lock.
+mod adapters;
 mod catalog;
 mod config;
+mod gates;
 mod lock;
 mod receipt;
 mod render;
