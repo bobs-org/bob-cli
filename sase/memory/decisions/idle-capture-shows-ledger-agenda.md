@@ -10,12 +10,10 @@ summary:
   show; folds go farthest-first (logs, one-line, one-row, name strip) below a fixed
   eye line; the app never reads the vault."
 metadata:
-  status: accepted
-  decided: 2026-10-09
-metadata:
   status: superseded-in-part
   superseded_by:
     - decisions:idle-capture-mirrors-walk-attention
+  decided: 2026-10-09
 ---
 
 **Applies to.** Bob Mac Capture (agenda cache, fit planner, panel layout) and bob-cli

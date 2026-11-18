@@ -56,9 +56,12 @@ keeps its last successful same-day report in memory. When refresh fails, that re
 be stale until the next successful scan; an older Bob shows an actionable upgrade hint.
 
 Evidence: epic `bob-cli-mx` and approved plan
-`plan:202611/mac_walk_attention_marks.md`; phase `bob-cli-mx.5`; docs
-`bob-mac-capture/docs/idle-agenda.md` and `docs/settings.md`; exact-SHA macOS CI run
-`44235553200` passed on `54d1c9638c3edbc70341c3cce4efd3e3864dae56`.
+`plan:202611/mac_walk_attention_marks.md`; bob-cli `c50f8895` (`bob walks` and
+`docs/walks.md`); bob-plugins `5964d35` (walker footer pinned to the walks vectors);
+bob-mac-capture `fee9ffab` and `a19bdd0a` (walks client, presentation, store, and
+marks); docs `docs/reference/mac-capture/idle-agenda.md` and
+`docs/reference/mac-capture/settings.md`; exact-SHA macOS CI run `44240009172` passed on
+master `a19bdd0a`.
 
 **Reopens when.** The `bob walks` attention predicate or JSON contract changes, the
 idle agenda starts writing the vault or deriving attention locally, or walk marks gain
