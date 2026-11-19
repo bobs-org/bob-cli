@@ -123,6 +123,24 @@ fn write_qfx(vault: &BankVault, name: &str, body: &str) -> PathBuf {
     path
 }
 
+fn write_download_qfx(vault: &BankVault, name: &str, body: &str) -> PathBuf {
+    let directory = vault._temp.path().join("home-dir/Downloads");
+    fs::create_dir_all(&directory).expect("Downloads");
+    let path = directory.join(name);
+    fs::write(&path, body).expect("write synthetic download");
+    path
+}
+
+fn one_transaction_qfx(id: &str, payee: &str) -> String {
+    ofx(
+        "20261112",
+        "20261112",
+        "1000.00",
+        "20261112",
+        &[("DEBIT", "20261112", "-13.71", id, payee)],
+    )
+}
+
 fn month_note(vault: &BankVault) -> String {
     fs::read_to_string(vault.path.join("bank/2026-11.md")).unwrap_or_default()
 }
@@ -301,6 +319,171 @@ fn walk_ensure_type_list_report_ack_and_import_twice() {
     assert!(payload["commit"].is_null(), "{payload}");
     let status = json(&run(&vault, &["report", "-f", "json"]));
     assert_eq!(status["accounts"][0]["status"], "balanced");
+}
+
+#[test]
+fn import_expands_literal_tilde_glob_and_keeps_sorted_match_order() {
+    let vault = syncable(HUB);
+    let qfx = one_transaction_qfx("fit-z", "ZED STORE");
+    write_download_qfx(&vault, "z.qfx", &qfx);
+    write_download_qfx(
+        &vault,
+        "a.qfx",
+        &one_transaction_qfx("fit-a", "ALPHA STORE"),
+    );
+
+    // This is a single literal argv element, matching the Command Mode call shape.
+    let imported = run(
+        &vault,
+        &[
+            "import",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            "~/Downloads/*.qfx",
+        ],
+    );
+    assert_success(&imported);
+    let payload = json(&imported);
+    let files = payload["files"].as_array().expect("imported files");
+    assert_eq!(files.len(), 2, "{payload}");
+    assert_eq!(files[0]["file"], write_download_path(&vault, "a.qfx"));
+    assert_eq!(files[1]["file"], write_download_path(&vault, "z.qfx"));
+    assert!(month_note(&vault).contains("Alpha Store"));
+    assert!(month_note(&vault).contains("Zed Store"));
+}
+
+#[test]
+fn existing_bracketed_download_is_imported_literally() {
+    let vault = syncable(HUB);
+    write_download_qfx(
+        &vault,
+        "checking [1].qfx",
+        &one_transaction_qfx("fit-literal", "LITERAL STORE"),
+    );
+    write_download_qfx(
+        &vault,
+        "checking 1.qfx",
+        &one_transaction_qfx("fit-pattern", "PATTERN STORE"),
+    );
+
+    let imported = run(
+        &vault,
+        &[
+            "import",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            "~/Downloads/checking [1].qfx",
+        ],
+    );
+    assert_success(&imported);
+    let payload = json(&imported);
+    assert_eq!(payload["files"].as_array().unwrap().len(), 1, "{payload}");
+    assert_eq!(
+        payload["files"][0]["file"],
+        write_download_path(&vault, "checking [1].qfx")
+    );
+    let note = month_note(&vault);
+    assert!(note.contains("Literal Store"), "{note}");
+    assert!(!note.contains("Pattern Store"), "{note}");
+}
+
+#[test]
+fn no_match_refuses_before_lock_sync_or_vault_changes() {
+    let vault = syncable(HUB);
+    fs::create_dir_all(vault._temp.path().join("home-dir/Downloads"))
+        .expect("Downloads");
+    let lock = vault_sync_lock_file(&vault._temp);
+    let state = vault_sync_state_file(&vault._temp);
+    let head = stdout(&git_in(&vault.path, ["rev-parse", "HEAD"]));
+    let status = stdout(&git_in(&vault.path, ["status", "--porcelain"]));
+
+    let output = run(
+        &vault,
+        &[
+            "import",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            "~/Downloads/*.qfx",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["code"], "bank_import_no_match");
+    assert_eq!(
+        payload["error"]["message"],
+        "no files match ~/Downloads/*.qfx"
+    );
+    assert_eq!(
+        payload["error"]["hint"],
+        "download an export first, or check the pattern"
+    );
+    assert!(!lock.exists(), "no-match must precede lock acquisition");
+    assert!(!state.exists(), "no-match must precede sync state writes");
+    assert!(
+        !vault.path.join(".bob/bank").exists(),
+        "no journal was written"
+    );
+    assert_eq!(stdout(&git_in(&vault.path, ["rev-parse", "HEAD"])), head);
+    assert_eq!(
+        stdout(&git_in(&vault.path, ["status", "--porcelain"])),
+        status
+    );
+}
+
+#[test]
+fn overlapping_patterns_import_each_file_once() {
+    let vault = syncable(HUB);
+    write_download_qfx(
+        &vault,
+        "a.qfx",
+        &one_transaction_qfx("fit-a", "ALPHA STORE"),
+    );
+    write_download_qfx(
+        &vault,
+        "b.qfx",
+        &one_transaction_qfx("fit-b", "BETA STORE"),
+    );
+
+    let imported = run(
+        &vault,
+        &[
+            "import",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            "~/Downloads/*.qfx",
+            "~/Downloads/a*.qfx",
+        ],
+    );
+    assert_success(&imported);
+    let payload = json(&imported);
+    let files = payload["files"].as_array().expect("imported files");
+    assert_eq!(files.len(), 2, "{payload}");
+    assert_eq!(files[0]["new"], 1);
+    assert_eq!(files[1]["new"], 1);
+    assert_eq!(
+        month_note(&vault).matches("^bank-").count(),
+        2,
+        "each source transaction is recorded once"
+    );
+}
+
+fn write_download_path(vault: &BankVault, name: &str) -> String {
+    vault
+        ._temp
+        .path()
+        .join("home-dir/Downloads")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[test]

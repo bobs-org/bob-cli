@@ -194,13 +194,13 @@ See docs/bank.md for the bank contract.
 Import posted bank transactions
 
 ```text title="bob bank import --help"
-Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.
+Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. FILE accepts `~` and glob patterns (`*`, `?`, `[...]`), which bob expands itself, so callers without a shell, such as Command Mode, can pass `~/Downloads/*.qfx`; an existing file always wins over pattern interpretation, and a pattern that matches nothing is refused. Refused input exits 2; runtime failures exit 1.
 
 Usage: bob bank import [OPTIONS] [FILE]...
 
 Arguments:
   [FILE]...
-          QFX/OFX or the supported Wells Fargo CSV export; repeatable
+          QFX/OFX or the supported Wells Fargo CSV export; repeatable; ~ and glob patterns expand
 
 Options:
   -a, --account <ALIAS>

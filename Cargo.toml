@@ -56,6 +56,7 @@ encoding_rs = "0.8"
 # `clap/unstable-ext`. Only `native::completion::engine` may import this crate.
 clap_complete = { version = "=4.6.11", features = ["unstable-dynamic"] }
 fs2 = "0.4"
+glob = "0.3"
 hex = "0.4.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 libc = "0.2"

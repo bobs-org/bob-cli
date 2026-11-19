@@ -20,6 +20,7 @@ use crate::native::{env::TestEnvGuard, note_tasks};
 fn import_command_help_and_option_aliases_are_complete() {
     let mut command = super::build_cli_import();
     let help = command.render_help().to_string();
+    let long_help = command.render_long_help().to_string();
     for option in [
         "-a, --account <ALIAS>",
         "-b, --bob-dir <DIR>",
@@ -30,6 +31,8 @@ fn import_command_help_and_option_aliases_are_complete() {
     ] {
         assert!(help.contains(option), "missing {option} in:\n{help}");
     }
+    assert!(help.contains("~ and glob patterns expand"), "{help}");
+    assert!(long_help.contains("Command Mode"), "{long_help}");
     assert!(help.contains("[FILE]..."), "FILE is optional in:\n{help}");
     let parsed = super::build_cli_import()
         .try_get_matches_from([

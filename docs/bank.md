@@ -369,6 +369,15 @@ bob bank import -d ~/Downloads/checking.qfx
 bob bank import -a checking -f json ~/Downloads/export.csv
 ```
 
+Bob expands a leading `~` and `*`, `?`, and `[...]` file patterns itself, so
+the same command works when a caller such as Command Mode passes the pattern
+without a shell. Existing paths take precedence over pattern interpretation;
+patterns are case-sensitive, skip directories, and match hidden files only
+when the pattern component starts with `.`. A pattern with no matching files
+is refused before the vault lock or sync lifecycle. Repeating a path or using
+overlapping patterns imports each file only once, in the order of the
+operands and then the glob matches.
+
 ### Sources
 
 Two export shapes, told apart by content: OFX/QFX (an `OFXHEADER` or

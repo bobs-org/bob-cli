@@ -578,7 +578,7 @@ const TABLE: &[Entry] = &[
     Entry {
         path: &["bank", "import"],
         arg: "files",
-        kind: Kind::Files(None),
+        kind: Kind::Files(Some("*.qfx *.ofx *.csv")),
     },
     // `bob bank config update -i` takes a JSON envelope file (`-` for stdin).
     Entry {
@@ -1351,5 +1351,9 @@ mod tests {
         assert_eq!(lookup_generic("bob-dir"), Some(Kind::Dirs));
         assert_eq!(lookup_generic("text"), Some(Kind::FreeText));
         assert_eq!(lookup_generic("pull-in"), Some(Kind::FreeText));
+        assert_eq!(
+            lookup_exact(&["bank", "import"], "files"),
+            Some(Kind::Files(Some("*.qfx *.ofx *.csv")))
+        );
     }
 }

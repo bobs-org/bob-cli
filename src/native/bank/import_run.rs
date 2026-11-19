@@ -24,6 +24,7 @@ use crate::native::{
     host_catalog::{
         CommitInfo, PlannedAppend, PlannedTxn, ReadDependencies, TxnResult,
     },
+    host_paths::{self, OperandError},
     ob, pref_journal,
     style::Styler,
     vault_rewrite::TxnFailure,
@@ -305,12 +306,16 @@ pub(crate) fn prepare_sources(
     let mut prepared = Vec::with_capacity(paths.len());
     for (order, path) in paths.iter().enumerate() {
         let label = path.to_string_lossy().into_owned();
-        let bytes = fs::read(path).map_err(|error| SourceError {
-            file: label.clone(),
-            record: None,
-            field: None,
-            message: format!("could not read source: {error}"),
-            hint: None,
+        let bytes = fs::read(path).map_err(|error| {
+            let hint = (error.kind() == std::io::ErrorKind::PermissionDenied)
+                .then(|| host_paths::permission_hint().to_owned());
+            SourceError {
+                file: label.clone(),
+                record: None,
+                field: None,
+                message: format!("could not read source: {error}"),
+                hint,
+            }
         })?;
         let statement = source::parse_export(&label, &bytes, order)?;
         prepared.push(PreparedSource { label, statement });
@@ -592,6 +597,31 @@ pub(crate) fn source_error_failure(error: SourceError) -> TxnFailure {
             .as_deref()
             .unwrap_or("fix the source file and retry"),
     )
+}
+
+pub(crate) fn operand_error_failure(error: OperandError) -> TxnFailure {
+    match error {
+        OperandError::NoMatch { operand } => failure(
+            "bank_import_no_match",
+            format!("no files match {}", operand.to_string_lossy()),
+            "download an export first, or check the pattern",
+        ),
+        OperandError::Unreadable { path, error, kind } => {
+            let hint = if kind == std::io::ErrorKind::PermissionDenied {
+                host_paths::permission_hint()
+            } else {
+                "check access to the source directory and retry"
+            };
+            failure(
+                "bank_import_source",
+                format!(
+                    "could not read {}: {error}",
+                    host_paths::display_path(&path)
+                ),
+                hint,
+            )
+        }
+    }
 }
 
 fn plan_refusal_failure(refusal: PlanRefusal) -> TxnFailure {

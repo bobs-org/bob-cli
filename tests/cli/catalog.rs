@@ -64,7 +64,14 @@ fn protocol_1_parses_with_schema_version_one() {
         entry["id"] == "bank-import"
             && entry["path"] == serde_json::json!(["bank", "import"])
             && entry["effect"] == "writes"
+            && entry["invalidates"] == serde_json::json!(["bank"])
     }));
+    for id in ["bank-import", "bank-ack", "bank-ensure"] {
+        assert!(entries.iter().any(|entry| {
+            entry["id"] == id
+                && entry["invalidates"] == serde_json::json!(["bank"])
+        }));
+    }
     assert!(entries.iter().any(|entry| {
         entry["id"] == "attachments-import"
             && entry["path"] == serde_json::json!(["attachments", "import"])

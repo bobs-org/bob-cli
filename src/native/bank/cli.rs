@@ -16,7 +16,7 @@ use super::{
     ack, charts, check, config_report, config_update, dates, ensure,
     import_run, list, output, report, scan, status, subscriptions_report,
 };
-use crate::native::env as bob_env;
+use crate::native::{env as bob_env, host_paths};
 
 const COMMAND_NAME: &str = "bob bank";
 
@@ -228,7 +228,7 @@ pub(crate) fn build_cli_import() -> ClapCommand {
     ClapCommand::new("bob bank import")
         .about("Import posted bank transactions from QFX, OFX, or Wells Fargo CSV")
         .long_about(
-            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. Refused input exits 2; runtime failures exit 1.",
+            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. FILE accepts `~` and glob patterns (`*`, `?`, `[...]`), which bob expands itself, so callers without a shell, such as Command Mode, can pass `~/Downloads/*.qfx`; an existing file always wins over pattern interpretation, and a pattern that matches nothing is refused. Refused input exits 2; runtime failures exit 1.",
         )
         .after_help(
             "Examples:\n  bob bank import ~/Downloads/*.qfx\n  bob bank import -d ~/Downloads/checking.qfx\n  bob bank import -a checking -f json ~/Downloads/export.csv\n  bob bank import -F\n\nSee docs/bank.md for import matching and recovery behavior.",
@@ -239,7 +239,7 @@ pub(crate) fn build_cli_import() -> ClapCommand {
                 .value_name("FILE")
                 .num_args(0..)
                 .value_parser(OsStringValueParser::new())
-                .help("QFX/OFX or the supported Wells Fargo CSV export; repeatable"),
+                .help("QFX/OFX or the supported Wells Fargo CSV export; repeatable; ~ and glob patterns expand"),
         )
         .arg(
             Arg::new("account")
@@ -530,12 +530,12 @@ fn execute_import(matches: &ArgMatches) -> i32 {
     let now = bob_env::current_datetime();
     let today = now.date();
     let now_stamp = import_run::now_stamp(now);
-    let paths = matches
+    let operands = matches
         .get_many::<OsString>("files")
-        .map(|files| files.map(PathBuf::from).collect::<Vec<_>>())
+        .map(|files| files.cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     let requested_account = opt_string(matches, "account");
-    if paths.is_empty() && !force_restore {
+    if operands.is_empty() && !force_restore {
         let report = import_run::ImportReport::failed(
             dry_run,
             today,
@@ -548,6 +548,22 @@ fn execute_import(matches: &ArgMatches) -> i32 {
         }
         return report.exit_code();
     }
+    let paths = match host_paths::expand_operands(&operands) {
+        Ok(paths) => paths,
+        Err(error) => {
+            let report = import_run::ImportReport::failed(
+                dry_run,
+                today,
+                import_run::operand_error_failure(error),
+            );
+            if json {
+                println!("{}", report.to_json());
+            } else {
+                import_run::print_human(&report);
+            }
+            return report.exit_code();
+        }
+    };
     let prepared = match import_run::prepare_sources(&paths) {
         Ok(prepared) => prepared,
         Err(error) => {

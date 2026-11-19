@@ -29,6 +29,7 @@ pub(crate) const KNOWN_SLOTS: &[&str] = &[
 /// coverage tests.
 #[cfg(test)]
 pub(crate) const KNOWN_INVALIDATES: &[&str] = &[
+    "bank",
     "gkeep",
     "plugins",
     "references",
@@ -1336,33 +1337,50 @@ pub(crate) const ENTRIES: &[Row] = &[
         Presentation::Report,
         60,
     ),
-    writes(
-        "bank-ensure",
-        &["bank", "ensure"],
-        "Ensure bank month note and day",
-        &["bank", "ensure", "month", "day", "heading"],
-        Policy::Run,
-        None,
-        60,
-    ),
-    writes(
-        "bank-ack",
-        &["bank", "ack"],
-        "Acknowledge bank rows",
-        &["bank", "ack", "acknowledge", "tick", "transactions"],
-        Policy::PreviewFirst,
-        Some(DRY_RUN),
-        60,
-    ),
-    writes(
-        "bank-import",
-        &["bank", "import"],
-        "Import bank transactions",
-        &["bank", "import", "qfx", "ofx", "csv", "transactions"],
-        Policy::PreviewFirst,
-        Some(DRY_RUN),
-        60,
-    ),
+    Row {
+        invalidates: &["bank"],
+        ..writes(
+            "bank-ensure",
+            &["bank", "ensure"],
+            "Ensure bank month note and day",
+            &["bank", "ensure", "month", "day", "heading"],
+            Policy::Run,
+            None,
+            60,
+        )
+    },
+    Row {
+        invalidates: &["bank"],
+        ..writes(
+            "bank-ack",
+            &["bank", "ack"],
+            "Acknowledge bank rows",
+            &["bank", "ack", "acknowledge", "tick", "transactions"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
+        invalidates: &["bank"],
+        ..writes(
+            "bank-import",
+            &["bank", "import"],
+            "Import bank transactions",
+            &[
+                "bank",
+                "import",
+                "qfx",
+                "ofx",
+                "csv",
+                "transactions",
+                "downloads",
+            ],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            60,
+        )
+    },
     reads(
         "clipboard",
         &["clipboard"],

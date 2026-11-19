@@ -87,7 +87,7 @@ Each `entries[]` object:
 | `exit_codes` | Optional `[{code, outcome, meaning}]` hints |
 | `adapter` | Plugin adapter id, or `null` |
 | `hosts` | `[]` means every host; otherwise e.g. `["macos"]` |
-| `invalidates` | `tasks` \| `themes` \| `relations` \| `stats` \| `references` \| `plugins` |
+| `invalidates` | `tasks` \| `themes` \| `relations` \| `stats` \| `references` \| `plugins` \| `gkeep` \| `bank` |
 
 `args[].slot` is one of `area-note`, `article-note`, `metric`, `pdf`,
 `ref`, `ref-query`, `ref-target`, `relation-label`, `text`, `theme`,
