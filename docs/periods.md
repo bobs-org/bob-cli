@@ -221,6 +221,15 @@ key. Before success it reparses the full mapping, verifies every requested
 value and all unmodified values, and refuses with `write_verify_failed` if
 they differ. It performs no file write, lock, or ownership decision.
 
+### Mechanical link rewrites
+
+Vault rewrites that move or rename a linked target repair links in the stored
+`intentions`, `summary`, and `reflection` values of canonical daily, week,
+quarter, and year notes. They rewrite decoded Markdown values and patch only
+changed owned keys, preserving unrelated frontmatter and body bytes. Legacy
+body text remains untouched until migration; edited or reflected draft state
+is not restamped by a mechanical rewrite.
+
 Parent and strip headlines use the same projection: a closed child shows its
 summary; a current or future child shows its intentions joined with `·`; all
 other cases are empty. A closed day never falls back to its old planned
@@ -480,7 +489,11 @@ commit.
 
 `bob periods list -p/--problems` is report-only (exit 0). Adopted ISO
 years are those with at least one weekly note. Each problem has
-`path`, `detail`, and a `fix` hint:
+`path`, `detail`, a `fix` hint, and a `level` (`error` or `info`). The
+collector checks canonical daily and week/quarter/year notes for stored
+intention-field problems; `all_time` and noncanonical notes are excluded.
+It uses one vault note index for link resolution and caches target notes for
+heading/block checks. It never migrates or writes a note.
 
 - `dangling_daily_parent`: a daily in an adopted year whose parent is
   not its week;
@@ -491,7 +504,26 @@ years are those with at least one weekly note. Each problem has
 - `wrong_parent`: a period note whose parent is not the expected one;
 - `task_rows`: a period note with a `#task` checkbox line;
 - `stale_instructions` (info): an unreflected note whose callout
-  version is older than current.
+  version is older than current;
+- `dangling_period_link`: an owned intention, summary, or reflection link
+  whose note target is missing or ambiguous, or whose supported heading/block
+  fragment is missing or ambiguous. External URLs, code examples, and existing
+  attachment files are ignored. Fix the field link or restore the target;
+- `intentions_shape`: malformed frontmatter or a typed intention/summary/
+  reflection value, including scalar intentions (read as one item but still
+  reported). The detail keeps the reader's specific parse reason. Repair the
+  listed field shape or value;
+- `intentions_over_soft_cap` (info): more than three readable intentions.
+  This is guidance only; Bob preserves every item and never truncates text;
+- `legacy_period_text`: a recognized daily preamble label, week Intentions,
+  quarter Outcomes, year Theme/Outcomes, period Reflection, or opening Review
+  Headline remains. Empty slots and placeholders count. Equal legacy copies
+  are reported as duplicates; conflicts say that frontmatter wins and must be
+  reconciled before migration. Run `bob periods migrate` after resolving any
+  conflict to remove the legacy shape.
+
+The nightly period-notes step uses this same collector and stays report-only:
+new findings do not change its exit-0 result or write vault content.
 
 ## Nightly
 

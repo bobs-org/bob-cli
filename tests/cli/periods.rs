@@ -705,6 +705,97 @@ fn list_problems_reports_each_kind() {
 }
 
 #[test]
+fn list_problems_reports_field_findings_in_human_and_json_without_writes() {
+    let vault = vault_dir("field-problems");
+    fs::create_dir_all(vault.path().join("2026")).unwrap();
+    fs::write(
+        vault.path().join("2026/2026-W45.md"),
+        "---\nparent: [[2026/2026-Q4]]\nintentions: [one, two, three, four]\n---\n\
+         ## Intentions\n\n- legacy item\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("2026/20261103.md"),
+        "---\nparent: [[2026/2026-W45]]\nintentions: \"Read [[missing]]\"\n\
+         summary: \"[[missing-summary]]\"\n---\n\
+         **Headline:** Old daily plan\n\n## Pomodoros\n",
+    )
+    .unwrap();
+    let before = snapshot_tree(vault.path());
+
+    let json_output = bob_command()
+        .arg("periods")
+        .arg("list")
+        .arg("-b")
+        .arg(vault.path())
+        .arg("-p")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_NOW", MIGRATE_NOW)
+        .output()
+        .expect("list -p JSON");
+    assert_success(&json_output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&json_output)).expect("problems JSON");
+    let problems = body["problems"].as_array().expect("problem rows");
+    for kind in [
+        "dangling_period_link",
+        "intentions_shape",
+        "intentions_over_soft_cap",
+        "legacy_period_text",
+    ] {
+        assert!(
+            problems.iter().any(|problem| problem["kind"] == kind),
+            "missing {kind}: {problems:#?}"
+        );
+    }
+    assert!(problems.iter().any(|problem| {
+        problem["kind"] == "intentions_over_soft_cap"
+            && problem["level"] == "info"
+    }));
+    assert!(problems.iter().any(|problem| {
+        problem["kind"] == "dangling_period_link"
+            && problem["detail"]
+                .as_str()
+                .unwrap()
+                .contains("intentions[1]")
+    }));
+    assert!(problems.iter().any(|problem| {
+        problem["kind"] == "legacy_period_text"
+            && problem["detail"].as_str().unwrap().contains("conflicts")
+            && problem["detail"]
+                .as_str()
+                .unwrap()
+                .contains("frontmatter wins")
+    }));
+
+    let human_output = bob_command()
+        .arg("periods")
+        .arg("list")
+        .arg("-b")
+        .arg(vault.path())
+        .arg("-p")
+        .env("BOB_NOW", MIGRATE_NOW)
+        .output()
+        .expect("list -p human");
+    assert_success(&human_output);
+    let human = stdout(&human_output);
+    for kind in [
+        "dangling_period_link",
+        "intentions_shape",
+        "intentions_over_soft_cap",
+        "legacy_period_text",
+    ] {
+        assert!(human.contains(kind), "missing {kind}:\n{human}");
+    }
+    assert_eq!(
+        snapshot_tree(vault.path()),
+        before,
+        "report wrote to the vault"
+    );
+}
+
+#[test]
 fn nightly_help_names_the_period_notes_step() {
     let output = bob_command()
         .arg("nightly")

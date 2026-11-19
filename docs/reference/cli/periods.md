@@ -212,7 +212,7 @@ See docs/periods.md for the calendar, scaffolds, and JSON.
 List period notes with review states (default)
 
 ```text title="bob periods list --help"
-List the period notes that exist, newest first, grouped year → quarter → weeks. Each row shows its review-state mark and its Summary. -p/--problems reports dangling daily parents, missing period notes, unscaffolded notes, wrong parents, task rows, and stale instructions. The command is read-only. See docs/periods.md for summaries, review states, problems, and JSON.
+List the period notes that exist, newest first, grouped year → quarter → weeks. Each row shows its review-state mark and its Summary. -p/--problems reports dangling daily parents and intention links, malformed, over-cap, or legacy intention fields, missing period notes, unscaffolded notes, wrong parents, task rows, and stale instructions. The command is read-only. See docs/periods.md for summaries, review states, problems, and JSON.
 
 Usage: bob periods list [OPTIONS]
 

@@ -4,6 +4,111 @@ use std::collections::BTreeMap;
 
 use crate::native::{daily_headline, markdown, periods::calendar::PeriodId};
 
+/// Recognized pre-frontmatter slots that still remain in a canonical note.
+/// `Some("")` and `Some(vec![])` mean that the old shape is present but
+/// empty; callers must not confuse it with an absent slot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LegacyFields {
+    pub(crate) intentions: Option<Vec<String>>,
+    pub(crate) summary: Option<String>,
+    pub(crate) reflection: Option<String>,
+    pub(crate) slots: Vec<&'static str>,
+}
+
+/// Find recognized legacy slots without migrating or normalizing the note.
+/// The values use the same readers as field fallback, while slot presence is
+/// retained even for empty headings and empty preamble labels.
+pub(crate) fn find_legacy_fields(
+    kind: IntentionsKind,
+    contents: &str,
+) -> LegacyFields {
+    let mut found = LegacyFields::default();
+    match kind {
+        IntentionsKind::Day => {
+            if let Some(text) = daily_preamble_slot(contents, "Headline") {
+                found.slots.push("daily Headline preamble");
+                found.intentions = Some(if text.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![text]
+                });
+            }
+            if let Some(text) = daily_preamble_slot(contents, "Reflection") {
+                found.slots.push("daily Reflection preamble");
+                found.reflection = Some(text);
+            }
+        }
+        IntentionsKind::Period(PeriodId::Week { .. }) => {
+            let sections = sections(contents);
+            if let Some(body) = sections.get("Intentions") {
+                found.slots.push("week ## Intentions");
+                found.intentions = Some(top_level_bullet_values(body));
+            }
+            if let Some(body) = sections.get("Review")
+                && let Some(headline) = opening_headline_slot(body)
+            {
+                found.slots.push("week Review Headline");
+                found.summary = Some(headline);
+            }
+            if let Some(body) = sections.get("Reflection") {
+                found.slots.push("week ## Reflection");
+                found.reflection = Some(body.clone());
+            }
+        }
+        IntentionsKind::Period(PeriodId::Quarter { .. }) => {
+            let sections = sections(contents);
+            if let Some(body) = sections.get("Outcomes") {
+                found.slots.push("quarter ## Outcomes");
+                found.intentions = Some(top_level_bullet_values(body));
+            }
+            if let Some(body) = sections.get("Review")
+                && let Some(headline) = opening_headline_slot(body)
+            {
+                found.slots.push("quarter Review Headline");
+                found.summary = Some(headline);
+            }
+            if let Some(body) = sections.get("Reflection") {
+                found.slots.push("quarter ## Reflection");
+                found.reflection = Some(body.clone());
+            }
+        }
+        IntentionsKind::Period(PeriodId::Year(_)) => {
+            let sections = sections(contents);
+            let mut intentions = Vec::new();
+            let mut present = false;
+            if let Some(body) = sections.get("Theme") {
+                found.slots.push("year ## Theme");
+                present = true;
+                if let Some(theme) = paragraph_slot(body)
+                    && !theme.trim().is_empty()
+                {
+                    intentions.push(theme);
+                }
+            }
+            if let Some(body) = sections.get("Outcomes") {
+                found.slots.push("year ## Outcomes");
+                present = true;
+                intentions.extend(top_level_bullet_values(body));
+            }
+            if present {
+                found.intentions = Some(intentions);
+            }
+            if let Some(body) = sections.get("Review")
+                && let Some(headline) = opening_headline_slot(body)
+            {
+                found.slots.push("year Review Headline");
+                found.summary = Some(headline);
+            }
+            if let Some(body) = sections.get("Reflection") {
+                found.slots.push("year ## Reflection");
+                found.reflection = Some(body.clone());
+            }
+        }
+        IntentionsKind::Period(PeriodId::AllTime) => {}
+    }
+    found
+}
+
 pub(crate) fn intentions(
     id: IntentionsKind,
     contents: &str,
@@ -40,6 +145,12 @@ pub(crate) fn intentions(
 pub(crate) fn parse_daily_headline(
     contents: &str,
 ) -> Option<daily_headline::DailyHeadline> {
+    let text = preamble_label(contents, "Headline")?;
+    let display = daily_headline::display_text(&text);
+    Some(daily_headline::DailyHeadline { text, display })
+}
+
+fn daily_preamble_slot(contents: &str, wanted: &str) -> Option<String> {
     let lines: Vec<&str> = contents.lines().collect();
     let start = markdown::strictly_closed_frontmatter_end(&lines)
         .map(|end| end + 1)
@@ -55,7 +166,7 @@ pub(crate) fn parse_daily_headline(
         if markdown::atx_heading(line).is_some_and(|(level, _)| level >= 2) {
             break;
         }
-        if let Some(rest) = label_rest(line, "Headline") {
+        if let Some(rest) = label_rest(line, wanted) {
             let mut words: Vec<&str> = rest.split_whitespace().collect();
             let mut next = index + 1;
             while next < lines.len()
@@ -65,12 +176,7 @@ pub(crate) fn parse_daily_headline(
                 words.extend(lines[next].split_whitespace());
                 next += 1;
             }
-            if !words.is_empty() {
-                let text = words.join(" ");
-                let display = daily_headline::display_text(&text);
-                return Some(daily_headline::DailyHeadline { text, display });
-            }
-            index = next.max(index + 1);
+            return Some(words.join(" "));
         } else {
             index += 1;
         }
@@ -161,6 +267,11 @@ fn trim_body(lines: &[String]) -> String {
 }
 
 fn top_level_bullets(body: &str) -> Option<Vec<String>> {
+    let values = top_level_bullet_values(body);
+    (!values.is_empty()).then_some(values)
+}
+
+fn top_level_bullet_values(body: &str) -> Vec<String> {
     let lines: Vec<_> = body.lines().collect();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
     let mut values: Vec<String> = Vec::new();
@@ -190,10 +301,14 @@ fn top_level_bullets(body: &str) -> Option<Vec<String>> {
         }
     }
     values.retain(|value| !value.trim().is_empty());
-    (!values.is_empty()).then_some(values)
+    values
 }
 
 fn paragraph(body: &str) -> Option<String> {
+    nonempty(paragraph_slot(body)?)
+}
+
+fn paragraph_slot(body: &str) -> Option<String> {
     let mut lines = Vec::new();
     for line in body.lines() {
         if lines.is_empty() && line.trim().is_empty() {
@@ -209,7 +324,7 @@ fn paragraph(body: &str) -> Option<String> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    nonempty(text)
+    Some(text)
 }
 
 fn preamble_label(contents: &str, wanted: &str) -> Option<String> {
@@ -266,6 +381,10 @@ fn label_rest<'a>(line: &'a str, wanted: &str) -> Option<&'a str> {
 }
 
 pub(crate) fn opening_headline(body: &str) -> Option<String> {
+    nonempty(opening_headline_slot(body)?)
+}
+
+fn opening_headline_slot(body: &str) -> Option<String> {
     let mut lines = body.lines();
     let first = lines.next()?;
     let rest = label_rest(first, "Headline")?;
@@ -276,7 +395,7 @@ pub(crate) fn opening_headline(body: &str) -> Option<String> {
         }
         words.extend(line.split_whitespace());
     }
-    nonempty(words.join(" "))
+    Some(words.join(" "))
 }
 
 fn nonempty(value: String) -> Option<String> {
