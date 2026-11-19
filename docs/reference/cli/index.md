@@ -84,7 +84,8 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob periods ensure`](periods.md#bob-periods-ensure) | Create missing period notes one week ahead |
 | [`bob periods list`](periods.md#bob-periods-list) | List period notes with review states (default) |
 | [`bob periods migrate`](periods.md#bob-periods-migrate) | Adopt the period-note tree (dry run by default) |
-| [`bob periods show`](periods.md#bob-periods-show) | Show a period's live stats and child summaries |
+| [`bob periods show`](periods.md#bob-periods-show) | Show daily intention fields or a period report |
+| [`bob periods update`](periods.md#bob-periods-update) | Apply a guarded intention card update |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
 | [`bob records`](records.md) | List, inspect, check, create, update, and tidy Record Notes |
 | [`bob records check`](records.md#bob-records-check) | Check Record Notes against their album schemas |

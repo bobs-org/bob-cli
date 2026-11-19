@@ -343,13 +343,14 @@ and never push (vault-sync commits, and agents commit as the vault's
   dry run by default. `-a` writes one `vault_rewrite` transaction and
   one commit. `-o` skips vault-sync before and after, as with
   `bob types rename`.
-- `bob periods show [PERIOD] [-f human|json] [-k/--clock worked|off-clock|total]`:
-  read-only. With no PERIOD it shows the current ISO week. PERIOD also
-  accepts `last-week`, `last-quarter`, and `last-year`, resolved
-  against today. It prints a compact terminal report — whose first
-  lines name the canonical id and the vault-relative note path — or the
-  schema-1 report below. The selected clock is applied to
-  Pomodoro minutes and lanes; Worked is the default.
+- `bob periods show [SUBJECT] [-f human|json] [-k/--clock worked|off-clock|total]`:
+  read-only. With no SUBJECT it shows the current ISO week. A day accepts
+  `YYYY-MM-DD`, `YYYYMMDD`, a canonical daily note path, `today`,
+  `yesterday`, or `last-day`; a period accepts `last-week`,
+  `last-quarter`, and `last-year`. Day output names the canonical date
+  and path, then intentions, summary, reflection, and review state. A
+  period prints the compact report or schema-1 report below. The selected
+  clock applies to period Pomodoro minutes and lanes; Worked is the default.
 - `bob periods brief <PERIOD> [-f md|json]`:
   read-only. With no PERIOD it briefs the current ISO week. PERIOD also
   accepts `last-week`, `last-quarter`, and `last-year`, resolved
@@ -363,6 +364,12 @@ and never push (vault-sync commits, and agents commit as the vault's
   accepts `last-week`, `last-quarter`, and `last-year`, resolved
   against today, with exactly the refusals of the canonical id. `-n`
   prints the planned section instead of writing it.
+- `bob periods update <SUBJECT> -i/--input FILE|- [-f/--format human|json] [-n/--dry-run]`:
+  applies one guarded JSON envelope to a daily, week, quarter, or year
+  note. SUBJECT uses the same day and period forms as `show`; `all_time`
+  is refused. The editor previews with `-n`, then applies with the field
+  fingerprint returned by the preview. Bob re-reads under `bob_sync.lock`
+  and preserves unrelated note-body edits.
 - `bob periods ensure -R/--refresh-instructions` refreshes stale
   agent callouts instead of creating notes (below). It also takes
   `-n` (plan only), `-f`, and `-q`.
@@ -373,13 +380,14 @@ Exit codes: 0 success; 1 vault I/O or transaction failure (including
 or flags, a draft that breaks the draft rules, or `all_time` for
 `brief` and `draft`); 3 a `migrate` refusal (not a worktree, dirty
 paths) or a `draft` refusal (period open, or state `edited` or
-`reflected`).
+`reflected`). An update's `missing_note`, `stale_note`, and `lock_busy`
+errors use exit code 1; malformed subjects and envelopes use exit code 2.
 JSON errors use
 `{"ok":false,"schema_version":1,"error":{"code","message","hint"}}`.
 `draft` adds `count` and `cap` to `over_cap` errors. Codes include
 `lock_busy`, `stale_note`, `refused_state`, `refused_open`,
 `over_cap`, `missing_headline`, `invalid_draft`, `no_review_section`,
-and `invalid_period`.
+and `invalid_period`. Update operation errors include `op_index`.
 
 `ensure` creates files without clobbering (temp file plus hard link)
 and re-reads just before each write. It never commits; vault-sync
@@ -560,6 +568,72 @@ week reads `so far · Mon–Tue`; a current quarter or year reads
 `so far · W40–W46` (ISO week ids, zero-padded). All time reads `since
 <date>`. A closed period with gaps reports `<N> of <M> days logged`; complete
 coverage has an empty display. Period reads never write a note.
+
+## Daily subjects and guarded field updates
+
+`bob periods show <DAY>` accepts `YYYY-MM-DD`, `YYYYMMDD`, a canonical daily-note
+path, `today`, `yesterday`, or `last-day`. Human output starts with the canonical
+date and vault-relative path, then shows the three fields and review state. JSON
+returns the same values in `{subject, intentions, summary, summary_state,
+reflection, review_state}`; `subject` contains the canonical `id`, `kind`, `label`,
+`path`, and current/closed/future `state`. Missing daily notes are refused with
+`missing_note`; open the day in Obsidian so Templater can create it. Period `show`
+continues to return the stats report and additive period fields described above.
+
+`bob periods update <SUBJECT> -i FILE|- [-f human|json] [-n]` is the guarded writer
+used by the intention card. SUBJECT resolves the same daily and period forms;
+`all_time` has no fields. Its v1 envelope is:
+
+```json
+{
+  "schema_version": 1,
+  "expect": "sha256:…",
+  "ops": [
+    { "op": "intentions.set", "values": ["one", "two"] },
+    { "op": "intentions.insert", "index": 0, "value": "first" },
+    { "op": "intentions.replace", "index": 1, "value": "revised" },
+    { "op": "intentions.move", "from": 1, "to": 0 },
+    { "op": "intentions.remove", "index": 1 },
+    { "op": "reflection.set", "value": "What it meant." },
+    { "op": "reflection.unset" },
+    { "op": "summary.set", "value": "What happened." },
+    { "op": "summary.unset" }
+  ]
+}
+```
+
+The envelope rejects duplicate JSON keys, unknown keys, unsupported versions,
+unknown operations, and wrong value types. Ops apply in order; indexes are
+zero-based. Empty `ops` is a valid no-op. Intentions are trimmed, one-line,
+non-empty strings; `intentions.set` with an empty list removes the key. Individual
+insert, replace, move, and remove ops refuse malformed stored intentions with
+`malformed_field`; `intentions.set` repairs them. Empty field values are refused;
+use `intentions.remove` or `intentions.set` with `[]`, `reflection.unset`, or
+`summary.unset` to clear a field. Reflections can contain multiple paragraphs. A
+summary is one paragraph on one line. `summary.set` and
+`summary.unset` remove `summary_digest` and `summary_drafted`, so a changed summary
+is `edited` until an agent drafts it again.
+
+Unset operations remove frontmatter keys. On a note still using the one-release
+legacy body fallback, removing an empty key can reveal the legacy text again until
+`bob periods migrate` moves that content into frontmatter.
+
+The `expect` fingerprint is SHA-256 over canonical JSON of the five owned values
+(`intentions`, `summary`, `summary_digest`, `summary_drafted`, and `reflection`),
+with absent values represented as null. It excludes the rest of the note, so task,
+Pomodoro, and other body edits do not stale the card. A dry run may omit `expect`
+to read the current fields and fingerprint; applying an update always requires it.
+The JSON report returns `{subject, dry_run, fingerprint_before,
+fingerprint_after, before, after, changed, inverse_ops, warnings[]}`. `before` and
+`after` contain intentions, summary, summary state, and reflection. Apply
+`inverse_ops` with `expect` set to `fingerprint_after` for Undo; the generated
+`summary.restore` operation restores the earlier summary and draft stamps.
+
+Before an applied write, Bob waits up to three seconds for `bob_sync.lock`, re-reads
+the note, and compares the owned-field fingerprint. It applies line-preserving YAML
+span edits to the fresh bytes, verifies the intended fields and all unrelated
+frontmatter keys, then installs the file atomically. A field change returns
+`stale_note`; a body-only change is preserved. Bob never commits the vault.
 
 ## Agent briefs (brief v2)
 

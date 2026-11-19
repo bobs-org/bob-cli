@@ -39,13 +39,6 @@ pub(crate) struct ReadNoteError {
 
 /// Read a resolved canonical note without creating it or interpreting its
 /// fields. Missing notes carry the approved day/period-specific recovery hint.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Existing note reader consumed by bob-cli-nh.2"
-    )
-)]
 pub(crate) fn read_existing(
     vault: &Path,
     info: &SubjectInfo,
@@ -55,7 +48,7 @@ pub(crate) fn read_existing(
         let missing = error.kind() == std::io::ErrorKind::NotFound;
         let hint = match (missing, info.subject) {
             (true, NoteSubject::Day(_)) => {
-                "Open the day in Obsidian before reading its intention fields."
+                "Open the day in Obsidian; Templater creates daily notes."
                     .to_owned()
             }
             (true, NoteSubject::Period(id)) => {

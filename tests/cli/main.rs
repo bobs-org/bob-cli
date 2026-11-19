@@ -27,6 +27,7 @@ mod note_walkers;
 mod notebooks;
 mod notebooks_catalog;
 mod periods;
+mod periods_update;
 mod plan;
 mod plan_off_clock;
 mod plugins;

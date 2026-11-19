@@ -839,9 +839,17 @@ const PERIODS_MEMBERS: &[Member] = &[
     },
     Member {
         name: "show",
-        about: "Show a period's live stats and child summaries",
+        about: "Show daily intention fields or a period report",
         leaf: Leaf {
             native_command: NativeCommand::PeriodsShow,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "update",
+        about: "Apply a guarded intention card update",
+        leaf: Leaf {
+            native_command: NativeCommand::PeriodsUpdate,
             script_command: None,
         },
     },
@@ -857,11 +865,13 @@ Examples:
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
   bob periods list -p            Report period-note problems
-  bob periods show               Show this week's stats strip data
-  bob periods show 2026-Q4 -f json  Print the quarter report as JSON
   bob periods ensure -n -f json  Preview the writes as JSON
   bob periods migrate            Preview adopting the period-note tree
   bob periods migrate -a         Apply the adoption in one commit
+  bob periods show               Show this week's stats strip data
+  bob periods show yesterday     Show a daily note's fields
+  bob periods show 2026-Q4 -f json  Print the quarter report as JSON
+  bob periods update yesterday -i update.json  Apply an intention card update
 
 See docs/periods.md for the calendar, scaffolds, reports, and JSON.
 Run 'bob periods <command> --help' for more information on a command.";
@@ -1171,7 +1181,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: PERIODS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one. migrate adopts the vault (dry run by default; -a applies one commit).",
+                "Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one. show reads daily intention fields or period reports. update applies a field-fingerprinted card envelope under the vault lock. migrate adopts the vault (dry run by default; -a applies one commit).",
             ),
             after_help: PERIODS_AFTER_HELP,
             usage: "bob periods [COMMAND]",
@@ -2733,6 +2743,7 @@ mod tests {
             NativeCommand::PeriodsList,
             NativeCommand::PeriodsMigrate,
             NativeCommand::PeriodsShow,
+            NativeCommand::PeriodsUpdate,
             NativeCommand::Plan,
             NativeCommand::Plugins,
             NativeCommand::Pomodoro,

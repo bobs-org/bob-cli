@@ -11,7 +11,7 @@ Manage period notes: weeks, quarters, years, and all time
 ```text title="bob periods --help"
 Manage period notes: weeks, quarters, years, and all time
 
-Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one. migrate adopts the vault (dry run by default; -a applies one commit).
+Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one. show reads daily intention fields or period reports. update applies a field-fingerprinted card envelope under the vault lock. migrate adopts the vault (dry run by default; -a applies one commit).
 
 Usage: bob periods [COMMAND]
 
@@ -21,7 +21,8 @@ Commands:
   ensure   Create missing period notes one week ahead
   list     List period notes with review states (default)
   migrate  Adopt the period-note tree (dry run by default)
-  show     Show a period's live stats and child summaries
+  show     Show daily intention fields or a period report
+  update   Apply a guarded intention card update
 
 Options:
   -h, --help  Print help
@@ -35,11 +36,13 @@ Examples:
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
   bob periods list -p            Report period-note problems
-  bob periods show               Show this week's stats strip data
-  bob periods show 2026-Q4 -f json  Print the quarter report as JSON
   bob periods ensure -n -f json  Preview the writes as JSON
   bob periods migrate            Preview adopting the period-note tree
   bob periods migrate -a         Apply the adoption in one commit
+  bob periods show               Show this week's stats strip data
+  bob periods show yesterday     Show a daily note's fields
+  bob periods show 2026-Q4 -f json  Print the quarter report as JSON
+  bob periods update yesterday -i update.json  Apply an intention card update
 
 See docs/periods.md for the calendar, scaffolds, reports, and JSON.
 Run 'bob periods <command> --help' for more information on a command.
@@ -309,16 +312,16 @@ See docs/periods.md for the range, verify, and JSON.
 
 ## bob periods show
 
-Show a period's live stats and child summaries
+Show daily intention fields or a period report
 
 ```text title="bob periods show --help"
-Show the stats strip and parts-table data for a week, quarter, year, or all time. With no PERIOD, show the current ISO week. The command is read-only. See docs/periods.md for the JSON contract and aggregation rules.
+Show intentions, summary, reflection, and review state for a daily note, or the stats strip and parts-table data for a week, quarter, year, or all time. With no SUBJECT, show the current ISO week. Daily subjects accept YYYY-MM-DD, YYYYMMDD, a canonical daily note path, today, yesterday, and last-day. The command is read-only. See docs/periods.md for the JSON contract and aggregation rules.
 
-Usage: bob periods show [OPTIONS] [PERIOD]
+Usage: bob periods show [OPTIONS] [SUBJECT]
 
 Arguments:
-  [PERIOD]
-          Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); defaults to the current week
+  [SUBJECT]
+          Day, period id, canonical note path, today, yesterday, last-day, last-week, last-quarter, or last-year; defaults to the current week
 
 Options:
   -k, --clock <CLOCK>
@@ -338,6 +341,7 @@ Options:
 
 Examples:
   bob periods show
+  bob periods show yesterday -f json
   bob periods show 2026-W45 -f json
   bob periods show 2026-Q4 -k total
   bob periods show all_time -f json
@@ -354,6 +358,54 @@ Exit codes:
   2  usage, unknown period, config error, or non-Dataview task format
 
 See docs/periods.md for the calendar, JSON contract, and display rules.
+```
+
+## bob periods update
+
+Apply a guarded intention card update
+
+```text title="bob periods update --help"
+Apply the guarded JSON envelope written by the intention card to a daily, week, quarter, or year note. The envelope carries a field fingerprint; Bob re-reads under the vault lock and preserves unrelated body edits. Summary edits clear the agent draft stamps. Dry runs may omit expect to read current values and the fingerprint. See docs/periods.md for the envelope, operations, Undo, and JSON.
+
+Usage: bob periods update [OPTIONS] --input <FILE> <SUBJECT>
+
+Arguments:
+  <SUBJECT>
+          Day, period id, canonical note path, today, yesterday, last-day, or a relative period
+
+Options:
+  -n, --dry-run
+          Plan without writing files
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -i, --input <FILE>
+          Guarded JSON envelope file, or - for stdin
+
+Examples:
+  bob periods update yesterday -i update.json -f json
+  bob periods update 2026-11-19 -i - -n -f json < preview.json
+  bob periods update 2026-W47 -i undo.json
+
+Environment:
+  BOB_DIR                   Bob vault root; defaults to ~/bob
+  BOB_NOW                   Local datetime override that pins today
+  BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock
+  NO_COLOR                  Disable colored output
+
+Exit codes:
+  0  previewed or updated
+  1  vault I/O, lock busy, or stale fields
+  2  usage or invalid envelope/operation
+
+See docs/periods.md for operation shapes and JSON errors.
 ```
 
 ## Related

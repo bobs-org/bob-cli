@@ -219,6 +219,11 @@ fn frontmatter(
     };
     let front = &lines[1..close];
     let yaml = yaml_spans::yaml_text(front);
+    if yaml.lines().all(|line| {
+        line.trim().is_empty() || line.trim_start().starts_with('#')
+    }) {
+        return (FrontmatterState::Valid, Some(Mapping::new()), None);
+    }
     if let Some(key) = duplicate_root_key(front) {
         return (
             FrontmatterState::Malformed,

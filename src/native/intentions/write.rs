@@ -13,10 +13,6 @@ const OWNED: [&str; 5] = [
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Public patch type consumed by bob-cli-nh.2")
-)]
 pub(crate) enum Patch<T> {
     #[default]
     Untouched,
@@ -47,13 +43,6 @@ impl std::fmt::Display for WriteError {
 
 /// Apply an explicit field patch without filesystem effects. The original
 /// frontmatter and the complete proposed mapping are reparsed before success.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Pure intention writer consumed by bob-cli-nh.2"
-    )
-)]
 pub(crate) fn apply(
     original: &str,
     patch: &OwnedPatch,
@@ -308,6 +297,11 @@ fn parse_mapping(lines: &[Line]) -> Result<Mapping, WriteError> {
     yaml_spans::collect_key_spans(lines, 0)
         .map_err(|message| error("duplicate_key", message))?;
     let yaml = yaml_spans::yaml_text(lines);
+    if yaml.lines().all(|line| {
+        line.trim().is_empty() || line.trim_start().starts_with('#')
+    }) {
+        return Ok(Mapping::new());
+    }
     if yaml_spans::validate_flow_map_keys(&yaml)
         == Err(yaml_spans::FlowMapError::DuplicateKey)
     {
@@ -580,5 +574,29 @@ mod tests {
             apply(malformed, &OwnedPatch::default()).unwrap(),
             malformed
         );
+    }
+
+    #[test]
+    fn removing_every_owned_key_keeps_an_empty_frontmatter_block_valid() {
+        let original = "---\nintentions: [plan]\nsummary: note\nsummary_digest: sha256:1111111111111111\nsummary_drafted: 2026-11-19\nreflection: private\n---\nbody\n";
+        let output = apply(
+            original,
+            &OwnedPatch {
+                intentions: Patch::Set(Vec::new()),
+                summary: Patch::Unset,
+                summary_digest: Patch::Unset,
+                summary_drafted: Patch::Unset,
+                reflection: Patch::Unset,
+            },
+        )
+        .expect("empty frontmatter mapping remains valid");
+        assert_eq!(output, "---\n---\nbody\n");
+        let parsed = crate::native::intentions::read(
+            &output,
+            crate::native::intentions::NoteSubject::Day(
+                chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap(),
+            ),
+        );
+        assert!(parsed.diagnostics.is_empty());
     }
 }

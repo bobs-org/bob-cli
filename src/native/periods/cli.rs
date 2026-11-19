@@ -1,8 +1,7 @@
 //! `bob periods` CLI wiring: the Vault group for period notes.
 //!
-//! The group owns `ensure`, `list`, and `migrate`. Later phases add
-//! `show`, `brief`, and `draft`. Options stay alphabetical and every
-//! long option keeps a short alias.
+//! Options stay alphabetical and every public long option keeps a short
+//! alias.
 
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, Command as ClapCommand,
@@ -210,16 +209,14 @@ pub(crate) fn migrate_command() -> ClapCommand {
 
 pub(crate) fn show_command() -> ClapCommand {
     ClapCommand::new("bob periods show")
-        .about("Show a period's live stats and child summaries")
+        .about("Show daily intention fields or a period report")
         .long_about(
-            "Show the stats strip and parts-table data for a week, quarter, \
-             year, or all time. With no PERIOD, show the current ISO week. \
-             The command is read-only. See docs/periods.md for the JSON \
-             contract and aggregation rules.",
+            "Show intentions, summary, reflection, and review state for a daily note, or the stats strip and parts-table data for a week, quarter, year, or all time. With no SUBJECT, show the current ISO week. Daily subjects accept YYYY-MM-DD, YYYYMMDD, a canonical daily note path, today, yesterday, and last-day. The command is read-only. See docs/periods.md for the JSON contract and aggregation rules.",
         )
         .after_help(
             "Examples:\n  \
              bob periods show\n  \
+             bob periods show yesterday -f json\n  \
              bob periods show 2026-W45 -f json\n  \
              bob periods show 2026-Q4 -k total\n  \
              bob periods show all_time -f json\n\n\
@@ -238,8 +235,40 @@ pub(crate) fn show_command() -> ClapCommand {
         .arg(show_clock_arg())
         .arg(show_format_arg())
         .arg(help_arg())
-        .arg(Arg::new("period").value_name("PERIOD").help(
-            "Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); defaults to the current week",
+        .arg(Arg::new("period").value_name("SUBJECT").help(
+            "Day, period id, canonical note path, today, yesterday, last-day, last-week, last-quarter, or last-year; defaults to the current week",
+        ))
+}
+
+pub(crate) fn update_command() -> ClapCommand {
+    ClapCommand::new("bob periods update")
+        .about("Apply a guarded intention card update")
+        .long_about(
+            "Apply the guarded JSON envelope written by the intention card to a daily, week, quarter, or year note. The envelope carries a field fingerprint; Bob re-reads under the vault lock and preserves unrelated body edits. Summary edits clear the agent draft stamps. Dry runs may omit expect to read current values and the fingerprint. See docs/periods.md for the envelope, operations, Undo, and JSON.",
+        )
+        .after_help(
+            "Examples:\n  \
+             bob periods update yesterday -i update.json -f json\n  \
+             bob periods update 2026-11-19 -i - -n -f json < preview.json\n  \
+             bob periods update 2026-W47 -i undo.json\n\n\
+             Environment:\n  \
+             BOB_DIR                   Bob vault root; defaults to ~/bob\n  \
+             BOB_NOW                   Local datetime override that pins today\n  \
+             BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n  \
+             NO_COLOR                  Disable colored output\n\n\
+             Exit codes:\n  \
+             0  previewed or updated\n  \
+             1  vault I/O, lock busy, or stale fields\n  \
+             2  usage or invalid envelope/operation\n\n\
+             See docs/periods.md for operation shapes and JSON errors.",
+        )
+        .disable_help_flag(true)
+        .arg(dry_run_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(update_input_arg())
+        .arg(Arg::new("subject").value_name("SUBJECT").required(true).help(
+            "Day, period id, canonical note path, today, yesterday, last-day, or a relative period",
         ))
 }
 
@@ -335,6 +364,16 @@ fn draft_input_arg() -> Arg {
         .value_name("FILE")
         .value_parser(OsStringValueParser::new())
         .help("Draft text file, or - for stdin (required)")
+}
+
+fn update_input_arg() -> Arg {
+    Arg::new("input")
+        .long("input")
+        .short('i')
+        .value_name("FILE")
+        .required(true)
+        .value_parser(OsStringValueParser::new())
+        .help("Guarded JSON envelope file, or - for stdin")
 }
 
 fn refresh_instructions_arg() -> Arg {

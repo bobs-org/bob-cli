@@ -20,3 +20,4 @@ pub(crate) mod note;
 pub(crate) mod problems;
 pub(crate) mod report;
 pub(crate) mod scaffold;
+pub(crate) mod update;

@@ -56,7 +56,7 @@ impl ShowError {
         Self {
             code: "invalid_period".to_string(),
             message: message.into(),
-            hint: "Pass a period id such as 2026-W45, 2026-Q4, 2026, all, last-week, last-quarter, or last-year. See docs/periods.md."
+            hint: "Pass a day (YYYY-MM-DD, YYYYMMDD, today, yesterday, last-day), a canonical daily note path, or a period id such as 2026-W45, 2026-Q4, 2026, all, last-week, last-quarter, or last-year. See docs/periods.md."
                 .to_string(),
             exit_code: 2,
         }
@@ -216,16 +216,64 @@ fn execute(matches: &ArgMatches) -> Result<Value, ShowError> {
     let vault = bob_env::bob_dir();
     let now = bob_env::current_datetime();
     let today = now.date();
-    let id = matches
-        .get_one::<String>("period")
-        .map(|text| PeriodId::resolve(text, today).map_err(ShowError::usage))
-        .transpose()?
-        .unwrap_or_else(|| PeriodId::week_for_date(today));
     let clock = matches
         .get_one::<String>("clock")
         .and_then(|value| StatsClock::parse_cli(value))
         .unwrap_or_default();
+    let id = matches.get_one::<String>("period");
+    if let Some(text) = id {
+        let subject =
+            crate::native::intentions::NoteSubject::resolve(text, today)
+                .map_err(ShowError::usage)?;
+        if let crate::native::intentions::NoteSubject::Day(_) = subject.subject
+        {
+            return build_day_report(&vault, subject, now);
+        }
+        let crate::native::intentions::NoteSubject::Period(id) =
+            subject.subject
+        else {
+            unreachable!("day subjects returned above")
+        };
+        return build_report(&vault, config::config_path(), id, now, clock);
+    }
+    let id = PeriodId::week_for_date(today);
     build_report(&vault, config::config_path(), id, now, clock)
+}
+
+fn build_day_report(
+    vault: &Path,
+    subject: crate::native::intentions::subject::SubjectInfo,
+    now: NaiveDateTime,
+) -> Result<Value, ShowError> {
+    let contents =
+        crate::native::intentions::subject::read_existing(vault, &subject)
+            .map_err(|error| ShowError {
+                code: error.code.to_owned(),
+                message: error.message,
+                hint: error.hint,
+                exit_code: 1,
+            })?;
+    let fields = crate::native::intentions::read(&contents, subject.subject);
+    let review_state = crate::native::intentions::evaluate(&fields, false);
+    Ok(json!({
+        "ok": true,
+        "schema_version": SCHEMA_VERSION,
+        "today": date_text(now.date()),
+        "generated_at": now.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        "subject": {
+            "id": subject.id,
+            "kind": subject.kind,
+            "label": subject.label,
+            "path": subject.path.to_string_lossy(),
+            "state": subject.state,
+        },
+        "intentions": fields.intentions.value.clone().unwrap_or_default(),
+        "summary": fields.summary.value,
+        "summary_state": crate::native::intentions::state::summary_state(&fields).as_str(),
+        "reflection": fields.reflection.value,
+        "review_state": review_state.as_str(),
+        "warnings": fields.diagnostics.iter().map(|diagnostic| json!({"code":diagnostic.code,"message":diagnostic.message})).collect::<Vec<_>>(),
+    }))
 }
 
 pub(crate) fn build_report(
@@ -2016,6 +2064,9 @@ fn prior_window_label(periods: &[PeriodId]) -> String {
 }
 
 fn render_human(report: &Value, styler: &Styler) -> String {
+    if report["subject"].is_object() {
+        return render_day_human(report, styler);
+    }
     let mut lines = Vec::new();
     let period = &report["period"];
     let title = period["title"].as_str().unwrap_or("Period");
@@ -2153,6 +2204,59 @@ fn render_human(report: &Value, styler: &Styler) -> String {
             lines.push(format!("{mark} {label:<8} {worked:<10} {}", summary));
         }
     }
+    format!("{}\n", lines.join("\n"))
+}
+
+fn render_day_human(report: &Value, styler: &Styler) -> String {
+    let subject = &report["subject"];
+    let mut lines = vec![format!(
+        "{}  {}",
+        styler.bold(subject["label"].as_str().unwrap_or("Day")),
+        styler.dim(subject["state"].as_str().unwrap_or("")),
+    )];
+    lines.push(styler.dim(&format!(
+        "{} · {}",
+        subject["id"].as_str().unwrap_or(""),
+        subject["path"].as_str().unwrap_or(""),
+    )));
+    let intentions =
+        report["intentions"].as_array().cloned().unwrap_or_default();
+    if intentions.is_empty() {
+        lines.push(format!(
+            "{}  {}",
+            styler.cyan("Intentions"),
+            styler.dim("—")
+        ));
+    } else {
+        lines.push(styler.cyan("Intentions"));
+        for (index, value) in intentions.iter().enumerate() {
+            lines.push(format!(
+                "  {}  {}",
+                styler.dim(&format!("{}.", index + 1)),
+                value.as_str().unwrap_or(""),
+            ));
+        }
+    }
+    lines.push(format!(
+        "{}  {}",
+        styler.cyan("Summary"),
+        report["summary"].as_str().unwrap_or("—"),
+    ));
+    lines.push(format!(
+        "{}  {}",
+        styler.cyan("Summary state"),
+        report["summary_state"].as_str().unwrap_or("empty"),
+    ));
+    lines.push(format!(
+        "{}  {}",
+        styler.cyan("Reflection"),
+        report["reflection"].as_str().unwrap_or("—"),
+    ));
+    lines.push(format!(
+        "{}  {}",
+        styler.cyan("Review state"),
+        report["review_state"].as_str().unwrap_or("empty"),
+    ));
     format!("{}\n", lines.join("\n"))
 }
 

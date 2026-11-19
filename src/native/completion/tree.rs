@@ -162,6 +162,9 @@ impl NativeCommand {
             NativeCommand::PeriodsShow => {
                 crate::native::periods::cli::show_command()
             }
+            NativeCommand::PeriodsUpdate => {
+                crate::native::periods::cli::update_command()
+            }
             NativeCommand::Plan => crate::native::plan_budget::cli::build_cli(),
             NativeCommand::Plugins => crate::native::plugins::build_cli(),
             NativeCommand::Pomodoro => {
