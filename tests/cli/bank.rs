@@ -78,6 +78,12 @@ fn run(vault: &BankVault, args: &[&str]) -> Output {
     command.output().expect("run bob bank")
 }
 
+fn run_from(vault: &BankVault, cwd: &Path, args: &[&str]) -> Output {
+    let mut command = bank_command(vault);
+    command.current_dir(cwd).args(args);
+    command.output().expect("run bob bank from directory")
+}
+
 fn run_at(vault: &BankVault, now: &str, args: &[&str]) -> Output {
     let mut command = bank_command(vault);
     command.env("BOB_NOW", now);
@@ -1963,6 +1969,79 @@ fn delete_real_import_unlinks_batch_and_reports_json() {
 }
 
 #[test]
+fn relative_dot_globs_preview_and_delete_once_with_literal_overlap() {
+    let vault = syncable(HUB);
+    let downloads = vault._temp.path().join("home-dir/Downloads");
+    let first = write_download_qfx(
+        &vault,
+        "Checking.qfx",
+        &one_transaction_qfx("fit-dot-1", "DOT ROOT"),
+    );
+    let nested_dir = downloads.join("nested");
+    fs::create_dir_all(&nested_dir).expect("nested Downloads directory");
+    let nested = nested_dir.join("Savings.qfx");
+    fs::write(&nested, one_transaction_qfx("fit-dot-2", "DOT NESTED"))
+        .expect("nested export");
+
+    let operands = ["././*.qfx", "./nested/*.qfx", "./Checking.qfx"];
+    let mut preview_args =
+        vec!["import", "-D", "-d", "-a", "checking", "-f", "json"];
+    preview_args.extend(operands);
+    let preview = run_from(&vault, &downloads, &preview_args);
+    assert_success(&preview);
+    let preview_json = json(&preview);
+    assert_eq!(preview_json["dry_run"], true, "{preview_json}");
+    assert_eq!(
+        preview_json["files"].as_array().unwrap().len(),
+        2,
+        "{preview_json}"
+    );
+    assert_eq!(
+        preview_json["delete"]["files"].as_array().unwrap().len(),
+        2,
+        "{preview_json}"
+    );
+    assert!(
+        preview_json["delete"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["status"] == "would_delete"),
+        "{preview_json}"
+    );
+    assert!(
+        first.exists() && nested.exists(),
+        "preview keeps both downloads"
+    );
+
+    let mut apply_args = vec!["import", "-D", "-a", "checking", "-f", "json"];
+    apply_args.extend(operands);
+    let applied = run_from(&vault, &downloads, &apply_args);
+    assert_success(&applied);
+    let payload = json(&applied);
+    assert_eq!(payload["ok"], true, "{payload}");
+    assert!(!payload["commit"].is_null(), "{payload}");
+    assert_eq!(payload["files"].as_array().unwrap().len(), 2, "{payload}");
+    assert_eq!(
+        payload["delete"]["files"].as_array().unwrap().len(),
+        2,
+        "{payload}"
+    );
+    assert!(
+        payload["delete"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["status"] == "deleted"),
+        "{payload}"
+    );
+    assert!(
+        !first.exists() && !nested.exists(),
+        "apply deletes both unique sources"
+    );
+}
+
+#[test]
 fn delete_seen_replay_unlinks_the_redownload() {
     let vault = syncable(HUB);
     let body = one_transaction_qfx("fit-replay-1", "REPLAY STORE");
@@ -2079,7 +2158,16 @@ fn delete_refusals_keep_every_byte() {
         "truncated.qfx",
         "<OFX><STMTRS><BANKTRANLIST><DTSTART>20261101</DTSTART><DTEND>20261112</DTEND><STMTTRN><TRNAMT>-1.00</TRNAMT><FITID>x</FITID>",
     );
+    let valid = write_download_qfx(
+        &vault,
+        "valid.qfx",
+        &one_transaction_qfx("fit-valid-with-bad", "VALID WITH BAD"),
+    );
+    let bad_bytes = fs::read(&bad).expect("malformed bytes");
+    let valid_bytes = fs::read(&valid).expect("valid bytes");
     let head = stdout(&git_in(&vault.path, ["rev-parse", "HEAD"]));
+    let journal = vault.path.join(".bob/bank/bank-e2e.jsonl");
+    let journal_before = fs::read(&journal).ok();
     let refused = run(
         &vault,
         &[
@@ -2090,6 +2178,7 @@ fn delete_refusals_keep_every_byte() {
             "-f",
             "json",
             path_str(&bad),
+            path_str(&valid),
         ],
     );
     assert_eq!(
@@ -2099,13 +2188,23 @@ fn delete_refusals_keep_every_byte() {
         format_output(&refused)
     );
     let payload = json(&refused);
-    assert_eq!(payload["delete"]["files"][0]["status"], "kept", "{payload}");
     assert_eq!(
-        payload["delete"]["files"][0]["reason"], "import_failed",
+        payload["delete"]["files"].as_array().unwrap().len(),
+        2,
         "{payload}"
     );
-    assert!(bad.exists(), "malformed source is kept");
+    for file in payload["delete"]["files"].as_array().unwrap() {
+        assert_eq!(file["status"], "kept", "{payload}");
+        assert_eq!(file["reason"], "import_failed", "{payload}");
+    }
+    assert_eq!(fs::read(&bad).expect("malformed source remains"), bad_bytes);
+    assert_eq!(fs::read(&valid).expect("valid source remains"), valid_bytes);
     assert_eq!(stdout(&git_in(&vault.path, ["rev-parse", "HEAD"])), head);
+    assert_eq!(
+        fs::read(&journal).ok(),
+        journal_before,
+        "journal is unchanged"
+    );
 
     let missing = run(
         &vault,

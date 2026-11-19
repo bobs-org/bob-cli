@@ -43,7 +43,7 @@ pub(crate) fn expand_operands(
         } else if let Some(pattern) = path.to_str().filter(|text| {
             text.contains('*') || text.contains('?') || text.contains('[')
         }) {
-            let compiled = match Pattern::new(pattern) {
+            let _compiled = match Pattern::new(pattern) {
                 Ok(compiled) => compiled,
                 Err(_) => {
                     push_unique(path, &mut expanded, &mut seen);
@@ -52,7 +52,7 @@ pub(crate) fn expand_operands(
             };
             let paths = glob_with(pattern, options)
                 .expect("the pattern was already validated");
-            let mut matches = collect_files(paths, &compiled, options)?;
+            let mut matches = collect_files(paths)?;
 
             // glob 0.3 filters every dot-prefixed directory entry before it
             // considers the pattern component. Re-run explicit dot globs
@@ -64,9 +64,12 @@ pub(crate) fn expand_operands(
                 hidden_options.require_literal_leading_dot = false;
                 let hidden_paths = glob_with(pattern, hidden_options)
                     .expect("the pattern was already validated");
-                matches.extend(collect_files(
+                let normalized = strip_leading_dot_prefixes(pattern);
+                let hidden_pattern = Pattern::new(normalized)
+                    .expect("removing leading ./ cannot invalidate a pattern");
+                matches.extend(collect_explicit_hidden(
                     hidden_paths,
-                    &compiled,
+                    &hidden_pattern,
                     options,
                 )?);
             }
@@ -92,6 +95,26 @@ pub(crate) fn expand_operands(
 
 fn collect_files(
     paths: impl Iterator<Item = glob::GlobResult>,
+) -> Result<Vec<PathBuf>, OperandError> {
+    let mut matches = Vec::new();
+    for entry in paths {
+        match entry {
+            Ok(path) if path.is_file() => matches.push(path),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(OperandError::Unreadable {
+                    path: error.path().to_path_buf(),
+                    error: error.error().to_string(),
+                    kind: error.error().kind(),
+                });
+            }
+        }
+    }
+    Ok(matches)
+}
+
+fn collect_explicit_hidden(
+    paths: impl Iterator<Item = glob::GlobResult>,
     pattern: &Pattern,
     options: MatchOptions,
 ) -> Result<Vec<PathBuf>, OperandError> {
@@ -115,6 +138,13 @@ fn collect_files(
         }
     }
     Ok(matches)
+}
+
+fn strip_leading_dot_prefixes(mut pattern: &str) -> &str {
+    while let Some(rest) = pattern.strip_prefix("./") {
+        pattern = rest;
+    }
+    pattern
 }
 
 fn has_explicit_dot_glob_component(pattern: &str) -> bool {
@@ -275,6 +305,14 @@ mod tests {
         assert_eq!(
             names(&expand(&["~/Downloads/.*"]).unwrap()),
             [".hidden.qfx"]
+        );
+        assert_eq!(
+            strip_leading_dot_prefixes("././Downloads/.*.qfx"),
+            "Downloads/.*.qfx"
+        );
+        assert_eq!(
+            strip_leading_dot_prefixes("../Downloads/*.qfx"),
+            "../Downloads/*.qfx"
         );
     }
 

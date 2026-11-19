@@ -449,6 +449,8 @@ mod tests {
 
         #[cfg(unix)]
         {
+            use std::os::unix::ffi::OsStrExt;
+
             let link = temp.path().join("link.qfx");
             std::os::unix::fs::symlink(&regular, &link).expect("symlink");
             let error =
@@ -460,6 +462,16 @@ mod tests {
                 "{}",
                 error.message
             );
+
+            let fifo = temp.path().join("pipe.qfx");
+            let fifo_c = std::ffi::CString::new(fifo.as_os_str().as_bytes())
+                .expect("fifo path has no NUL");
+            assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+            let error =
+                check_delete_supported(std::slice::from_ref(&fifo), &vault)
+                    .expect_err("FIFO is refused");
+            assert_eq!(error.code, "bank_import_delete_unsupported");
+            assert!(error.message.contains("is not a regular file"));
         }
 
         let directory = temp.path().join("dir.qfx");
@@ -492,12 +504,15 @@ mod tests {
         fs::write(&changed, CSV).expect("changed");
         let locked = temp.path().join("locked.qfx");
         fs::write(&locked, CSV).expect("locked");
+        let later = temp.path().join("later.qfx");
+        fs::write(&later, CSV).expect("later");
 
         let sources = vec![
             prepared_with(gone.clone(), CSV.as_bytes()),
             prepared_with(same.clone(), CSV.as_bytes()),
             prepared_with(changed.clone(), CSV.as_bytes()),
             prepared_with(locked.clone(), CSV.as_bytes()),
+            prepared_with(later.clone(), CSV.as_bytes()),
         ];
         fs::write(&changed, "11/12/2026,-99.99,*,,\"OTHER\"\n")
             .expect("mutate");
@@ -517,8 +532,10 @@ mod tests {
         );
         assert_eq!(report.files[3].status, DeleteStatus::Kept);
         assert_eq!(report.files[3].reason, Some(DeleteReason::Io));
+        assert_eq!(report.files[4].status, DeleteStatus::Deleted);
         assert!(report.has_kept());
         assert!(!same.exists());
         assert!(locked.exists());
+        assert!(!later.exists(), "cleanup continues after a middle failure");
     }
 }
