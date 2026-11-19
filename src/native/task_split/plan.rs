@@ -251,7 +251,7 @@ pub(crate) fn plan_task_split(
         transformed_source[owner.line] =
             set_trailing_block_id(&transformed_source[owner.line], id);
     }
-    let mut generated = Vec::new();
+    let mut generated_blocks = Vec::new();
     let mut planned_tasks = Vec::new();
     let mut stubs = Vec::new();
     for candidate_index in &selected {
@@ -338,8 +338,9 @@ pub(crate) fn plan_task_split(
             anchor_reused: anchor.is_some(),
             child_lines: child_count,
         });
-        generated.push(task_line);
-        generated.extend(children);
+        let mut payload = task_line;
+        payload.push_str(&children.concat());
+        generated_blocks.push(payload);
     }
 
     let mut source_after = transformed_source.concat();
@@ -412,18 +413,17 @@ pub(crate) fn plan_task_split(
     // Fragments are body text, never standalone canonical notes.
     let mut fragment_link_count = 0;
     let mut fragment_dep_count = 0;
-    let mut repaired_generated = generated.clone();
-    if !destination_is_source && !moved_targets.is_empty() {
+    let mut repaired_generated = Vec::new();
+    if !destination_is_source {
         let source_target =
             vault_relative_link_target(&request.owner_path, "split source")
                 .map_err(|err| error("split_invalid_path", err.to_string()))?;
         let stayed_ids: BTreeSet<String> =
             live_block_ids(&source_after).into_iter().collect();
         let empty_id_map = BTreeMap::new();
-        repaired_generated.clear();
-        for fragment in &generated {
+        for payload in &generated_blocks {
             let repaired = repair_moved_fragment(
-                fragment,
+                payload,
                 &request.owner_path,
                 &source_target,
                 &note_index,
@@ -433,7 +433,14 @@ pub(crate) fn plan_task_split(
             );
             fragment_link_count += repaired.link_count;
             fragment_dep_count += repaired.dependency_count;
-            repaired_generated.push(repaired.contents);
+            repaired_generated.extend(
+                repaired.contents.split_inclusive('\n').map(str::to_owned),
+            );
+        }
+    } else {
+        for payload in &generated_blocks {
+            repaired_generated
+                .extend(payload.split_inclusive('\n').map(str::to_owned));
         }
     }
 

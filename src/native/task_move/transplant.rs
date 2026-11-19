@@ -15,7 +15,8 @@ use super::super::{
         MovedBlockTargets, ResolveMovedNote,
     },
     intentions::{
-        fields::canonical_subject, repair::rewrite_owned_moved_links,
+        fields::canonical_subject,
+        repair::{rewrite_owned_moved_links, RepairResult},
     },
     markdown,
     periods::note::carry_rewrite_digests,
@@ -424,9 +425,9 @@ pub(crate) struct OwnedRepairError {
 /// postimages. `originals` is the captured pre-write snapshot: digest
 /// eligibility always derives from it, so a staged mechanical edit cannot
 /// turn an edited or reflected note back into a draft. Paths in `skip`
-/// were already repaired before insertion and keep their planned bytes
-/// and counts. Owned-only rewrites join `repaired_files` so previews and
-/// counts include them.
+/// keep their planned link bytes and counts; final digest carry still runs
+/// on the complete postimage after insertion. Owned-only rewrites join the
+/// repair summary so previews and counts include them.
 pub(crate) fn repair_owned_postimages<R: ResolveMovedNote>(
     originals: &BTreeMap<PathBuf, String>,
     postimages: &mut BTreeMap<PathBuf, String>,
@@ -436,19 +437,19 @@ pub(crate) fn repair_owned_postimages<R: ResolveMovedNote>(
     skip: &[PathBuf],
 ) -> Result<(), OwnedRepairError> {
     for (path, original) in originals {
-        if skip.contains(path) {
-            continue;
-        }
         let current = postimages.get(path).unwrap_or(original);
-        let owned =
+        let owned = if skip.contains(path) {
+            RepairResult {
+                contents: current.clone(),
+                link_count: 0,
+            }
+        } else {
             rewrite_owned_moved_links(current, path, note_index, moved_targets)
                 .map_err(|error| OwnedRepairError {
                     path: path.clone(),
                     detail: error.to_string(),
-                })?;
-        if owned.contents == *current {
-            continue;
-        }
+                })?
+        };
         let subject = canonical_subject(&path.to_string_lossy());
         let carried = carry_rewrite_digests(original, &owned.contents, subject)
             .map_err(|error| OwnedRepairError {
@@ -461,11 +462,12 @@ pub(crate) fn repair_owned_postimages<R: ResolveMovedNote>(
         postimages.insert(path.clone(), carried);
         match repaired_files.iter_mut().find(|file| file.path == *path) {
             Some(file) => file.link_count += owned.link_count,
-            None => repaired_files.push(RepairedFile {
+            None if owned.link_count > 0 => repaired_files.push(RepairedFile {
                 path: path.clone(),
                 link_count: owned.link_count,
                 dependency_token_count: 0,
             }),
+            None => {}
         }
     }
     repaired_files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -506,10 +508,25 @@ fn fragment_hidden_line_indexes(logical: &[&str]) -> BTreeSet<usize> {
 fn hidden_markdown_indexes(logical: &[&str]) -> BTreeSet<usize> {
     let frontmatter_end = markdown::strictly_closed_frontmatter_end(logical);
     let scan_start = frontmatter_end.map_or(0, |end| end + 1);
-    let mut hidden = markdown::fenced_lines(logical, scan_start..logical.len());
+    let fenced = markdown::fenced_lines(logical, scan_start..logical.len());
+    let mut hidden = fenced.clone();
     if let Some(end) = frontmatter_end {
         hidden.extend(0..=end);
     }
+    let comment_input: Vec<&str> = logical
+        .iter()
+        .enumerate()
+        .map(
+            |(index, line)| {
+                if hidden.contains(&index) {
+                    ""
+                } else {
+                    *line
+                }
+            },
+        )
+        .collect();
+    hidden.extend(markdown::multiline_comment_lines(&comment_input));
     hidden
 }
 

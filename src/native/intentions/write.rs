@@ -377,18 +377,9 @@ pub(crate) fn apply_with_review(
             Desired::Untouched => unreachable!(),
         }
     }
-    let close = lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find_map(|(index, line)| {
-            (line.text.trim() == "---"
-                && line.text.trim_start_matches('\u{feff}').trim() == "---")
-                .then_some(index)
-        })
-        .ok_or_else(|| {
-            error("frontmatter_invalid", "closing delimiter was lost")
-        })?;
+    let close = closing_delimiter(&lines, open + 1).ok_or_else(|| {
+        error("frontmatter_invalid", "closing delimiter was lost")
+    })?;
     let now_spans =
         yaml_spans::collect_key_spans(&lines[open + 1..close], open + 1)
             .map_err(|message| error("duplicate_key", message))?;
@@ -482,17 +473,23 @@ fn split_document(
     {
         return Ok((lines, 0, 0, false));
     }
-    let Some(close) =
-        lines.iter().enumerate().skip(1).find_map(|(index, line)| {
-            (line.text.trim_end() == "---").then_some(index)
-        })
-    else {
+    let Some(close) = closing_delimiter(&lines, 1) else {
         return Err(error(
             "frontmatter_invalid",
             "cannot patch an unclosed frontmatter block",
         ));
     };
     Ok((lines, 0, close, true))
+}
+
+fn closing_delimiter(lines: &[Line], start: usize) -> Option<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(index, line)| {
+            (line.text.trim_end() == "---").then_some(index)
+        })
 }
 
 fn parse_mapping(lines: &[Line]) -> Result<Mapping, WriteError> {
@@ -801,5 +798,71 @@ mod tests {
             ),
         );
         assert!(parsed.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn apply_with_review_ignores_indented_delimiters_inside_reflection() {
+        let original = concat!(
+            "---\n",
+            "reflection: |-\n",
+            "  Keep the opening reflection.\n",
+            "  ---\n",
+            "  Keep the rest of the reflection.\n",
+            "custom: \"unchanged\"\n",
+            "---\n",
+            "Body stays exact.\n",
+        );
+        let summary = "First daily summary draft.";
+        let review_digest = "sha256:review-draft";
+        let output = apply_with_review(
+            original,
+            &OwnedPatch {
+                summary: Patch::Set(summary.to_owned()),
+                summary_digest: Patch::Set(crate::native::intentions::digest(
+                    summary,
+                )),
+                summary_drafted: Patch::Set("2026-11-19".to_owned()),
+                ..OwnedPatch::default()
+            },
+            &ReviewPatch {
+                review_digest: Patch::Set(review_digest.to_owned()),
+                review_drafted: Patch::Set("2026-11-19".to_owned()),
+            },
+        )
+        .expect("reflection's indented delimiter is still scalar text");
+
+        let (lines, open, close, had_frontmatter) =
+            split_document(&output).expect("output delimiters remain valid");
+        assert!(had_frontmatter);
+        let parsed = parse_mapping(&lines[open + 1..close])
+            .expect("the complete frontmatter remains valid YAML");
+        assert_eq!(
+            parsed.get(Value::String("summary".to_owned())),
+            Some(&Value::String(summary.to_owned()))
+        );
+        assert_eq!(
+            parsed.get(Value::String("reflection".to_owned())),
+            Some(&Value::String(
+                "Keep the opening reflection.\n---\nKeep the rest of the reflection."
+                    .to_owned()
+            ))
+        );
+        assert_eq!(
+            parsed.get(Value::String("custom".to_owned())),
+            Some(&Value::String("unchanged".to_owned()))
+        );
+        assert_eq!(
+            parsed.get(Value::String("summary_digest".to_owned())),
+            Some(&Value::String(crate::native::intentions::digest(summary)))
+        );
+        assert_eq!(
+            parsed.get(Value::String("review_digest".to_owned())),
+            Some(&Value::String(review_digest.to_owned()))
+        );
+        assert_eq!(
+            parsed.get(Value::String("review_drafted".to_owned())),
+            Some(&Value::String("2026-11-19".to_owned()))
+        );
+        assert!(output.ends_with("---\nBody stays exact.\n"));
     }
 }

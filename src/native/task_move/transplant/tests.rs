@@ -137,3 +137,255 @@ fn repairs_daily_note_links_and_returns_the_complete_transplant_summary() {
     assert_eq!(plan.repaired_files[0].path, daily);
     assert_eq!(plan.repaired_files[0].link_count, 1);
 }
+
+#[test]
+fn final_postimage_digest_carry_includes_review_only_and_split_changes() {
+    let week_only_review = PathBuf::from("2026/2026-W46.md");
+    let week_review_only_split = PathBuf::from("2026/2026-W47.md");
+    let week_both = PathBuf::from("2026/2026-W48.md");
+    let week_edited = PathBuf::from("2026/2026-W49.md");
+    let week_reflected = PathBuf::from("2026/2026-W50.md");
+    let target = "[[source#^moved]]";
+    let replacement = "[[destination#^moved]]";
+
+    let make_note = |summary: &str, review: &str| {
+        format!(
+            "---\nsummary: {summary:?}\nsummary_digest: {}\nreview_digest: {}\nsummary_drafted: 2026-11-19\n---\n# Week\n\n## Review\n\n{review}\n",
+            crate::native::intentions::digest(summary),
+            crate::native::periods::note::review_digest(review),
+        )
+    };
+    let only_review =
+        make_note("No summary link", &format!("Reviewed {target}."));
+    let review_only_split = make_note(
+        &format!("Summary remains {target}."),
+        &format!("Reviewed {target}."),
+    );
+    let both = make_note(
+        &format!("Summary {target}."),
+        &format!("Reviewed {target}."),
+    );
+    let edited_summary = format!("Edited summary {target}.");
+    let edited = format!(
+        "---\nsummary: {edited_summary:?}\nsummary_digest: sha256:eeeeeeeeeeeeeeee\nsummary_drafted: 2026-11-19\n---\n# Week\n"
+    );
+    let reflected_summary = format!("Reflected summary {target}.");
+    let reflected = format!(
+        "---\nsummary: {reflected_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\nreflection: Bryan wrote this.\n---\n# Week\n",
+        crate::native::intentions::digest(&reflected_summary),
+    );
+    let originals = BTreeMap::from([
+        (week_only_review.clone(), only_review.clone()),
+        (week_review_only_split.clone(), review_only_split.clone()),
+        (week_both.clone(), both.clone()),
+        (week_edited.clone(), edited.clone()),
+        (week_reflected.clone(), reflected.clone()),
+    ]);
+    let postimages = BTreeMap::from([
+        (
+            week_only_review.clone(),
+            only_review.replace(target, replacement),
+        ),
+        (
+            week_review_only_split.clone(),
+            review_only_split.replace(
+                &format!("Reviewed {target}."),
+                &format!("Reviewed {replacement}."),
+            ),
+        ),
+        (week_both.clone(), both.replace(target, replacement)),
+        (week_edited.clone(), edited.replace(target, replacement)),
+        (
+            week_reflected.clone(),
+            reflected.replace(target, replacement),
+        ),
+    ]);
+    let mut repaired_files = vec![
+        RepairedFile {
+            path: week_only_review.clone(),
+            link_count: 1,
+            dependency_token_count: 0,
+        },
+        RepairedFile {
+            path: week_review_only_split.clone(),
+            link_count: 1,
+            dependency_token_count: 0,
+        },
+        RepairedFile {
+            path: week_both.clone(),
+            link_count: 2,
+            dependency_token_count: 0,
+        },
+        RepairedFile {
+            path: week_edited.clone(),
+            link_count: 1,
+            dependency_token_count: 0,
+        },
+        RepairedFile {
+            path: week_reflected.clone(),
+            link_count: 1,
+            dependency_token_count: 0,
+        },
+    ];
+    let mut final_postimages = postimages;
+    repair_owned_postimages(
+        &originals,
+        &mut final_postimages,
+        &mut repaired_files,
+        &NoteIndex::from_paths(originals.keys().cloned()),
+        &MovedBlockTargets::new(),
+        std::slice::from_ref(&week_both),
+    )
+    .expect("all final drafts carry from captured original bytes");
+
+    let only_review_fields = crate::native::intentions::read(
+        &final_postimages[&week_only_review],
+        crate::native::intentions::NoteSubject::Period(
+            crate::native::periods::calendar::PeriodId::Week {
+                year: 2026,
+                week: 46,
+            },
+        ),
+    );
+    assert_eq!(
+        only_review_fields.review_digest.value.as_deref(),
+        Some(
+            crate::native::periods::note::review_digest(
+                "Reviewed [[destination#^moved]]."
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(
+        only_review_fields.summary_digest.value.as_deref(),
+        Some(crate::native::intentions::digest("No summary link").as_str())
+    );
+
+    let review_only_fields = crate::native::intentions::read(
+        &final_postimages[&week_review_only_split],
+        crate::native::intentions::NoteSubject::Period(
+            crate::native::periods::calendar::PeriodId::Week {
+                year: 2026,
+                week: 47,
+            },
+        ),
+    );
+    assert_eq!(
+        review_only_fields.review_digest.value.as_deref(),
+        Some(
+            crate::native::periods::note::review_digest(
+                "Reviewed [[destination#^moved]]."
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(
+        review_only_fields.summary_digest.value.as_deref(),
+        Some(
+            crate::native::intentions::digest(
+                "Summary remains [[source#^moved]]."
+            )
+            .as_str()
+        )
+    );
+
+    let both_fields = crate::native::intentions::read(
+        &final_postimages[&week_both],
+        crate::native::intentions::NoteSubject::Period(
+            crate::native::periods::calendar::PeriodId::Week {
+                year: 2026,
+                week: 48,
+            },
+        ),
+    );
+    assert_eq!(
+        both_fields.review_digest.value.as_deref(),
+        Some(
+            crate::native::periods::note::review_digest(
+                "Reviewed [[destination#^moved]]."
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(
+        both_fields.summary_digest.value.as_deref(),
+        Some(
+            crate::native::intentions::digest(
+                "Summary [[destination#^moved]]."
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(
+        crate::native::intentions::state::summary_state(&both_fields),
+        crate::native::intentions::state::SummaryState::Drafted,
+        "the final postimage keeps the complete weekly draft"
+    );
+    let edited_fields = crate::native::intentions::read(
+        &final_postimages[&week_edited],
+        crate::native::intentions::NoteSubject::Period(
+            crate::native::periods::calendar::PeriodId::Week {
+                year: 2026,
+                week: 49,
+            },
+        ),
+    );
+    assert_eq!(
+        edited_fields.summary_digest.value.as_deref(),
+        Some("sha256:eeeeeeeeeeeeeeee"),
+        "an edited summary never acquires a refreshed ownership digest"
+    );
+    let reflected_fields = crate::native::intentions::read(
+        &final_postimages[&week_reflected],
+        crate::native::intentions::NoteSubject::Period(
+            crate::native::periods::calendar::PeriodId::Week {
+                year: 2026,
+                week: 50,
+            },
+        ),
+    );
+    assert_eq!(
+        reflected_fields.summary_digest.value.as_deref(),
+        Some(crate::native::intentions::digest(&reflected_summary).as_str()),
+        "a reflected summary never acquires a refreshed ownership digest"
+    );
+    assert_eq!(
+        repaired_files
+            .iter()
+            .find(|file| file.path == week_only_review)
+            .unwrap()
+            .link_count,
+        1,
+        "a digest stamp is not counted as another rewritten link"
+    );
+    assert_eq!(
+        repaired_files
+            .iter()
+            .find(|file| file.path == week_both)
+            .unwrap()
+            .link_count,
+        2,
+        "post-insertion digest carry does not add another link count"
+    );
+
+    let unchanged_path = PathBuf::from("2026/2026-W51.md");
+    let unchanged = make_note(
+        "An unchanged summary",
+        "**Headline:** No movement\n\nNo changed links.",
+    );
+    let unchanged_originals =
+        BTreeMap::from([(unchanged_path.clone(), unchanged.clone())]);
+    let mut unchanged_postimages = BTreeMap::new();
+    let mut unchanged_repairs = Vec::new();
+    repair_owned_postimages(
+        &unchanged_originals,
+        &mut unchanged_postimages,
+        &mut unchanged_repairs,
+        &NoteIndex::from_paths([unchanged_path]),
+        &MovedBlockTargets::new(),
+        &[],
+    )
+    .expect("no-op postimage remains valid");
+    assert!(unchanged_postimages.is_empty());
+    assert!(unchanged_repairs.is_empty());
+}

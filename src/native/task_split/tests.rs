@@ -333,6 +333,82 @@ fn split_same_note_fabricates_no_retargets() {
     assert_eq!(plan.cursor_path, "notes.md");
 }
 
+#[test]
+fn split_minted_anchor_still_qualifies_pathless_stayed_anchor_links() {
+    let notes = [(
+        "2026/20261118.md",
+        concat!(
+            "- [ ] #task Big one ^owner\n",
+            "  - Note alpha\n",
+            "    - Detail [[#^stay]]\n",
+            "  - Stay put ^stay\n",
+        ),
+    )];
+    let plan =
+        split(&notes, "2026/20261118.md", 0, SplitSelection::Nth(vec![1]));
+    let destination = post(&plan, "inbox.md");
+    assert!(
+        destination.contains("[[2026/20261118#^stay]]"),
+        "{destination}"
+    );
+    assert_eq!(
+        plan.repaired_files
+            .iter()
+            .find(|file| file.path.as_path() == std::path::Path::new("inbox.md"))
+            .map(|file| file.link_count),
+        Some(1),
+        "link qualification is counted even without relocated anchors"
+    );
+    assert_eq!(
+        plan.tasks[0].line,
+        destination
+            .lines()
+            .position(|line| line.contains("#task Note alpha"))
+            .unwrap()
+            + 1
+    );
+    assert_eq!(plan.cursor_line, plan.tasks[0].line);
+}
+
+#[test]
+fn split_repairs_whole_payload_with_multiline_fence_and_comment_context() {
+    let fence = char::from(96).to_string().repeat(3);
+    let source = format!(
+        "- [ ] #task Big one ^owner\n  - Note alpha ^alpha\n    {fence}md\n    [[2026/20261118#^alpha]]\n    {fence}\n    <!--\n    [[2026/20261118#^alpha]]\n    -->\n    [[#^stay]]\n  - Stay put ^stay\n"
+    );
+    let notes = [("2026/20261118.md", source.as_str())];
+    let plan =
+        split(&notes, "2026/20261118.md", 0, SplitSelection::Nth(vec![1]));
+    let destination = post(&plan, "inbox.md");
+    assert!(
+        destination.contains("[[2026/20261118#^alpha]]"),
+        "fenced and commented references preserve their source text: {destination}"
+    );
+    assert!(
+        destination.contains("[[2026/20261118#^stay]]"),
+        "live pathless links to stayed source anchors are qualified: {destination}"
+    );
+    assert_eq!(
+        destination.matches("[[2026/20261118#^alpha]]").count(),
+        2,
+        "neither the fence nor multiline comment is rewritten"
+    );
+    assert_eq!(
+        plan.repaired_files
+            .iter()
+            .find(|file| file.path.as_path() == std::path::Path::new("inbox.md"))
+            .map(|file| file.link_count),
+        Some(1)
+    );
+    let landing = destination
+        .lines()
+        .position(|line| line.contains("#task Note alpha"))
+        .unwrap()
+        + 1;
+    assert_eq!(plan.tasks[0].line, landing);
+    assert_eq!(plan.cursor_line, landing);
+}
+
 fn parse_selection(value: &Value) -> SplitSelection {
     match value["kind"].as_str().unwrap() {
         "cursor" => SplitSelection::Cursor {

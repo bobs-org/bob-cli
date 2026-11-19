@@ -400,9 +400,13 @@ fn rewrite_text(
     // frontmatter. The generic raw pass leaves that block alone so it
     // cannot rewrite an unrelated property or apply the same replacement
     // twice; owned values go through the typed verified repair below.
-    let frontmatter_end =
-        canonical_frontmatter_end(current_file, &logical_lines);
-    let fence_start = frontmatter_end.map_or(0, |end| end + 1);
+    let frontmatter =
+        canonical_frontmatter_boundary(current_file, &logical_lines);
+    let fence_start = match frontmatter {
+        CanonicalFrontmatter::Closed(end) => end + 1,
+        CanonicalFrontmatter::Unclosed => logical_lines.len(),
+        CanonicalFrontmatter::NotCanonical | CanonicalFrontmatter::Absent => 0,
+    };
     let fenced = markdown::fenced_lines(
         &logical_lines,
         fence_start..logical_lines.len(),
@@ -413,9 +417,13 @@ fn rewrite_text(
 
     for (index, raw_line) in raw_lines.iter().enumerate() {
         let line = logical_lines[index];
-        if fenced.contains(&index)
-            || frontmatter_end.is_some_and(|end| index <= end)
-        {
+        let in_protected_frontmatter = match frontmatter {
+            CanonicalFrontmatter::Closed(end) => index <= end,
+            CanonicalFrontmatter::Unclosed => true,
+            CanonicalFrontmatter::NotCanonical
+            | CanonicalFrontmatter::Absent => false,
+        };
+        if fenced.contains(&index) || in_protected_frontmatter {
             output.push_str(raw_line);
             continue;
         }
@@ -458,25 +466,41 @@ fn rewrite_text(
     result
 }
 
-/// Strictly closed frontmatter end for a canonical daily or period note, or
-/// `None` when this file carries no intention-field semantics. An unclosed
-/// or absent block is not protected: the typed repair leaves invalid
-/// frontmatter byte-identical while the raw pass still repairs the body.
-fn canonical_frontmatter_end(
+/// The boundary distinguishes canonical notes with no opener from unclosed
+/// YAML. A missing block leaves the whole note available to the body pass;
+/// an unclosed opener conservatively protects through EOF. Closed invalid
+/// YAML protects only its block while repair can proceed in the body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalFrontmatter {
+    NotCanonical,
+    Absent,
+    Closed(usize),
+    Unclosed,
+}
+
+fn canonical_frontmatter_boundary(
     current_file: &Path,
     logical_lines: &[&str],
-) -> Option<usize> {
-    canonical_subject(&vault_path(current_file))?;
-    let first = logical_lines.first()?;
+) -> CanonicalFrontmatter {
+    if canonical_subject(&vault_path(current_file)).is_none() {
+        return CanonicalFrontmatter::NotCanonical;
+    }
+    let Some(first) = logical_lines.first() else {
+        return CanonicalFrontmatter::Absent;
+    };
     let opener = first.strip_prefix('\u{feff}').unwrap_or(first);
     if opener.trim_end() != "---" {
-        return None;
+        return CanonicalFrontmatter::Absent;
     }
-    logical_lines
+    let Some(end) = logical_lines
         .iter()
         .enumerate()
         .skip(1)
         .find_map(|(index, line)| (line.trim_end() == "---").then_some(index))
+    else {
+        return CanonicalFrontmatter::Unclosed;
+    };
+    CanonicalFrontmatter::Closed(end)
 }
 
 /// Route a canonical note's stored intention fields through the typed
@@ -494,7 +518,9 @@ fn rewrite_canonical_owned_fields(
     known_highlights: Option<&BTreeSet<String>>,
 ) -> Result<TextRewrite, String> {
     let logical: Vec<&str> = original.split('\n').collect();
-    let Some(end) = canonical_frontmatter_end(current_file, &logical) else {
+    let CanonicalFrontmatter::Closed(end) =
+        canonical_frontmatter_boundary(current_file, &logical)
+    else {
         return Ok(result);
     };
     let subject = canonical_subject(&vault_path(current_file))
@@ -1871,6 +1897,62 @@ mod tests {
         assert!(mixed_rewrite
             .contents
             .contains("summary: \"[[ref/blogs/new]]\"\n"));
+    }
+
+    #[test]
+    fn canonical_unclosed_frontmatter_is_protected_in_plans_and_memory_rewrites(
+    ) {
+        let moves = bundle("old", "new");
+        let unclosed = concat!(
+            "\u{feff}---\r\n",
+            "custom: \"[[ref/blogs/old]]\"\r\n",
+            "intentions: \"[[ref/blogs/old]]\"\r\n",
+            "Body [[ref/blogs/old]]\r\n",
+        );
+        let expected = concat!(
+            "\u{feff}---\r\n",
+            "custom: \"[[ref/blogs/old]]\"\r\n",
+            "intentions: \"[[ref/blogs/old]]\"\r\n",
+            "Body [[ref/blogs/old]]\r\n",
+        );
+
+        let direct = rewrite_contents(
+            unclosed,
+            &moves,
+            LinkSelector::All,
+            Path::new("2026/20261119.md"),
+        )
+        .expect("unclosed canonical note keeps its properties protected");
+        assert_eq!(direct, expected);
+
+        let temp = tempfile::tempdir().expect("vault");
+        fs::create_dir_all(temp.path().join("2026")).unwrap();
+        fs::create_dir_all(temp.path().join("ref/blogs")).unwrap();
+        fs::write(temp.path().join("2026/20261119.md"), unclosed).unwrap();
+        fs::write(temp.path().join("ref/blogs/old.md"), "# Old\n").unwrap();
+        let plan = plan_vault_links(temp.path(), &moves).unwrap();
+        assert!(plan.files.is_empty());
+        assert!(plan.files.is_empty());
+        assert_eq!(plan.rewritten, 0, "protected properties are not counted");
+
+        let body_only = rewrite_contents(
+            "Body [[ref/blogs/old]]\n",
+            &moves,
+            LinkSelector::All,
+            Path::new("2026/20261119.md"),
+        )
+        .expect("a canonical note without YAML still repairs body links");
+        assert_eq!(body_only, "Body [[ref/blogs/new]]\n");
+
+        let closed = rewrite_contents(
+            "---\nintentions: [\"[[ref/blogs/old]]\"]\ncustom: \"[[ref/blogs/old]]\"\n---\nBody.\n",
+            &moves,
+            LinkSelector::All,
+            Path::new("2026/20261119.md"),
+        )
+        .expect("closed canonical YAML uses typed repairs");
+        assert!(closed.contains("intentions:\n  - \"[[ref/blogs/new]]\"\n"));
+        assert!(closed.contains("custom: \"[[ref/blogs/old]]\"\n"));
     }
 
     #[test]
