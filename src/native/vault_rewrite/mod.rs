@@ -194,14 +194,28 @@ pub(crate) fn run<C>(
     }
 
     let mut ready = plan()?;
-    // A rewrite that touches a still-drafted period Review restamps its
-    // digest in the same write, so bob's own edits never read as Bryan's.
+    // Mechanical rewrites carry eligible Review and summary digests from the
+    // original note so bob's own edits never read as Bryan's.
     for file in &mut ready.files {
         if let Some(before) = file.before_contents.as_deref() {
-            file.after_contents = periods::note::carry_review_digest(
+            let subject = crate::native::intentions::fields::canonical_subject(
+                &file.path,
+            );
+            file.after_contents = periods::note::carry_rewrite_digests(
                 before,
                 &file.after_contents,
-            );
+                subject,
+            )
+            .map_err(|error| {
+                TxnFailure::new(
+                    error.code,
+                    format!(
+                        "could not carry draft digests in {}: {}",
+                        file.path, error.message
+                    ),
+                    Some("repair the note's frontmatter, then re-run the rewrite"),
+                )
+            })?;
         }
     }
     let touched_relative: BTreeSet<PathBuf> = ready

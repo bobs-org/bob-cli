@@ -419,6 +419,109 @@ Inline `[[work_old_done]]` stays.
 }
 
 #[test]
+fn archive_repairs_canonical_owned_fields_and_carries_draft_digests() {
+    let vault = bound_pair_fixture("bob-cli-archive-owned-intention-links");
+    let daily_summary = "Shipped [[work#^one]].";
+    let daily_intention = "Keep `[[work#^one]]` literal; close [[work#^one|the task]] and file ![[done/work_old_done#^old|the old archive]].";
+    write_file(
+        &vault.path().join("2026/20261118.md"),
+        &format!(
+            "---\ntype: \"[[day]]\"\nintentions:\n  - {daily_intention:?}\nsummary: {daily_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\ncustom: [[work#^one]] # untouched\nother: \"[dependsOn:: work__one]\" # not task metadata\n---\n\nBody stays byte-identical.\n",
+            crate::native::intentions::digest(daily_summary)
+        ),
+    );
+
+    write_file(
+        &vault.path().join("2026/20261117.md"),
+        "---\ntype: \"[[day]]\"\nreflection: |-\n  The old record ![[done/work_old_done#^old|still matters]].\n  ---\n  [[done/work_old_done#^old]]\n  ---\n  ```\n  [[done/work_old_done#^old]]\n  ```\n---\n",
+    );
+
+    let weekly_summary =
+        "Reviewed `[[work#^one]]` literally and [[work#^one]].";
+    let weekly_intention = "Finish [[work#^one|the archive work]].";
+    write_file(
+        &vault.path().join("2026/2026-W47.md"),
+        &format!(
+            "---\nintentions:\n  - {weekly_intention:?}\nsummary: {weekly_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\ncustom: preserve this key\n---\n\nWeekly body stays.\n",
+            crate::native::intentions::digest(weekly_summary)
+        ),
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("plan");
+    assert_eq!(plan.renames.len(), 1, "fixture exercises archive rename");
+    apply_archive(vault.path(), 1);
+    assert!(!vault.path().join("done/work_old_done.md").exists());
+
+    let daily_path = vault.path().join("2026/20261118.md");
+    let daily = fs::read_to_string(&daily_path).expect("daily note");
+    let day = crate::native::intentions::NoteSubject::Day(
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+    );
+    let daily_fields = crate::native::intentions::read(&daily, day);
+    assert_eq!(
+        daily_fields.intentions.value.as_ref().unwrap()[0],
+        "Keep `[[work#^one]]` literal; close [[done/work_done#^one|the task]] and file ![[done/work_done#^old|the old archive]]."
+    );
+    assert_eq!(
+        daily_fields.summary.value.as_deref(),
+        Some("Shipped [[done/work_done#^one]].")
+    );
+    assert_eq!(
+        crate::native::intentions::state::summary_state(&daily_fields),
+        crate::native::intentions::state::SummaryState::Drafted
+    );
+    assert_eq!(
+        daily_fields.summary_drafted.value.as_deref(),
+        Some("2026-11-19")
+    );
+    assert!(daily.contains("custom: [[work#^one]] # untouched\n"));
+    assert!(daily
+        .contains("other: \"[dependsOn:: work__one]\" # not task metadata\n"));
+    assert!(daily.ends_with("Body stays byte-identical.\n"));
+
+    let reflection = fs::read_to_string(vault.path().join("2026/20261117.md"))
+        .expect("reflection day");
+    let reflection_fields = crate::native::intentions::read(
+        &reflection,
+        crate::native::intentions::NoteSubject::Day(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 17).unwrap(),
+        ),
+    );
+    assert_eq!(
+        reflection_fields.reflection.value.as_deref(),
+        Some("The old record ![[done/work_done#^old|still matters]].\n---\n[[done/work_done#^old]]\n---\n```\n[[done/work_old_done#^old]]\n```")
+    );
+
+    let weekly_path = vault.path().join("2026/2026-W47.md");
+    let weekly = fs::read_to_string(&weekly_path).expect("weekly note");
+    let week = crate::native::intentions::NoteSubject::Period(
+        crate::native::periods::calendar::PeriodId::Week {
+            year: 2026,
+            week: 47,
+        },
+    );
+    let weekly_fields = crate::native::intentions::read(&weekly, week);
+    assert_eq!(
+        weekly_fields.intentions.value.as_ref().unwrap()[0],
+        "Finish [[done/work_done#^one|the archive work]]."
+    );
+    assert_eq!(
+        weekly_fields.summary.value.as_deref(),
+        Some("Reviewed `[[work#^one]]` literally and [[done/work_done#^one]].")
+    );
+    assert_eq!(
+        crate::native::intentions::state::evaluate(&weekly_fields, false),
+        crate::native::intentions::ReviewState::Drafted
+    );
+    assert_eq!(
+        weekly_fields.summary_drafted.value.as_deref(),
+        Some("2026-11-19")
+    );
+    assert!(weekly.contains("custom: preserve this key\n"));
+    assert!(weekly.ends_with("Weekly body stays.\n"));
+}
+
+#[test]
 fn ambiguous_basename_links_are_never_guessed() {
     let vault = bound_pair_fixture("bob-cli-archive-rename-ambiguous");
     // A second stem twin makes the bare target ambiguous.

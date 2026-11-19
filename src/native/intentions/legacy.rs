@@ -115,12 +115,11 @@ pub(crate) enum IntentionsKind {
 fn sections(contents: &str) -> BTreeMap<String, String> {
     let lines: Vec<&str> = contents.lines().collect();
     let mut index = 0;
-    if lines
-        .first()
-        .is_some_and(|line| line.trim_start_matches('\u{feff}').trim() == "---")
-    {
+    if lines.first().is_some_and(|line| {
+        line.trim_start_matches('\u{feff}').trim_end() == "---"
+    }) {
         index = 1;
-        while index < lines.len() && lines[index].trim() != "---" {
+        while index < lines.len() && lines[index].trim_end() != "---" {
             index += 1;
         }
         if index < lines.len() {

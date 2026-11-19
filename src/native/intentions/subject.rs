@@ -98,12 +98,10 @@ impl NoteSubject {
         Ok(period_info(id, today))
     }
 
-    /// Recognize only canonical note paths. A notebook whose basename looks
-    /// like a date is deliberately not accepted.
-    pub(crate) fn from_canonical_note(
-        path: &str,
-        today: NaiveDate,
-    ) -> Option<SubjectInfo> {
+    /// Return the subject encoded by a canonical vault-relative note path.
+    /// This variant does not need a clock because it does not expose period
+    /// state or resolve relative aliases.
+    pub(crate) fn canonical(path: &str) -> Option<NoteSubject> {
         let normalized = path.trim_start_matches("./").replace('\\', "/");
         let no_md = normalized.strip_suffix(".md").unwrap_or(&normalized);
         let components: Vec<_> = no_md.split('/').collect();
@@ -115,7 +113,7 @@ impl NoteSubject {
         {
             let date = parse_compact_date(components[1])?;
             if date.format("%Y").to_string() == components[0] {
-                return Some(day_info(date, today));
+                return Some(NoteSubject::Day(date));
             }
         }
         let candidate = match components.as_slice() {
@@ -137,7 +135,7 @@ impl NoteSubject {
         } else {
             format!("{normalized}.md")
         };
-        (requested == canonical).then(|| period_info(id, today))
+        (requested == canonical).then_some(NoteSubject::Period(id))
     }
 
     pub(crate) fn day_path(date: NaiveDate) -> PathBuf {
@@ -265,16 +263,10 @@ mod tests {
         assert!(NoteSubject::resolve("2026-02-30", today).is_err());
         assert!(NoteSubject::resolve("☃.md", today).is_err());
         assert_eq!(
-            NoteSubject::from_canonical_note("2026/20260101.md", today)
-                .unwrap()
-                .subject,
-            NoteSubject::Day(today)
+            NoteSubject::canonical("2026/20260101.md"),
+            Some(NoteSubject::Day(today))
         );
-        assert!(NoteSubject::from_canonical_note(
-            "notebooks/20260101.md",
-            today
-        )
-        .is_none());
+        assert!(NoteSubject::canonical("notebooks/20260101.md").is_none());
     }
 
     #[test]

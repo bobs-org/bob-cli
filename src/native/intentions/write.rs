@@ -1,15 +1,18 @@
-//! Pure, verified line-span YAML edits for the five intention-owned keys.
+//! Pure, verified line-span YAML edits for intention fields and digest stamps.
 
 use serde_yaml::{Mapping, Value};
 
 use crate::native::yaml_spans::{self, Line};
 
-const OWNED: [&str; 5] = [
+const OWNED: [&str; 6] = [
     "intentions",
     "summary",
     "summary_digest",
     "summary_drafted",
     "reflection",
+    // The existing period Review digest stays a separate behavior, but uses
+    // the same verified span writer when a mechanical rewrite carries it.
+    "review_digest",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -27,6 +30,7 @@ pub(crate) struct OwnedPatch {
     pub(crate) summary_digest: Patch<String>,
     pub(crate) summary_drafted: Patch<String>,
     pub(crate) reflection: Patch<String>,
+    pub(crate) review_digest: Patch<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,9 +187,8 @@ pub(crate) fn apply(
         .enumerate()
         .skip(1)
         .find_map(|(index, line)| {
-            (line.text.trim() == "---"
-                && line.text.trim_start_matches('\u{feff}').trim() == "---")
-                .then_some(index)
+            let without_bom = line.text.trim_start_matches('\u{feff}');
+            (without_bom.trim_end() == "---").then_some(index)
         })
         .ok_or_else(|| {
             error("frontmatter_invalid", "closing delimiter was lost")
@@ -244,6 +247,7 @@ fn patch_values(patch: &OwnedPatch) -> Vec<(&'static str, Desired)> {
         ("summary_digest", desired_text(&patch.summary_digest)),
         ("summary_drafted", desired_text(&patch.summary_drafted)),
         ("reflection", desired_text(&patch.reflection)),
+        ("review_digest", desired_text(&patch.review_digest)),
     ]
 }
 
@@ -262,6 +266,7 @@ fn is_noop(patch: &OwnedPatch) -> bool {
         && matches!(patch.summary_digest, Patch::Untouched)
         && matches!(patch.summary_drafted, Patch::Untouched)
         && matches!(patch.reflection, Patch::Untouched)
+        && matches!(patch.review_digest, Patch::Untouched)
 }
 
 fn split_document(
@@ -282,7 +287,7 @@ fn split_document(
     }
     let Some(close) =
         lines.iter().enumerate().skip(1).find_map(|(index, line)| {
-            (line.text.trim() == "---").then_some(index)
+            (line.text.trim_end() == "---").then_some(index)
         })
     else {
         return Err(error(
@@ -505,7 +510,7 @@ mod tests {
             apply(
                 original,
                 &OwnedPatch {
-                    intentions: Patch::Unset,
+                    intentions: Patch::Set(Vec::new()),
                     ..OwnedPatch::default()
                 }
             )
@@ -542,7 +547,7 @@ mod tests {
         let original = "---\nsummary: old\nsummary_digest: sha256:0000000000000000\nreflection: old meaning\n---\nbody\n";
         let patch = OwnedPatch {
             summary: Patch::Set(String::new()),
-            summary_digest: Patch::Unset,
+            summary_digest: Patch::Set(String::new()),
             reflection: Patch::Set(
                 "  keep leading space\ntrailing\t".to_owned(),
             ),
@@ -578,7 +583,7 @@ mod tests {
 
     #[test]
     fn removing_every_owned_key_keeps_an_empty_frontmatter_block_valid() {
-        let original = "---\nintentions: [plan]\nsummary: note\nsummary_digest: sha256:1111111111111111\nsummary_drafted: 2026-11-19\nreflection: private\n---\nbody\n";
+        let original = "---\nintentions: [plan]\nsummary: note\nsummary_digest: sha256:1111111111111111\nsummary_drafted: 2026-11-19\nreflection: private\nreview_digest: sha256:2222222222222222\n---\nbody\n";
         let output = apply(
             original,
             &OwnedPatch {
@@ -587,6 +592,7 @@ mod tests {
                 summary_digest: Patch::Unset,
                 summary_drafted: Patch::Unset,
                 reflection: Patch::Unset,
+                review_digest: Patch::Unset,
             },
         )
         .expect("empty frontmatter mapping remains valid");

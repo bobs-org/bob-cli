@@ -8,7 +8,13 @@ use std::collections::BTreeMap;
 
 use super::calendar::PeriodId;
 use crate::native::daily_headline::ends_headline_paragraph;
-use crate::native::intentions::{self, NoteSubject};
+use crate::native::intentions::{
+    self,
+    fields::{FieldProvenance, FrontmatterState},
+    state,
+    write::{self, OwnedPatch, Patch, WriteError},
+    NoteSubject,
+};
 
 pub(crate) use crate::native::intentions::ReviewState;
 
@@ -75,63 +81,113 @@ pub(crate) fn review_digest(review_body: &str) -> String {
 /// the only automatic sign that Bryan corrected a draft, and it also
 /// blocks redrafting without `-F`. Every other note, and every note
 /// whose Review is unchanged or not `drafted`, returns `after` as is.
-pub(crate) fn carry_review_digest(before: &str, after: &str) -> String {
-    // Cheap pre-filter: only period notes stamped by `draft` qualify.
-    if before == after || !before.contains("review_digest:") {
-        return after.to_string();
+pub(crate) fn carry_review_digest(
+    before: &str,
+    after: &str,
+) -> Result<String, WriteError> {
+    if before == after {
+        return Ok(after.to_owned());
     }
-    if parse(before).review_state != ReviewState::Drafted {
-        return after.to_string();
+    let subject = NoteSubject::Period(PeriodId::Week {
+        year: 1970,
+        week: 1,
+    });
+    let before_fields = intentions::read(before, subject);
+    let review_before = before_fields.review_body.as_str();
+    let before_digest = &before_fields.review_digest;
+    if before_fields.frontmatter_state != FrontmatterState::Valid
+        || !before_digest.present
+        || !before_digest.valid
+        || before_digest.value.as_deref() != Some(&review_digest(review_before))
+        || state::evaluate(&before_fields, !review_before.trim().is_empty())
+            != ReviewState::Drafted
+    {
+        return Ok(after.to_owned());
     }
-    let parsed_after = parse(after);
-    if parsed_after.review_state != ReviewState::Edited {
-        return after.to_string();
+    let after_fields = intentions::read(after, subject);
+    if after_fields.frontmatter_state != FrontmatterState::Valid
+        || review_before == after_fields.review_body
+        || !after_fields.review_digest.present
+        || !after_fields.review_digest.valid
+        || after_fields.review_digest.value != before_digest.value
+    {
+        return Ok(after.to_owned());
     }
-    let review = parsed_after
-        .sections
-        .get("Review")
-        .cloned()
-        .unwrap_or_default();
-    let digest = review_digest(&review);
-    let mut lines = after.split_inclusive('\n');
-    let mut out = String::with_capacity(after.len());
-    let Some(first) = lines.next() else {
-        return after.to_string();
+    write::apply(
+        after,
+        &OwnedPatch {
+            review_digest: Patch::Set(review_digest(&after_fields.review_body)),
+            ..OwnedPatch::default()
+        },
+    )
+}
+
+/// Carry both agent digests through a mechanical rewrite. Eligibility is
+/// always read from `before`; staged edits cannot turn an edited or reflected
+/// note back into an owned draft.
+pub(crate) fn carry_rewrite_digests(
+    before: &str,
+    after: &str,
+    subject: Option<NoteSubject>,
+) -> Result<String, WriteError> {
+    let after_review = carry_review_digest(before, after)?;
+    let Some(subject) = subject else {
+        return Ok(after_review);
     };
-    if first.trim() != "---" {
-        return after.to_string();
+    carry_summary_digest(before, &after_review, subject)
+}
+
+fn carry_summary_digest(
+    before: &str,
+    after: &str,
+    subject: NoteSubject,
+) -> Result<String, WriteError> {
+    if before == after
+        || matches!(subject, NoteSubject::Period(PeriodId::AllTime))
+    {
+        return Ok(after.to_owned());
     }
-    out.push_str(first);
-    let mut stamped = false;
-    for line in lines.by_ref() {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            out.push_str(line);
-            break;
-        }
-        if !stamped
-            && line
-                .split_once(':')
-                .is_some_and(|(key, _)| key.trim() == "review_digest")
-        {
-            let ending = if line.ends_with("\r\n") {
-                "\r\n"
-            } else if line.ends_with('\n') {
-                "\n"
-            } else {
-                ""
-            };
-            out.push_str(&format!("review_digest: {digest}{ending}"));
-            stamped = true;
-            continue;
-        }
-        out.push_str(line);
+    let before_fields = intentions::read(before, subject);
+    let Some(summary_before) = before_fields.summary.value.as_deref() else {
+        return Ok(after.to_owned());
+    };
+    if before_fields.frontmatter_state != FrontmatterState::Valid
+        || before_fields.summary.provenance != FieldProvenance::Frontmatter
+        || !before_fields.summary.valid
+        || !before_fields.summary_digest.present
+        || !before_fields.summary_digest.valid
+        || before_fields.summary_digest.value.as_deref()
+            != Some(&state::digest(summary_before))
+        || state::evaluate(
+            &before_fields,
+            matches!(subject, NoteSubject::Period(_))
+                && !before_fields.review_body.trim().is_empty(),
+        ) != ReviewState::Drafted
+    {
+        return Ok(after.to_owned());
     }
-    if !stamped {
-        return after.to_string();
+
+    let after_fields = intentions::read(after, subject);
+    let Some(summary_after) = after_fields.summary.value.as_deref() else {
+        return Ok(after.to_owned());
+    };
+    if after_fields.frontmatter_state != FrontmatterState::Valid
+        || after_fields.summary.provenance != FieldProvenance::Frontmatter
+        || !after_fields.summary.valid
+        || summary_before == summary_after
+        || after_fields.summary_digest.value
+            != before_fields.summary_digest.value
+    {
+        return Ok(after.to_owned());
     }
-    out.extend(lines);
-    out
+
+    write::apply(
+        after,
+        &OwnedPatch {
+            summary_digest: Patch::Set(state::digest(summary_after)),
+            ..OwnedPatch::default()
+        },
+    )
 }
 
 /// The Headline: the whole paragraph that opens with the first
@@ -507,7 +563,7 @@ mod tests {
         // An archive moves the link to `done/`: still drafted afterwards.
         let after = before.replace("[[bob#^decay", "[[done/bob_done#^decay");
         assert_eq!(parse(&after).review_state, ReviewState::Edited);
-        let carried = carry_review_digest(&before, &after);
+        let carried = carry_review_digest(&before, &after).unwrap();
         assert_eq!(parse(&carried).review_state, ReviewState::Drafted);
         assert!(carried.contains("[[done/bob_done#^decay|decay]]"));
         assert_eq!(
@@ -518,14 +574,178 @@ mod tests {
 
         // An edited Review stays edited; other notes pass through.
         let edited = after.clone();
-        assert_eq!(carry_review_digest(&edited, &edited), edited);
+        assert_eq!(carry_review_digest(&edited, &edited).unwrap(), edited);
         let moved_edit = edited.replace("A calm", "A busy");
-        assert_eq!(carry_review_digest(&edited, &moved_edit), moved_edit);
+        assert_eq!(
+            carry_review_digest(&edited, &moved_edit).unwrap(),
+            moved_edit
+        );
         let plain = "# Note\n\n[[bob#^decay]]\n";
         assert_eq!(
             carry_review_digest(plain, "# Note\n\n[[done/bob_done#^decay]]\n"),
-            "# Note\n\n[[done/bob_done#^decay]]\n"
+            Ok("# Note\n\n[[done/bob_done#^decay]]\n".to_owned())
         );
+    }
+
+    #[test]
+    fn canonical_summary_carry_uses_original_provenance_and_verified_writer() {
+        let day = NoteSubject::Day(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+        );
+        let summary = "Shipped [[work#^block]].";
+        let before = format!(
+            "---\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\ncustom: keep # exact\n---\n# 2026-11-18\n",
+            intentions::digest(summary)
+        );
+        let after = before.replace("[[work#^block]]", "[[done/work#^block]]");
+        let carried =
+            carry_rewrite_digests(&before, &after, Some(day)).unwrap();
+        let fields = intentions::read(&carried, day);
+        assert_eq!(
+            fields.summary_digest.value.as_deref(),
+            Some(intentions::digest("Shipped [[done/work#^block]].").as_str())
+        );
+        assert_eq!(fields.summary_drafted.value.as_deref(), Some("2026-11-19"));
+        assert!(carried.contains("custom: keep # exact\n"));
+        assert_eq!(
+            state::summary_state(&fields),
+            crate::native::intentions::state::SummaryState::Drafted
+        );
+
+        let period = NoteSubject::Period(PeriodId::Week {
+            year: 2026,
+            week: 47,
+        });
+        let summary = "Shipped [[work#^block]].";
+        let review = "**Headline:** A useful week\n\n[[work#^block]] shipped.";
+        let before = format!(
+            "---\nsummary: {summary:?}\nsummary_digest: {}\nreview_digest: {}\nsummary_drafted: 2026-11-19\n---\n# 2026-W47\n\n## Review\n\n{review}\n",
+            intentions::digest(summary),
+            review_digest(review)
+        );
+        let after = before.replace("[[work#^block]]", "[[done/work#^block]]");
+        let carried =
+            carry_rewrite_digests(&before, &after, Some(period)).unwrap();
+        let fields = intentions::read(&carried, period);
+        assert_eq!(
+            fields.summary_digest.value.as_deref(),
+            Some(intentions::digest("Shipped [[done/work#^block]].").as_str())
+        );
+        assert_eq!(
+            fields.review_digest.value.as_deref(),
+            Some(review_digest(
+                "**Headline:** A useful week\n\n[[done/work#^block]] shipped."
+            )
+            .as_str())
+        );
+        assert_eq!(
+            state::evaluate(&fields, true),
+            ReviewState::Drafted,
+            "both agent parts stay drafted after one transaction"
+        );
+    }
+
+    #[test]
+    fn summary_carry_skips_edited_reflected_legacy_and_unchanged_parts() {
+        let day = NoteSubject::Day(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+        );
+        let summary = "Shipped [[work#^block]].";
+        let drafted = format!(
+            "---\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\n---\n",
+            intentions::digest(summary)
+        );
+        let edited = drafted.replace(
+            "summary_digest: ",
+            "summary_digest: sha256:0000000000000000 # was ",
+        );
+        let edited_after =
+            edited.replace("[[work#^block]]", "[[done/work#^block]]");
+        assert_eq!(
+            carry_rewrite_digests(&edited, &edited_after, Some(day)).unwrap(),
+            edited_after
+        );
+
+        let reflected =
+            drafted.replace("---\n", "reflection: Meaningful.\n---\n");
+        let reflected_after =
+            reflected.replace("[[work#^block]]", "[[done/work#^block]]");
+        assert_eq!(
+            carry_rewrite_digests(&reflected, &reflected_after, Some(day))
+                .unwrap(),
+            reflected_after
+        );
+
+        let period = NoteSubject::Period(PeriodId::Week {
+            year: 2026,
+            week: 47,
+        });
+        let legacy_review = format!(
+            "---\nreview_digest: {}\n---\n# 2026-W47\n\n## Review\n\n**Headline:** A useful week\n\n[[work#^block]] shipped.\n",
+            review_digest("**Headline:** A useful week\n\n[[work#^block]] shipped.\n")
+        );
+        let legacy_after =
+            legacy_review.replace("[[work#^block]]", "[[done/work#^block]]");
+        let carried =
+            carry_rewrite_digests(&legacy_review, &legacy_after, Some(period))
+                .unwrap();
+        assert_eq!(
+            intentions::read(&carried, period).summary.provenance,
+            FieldProvenance::LegacyReview
+        );
+        assert_eq!(
+            parse_for_period(
+                &carried,
+                match period {
+                    NoteSubject::Period(id) => id,
+                    _ => unreachable!(),
+                }
+            )
+            .review_state,
+            ReviewState::Drafted
+        );
+
+        let all_time = NoteSubject::Period(PeriodId::AllTime);
+        let all_time_review = "[[work#^block]] remains recorded.";
+        let all_time_before = format!(
+            "---\nreview_digest: {}\n---\n## Review\n\n{all_time_review}\n",
+            review_digest(all_time_review)
+        );
+        let all_time_after =
+            all_time_before.replace("[[work#^block]]", "[[done/work#^block]]");
+        let all_time_carried = carry_rewrite_digests(
+            &all_time_before,
+            &all_time_after,
+            Some(all_time),
+        )
+        .unwrap();
+        assert!(all_time_carried.contains(&review_digest(
+            "[[done/work#^block]] remains recorded.\n"
+        )));
+        assert!(!all_time_carried.contains("summary_digest:"));
+        assert_eq!(
+            carry_rewrite_digests(&drafted, &drafted, Some(day)).unwrap(),
+            drafted,
+            "unchanged parts retain exact bytes"
+        );
+    }
+
+    #[test]
+    fn quoted_review_digest_keys_are_carried_without_touching_other_yaml() {
+        let review = "**Headline:** A useful week\n\n[[work#^block]] shipped.";
+        let before = format!(
+            "---\n\"review_digest\": {}\ncustom: keep\n---\n# 2026-W47\n\n## Review\n\n{review}\n",
+            review_digest(review)
+        );
+        let after = before.replace("[[work#^block]]", "[[done/work#^block]]");
+        let carried = carry_review_digest(&before, &after).unwrap();
+        assert!(carried.contains(&format!(
+            "\"review_digest\": {}\n",
+            review_digest(
+                "**Headline:** A useful week\n\n[[done/work#^block]] shipped."
+            )
+        )));
+        assert!(carried.contains("custom: keep\n"));
     }
 
     #[test]

@@ -208,7 +208,7 @@ fn frontmatter(
     }
     let Some(close) =
         lines.iter().enumerate().skip(1).find_map(|(index, line)| {
-            (line.text.trim() == "---").then_some(index)
+            (line.text.trim_end() == "---").then_some(index)
         })
     else {
         return (
@@ -426,13 +426,8 @@ fn read_date_stamp(
 
 /// Canonical subject recognition used by adapters that already have the
 /// vault-relative path. Arbitrary date-like basenames are not enough.
-#[allow(dead_code)]
-pub(crate) fn canonical_subject(
-    path: &str,
-    today: NaiveDate,
-) -> Option<NoteSubject> {
-    super::subject::NoteSubject::from_canonical_note(path, today)
-        .map(|info| info.subject)
+pub(crate) fn canonical_subject(path: &str) -> Option<NoteSubject> {
+    super::subject::NoteSubject::canonical(path)
 }
 
 #[cfg(test)]

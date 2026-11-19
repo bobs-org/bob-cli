@@ -201,11 +201,13 @@ pub(super) fn apply_link_repairs_to_plan(
                 &relative_path,
                 &pre_rename_index,
                 &rename_map,
+                true,
             );
             repair.contents = renamed.contents;
             repair.link_count += renamed.link_count;
-            let metadata = repair_dependency_metadata(
+            let metadata = repair_dependency_metadata_for_note(
                 &repair.contents,
+                &relative_path,
                 &rename_dep_targets,
             );
             repair.contents = metadata.contents;
@@ -230,14 +232,76 @@ pub(super) fn apply_link_repairs_to_plan(
             repair.contents = pathless.contents;
             repair.link_count += pathless.link_count;
         }
-        if repair.link_count > 0 || repair.dependency_metadata_count > 0 {
-            // Moving a link to `done/` inside a still-drafted period
-            // Review restamps its digest, so the archive never reads as
-            // Bryan's edit.
-            let repaired = crate::native::periods::note::carry_review_digest(
-                &contents,
+        if let Some(subject) =
+            crate::native::intentions::fields::canonical_subject(
+                &relative_path.to_string_lossy(),
+            )
+        {
+            let owned = crate::native::intentions::repair::rewrite_owned_links(
                 &repair.contents,
+                subject,
+                |text| {
+                    // Decoded YAML values are Markdown here. Reuse the same
+                    // moved-block and rename resolvers and their code/comment
+                    // exclusions without reparsing them as a whole note.
+                    let wiki = repair_wiki_links(
+                        text,
+                        &relative_path,
+                        &note_index,
+                        &moved_targets,
+                        true,
+                        false,
+                    );
+                    let markdown = repair_markdown_links(
+                        &wiki.contents,
+                        &relative_path,
+                        &note_index,
+                        &moved_targets,
+                        true,
+                        false,
+                    );
+                    let renamed = repair_rename_links(
+                        &markdown.contents,
+                        &relative_path,
+                        &pre_rename_index,
+                        &rename_map,
+                        false,
+                    );
+                    (
+                        renamed.contents,
+                        wiki.link_count
+                            + markdown.link_count
+                            + renamed.link_count,
+                    )
+                },
+            )
+            .map_err(|error| {
+                io::Error::other(format!(
+                    "could not verify owned link repair in {}: {error}",
+                    relative_path.display()
+                ))
+            })?;
+            repair.contents = owned.contents;
+            repair.link_count += owned.link_count;
+        }
+        if repair.link_count > 0 || repair.dependency_metadata_count > 0 {
+            // Eligibility comes from the captured pre-write note even when
+            // this same operation already staged task/archive edits.
+            let before = captured.get(&relative_path).unwrap_or(&contents);
+            let subject = crate::native::intentions::fields::canonical_subject(
+                &relative_path.to_string_lossy(),
             );
+            let repaired = crate::native::periods::note::carry_rewrite_digests(
+                before,
+                &repair.contents,
+                subject,
+            )
+            .map_err(|error| {
+                io::Error::other(format!(
+                    "could not carry draft digests in {}: {error}",
+                    relative_path.display()
+                ))
+            })?;
             planned_contents.insert(relative_path.clone(), repaired);
             link_repair_counts.insert(
                 relative_path,
@@ -385,6 +449,7 @@ fn repair_rename_links(
     current_path: &Path,
     note_index: &NoteIndex,
     rename_map: &BTreeMap<PathBuf, PathBuf>,
+    frontmatter_is_note: bool,
 ) -> RenameLinkRepair {
     if rename_map.is_empty() {
         return RenameLinkRepair {
@@ -397,12 +462,14 @@ fn repair_rename_links(
         current_path,
         note_index,
         rename_map,
+        frontmatter_is_note,
     );
     let markdown = repair_rename_markdown_links(
         &wiki.contents,
         current_path,
         note_index,
         rename_map,
+        frontmatter_is_note,
     );
     RenameLinkRepair {
         contents: markdown.contents,
@@ -410,9 +477,40 @@ fn repair_rename_links(
     }
 }
 
-fn rename_skip_lines(contents: &str) -> BTreeSet<usize> {
+fn rename_skip_lines(
+    contents: &str,
+    frontmatter_is_note: bool,
+) -> BTreeSet<usize> {
     let lines: Vec<&str> = contents.split_inclusive('\n').collect();
-    super::super::markdown::non_content_line_indexes(&lines)
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let mut skipped = if frontmatter_is_note {
+        super::super::markdown::non_content_line_indexes(&lines)
+    } else {
+        let fenced = markdown::fenced_lines(&logical, 0..logical.len());
+        let comment_input: Vec<&str> = logical
+            .iter()
+            .enumerate()
+            .map(
+                |(index, line)| {
+                    if fenced.contains(&index) {
+                        ""
+                    } else {
+                        *line
+                    }
+                },
+            )
+            .collect();
+        let mut masked = fenced;
+        masked.extend(markdown::multiline_comment_lines(&comment_input));
+        masked
+    };
+    if frontmatter_is_note
+        && let Some(end) = frontmatter_end_for_repair(&logical, true)
+    {
+        skipped.extend(0..=end);
+    }
+    skipped
 }
 
 fn repair_rename_wiki_links(
@@ -420,14 +518,16 @@ fn repair_rename_wiki_links(
     current_path: &Path,
     note_index: &NoteIndex,
     rename_map: &BTreeMap<PathBuf, PathBuf>,
+    frontmatter_is_note: bool,
 ) -> RenameLinkRepair {
     let lines: Vec<&str> = contents
         .split_inclusive('\n')
         .map(|line| split_line_ending(line).0)
         .collect();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
-    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
-    let skipped = rename_skip_lines(contents);
+    let frontmatter_end =
+        frontmatter_end_for_repair(&lines, frontmatter_is_note);
+    let skipped = rename_skip_lines(contents, frontmatter_is_note);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -455,6 +555,7 @@ fn repair_rename_wiki_links(
                 end + 2 - line_start,
                 &fenced,
                 frontmatter_end,
+                frontmatter_is_note,
             );
         let replacement = if skip {
             None
@@ -512,14 +613,16 @@ fn repair_rename_markdown_links(
     current_path: &Path,
     note_index: &NoteIndex,
     rename_map: &BTreeMap<PathBuf, PathBuf>,
+    frontmatter_is_note: bool,
 ) -> RenameLinkRepair {
     let lines: Vec<&str> = contents
         .split_inclusive('\n')
         .map(|line| split_line_ending(line).0)
         .collect();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
-    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
-    let skipped = rename_skip_lines(contents);
+    let frontmatter_end =
+        frontmatter_end_for_repair(&lines, frontmatter_is_note);
+    let skipped = rename_skip_lines(contents, frontmatter_is_note);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -560,6 +663,7 @@ fn repair_rename_markdown_links(
                 destination_end + 1 - line_start,
                 &fenced,
                 frontmatter_end,
+                frontmatter_is_note,
             );
         if skip {
             repaired.push_str(destination);
@@ -824,7 +928,8 @@ pub(crate) fn repair_links_in_note(
 /// Vault-wide moved-block repair with an explicit resolver and code-context flag.
 ///
 /// `skip_code` leaves fenced blocks, frontmatter, and inline code spans
-/// untouched. Archive callers pass `skip_code = true`.
+/// untouched. Canonical intention notes always protect their frontmatter,
+/// even when a caller asks to inspect code contexts.
 pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
     contents: &str,
     current_path: &Path,
@@ -832,12 +937,18 @@ pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
     moved_targets: &MovedBlockTargets,
     skip_code: bool,
 ) -> LinkRepairResult {
+    let protect_frontmatter = skip_code
+        || crate::native::intentions::fields::canonical_subject(
+            &current_path.to_string_lossy(),
+        )
+        .is_some();
     let wiki_repair = repair_wiki_links(
         contents,
         current_path,
         note_index,
         moved_targets,
         skip_code,
+        protect_frontmatter,
     );
     let markdown_repair = repair_markdown_links(
         &wiki_repair.contents,
@@ -845,9 +956,13 @@ pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
         note_index,
         moved_targets,
         skip_code,
+        protect_frontmatter,
     );
-    let metadata_repair =
-        repair_dependency_metadata(&markdown_repair.contents, moved_targets);
+    let metadata_repair = repair_dependency_metadata_for_note(
+        &markdown_repair.contents,
+        current_path,
+        moved_targets,
+    );
 
     LinkRepairResult {
         contents: metadata_repair.contents,
@@ -1167,19 +1282,52 @@ pub(crate) fn repair_dependency_metadata(
         count,
     }
 }
+
+fn repair_dependency_metadata_for_note(
+    contents: &str,
+    current_path: &Path,
+    moved_targets: &MovedBlockTargets,
+) -> DependencyMetadataRepair {
+    if crate::native::intentions::fields::canonical_subject(
+        &current_path.to_string_lossy(),
+    )
+    .is_none()
+    {
+        return repair_dependency_metadata(contents, moved_targets);
+    }
+
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let Some(end) = frontmatter_end_for_repair(&logical, true) else {
+        return repair_dependency_metadata(contents, moved_targets);
+    };
+    let prefix_len = lines.iter().take(end + 1).map(|line| line.len()).sum();
+    let body =
+        repair_dependency_metadata(&contents[prefix_len..], moved_targets);
+    let mut repaired = String::with_capacity(prefix_len + body.contents.len());
+    repaired.push_str(&contents[..prefix_len]);
+    repaired.push_str(&body.contents);
+    DependencyMetadataRepair {
+        contents: repaired,
+        count: body.count,
+    }
+}
 pub(super) fn repair_wiki_links<R: ResolveMovedNote>(
     contents: &str,
     current_path: &Path,
     note_index: &R,
     moved_targets: &MovedBlockTargets,
     skip_code: bool,
+    protect_frontmatter: bool,
 ) -> LinkRepairResult {
     let lines: Vec<&str> = contents
         .split_inclusive('\n')
         .map(|line| split_line_ending(line).0)
         .collect();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
-    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
+    let frontmatter_end =
+        frontmatter_end_for_repair(&lines, protect_frontmatter);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -1206,6 +1354,7 @@ pub(super) fn repair_wiki_links<R: ResolveMovedNote>(
             end + 2 - line_start,
             &fenced,
             frontmatter_end,
+            protect_frontmatter,
         );
         let replacement = if skip {
             None
@@ -1261,13 +1410,15 @@ pub(super) fn repair_markdown_links<R: ResolveMovedNote>(
     note_index: &R,
     moved_targets: &MovedBlockTargets,
     skip_code: bool,
+    protect_frontmatter: bool,
 ) -> LinkRepairResult {
     let lines: Vec<&str> = contents
         .split_inclusive('\n')
         .map(|line| split_line_ending(line).0)
         .collect();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
-    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
+    let frontmatter_end =
+        frontmatter_end_for_repair(&lines, protect_frontmatter);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -1307,6 +1458,7 @@ pub(super) fn repair_markdown_links<R: ResolveMovedNote>(
             destination_end + 1 - line_start,
             &fenced,
             frontmatter_end,
+            protect_frontmatter,
         );
         if skip {
             repaired.push_str(destination);
@@ -1333,6 +1485,22 @@ pub(super) fn repair_markdown_links<R: ResolveMovedNote>(
     }
 }
 
+fn frontmatter_end_for_repair(
+    lines: &[&str],
+    protect_frontmatter: bool,
+) -> Option<usize> {
+    if !protect_frontmatter {
+        return None;
+    }
+    let first = lines.first()?;
+    let opener = first.strip_prefix('\u{feff}').unwrap_or(first);
+    if opener.trim() != "---" {
+        return None;
+    }
+    markdown::strictly_closed_frontmatter_end(lines)
+        .or_else(|| Some(lines.len().saturating_sub(1)))
+}
+
 fn skip_repaired_span(
     skip_code: bool,
     line_index: usize,
@@ -1341,18 +1509,18 @@ fn skip_repaired_span(
     end_in_line: usize,
     fenced: &BTreeSet<usize>,
     frontmatter_end: Option<usize>,
+    protect_frontmatter: bool,
 ) -> bool {
-    if !skip_code {
-        return false;
-    }
-    if fenced.contains(&line_index)
-        || frontmatter_end.is_some_and(|end| line_index <= end)
+    if (skip_code && fenced.contains(&line_index))
+        || (protect_frontmatter
+            && frontmatter_end.is_some_and(|end| line_index <= end))
     {
         return true;
     }
-    super::super::task_dependencies::inline_code_spans(line)
-        .iter()
-        .any(|span| start_in_line < span.end && end_in_line > span.start)
+    skip_code
+        && super::super::task_dependencies::inline_code_spans(line)
+            .iter()
+            .any(|span| start_in_line < span.end && end_in_line > span.start)
 }
 pub(super) fn next_wiki_link_start(
     contents: &str,
