@@ -79,6 +79,7 @@ mod highlights_ref;
 pub(crate) mod host_catalog;
 pub(crate) mod human_bytes;
 mod ledger_place;
+mod log_history;
 mod markdown;
 mod nightly;
 pub(crate) mod note_catalog;
@@ -191,6 +192,7 @@ pub(crate) enum NativeCommand {
     Gcal,
     Gkeep,
     Gmail,
+    LogsList,
     Query,
     Highlights,
     MoveDoneTasks,
@@ -311,6 +313,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Gcal => gcal::run(args),
         NativeCommand::Gkeep => gkeep::run(args),
         NativeCommand::Gmail => gmail::run(args),
+        NativeCommand::LogsList => log_history::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),

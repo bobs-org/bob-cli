@@ -460,6 +460,14 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     // Tasks and projects
+    reads(
+        "logs-list",
+        &["logs", "list"],
+        "Task log phrases",
+        &["logs", "log", "phrases", "history", "list"],
+        Presentation::Report,
+        60,
+    ),
     Row {
         fixed: JSON,
         ..reads(

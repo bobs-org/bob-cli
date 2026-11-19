@@ -108,6 +108,7 @@ plugins:
           - date-marks.md
           - blocked-marks.md
           - freshness.md
+          - log-recall.md
           - walks.md
           - plan.md
           - projects.md
@@ -244,6 +245,7 @@ nav:
               - "bob types": reference/cli/types.md
               - "bob walks": reference/cli/walks.md
           - "Tasks and projects":
+              - "bob logs": reference/cli/logs.md
               - "bob projects": reference/cli/projects.md
               - "bob relations": reference/cli/relations.md
               - "bob task": reference/cli/task.md
@@ -364,6 +366,7 @@ nav:
               - "Off-clock link chips": off-clock-link-chips.md
               - "Event link times": event-link-times.md
               - "Mail link marks": mail-link-marks.md
+              - "Log Recall": log-recall.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md

@@ -201,6 +201,12 @@ sets `one_off: true`.
 | `bob projects list` | `-f json` | Projects, catalogs, findings, and counts | `schema_version: 1` | [Projects](../projects.md#json-report) |
 | `bob projects sync` | `-f json` | Lifecycle/catalog events, changes, findings, commit, sync, warnings; dry runs add diffs | `schema_version: 1` | [Projects](../projects.md#commands) |
 
+### Task log reports {#task-log-reports}
+
+| Command | Flag | Shape | Version | Contract |
+| --- | --- | --- | --- | --- |
+| `bob logs list` | `-f json` | Per-kind phrase catalog, match tier, frecency, recency, exclusions, and warnings | `schema_version: 1` | [Log Recall](../log-recall.md) |
+
 Capture may include `project_note.parent_catalog` (`path`, `action`) when the
 parent catalog changes; dry runs set `dry_run: true`. See
 [capture JSON](../capture.md#input-stdin-and-json-output).

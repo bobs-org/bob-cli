@@ -56,6 +56,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Off-clock link chips](../off-clock-link-chips.md) — Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited
 - [Event link times](../event-link-times.md) — Event link times: the Event Task's time pill beside ledger Task Links that point at it
 - [Mail link marks](../mail-link-marks.md) — Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks
+- [Log Recall](../log-recall.md) — Vault-derived phrase history from Schedule, Work, Rotten, and Cancel Logs, including `bob logs list` and shared client behavior
 
 ## References
 

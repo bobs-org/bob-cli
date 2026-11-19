@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "source": "tests/fixtures/log_recall/vectors.json",
+  "normalize": [
+    { "name": "collapse whitespace and lowercase", "input": "  ATHENA\t Agent  ", "expected": "athena agent" },
+    { "name": "compose NFC accents", "input": "cafe\u0301", "expected": "café" },
+    { "name": "emoji and CJK", "input": "🎲 東京", "expected": "🎲 東京" },
+    { "name": "lowercase Greek", "input": "ÉCOLE", "expected": "école" }
+  ],
+  "rank": [
+    {
+      "name": "all tiers and newest pin",
+      "query": "ag",
+      "catalog": [
+        { "text": "flagship", "key": "flagship", "score": 4.0, "recency_rank": 2 },
+        { "text": "the agent", "key": "the agent", "score": 0.1, "recency_rank": 1 },
+        { "text": "athena agent", "key": "athena agent", "score": 0.1, "recency_rank": 0 },
+        { "text": "agentic", "key": "agentic", "score": 0.1, "recency_rank": 5 },
+        { "text": "agent", "key": "agent", "score": 0.2, "recency_rank": 3 },
+        { "text": "ag", "key": "ag", "score": 0.1, "recency_rank": 6 }
+      ],
+      "expected": ["ag", "agent", "agentic", "athena agent", "the agent", "flagship"]
+    },
+    {
+      "name": "empty query pins newest then uses frecency",
+      "query": "",
+      "catalog": [
+        { "text": "often used", "key": "often used", "score": 8.0, "recency_rank": 2 },
+        { "text": "newest", "key": "newest", "score": 0.1, "recency_rank": 0 },
+        { "text": "less used", "key": "less used", "score": 2.0, "recency_rank": 1 }
+      ],
+      "expected": ["newest", "often used", "less used"]
+    },
+    {
+      "name": "overlay updates existing and inserts new phrase",
+      "query": "",
+      "catalog": [
+        { "text": "Athena Agent", "key": "athena agent", "score": 2.5, "recency_rank": 0 },
+        { "text": "Apollo research", "key": "apollo research", "score": 2.0, "recency_rank": 1 }
+      ],
+      "overlay": [
+        { "key": "athena agent", "text": "ATHENA agent", "at": "2026-11-19T10:00:00Z" },
+        { "key": "new phrase", "text": "New phrase", "at": "2026-11-19T11:00:00Z" }
+      ],
+      "expected": ["new phrase", "athena agent", "apollo research"]
+    },
+    {
+      "name": "query with no match",
+      "query": "zzzz",
+      "catalog": [
+        { "text": "athena agent", "key": "athena agent", "score": 1.0, "recency_rank": 0 }
+      ],
+      "expected": []
+    },
+    {
+      "name": "score and recency ties use key",
+      "query": "",
+      "catalog": [
+        { "text": "zulu", "key": "zulu", "score": 1.0, "recency_rank": 0 },
+        { "text": "alpha", "key": "alpha", "score": 1.0, "recency_rank": 0 },
+        { "text": "beta", "key": "beta", "score": 0.5, "recency_rank": 1 }
+      ],
+      "expected": ["alpha", "zulu", "beta"]
+    }
+  ],
+  "machine_samples": [
+    { "kind": "schedule", "source": "capture_schedule_log::AUTO_REASON_EMOJI", "text": "🎲 P2 roll · in 3 (2–7) days" },
+    { "kind": "work", "source": "WORK_LOG_NO_REASON_GIVEN", "text": "🤷 no reason given" },
+    { "kind": "rotten", "source": "formatRottenLogEntryText", "text": "🍂 P1 → P2" },
+    { "kind": "cancel", "source": "RELATION_CANCEL_FALLBACK", "text": "🪢 duplicate of [[target#^id]]" },
+    { "kind": "work", "source": "unblock marker", "text": "🔓 unblocked after prerequisite completion" },
+    { "kind": "work", "source": "Gmail reply marker", "text": "📬 reply received" },
+    { "kind": "schedule", "source": "priority_roll_reason", "text": "🎲 P1 → P2 · in **3** (2–7) days" },
+    { "kind": "schedule", "source": "randomize_reason", "text": "🎲 P2 randomize · in **3** (2–7) days" },
+    { "kind": "cancel", "source": "AbsentVerdict::cancel_reason", "text": "Moved to Fri 2026-11-20 in Google Calendar" },
+    { "kind": "cancel", "source": "AbsentVerdict::cancel_reason", "text": "Deleted in Google Calendar" },
+    { "kind": "cancel", "source": "AbsentVerdict::cancel_reason", "text": "Declined in Google Calendar" },
+    { "kind": "cancel", "source": "section_provenance_reason", "text": "📥 merged into [[target#heading]]" }
+  ],
+  "human_samples": [
+    "athena agent",
+    "Move this to next week",
+    "The wording has a · middle dot",
+    "Café 東京"
+  ]
+}

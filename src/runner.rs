@@ -696,6 +696,23 @@ const RELATIONS_MEMBERS: &[Member] = &[
     },
 ];
 
+const LOGS_MEMBERS: &[Member] = &[Member {
+    name: "list",
+    about: "List reusable phrases from task logs (default)",
+    leaf: Leaf {
+        native_command: NativeCommand::LogsList,
+        script_command: None,
+    },
+}];
+
+const LOGS_AFTER_HELP: &str = "\
+Bare `bob logs` runs the read-only list.\n\n\
+Examples:\n  \\
+bob logs                           List phrase history for every log\n  \\
+bob logs -l work -q 'athena'      Find Work Log phrases\n  \\
+bob logs -l schedule -f json      Print schedule history as JSON\n\n\
+See docs/log-recall.md for the log-history contract.";
+
 const RELATIONS_AFTER_HELP: &str = "\
 Bare `bob relations` runs the read-only list.
 
@@ -1060,6 +1077,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Walks,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "logs",
+        about: "List and search phrase history from task logs",
+        section: Section::TasksAndProjects,
+        target: Target::Group(Group {
+            members: LOGS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob logs` runs the read-only phrase history list.",
+            ),
+            after_help: LOGS_AFTER_HELP,
+            usage: "bob logs [COMMAND]",
         }),
     },
     Subcommand {
@@ -2722,6 +2753,7 @@ mod tests {
             NativeCommand::Gcal,
             NativeCommand::Gkeep,
             NativeCommand::Gmail,
+            NativeCommand::LogsList,
             NativeCommand::Query,
             NativeCommand::Highlights,
             NativeCommand::MoveDoneTasks,

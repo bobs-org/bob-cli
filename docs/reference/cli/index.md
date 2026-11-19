@@ -39,6 +39,8 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 
 | Command | What it does |
 | --- | --- |
+| [`bob logs`](logs.md) | List and search phrase history from task logs |
+| [`bob logs list`](logs.md#bob-logs-list) | List reusable phrases from task logs (default) |
 | [`bob projects`](projects.md) | List and sync project notes via their ^prj tasks |
 | [`bob relations`](relations.md) | List, hide, unhide, and rename relation labels |
 | [`bob relations hide`](relations.md#bob-relations-hide) | Hide relation labels from suggestions |
@@ -170,6 +172,7 @@ Daily workflow:
                bank
 
 Tasks and projects:
+  logs         List and search phrase history from task logs
   projects     List and sync project notes via their ^prj tasks
   relations    List, hide, unhide, and rename relation labels
   task         Task maintenance: archive, merge, move, reconcile, reroll,

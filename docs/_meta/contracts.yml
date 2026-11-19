@@ -104,6 +104,9 @@ groups:
       - stem: task-relations
         summary: "Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture"
         order: 31
+      - stem: log-recall
+        summary: "Vault-derived phrase history from Schedule, Work, Rotten, and Cancel Logs, including `bob logs list` and shared client behavior"
+        order: 54
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
         order: 32
