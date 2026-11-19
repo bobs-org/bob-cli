@@ -1995,3 +1995,234 @@ fn album_destinations_refuse_with_owner_guidance() {
     assert!(detail.contains("@drink/ adds a drink"), "{detail}");
     assert!(detail.contains("@body"), "{detail}");
 }
+
+fn canonical_day_source(
+    intention: &str,
+    summary: &str,
+    reflection: &str,
+) -> String {
+    format!(
+        "---\nintentions:\n  - {intention:?}\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\nreflection: {reflection:?}\ncustom: keep # exact\n---\n# 2026-11-18\n\n- [ ] #task Move me ^mv\n",
+        crate::native::intentions::digest(summary)
+    )
+}
+
+fn canonical_week_bystander(summary: &str) -> String {
+    format!(
+        "---\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\ncustom: preserve this key\n---\n\nWeekly body stays.\n",
+        crate::native::intentions::digest(summary)
+    )
+}
+
+#[test]
+fn move_repairs_canonical_owned_fields_and_carries_draft_digests() {
+    // A drafted day carries no reflection body: any non-empty reflection
+    // would make the note reflected instead of drafted.
+    let source = canonical_day_source(
+        "Ship [[#^mv|the thing]] today",
+        "Did [[#^mv]] and ![[2026/20261118#^mv|emb]]",
+        "",
+    );
+    let dest = area("## Tasks\n\nSee [[2026/20261118#^mv]] here.\n");
+    let bystander =
+        canonical_week_bystander("Saw [[2026/20261118#^mv]] and [[#^other]].");
+    let notes = [
+        ("2026/20261118.md", source.as_str()),
+        ("work.md", dest.as_str()),
+        ("2026/2026-W47.md", bystander.as_str()),
+    ];
+    let first = plan(&notes, "2026/20261118.md", "work.md", vec![block("mv")]);
+    // Dry-run/apply agreement: the pure planner is deterministic.
+    let second = plan(&notes, "2026/20261118.md", "work.md", vec![block("mv")]);
+    assert_eq!(first.postimages, second.postimages);
+
+    let moved = post(&first, "2026/20261118.md");
+    assert!(!moved.contains("- [ ] #task Move me"), "{moved}");
+    assert!(
+        moved
+            .contains("intentions:\n  - \"Ship [[work#^mv|the thing]] today\""),
+        "{moved}"
+    );
+    assert!(
+        moved.contains("summary: \"Did [[work#^mv]] and ![[work#^mv|emb]]\""),
+        "{moved}"
+    );
+    assert!(moved.contains("reflection: \"\"\n"), "{moved}");
+    assert!(moved.contains("custom: keep # exact\n"), "{moved}");
+    let fields = crate::native::intentions::read(
+        moved,
+        crate::native::intentions::NoteSubject::Day(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+        ),
+    );
+    assert_eq!(
+        fields.summary.value.as_deref(),
+        Some("Did [[work#^mv]] and ![[work#^mv|emb]]")
+    );
+    assert_eq!(
+        fields.summary_digest.value.as_deref(),
+        Some(
+            crate::native::intentions::digest(
+                "Did [[work#^mv]] and ![[work#^mv|emb]]"
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(fields.summary_drafted.value.as_deref(), Some("2026-11-19"));
+    assert_eq!(
+        crate::native::intentions::state::summary_state(&fields),
+        crate::native::intentions::state::SummaryState::Drafted
+    );
+
+    let weekly = post(&first, "2026/2026-W47.md");
+    assert!(
+        weekly.contains("summary: \"Saw [[work#^mv]] and [[#^other]].\""),
+        "{weekly}"
+    );
+    assert!(weekly.ends_with("Weekly body stays.\n"), "{weekly}");
+    let week_fields = crate::native::intentions::read(
+        weekly,
+        crate::native::intentions::NoteSubject::Period(
+            crate::native::periods::calendar::PeriodId::Week {
+                year: 2026,
+                week: 47,
+            },
+        ),
+    );
+    assert_eq!(
+        week_fields.summary_digest.value.as_deref(),
+        Some(
+            crate::native::intentions::digest(
+                "Saw [[work#^mv]] and [[#^other]]."
+            )
+            .as_str()
+        )
+    );
+
+    let dest_post = post(&first, "work.md");
+    assert!(dest_post.contains("See [[work#^mv]] here."), "{dest_post}");
+    // Landing lines are located on the final bytes: the record points at
+    // the moved row itself.
+    let record = first
+        .moves
+        .iter()
+        .find(|record| record.old_block_id.as_deref() == Some("mv"))
+        .expect("move record for ^mv");
+    let landing = dest_post
+        .lines()
+        .position(|line| {
+            line.contains("- [ ] #task Move me") && line.contains("^mv")
+        })
+        .expect("moved row lands in destination")
+        + 1;
+    assert_eq!(record.dest_line, landing);
+    // Owned-only rewrites join the repaired files so previews count them.
+    let repaired: std::collections::BTreeMap<_, _> = first
+        .repaired_files
+        .iter()
+        .map(|file| {
+            (
+                file.path.clone(),
+                (file.link_count, file.dependency_token_count),
+            )
+        })
+        .collect();
+    assert_eq!(
+        repaired.get(&PathBuf::from("2026/20261118.md")),
+        Some(&(3, 0)),
+        "{repaired:?}"
+    );
+    assert_eq!(
+        repaired.get(&PathBuf::from("2026/2026-W47.md")),
+        Some(&(1, 0)),
+        "{repaired:?}"
+    );
+}
+
+#[test]
+fn move_repairs_links_but_never_restamps_edited_or_reflected_notes() {
+    let drafted = canonical_day_source(
+        "Ship [[#^mv]] today",
+        "Did [[2026/20261118#^mv]].",
+        "",
+    );
+    // An invalid digest makes the note edited; a reflection body makes it
+    // reflected. Both stay unstamped while their links are still repaired.
+    let edited = drafted.replace(
+        "summary_digest: ",
+        "summary_digest: sha256:0000000000000000 # was ",
+    );
+    let reflected = drafted.replace(
+        "reflection: \"\"\n",
+        "reflection: \"Kept [[2026/20261118#^mv]].\"\n",
+    );
+    assert_ne!(edited, drafted);
+    assert_ne!(reflected, drafted);
+    let dest = area("## Tasks\n");
+    let edited_plan = plan(
+        &[
+            ("2026/20261118.md", edited.as_str()),
+            ("work.md", dest.as_str()),
+        ],
+        "2026/20261118.md",
+        "work.md",
+        vec![block("mv")],
+    );
+    let edited_post = post(&edited_plan, "2026/20261118.md");
+    assert!(edited_post.contains("Did [[work#^mv]]."), "{edited_post}");
+    assert!(
+        edited_post.contains("summary_digest: sha256:0000000000000000 # was "),
+        "{edited_post}"
+    );
+
+    let reflected_notes = [
+        ("2026/20261118.md", reflected.as_str()),
+        ("work.md", dest.as_str()),
+    ];
+    let reflected_plan = plan(
+        &reflected_notes,
+        "2026/20261118.md",
+        "work.md",
+        vec![block("mv")],
+    );
+    let reflected_post = post(&reflected_plan, "2026/20261118.md");
+    assert!(
+        reflected_post.contains("reflection: \"Kept [[work#^mv]].\""),
+        "{reflected_post}"
+    );
+    assert!(
+        reflected_post.contains("Did [[work#^mv]]."),
+        "{reflected_post}"
+    );
+    let before_digest = reflected
+        .lines()
+        .find(|line| line.starts_with("summary_digest:"))
+        .expect("reflected fixture carries a digest");
+    assert!(reflected_post.contains(before_digest), "{reflected_post}");
+}
+
+#[test]
+fn move_leaves_ambiguous_owned_targets_untouched() {
+    let source = canonical_day_source(
+        "Ship it",
+        "Links [[src#^mv]] exact, [[SRC#^mv]] ambiguous, and [[#^mv]] pathless.",
+        "Done.",
+    );
+    let twin = "- [ ] #task Twin ^other\n";
+    let dest = area("## Tasks\n");
+    let notes = [
+        ("2026/20261118.md", source.as_str()),
+        ("src.md", "- [ ] #task Move me ^mv\n"),
+        ("misc/src.md", twin),
+        ("work.md", dest.as_str()),
+    ];
+    let moved = plan(&notes, "src.md", "work.md", vec![block("mv")]);
+    // An exact relative target follows the move, but a bare basename that
+    // matches two stems never resolves, and a pathless link in a bystander
+    // resolves to the bystander itself, so both stay byte-identical.
+    let daily = post(&moved, "2026/20261118.md");
+    assert!(daily.contains("[[work#^mv]]"), "{daily}");
+    assert!(daily.contains("[[SRC#^mv]]"), "{daily}");
+    assert!(daily.contains("[[#^mv]]"), "{daily}");
+    assert!(!daily.contains("[[src#^mv]]"), "{daily}");
+}

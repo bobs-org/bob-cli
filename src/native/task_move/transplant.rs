@@ -12,9 +12,13 @@ use super::super::{
         next_available_block_id, repair_dependency_metadata,
         repair_links_in_note_with, repair_markdown_destination,
         repair_wiki_link_inner, split_block_fragment, split_line_ending,
-        MovedBlockTargets,
+        MovedBlockTargets, ResolveMovedNote,
+    },
+    intentions::{
+        fields::canonical_subject, repair::rewrite_owned_moved_links,
     },
     markdown,
+    periods::note::carry_rewrite_digests,
     task_dependencies::inline_code_spans,
     vault_links::NoteIndex,
 };
@@ -408,6 +412,64 @@ pub(crate) fn finish_transplant(
         repaired_files: repaired.repaired_files,
         landing_lines,
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedRepairError {
+    pub(crate) path: PathBuf,
+    pub(crate) detail: String,
+}
+
+/// Repair canonical owned fields and carry draft digests across finished
+/// postimages. `originals` is the captured pre-write snapshot: digest
+/// eligibility always derives from it, so a staged mechanical edit cannot
+/// turn an edited or reflected note back into a draft. Paths in `skip`
+/// were already repaired before insertion and keep their planned bytes
+/// and counts. Owned-only rewrites join `repaired_files` so previews and
+/// counts include them.
+pub(crate) fn repair_owned_postimages<R: ResolveMovedNote>(
+    originals: &BTreeMap<PathBuf, String>,
+    postimages: &mut BTreeMap<PathBuf, String>,
+    repaired_files: &mut Vec<RepairedFile>,
+    note_index: &R,
+    moved_targets: &MovedBlockTargets,
+    skip: &[PathBuf],
+) -> Result<(), OwnedRepairError> {
+    for (path, original) in originals {
+        if skip.contains(path) {
+            continue;
+        }
+        let current = postimages.get(path).unwrap_or(original);
+        let owned =
+            rewrite_owned_moved_links(current, path, note_index, moved_targets)
+                .map_err(|error| OwnedRepairError {
+                    path: path.clone(),
+                    detail: error.to_string(),
+                })?;
+        if owned.contents == *current {
+            continue;
+        }
+        let subject = canonical_subject(&path.to_string_lossy());
+        let carried = carry_rewrite_digests(original, &owned.contents, subject)
+            .map_err(|error| OwnedRepairError {
+                path: path.clone(),
+                detail: error.to_string(),
+            })?;
+        if carried == *current {
+            continue;
+        }
+        postimages.insert(path.clone(), carried);
+        match repaired_files.iter_mut().find(|file| file.path == *path) {
+            Some(file) => file.link_count += owned.link_count,
+            None => repaired_files.push(RepairedFile {
+                path: path.clone(),
+                link_count: owned.link_count,
+                dependency_token_count: 0,
+            }),
+        }
+    }
+    repaired_files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(())
 }
 
 pub(crate) fn live_block_ids(contents: &str) -> Vec<String> {

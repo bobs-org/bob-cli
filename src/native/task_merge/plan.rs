@@ -329,7 +329,39 @@ pub(crate) fn plan_task_merge_with_selected_freshness(
     enrich_target_lines(&mut records, &staged, context);
     let merge_line_origins =
         forward_insertion_origins(prepared.as_ref(), &staged);
+    // Merge never retargets inbound links: source anchors are retained in
+    // place, so ordinary links in bodies and owned fields keep resolving
+    // to the source. Only the move planner relocates anchors. Digest carry
+    // still runs so a drafted canonical note touched by retirement or
+    // payload insertion keeps its draft state in both preview and apply.
     let postimages = staged
+        .into_iter()
+        .filter(|(path, contents)| snapshot.notes.get(path) != Some(contents))
+        .map(|(path, contents)| {
+            let before = snapshot.notes.get(&path).map(String::as_str);
+            let subject = crate::native::intentions::fields::canonical_subject(
+                &path.to_string_lossy(),
+            );
+            let carried = match before {
+                Some(before) => {
+                    crate::native::periods::note::carry_rewrite_digests(
+                        before, &contents, subject,
+                    )
+                    .map_err(|error| {
+                        MergeError::new(
+                            "merge_digest_carry",
+                            format!(
+                                "could not carry draft digests in {}: {error}",
+                                path.display()
+                            ),
+                        )
+                    })?
+                }
+                None => contents.clone(),
+            };
+            Ok((path, carried))
+        })
+        .collect::<Result<BTreeMap<_, _>, MergeError>>()?
         .into_iter()
         .filter(|(path, contents)| snapshot.notes.get(path) != Some(contents))
         .collect::<BTreeMap<_, _>>();

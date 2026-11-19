@@ -336,6 +336,11 @@ pub(crate) fn prepare_task_merge(
         .note_index
         .with_additional(snapshot.notes.keys().cloned());
     let raw_payloads = build_payloads(&sources, &destination);
+    // Merge copies payloads and retires sources in place: every source
+    // anchor is retained, so no inbound link (body or owned field) is
+    // ever retargeted. The empty map keeps that contract explicit: only
+    // the move planner's relocation paths use moved-target repair, and
+    // pathless links to stayed anchors are qualified back to the source.
     let empty_targets = MovedBlockTargets::new();
     let empty_id_map = BTreeMap::new();
     let mut prepared_payloads = Vec::with_capacity(raw_payloads.len());

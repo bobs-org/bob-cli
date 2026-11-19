@@ -21,8 +21,12 @@ use super::super::{
         split_line_ending, task_block_end, trailing_block_id_in_line,
         vault_relative_link_target, MovedBlockTarget, MovedBlockTargets,
     },
+    intentions::{
+        fields::canonical_subject, repair::rewrite_owned_moved_links,
+    },
     markdown,
     note_tasks::clean_description,
+    periods::note::carry_rewrite_digests,
     pomodoro_homes::{HomeResolver, IndexedHomeSource},
     projects::{
         frontmatter_is_album, frontmatter_is_area, frontmatter_is_notebook,
@@ -493,6 +497,10 @@ pub(crate) enum PlanError {
         block_id: String,
         detail: String,
     },
+    OwnedRepair {
+        path: PathBuf,
+        detail: String,
+    },
 }
 
 impl fmt::Display for PlanError {
@@ -689,6 +697,13 @@ impl fmt::Display for PlanError {
                     path.display()
                 )
             }
+            Self::OwnedRepair { path, detail } => {
+                write!(
+                    formatter,
+                    "could not verify owned link repair in {}: {detail}",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -726,6 +741,7 @@ impl PlanError {
             Self::UnrepresentableIdentity { .. } => {
                 "move_unrepresentable_identity"
             }
+            Self::OwnedRepair { .. } => "move_owned_repair",
         }
     }
 }
@@ -1050,11 +1066,34 @@ pub(crate) fn plan_task_move(
         &moved_targets,
         true,
     );
+    // Owned fields are repaired before insertion so any YAML expansion
+    // settles before landing offsets are calculated; the cursor never
+    // points into the wrong row. Eligibility derives from the captured
+    // pre-write destination.
+    let dest_owned = rewrite_owned_moved_links(
+        &dest_existing_repair.contents,
+        &dest_path,
+        &note_index,
+        &moved_targets,
+    )
+    .map_err(|error| PlanError::OwnedRepair {
+        path: dest_path.clone(),
+        detail: error.to_string(),
+    })?;
+    let dest_repaired = carry_rewrite_digests(
+        dest_contents,
+        &dest_owned.contents,
+        canonical_subject(&dest_path.to_string_lossy()),
+    )
+    .map_err(|error| PlanError::OwnedRepair {
+        path: dest_path.clone(),
+        detail: error.to_string(),
+    })?;
     let source_without =
         transplant::remove_line_ranges(source_contents, &ranges);
 
     let (dest_with_insert, landing_lines) = insert_into_dest(
-        &dest_existing_repair.contents,
+        &dest_repaired,
         &repaired_fragments,
         dest_kind,
         capture_slots.as_deref(),
@@ -1064,7 +1103,9 @@ pub(crate) fn plan_task_move(
     add_repair(
         &mut repair_counts,
         dest_path.clone(),
-        dest_existing_repair.link_count + fragment_link_count,
+        dest_existing_repair.link_count
+            + dest_owned.link_count
+            + fragment_link_count,
         dest_existing_repair.dependency_metadata_count + fragment_dep_count,
     );
     let source_postimages =
@@ -1078,12 +1119,26 @@ pub(crate) fn plan_task_move(
         &moved_targets,
         repair_counts,
     );
-    let transplanted = transplant::finish_transplant(
+    let mut transplanted = transplant::finish_transplant(
         repaired,
         repaired_fragments,
         renames,
         landing_lines,
     );
+    // Source and bystander owned fields are repaired after the vault-wide
+    // body pass. The destination keeps its pre-insert repair above.
+    transplant::repair_owned_postimages(
+        &snapshot.notes,
+        &mut transplanted.postimages,
+        &mut transplanted.repaired_files,
+        &note_index,
+        &moved_targets,
+        std::slice::from_ref(&dest_path),
+    )
+    .map_err(|error| PlanError::OwnedRepair {
+        path: error.path,
+        detail: error.detail,
+    })?;
     let mut postimages = transplanted.postimages;
     if request.restore
         && let Some(source_postimage) = postimages.get(&source_path)

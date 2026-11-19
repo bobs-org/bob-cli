@@ -1313,7 +1313,7 @@ fn repair_dependency_metadata_for_note(
         count: body.count,
     }
 }
-pub(super) fn repair_wiki_links<R: ResolveMovedNote>(
+pub(crate) fn repair_wiki_links<R: ResolveMovedNote>(
     contents: &str,
     current_path: &Path,
     note_index: &R,
@@ -1404,7 +1404,7 @@ pub(crate) fn repair_wiki_link_inner<R: ResolveMovedNote>(
         moved_target.archive_target, moved_target.block_id, alias
     ))
 }
-pub(super) fn repair_markdown_links<R: ResolveMovedNote>(
+pub(crate) fn repair_markdown_links<R: ResolveMovedNote>(
     contents: &str,
     current_path: &Path,
     note_index: &R,

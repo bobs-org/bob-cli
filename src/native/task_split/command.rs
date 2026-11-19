@@ -691,6 +691,14 @@ fn print_report(report: &Report) {
             );
         }
     }
+    if let Some(plan) = &report.plan
+        && !plan.repaired_files.is_empty()
+    {
+        let links: usize =
+            plan.repaired_files.iter().map(|file| file.link_count).sum();
+        let notes = plan.repaired_files.len();
+        println!("  ↻ repaired {links} link(s) in {notes} note(s)");
+    }
     if let Some((stage, _, message)) = &report.error {
         eprintln!("{} {}: {}", styler.red("✗"), stage, message);
     }
@@ -703,7 +711,8 @@ fn json_document(report: &Report) -> Value {
         "cursor":{"path":plan.cursor_path,"line":plan.cursor_line},
         "clamped":plan.clamped.map(|(requested,split)|json!({"requested":requested,"split":split})),
     })]).unwrap_or_default();
-    json!({"schema_version":1,"ok":report.error.is_none(),"dry_run":report.dry_run,"candidates":report.candidates,"splits":splits,"warnings":[],"repaired_files":[],"git":{"mode":report.mode,"pre_sync":report.pre_sync,"commit":report.commit.as_ref().map(|commit|json!({"sha":commit.sha,"subject":commit.subject,"paths":commit.paths})),"post_sync":report.post_sync},"applied_paths":report.applied,"deferred_paths":report.deferred,"recovery_directory":report.recovery,"error":report.error.as_ref().map(|(stage,code,message)|json!({"stage":stage,"code":code,"message":message,"hint":null}))})
+    let repaired: Vec<Value> = report.plan.as_ref().map(|plan|plan.repaired_files.iter().map(|file|json!({"path":file.path,"link_count":file.link_count,"dependency_token_count":file.dependency_token_count})).collect()).unwrap_or_default();
+    json!({"schema_version":1,"ok":report.error.is_none(),"dry_run":report.dry_run,"candidates":report.candidates,"splits":splits,"warnings":[],"repaired_files":repaired,"git":{"mode":report.mode,"pre_sync":report.pre_sync,"commit":report.commit.as_ref().map(|commit|json!({"sha":commit.sha,"subject":commit.subject,"paths":commit.paths})),"post_sync":report.post_sync},"applied_paths":report.applied,"deferred_paths":report.deferred,"recovery_directory":report.recovery,"error":report.error.as_ref().map(|(stage,code,message)|json!({"stage":stage,"code":code,"message":message,"hint":null}))})
 }
 
 fn print_clap_error(error: clap::Error) -> i32 {

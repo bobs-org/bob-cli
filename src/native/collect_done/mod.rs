@@ -48,8 +48,9 @@ pub(crate) use link_repair::repair_links_in_note;
 pub(crate) use link_repair::{
     is_simple_markdown_destination, repair_dependency_metadata,
     repair_links_in_note_with, repair_markdown_destination,
-    repair_wiki_link_inner, split_block_fragment, LinkRepairResult,
-    MovedBlockTarget, MovedBlockTargets,
+    repair_markdown_links, repair_wiki_link_inner, repair_wiki_links,
+    split_block_fragment, LinkRepairResult, MovedBlockTarget,
+    MovedBlockTargets, ResolveMovedNote,
 };
 pub(crate) use transform::{
     block_id_occurrences_in_text, has_task_tag, leading_indent_len,

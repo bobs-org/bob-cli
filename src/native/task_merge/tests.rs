@@ -3116,3 +3116,140 @@ fn mg18_merge_source_with_descendant_anchor_archives_through_bound_pair() {
         ));
     }
 }
+
+fn drafted_daily(summary: &str, body: &str) -> String {
+    format!(
+        "---\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\n---\n\n{body}",
+        crate::native::intentions::digest(summary),
+    )
+}
+
+fn day_subject() -> crate::native::intentions::NoteSubject {
+    crate::native::intentions::NoteSubject::Day(
+        NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+    )
+}
+
+#[test]
+fn merge_owned_links_to_retained_source_anchors_stay_unchanged() {
+    let summary = "Follow [[2026/20261118#^src]] next.";
+    let daily = drafted_daily(summary, "- [ ] #task Source ^src\n");
+    let weekly_summary = "See [[2026/20261118#^src]] too.";
+    let weekly = format!(
+        "---\nsummary: {weekly_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\n---\n\nWeekly body.\n",
+        crate::native::intentions::digest(weekly_summary)
+    );
+    let snapshot = snapshot(&[
+        ("2026/20261118.md", daily.as_str()),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        ("2026/2026-W47.md", weekly.as_str()),
+    ]);
+    let merged = plan(
+        &snapshot,
+        &request(
+            &["2026/20261118:src"],
+            MergeContainer::Task(locator("dest:dst")),
+        ),
+    )
+    .expect("merge plan");
+    // The source anchor is retained (cancelled in place): owned links keep
+    // resolving to the source and are never retargeted to the merge target.
+    let source = merged
+        .postimages
+        .get(Path::new("2026/20261118.md"))
+        .expect("source postimage");
+    assert!(
+        source.contains("summary: \"Follow [[2026/20261118#^src]] next.\""),
+        "{source}"
+    );
+    let fields = crate::native::intentions::read(source, day_subject());
+    assert_eq!(fields.summary.value.as_deref(), Some(summary));
+    assert!(
+        !fields
+            .summary
+            .value
+            .as_deref()
+            .unwrap_or_default()
+            .contains("dest"),
+        "owned summary never points at the merge target"
+    );
+    assert_eq!(
+        fields.summary_digest.value.as_deref(),
+        Some(crate::native::intentions::digest(summary).as_str())
+    );
+    assert_eq!(
+        crate::native::intentions::state::summary_state(&fields),
+        crate::native::intentions::state::SummaryState::Drafted
+    );
+    // The bystander keeps resolving to the retained anchor: no retarget,
+    // so it never enters the postimages.
+    assert!(
+        !merged
+            .postimages
+            .contains_key(Path::new("2026/2026-W47.md")),
+        "links to retained source anchors stay on the source"
+    );
+}
+
+#[test]
+fn merge_into_canonical_task_keeps_owned_fields_and_draft() {
+    let summary = "Ship [[dest#^dst]] soon.";
+    let daily = drafted_daily(summary, "- [ ] #task Target ^dst\n");
+    let merging = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("2026/20261118.md", daily.as_str()),
+    ]);
+    let merged = plan(
+        &merging,
+        &request(
+            &["src:src"],
+            MergeContainer::Task(locator("2026/20261118:dst")),
+        ),
+    )
+    .expect("merge plan");
+    // Payload lands in the destination body; owned fields stay byte-exact
+    // and the drafted digest is carried, not restamped or dropped.
+    let dest = merged
+        .postimages
+        .get(Path::new("2026/20261118.md"))
+        .expect("destination postimage");
+    assert!(dest.contains("\t- Source\n"), "{dest}");
+    for line in daily.lines().take_while(|line| !line.is_empty()) {
+        if line.starts_with("summary") || line.starts_with("---") {
+            assert!(dest.contains(line), "owned line kept: {line}\n{dest}");
+        }
+    }
+    let fields = crate::native::intentions::read(dest, day_subject());
+    assert_eq!(fields.summary.value.as_deref(), Some(summary));
+    assert_eq!(
+        crate::native::intentions::state::summary_state(&fields),
+        crate::native::intentions::state::SummaryState::Drafted
+    );
+
+    // An edited digest is never restamped by the mechanical merge.
+    let edited = daily.replace(
+        "summary_digest: ",
+        "summary_digest: sha256:0000000000000000 # was ",
+    );
+    let edited_snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("2026/20261118.md", edited.as_str()),
+    ]);
+    let merged = plan(
+        &edited_snapshot,
+        &request(
+            &["src:src"],
+            MergeContainer::Task(locator("2026/20261118:dst")),
+        ),
+    )
+    .expect("merge plan");
+    let dest = merged
+        .postimages
+        .get(Path::new("2026/20261118.md"))
+        .expect("destination postimage");
+    let before_digest = edited
+        .lines()
+        .find(|line| line.starts_with("summary_digest:"))
+        .expect("edited fixture carries a digest");
+    assert!(dest.contains(before_digest), "{dest}");
+}

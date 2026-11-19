@@ -144,6 +144,195 @@ fn split_conformance_vectors_match_byte_for_byte() {
     }
 }
 
+fn settings() -> SplitSettings {
+    SplitSettings {
+        linked_from_lines: true,
+        linked_from_mentions: true,
+        inbox_route: "inbox.md".to_string(),
+    }
+}
+
+fn task_settings() -> crate::native::note_tasks::NoteTaskSettings {
+    crate::native::note_tasks::read_settings(&PathBuf::from("/missing-vault"))
+}
+
+fn split(
+    notes: &[(&str, &str)],
+    owner: &str,
+    line: usize,
+    selection: SplitSelection,
+) -> super::plan::SplitPlan {
+    let snapshot =
+        VaultSnapshot::from_notes(notes.iter().map(|(path, contents)| {
+            (PathBuf::from(path), (*contents).to_string())
+        }));
+    plan_task_split(
+        &snapshot,
+        &SplitRequest {
+            owner_path: PathBuf::from(owner),
+            owner_line: line,
+            selection,
+        },
+        "2026-11-19",
+        &settings(),
+        &task_settings(),
+    )
+    .unwrap_or_else(|error| {
+        panic!("split plan failed ({}): {}", error.code, error.message)
+    })
+}
+
+fn post<'a>(plan: &'a super::plan::SplitPlan, path: &str) -> &'a str {
+    plan.postimages
+        .get(&PathBuf::from(path))
+        .map(String::as_str)
+        .unwrap_or_else(|| panic!("missing postimage {path}"))
+}
+
+fn drafted_summary_note(summary: &str, body: &str) -> String {
+    format!(
+        "---\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\n---\n\n{body}",
+        crate::native::intentions::digest(summary),
+    )
+}
+
+#[test]
+fn split_repairs_cross_note_anchors_in_owned_fields_and_payload() {
+    let summary = "Plan [[#^a1]] next.";
+    let source = format!(
+        "---\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\n---\n\n- [ ] #task Big one ^owner\n  - Note alpha ^a1\n    - detail [[2026/20261118#^stay]] plus [[#^stay]]\n  - Note beta\n  - Stay put ^stay\n",
+        crate::native::intentions::digest(summary),
+    );
+    let weekly_summary = "Saw [[2026/20261118#^a1]] move.";
+    let old_dep = crate::native::task_dependencies::dependency_id(
+        std::path::Path::new("2026/20261118.md"),
+        "a1",
+    )
+    .expect("source dependency id");
+    let new_dep = crate::native::task_dependencies::dependency_id(
+        std::path::Path::new("inbox.md"),
+        "a1",
+    )
+    .expect("destination dependency id");
+    let bystander_body =
+        format!("- [ ] #task Watcher [dependsOn:: {old_dep}] ^w\n");
+    let weekly = drafted_summary_note(weekly_summary, "Weekly body.\n");
+    let notes = [
+        ("2026/20261118.md", source.as_str()),
+        ("inbox.md", "## Tasks\n"),
+        ("2026/2026-W47.md", weekly.as_str()),
+        ("watcher.md", bystander_body.as_str()),
+    ];
+    let plan =
+        split(&notes, "2026/20261118.md", 7, SplitSelection::Nth(vec![1]));
+
+    // The extracted anchor leaves the source: stubs point at the new note
+    // while owned fields and bystander links follow it there.
+    let moved = post(&plan, "2026/20261118.md");
+    assert!(moved.contains("- [[inbox#^a1|"), "{moved}");
+    assert!(!moved.contains("- Note alpha ^a1"), "{moved}");
+    assert!(moved.contains("- Note beta"), "{moved}");
+    assert!(
+        moved.contains("summary: \"Plan [[inbox#^a1]] next.\""),
+        "{moved}"
+    );
+    let fields = crate::native::intentions::read(
+        moved,
+        crate::native::intentions::NoteSubject::Day(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+        ),
+    );
+    assert_eq!(
+        fields.summary_digest.value.as_deref(),
+        Some(
+            crate::native::intentions::digest("Plan [[inbox#^a1]] next.")
+                .as_str()
+        )
+    );
+
+    let dest = post(&plan, "inbox.md");
+    assert!(dest.contains("- [ ] #task Note alpha"), "{dest}");
+    assert!(dest.contains("^a1"), "{dest}");
+    // The payload keeps working: the explicit moved link follows the
+    // anchor, and the pathless stayed link is qualified back to the source.
+    assert!(
+        dest.contains("[[2026/20261118#^stay]] plus [[2026/20261118#^stay]]"),
+        "{dest}"
+    );
+    // Task and cursor lines are located on the final postimage bytes.
+    let expected = dest
+        .lines()
+        .position(|line| line.contains("^a1") && line.contains("#task"))
+        .expect("extracted task lands in destination")
+        + 1;
+    assert_eq!(plan.tasks[0].line, expected);
+    assert_eq!(plan.cursor_line, expected);
+    assert_eq!(plan.cursor_path, "inbox.md");
+
+    let weekly = post(&plan, "2026/2026-W47.md");
+    assert!(
+        weekly.contains("summary: \"Saw [[inbox#^a1]] move.\""),
+        "{weekly}"
+    );
+
+    let watcher = post(&plan, "watcher.md");
+    assert!(
+        watcher.contains(&format!("[dependsOn:: {new_dep}]")),
+        "{watcher}"
+    );
+    assert!(!watcher.contains(&old_dep), "{watcher}");
+
+    let repaired: std::collections::BTreeMap<_, _> = plan
+        .repaired_files
+        .iter()
+        .map(|file| {
+            (
+                file.path.clone(),
+                (file.link_count, file.dependency_token_count),
+            )
+        })
+        .collect();
+    assert!(
+        repaired.contains_key(&PathBuf::from("inbox.md")),
+        "{repaired:?}"
+    );
+    assert_eq!(
+        repaired.get(&PathBuf::from("2026/20261118.md")),
+        Some(&(1, 0)),
+        "{repaired:?}"
+    );
+}
+
+#[test]
+fn split_same_note_fabricates_no_retargets() {
+    let weekly_summary = "Saw [[notes#^a1]] stay.";
+    let weekly = drafted_summary_note(weekly_summary, "Weekly body.\n");
+    let notes = [
+        (
+            "notes.md",
+            "- [ ] #task Big one ^owner\n  - Note alpha ^a1\n  - Stay put ^stay\n",
+        ),
+        ("2026/2026-W47.md", weekly.as_str()),
+    ];
+    let plan = split(&notes, "notes.md", 1, SplitSelection::Nth(vec![1]));
+    // The anchor never leaves the note: the bystander keeps resolving to
+    // it and never enters the postimages.
+    assert!(!plan
+        .postimages
+        .contains_key(&PathBuf::from("2026/2026-W47.md")));
+    assert!(plan.repaired_files.is_empty());
+    let moved = post(&plan, "notes.md");
+    assert!(moved.contains("- [[#^a1|"), "{moved}");
+    let expected = moved
+        .lines()
+        .position(|line| line.contains("^a1") && line.contains("#task"))
+        .expect("extracted task lands below owner")
+        + 1;
+    assert_eq!(plan.tasks[0].line, expected);
+    assert_eq!(plan.cursor_line, expected);
+    assert_eq!(plan.cursor_path, "notes.md");
+}
+
 fn parse_selection(value: &Value) -> SplitSelection {
     match value["kind"].as_str().unwrap() {
         "cursor" => SplitSelection::Cursor {

@@ -1,10 +1,13 @@
 //! Canonical owned-field link repair through the verified YAML writer.
 
+use std::path::Path;
+
 use super::{
     fields::{self, FieldProvenance, FrontmatterState},
     subject::NoteSubject,
     write::{self, OwnedPatch, Patch, WriteError},
 };
+use crate::native::collect_done::{MovedBlockTargets, ResolveMovedNote};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepairResult {
@@ -99,6 +102,47 @@ pub(crate) fn rewrite_owned_links_with(
     Ok(RepairResult {
         contents: repaired,
         link_count,
+    })
+}
+
+/// Rewrite moved-block links inside stored, valid owned fields on a
+/// canonical note, reusing the caller's vault-wide moved-target resolver.
+/// Decoded YAML values are Markdown: fenced blocks and inline code spans
+/// stay excluded, matching the archive repair semantics. Non-canonical
+/// notes never acquire intention-field semantics and pass through
+/// unchanged. Dependency metadata is deliberately untouched here; YAML
+/// values are not dependency fields.
+pub(crate) fn rewrite_owned_moved_links<R: ResolveMovedNote>(
+    contents: &str,
+    path: &Path,
+    note_index: &R,
+    moved_targets: &MovedBlockTargets,
+) -> Result<RepairResult, WriteError> {
+    let Some(subject) = fields::canonical_subject(&path.to_string_lossy())
+    else {
+        return Ok(RepairResult {
+            contents: contents.to_owned(),
+            link_count: 0,
+        });
+    };
+    rewrite_owned_links(contents, subject, |text| {
+        let wiki = crate::native::collect_done::repair_wiki_links(
+            text,
+            path,
+            note_index,
+            moved_targets,
+            true,
+            false,
+        );
+        let markdown = crate::native::collect_done::repair_markdown_links(
+            &wiki.contents,
+            path,
+            note_index,
+            moved_targets,
+            true,
+            false,
+        );
+        (markdown.contents, wiki.link_count + markdown.link_count)
     })
 }
 

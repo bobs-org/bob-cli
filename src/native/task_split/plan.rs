@@ -11,11 +11,27 @@ use serde::Serialize;
 
 use crate::native::{
     capture_block_ids::mint_block_id,
-    collect_done::{block_ids_in_markdown, trailing_block_id_in_line},
+    collect_done::{
+        block_ids_in_markdown, repair_links_in_note_with,
+        trailing_block_id_in_line, vault_relative_link_target,
+        MovedBlockTarget, MovedBlockTargets,
+    },
+    intentions::{
+        fields::canonical_subject, repair::rewrite_owned_moved_links,
+    },
     note_tasks::{self, NoteTaskSettings},
+    periods::note::carry_rewrite_digests,
     task_children::{self, TaskChildKind},
-    task_move::VaultSnapshot,
+    task_dependencies::dependency_id,
+    task_move::{
+        transplant::{
+            live_block_ids, repair_moved_fragment, repair_owned_postimages,
+            repair_vault_postimages, RepairedFile,
+        },
+        VaultSnapshot,
+    },
     task_relations,
+    vault_links::NoteIndex,
 };
 
 static BLOCK_ID_BEFORE_INLINE_FIELDS_RE: LazyLock<Regex> =
@@ -89,6 +105,7 @@ pub(crate) struct SplitPlacement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SplitPlan {
     pub(crate) postimages: BTreeMap<PathBuf, String>,
+    pub(crate) repaired_files: Vec<RepairedFile>,
     pub(crate) owner_path: PathBuf,
     pub(crate) owner_line: usize,
     pub(crate) owner_block_id: Option<String>,
@@ -326,38 +343,211 @@ pub(crate) fn plan_task_split(
     }
 
     let mut source_after = transformed_source.concat();
-    if destination_is_source {
-        if owner.kind == OwnerKind::Task {
-            insert_after_block(&mut source_after, owner.end, &generated);
-        } else {
-            insert_tasks_section(&mut source_after, &generated)?;
-        }
-        files.insert(request.owner_path.clone(), source_after.clone());
-    } else {
-        files.insert(request.owner_path.clone(), source_after.clone());
-        let dest_after = if owner.kind == OwnerKind::Task {
-            insert_tasks_section_string(&destination_before, &generated)?
-        } else {
-            insert_tasks_section_string(&destination_before, &generated)?
-        };
-        files.insert(destination_path.clone(), dest_after);
-    }
-
     // The parent id may have been minted after the source was snapshotted.
-    if let Some(id) = &owner_minted_id
-        && let Some(contents) = files.get_mut(&request.owner_path)
-    {
-        let mut lines = split_lines(contents);
+    if let Some(id) = &owner_minted_id {
+        let mut lines = split_lines(&source_after);
         if owner.line < lines.len() {
             lines[owner.line] = set_trailing_block_id(&lines[owner.line], id);
-            *contents = lines.concat();
+            source_after = lines.concat();
         }
     }
 
+    // Relocation identities for cross-note extraction: every anchor that
+    // actually moves to a different note, including retained descendant
+    // anchors. Same-note extraction fabricates no retargets, and freshly
+    // minted anchors (absent from the source) never enter the map.
+    let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+    let mut moved_targets = MovedBlockTargets::new();
+    if !destination_is_source {
+        let mut extracted_text = String::new();
+        for candidate_index in &selected {
+            let candidate = &candidates[*candidate_index];
+            extracted_text.push_str(&candidate.raw_body);
+            extracted_text.push('\n');
+            for child in &candidate.child_lines {
+                extracted_text.push_str(child);
+                extracted_text.push('\n');
+            }
+        }
+        let source_ids: BTreeSet<String> =
+            block_ids_in_markdown(source).into_iter().collect();
+        let extracted_ids: BTreeSet<String> =
+            block_ids_in_markdown(&extracted_text).into_iter().collect();
+        let stayed_ids: BTreeSet<String> =
+            live_block_ids(&source_after).into_iter().collect();
+        let relocated: Vec<String> = extracted_ids
+            .intersection(&source_ids)
+            .filter(|id| !stayed_ids.contains(*id))
+            .cloned()
+            .collect();
+        if !relocated.is_empty() {
+            let dest_target = vault_relative_link_target(
+                &destination_path,
+                "split destination",
+            )
+            .map_err(|err| error("split_invalid_path", err.to_string()))?;
+            for id in &relocated {
+                let (Ok(old_dep), Ok(new_dep)) = (
+                    dependency_id(&request.owner_path, id),
+                    dependency_id(&destination_path, id),
+                ) else {
+                    continue;
+                };
+                moved_targets.insert(
+                    (request.owner_path.clone(), id.clone()),
+                    MovedBlockTarget {
+                        archive_target: dest_target.clone(),
+                        block_id: id.clone(),
+                        old_dependency_id: old_dep,
+                        new_dependency_id: new_dep,
+                    },
+                );
+            }
+        }
+    }
+
+    // Links inside the extracted payload keep working after relocation:
+    // explicit references to moved anchors follow them, while pathless
+    // references to stayed anchors are qualified back to the source.
+    // Fragments are body text, never standalone canonical notes.
+    let mut fragment_link_count = 0;
+    let mut fragment_dep_count = 0;
+    let mut repaired_generated = generated.clone();
+    if !destination_is_source && !moved_targets.is_empty() {
+        let source_target =
+            vault_relative_link_target(&request.owner_path, "split source")
+                .map_err(|err| error("split_invalid_path", err.to_string()))?;
+        let stayed_ids: BTreeSet<String> =
+            live_block_ids(&source_after).into_iter().collect();
+        let empty_id_map = BTreeMap::new();
+        repaired_generated.clear();
+        for fragment in &generated {
+            let repaired = repair_moved_fragment(
+                fragment,
+                &request.owner_path,
+                &source_target,
+                &note_index,
+                &moved_targets,
+                &stayed_ids,
+                &empty_id_map,
+            );
+            fragment_link_count += repaired.link_count;
+            fragment_dep_count += repaired.dependency_count;
+            repaired_generated.push(repaired.contents);
+        }
+    }
+
+    let (postimages, repaired_files, dest_final) = if destination_is_source {
+        if owner.kind == OwnerKind::Task {
+            insert_after_block(
+                &mut source_after,
+                owner.end,
+                &repaired_generated,
+            );
+        } else {
+            insert_tasks_section(&mut source_after, &repaired_generated)?;
+        }
+        files.insert(request.owner_path.clone(), source_after.clone());
+        let postimages = files
+            .into_iter()
+            .filter(|(path, contents)| {
+                snapshot.notes.get(path) != Some(contents)
+            })
+            .collect();
+        (postimages, Vec::new(), source_after)
+    } else {
+        // The destination body and owned fields are repaired before
+        // insertion so landing and cursor lines are located on the final
+        // bytes. Eligibility derives from the captured pre-write note.
+        let dest_body_repair = repair_links_in_note_with(
+            &destination_before,
+            &destination_path,
+            &note_index,
+            &moved_targets,
+            true,
+        );
+        let dest_owned = rewrite_owned_moved_links(
+            &dest_body_repair.contents,
+            &destination_path,
+            &note_index,
+            &moved_targets,
+        )
+        .map_err(|err| {
+            error(
+                "split_owned_repair",
+                format!(
+                    "could not verify owned link repair in {}: {err}",
+                    destination_path.display()
+                ),
+            )
+        })?;
+        let dest_repaired = carry_rewrite_digests(
+            &destination_before,
+            &dest_owned.contents,
+            canonical_subject(&destination_path.to_string_lossy()),
+        )
+        .map_err(|err| {
+            error(
+                "split_owned_repair",
+                format!(
+                    "could not carry draft digests in {}: {err}",
+                    destination_path.display()
+                ),
+            )
+        })?;
+        let dest_after =
+            insert_tasks_section_string(&dest_repaired, &repaired_generated)?;
+        let mut repair_counts: BTreeMap<PathBuf, (usize, usize)> =
+            BTreeMap::new();
+        repair_counts.insert(
+            destination_path.clone(),
+            (
+                dest_body_repair.link_count
+                    + dest_owned.link_count
+                    + fragment_link_count,
+                dest_body_repair.dependency_metadata_count + fragment_dep_count,
+            ),
+        );
+        let source_postimages =
+            BTreeMap::from([(request.owner_path.clone(), source_after)]);
+        let vault_repaired = repair_vault_postimages(
+            &snapshot.notes,
+            &source_postimages,
+            &destination_path,
+            dest_after,
+            &note_index,
+            &moved_targets,
+            repair_counts,
+        );
+        let mut postimages = vault_repaired.postimages;
+        let mut repaired_files = vault_repaired.repaired_files;
+        repair_owned_postimages(
+            &snapshot.notes,
+            &mut postimages,
+            &mut repaired_files,
+            &note_index,
+            &moved_targets,
+            std::slice::from_ref(&destination_path),
+        )
+        .map_err(|err| {
+            error(
+                "split_owned_repair",
+                format!(
+                    "could not verify owned link repair in {}: {}",
+                    err.path.display(),
+                    err.detail
+                ),
+            )
+        })?;
+        let dest_final = postimages
+            .get(&destination_path)
+            .cloned()
+            .unwrap_or(destination_before);
+        (postimages, repaired_files, dest_final)
+    };
+
     for task in &mut planned_tasks {
-        task.line = locate_line(&files[&destination_path], &task.block_id)
-            .unwrap_or(0)
-            + 1;
+        task.line = locate_line(&dest_final, &task.block_id).unwrap_or(0) + 1;
     }
     let first = planned_tasks.first().expect("selected is nonempty");
     let display_titles = planned_tasks
@@ -374,9 +564,8 @@ pub(crate) fn plan_task_split(
             "notes"
         }
     );
-    let cursor_line = locate_line(&files[&destination_path], &first.block_id)
-        .unwrap_or(0)
-        + 1;
+    let cursor_line =
+        locate_line(&dest_final, &first.block_id).unwrap_or(0) + 1;
     let clamped = match request.selection {
         SplitSelection::Count { count, .. } if count > planned_tasks.len() => {
             Some((count, planned_tasks.len()))
@@ -384,12 +573,8 @@ pub(crate) fn plan_task_split(
         _ => None,
     };
     Ok(SplitPlan {
-        postimages: files
-            .into_iter()
-            .filter(|(path, contents)| {
-                snapshot.notes.get(path) != Some(contents)
-            })
-            .collect(),
+        postimages,
+        repaired_files,
         owner_path: request.owner_path.clone(),
         owner_line: owner.line + 1,
         owner_block_id,
