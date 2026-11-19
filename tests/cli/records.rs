@@ -4055,3 +4055,210 @@ fn walk_tidy_skips_walk_line_and_update_appends_after_it() {
         "walk line kept above H1: {markdown}"
     );
 }
+
+#[test]
+fn literal_comma_list_groups_and_updates_without_false_warning() {
+    let temp = TempDir::new("bob-cli-records-literal-group");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(vault.join("items")).expect("create items folder");
+    write_file(
+        &config,
+        "records:\n  item:\n    dir: items\n    label: Item\n    fields:\n      category: {list: true, values: {'Science, fiction': Fiction, other: Other}}\n      rating: {values: number}\n",
+    );
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("items.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Items.\n",
+            "record:\n",
+            "  noun: item\n",
+            "  label: Item\n",
+            "  fields:\n",
+            "    category: {list: true, values: {'Science, fiction': Fiction, other: Other}}\n",
+            "    rating: {values: number}\n",
+            "---\n\n# Items\n"
+        ),
+    );
+    write_file(
+        &vault.join("items/one.md"),
+        concat!(
+            "---\n",
+            "title: One\n",
+            "parent: \"[[items]]\"\n",
+            "type: \"[[record]]\"\n",
+            "category:\n",
+            "  - \"Science, fiction\"\n",
+            "rating: 1\n",
+            "---\n\n# One\n"
+        ),
+    );
+    let fixture = RecordsFixture {
+        _temp: temp,
+        vault,
+        config,
+    };
+    let before =
+        fs::read_to_string(fixture.vault.join("items/one.md")).unwrap();
+
+    let shown = show_record(&fixture, &["show", "item", "one", "-f", "json"]);
+    assert_success(&shown);
+    let shown = show_json(&shown);
+    let category = property(&shown, "category");
+    assert_eq!(category["state"], "set");
+    assert_eq!(category["value"], serde_json::json!(["Science, fiction"]));
+    assert_eq!(category["display"], "Fiction");
+    assert!(
+        shown["record"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|finding| finding["field"] != "category"),
+        "no false finding: {shown}"
+    );
+
+    let albums = bob_command()
+        .arg("albums")
+        .env("BOB_DIR", &fixture.vault)
+        .env("NO_COLOR", "1")
+        .env("BOB_NOW", "2026-10-07 13:40:00")
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("albums list");
+    assert_success(&albums);
+    let albums: Value =
+        serde_json::from_str(stdout(&albums).trim()).expect("albums json");
+    let album = albums["albums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["stem"] == "items")
+        .expect("items album");
+    assert_eq!(album["group_field"], "category");
+    let groups = album["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["value"], "Science, fiction");
+    assert_eq!(groups[0]["count"], 1);
+    assert_eq!(album["needs_status"], 0);
+
+    let shown_fp = records_command(&fixture)
+        .args(["show", "item", "one", "-f", "json"])
+        .output()
+        .expect("show fingerprint");
+    assert_success(&shown_fp);
+    let fingerprint = json(&shown_fp)["record"]["fingerprint"]
+        .as_str()
+        .expect("record fingerprint")
+        .to_owned();
+    let item_envelope = |envelope: &str, extra: &[&str]| {
+        let path = write_envelope(&fixture.vault, "envelope.json", envelope);
+        let path_text = path.to_string_lossy().into_owned();
+        let mut owned =
+            vec!["update".to_owned(), "item".to_owned(), "one".to_owned()];
+        owned.push("-i".to_owned());
+        owned.push(path_text);
+        owned.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        records_command(&fixture)
+            .args(&owned)
+            .output()
+            .expect("bob records update")
+    };
+    let output = item_envelope(
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"rating","value":2}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["changed"], serde_json::json!(["rating"]));
+    assert!(
+        payload["warnings"].as_array().unwrap().is_empty(),
+        "no false warning: {payload}"
+    );
+    let updated_category = payload["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "category")
+        .expect("category property");
+    assert_eq!(
+        updated_category["value"],
+        serde_json::json!(["Science, fiction"])
+    );
+    assert_eq!(updated_category["display"], "Fiction");
+    let after = fs::read_to_string(fixture.vault.join("items/one.md")).unwrap();
+    assert!(after.contains("rating: 2"), "{after}");
+    assert!(after.contains("  - \"Science, fiction\""), "{after}");
+    assert_eq!(
+        after.replace("rating: 2", "rating: 1"),
+        before,
+        "only rating bytes change"
+    );
+    let regrouped = bob_command()
+        .arg("albums")
+        .env("BOB_DIR", &fixture.vault)
+        .env("NO_COLOR", "1")
+        .env("BOB_NOW", "2026-10-07 13:40:00")
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("albums list after update");
+    assert_success(&regrouped);
+    let regrouped: Value =
+        serde_json::from_str(stdout(&regrouped).trim()).expect("albums json");
+    let regrouped = regrouped["albums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["stem"] == "items")
+        .expect("items album");
+    assert_eq!(regrouped["groups"].as_array().unwrap().len(), 1);
+    assert_eq!(regrouped["groups"][0]["value"], "Science, fiction");
+    assert_eq!(regrouped["needs_status"], 0);
+
+    let replay = serde_json::json!({
+        "schema_version": 1,
+        "expect": payload["fingerprint_after"],
+        "ops": payload["inverse_ops"],
+    });
+    let output = item_envelope(&replay.to_string(), &["-f", "json"]);
+    assert_success(&output);
+    assert_eq!(envelope_json(&output)["fingerprint_after"], fingerprint);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("items/one.md")).unwrap(),
+        before,
+        "Undo restores bytes"
+    );
+
+    // `-s` keeps CLI comma splitting for authored input.
+    let split = records_command(&fixture)
+        .args([
+            "update",
+            "item",
+            "one",
+            "-s",
+            "category=other,other",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("comma split control");
+    assert_success(&split);
+    let split = json(&split);
+    let value = split["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "category")
+        .unwrap()["value"]
+        .clone();
+    assert_eq!(value, serde_json::json!(["other", "other"]));
+}

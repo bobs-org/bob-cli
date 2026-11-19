@@ -1126,16 +1126,11 @@ fn collect_warnings(
         if inputs.is_empty() {
             continue;
         }
-        let state = FieldInputState::SuppliedValues(inputs);
-        if super::schema::validate_field_values(
-            field,
-            match &state {
-                FieldInputState::SuppliedValues(values) => values,
-                _ => &[],
-            },
-            today,
-        )
-        .is_err()
+        // Stored YAML members are already delimited; comma splitting here
+        // would turn one literal member into false `record_invalid_value`
+        // warnings, so validate with literal semantics.
+        if super::schema::validate_literal_values(field, &inputs, today)
+            .is_err()
         {
             warnings.push(RecordDiagnostic {
                 code: RecordDiagnosticCode::InvalidValue,
@@ -3340,6 +3335,49 @@ mod tests {
         )
         .replace('\n', "\r\n");
         assert_eq!(apply(&crlf), expected_crlf);
+    }
+
+    #[test]
+    fn untouched_literal_comma_list_produces_no_warning() {
+        let mut record_type = restaurant_type();
+        let Some(category) = record_type
+            .fields
+            .iter_mut()
+            .find(|field| field.key == "category")
+        else {
+            panic!("restaurant category field");
+        };
+        category.kind = FieldKind::Choices(vec![
+            super::super::schema::RecordChoice {
+                value: "Science, fiction".to_owned(),
+                label: "Fiction".to_owned(),
+            },
+            super::super::schema::RecordChoice {
+                value: "other".to_owned(),
+                label: "Other".to_owned(),
+            },
+        ]);
+        category.list = true;
+        let original = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\ncategory:\n  - \"Science, fiction\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n\n# T\n";
+        let applied = apply_record_update(&RecordUpdateRequest {
+            record_type: &record_type,
+            original,
+            fields: &[field_input("location", &["Westfield"])],
+            notes: &[],
+            note_date: Some(NOTE_DATE),
+            today: TODAY,
+        })
+        .expect("literal comma update applies");
+        assert_eq!(applied.changed, vec!["location".to_owned()]);
+        assert!(
+            applied.warnings.is_empty(),
+            "no false warning:\n{applied:?}"
+        );
+        assert!(
+            applied.markdown.contains("  - \"Science, fiction\"\n"),
+            "literal member preserved:\n{}",
+            applied.markdown
+        );
     }
 
     #[test]

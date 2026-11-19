@@ -12,7 +12,7 @@ use crate::native::{
     records::{
         catalog::IndexedRecord,
         schema::{
-            validate_field_values, FieldKind, RecordField, RecordScalar,
+            validate_literal_values, FieldKind, RecordField, RecordScalar,
             RecordValue,
         },
         IndexedFieldValue,
@@ -263,7 +263,10 @@ fn group_value(field: &RecordField, record: &GroupingRecord) -> Option<String> {
         | IndexedFieldValue::Scalar(_) => return None,
     };
     let today = NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch");
-    match validate_field_values(field, &raw, today).ok()? {
+    // Stored YAML members are already delimited. CLI comma splitting would
+    // break a literal member such as "Science, fiction" into two invalid
+    // fragments, so validate with literal semantics.
+    match validate_literal_values(field, &raw, today).ok()? {
         RecordValue::Scalar(RecordScalar::Choice(choice)) => Some(choice),
         RecordValue::List(values) => match values.as_slice() {
             [RecordScalar::Choice(choice)] => Some(choice.clone()),
@@ -858,5 +861,28 @@ mod tests {
         assert!(subgroups[1].missing);
         assert_eq!(subgroups[1].display, MISSING_SUBGROUP);
         assert_eq!(subgroups[1].members[0].title, "Place 07");
+    }
+
+    #[test]
+    fn literal_comma_member_groups_without_splitting() {
+        let mut category = choices(
+            "category",
+            &[("Science, fiction", "Fiction"), ("other", "Other")],
+        );
+        category.list = true;
+        let members =
+            IndexedFieldValue::List(vec!["Science, fiction".to_owned()]);
+        let records = vec![record(
+            "items/one.md",
+            "One",
+            None,
+            &[("category", members)],
+        )];
+        let grouping = group_records(&[category], None, &[], &records);
+        assert_eq!(grouping.group_field.as_deref(), Some("category"));
+        assert_eq!(grouping.groups.len(), 1);
+        assert_eq!(grouping.groups[0].value, "Science, fiction");
+        assert_eq!(grouping.groups[0].count, 1);
+        assert_eq!(grouping.needs_status, 0);
     }
 }

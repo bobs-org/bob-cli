@@ -2228,14 +2228,17 @@ fn count_newly_invalid(
 
     let mut newly = 0;
     for note in folder.notes() {
+        // Indexed members are already delimited stored YAML. Literal
+        // semantics preserve commas; authored CLI `-s` input keeps its
+        // comma-splitting path elsewhere.
         let state = match note.field(&before.key) {
             None => FieldInputState::Absent,
             Some(IndexedFieldValue::Null) => FieldInputState::SuppliedEmpty,
             Some(IndexedFieldValue::Scalar(value)) => {
-                FieldInputState::SuppliedValues(vec![value.clone()])
+                FieldInputState::SuppliedLiteralValues(vec![value.clone()])
             }
             Some(IndexedFieldValue::List(values)) => {
-                FieldInputState::SuppliedValues(values.clone())
+                FieldInputState::SuppliedLiteralValues(values.clone())
             }
             Some(IndexedFieldValue::Unsupported) => {
                 // Unsupported YAML can never prove validity; skip it
