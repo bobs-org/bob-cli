@@ -1448,7 +1448,8 @@ fn render_frozen_note(
                 annotated.asset_map,
                 super::rename::links::LinkSelector::All,
                 archive_note,
-            );
+            )
+            .map_err(|error| error.to_string())?;
         }
         if !annotated.highlight_map.is_empty() {
             frozen = super::rename::links::rewrite_contents(
@@ -1456,7 +1457,8 @@ fn render_frozen_note(
                 annotated.highlight_map,
                 super::rename::links::LinkSelector::HighlightFragments,
                 archive_note,
-            );
+            )
+            .map_err(|error| error.to_string())?;
         }
     }
     Ok(frozen)
@@ -2391,5 +2393,90 @@ mod tests {
             .find(|preimage| preimage.path == "lib/papers/paper.pdf")
             .unwrap();
         assert_eq!(live_pdf.sha256.as_deref(), Some(hash.as_str()));
+    }
+
+    #[test]
+    fn annotated_plan_repairs_canonical_owned_highlight_links() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let config = Config {
+            bob_dir: root.to_path_buf(),
+            ref_dir: root.join("ref"),
+            lib_dir: root.join("lib"),
+            xlib_dir: root.join("xlib"),
+        };
+        fs::create_dir_all(root.join("ref/papers/paper.assets")).unwrap();
+        fs::create_dir_all(root.join("lib/papers")).unwrap();
+        fs::create_dir_all(root.join("2026")).unwrap();
+        fs::create_dir_all(root.join("Archive")).unwrap();
+        fs::write(
+            root.join("ref/papers/paper.md"),
+            "---\ntitle: Paper\nparent: \"[[area]]\"\n---\n# Paper\n\nQuote ^h-abc\n",
+        )
+        .unwrap();
+        fs::write(root.join("lib/papers/paper.pdf"), b"%PDF-fake").unwrap();
+        fs::write(root.join("Archive/paper.md"), "# Other paper\n").unwrap();
+        let summary =
+            "Drafted [[ref/papers/paper#^h-abc]] and missing [[ref/papers/paper#^h-nope]] and bare [[paper]]";
+        let day = format!(
+            "---\nsummary: {summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-10-25\nparent: \"[[ref/papers/paper#^h-abc]]\"\n---\nBody [[ref/papers/paper#^h-abc]] and [[ref/papers/paper]].\n",
+            crate::native::intentions::digest(summary)
+        );
+        fs::write(root.join("2026/20261025.md"), &day).unwrap();
+        let hash = sha256(b"%PDF-fake");
+        let plan = plan_annotated_archive(
+            &config,
+            "ref/papers/paper.md",
+            "papers",
+            "paper",
+            "2026-10-25",
+            Some("2020-01-01"),
+            "read",
+            "Paper",
+            1,
+            &fs::read_to_string(root.join("ref/papers/paper.md")).unwrap(),
+            Path::new("lib/papers/paper.pdf"),
+            &hash,
+            &hash,
+            None,
+        )
+        .expect("annotated plan");
+        let inbound = plan
+            .inbound
+            .files
+            .iter()
+            .find(|file| vault_slash_path(&file.path) == "2026/20261025.md")
+            .expect("canonical day has inbound highlight rewrites");
+        let rewritten_summary = "Drafted [[ref_history/papers/paper__2026-10-25#^h-abc]] and missing [[ref/papers/paper#^h-nope]] and bare [[paper]]"
+            .to_string();
+        // Selected highlight fragments rewrite through the verified writer;
+        // unselected note links, missing anchors, and ambiguous bare
+        // targets stay put.
+        assert!(inbound.contents.contains(&format!(
+            "summary: {rewritten_summary:?}\nsummary_digest: {}\n",
+            crate::native::intentions::digest(&rewritten_summary)
+        )));
+        assert!(inbound.contents.contains("summary_drafted: 2026-10-25\n"));
+        assert!(inbound
+            .contents
+            .contains("parent: \"[[ref/papers/paper#^h-abc]]\"\n"));
+        assert!(inbound.contents.contains(
+            "Body [[ref_history/papers/paper__2026-10-25#^h-abc]] and [[ref/papers/paper]].\n"
+        ));
+        assert_eq!(inbound.rewritten, 2);
+        assert!(plan
+            .inbound
+            .skipped_dangling_highlights
+            .iter()
+            .any(|finding| finding.target == "ref/papers/paper#^h-nope"));
+        assert!(plan
+            .inbound
+            .skipped_ambiguous
+            .iter()
+            .any(|finding| finding.target == "paper"));
+        assert!(plan
+            .preimages
+            .iter()
+            .any(|preimage| preimage.path == "2026/20261025.md"));
     }
 }

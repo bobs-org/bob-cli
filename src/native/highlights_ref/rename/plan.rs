@@ -2892,6 +2892,20 @@ mod tests {
             String::from_utf8_lossy(&output.stdout).to_string()
         }
 
+        fn commit_all(vault: &Path) {
+            let run = |args: &[&str]| {
+                let status = Command::new("git")
+                    .arg("-C")
+                    .arg(vault)
+                    .args(args)
+                    .status()
+                    .expect("run git");
+                assert!(status.success(), "git {args:?} failed");
+            };
+            run(&["add", "-A"]);
+            run(&["commit", "-q", "-m", "fixture"]);
+        }
+
         fn synced_fixture(
             stem: &str,
             marker: &str,
@@ -3319,6 +3333,78 @@ mod tests {
             assert!(vault.join("lib/blogs/bar.pdf").exists());
             assert!(!vault.join("lib/blogs/foo.pdf").exists());
             assert_eq!(git_head(&vault), sha);
+        }
+
+        #[test]
+        fn canonical_owned_fields_repair_and_restamp_through_rename() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let day_summary = "Read [[ref/blogs/foo]] today";
+            let day_after = "Read [[ref/blogs/bar]] today";
+            fs::create_dir_all(vault.join("2026")).unwrap();
+            fs::write(
+                vault.join("2026/20261119.md"),
+                format!(
+                    "---\nsummary: {day_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\nparent: \"[[ref/blogs/foo]]\"\n---\nBody [[ref/blogs/foo]].\n",
+                    crate::native::intentions::digest(day_summary)
+                ),
+            )
+            .unwrap();
+            fs::write(
+                vault.join("2026/2026-W47.md"),
+                "---\nintentions:\n  - \"Review [[ref/blogs/foo#^s-memory]]\"\n---\nBody [[ref/blogs/foo]].\n",
+            )
+            .unwrap();
+            commit_all(&vault);
+            let prepared = prepare_rename(&config, "foo", "bar");
+            assert!(prepared
+                .report
+                .links
+                .files
+                .contains(&vault_path(&PathBuf::from("2026/20261119.md"))));
+            assert!(prepared
+                .report
+                .links
+                .files
+                .contains(&vault_path(&PathBuf::from("2026/2026-W47.md"))));
+            let day_planned = prepared
+                .link_rewrites
+                .iter()
+                .find(|rewrite| rewrite.path == Path::new("2026/20261119.md"))
+                .expect("canonical day is planned");
+            assert!(day_planned.contents.contains(&format!(
+                "summary: {day_after:?}\nsummary_digest: {}\n",
+                crate::native::intentions::digest(day_after)
+            )));
+            assert!(day_planned
+                .contents
+                .contains("parent: \"[[ref/blogs/foo]]\"\n"));
+            let week_planned = prepared
+                .link_rewrites
+                .iter()
+                .find(|rewrite| rewrite.path == Path::new("2026/2026-W47.md"))
+                .expect("canonical week is planned");
+            assert!(week_planned.contents.contains(
+                "intentions:\n  - \"Review [[ref/blogs/bar#^s-memory]]\"\n"
+            ));
+            let fake = FakeCoordinator::grant(Duration::from_millis(7));
+            let (result, _) = execute_with_fake(&config, &prepared, fake);
+            result.expect("rename with canonical inbound links succeeds");
+            let day_written =
+                fs::read_to_string(vault.join("2026/20261119.md")).unwrap();
+            assert!(day_written.contains(&format!(
+                "summary: {day_after:?}\nsummary_digest: {}\n",
+                crate::native::intentions::digest(day_after)
+            )));
+            assert!(day_written.contains("summary_drafted: 2026-11-19\n"));
+            assert!(day_written.contains("parent: \"[[ref/blogs/foo]]\"\n"));
+            assert!(day_written.contains("Body [[ref/blogs/bar]].\n"));
+            let week_written =
+                fs::read_to_string(vault.join("2026/2026-W47.md")).unwrap();
+            assert!(week_written.contains(
+                "intentions:\n  - \"Review [[ref/blogs/bar#^s-memory]]\"\n"
+            ));
+            assert!(week_written.contains("Body [[ref/blogs/bar]].\n"));
+            assert_eq!(git_status(&vault), "");
         }
 
         #[test]

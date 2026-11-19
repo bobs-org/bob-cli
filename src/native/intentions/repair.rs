@@ -12,6 +12,16 @@ pub(crate) struct RepairResult {
     pub(crate) link_count: usize,
 }
 
+/// Which stored field supplies one rewrite callback value. The index is the
+/// position inside a sequence-valued `intentions` field and zero otherwise,
+/// so callers can map a rewritten value back to its original-source lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnedField {
+    Intentions,
+    Summary,
+    Reflection,
+}
+
 /// Rewrite links only in stored, valid intention fields on a canonical note.
 /// The caller supplies the Markdown resolver so each rewrite surface keeps
 /// its existing target resolution and code/comment exclusions.
@@ -19,6 +29,16 @@ pub(crate) fn rewrite_owned_links(
     contents: &str,
     subject: NoteSubject,
     mut rewrite: impl FnMut(&str) -> (String, usize),
+) -> Result<RepairResult, WriteError> {
+    rewrite_owned_links_with(contents, subject, |_, _, value| rewrite(value))
+}
+
+/// Field-aware variant of [`rewrite_owned_links`] for callers that report
+/// per-value evidence against original-source lines.
+pub(crate) fn rewrite_owned_links_with(
+    contents: &str,
+    subject: NoteSubject,
+    mut rewrite: impl FnMut(OwnedField, usize, &str) -> (String, usize),
 ) -> Result<RepairResult, WriteError> {
     let stored = fields::read(contents, subject);
     if stored.frontmatter_state != FrontmatterState::Valid {
@@ -37,8 +57,9 @@ pub(crate) fn rewrite_owned_links(
     {
         let mut rewritten_values = Vec::with_capacity(values.len());
         let mut changed = false;
-        for value in values {
-            let (rewritten, count) = rewrite(value);
+        for (index, value) in values.iter().enumerate() {
+            let (rewritten, count) =
+                rewrite(OwnedField::Intentions, index, value);
             if rewritten != *value {
                 changed = true;
                 link_count += count;
@@ -56,7 +77,7 @@ pub(crate) fn rewrite_owned_links(
         && stored.summary.valid
         && let Some(value) = stored.summary.value.as_deref()
     {
-        let (rewritten, count) = rewrite(value);
+        let (rewritten, count) = rewrite(OwnedField::Summary, 0, value);
         if rewritten != value {
             link_count += count;
             patch.summary = Patch::Set(rewritten);
@@ -67,7 +88,7 @@ pub(crate) fn rewrite_owned_links(
         && stored.reflection.valid
         && let Some(value) = stored.reflection.value.as_deref()
     {
-        let (rewritten, count) = rewrite(value);
+        let (rewritten, count) = rewrite(OwnedField::Reflection, 0, value);
         if rewritten != value {
             link_count += count;
             patch.reflection = Patch::Set(rewritten);

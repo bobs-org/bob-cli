@@ -11,7 +11,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::native::{markdown, task_dependencies};
+use crate::native::{
+    intentions::{
+        fields::canonical_subject,
+        repair::{rewrite_owned_links_with, OwnedField},
+    },
+    markdown, task_dependencies,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LineEdit {
@@ -88,6 +94,10 @@ pub(crate) enum LinkScanError {
     InvalidUtf8 {
         path: PathBuf,
     },
+    OwnedRepair {
+        path: PathBuf,
+        message: String,
+    },
 }
 
 impl fmt::Display for LinkScanError {
@@ -102,6 +112,13 @@ impl fmt::Display for LinkScanError {
             Self::InvalidUtf8 { path } => {
                 write!(formatter, "{} is not valid UTF-8", path.display())
             }
+            Self::OwnedRepair { path, message } => {
+                write!(
+                    formatter,
+                    "could not verify owned link repair in {}: {message}",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -112,7 +129,7 @@ impl Error for LinkScanError {
             Self::ReadDir { source, .. } | Self::ReadFile { source, .. } => {
                 Some(source)
             }
-            Self::InvalidUtf8 { .. } => None,
+            Self::InvalidUtf8 { .. } | Self::OwnedRepair { .. } => None,
         }
     }
 }
@@ -276,7 +293,7 @@ pub(crate) fn plan_vault_links_with_known_highlights(
                 path: absolute.clone(),
             }
         })?;
-        let result = rewrite_text(
+        let mut result = rewrite_text(
             &contents,
             &bundle_paths,
             &all_markdown,
@@ -284,7 +301,20 @@ pub(crate) fn plan_vault_links_with_known_highlights(
             selector,
             known_highlights,
         );
-        if !result.edits.is_empty() {
+        result = rewrite_canonical_owned_fields(
+            &contents,
+            result,
+            &bundle_paths,
+            &all_markdown,
+            relative,
+            selector,
+            known_highlights,
+        )
+        .map_err(|message| LinkScanError::OwnedRepair {
+            path: relative.clone(),
+            message,
+        })?;
+        if !result.edits.is_empty() || result.contents != contents {
             plan.files.push(FileRewrite {
                 path: relative.clone(),
                 edits: result.edits,
@@ -316,10 +346,30 @@ pub(crate) fn rewrite_contents(
     bundle: &BTreeMap<PathBuf, PathBuf>,
     selector: LinkSelector,
     current_file: &Path,
-) -> String {
+) -> Result<String, LinkScanError> {
     let bundle_paths = BundlePaths::new(bundle);
-    rewrite_text(contents, &bundle_paths, &[], current_file, selector, None)
-        .contents
+    let result = rewrite_text(
+        contents,
+        &bundle_paths,
+        &[],
+        current_file,
+        selector,
+        None,
+    );
+    rewrite_canonical_owned_fields(
+        contents,
+        result,
+        &bundle_paths,
+        &[],
+        current_file,
+        selector,
+        None,
+    )
+    .map(|result| result.contents)
+    .map_err(|message| LinkScanError::OwnedRepair {
+        path: current_file.to_path_buf(),
+        message,
+    })
 }
 
 #[derive(Debug, Default)]
@@ -346,14 +396,26 @@ fn rewrite_text(
         .iter()
         .map(|line| line.strip_suffix('\n').unwrap_or(line))
         .collect::<Vec<_>>();
-    let fenced = markdown::fenced_lines(&logical_lines, 0..logical_lines.len());
+    // Canonical daily and period notes keep intention-field semantics in
+    // frontmatter. The generic raw pass leaves that block alone so it
+    // cannot rewrite an unrelated property or apply the same replacement
+    // twice; owned values go through the typed verified repair below.
+    let frontmatter_end =
+        canonical_frontmatter_end(current_file, &logical_lines);
+    let fence_start = frontmatter_end.map_or(0, |end| end + 1);
+    let fenced = markdown::fenced_lines(
+        &logical_lines,
+        fence_start..logical_lines.len(),
+    );
     let file = current_file.to_path_buf();
     let mut output = String::with_capacity(contents.len());
     let mut result = TextRewrite::default();
 
     for (index, raw_line) in raw_lines.iter().enumerate() {
         let line = logical_lines[index];
-        if fenced.contains(&index) {
+        if fenced.contains(&index)
+            || frontmatter_end.is_some_and(|end| index <= end)
+        {
             output.push_str(raw_line);
             continue;
         }
@@ -394,6 +456,326 @@ fn rewrite_text(
     }
     result.contents = output;
     result
+}
+
+/// Strictly closed frontmatter end for a canonical daily or period note, or
+/// `None` when this file carries no intention-field semantics. An unclosed
+/// or absent block is not protected: the typed repair leaves invalid
+/// frontmatter byte-identical while the raw pass still repairs the body.
+fn canonical_frontmatter_end(
+    current_file: &Path,
+    logical_lines: &[&str],
+) -> Option<usize> {
+    canonical_subject(&vault_path(current_file))?;
+    let first = logical_lines.first()?;
+    let opener = first.strip_prefix('\u{feff}').unwrap_or(first);
+    if opener.trim_end() != "---" {
+        return None;
+    }
+    logical_lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| (line.trim_end() == "---").then_some(index))
+}
+
+/// Route a canonical note's stored intention fields through the typed
+/// verified repair, then carry eligible draft digests from the original
+/// bytes. Noncanonical notes and notes without a closed frontmatter block
+/// keep the raw-pass result untouched.
+#[allow(clippy::too_many_arguments)]
+fn rewrite_canonical_owned_fields(
+    original: &str,
+    mut result: TextRewrite,
+    bundle: &BundlePaths,
+    markdown_paths: &[PathBuf],
+    current_file: &Path,
+    selector: LinkSelector,
+    known_highlights: Option<&BTreeSet<String>>,
+) -> Result<TextRewrite, String> {
+    let logical: Vec<&str> = original.split('\n').collect();
+    let Some(end) = canonical_frontmatter_end(current_file, &logical) else {
+        return Ok(result);
+    };
+    let subject = canonical_subject(&vault_path(current_file))
+        .expect("frontmatter end implies a canonical subject");
+    let key_lines = owned_key_lines(&logical, end);
+    let file = current_file.to_path_buf();
+    let mut evidence = OwnedEvidence::default();
+    let repaired = rewrite_owned_links_with(
+        &result.contents,
+        subject,
+        |field, index, value| {
+            rewrite_owned_value(
+                field,
+                index,
+                value,
+                bundle,
+                markdown_paths,
+                &file,
+                &key_lines,
+                end,
+                selector,
+                known_highlights,
+                &mut evidence,
+            )
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    // Eligibility is always read from the original pre-write note: staged
+    // link edits cannot turn an edited or reflected note into a draft.
+    let carried = crate::native::periods::note::carry_rewrite_digests(
+        original,
+        &repaired.contents,
+        Some(subject),
+    )
+    .map_err(|error| error.to_string())?;
+    result.rewritten += repaired.link_count;
+    result.skipped_ambiguous.extend(evidence.skipped_ambiguous);
+    result
+        .skipped_dangling_highlights
+        .extend(evidence.skipped_dangling_highlights);
+    result
+        .highlight_fragments
+        .extend(evidence.highlight_fragments);
+    result
+        .highlight_follow_ups
+        .extend(evidence.highlight_follow_ups);
+    result
+        .edits
+        .extend(frontmatter_edits(&result.contents, &carried, end));
+    result.contents = carried;
+    Ok(result)
+}
+
+/// Original-source line anchors for the three owned fields: the key line
+/// plus whether its value starts on that same line. Intentions items in a
+/// block list additionally record their own lines.
+#[derive(Debug, Default)]
+struct OwnedKeyLines {
+    intentions: Option<(usize, bool, Vec<usize>)>,
+    summary: Option<(usize, bool)>,
+    reflection: Option<(usize, bool)>,
+}
+
+fn owned_key_lines(logical: &[&str], end: usize) -> OwnedKeyLines {
+    let mut key_lines = OwnedKeyLines::default();
+    for (index, line) in logical.iter().enumerate().take(end + 1).skip(1) {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        let Some((key, colon)) = crate::native::yaml_spans::parse_key(line, 0)
+        else {
+            continue;
+        };
+        let same_line = has_same_line_value(&line[colon + 1..]);
+        match key.as_str() {
+            "intentions" => {
+                key_lines.intentions = Some((index, same_line, Vec::new()));
+            }
+            "summary" => {
+                key_lines.summary = Some((index, same_line));
+            }
+            "reflection" => {
+                key_lines.reflection = Some((index, same_line));
+            }
+            _ => {}
+        }
+        if key.as_str() == "intentions" && !same_line {
+            key_lines.intentions =
+                Some((index, same_line, block_item_lines(logical, index, end)));
+        }
+    }
+    key_lines
+}
+
+/// True when a key's value starts on the key's own line (flow, quoted, or
+/// plain single-line scalars). Block headers (`|`, `>`) and absent values
+/// continue on following lines.
+fn has_same_line_value(after_colon: &str) -> bool {
+    let mut rest = after_colon.trim_end();
+    if let Some(comment_start) = rest.find(" #") {
+        rest = rest[..comment_start].trim_end();
+    }
+    if rest.starts_with(" #") {
+        return false;
+    }
+    if rest.is_empty() {
+        return false;
+    }
+    let first = rest.chars().next().unwrap_or(' ');
+    !(first == '|' || first == '>')
+}
+
+/// Zero-based lines of `- ` block-sequence items after a key line.
+fn block_item_lines(
+    logical: &[&str],
+    key_index: usize,
+    end: usize,
+) -> Vec<usize> {
+    logical
+        .iter()
+        .enumerate()
+        .take(end + 1)
+        .skip(key_index + 1)
+        .take_while(|(_, line)| {
+            !line.trim().is_empty()
+                && (line.starts_with(' ') || line.starts_with('\t'))
+        })
+        .filter_map(|(index, line)| {
+            line.trim_start().starts_with("- ").then_some(index)
+        })
+        .collect()
+}
+
+#[derive(Debug, Default)]
+struct OwnedEvidence {
+    skipped_ambiguous: Vec<AmbiguousBareLink>,
+    skipped_dangling_highlights: Vec<LinkFinding>,
+    highlight_fragments: Vec<LinkFinding>,
+    highlight_follow_ups: Vec<LinkFinding>,
+}
+
+/// Rewrite one decoded YAML value with the same bundle resolver, selector,
+/// and known-highlight guards as the raw line pass. Code exclusions apply
+/// within the value itself; `base_line` keeps findings on original-source
+/// lines after YAML re-rendering.
+#[allow(clippy::too_many_arguments)]
+fn rewrite_owned_value(
+    field: OwnedField,
+    index: usize,
+    value: &str,
+    bundle: &BundlePaths,
+    markdown_paths: &[PathBuf],
+    current_file: &Path,
+    key_lines: &OwnedKeyLines,
+    frontmatter_end: usize,
+    selector: LinkSelector,
+    known_highlights: Option<&BTreeSet<String>>,
+    evidence: &mut OwnedEvidence,
+) -> (String, usize) {
+    let base_line = owned_base_line(field, index, key_lines, frontmatter_end);
+    let lines: Vec<&str> = value.split('\n').collect();
+    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let mut rewritten = String::with_capacity(value.len());
+    let mut count = 0;
+    for (offset, line) in lines.iter().enumerate() {
+        if !fenced.contains(&offset) {
+            let line_result = rewrite_line(
+                line,
+                bundle,
+                markdown_paths,
+                current_file,
+                base_line + offset,
+                selector,
+                known_highlights,
+            );
+            rewritten.push_str(&line_result.after);
+            count += line_result.rewritten;
+            evidence
+                .skipped_ambiguous
+                .extend(line_result.skipped_ambiguous);
+            evidence
+                .skipped_dangling_highlights
+                .extend(line_result.skipped_dangling_highlights);
+            evidence
+                .highlight_fragments
+                .extend(line_result.highlight_fragments);
+            evidence
+                .highlight_follow_ups
+                .extend(line_result.highlight_follow_ups);
+        } else {
+            rewritten.push_str(line);
+        }
+        if offset + 1 < lines.len() {
+            rewritten.push('\n');
+        }
+    }
+    (rewritten, count)
+}
+
+/// One-based original-source line number for a value's first line. Later
+/// lines of a multiline value follow consecutively, clamped to the
+/// frontmatter block.
+fn owned_base_line(
+    field: OwnedField,
+    index: usize,
+    key_lines: &OwnedKeyLines,
+    frontmatter_end: usize,
+) -> usize {
+    let key_index = match field {
+        OwnedField::Intentions => {
+            if let Some((key_index, same_line, items)) = &key_lines.intentions {
+                if *same_line {
+                    return key_index + 1;
+                }
+                if let Some(item) = items.get(index) {
+                    return item + 1;
+                }
+                return (*key_index + 1 + index).min(frontmatter_end) + 1;
+            }
+            return frontmatter_end.min(1) + 1;
+        }
+        OwnedField::Summary => key_lines.summary,
+        OwnedField::Reflection => key_lines.reflection,
+    };
+    let Some((key_index, same_line)) = key_index else {
+        return frontmatter_end.min(1) + 1;
+    };
+    if same_line {
+        key_index + 1
+    } else {
+        (key_index + 1).min(frontmatter_end) + 1
+    }
+}
+
+/// Line edits covering the frontmatter block that the verified writer
+/// re-rendered, so owned-only rewrites still surface in `edits` and
+/// previews with original-source line numbers.
+fn frontmatter_edits(
+    before: &str,
+    after: &str,
+    frontmatter_end: usize,
+) -> Vec<LineEdit> {
+    if before == after {
+        return Vec::new();
+    }
+    let before_lines: Vec<&str> = before.split('\n').collect();
+    let after_lines: Vec<&str> = after.split('\n').collect();
+    let before_end =
+        canonical_block_end(&before_lines, frontmatter_end).unwrap_or(0);
+    let after_end =
+        canonical_block_end(&after_lines, frontmatter_end).unwrap_or(0);
+    let width = before_end.max(after_end) + 1;
+    let mut edits = Vec::new();
+    for index in 0..width {
+        let old = before_lines.get(index).copied().unwrap_or("");
+        let new = after_lines.get(index).copied().unwrap_or("");
+        if old != new {
+            edits.push(LineEdit {
+                line: index + 1,
+                before: old.to_string(),
+                after: new.to_string(),
+            });
+        }
+    }
+    edits
+}
+
+/// Re-locate the closing `---` in re-rendered contents, tolerating a BOM.
+/// Falls back to the original block end when the fences are unchanged.
+fn canonical_block_end(lines: &[&str], fallback: usize) -> Option<usize> {
+    let first = lines.first()?;
+    let opener = first.strip_prefix('\u{feff}').unwrap_or(first);
+    if opener.trim_end() != "---" {
+        return Some(fallback.min(lines.len().saturating_sub(1)));
+    }
+    lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| (line.trim_end() == "---").then_some(index))
+        .or(Some(fallback.min(lines.len().saturating_sub(1))))
 }
 
 #[derive(Debug, Default)]
@@ -1285,6 +1667,319 @@ mod tests {
             result.contents,
             "- [ ] #task Read [[ref/blogs/new.md|alias]] [type:: WRITE] ^t1\n"
         );
+    }
+
+    #[test]
+    fn canonical_owned_fields_rewrite_while_unrelated_yaml_stays_exact() {
+        let moves = bundle("old", "new");
+        let day = "---\nintentions:\n  - \"[[ref/blogs/old|read]]\"\n  - keep\nsummary: \"See [[ref/blogs/old#^s-memory]]\"\nreflection: |-\n  First [[ref/blogs/old]].\n\n  Second paragraph.\nparent: \"[[ref/blogs/old]]\"\ncustom: plain [[ref/blogs/old]] text\n---\nBody [[ref/blogs/old]] and [[old]].\n";
+        let plan = plan_files(
+            &[
+                ("ref/blogs/old.md", "---\ntitle: Old\n---\n# Old\n"),
+                ("2026/20261119.md", day),
+            ],
+            &moves,
+        );
+        let day_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261119.md"))
+            .expect("canonical day is rewritten");
+        assert!(day_rewrite.contents.contains(
+            "intentions:\n  - \"[[ref/blogs/new|read]]\"\n  - keep\n"
+        ));
+        assert!(day_rewrite
+            .contents
+            .contains("summary: \"See [[ref/blogs/new#^s-memory]]\"\n"));
+        assert!(day_rewrite.contents.contains("First [[ref/blogs/new]].\n"));
+        // Unrelated canonical properties never acquire link semantics,
+        // even when they name the renamed target.
+        assert!(day_rewrite
+            .contents
+            .contains("parent: \"[[ref/blogs/old]]\"\n"));
+        assert!(day_rewrite
+            .contents
+            .contains("custom: plain [[ref/blogs/old]] text\n"));
+        assert!(day_rewrite
+            .contents
+            .contains("Body [[ref/blogs/new]] and [[new]].\n"));
+        // Three owned links plus two body links.
+        assert_eq!(day_rewrite.rewritten, 5);
+        assert!(!day_rewrite.edits.is_empty());
+        // Owned edits report original-source lines inside the frontmatter.
+        let original_lines: Vec<&str> = day.split('\n').collect();
+        for edit in &day_rewrite.edits {
+            assert!(
+                edit.line >= 1 && edit.line <= original_lines.len(),
+                "edit line {} is outside the original file",
+                edit.line
+            );
+            assert_eq!(
+                edit.before,
+                original_lines[edit.line - 1],
+                "edit before must quote the original source line"
+            );
+        }
+        assert!(day_rewrite.edits.iter().any(|edit| edit.line <= 8));
+    }
+
+    #[test]
+    fn canonical_owned_only_change_surfaces_in_plan_files_and_edits() {
+        let moves = bundle("old", "new");
+        let day =
+            "---\nintentions: [\"[[ref/blogs/old]]\"]\n---\nNo links here.\n";
+        let plan = plan_files(
+            &[
+                ("ref/blogs/old.md", "---\ntitle: Old\n---\n# Old\n"),
+                ("2026/20261119.md", day),
+            ],
+            &moves,
+        );
+        let day_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261119.md"))
+            .expect("owned-only change is still planned");
+        assert_eq!(day_rewrite.rewritten, 1);
+        assert!(!day_rewrite.edits.is_empty());
+        assert!(day_rewrite
+            .contents
+            .contains("intentions:\n  - \"[[ref/blogs/new]]\"\n"));
+        assert!(day_rewrite.contents.contains("No links here.\n"));
+    }
+
+    #[test]
+    fn canonical_flow_values_escaped_quotes_and_encoded_targets_rewrite() {
+        let moves = bundle("old", "new");
+        let week = "---\nintentions: [\"[[ref/blogs/old]]\", keep]\nsummary: \"He said \\\"hi\\\" [[ref/blogs/old]]\"\nreflection: >-\n  See [note](ref%2Fblogs%2Fold.md#Title).\n---\nBody.\n"
+            .to_string();
+        let plan = plan_files(
+            &[
+                ("ref/blogs/old.md", "---\ntitle: Old\n---\n# Old\n"),
+                ("2026/2026-W47.md", &week),
+            ],
+            &moves,
+        );
+        let week_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/2026-W47.md"))
+            .expect("canonical week is rewritten");
+        assert!(week_rewrite
+            .contents
+            .contains("intentions:\n  - \"[[ref/blogs/new]]\"\n  - keep\n"));
+        assert!(week_rewrite
+            .contents
+            .contains("summary: \"He said \\\"hi\\\" [[ref/blogs/new]]\"\n"));
+        assert!(week_rewrite
+            .contents
+            .contains("[note](ref%2Fblogs%2Fnew.md#Title)"));
+        assert_eq!(week_rewrite.rewritten, 3);
+    }
+
+    #[test]
+    fn canonical_drafted_summary_restamps_but_edited_and_reflected_do_not() {
+        let moves = bundle("old", "new");
+        let drafted_summary = "See [[ref/blogs/old]]";
+        let drafted_after = "See [[ref/blogs/new]]";
+        let drafted = format!(
+            "---\nsummary: {drafted_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\n---\nBody.\n",
+            digest(drafted_summary)
+        );
+        let edited = format!(
+            "---\nsummary: {drafted_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\n---\nBody.\n",
+            digest("something else entirely")
+        );
+        let reflected = format!(
+            "---\nsummary: {drafted_summary:?}\nsummary_digest: {}\nsummary_drafted: 2026-11-19\nreflection: \"Notes [[ref/blogs/old]]\"\n---\nBody.\n",
+            digest(drafted_summary)
+        );
+        let plan = plan_files(
+            &[
+                ("ref/blogs/old.md", "---\ntitle: Old\n---\n# Old\n"),
+                ("2026/20261118.md", &drafted),
+                ("2026/20261119.md", &edited),
+                ("2026/2026-W47.md", &reflected),
+            ],
+            &moves,
+        );
+        let drafted_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261118.md"))
+            .expect("drafted day is rewritten");
+        assert!(drafted_rewrite.contents.contains(&format!(
+            "summary: {drafted_after:?}\nsummary_digest: {}\n",
+            digest(drafted_after)
+        )));
+        assert!(drafted_rewrite
+            .contents
+            .contains("summary_drafted: 2026-11-19\n"));
+        let edited_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261119.md"))
+            .expect("edited day still repairs its links");
+        assert!(edited_rewrite.contents.contains(&format!(
+            "summary: {drafted_after:?}\nsummary_digest: {}\n",
+            digest("something else entirely")
+        )));
+        let reflected_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/2026-W47.md"))
+            .expect("reflected week still repairs its links");
+        assert!(reflected_rewrite.contents.contains(&format!(
+            "summary: {drafted_after:?}\nsummary_digest: {}\n",
+            digest(drafted_summary)
+        )));
+        assert!(reflected_rewrite
+            .contents
+            .contains("reflection: \"Notes [[ref/blogs/new]]\"\n"));
+    }
+
+    #[test]
+    fn canonical_invalid_owned_fields_stay_byte_identical_around_body_repair() {
+        let moves = bundle("old", "new");
+        let malformed = "---\nintentions: [\n---\nBody [[ref/blogs/old]]\n";
+        let mixed = "---\nintentions: [\"[[ref/blogs/old]]\", 12]\nsummary: \"[[ref/blogs/old]]\"\n---\nBody.\n";
+        let plan = plan_files(
+            &[
+                ("ref/blogs/old.md", "---\ntitle: Old\n---\n# Old\n"),
+                ("2026/20261118.md", malformed),
+                ("2026/20261119.md", mixed),
+            ],
+            &moves,
+        );
+        let malformed_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261118.md"))
+            .expect("body repair proceeds around invalid frontmatter");
+        assert_eq!(
+            malformed_rewrite.contents,
+            "---\nintentions: [\n---\nBody [[ref/blogs/new]]\n"
+        );
+        let mixed_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261119.md"))
+            .expect("valid summary repairs beside an invalid sequence");
+        assert!(mixed_rewrite
+            .contents
+            .contains("intentions: [\"[[ref/blogs/old]]\", 12]\n"));
+        assert!(mixed_rewrite
+            .contents
+            .contains("summary: \"[[ref/blogs/new]]\"\n"));
+    }
+
+    #[test]
+    fn canonical_owned_links_keep_highlight_selector_and_known_guards() {
+        let moves = BTreeMap::from([(
+            PathBuf::from("ref/blogs/old.md"),
+            PathBuf::from("ref_history/blogs/old__2026-10-25.md"),
+        )]);
+        let known = BTreeSet::from(["h-present".to_string()]);
+        let day = "---\nsummary: \"See [[ref/blogs/old#^h-present]] and [[ref/blogs/old#^h-missing]] and [[old]]\"\nparent: \"[[ref/blogs/old#^h-present]]\"\n---\nBody [[ref/blogs/old#^h-present]] and [[ref/blogs/old]].\n";
+        let plan = plan_files_with(
+            &[
+                ("ref/blogs/old.md", "---\ntitle: Old\n---\n# Old\n"),
+                ("2026/20261119.md", day),
+            ],
+            &moves,
+            LinkSelector::HighlightFragments,
+            Some(&known),
+        );
+        let day_rewrite = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261119.md"))
+            .expect("highlight links in owned fields are rewritten");
+        assert!(day_rewrite.contents.contains(
+            "summary: \"See [[ref_history/blogs/old__2026-10-25#^h-present]] and [[ref/blogs/old#^h-missing]] and [[old]]\"\n"
+        ));
+        // An owned-key highlight link never bypasses the known-anchor
+        // guard, and unrelated YAML stays exact either way.
+        assert!(day_rewrite
+            .contents
+            .contains("parent: \"[[ref/blogs/old#^h-present]]\"\n"));
+        assert!(day_rewrite.contents.contains(
+            "Body [[ref_history/blogs/old__2026-10-25#^h-present]] and [[ref/blogs/old]].\n"
+        ));
+        assert_eq!(day_rewrite.rewritten, 2);
+        assert_eq!(plan.skipped_dangling_highlights.len(), 1);
+        assert_eq!(plan.highlight_fragments.len(), 2);
+    }
+
+    #[test]
+    fn canonical_owned_bare_targets_keep_ambiguity_handling() {
+        let moves = BTreeMap::from([(
+            PathBuf::from("ref/blogs/old.md"),
+            PathBuf::from("ref_history/blogs/old__2026-10-25.md"),
+        )]);
+        let day =
+            "---\nsummary: \"See [[old#^h-one]]\"\n---\nBody [[old#^h-one]].\n";
+        let plan = plan_files_with(
+            &[
+                ("ref/blogs/old.md", "---\ntitle: Old\n---\n# Old\n"),
+                ("Archive/old.md", "# Other old\n"),
+                ("2026/20261119.md", day),
+            ],
+            &moves,
+            LinkSelector::HighlightFragments,
+            None,
+        );
+        let day_file = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("2026/20261119.md"));
+        assert!(
+            day_file.is_none(),
+            "ambiguous bare targets leave the canonical note untouched"
+        );
+        assert_eq!(plan.skipped_ambiguous.len(), 2);
+        assert_eq!(plan.highlight_fragments.len(), 2);
+        assert_eq!(plan.rewritten, 0);
+    }
+
+    // Canonical daily and period notes route stored intention fields
+    // through the typed verified repair while unrelated YAML stays exact.
+    fn plan_files(
+        files: &[(&str, &str)],
+        moves: &BTreeMap<PathBuf, PathBuf>,
+    ) -> LinkRewritePlan {
+        let temp = tempfile::tempdir().expect("vault");
+        for (path, contents) in files {
+            let absolute = temp.path().join(path);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(&absolute, contents).unwrap();
+        }
+        plan_vault_links(temp.path(), moves).expect("plan links")
+    }
+
+    fn plan_files_with(
+        files: &[(&str, &str)],
+        moves: &BTreeMap<PathBuf, PathBuf>,
+        selector: LinkSelector,
+        known_highlights: Option<&BTreeSet<String>>,
+    ) -> LinkRewritePlan {
+        let temp = tempfile::tempdir().expect("vault");
+        for (path, contents) in files {
+            let absolute = temp.path().join(path);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(&absolute, contents).unwrap();
+        }
+        plan_vault_links_with_known_highlights(
+            temp.path(),
+            moves,
+            selector,
+            known_highlights,
+        )
+        .expect("plan links")
+    }
+
+    fn digest(text: &str) -> String {
+        crate::native::intentions::digest(text)
     }
 
     /// Preservation contract (R11): `bob ref rename`'s alias overwrite
