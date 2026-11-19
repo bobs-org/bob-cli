@@ -1,27 +1,43 @@
-//! `bob periods draft`: replace a period's `## Review` from a file.
+//! `bob periods draft`: write a day's summary or split a period draft
+//! into a frontmatter summary plus the `## Review` body.
 //!
-//! The contract lives in `docs/periods.md` §10. The draft text must
-//! open with a `**Headline:**` line and stay within the kind's word
-//! cap. An open or future period, or a Review Bryan already edited or
-//! reflected, is refused unless `--force` is passed. `all_time` has
-//! no Review. Writes wait for the vault lock, re-read before
-//! writing, and never commit.
+//! The contract lives in `docs/periods.md` §Drafting reviews. A day
+//! draft is one paragraph of 1–3 sentences, at most 60 words and two
+//! links, stored as the frontmatter `summary`. A period draft opens
+//! with a `**Summary:**` line (the one-release `**Headline:**` alias
+//! still reads) and the remaining text becomes only the `## Review`
+//! body. Both values are stamped independently with the shared digest
+//! recipe. The shared eligibility decision (`super::eligibility`) backs
+//! both the brief's stop advice and these guards; `-F/--force`
+//! overrides ownership and time guards only. Writes wait for the vault
+//! lock, re-read before writing, verify the combined document, and
+//! never commit. A period draft is never half applied: frontmatter and
+//! body land in one verified pass.
 
 use std::{ffi::OsString, fs, io, io::Read, path::Path, time::Duration};
 
-use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use super::{
     calendar::{PeriodId, PeriodState},
-    cli, note,
+    cli, eligibility, note,
 };
-use crate::native::{env as bob_env, ob};
+use crate::native::{
+    env as bob_env,
+    intentions::{
+        self,
+        write::{apply_with_review, OwnedPatch, Patch, ReviewPatch},
+        NoteSubject,
+    },
+    ob, yaml_spans,
+};
 
 const COMMAND_NAME: &str = "bob periods draft";
 const SCHEMA_VERSION: u32 = 1;
 const LOCK_WAIT: Duration = Duration::from_secs(3);
-const HEADLINE_CAP: usize = 25;
+const SUMMARY_CAP_PERIOD: usize = 25;
+const SUMMARY_CAP_DAY: usize = 60;
+const MAX_LINKS_DAY: usize = 2;
 
 #[derive(Debug, Clone)]
 struct DraftError {
@@ -61,6 +77,17 @@ impl DraftError {
             message,
             hint: "Check the vault path and file permissions.".to_string(),
             exit_code,
+            extra: None,
+        }
+    }
+
+    /// Malformed or duplicate YAML fails closed, even with `-F/--force`.
+    fn invalid_yaml(code: String, message: String) -> Self {
+        Self {
+            code,
+            message,
+            hint: "Fix the note's frontmatter YAML and retry.".to_string(),
+            exit_code: 1,
             extra: None,
         }
     }
@@ -108,8 +135,11 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
                     println!("{}", report.planned);
                 } else {
                     println!(
-                        "Drafted {} Review · {} words · state drafted",
-                        report.id, report.words,
+                        "Drafted {} {} · {} words · state {}",
+                        report.id,
+                        report.noun,
+                        report.words,
+                        report.review_state,
                     );
                 }
             } else {
@@ -147,135 +177,256 @@ fn print_clap_error(error: clap::Error) -> i32 {
 }
 
 struct DraftReport {
-    id: PeriodId,
+    id: String,
+    noun: &'static str,
     words: usize,
     planned: String,
+    dry_run: bool,
+    review_state: String,
+    summary_state: String,
 }
 
 impl DraftReport {
     fn json(&self) -> Value {
-        json!({
+        let mut report = json!({
             "ok": true,
             "schema_version": SCHEMA_VERSION,
-            "id": self.id.to_string(),
+            "id": self.id,
             "words": self.words,
-            "review_state": "drafted",
-        })
+            "review_state": self.review_state,
+            "summary_state": self.summary_state,
+        });
+        // Dry runs make the proposed summary and (for periods) Review
+        // reviewable without writes or commits.
+        if self.dry_run
+            && let Some(object) = report.as_object_mut()
+        {
+            object.insert(
+                "planned".to_string(),
+                Value::String(self.planned.clone()),
+            );
+        }
+        report
     }
 }
 
+/// A parsed draft: the stored summary plus, for periods, the Review body.
+/// `words` counts the submitted summary-plus-body with the existing
+/// display-text convention (wiki-links reduced to their shown text).
+struct ParsedDraft {
+    summary: String,
+    review: String,
+    words: usize,
+}
+
 fn execute(matches: &clap::ArgMatches) -> Result<DraftReport, DraftError> {
+    // One explicit BOB_NOW-aware clock per invocation.
     let today = bob_env::current_datetime().date();
-    let id = matches
+    let raw_subject = matches
         .get_one::<String>("period")
-        .map(|text| {
-            PeriodId::resolve(text, today)
-                .map_err(|message| DraftError::usage("invalid_period", message))
-        })
-        .transpose()?
-        .unwrap_or_else(|| PeriodId::week_for_date(today));
-    if matches!(id, PeriodId::AllTime) {
+        .map(String::as_str)
+        .unwrap_or_default()
+        .trim();
+    let subject = if raw_subject.is_empty() {
+        NoteSubject::Period(PeriodId::week_for_date(today))
+    } else {
+        NoteSubject::resolve(raw_subject, today)
+            .map_err(|message| DraftError::usage("invalid_period", message))?
+            .subject
+    };
+    if matches!(subject, NoteSubject::Period(PeriodId::AllTime)) {
         return Err(DraftError::usage(
             "no_review_section",
             "all_time has no review".to_string(),
         ));
     }
     let raw = read_input(matches)?;
-    let text = strip_blank_edges(&raw);
-    // A soft-wrapped Headline paragraph is joined onto one physical line
-    // before the checks, so the cap counts the whole sentence and parents
-    // never show half of it.
-    let text = note::unwrap_headline(&text).unwrap_or(text);
-    if text.is_empty() {
-        return Err(DraftError::usage(
-            "missing_headline",
-            "the draft must open with a **Headline:** line".to_string(),
-        ));
-    }
-    let cap = match id {
-        PeriodId::Week { .. } => 250,
-        PeriodId::Quarter { .. } => 400,
-        PeriodId::Year(_) => 600,
-        PeriodId::AllTime => unreachable!("all_time refused above"),
+    let draft = match subject {
+        NoteSubject::Day(_) => parse_day(&raw)?,
+        NoteSubject::Period(id) => parse_period(&raw, id)?,
     };
-    let headline = headline_of(&text).ok_or_else(|| {
-        DraftError::usage(
-            "missing_headline",
-            "the first line must be **Headline:** <text>".to_string(),
-        )
-    })?;
-    if count_words(&headline) > HEADLINE_CAP {
-        let count = count_words(&headline);
-        let mut error = DraftError::usage(
-            "over_cap",
-            format!("the Headline is {count} words; at most {HEADLINE_CAP}"),
-        );
-        error.extra = Some(json!({ "count": count, "cap": HEADLINE_CAP }));
-        return Err(error);
-    }
-    check_lines(&text)?;
-    let words = count_words(&text);
-    if words > cap {
-        let mut error = DraftError::usage(
-            "over_cap",
-            format!("the draft is {words} words; at most {cap}"),
-        );
-        error.extra = Some(json!({ "count": words, "cap": cap }));
-        return Err(error);
-    }
     let vault = bob_env::bob_dir();
-    let path = vault.join(id.path());
-    let before = fs::read_to_string(&path).map_err(|_| {
-        DraftError::usage(
-            "no_review_section",
-            format!(
-                "no period note at {}: draft never creates or inserts headings",
-                id.path().display(),
-            ),
-        )
-    })?;
-    if !has_review_heading(&before) {
+    let (canonical_id, note_relative, noun, state_name) = match subject {
+        NoteSubject::Day(date) => (
+            date.format("%Y-%m-%d").to_string(),
+            NoteSubject::day_path(date),
+            "summary",
+            if date < today {
+                "closed"
+            } else if date > today {
+                "future"
+            } else {
+                "open"
+            },
+        ),
+        NoteSubject::Period(id) => (
+            id.to_string(),
+            id.path(),
+            "Review",
+            match id.state(today) {
+                PeriodState::Closed => "closed",
+                PeriodState::Current => "open",
+                PeriodState::Future => "future",
+            },
+        ),
+    };
+    // Never create notes or headings: a missing daily note names the
+    // Obsidian recovery hint, and a missing period note or Review keeps
+    // its existing error.
+    let before = match subject {
+        NoteSubject::Day(_) => {
+            let path = vault.join(&note_relative);
+            fs::read_to_string(&path).map_err(|_| {
+                let mut error = DraftError::usage(
+                    "missing_note",
+                    format!(
+                        "no daily note at {}: open the day in Obsidian so Templater creates it",
+                        note_relative.display(),
+                    ),
+                );
+                error.hint = "Open the day in Obsidian before drafting its summary; Templater creates daily notes.".to_string();
+                error
+            })?
+        }
+        NoteSubject::Period(_) => {
+            let path = vault.join(&note_relative);
+            fs::read_to_string(&path).map_err(|_| {
+                DraftError::usage(
+                    "no_review_section",
+                    format!(
+                        "no period note at {}: draft never creates or inserts headings",
+                        note_relative.display(),
+                    ),
+                )
+            })?
+        }
+    };
+    if matches!(subject, NoteSubject::Period(_)) && !has_review_heading(&before)
+    {
         return Err(DraftError::usage(
             "no_review_section",
             format!(
                 "the note at {} has no ## Review: draft never inserts headings",
-                id.path().display(),
+                note_relative.display(),
             ),
         ));
     }
-    // Guards, overridden only by -F/--force.
-    if !matches.get_flag("force") {
-        if !matches!(id.state(today), PeriodState::Closed) {
-            return Err(DraftError::refused(
-                "refused_open",
-                format!(
-                    "{id} is not closed: draft only when Bryan asked for so far, with -F"
-                ),
+    // The typed legacy-aware reader keeps old Headline Reviews protected.
+    // Malformed or duplicate YAML fails closed, even with -F/--force.
+    let fields = intentions::read(&before, subject);
+    if matches!(
+        fields.frontmatter_state,
+        intentions::fields::FrontmatterState::Malformed
+    ) {
+        if let Err((code, message)) = frontmatter_mapping(&before) {
+            return Err(DraftError::invalid_yaml(
+                code,
+                format!("the note at {}: {message}", note_relative.display()),
             ));
         }
-        match note::parse(&before).review_state {
-            note::ReviewState::Edited | note::ReviewState::Reflected => {
-                return Err(DraftError::refused(
-                    "refused_state",
-                    format!(
-                        "the Review of {id} is already Bryan's: draft only when he said redo, with -F"
-                    ),
-                ));
+        let detail = fields
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(DraftError::invalid_yaml(
+            "frontmatter_invalid".to_string(),
+            format!(
+                "the note at {} has invalid frontmatter: {detail}",
+                note_relative.display()
+            ),
+        ));
+    }
+    let has_review_body = match subject {
+        NoteSubject::Day(_) => false,
+        NoteSubject::Period(_) => !fields.review_body.trim().is_empty(),
+    };
+    let noun_kind = match subject {
+        NoteSubject::Day(_) => "day",
+        NoteSubject::Period(PeriodId::Week { .. }) => "week",
+        NoteSubject::Period(PeriodId::Quarter { .. }) => "quarter",
+        NoteSubject::Period(_) => "year",
+    };
+    // The shared eligibility decision; -F/--force overrides ownership and
+    // time guards only, never invalid text, malformed YAML, missing
+    // targets, locking, stale-note detection, or verification failures.
+    if !matches.get_flag("force") {
+        match eligibility::decide(
+            &fields,
+            has_review_body,
+            state_name,
+            noun_kind,
+        ) {
+            eligibility::Eligibility::Allow { .. } => {}
+            eligibility::Eligibility::RefusedOpen { advice } => {
+                return Err(DraftError::refused("refused_open", advice));
             }
-            note::ReviewState::Drafted | note::ReviewState::Empty => {}
+            eligibility::Eligibility::RefusedState { advice } => {
+                return Err(DraftError::refused("refused_state", advice));
+            }
         }
     }
-    let planned = planned_section(&before, &text).ok_or_else(|| {
-        DraftError::usage(
-            "no_review_section",
+    // For periods, an edited or reflected existing Review stays protected
+    // even when the new summary key is absent: the first-summary
+    // exception must not overwrite Bryan's existing Review. A
+    // summary-only draft never wipes a nonempty Review without -F.
+    if matches!(subject, NoteSubject::Period(_))
+        && draft.review.trim().is_empty()
+        && has_review_body
+        && !matches.get_flag("force")
+    {
+        return Err(DraftError::refused(
+            "refused_state",
             format!(
-                "the note at {} has no ## Review: draft never inserts headings",
-                id.path().display(),
+                "the Review of {canonical_id} already has content: a summary-only draft needs an explicit redo, with -F"
             ),
-        )
-    })?;
+        ));
+    }
+    let today_text = today.format("%Y-%m-%d").to_string();
+    let summary_digest = intentions::digest(&draft.summary);
+    let owned = OwnedPatch {
+        summary: Patch::Set(draft.summary.clone()),
+        summary_digest: Patch::Set(summary_digest),
+        summary_drafted: Patch::Set(today_text.clone()),
+        ..OwnedPatch::default()
+    };
+    let mut review_patch = ReviewPatch::default();
+    if matches!(subject, NoteSubject::Period(_)) {
+        if draft.review.trim().is_empty() {
+            review_patch.review_digest = Patch::Unset;
+            review_patch.review_drafted = Patch::Unset;
+        } else {
+            review_patch.review_digest =
+                Patch::Set(intentions::digest(&draft.review));
+            review_patch.review_drafted = Patch::Set(today_text.clone());
+        }
+    }
+    let planned = match subject {
+        NoteSubject::Day(_) => draft.summary.clone(),
+        NoteSubject::Period(_) => {
+            let mut planned = format!("**Summary:** {}", draft.summary);
+            planned.push_str("\n\n## Review\n");
+            if !draft.review.trim().is_empty() {
+                planned.push('\n');
+                planned.push_str(&draft.review);
+            }
+            planned.push('\n');
+            planned
+        }
+    };
     if matches.get_flag("dry-run") {
-        return Ok(DraftReport { id, words, planned });
+        let (review_state, summary_state) =
+            planned_states(&fields, &draft, subject, has_review_body);
+        return Ok(DraftReport {
+            id: canonical_id,
+            noun,
+            words: draft.words,
+            planned,
+            dry_run: true,
+            review_state,
+            summary_state,
+        });
     }
     let _lock = ob::acquire_lock_waiting(LOCK_WAIT, || {}).map_err(
         |error| match error {
@@ -306,7 +457,8 @@ fn execute(matches: &clap::ArgMatches) -> Result<DraftReport, DraftError> {
             }
         },
     )?;
-    // Re-read and compare before writing.
+    // Re-read under the lock; refuse when the note changed.
+    let path = vault.join(&note_relative);
     let current = fs::read_to_string(&path).map_err(|error| {
         DraftError::failed("io_error", error.to_string(), 1)
     })?;
@@ -315,22 +467,98 @@ fn execute(matches: &clap::ArgMatches) -> Result<DraftReport, DraftError> {
             "stale_note",
             format!(
                 "the note at {} changed while waiting for the lock",
-                id.path().display()
+                note_relative.display()
             ),
             1,
         ));
     }
-    let after = apply_draft(&current, &text, today).ok_or_else(|| {
-        DraftError::failed(
-            "io_error",
-            "could not plan the draft write".to_string(),
-            1,
-        )
-    })?;
+    // Never apply half a period draft: body and stamps land in one
+    // verified pass over the locked snapshot.
+    let base_current: String;
+    let base: &str = match subject {
+        NoteSubject::Day(_) => &current,
+        NoteSubject::Period(_) => {
+            base_current = replace_review_body(&current, &draft.review)
+                .ok_or_else(|| {
+                    DraftError::failed(
+                        "io_error",
+                        "could not plan the draft write".to_string(),
+                        1,
+                    )
+                })?;
+            &base_current
+        }
+    };
+    let after =
+        apply_with_review(base, &owned, &review_patch).map_err(|error| {
+            match error.code {
+                "duplicate_key" => DraftError::invalid_yaml(
+                    error.code.to_string(),
+                    error.message,
+                ),
+                "frontmatter_invalid" | "write_verify_failed" => {
+                    DraftError::invalid_yaml(
+                        error.code.to_string(),
+                        error.message,
+                    )
+                }
+                _ => DraftError::failed("io_error", error.message, 1),
+            }
+        })?;
+    verify_final(&before, &after, subject, &draft)?;
     atomic_write(&path, &after).map_err(|error| {
         DraftError::failed("io_error", error.to_string(), 1)
     })?;
-    Ok(DraftReport { id, words, planned })
+    let staged = intentions::read(&after, subject);
+    let review_state = intentions::evaluate(
+        &staged,
+        matches!(subject, NoteSubject::Period(_))
+            && !draft.review.trim().is_empty(),
+    )
+    .as_str()
+    .to_string();
+    let summary_state = intentions::summary_state(&staged).as_str().to_string();
+    Ok(DraftReport {
+        id: canonical_id,
+        noun,
+        words: draft.words,
+        planned,
+        dry_run: false,
+        review_state,
+        summary_state,
+    })
+}
+
+/// Predicted overall and summary states for a dry run: a successful
+/// first draft after reflection remains `reflected`, while its
+/// `summary_state` is `drafted`.
+fn planned_states(
+    fields: &intentions::fields::Fields,
+    draft: &ParsedDraft,
+    subject: NoteSubject,
+    has_review_body: bool,
+) -> (String, String) {
+    let reflected = fields
+        .reflection
+        .value
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let summary_state = "drafted".to_string();
+    let review_state = if reflected {
+        "reflected".to_string()
+    } else if matches!(subject, NoteSubject::Day(_)) {
+        "drafted".to_string()
+    } else if draft.review.trim().is_empty() && !has_review_body {
+        "drafted".to_string()
+    } else if draft.review.trim().is_empty() {
+        intentions::evaluate(fields, has_review_body)
+            .as_str()
+            .to_string()
+    } else {
+        "drafted".to_string()
+    };
+    let _ = fields;
+    (review_state, summary_state)
 }
 
 fn read_input(matches: &clap::ArgMatches) -> Result<String, DraftError> {
@@ -364,14 +592,257 @@ fn strip_blank_edges(text: &str) -> String {
     kept.join("\n").trim_end().to_string()
 }
 
-/// The `**Headline:** <text>` opener, else none. `execute` has already
-/// joined a soft-wrapped Headline paragraph onto this first line.
-fn headline_of(text: &str) -> Option<String> {
-    let first = text.lines().next().unwrap_or("").trim();
-    first
-        .strip_prefix("**Headline:**")
-        .map(|headline| headline.trim().to_string())
-        .filter(|headline| !headline.is_empty())
+/// Parse a day draft: one paragraph, optional `**Summary:**` label,
+/// soft wraps joined into one stored line.
+fn parse_day(raw: &str) -> Result<ParsedDraft, DraftError> {
+    let text = strip_blank_edges(raw);
+    if text.is_empty() {
+        return Err(DraftError::usage(
+            "invalid_draft",
+            "the summary is empty: write 1–3 sentences in one paragraph"
+                .to_string(),
+        ));
+    }
+    let text = strip_summary_label(&text);
+    if text.lines().any(|line| line.trim().is_empty()) {
+        return Err(DraftError::usage(
+            "invalid_draft",
+            "the summary must be one paragraph: join soft wraps into one stored line"
+                .to_string(),
+        ));
+    }
+    check_day_lines(&text)?;
+    let links = count_wikilinks(&text) + count_markdown_links(&text);
+    if links > MAX_LINKS_DAY {
+        return Err(DraftError::usage(
+            "invalid_draft",
+            format!("the summary has {links} links; at most {MAX_LINKS_DAY}"),
+        ));
+    }
+    // Join soft wraps of the one paragraph into one stored line. The
+    // instruction asset specifies 1–3 sentences; no brittle
+    // punctuation-based validation treats abbreviations or link targets
+    // as sentences.
+    let summary = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if summary.is_empty() {
+        return Err(DraftError::usage(
+            "invalid_draft",
+            "the summary is empty: write 1–3 sentences in one paragraph"
+                .to_string(),
+        ));
+    }
+    let words = count_words(&summary);
+    if words > SUMMARY_CAP_DAY {
+        let mut error = DraftError::usage(
+            "over_cap",
+            format!("the summary is {words} words; at most {SUMMARY_CAP_DAY}"),
+        );
+        error.extra = Some(json!({ "count": words, "cap": SUMMARY_CAP_DAY }));
+        return Err(error);
+    }
+    Ok(ParsedDraft {
+        summary,
+        review: String::new(),
+        words,
+    })
+}
+
+/// Parse a period draft: a `**Summary:**` opener (the one-release
+/// `**Headline:**` alias still reads) joined onto one line, plus the
+/// remaining text as only the `## Review` body.
+fn parse_period(raw: &str, id: PeriodId) -> Result<ParsedDraft, DraftError> {
+    let stripped = strip_blank_edges(raw);
+    // The one-release alias keeps the established headline joining
+    // semantics before the split.
+    let text = if stripped.trim_start().starts_with("**Headline:**") {
+        note::unwrap_headline(&stripped).unwrap_or(stripped)
+    } else {
+        stripped
+    };
+    if text.is_empty() {
+        return Err(DraftError::usage(
+            "missing_summary",
+            "the draft must open with a **Summary:** line".to_string(),
+        ));
+    }
+    // The opening paragraph (soft-wrapped lines joined) carries the
+    // summary; the rest becomes the Review body.
+    let mut lines = text.lines();
+    let mut opener: Vec<&str> = Vec::new();
+    for line in lines.by_ref() {
+        if line.trim().is_empty() {
+            break;
+        }
+        opener.push(line);
+    }
+    let rest: Vec<&str> = lines.collect();
+    let opener_joined = opener.join(" ");
+    let summary = opener_joined
+        .trim_start()
+        .strip_prefix("**Summary:**")
+        .or_else(|| opener_joined.trim_start().strip_prefix("**Headline:**"))
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .ok_or_else(|| {
+            DraftError::usage(
+                "missing_summary",
+                "the first line must be **Summary:** <text>".to_string(),
+            )
+        })?
+        .to_string();
+    let summary_words = count_words(&summary);
+    if summary_words > SUMMARY_CAP_PERIOD {
+        let mut error = DraftError::usage(
+            "over_cap",
+            format!(
+                "the summary is {summary_words} words; at most {SUMMARY_CAP_PERIOD}"
+            ),
+        );
+        error.extra =
+            Some(json!({ "count": summary_words, "cap": SUMMARY_CAP_PERIOD }));
+        return Err(error);
+    }
+    let review = strip_blank_edges(&rest.join("\n"));
+    if let Some(first) = review.lines().next() {
+        let trimmed = first.trim_start();
+        if trimmed.starts_with("**Summary:**")
+            || trimmed.starts_with("**Headline:**")
+        {
+            return Err(DraftError::usage(
+                "invalid_draft",
+                "the Review body must not repeat the **Summary:** opener"
+                    .to_string(),
+            ));
+        }
+    }
+    check_lines(&review)?;
+    let cap = match id {
+        PeriodId::Week { .. } => 250,
+        PeriodId::Quarter { .. } => 400,
+        PeriodId::Year(_) => 600,
+        PeriodId::AllTime => unreachable!("all_time refused above"),
+    };
+    // Total cap over the submitted summary-plus-body with the existing
+    // counting convention.
+    let words = count_words(&text);
+    if words > cap {
+        let mut error = DraftError::usage(
+            "over_cap",
+            format!("the draft is {words} words; at most {cap}"),
+        );
+        error.extra = Some(json!({ "count": words, "cap": cap }));
+        return Err(error);
+    }
+    Ok(ParsedDraft {
+        summary,
+        review,
+        words,
+    })
+}
+
+/// Strip one optional leading `**Summary:**` label line.
+fn strip_summary_label(text: &str) -> String {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    if let Some(rest) = first.trim_start().strip_prefix("**Summary:**") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return lines.collect::<Vec<_>>().join("\n");
+        }
+        let mut out = String::from(rest);
+        for line in lines {
+            out.push('\n');
+            out.push_str(line);
+        }
+        return out;
+    }
+    text.to_string()
+}
+
+/// Reject day-draft structure: headings, lists, fences, and callouts.
+fn check_day_lines(text: &str) -> Result<(), DraftError> {
+    check_lines(text)?;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+            || is_ordered_list_item(trimmed)
+        {
+            return Err(DraftError::usage(
+                "invalid_draft",
+                "the summary must not contain a list: write one paragraph"
+                    .to_string(),
+            ));
+        }
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            return Err(DraftError::usage(
+                "invalid_draft",
+                "the summary must not contain a fenced code block".to_string(),
+            ));
+        }
+        if trimmed.starts_with('>') {
+            return Err(DraftError::usage(
+                "invalid_draft",
+                "the summary must not contain a callout".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_ordered_list_item(trimmed: &str) -> bool {
+    let mut digits = 0;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            digits += 1;
+        } else {
+            break;
+        }
+    }
+    digits > 0
+        && trimmed[digits..].starts_with(['.', ')'])
+        && trimmed[digits + 1..].starts_with(' ')
+}
+
+/// Count `[[wiki]]` links.
+fn count_wikilinks(text: &str) -> usize {
+    let mut count = 0;
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        let after = &rest[start + 2..];
+        match after.find("]]") {
+            Some(end) => {
+                count += 1;
+                rest = &after[end + 2..];
+            }
+            None => break,
+        }
+    }
+    count
+}
+
+/// Count Markdown `[label](target)` links.
+fn count_markdown_links(text: &str) -> usize {
+    let mut count = 0;
+    let mut rest = text;
+    while let Some(start) = rest.find('[') {
+        let after = &rest[start + 1..];
+        let Some(close) = after.find(']') else {
+            break;
+        };
+        if after[close + 1..].starts_with('(')
+            && let Some(paren) = after[close + 1..].find(')')
+        {
+            count += 1;
+            rest = &after[close + 1 + paren + 1..];
+        } else {
+            rest = &after[close + 1..];
+        }
+    }
+    count
 }
 
 /// Reject headings, agent callouts, and frontmatter fences.
@@ -447,126 +918,170 @@ fn has_review_heading(contents: &str) -> bool {
     contents.lines().any(|line| line.trim_end() == "## Review")
 }
 
-/// The planned `## Review` section: heading plus the draft body.
-fn planned_section(contents: &str, text: &str) -> Option<String> {
-    if !has_review_heading(contents) {
-        return None;
-    }
-    let mut planned = String::from("## Review\n\n");
-    planned.push_str(text);
-    planned.push('\n');
-    Some(planned)
-}
-
-/// Byte offsets of the Review body: first non-blank line after the
-/// `## Review` heading through the last non-blank line before the
-/// next block (`## ` heading, agent callout, or EOF).
-fn review_span(contents: &str) -> Option<(usize, usize)> {
-    let heading = contents
-        .lines()
-        .position(|line| line.trim_end() == "## Review")?;
-    let mut body_start = None;
-    let mut body_end = None;
-    let mut offset = 0;
-    for (index, line) in contents.lines().enumerate() {
-        let length = line.len() + 1;
-        if index <= heading {
-            offset += length;
-            continue;
-        }
-        if line.starts_with("## ") || line.starts_with("> [!agent]") {
+/// Replace the `## Review` body region, preserving every byte outside
+/// the owned Review span: BOM, line endings, comments, unrelated
+/// frontmatter, reflection/intentions, other body sections, and callouts
+/// stay byte-for-byte. The newline style follows the file.
+fn replace_review_body(contents: &str, body: &str) -> Option<String> {
+    let lines = yaml_spans::split_lines(contents);
+    let heading = lines
+        .iter()
+        .position(|line| line.text.trim_end() == "## Review")?;
+    let newline = lines
+        .iter()
+        .find(|line| !line.ending.is_empty())
+        .map(|line| line.ending.clone())
+        .unwrap_or_else(|| "\n".to_owned());
+    // Next block boundary: a `## ` heading or an agent callout.
+    let mut limit = lines.len();
+    for (index, line) in lines.iter().enumerate().skip(heading + 1) {
+        if line.text.starts_with("## ") || line.text.starts_with("> [!agent]") {
+            limit = index;
             break;
         }
-        if !line.trim().is_empty() {
-            if body_start.is_none() {
-                body_start = Some(offset);
-            }
-            body_end = Some(offset + line.trim_end().len());
-        }
-        offset += length;
     }
-    match (body_start, body_end) {
-        (Some(start), Some(end)) => Some((start, end)),
-        _ => {
-            // An empty Review: the body starts where the next block
-            // would, right after the heading and its blank line.
-            let mut offset = 0;
-            for (index, line) in contents.lines().enumerate() {
-                if index <= heading {
-                    offset += line.len() + 1;
-                    continue;
-                }
-                if line.trim().is_empty() {
-                    offset += line.len() + 1;
-                    continue;
-                }
-                break;
-            }
-            Some((offset, offset))
+    // Owned span: first non-blank line after the heading through the
+    // last non-blank line before the next block.
+    let mut start = limit;
+    for index in heading + 1..limit {
+        if !lines[index].text.trim().is_empty() {
+            start = index;
+            break;
         }
     }
-}
-
-/// Replace the Review body and stamp the frontmatter digest keys.
-fn apply_draft(contents: &str, text: &str, today: NaiveDate) -> Option<String> {
-    let (start, end) = review_span(contents)?;
-    let mut out = String::with_capacity(contents.len() + text.len());
-    out.push_str(contents[..start].trim_end_matches(['\n', '\r']));
-    out.push_str("\n\n");
-    out.push_str(text);
-    out.push('\n');
-    let tail = contents[end..].trim_start_matches(['\n', '\r']);
-    if !tail.is_empty() {
-        out.push('\n');
-        out.push_str(tail);
+    let mut end = start;
+    for index in (heading + 1..limit).rev() {
+        if !lines[index].text.trim().is_empty() {
+            end = index + 1;
+            break;
+        }
     }
-    Some(stamp_frontmatter(&out, text, today))
+    let prefix = yaml_spans::join_lines(&lines[..start]);
+    let suffix = yaml_spans::join_lines(&lines[end..]);
+    let prefix = prefix.trim_end_matches(['\n', '\r']).to_string();
+    let suffix = suffix.trim_start_matches(['\n', '\r']).to_string();
+    let mut out = prefix;
+    out.push_str(&newline);
+    out.push_str(&newline);
+    if !body.trim().is_empty() {
+        for line in body.split('\n') {
+            out.push_str(line.trim_end());
+            out.push_str(&newline);
+        }
+    }
+    if !suffix.is_empty() {
+        out.push_str(&newline);
+        out.push_str(&suffix);
+    }
+    Some(out)
 }
 
-fn stamp_frontmatter(contents: &str, text: &str, today: NaiveDate) -> String {
-    let digest = note::review_digest(text);
-    let drafted = today.format("%Y-%m-%d").to_string();
-    let mut lines: Vec<String> = contents.lines().map(str::to_string).collect();
-    let close = lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, line)| line.trim() == "---" || line.trim() == "...")
-        .map(|(index, _)| index);
-    let Some(close) = close
-        .filter(|_| lines.first().is_some_and(|first| first.trim() == "---"))
-    else {
-        // No frontmatter block: prepend one so the digest persists.
-        let mut with_frontmatter = format!(
-            "---\nreview_digest: {digest}\nreview_drafted: {drafted}\n---\n"
-        );
-        with_frontmatter.push_str(contents);
-        return with_frontmatter;
+/// Verify the final combined document: owned values equal the intended
+/// values and all other YAML keys retain their values. Malformed or
+/// duplicate YAML fails closed. BOM is preserved.
+fn verify_final(
+    original: &str,
+    final_doc: &str,
+    subject: NoteSubject,
+    draft: &ParsedDraft,
+) -> Result<(), DraftError> {
+    let invalid = |message: String| {
+        DraftError::invalid_yaml("write_verify_failed".to_string(), message)
     };
-    let mut has_digest = false;
-    let mut has_drafted = false;
-    for line in lines.iter_mut().take(close) {
-        let key = line.split(':').next().unwrap_or("").trim();
-        if key == "review_digest" {
-            *line = format!("review_digest: {digest}");
-            has_digest = true;
-        } else if key == "review_drafted" {
-            *line = format!("review_drafted: {drafted}");
-            has_drafted = true;
+    if original.starts_with('\u{feff}') && !final_doc.starts_with('\u{feff}') {
+        return Err(invalid("the write dropped the BOM".to_string()));
+    }
+    let before_map = frontmatter_mapping(original)
+        .map_err(|message| DraftError::invalid_yaml(message.0, message.1))?;
+    let after_map = frontmatter_mapping(final_doc)
+        .map_err(|message| DraftError::invalid_yaml(message.0, message.1))?;
+    let mut expected_before = before_map.clone();
+    let mut expected_after = after_map.clone();
+    for key in [
+        "summary",
+        "summary_digest",
+        "summary_drafted",
+        "review_digest",
+        "review_drafted",
+    ] {
+        expected_before.remove(serde_yaml::Value::String(key.to_string()));
+        expected_after.remove(serde_yaml::Value::String(key.to_string()));
+    }
+    if expected_before != expected_after {
+        return Err(invalid("unrelated frontmatter keys changed".to_string()));
+    }
+    let staged = intentions::read(final_doc, subject);
+    if staged.summary.value.as_deref() != Some(draft.summary.as_str()) {
+        return Err(invalid("the summary did not round-trip".to_string()));
+    }
+    if staged.summary_digest.value.as_deref()
+        != Some(&intentions::digest(&draft.summary))
+    {
+        return Err(invalid(
+            "the summary digest did not round-trip".to_string(),
+        ));
+    }
+    match subject {
+        NoteSubject::Day(_) => {}
+        NoteSubject::Period(_) => {
+            if draft.review.trim().is_empty() {
+                if staged.review_digest.value.is_some() {
+                    return Err(invalid(
+                        "a cleared Review must drop its stamps".to_string(),
+                    ));
+                }
+            } else if staged.review_digest.value.as_deref()
+                != Some(&intentions::digest(&draft.review))
+            {
+                return Err(invalid(
+                    "the Review digest did not round-trip".to_string(),
+                ));
+            }
         }
     }
-    if !has_digest {
-        lines.insert(close, format!("review_digest: {digest}"));
-        let close = close + 1;
-        if !has_drafted {
-            lines.insert(close, format!("review_drafted: {drafted}"));
-        }
-    } else if !has_drafted {
-        lines.insert(close, format!("review_drafted: {drafted}"));
+    Ok(())
+}
+
+/// The frontmatter mapping, or an empty map when the note has none.
+/// `(code, message)` on malformed or duplicate YAML.
+fn frontmatter_mapping(
+    contents: &str,
+) -> Result<serde_yaml::Mapping, (String, String)> {
+    let fail = |message: String| (String::from("frontmatter_invalid"), message);
+    let lines = yaml_spans::split_lines(contents);
+    let Some(first) = lines.first() else {
+        return Ok(serde_yaml::Mapping::new());
+    };
+    let opener = first.text.strip_prefix('\u{feff}').unwrap_or(&first.text);
+    if opener.trim() != "---" {
+        return Ok(serde_yaml::Mapping::new());
     }
-    let mut stamped = lines.join("\n");
-    stamped.push('\n');
-    stamped
+    let Some(close) =
+        lines.iter().enumerate().skip(1).find_map(|(index, line)| {
+            (line.text.trim() == "---").then_some(index)
+        })
+    else {
+        return Err(fail("frontmatter block is not closed".to_string()));
+    };
+    yaml_spans::collect_key_spans(&lines[1..close], 1)
+        .map_err(|message| (String::from("duplicate_key"), message))?;
+    let yaml = yaml_spans::yaml_text(&lines[1..close]);
+    // Mirror the field writer: only a duplicate flow key fails here;
+    // comments ride through to the serde parse below.
+    if yaml_spans::validate_flow_map_keys(&yaml)
+        == Err(yaml_spans::FlowMapError::DuplicateKey)
+    {
+        return Err((
+            String::from("duplicate_key"),
+            String::from("duplicate key in frontmatter flow mapping"),
+        ));
+    }
+    let value: serde_yaml::Value = serde_yaml::from_str(&yaml)
+        .map_err(|error| fail(format!("invalid frontmatter YAML: {error}")))?;
+    match value {
+        serde_yaml::Value::Mapping(mapping) => Ok(mapping),
+        _ => Err(fail("frontmatter YAML must be a mapping".to_string())),
+    }
 }
 
 fn atomic_write(target: &Path, bytes: &str) -> io::Result<()> {

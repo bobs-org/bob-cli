@@ -751,11 +751,10 @@ week-years, `all_time`, and `org`. Daily folders use the calendar year;
 
 These notes use `type: "[[day]]"` and hold no tasks. `bob periods ensure`
 creates missing notes and fills empty or frontmatter-only stubs; existing
-body content stays intact. `bob periods draft` replaces `## Review`, including
-its Headline, for a closed week, quarter, or year whose Review is empty or
-still an unedited draft and whose Reflection is blank. `-F` overrides those
-guards. All time has no Review. Intentions, Outcomes, Theme, Reflection, and
-Notes are user-owned; Bob manages the agent callout. See
+body content stays intact. `bob periods draft` writes a day's summary, or splits a period draft
+into `summary` plus only the `## Review` body, for a closed subject
+the shared eligibility decision allows. All time has no Review.
+Intentions, reflection, and Notes are user-owned. See
 [Period notes](../periods.md) for scaffolds and review states.
 
 ### Mail notes

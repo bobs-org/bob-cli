@@ -11,6 +11,7 @@ pub(crate) mod charts;
 pub(crate) mod children;
 pub(crate) mod cli;
 pub(crate) mod draft;
+pub(crate) mod eligibility;
 pub(crate) mod ensure;
 pub(crate) mod instructions;
 pub(crate) mod labels;

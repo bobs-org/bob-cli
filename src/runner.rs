@@ -816,7 +816,7 @@ Run 'bob types <command> --help' for more information on a command.";
 const PERIODS_MEMBERS: &[Member] = &[
     Member {
         name: "brief",
-        about: "Print the agent review bundle for a week, quarter, or year",
+        about: "Print the agent review bundle for a day, week, quarter, or year",
         leaf: Leaf {
             native_command: NativeCommand::PeriodsBrief,
             script_command: None,
@@ -824,7 +824,7 @@ const PERIODS_MEMBERS: &[Member] = &[
     },
     Member {
         name: "draft",
-        about: "Draft a period's Review section (never overwrites Bryan)",
+        about: "Draft a day's summary or a period's summary plus Review (never overwrites Bryan)",
         leaf: Leaf {
             native_command: NativeCommand::PeriodsDraft,
             script_command: None,
@@ -876,8 +876,10 @@ const PERIODS_AFTER_HELP: &str = "\
 Bare `bob periods` runs the read-only list.
 
 Examples:
+  bob periods brief yesterday     Print the agent bundle for a day with its instructions
   bob periods brief 2026-W45     Print the agent review bundle for a week
-  bob periods draft 2026-W45 -i review.md  Draft the week's Review section
+  bob periods draft yesterday -i summary.md  Draft the day's summary
+  bob periods draft 2026-W45 -i review.md  Draft the week's summary plus Review section
   bob periods ensure             Create missing notes one week ahead
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes

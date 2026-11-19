@@ -89,17 +89,23 @@ pub(crate) fn list_command() -> ClapCommand {
 
 pub(crate) fn brief_command() -> ClapCommand {
     ClapCommand::new("bob periods brief")
-        .about("Print the agent review bundle for a week, quarter, or year")
+        .about("Print the agent review bundle for a day, week, quarter, or year")
         .long_about(
-            "Print the deterministic, versioned agent bundle (brief v2) for \
-             a week, quarter, or year: header, facts, time, parts, finished, \
+            "Print the deterministic, versioned agent bundle (brief v3) for \
+             a day, week, quarter, or year: instructions first, then header, \
+             intentions, facts, time, parts (periods only), finished, \
              started and dropped, still open, practice (year only), Bryan's \
-             words, this note and its neighbours, off-clock counts, and \
-             caveats. The command is read-only. all_time has no review. See \
-             docs/periods.md for the brief contract and token budgets.",
+             words, the previous day's summary (day only), events, this note \
+             and its neighbours (v3), day summaries with coverage (week \
+             only), off-clock counts, and caveats. Day briefs carry the day \
+             v1 instructions; period briefs carry the same v3 text the \
+             folded callouts carry. The command is read-only. all_time has \
+             no review. See docs/periods.md for the brief contract and token \
+             budgets.",
         )
         .after_help(
             "Examples:\n  \
+             bob periods brief yesterday\n  \
              bob periods brief 2026-W45\n  \
              bob periods brief 2026-Q4 -f json\n  \
              bob periods brief 2026 -f md\n\n\
@@ -111,34 +117,41 @@ pub(crate) fn brief_command() -> ClapCommand {
              Exit codes:\n  \
              0  brief\n  \
              1  vault I/O failure\n  \
-             2  usage (bad id or flags), or all_time (which has no review)\n\n\
+             2  usage (bad id or flags), missing daily note, or all_time (which has no review)\n\n\
              See docs/periods.md for the brief contract and token budgets.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
         .arg(brief_format_arg())
         .arg(help_arg())
-        .arg(Arg::new("period").value_name("PERIOD").help(
-            "Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review",
+        .arg(Arg::new("period").value_name("SUBJECT").help(
+            "Day or period id or note path (today, yesterday, last-day, YYYY-MM-DD, YYYYMMDD, daily path, week, quarter, year, last-week, last-quarter, or last-year); all_time has no review",
         ))
 }
 
 pub(crate) fn draft_command() -> ClapCommand {
     ClapCommand::new("bob periods draft")
-        .about("Draft a period's Review section (never overwrites Bryan)")
+        .about("Draft a day's summary or a period's summary plus Review (never overwrites Bryan)")
         .long_about(
-            "Replace the `## Review` section of a week, quarter, or year note \
-             with the draft text from -i/--input (a file path, or - for \
-             stdin). The text must open with a `**Headline:**` paragraph \
-             (joined onto one line on save) and stay within the kind's word \
-             cap (week 250, quarter 400, year 600). \
-             An open or future period, or a Review Bryan already edited or \
-             reflected, is refused unless -F/--force is passed. The note must \
-             exist and contain `## Review`; all_time has no review. See \
-             docs/periods.md for the draft rules and JSON errors.",
+            "Write a day's frontmatter summary from -i/--input (a file \
+             path, or - for stdin): one paragraph of 1–3 sentences, at most \
+             60 words and two links, stored as `summary` with its digest and \
+             date. Or split a period draft from -i/--input: the opening \
+             `**Summary:**` paragraph (the one-release `**Headline:**` alias \
+             still reads; joined onto one line on save, at most 25 words) \
+             becomes the frontmatter summary, and the remaining text becomes \
+             only the `## Review` body (a summary-only draft may leave an \
+             empty Review body). Total caps: day 60, week 250, quarter 400, \
+             year 600. An open or future subject, an edited summary or \
+             Review, or a reflection beside existing agent content is refused \
+             unless -F/--force is passed; a reflection never blocks a first \
+             draft. The note must exist (daily notes are never created; a \
+             period note must contain `## Review`); all_time has no review. \
+             See docs/periods.md for the draft rules and JSON errors.",
         )
         .after_help(
             "Examples:\n  \
+             bob periods draft yesterday -i /tmp/summary.md\n  \
              bob periods draft 2026-W45 -i /tmp/review.md\n  \
              bob periods draft 2026-Q4 -i - < review.md\n  \
              bob periods draft 2026-W45 -i review.md -n\n  \
@@ -151,7 +164,7 @@ pub(crate) fn draft_command() -> ClapCommand {
              0  drafted (or planned with -n)\n  \
              1  vault I/O or transaction failure\n  \
              2  usage (bad id, flags, or draft text)\n  \
-             3  refused (period open, or state edited/reflected)\n\n\
+             3  refused (subject open, or state edited/reflected)\n\n\
              See docs/periods.md for the draft rules, word caps, and JSON errors.",
         )
         .disable_help_flag(true)
@@ -161,8 +174,8 @@ pub(crate) fn draft_command() -> ClapCommand {
         .arg(help_arg())
         .arg(draft_input_arg())
         .arg(dry_run_arg())
-        .arg(Arg::new("period").value_name("PERIOD").help(
-            "Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review",
+        .arg(Arg::new("period").value_name("SUBJECT").help(
+            "Day or period id or note path (today, yesterday, last-day, YYYY-MM-DD, YYYYMMDD, daily path, week, quarter, year, last-week, last-quarter, or last-year); all_time has no review",
         ))
 }
 
@@ -354,7 +367,7 @@ fn draft_force_arg() -> Arg {
         .long("force")
         .short('F')
         .action(ArgAction::SetTrue)
-        .help("Draft an open period or overwrite Bryan's edits (Bryan said redo, or asked for so far)")
+        .help("Draft an open subject or overwrite protected content (Bryan said redo, or asked for so far)")
 }
 
 fn draft_input_arg() -> Arg {

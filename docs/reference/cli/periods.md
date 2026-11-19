@@ -16,8 +16,8 @@ Bare `bob periods` runs the read-only list. ensure creates missing period notes 
 Usage: bob periods [COMMAND]
 
 Commands:
-  brief    Print the agent review bundle for a week, quarter, or year
-  draft    Draft a period's Review section (never overwrites Bryan)
+  brief    Print the agent review bundle for a day, week, quarter, or year
+  draft    Draft a day's summary or a period's summary plus Review (never overwrites Bryan)
   ensure   Create missing period notes one week ahead
   list     List period notes with review states (default)
   migrate  Adopt the period-note tree (dry run by default)
@@ -30,8 +30,10 @@ Options:
 Bare `bob periods` runs the read-only list.
 
 Examples:
+  bob periods brief yesterday     Print the agent bundle for a day with its instructions
   bob periods brief 2026-W45     Print the agent review bundle for a week
-  bob periods draft 2026-W45 -i review.md  Draft the week's Review section
+  bob periods draft yesterday -i summary.md  Draft the day's summary
+  bob periods draft 2026-W45 -i review.md  Draft the week's summary plus Review section
   bob periods ensure             Create missing notes one week ahead
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
@@ -50,16 +52,16 @@ Run 'bob periods <command> --help' for more information on a command.
 
 ## bob periods brief
 
-Print the agent review bundle for a week, quarter, or year
+Print the agent review bundle for a day, week, quarter, or year
 
 ```text title="bob periods brief --help"
-Print the deterministic, versioned agent bundle (brief v2) for a week, quarter, or year: header, facts, time, parts, finished, started and dropped, still open, practice (year only), Bryan's words, this note and its neighbours, off-clock counts, and caveats. The command is read-only. all_time has no review. See docs/periods.md for the brief contract and token budgets.
+Print the deterministic, versioned agent bundle (brief v3) for a day, week, quarter, or year: instructions first, then header, intentions, facts, time, parts (periods only), finished, started and dropped, still open, practice (year only), Bryan's words, the previous day's summary (day only), events, this note and its neighbours (v3), day summaries with coverage (week only), off-clock counts, and caveats. Day briefs carry the day v1 instructions; period briefs carry the same v3 text the folded callouts carry. The command is read-only. all_time has no review. See docs/periods.md for the brief contract and token budgets.
 
-Usage: bob periods brief [OPTIONS] [PERIOD]
+Usage: bob periods brief [OPTIONS] [SUBJECT]
 
 Arguments:
-  [PERIOD]
-          Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review
+  [SUBJECT]
+          Day or period id or note path (today, yesterday, last-day, YYYY-MM-DD, YYYYMMDD, daily path, week, quarter, year, last-week, last-quarter, or last-year); all_time has no review
 
 Options:
   -b, --bob-dir <DIR>
@@ -75,6 +77,7 @@ Options:
           Show help
 
 Examples:
+  bob periods brief yesterday
   bob periods brief 2026-W45
   bob periods brief 2026-Q4 -f json
   bob periods brief 2026 -f md
@@ -88,30 +91,30 @@ Environment:
 Exit codes:
   0  brief
   1  vault I/O failure
-  2  usage (bad id or flags), or all_time (which has no review)
+  2  usage (bad id or flags), missing daily note, or all_time (which has no review)
 
 See docs/periods.md for the brief contract and token budgets.
 ```
 
 ## bob periods draft
 
-Draft a period's Review section (never overwrites Bryan)
+Draft a day's summary or a period's summary plus Review (never overwrites Bryan)
 
 ```text title="bob periods draft --help"
-Replace the `## Review` section of a week, quarter, or year note with the draft text from -i/--input (a file path, or - for stdin). The text must open with a `**Headline:**` paragraph (joined onto one line on save) and stay within the kind's word cap (week 250, quarter 400, year 600). An open or future period, or a Review Bryan already edited or reflected, is refused unless -F/--force is passed. The note must exist and contain `## Review`; all_time has no review. See docs/periods.md for the draft rules and JSON errors.
+Write a day's frontmatter summary from -i/--input (a file path, or - for stdin): one paragraph of 1–3 sentences, at most 60 words and two links, stored as `summary` with its digest and date. Or split a period draft from -i/--input: the opening `**Summary:**` paragraph (the one-release `**Headline:**` alias still reads; joined onto one line on save, at most 25 words) becomes the frontmatter summary, and the remaining text becomes only the `## Review` body (a summary-only draft may leave an empty Review body). Total caps: day 60, week 250, quarter 400, year 600. An open or future subject, an edited summary or Review, or a reflection beside existing agent content is refused unless -F/--force is passed; a reflection never blocks a first draft. The note must exist (daily notes are never created; a period note must contain `## Review`); all_time has no review. See docs/periods.md for the draft rules and JSON errors.
 
-Usage: bob periods draft [OPTIONS] [PERIOD]
+Usage: bob periods draft [OPTIONS] [SUBJECT]
 
 Arguments:
-  [PERIOD]
-          Period id or note path (week, quarter, year, last-week, last-quarter, or last-year); all_time has no review
+  [SUBJECT]
+          Day or period id or note path (today, yesterday, last-day, YYYY-MM-DD, YYYYMMDD, daily path, week, quarter, year, last-week, last-quarter, or last-year); all_time has no review
 
 Options:
   -b, --bob-dir <DIR>
           Bob vault root; defaults to BOB_DIR or ~/bob
 
   -F, --force
-          Draft an open period or overwrite Bryan's edits (Bryan said redo, or asked for so far)
+          Draft an open subject or overwrite protected content (Bryan said redo, or asked for so far)
 
   -f, --format <FORMAT>
           Output format: human or json
@@ -129,6 +132,7 @@ Options:
           Plan without writing files
 
 Examples:
+  bob periods draft yesterday -i /tmp/summary.md
   bob periods draft 2026-W45 -i /tmp/review.md
   bob periods draft 2026-Q4 -i - < review.md
   bob periods draft 2026-W45 -i review.md -n
@@ -143,7 +147,7 @@ Exit codes:
   0  drafted (or planned with -n)
   1  vault I/O or transaction failure
   2  usage (bad id, flags, or draft text)
-  3  refused (period open, or state edited/reflected)
+  3  refused (subject open, or state edited/reflected)
 
 See docs/periods.md for the draft rules, word caps, and JSON errors.
 ```

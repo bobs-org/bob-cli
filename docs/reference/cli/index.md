@@ -81,8 +81,8 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob notebooks list`](notebooks.md#bob-notebooks-list) | List notebooks grouped by root (default) |
 | [`bob notebooks sync`](notebooks.md#bob-notebooks-sync) | Write every generated notebook catalog |
 | [`bob periods`](periods.md) | Manage period notes: weeks, quarters, years, and all time |
-| [`bob periods brief`](periods.md#bob-periods-brief) | Print the agent review bundle for a week, quarter, or year |
-| [`bob periods draft`](periods.md#bob-periods-draft) | Draft a period's Review section (never overwrites Bryan) |
+| [`bob periods brief`](periods.md#bob-periods-brief) | Print the agent review bundle for a day, week, quarter, or year |
+| [`bob periods draft`](periods.md#bob-periods-draft) | Draft a day's summary or a period's summary plus Review (never overwrites Bryan) |
 | [`bob periods ensure`](periods.md#bob-periods-ensure) | Create missing period notes one week ahead |
 | [`bob periods list`](periods.md#bob-periods-list) | List period notes with review states (default) |
 | [`bob periods migrate`](periods.md#bob-periods-migrate) | Adopt the period-note tree (dry run by default) |

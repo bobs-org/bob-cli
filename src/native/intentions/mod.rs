@@ -10,5 +10,5 @@ pub(crate) mod subject;
 pub(crate) mod write;
 
 pub(crate) use fields::read;
-pub(crate) use state::{digest, evaluate, ReviewState};
+pub(crate) use state::{digest, evaluate, summary_state, ReviewState};
 pub(crate) use subject::NoteSubject;

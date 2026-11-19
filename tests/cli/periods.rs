@@ -302,10 +302,9 @@ fn periods_help_lists_options_alphabetically() {
     );
     assert_stdout_has_no_ansi(&ensure_help);
 
-    for (command, about) in [
-        ("brief", "agent bundle"),
-        ("draft", "Replace the `## Review` section"),
-    ] {
+    for (command, about) in
+        [("brief", "agent bundle"), ("draft", "split a period draft")]
+    {
         let help = bob_command()
             .arg("periods")
             .arg(command)
@@ -558,7 +557,7 @@ fn migrate_apply_commits_the_tree_and_reruns_cleanly() {
     assert!(adopted.contains("## Archive"), "{adopted}");
     assert!(adopted.contains("# 2026\n\nIndex of 2026."), "{adopted}");
     assert!(
-        adopted.contains("Agent instructions · yearly v2"),
+        adopted.contains("Agent instructions · yearly v3"),
         "{adopted}"
     );
     let archive_at = adopted.find("## Archive").expect("archive");
@@ -823,11 +822,12 @@ fn brief_closed_week_reports_every_section() {
     write_reviews_fixture(vault.path());
     let body = brief_json(vault.path(), "2026-W44");
     assert_eq!(body["ok"], true);
-    assert_eq!(body["brief_version"], "brief v2");
-    assert_eq!(body["schema_version"], 2);
+    assert_eq!(body["brief_version"], "brief v3");
+    assert_eq!(body["schema_version"], 3);
     assert_eq!(body["id"], "2026-W44");
     assert_eq!(body["header"]["state"], "closed");
     assert_eq!(body["header"]["review_state"], "empty");
+    assert_eq!(body["header"]["summary_state"], "empty");
     assert!(
         body["header"]["stop_advice"]
             .as_str()
@@ -836,6 +836,48 @@ fn brief_closed_week_reports_every_section() {
         "stop advice: {}",
         body["header"]["stop_advice"]
     );
+    // Instructions ride first, in both formats, with the same substance.
+    assert_eq!(body["instructions"]["version"], "weekly v3");
+    assert!(
+        body["instructions"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("at most 250 words"),
+        "v3 instruction substance: {}",
+        body["instructions"]
+    );
+    // v3 neighbour shape: no legacy spellings.
+    let neighbours = &body["neighbours"];
+    assert!(neighbours.get("own").is_none(), "{neighbours}");
+    assert!(neighbours.get("parent_outcomes").is_none(), "{neighbours}");
+    assert!(neighbours.get("parent_theme").is_none(), "{neighbours}");
+    assert!(neighbours.get("prev_reflection").is_none(), "{neighbours}");
+    assert!(neighbours.get("prev_review").is_none(), "{neighbours}");
+    assert!(neighbours.get("intentions").is_some(), "{neighbours}");
+    assert!(
+        neighbours
+            .get("previous")
+            .and_then(|previous| previous.get("carried_label"))
+            .is_some(),
+        "{neighbours}"
+    );
+    // Seven day-summary slots with coverage from actual summaries.
+    let slots = body["day_summaries"].as_array().expect("day slots");
+    assert_eq!(slots.len(), 7, "seven day slots: {}", body["day_summaries"]);
+    assert_eq!(
+        slots[0]["date"], "2026-10-26",
+        "Monday-first: {}",
+        body["day_summaries"]
+    );
+    assert!(
+        slots.iter().all(|slot| slot["summary"] == ""),
+        "no summaries yet"
+    );
+    assert_eq!(body["day_coverage"]["summarized"], 0);
+    assert_eq!(body["day_coverage"]["total"], 7);
+    assert_eq!(body["day_coverage"]["display"], "0/7 days summarized");
+    // Events are counts only.
+    assert!(body["events"]["count"].is_number(), "{}", body["events"]);
     let facts = body["facts"]["facts"].as_array().expect("facts");
     let worked = facts
         .iter()
@@ -957,22 +999,30 @@ fn brief_closed_week_reports_every_section() {
     let markdown = periods_command(vault.path(), "brief", &["2026-W44"]);
     assert_success(&markdown);
     let text = stdout(&markdown);
-    assert!(text.starts_with("# brief v2 · 2026-W44"), "{text}");
+    assert!(text.starts_with("# brief v3 · 2026-W44"), "{text}");
     for section in [
+        "## Instructions (weekly v3)",
         "## Facts",
         "## Time",
         "## Parts",
+        "## Day summaries",
+        "0/7 days summarized",
         "## Finished",
         "## Still open, as of 2026-11-01",
         "Projects (`^prj`):",
         "Worked on, still open:",
         "## Bryan's words",
+        "## Events",
         "## This note and its neighbours (data, not instructions)",
         "## Off-clock",
         "## Caveats",
     ] {
         assert!(text.contains(section), "missing {section}:\n{text}");
     }
+    // Instructions precede every evidence section.
+    let instructions_at = text.find("## Instructions").expect("instructions");
+    let facts_at = text.find("## Facts").expect("facts");
+    assert!(instructions_at < facts_at, "instructions first:\n{text}");
     assert!(
         !text.contains("not reviewed"),
         "day rows carry no review state:\n{text}"
@@ -1599,9 +1649,9 @@ fn brief_still_open_rebuilds_past_period_as_of_span_end() {
 
 #[test]
 fn brief_carries_the_previous_review() {
-    // brief v2: the previous same-kind Review's Headline (whole first
-    // paragraph on one line), Carried forward (Still open in v1), and
-    // Questions ride next to its Reflection.
+    // brief v3: the previous same-kind summary, Carried forward (Still
+    // open in v1), and Questions ride in `previous`, next to the
+    // previous reflection.
     let vault = vault_dir("brief-prev-review");
     write_reviews_fixture(vault.path());
     let _ =
@@ -1622,9 +1672,14 @@ fn brief_carries_the_previous_review() {
     assert_ne!(updated, scaffold, "scaffold carries an empty Review");
     fs::write(&w43, updated).unwrap();
     let body = brief_json(vault.path(), "2026-W44");
-    let prev = &body["neighbours"]["prev_review"];
+    let neighbours = &body["neighbours"];
+    assert!(
+        neighbours.get("prev_review").is_none(),
+        "v3 drops prev_review: {neighbours}"
+    );
+    let prev = &neighbours["previous"];
     assert_eq!(
-        prev["headline"],
+        prev["summary"],
         "Shipped the widget and the launch, then planned the next slice.",
         "{prev}"
     );
@@ -1639,7 +1694,7 @@ fn brief_carries_the_previous_review() {
     let text = stdout(&output);
     assert!(
         text.contains(
-            "### Previous Review: Headline\nShipped the widget and the launch, then planned the next slice.\n"
+            "### Previous Summary\nShipped the widget and the launch, then planned the next slice.\n"
         ),
         "{text}"
     );
@@ -1682,27 +1737,28 @@ fn brief_neighbours_use_intention_fields_and_keep_legacy_review_parts() {
     .unwrap();
 
     let body = brief_json(vault.path(), "2026-W44");
+    let neighbours = &body["neighbours"];
+    assert_eq!(neighbours["intentions"], "- Frontmatter week intention");
+    assert_eq!(neighbours["summary"], "");
     assert_eq!(
-        body["neighbours"]["own"]["Intentions"],
-        "- Frontmatter week intention"
-    );
-    assert_eq!(
-        body["neighbours"]["prev_review"]["headline"],
-        "Frontmatter previous summary"
-    );
-    assert_eq!(
-        body["neighbours"]["prev_review"]["carried"],
-        "- Keep this detail."
-    );
-    assert_eq!(
-        body["neighbours"]["prev_reflection"],
-        "Frontmatter previous reflection."
-    );
-    assert_eq!(
-        body["neighbours"]["parent_outcomes"],
+        neighbours["parent_intentions"],
         "- Frontmatter parent intention"
     );
-    assert_eq!(body["neighbours"]["parent_theme"], "");
+    assert_eq!(
+        neighbours["previous"]["summary"],
+        "Frontmatter previous summary"
+    );
+    assert_eq!(neighbours["previous"]["carried"], "- Keep this detail.");
+    assert_eq!(
+        neighbours["previous"]["reflection"],
+        "Frontmatter previous reflection."
+    );
+    // Legacy shapes stay readable: the legacy Review Headline projects
+    // into the previous summary, and legacy text survives beside
+    // frontmatter.
+    assert!(neighbours.get("own").is_none(), "{neighbours}");
+    assert!(neighbours.get("prev_review").is_none(), "{neighbours}");
+    assert!(neighbours.get("parent_outcomes").is_none(), "{neighbours}");
 }
 
 #[test]
@@ -1896,7 +1952,7 @@ fn relative_period_ids_resolve_like_canonical_ids() {
     let input = write_review(
         vault.path(),
         "relative.md",
-        "**Headline:** Relative week\n\nShipped it.\n",
+        "**Summary:** Relative week\n\nShipped it.\n",
     );
     let output =
         draft(vault.path(), "last-week", &input, &["-F", "-f", "json"]);
@@ -1904,11 +1960,16 @@ fn relative_period_ids_resolve_like_canonical_ids() {
     let body: serde_json::Value =
         serde_json::from_str(&stdout(&output)).expect("draft JSON");
     assert_eq!(body["id"], "2026-W45");
+    assert_eq!(body["summary_state"], "drafted");
+    let written =
+        fs::read_to_string(vault.path().join("2026/2026-W45.md")).unwrap();
     assert!(
-        fs::read_to_string(vault.path().join("2026/2026-W45.md"))
-            .unwrap()
-            .contains("**Headline:** Relative week"),
-        "draft last-week writes the canonical note"
+        written.contains("summary: Relative week"),
+        "draft last-week writes the summary to the canonical note"
+    );
+    assert!(
+        written.contains("## Review\n\nShipped it."),
+        "and the Review body:\n{written}"
     );
 
     // PI6: unknown relative words stay usage errors whose message lists
@@ -1980,7 +2041,7 @@ fn draft_joins_a_wrapped_headline_and_parents_read_it_whole() {
     let input = write_review(
         vault.path(),
         "review.md",
-        "**Headline:** Shipped the widget slice and the big launch, and\n\
+        "**Summary:** Shipped the widget slice and the big launch, and\n\
          closed the first weekly review.\n\n**Shipped:**\n\n- [[2026/20261026#^ship|Widget]]\n",
     );
     let output = draft(vault.path(), "2026-W44", &input, &["-f", "json"]);
@@ -1989,9 +2050,17 @@ fn draft_joins_a_wrapped_headline_and_parents_read_it_whole() {
         .expect("drafted note");
     assert!(
         after.contains(
-            "## Review\n\n**Headline:** Shipped the widget slice and the big launch, and closed the first weekly review.\n\n**Shipped:**\n"
+            "## Review\n\n**Shipped:**\n\n- [[2026/20261026#^ship|Widget]]\n"
         ),
-        "Headline joined onto one physical line:\n{after}"
+        "remaining text becomes only the Review body:\n{after}"
+    );
+    assert!(
+        !after.contains("**Headline:**"),
+        "no duplicate opener:\n{after}"
+    );
+    assert!(
+        after.contains("summary: Shipped the widget slice and the big launch, and closed the first weekly review."),
+        "summary split into frontmatter:\n{after}"
     );
     let list = periods_command(vault.path(), "list", &["-f", "json"]);
     assert_success(&list);
@@ -2009,11 +2078,11 @@ fn draft_joins_a_wrapped_headline_and_parents_read_it_whole() {
         "Shipped the widget slice and the big launch, and closed the first weekly review."
     );
 
-    // The 25-word cap counts the whole paragraph, not its first line.
+    // The 25-word cap counts the whole opener paragraph.
     let long = write_review(
         vault.path(),
         "long.md",
-        "**Headline:** one two three four five six seven eight nine ten\n\
+        "**Summary:** one two three four five six seven eight nine ten\n\
          eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen\n\
          nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six\n",
     );
@@ -2023,6 +2092,17 @@ fn draft_joins_a_wrapped_headline_and_parents_read_it_whole() {
         serde_json::from_str(&stdout(&output)).expect("error json");
     assert_eq!(body["error"]["code"], "over_cap");
     assert_eq!(body["error"]["count"], 26);
+    // The one-release Headline alias still reads and joins.
+    let alias = write_review(
+        vault.path(),
+        "alias.md",
+        "**Headline:** Shipped the widget slice,\nand the launch.\n\nBody words.\n",
+    );
+    let output = draft(vault.path(), "2026-W44", &alias, &["-F", "-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("alias json");
+    assert_eq!(body["summary_state"], "drafted");
 }
 
 #[test]
@@ -2032,26 +2112,37 @@ fn draft_accepts_a_valid_text_and_a_second_draft() {
     let input = write_review(
         vault.path(),
         "review.md",
-        "**Headline:** A steady build week\n\nShipped the widget slice.\n",
+        "**Summary:** A steady build week\n\nShipped the widget slice.\n",
     );
     let before = fs::read_to_string(vault.path().join("2026/2026-W44.md"))
         .expect("week note");
     let output = draft(vault.path(), "2026-W44", &input, &[]);
     assert_success(&output);
     assert!(
-        stdout(&output).starts_with("Drafted 2026-W44 Review · "),
+        stdout(&output)
+            .starts_with("Drafted 2026-W44 Review · 9 words · state drafted"),
         "success line: {}",
         stdout(&output)
     );
     let after = fs::read_to_string(vault.path().join("2026/2026-W44.md"))
         .expect("drafted note");
     assert!(
-        after.contains("## Review\n\n**Headline:** A steady build week\n\nShipped the widget slice.\n\n## Reflection"),
-        "section replaced with blank lines:\n{after}"
+        after.contains(
+            "## Review\n\nShipped the widget slice.\n\n## Reflection"
+        ),
+        "remaining text becomes only the Review body:\n{after}"
     );
     assert!(
-        after.contains("review_drafted: 2026-11-10"),
+        after.contains("summary: A steady build week"),
+        "summary split into frontmatter:\n{after}"
+    );
+    assert!(
+        after.contains("review_drafted: \"2026-11-10\""),
         "draft day stamped:\n{after}"
+    );
+    assert!(
+        after.contains("summary_drafted: \"2026-11-10\""),
+        "summary day stamped:\n{after}"
     );
     let digest = after
         .lines()
@@ -2061,9 +2152,17 @@ fn draft_accepts_a_valid_text_and_a_second_draft() {
         digest.len() == "review_digest: sha256:".len() + 16,
         "short digest: {digest}"
     );
+    let summary_digest = after
+        .lines()
+        .find(|line| line.starts_with("summary_digest: "))
+        .expect("summary digest line");
+    assert!(
+        summary_digest.len() == "summary_digest: sha256:".len() + 16,
+        "short summary digest: {summary_digest}"
+    );
     for kept in [
         "[[2026/2026-Q4|↑ 2026-Q4]]",
-        "> [!agent]- Agent instructions · weekly v2\n",
+        "> [!agent]- Agent instructions · weekly v3\n",
     ] {
         assert!(
             after.contains(kept),
@@ -2078,13 +2177,14 @@ fn draft_accepts_a_valid_text_and_a_second_draft() {
     let again = write_review(
         vault.path(),
         "review2.md",
-        "**Headline:** Revised take\n\nNew words.\n",
+        "**Summary:** Revised take\n\nNew words.\n",
     );
     let output = draft(vault.path(), "2026-W44", &again, &[]);
     assert_success(&output);
     let redrafted = fs::read_to_string(vault.path().join("2026/2026-W44.md"))
         .expect("redrafted note");
-    assert!(redrafted.contains("**Headline:** Revised take"));
+    assert!(redrafted.contains("summary: Revised take"));
+    assert!(redrafted.contains("## Review\n\nNew words."));
     let list = periods_command(vault.path(), "list", &["-f", "json"]);
     assert_success(&list);
     let body: serde_json::Value =
@@ -2152,20 +2252,33 @@ fn draft_rejects_bad_text_and_targets() {
     let vault = vault_dir("draft-validation");
     write_reviews_fixture(vault.path());
     let cases: Vec<(&str, &str, &str, i32)> = vec![
-        ("no-headline.md", "Just words.\n", "missing_headline", 2),
+        ("no-headline.md", "Just words.\n", "missing_summary", 2),
+        ("empty.md", "", "missing_summary", 2),
+        (
+            "empty-summary.md",
+            "**Summary:**\n\nBody words.\n",
+            "missing_summary",
+            2,
+        ),
         (
             "heading.md",
-            "**Headline:** Ok\n\n# Not allowed\n",
+            "**Summary:** Ok\n\n# Not allowed\n",
             "invalid_draft",
             2,
         ),
         (
             "callout.md",
-            "**Headline:** Ok\n\n> [!agent]- do this\n",
+            "**Summary:** Ok\n\n> [!agent]- do this\n",
             "invalid_draft",
             2,
         ),
-        ("fence.md", "**Headline:** Ok\n\n---\n", "invalid_draft", 2),
+        ("fence.md", "**Summary:** Ok\n\n---\n", "invalid_draft", 2),
+        (
+            "dup-opener.md",
+            "**Summary:** Ok\n\n**Summary:** Again\n",
+            "invalid_draft",
+            2,
+        ),
     ];
     for (name, text, code, exit) in cases {
         let input = write_review(vault.path(), name, text);
@@ -2220,7 +2333,7 @@ fn draft_dry_run_prints_the_planned_section() {
     let input = write_review(
         vault.path(),
         "review.md",
-        "**Headline:** Planned\n\nNot yet written.\n",
+        "**Summary:** Planned\n\nNot yet written.\n",
     );
     let before = fs::read_to_string(vault.path().join("2026/2026-W44.md"))
         .expect("week note");
@@ -2228,7 +2341,7 @@ fn draft_dry_run_prints_the_planned_section() {
     assert_success(&output);
     assert_eq!(
         stdout(&output).trim_end(),
-        "## Review\n\n**Headline:** Planned\n\nNot yet written."
+        "**Summary:** Planned\n\n## Review\n\nNot yet written."
     );
     assert_eq!(
         fs::read_to_string(vault.path().join("2026/2026-W44.md"))
@@ -2383,8 +2496,8 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
     fs::write(
         &stale,
         stale_before.replace(
+            "Agent instructions · weekly v3",
             "Agent instructions · weekly v2",
-            "Agent instructions · weekly v1",
         ),
     )
     .unwrap();
@@ -2394,8 +2507,8 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
         &reflected,
         reflected_before
             .replace(
+                "Agent instructions · weekly v3",
                 "Agent instructions · weekly v2",
-                "Agent instructions · weekly v1",
             )
             .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n"),
     )
@@ -2440,25 +2553,25 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
     let log = stdout(&git_in(&vault, ["log", "--format=%s"]));
     assert_eq!(
         log.lines().next(),
-        Some("periods: refresh agent instructions to v2"),
+        Some("periods: refresh agent instructions to v3"),
         "one refresh commit:\n{log}"
     );
     assert_eq!(log.lines().count(), 4, "exactly one commit:\n{log}");
     let refreshed = fs::read_to_string(&stale).expect("refreshed note");
     assert!(
-        refreshed.contains("Agent instructions · weekly v2"),
+        refreshed.contains("Agent instructions · weekly v3"),
         "callout refreshed:\n{refreshed}"
     );
     assert!(
-        !refreshed.contains("weekly v1"),
+        !refreshed.contains("weekly v2"),
         "no stale callout left:\n{refreshed}"
     );
     assert_eq!(
         fs::read_to_string(&reflected).expect("reflected note"),
         reflected_before
             .replace(
+                "Agent instructions · weekly v3",
                 "Agent instructions · weekly v2",
-                "Agent instructions · weekly v1",
             )
             .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n"),
         "reflected notes stay untouched"
@@ -3001,5 +3114,830 @@ fn week_report_and_brief_carry_day_intentions_and_summaries() {
         md.contains("(not started)")
             && md.contains("Bryan's headline: “Converge take-home submitted”"),
         "future day brief:\n{md}"
+    );
+}
+
+fn draft_stdin(
+    vault: &std::path::Path,
+    subject: &str,
+    text: &str,
+    extra: &[&str],
+) -> std::process::Output {
+    use std::io::Write;
+    let mut command = bob_command();
+    command
+        .arg("periods")
+        .arg("draft")
+        .arg("-b")
+        .arg(vault)
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", REVIEWS_NOW)
+        .env("NO_COLOR", "1");
+    command.arg(subject).arg("-i").arg("-");
+    for arg in extra {
+        command.arg(arg);
+    }
+    command.stdin(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("spawn bob periods draft");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(text.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("draft stdin")
+}
+
+#[test]
+fn brief_day_reports_evidence_and_instructions_first() {
+    let vault = vault_dir("brief-day");
+    write_reviews_fixture(vault.path());
+    // Day intentions verbatim, plus one event whose title stays private.
+    fs::write(
+        vault.path().join("2026/20261026.md"),
+        "---\nparent: '[[2026/2026-W44]]'\nintentions:\n  - \"Ship the widget\"\n---\n\n\
+         [[2026/20261025|prev]] · [[2026/2026-W44|W44]] · [[2026/20261027|next]]\n\n\
+         - [x] #task Ship widget [created:: 2026-10-20] [completion:: 2026-10-26] ^ship\n\
+         - [x] #task Big launch [created:: 2026-10-18] [completion:: 2026-10-26] ^prj\n\n\
+         ## Pomodoros\n\n\
+         - [x] (**08:00 - 08:25** [t:: 25m]) — PLAN\n\
+         \t- [[#^ship]]\n\n\
+         ## Events\n\n\
+         - [ ] #task **0800-0830** Dentist ^dentist\n",
+    )
+    .unwrap();
+    // Previous calendar day's summary.
+    fs::write(
+        vault.path().join("2026/20261025.md"),
+        "---\nparent: '[[2026/2026-W44]]'\nsummary: Shipped the prior slice\n---\n\nprev day\n",
+    )
+    .unwrap();
+    // Week intentions project into the day brief as the parent.
+    let w44 = vault.path().join("2026/2026-W44.md");
+    let scaffold = fs::read_to_string(&w44).expect("W44 scaffold");
+    fs::write(
+        &w44,
+        scaffold.replacen(
+            "\n---\n\n# 2026-W44",
+            "\nintentions: [\"Finish the widget slice\"]\n---\n\n# 2026-W44",
+            1,
+        ),
+    )
+    .unwrap();
+
+    let body = brief_json(vault.path(), "2026-10-26");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["brief_version"], "brief v3");
+    assert_eq!(body["schema_version"], 3);
+    assert_eq!(body["id"], "2026-10-26");
+    assert_eq!(body["kind"], "day");
+    assert_eq!(body["header"]["state"], "closed");
+    assert_eq!(body["header"]["note_path"], "2026/20261026.md");
+    assert_eq!(body["header"]["prev_path"], "2026/20261025.md");
+    assert_eq!(body["header"]["parent_path"], "2026/2026-W44.md");
+    assert!(
+        body["header"]["stop_advice"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ready to draft"),
+        "day stop advice: {}",
+        body["header"]
+    );
+    // Day v1 instructions carry the canonical date and the day rules.
+    assert_eq!(body["instructions"]["version"], "day v1");
+    let text = body["instructions"]["text"].as_str().unwrap_or_default();
+    assert!(text.contains("2026-10-26"), "canonical date: {text}");
+    assert!(text.contains("at most 60 words"), "day cap: {text}");
+    // Intentions verbatim plus the week's, explicitly data.
+    assert_eq!(body["neighbours"]["intentions"], "- Ship the widget");
+    assert_eq!(
+        body["neighbours"]["parent_intentions"],
+        "- Finish the widget slice"
+    );
+    // Day facts come from the Stats machinery for that day.
+    let facts: Vec<(String, String)> = body["facts"]["facts"]
+        .as_array()
+        .expect("facts")
+        .iter()
+        .map(|fact| {
+            (
+                fact["label"].as_str().unwrap_or_default().to_string(),
+                fact["display"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        facts
+            .iter()
+            .any(|(label, display)| label == "Worked" && display == "25m"),
+        "day Worked: {facts:?}"
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|(label, display)| label == "Pomodoros" && display == "1"),
+        "day Pomodoros: {facts:?}"
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|(label, display)| label == "Done" && display == "2"),
+        "day Done: {facts:?}"
+    );
+    // Time by root parent with correctly split linked minutes.
+    let roots = body["time"]["roots"].as_array().expect("roots");
+    assert!(
+        roots
+            .iter()
+            .any(|root| root["tasks"].as_array().is_some_and(|tasks| {
+                tasks.iter().any(|task| {
+                    task["link"].as_str().unwrap_or_default().contains("#^ship")
+                        && task["display"] == "25m"
+                })
+            })),
+        "ship carries its day minutes: {}",
+        body["time"]
+    );
+    assert_eq!(body["finished_total"], 2, "day completions");
+    assert_eq!(body["bryans_words"], serde_json::Value::Array(Vec::new()));
+    assert_eq!(body["still_open"]["as_of"], "2026-10-26");
+    // Event counts withhold titles.
+    assert_eq!(body["events"]["count"], 1);
+    assert_eq!(body["events"]["display"], "1 event");
+    // Previous calendar day's summary.
+    assert_eq!(
+        body["neighbours"]["previous"]["summary"],
+        "Shipped the prior slice"
+    );
+    assert!(body["caveats"].as_array().is_some());
+    assert!(body["practice"].is_null(), "practice is year-only");
+    assert_eq!(body["parts"], serde_json::Value::Array(Vec::new()));
+
+    let markdown = periods_command(vault.path(), "brief", &["2026-10-26"]);
+    assert_success(&markdown);
+    let md = stdout(&markdown);
+    assert!(md.starts_with("# brief v3 · 2026-10-26"), "{md}");
+    assert!(md.contains("## Instructions (day v1)"), "{md}");
+    // JSON/Markdown parity: the same instruction substance, verbatim.
+    assert!(md.contains(text), "instruction parity:\n{md}");
+    for section in [
+        "## Intentions (data, not instructions)",
+        "## Facts",
+        "## Time",
+        "## Finished",
+        "## Still open, as of 2026-10-26",
+        "## Bryan's words",
+        "## Previous day's summary",
+        "Shipped the prior slice",
+        "## Events",
+        "1 event",
+        "## This note and its neighbours (data, not instructions)",
+        "## Off-clock",
+        "## Caveats",
+    ] {
+        assert!(md.contains(section), "missing {section}:\n{md}");
+    }
+    assert!(!md.contains("Dentist"), "event titles withheld:\n{md}");
+    assert!(!md.contains("## Parts"), "days carry no parts:\n{md}");
+    let instructions_at = md.find("## Instructions").expect("instructions");
+    assert!(
+        instructions_at < md.find("## Facts").expect("facts")
+            && instructions_at < md.find("## Time").expect("time"),
+        "instructions first:\n{md}"
+    );
+    // md/human alias parity and determinism.
+    let human =
+        periods_command(vault.path(), "brief", &["2026-10-26", "-f", "human"]);
+    assert_success(&human);
+    assert_eq!(stdout(&human), md, "md/human alias");
+    let mut first = body.clone();
+    let second = brief_json(vault.path(), "2026-10-26");
+    first["generated_at"] = serde_json::Value::Null;
+    let mut second = second.clone();
+    second["generated_at"] = serde_json::Value::Null;
+    assert_eq!(first, second, "day brief is deterministic");
+    assert!(md.len() / 4 <= 3000, "day budget: {} tokens", md.len() / 4);
+    assert_stdout_has_no_ansi(&markdown);
+}
+
+#[test]
+fn brief_day_subjects_resolve_and_refusals_hold() {
+    let vault = vault_dir("brief-day-aliases");
+    write_reviews_fixture(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-11-09", "-q"]);
+    for (name, contents) in [
+        (
+            "2026/20261109.md",
+            "---\nparent: '[[2026/2026-W46]]'\n---\n\nyesterday\n",
+        ),
+        (
+            "2026/20261110.md",
+            "---\nparent: '[[2026/2026-W46]]'\n---\n\ntoday\n",
+        ),
+        (
+            "2026/20261111.md",
+            "---\nparent: '[[2026/2026-W46]]'\n---\n\ntomorrow\n",
+        ),
+    ] {
+        fs::write(vault.path().join(name), contents).unwrap();
+    }
+    // Canonical daily aliases under the pinned clock.
+    for alias in ["today", "yesterday", "last-day", "2026-11-10", "20261110"] {
+        let body = brief_json(vault.path(), alias);
+        let expected = if alias == "yesterday" || alias == "last-day" {
+            "2026-11-09"
+        } else {
+            "2026-11-10"
+        };
+        assert_eq!(body["id"], expected, "{alias}");
+        assert_eq!(body["kind"], "day");
+    }
+    let by_path = brief_json(vault.path(), "2026/20261109.md");
+    assert_eq!(by_path["id"], "2026-11-09");
+    // Open and future states with stop advice.
+    assert_eq!(brief_json(vault.path(), "today")["header"]["state"], "open");
+    assert!(brief_json(vault.path(), "today")["header"]["stop_advice"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("so far"));
+    assert_eq!(
+        brief_json(vault.path(), "2026-11-11")["header"]["state"],
+        "future"
+    );
+    // all_time refusal and bad ids.
+    for (subject, code) in [
+        ("all_time", "no_review_section"),
+        ("2026-02-30", "invalid_period"),
+    ] {
+        let output =
+            periods_command(vault.path(), "brief", &[subject, "-f", "json"]);
+        assert_eq!(output.status.code(), Some(2), "{subject}");
+        let body: serde_json::Value =
+            serde_json::from_str(&stdout(&output)).expect("error JSON");
+        assert_eq!(body["error"]["code"], code, "{subject}");
+        assert_eq!(body["schema_version"], 1, "error envelope");
+    }
+    // A missing daily note names the Obsidian recovery hint.
+    let missing =
+        periods_command(vault.path(), "brief", &["2026-10-25", "-f", "json"]);
+    assert_eq!(missing.status.code(), Some(2));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&missing)).expect("missing JSON");
+    assert_eq!(body["error"]["code"], "missing_note");
+    assert!(
+        body["error"]["hint"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Obsidian"),
+        "recovery hint: {}",
+        body["error"]
+    );
+    // The brief is read-only.
+    let before =
+        fs::read_to_string(vault.path().join("2026/20261109.md")).unwrap();
+    let _ = brief_json(vault.path(), "2026-11-09");
+    assert_eq!(
+        fs::read_to_string(vault.path().join("2026/20261109.md")).unwrap(),
+        before,
+        "brief writes nothing"
+    );
+}
+
+#[test]
+fn draft_day_summaries_enforce_boundaries() {
+    let vault = vault_dir("draft-day");
+    write_reviews_fixture(vault.path());
+    // A valid day draft stores one line with stamps; stdin works too.
+    let input = write_review(
+        vault.path(),
+        "summary.md",
+        "**Summary:** Shipped the widget and closed the review queue.\n",
+    );
+    let output = draft(vault.path(), "2026-10-26", &input, &["-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("draft JSON");
+    assert_eq!(body["id"], "2026-10-26");
+    assert_eq!(body["summary_state"], "drafted");
+    assert_eq!(body["review_state"], "drafted");
+    let note =
+        fs::read_to_string(vault.path().join("2026/20261026.md")).unwrap();
+    assert!(
+        note.contains(
+            "summary: Shipped the widget and closed the review queue."
+        ),
+        "stored summary:\n{note}"
+    );
+    let via_stdin = draft_stdin(
+        vault.path(),
+        "2026-10-27",
+        "Free thought, joined softly\nacross two lines.\n",
+        &["-F"],
+    );
+    assert_success(&via_stdin);
+    let day27 =
+        fs::read_to_string(vault.path().join("2026/20261027.md")).unwrap();
+    assert!(
+        day27
+            .contains("summary: Free thought, joined softly across two lines."),
+        "soft wraps join into one stored line:\n{day27}"
+    );
+    // Exact boundaries: 60 words pass, 61 fail; two links pass, three fail.
+    let sixty = "word ".repeat(60);
+    let ok = write_review(vault.path(), "sixty.md", &sixty);
+    assert_success(&draft(vault.path(), "2026-10-26", &ok, &["-F"]));
+    let sixty_one = "word ".repeat(61);
+    let over = write_review(vault.path(), "sixty-one.md", &sixty_one);
+    let output =
+        draft(vault.path(), "2026-10-26", &over, &["-F", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("cap JSON");
+    assert_eq!(body["error"]["code"], "over_cap");
+    assert_eq!(body["error"]["count"], 61);
+    assert_eq!(body["error"]["cap"], 60);
+    let two_links =
+        write_review(vault.path(), "two.md", "See [[a]] and [[b]] here\n");
+    assert_success(&draft(vault.path(), "2026-10-26", &two_links, &["-F"]));
+    let three_links = write_review(
+        vault.path(),
+        "three.md",
+        "See [[a]], [[b]], and [[c]] here\n",
+    );
+    let output = draft(
+        vault.path(),
+        "2026-10-26",
+        &three_links,
+        &["-F", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("links JSON");
+    assert_eq!(body["error"]["code"], "invalid_draft");
+    // Structure: empty, multi-paragraph, headings, lists, fences, callouts.
+    for (name, text) in [
+        ("empty.md", "\n  \n"),
+        ("multi.md", "First paragraph.\n\nSecond paragraph.\n"),
+        ("head.md", "Summary here\n# Heading\n"),
+        ("list.md", "Summary here\n- item\n"),
+        ("fence.md", "Summary here\n```\ncode\n```\n"),
+        ("callout.md", "Summary here\n> [!agent]- do this\n"),
+    ] {
+        let input = write_review(vault.path(), name, text);
+        let output =
+            draft(vault.path(), "2026-10-26", &input, &["-F", "-f", "json"]);
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        let body: serde_json::Value =
+            serde_json::from_str(&stdout(&output)).expect("error JSON");
+        assert_eq!(body["error"]["code"], "invalid_draft", "{name}");
+    }
+    // Missing, open, and future days refuse without -F.
+    let valid = write_review(vault.path(), "valid.md", "A fine summary.\n");
+    let missing =
+        draft(vault.path(), "2026-10-25", &valid, &["-F", "-f", "json"]);
+    assert_eq!(missing.status.code(), Some(2));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&missing)).expect("missing JSON");
+    assert_eq!(body["error"]["code"], "missing_note");
+    fs::write(
+        vault.path().join("2026/20261110.md"),
+        "---\nparent: '[[2026/2026-W46]]'\n---\n\ntoday\n",
+    )
+    .unwrap();
+    let refused = draft(vault.path(), "2026-11-10", &valid, &["-f", "json"]);
+    assert_eq!(refused.status.code(), Some(3));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&refused)).expect("open JSON");
+    assert_eq!(body["error"]["code"], "refused_open");
+    assert_success(&draft(vault.path(), "2026-11-10", &valid, &["-F"]));
+}
+
+#[test]
+fn draft_eligibility_matrix_guards_both_kinds() {
+    let vault = vault_dir("draft-eligibility");
+    write_reviews_fixture(vault.path());
+    let summary = |text: &str| {
+        write_review(vault.path(), "s.md", &format!("**Summary:** {text}\n"))
+    };
+    // Day: a reflection never blocks a first draft; the reflection is
+    // preserved while the summary state becomes drafted. The overall
+    // state remains reflected.
+    let day = vault.path().join("2026/20261026.md");
+    let with_reflection = fs::read_to_string(&day).unwrap().replacen(
+        "---\n\n[[2026/20261025|prev]]",
+        "reflection: It meant a lot.\n---\n\n[[2026/20261025|prev]]",
+        1,
+    );
+    fs::write(&day, with_reflection).unwrap();
+    let planned = draft(
+        vault.path(),
+        "2026-10-26",
+        &summary("Did the work."),
+        &["-n", "-f", "json"],
+    );
+    assert_success(&planned);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&planned)).expect("dry JSON");
+    assert_eq!(body["review_state"], "reflected");
+    assert_eq!(body["summary_state"], "drafted");
+    assert!(
+        body["planned"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Did the work."),
+        "dry run shows the summary: {}",
+        body
+    );
+    assert_success(&draft(
+        vault.path(),
+        "2026-10-26",
+        &summary("Did the work."),
+        &[],
+    ));
+    let note = fs::read_to_string(&day).unwrap();
+    assert!(
+        note.contains("reflection: It meant a lot."),
+        "preserved:\n{note}"
+    );
+    assert!(note.contains("summary: Did the work."), "stamped:\n{note}");
+    // Day: a reflection beside an existing summary refuses re-draft.
+    let output = draft(
+        vault.path(),
+        "2026-10-26",
+        &summary("Redo it."),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("refused JSON");
+    assert_eq!(body["error"]["code"], "refused_state");
+    assert_success(&draft(
+        vault.path(),
+        "2026-10-26",
+        &summary("Redo it."),
+        &["-F"],
+    ));
+    // Day: an edited summary (digest mismatch) refuses without -F.
+    let edited = fs::read_to_string(&day)
+        .unwrap()
+        .replace("summary: Redo it.", "summary: Bryan rewrote it.");
+    fs::write(&day, edited).unwrap();
+    let output = draft(
+        vault.path(),
+        "2026-10-26",
+        &summary("Once more."),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("edited JSON");
+    assert_eq!(body["error"]["code"], "refused_state");
+
+    // Period: an edited Review body refuses a first summary even when
+    // the summary key is absent.
+    let week = vault.path().join("2026/2026-W44.md");
+    let edited_review = fs::read_to_string(&week).unwrap().replace(
+        "## Review\n\n## Reflection",
+        "## Review\n\nBryan wrote this.\n\n## Reflection",
+    );
+    fs::write(&week, edited_review).unwrap();
+    let first =
+        write_review(vault.path(), "first.md", "**Summary:** New summary\n");
+    let output = draft(vault.path(), "2026-W44", &first, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(3), "protect Bryan's Review");
+    // Period: a legacy Headline Review stays protected without -F.
+    let legacy = write_review(
+        vault.path(),
+        "legacy.md",
+        "**Headline:** Legacy headline\n\nLegacy body.\n",
+    );
+    let legacy_note = "---\nparent: \"[[2026/2026-Q4]]\"\n---\n\n# 2026-W45\n\n## Review\n\n**Headline:** Legacy headline\n\nLegacy body.\n\n## Reflection\n";
+    fs::write(vault.path().join("2026/2026-W45.md"), legacy_note).unwrap();
+    let output = draft(vault.path(), "2026-W45", &legacy, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(3), "legacy protection");
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("legacy JSON");
+    assert_eq!(body["error"]["code"], "refused_state");
+    assert_success(&draft(vault.path(), "2026-W45", &legacy, &["-F"]));
+    // -F never overrides invalid text.
+    let over = write_review(
+        vault.path(),
+        "over.md",
+        &format!("**Summary:** {}\n", "word ".repeat(60)),
+    );
+    let output = draft(vault.path(), "2026-W45", &over, &["-F", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn draft_period_splitting_caps_and_reflected_result() {
+    let vault = vault_dir("draft-splitting");
+    write_reviews_fixture(vault.path());
+    // Wrapped opener joins onto one line; exactly 25 words pass.
+    let words25: Vec<String> = (1..=25).map(|n| format!("w{n}")).collect();
+    let wrapped = write_review(
+        vault.path(),
+        "wrapped.md",
+        &format!(
+            "**Summary:** {}\n{}\n\nBody here.\n",
+            words25[..12].join(" "),
+            words25[12..].join(" ")
+        ),
+    );
+    let output = draft(vault.path(), "2026-W44", &wrapped, &["-f", "json"]);
+    assert_success(&output);
+    let note =
+        fs::read_to_string(vault.path().join("2026/2026-W44.md")).unwrap();
+    assert!(
+        note.contains(&format!("summary: {}", words25.join(" "))),
+        "joined opener:\n{note}"
+    );
+    assert!(
+        note.contains("## Review\n\nBody here."),
+        "split body:\n{note}"
+    );
+    // 26 summary words refuse.
+    let words26 = format!(
+        "**Summary:** {}\n",
+        (1..=26)
+            .map(|n| format!("w{n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let input = write_review(vault.path(), "s26.md", &words26);
+    let output = draft(vault.path(), "2026-W44", &input, &["-F", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("cap JSON");
+    assert_eq!(body["error"]["code"], "over_cap");
+    assert_eq!(body["error"]["cap"], 25);
+    // Total 250/251 boundary over the submitted summary-plus-body.
+    let filler = format!("**Summary:** Ok\n\n{}", "word ".repeat(248));
+    let input = write_review(vault.path(), "b250.md", &filler);
+    assert_success(&draft(vault.path(), "2026-W44", &input, &["-F"]));
+    let filler = format!("**Summary:** Ok\n\n{}", "word ".repeat(249));
+    let input = write_review(vault.path(), "b251.md", &filler);
+    let output = draft(vault.path(), "2026-W44", &input, &["-F", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+    // Summary-only draft leaves an empty Review body with no Review stamps.
+    let only = write_review(
+        vault.path(),
+        "only.md",
+        "**Summary:** Just the summary\n",
+    );
+    assert_success(&draft(vault.path(), "2026-W44", &only, &["-F"]));
+    let note =
+        fs::read_to_string(vault.path().join("2026/2026-W44.md")).unwrap();
+    assert!(note.contains("summary: Just the summary"), ":\n{note}");
+    assert!(
+        !note.contains("review_digest:"),
+        "no Review stamps:\n{note}"
+    );
+    // A first draft after reflection remains reflected with a drafted summary.
+    let reflected = fs::read_to_string(vault.path().join("2026/2026-Q4.md"))
+        .unwrap()
+        .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n");
+    fs::write(vault.path().join("2026/2026-Q4.md"), reflected).unwrap();
+    let quarter = write_review(
+        vault.path(),
+        "q.md",
+        "**Summary:** Quarter summary\n\nQuarter body.\n",
+    );
+    let output =
+        draft(vault.path(), "2026-Q4", &quarter, &["-F", "-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("quarter JSON");
+    assert_eq!(body["review_state"], "reflected");
+    assert_eq!(body["summary_state"], "drafted");
+}
+
+#[test]
+fn draft_preserves_bytes_and_fails_closed() {
+    let vault = vault_dir("draft-preserve");
+    write_reviews_fixture(vault.path());
+    let note = vault.path().join("2026/2026-W44.md");
+    // BOM, CRLF, comments, unrelated keys, intentions, reflection, callout.
+    let contents = "\u{feff}---\r\nparent: \"[[2026/2026-Q4]]\" # keep me\r\ncustom: value\r\nintentions:\r\n  - Do the thing\r\n---\r\n\r\n# 2026-W44\r\n\r\n## Review\r\n\r\nOld body.\r\n\r\n## Reflection\r\n\r\nBryan reflected.\r\n\r\n> [!agent]- Agent instructions · weekly v3\r\n"
+        .to_string();
+    fs::write(&note, contents).unwrap();
+    let input = write_review(
+        vault.path(),
+        "review.md",
+        "**Summary:** New summary\n\nNew body.\n",
+    );
+    let output = draft(vault.path(), "2026-W44", &input, &["-F", "-f", "json"]);
+    assert_success(&output);
+    let after = fs::read_to_string(&note).unwrap();
+    assert!(after.starts_with("\u{feff}---\r\n"), "BOM kept:\n{after:?}");
+    assert!(
+        after.contains("parent: \"[[2026/2026-Q4]]\" # keep me\r\n"),
+        "comment kept"
+    );
+    assert!(after.contains("custom: value\r\n"), "unrelated key kept");
+    assert!(after.contains("  - Do the thing\r\n"), "intentions kept");
+    assert!(after.contains("Bryan reflected.\r\n"), "reflection kept");
+    assert!(
+        after.contains("> [!agent]- Agent instructions · weekly v3\r\n"),
+        "callout kept"
+    );
+    assert!(
+        after.contains("## Review\r\n\r\nNew body.\r\n"),
+        "body replaced"
+    );
+    assert!(after.contains("summary: New summary"), "summary stamped");
+    // Malformed and duplicate YAML fail closed, even with -F.
+    for (name, contents, code) in [
+        (
+            "malformed.md",
+            "---\nintentions: [\n---\n\n## Review\n",
+            "frontmatter_invalid",
+        ),
+        (
+            "duplicate.md",
+            "---\nsummary: one\nsummary: two\n---\n\n## Review\n",
+            "duplicate_key",
+        ),
+    ] {
+        let target = vault.path().join("2026/2026-W44.md");
+        fs::write(&target, contents).unwrap();
+        let input =
+            write_review(vault.path(), name, "**Summary:** Try\n\nBody.\n");
+        let output =
+            draft(vault.path(), "2026-W44", &input, &["-F", "-f", "json"]);
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        let body: serde_json::Value =
+            serde_json::from_str(&stdout(&output)).expect("error JSON");
+        assert_eq!(body["error"]["code"], code, "{name}: {}", body["error"]);
+    }
+}
+
+#[test]
+fn brief_week_coverage_counts_actual_summaries() {
+    let vault = vault_dir("brief-coverage");
+    write_reviews_fixture(vault.path());
+    // Partial coverage: two of seven days carry nonempty summaries.
+    // One stamped summary via draft (drafted), one bare summary (edited).
+    let stamped =
+        write_review(vault.path(), "stamped.md", "Shipped the widget.\n");
+    assert_success(&draft(vault.path(), "2026-10-26", &stamped, &["-F"]));
+    let bare = vault.path().join("2026/20261028.md");
+    fs::write(
+        &bare,
+        "---\nparent: '[[2026/2026-W44]]'\nsummary: \"Planned the launch.\"\n---\n\nnote\n",
+    )
+    .unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    assert_eq!(body["day_coverage"]["summarized"], 2);
+    assert_eq!(body["day_coverage"]["display"], "2/7 days summarized");
+    let slots = body["day_summaries"].as_array().expect("slots");
+    assert_eq!(slots.len(), 7);
+    assert_eq!(slots[0]["summary"], "Shipped the widget.");
+    assert_eq!(slots[0]["summary_state"], "drafted");
+    assert_eq!(slots[2]["summary"], "Planned the launch.");
+    assert_eq!(slots[2]["summary_state"], "edited");
+    assert_eq!(slots[1]["summary"], "");
+    assert_eq!(slots[1]["summary_state"], "empty");
+    assert_eq!(slots[1]["path"], "2026/20261027.md");
+    // Quarter parts read actual week summaries, never intentions.
+    let week = vault.path().join("2026/2026-W44.md");
+    let scaffold = fs::read_to_string(&week).unwrap();
+    fs::write(
+        &week,
+        scaffold.replacen(
+            "\n---\n\n# 2026-W44",
+            "\nsummary: \"Week summary wins\"\nsummary_digest: \"sha256:0000000000000000\"\n---\n\n# 2026-W44",
+            1,
+        ),
+    )
+    .unwrap();
+    let quarter = brief_json(vault.path(), "2026-Q4");
+    let parts = quarter["parts"].as_array().expect("parts");
+    let w44 = parts
+        .iter()
+        .find(|part| part["id"] == "2026-W44")
+        .expect("W44 part");
+    assert_eq!(w44["headline"], "Week summary wins");
+    // ISO boundary: W53 spans the year boundary with per-day slots.
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2020-12-28", "-q"]);
+    for date in [
+        "20201228", "20201229", "20201230", "20201231", "20210101", "20210102",
+        "20210103",
+    ] {
+        let path = vault.path().join(format!("2020/{date}.md"));
+        if date.starts_with("2021") {
+            let path = vault.path().join(format!("2021/{date}.md"));
+            if !path.exists() {
+                let year = "2021";
+                fs::create_dir_all(vault.path().join(year)).unwrap();
+                fs::write(
+                    &path,
+                    "---\nparent: '[[2020/2020-W53]]'\n---\n\nnote\n",
+                )
+                .unwrap();
+            }
+            continue;
+        }
+        if !path.exists() {
+            fs::create_dir_all(vault.path().join("2020")).unwrap();
+            fs::write(&path, "---\nparent: '[[2020/2020-W53]]'\n---\n\nnote\n")
+                .unwrap();
+        }
+    }
+    let boundary = brief_json(vault.path(), "2020-W53");
+    assert_eq!(
+        boundary["day_summaries"].as_array().expect("slots").len(),
+        7
+    );
+    assert_eq!(boundary["day_summaries"][0]["date"], "2020-12-28");
+    assert_eq!(boundary["day_summaries"][6]["date"], "2021-01-03");
+}
+
+#[test]
+fn brief_heavy_day_stays_in_budget_without_private_titles() {
+    let vault = vault_dir("brief-heavy-day");
+    write_reviews_fixture(vault.path());
+    // Many completions force honest omission totals behind the day cap.
+    let mut tasks = String::new();
+    for n in 1..=150 {
+        tasks.push_str(&format!(
+            "- [x] #task Heavy job {n:03} with substantial scope and follow-through [created:: 2026-10-20] [completion:: 2026-10-26] ^heavy{n:03}\n"
+        ));
+    }
+    tasks.push_str("- [x] #task Daily review #gtd [created:: 2026-10-26] [completion:: 2026-10-26] ^gtd\n");
+    fs::write(
+        vault.path().join("2026/20261026.md"),
+        format!(
+            "---\nparent: '[[2026/2026-W44]]'\n---\n\ntasks\n\n{tasks}\n## Pomodoros\n\n\
+             - [x] (**08:00 - 08:40** [t:: 40m]) — PLAN\n\
+             \t- [[2026/20261026#^heavy001]]\n\
+             \t- [[proj#^openheavy]]\n\
+             - [x] (**09:00 - 09:20** [off:: 20m]) — REST\n\
+             - [x] (**10:00 - 10:30** [t:: 30m]) — PLAN\n\n\
+             ## Events\n\n\
+             - [ ] #task **0800-0830** QRS Secret Sync Title ^evt1\n\
+             - [ ] #task **0900-0930** Zebra Private Planning ^evt2\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("proj.md"),
+        "---\nparent: \"[[org]]\"\n---\n\n\
+         - [x] #task Old job [created:: 2026-10-18] [completion:: 2026-10-26] ^oldjob\n\
+         - [x] #task #gtd Water plants [repeat:: every day] [created:: 2026-10-18] [completion:: 2026-10-26] ^water\n\
+         - [ ] #task Open heavy [created:: 2026-10-20] ^openheavy\n\
+         \t- 🛠️ **WORK LOG**\n\
+         \t\t- *2026-10-26 14:03* — heavy day words\n\
+         \t\t- *2026-10-27 14:03* — adjacent day words\n",
+    )
+    .unwrap();
+    let body = brief_json(vault.path(), "2026-10-26");
+    assert_eq!(body["finished_total"], 151, "151 counted completions");
+    assert!(
+        body["finished_routine_omitted"].as_u64().unwrap_or(0) >= 2,
+        "recurring and daily-review rows omitted: {}",
+        body["finished_routine_omitted"]
+    );
+    let more = body["finished_more"].as_u64().unwrap_or(0);
+    assert!(more > 0, "omission totals: {}", body["finished_more"]);
+    assert_eq!(body["events"]["count"], 2);
+    assert!(
+        body["facts"]["facts"].as_array().is_some_and(|facts| facts
+            .iter()
+            .any(
+                |fact| fact["label"] == "Off-clock" && fact["display"] != "0m"
+            )),
+        "off-clock counts: {}",
+        body["facts"]
+    );
+    assert!(
+        body["still_open"]["worked_open"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()),
+        "historical open work: {}",
+        body["still_open"]
+    );
+    let markdown = periods_command(vault.path(), "brief", &["2026-10-26"]);
+    assert_success(&markdown);
+    let md = stdout(&markdown);
+    assert!(!md.contains("QRS Secret Sync Title"), "privacy:\n{md}");
+    assert!(!md.contains("Zebra Private Planning"), "privacy:\n{md}");
+    assert!(
+        md.contains(&format!("- +{more} more")),
+        "honest more counts:\n{md}"
+    );
+    assert!(md.contains("heavy day words"), "same-day words:\n{md}");
+    assert!(
+        md.len() / 4 <= 3000,
+        "heavy day budget with instructions: {} tokens",
+        md.len() / 4
+    );
+    assert_eq!(
+        body["instructions"]["version"], "day v1",
+        "budget includes instructions"
     );
 }

@@ -1,13 +1,14 @@
 //! `bob periods brief`: the deterministic, versioned agent bundle.
 //!
-//! The contract lives in `docs/periods.md`. The brief (brief v2) is the
-//! only source of numbers an agent may use when drafting a period
-//! Review: header, facts, time, parts, finished (projects, then every
-//! non-routine completion grouped by root parent and note), started and
-//! dropped, still open, practice (year only), Bryan's words, this note
-//! and its neighbours (including the previous Review's Headline,
-//! Carried forward, and Questions), off-clock counts, and caveats.
-//! Markdown and JSON carry the same content. `all_time` has no review.
+//! The contract lives in `docs/periods.md`. The brief (brief v3) is the
+//! only source of numbers an agent may use when drafting a day summary
+//! or a period Review: instructions first, then header, facts, time,
+//! parts, finished (projects, then every non-routine completion grouped
+//! by root parent and note), started and dropped, still open, practice
+//! (year only), Bryan's words, this note and its neighbours (v3 shape),
+//! off-clock counts, and caveats. Markdown and JSON carry the same
+//! content. `all_time` has no review. Token budgets estimate rendered
+//! bytes/4 as tokens, including instructions.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -21,7 +22,7 @@ use serde_json::{json, Value};
 
 use super::{
     calendar::{PeriodId, PeriodState},
-    cli, report,
+    cli, instructions, report,
 };
 use crate::native::{
     config,
@@ -41,14 +42,23 @@ use crate::native::{
 };
 
 const COMMAND_NAME: &str = "bob periods brief";
-/// Success envelopes carry the brief v2 shape; error envelopes keep the
+/// Success envelopes carry the brief v3 shape; error envelopes keep the
 /// shared period-command error shape (`schema_version: 1`).
-const SCHEMA_VERSION: u32 = 2;
+/// Schema 1 is the shared error envelope; schema 3 is the success
+/// envelope. `brief_version` names the evidence contract, while the
+/// instruction object names its own `day v1` / `weekly v3` kind.
+const SCHEMA_VERSION: u32 = 3;
 const ERROR_SCHEMA_VERSION: u32 = 1;
-const BRIEF_VERSION: &str = "brief v2";
+const BRIEF_VERSION: &str = "brief v3";
+const DAY_BUDGET: usize = 3000;
 const WEEK_BUDGET: usize = 6000;
 const QUARTER_BUDGET: usize = 10_000;
 const YEAR_BUDGET: usize = 12_000;
+
+/// Token estimate: rendered bytes/4, including instructions.
+pub(crate) fn estimated_tokens(rendered_bytes: usize) -> usize {
+    rendered_bytes / 4
+}
 
 #[derive(Debug, Clone)]
 struct BriefError {
@@ -63,7 +73,16 @@ impl BriefError {
         Self {
             code: code.to_string(),
             message,
-            hint: "Pass a period id such as 2026-W45, 2026-Q4, 2026, last-week, last-quarter, or last-year. See docs/periods.md.".to_string(),
+            hint: "Pass a day (today, yesterday, 2026-11-18, 20261118) or a period id such as 2026-W45, 2026-Q4, 2026, last-week, last-quarter, or last-year. See docs/periods.md.".to_string(),
+            exit_code: 2,
+        }
+    }
+
+    fn missing_note(message: String) -> Self {
+        Self {
+            code: "missing_note".to_string(),
+            message,
+            hint: "Open the day in Obsidian so Templater creates it. Period notes come from `bob periods ensure`.".to_string(),
             exit_code: 2,
         }
     }
@@ -160,8 +179,11 @@ struct Bundle {
 }
 
 struct Ctx {
-    id: PeriodId,
+    subject: NoteSubject,
+    day: Option<NaiveDate>,
+    id: Option<PeriodId>,
     kind: &'static str,
+    canonical_id: String,
     today: NaiveDate,
     generated_at: String,
     vault: PathBuf,
@@ -177,34 +199,40 @@ struct Ctx {
     observed_end: Option<NaiveDate>,
     span_start: NaiveDate,
     finish_cap: usize,
+    note_path: String,
+    prev_path: String,
+    parent_path: String,
+    title: String,
+    fields: intentions::fields::Fields,
+    has_review_body: bool,
+    instruction_version: String,
+    instruction_text: String,
 }
 
+/// One explicit `BOB_NOW`-aware clock per invocation: the subject, the
+/// stats index, and the report all share this `now`.
 fn execute(matches: &clap::ArgMatches) -> Result<Bundle, BriefError> {
     let vault = bob_env::bob_dir();
     let now = bob_env::current_datetime();
     let today = now.date();
-    let id = matches
+    let raw = matches
         .get_one::<String>("period")
-        .map(|text| {
-            PeriodId::resolve(text, today)
-                .map_err(|message| BriefError::usage("invalid_period", message))
-        })
-        .transpose()?
-        .unwrap_or_else(|| PeriodId::week_for_date(today));
-    if matches!(id, PeriodId::AllTime) {
+        .map(String::as_str)
+        .unwrap_or_default()
+        .trim();
+    let subject = if raw.is_empty() {
+        NoteSubject::Period(PeriodId::week_for_date(today))
+    } else {
+        NoteSubject::resolve(raw, today)
+            .map_err(|message| BriefError::usage("invalid_period", message))?
+            .subject
+    };
+    if matches!(subject, NoteSubject::Period(PeriodId::AllTime)) {
         return Err(BriefError::usage(
             "no_review_section",
             "all_time has no review".to_string(),
         ));
     }
-    let report = report::build_report(
-        &vault,
-        config::config_path(),
-        id,
-        now,
-        StatsClock::default(),
-    )
-    .map_err(BriefError::from)?;
     let index = StatsIndex::read(&vault, now).map_err(|error| {
         BriefError::failed(
             error.code().to_string(),
@@ -217,33 +245,122 @@ fn execute(matches: &clap::ArgMatches) -> Result<Bundle, BriefError> {
             error.exit_code(),
         )
     })?;
-    let state = id.state(today);
-    let span =
-        report::period_span(id, &vault, today).map_err(BriefError::from)?;
-    let observed_end = match state {
-        PeriodState::Future => None,
-        PeriodState::Current => Some(today),
-        PeriodState::Closed => Some(span.end),
-    };
-    let finish_cap = match id {
-        PeriodId::Week { .. } => 7,
-        PeriodId::Quarter { .. } => 15,
-        PeriodId::Year(_) => 25,
-        PeriodId::AllTime => unreachable!("all_time refused above"),
-    };
     let buffers: HashMap<String, String> = index
         .buffers
         .iter()
         .map(|(path, contents)| (path.clone(), contents.clone()))
         .collect();
+    let (subject_state, canonical_id, kind, note_path, title, day, period) =
+        match subject {
+            NoteSubject::Day(date) => {
+                let info = NoteSubject::resolve(
+                    &date.format("%Y-%m-%d").to_string(),
+                    today,
+                )
+                .expect("canonical day resolves");
+                let state = info.state;
+                let path = info.path.to_string_lossy().replace('\\', "/");
+                if buffers.get(&path).is_none() {
+                    return Err(BriefError::missing_note(format!(
+                        "no daily note at {}: open the day in Obsidian so Templater creates it",
+                        info.path.display(),
+                    )));
+                }
+                (state, info.id, "day", path, info.label, Some(date), None)
+            }
+            NoteSubject::Period(id) => {
+                let info = NoteSubject::resolve(&id.to_string(), today)
+                    .expect("canonical period resolves");
+                (
+                    info.state,
+                    info.id,
+                    match id {
+                        PeriodId::Week { .. } => "week",
+                        PeriodId::Quarter { .. } => "quarter",
+                        PeriodId::Year(_) => "year",
+                        PeriodId::AllTime => unreachable!("all_time refused"),
+                    },
+                    info.path.to_string_lossy().replace('\\', "/"),
+                    super::labels::title(id),
+                    None,
+                    Some(id),
+                )
+            }
+        };
+    let state = match subject_state {
+        "closed" => PeriodState::Closed,
+        "future" => PeriodState::Future,
+        _ => PeriodState::Current,
+    };
+    let (span_start, span_end) = match (day, period) {
+        (Some(date), _) => (date, date),
+        (_, Some(id)) => {
+            let span = report::period_span(id, &vault, today)
+                .map_err(BriefError::from)?;
+            (span.start, span.end)
+        }
+        _ => unreachable!("day or period"),
+    };
+    let observed_end = match state {
+        PeriodState::Future => None,
+        PeriodState::Current => Some(today),
+        PeriodState::Closed => Some(span_end),
+    };
+    let report = match period {
+        Some(id) => report::build_report(
+            &vault,
+            config::config_path(),
+            id,
+            now,
+            StatsClock::default(),
+        )
+        .map_err(BriefError::from)?,
+        None => report::day_report_shell(&vault, today, now, span_start),
+    };
+    let finish_cap = match period {
+        Some(PeriodId::Week { .. }) => 7,
+        Some(PeriodId::Quarter { .. }) => 15,
+        Some(PeriodId::Year(_)) => 25,
+        None => 10,
+        _ => 7,
+    };
+    let contents = buffers.get(&note_path).cloned().unwrap_or_default();
+    let fields = intentions::read(&contents, subject);
+    let has_review_body = match subject {
+        NoteSubject::Day(_) => false,
+        NoteSubject::Period(_) => !fields.review_body.trim().is_empty(),
+    };
+    let prev_path = report
+        .get("links")
+        .and_then(|links| links.get("prev"))
+        .and_then(|prev| prev.get("path"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let parent_path = report
+        .get("links")
+        .and_then(|links| links.get("parent"))
+        .and_then(|parent| parent.get("path"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let (instruction_version, instruction_text) = match (day, period) {
+        (Some(date), _) => (
+            instructions::DAY_INSTRUCTIONS_VERSION.to_string(),
+            instructions::render_day(&date.format("%Y-%m-%d").to_string()),
+        ),
+        (_, Some(id)) => {
+            let (version, text) = instructions::instruction_text(id);
+            (version, text)
+        }
+        _ => unreachable!("day or period"),
+    };
     let mut ctx = Ctx {
-        kind: match id {
-            PeriodId::Week { .. } => "week",
-            PeriodId::Quarter { .. } => "quarter",
-            PeriodId::Year(_) => "year",
-            PeriodId::AllTime => unreachable!("all_time refused above"),
-        },
-        id,
+        subject,
+        day,
+        id: period,
+        kind,
+        canonical_id,
         today,
         generated_at: now.format("%Y-%m-%dT%H:%M:%S").to_string(),
         vault,
@@ -254,8 +371,16 @@ fn execute(matches: &clap::ArgMatches) -> Result<Bundle, BriefError> {
         _roots: BTreeMap::new(),
         state,
         observed_end,
-        span_start: span.start,
+        span_start,
         finish_cap,
+        note_path,
+        prev_path,
+        parent_path,
+        title,
+        fields,
+        has_review_body,
+        instruction_version,
+        instruction_text,
     };
     ctx.linked = linked_minutes(&ctx);
     let mut json = build_json(&mut ctx)?;
@@ -595,6 +720,10 @@ fn is_bare_wikilink(text: &str) -> bool {
 
 fn build_json(ctx: &mut Ctx) -> Result<Value, BriefError> {
     let header = header_section(ctx);
+    let instruction = json!({
+        "version": ctx.instruction_version,
+        "text": ctx.instruction_text,
+    });
     let facts = facts_section(ctx);
     let time = time_section(ctx)?;
     let parts = parts_section(ctx);
@@ -607,16 +736,18 @@ fn build_json(ctx: &mut Ctx) -> Result<Value, BriefError> {
     let bryans_words = bryans_words_section(ctx);
     let neighbours = neighbours_section(ctx);
     let offclock = offclock_section(ctx);
+    let events = events_section(ctx);
     let caveats = caveats_section(ctx);
-    Ok(json!({
+    let mut envelope = json!({
         "ok": true,
         "schema_version": SCHEMA_VERSION,
         "brief_version": BRIEF_VERSION,
         "today": ctx.today.format("%Y-%m-%d").to_string(),
         "generated_at": ctx.generated_at,
-        "id": ctx.id.to_string(),
+        "id": ctx.canonical_id,
         "kind": ctx.kind,
         "header": header,
+        "instructions": instruction,
         "facts": facts,
         "time": time,
         "parts": parts,
@@ -638,8 +769,15 @@ fn build_json(ctx: &mut Ctx) -> Result<Value, BriefError> {
         "bryans_words": bryans_words,
         "neighbours": neighbours,
         "offclock": offclock,
+        "events": events,
         "caveats": caveats,
-    }))
+    });
+    if ctx.kind == "week" {
+        let (slots, coverage) = day_summaries(ctx);
+        envelope["day_summaries"] = Value::Array(slots);
+        envelope["day_coverage"] = coverage;
+    }
+    Ok(envelope)
 }
 
 fn str_field(value: &Value, key: &str) -> String {
@@ -651,72 +789,65 @@ fn str_field(value: &Value, key: &str) -> String {
 }
 
 fn header_section(ctx: &Ctx) -> Value {
-    let report = &ctx.report;
-    let title =
-        str_field(report.get("period").unwrap_or(&Value::Null), "title");
-    let state_name = match ctx.state {
-        PeriodState::Future => "future",
-        PeriodState::Current => "open",
-        PeriodState::Closed => "closed",
-    };
-    let review_state = report
+    let review_state = ctx
+        .report
         .get("note")
         .and_then(|note| note.get("review"))
         .and_then(|review| review.get("state"))
         .and_then(Value::as_str)
         .unwrap_or("empty")
         .to_string();
-    let note_path = report
+    let summary_state = ctx
+        .report
         .get("note")
-        .and_then(|note| note.get("path"))
+        .and_then(|note| note.get("review"))
+        .and_then(|review| review.get("summary_state"))
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .unwrap_or_else(|| {
+            if review_state == "empty" {
+                "empty"
+            } else {
+                "edited"
+            }
+        })
         .to_string();
-    let prev_path = report
-        .get("links")
-        .and_then(|links| links.get("prev"))
-        .and_then(|prev| prev.get("path"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let parent_path = report
-        .get("links")
-        .and_then(|links| links.get("parent"))
-        .and_then(|parent| parent.get("path"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let noun = match ctx.kind {
-        "quarter" => "quarter",
-        "year" => "year",
-        _ => "week",
+    let state_name = match ctx.state {
+        PeriodState::Future => "future",
+        PeriodState::Current => "open",
+        PeriodState::Closed => "closed",
     };
-    let stop_advice = if matches!(ctx.state, PeriodState::Future) {
-        format!("This {noun} has not started: do not draft it.")
-    } else if matches!(ctx.state, PeriodState::Current) {
-        format!(
-            "This {noun} is open: draft only if Bryan asked for \"so far\"."
-        )
-    } else if review_state == "edited" || review_state == "reflected" {
-        format!(
-            "This {noun} is closed but its Review is {review_state}: draft only if Bryan said \"redo\"."
-        )
-    } else {
-        format!("This {noun} is closed: ready to draft.")
+    let noun = ctx.kind;
+    let stop_advice = match super::eligibility::decide(
+        &ctx.fields,
+        ctx.has_review_body,
+        if state_name == "open" {
+            "open"
+        } else {
+            state_name
+        },
+        noun,
+    ) {
+        super::eligibility::Eligibility::Allow { advice, .. } => advice,
+        super::eligibility::Eligibility::RefusedOpen { advice } => advice,
+        super::eligibility::Eligibility::RefusedState { advice } => advice,
     };
     json!({
-        "id": ctx.id.to_string(),
-        "title": title,
+        "id": ctx.canonical_id,
+        "title": ctx.title,
         "state": state_name,
         "review_state": review_state,
-        "note_path": note_path,
-        "prev_path": prev_path,
-        "parent_path": parent_path,
+        "summary_state": summary_state,
+        "note_path": ctx.note_path,
+        "prev_path": ctx.prev_path,
+        "parent_path": ctx.parent_path,
         "stop_advice": stop_advice,
     })
 }
 
 fn facts_section(ctx: &Ctx) -> Value {
+    if ctx.day.is_some() {
+        return day_facts(ctx);
+    }
     let empty = Vec::new();
     let report_facts = ctx
         .report
@@ -751,6 +882,61 @@ fn facts_section(ctx: &Ctx) -> Value {
     json!({ "facts": facts, "coverage": coverage })
 }
 
+/// Day facts from the stats machinery for that one day: Worked minutes,
+/// off-clock minutes and session count, closed-Pomodoro count, and done
+/// count. Unknown/coverage distinctions come from the day's presence in
+/// the stats index: a missing day is not zero.
+fn day_facts(ctx: &Ctx) -> Value {
+    let Some(day) = ctx.day else {
+        return json!({ "facts": [], "coverage": "" });
+    };
+    let Some(daily) = ctx.index.daily_notes.get(&day) else {
+        return json!({
+            "facts": [],
+            "coverage": "not tracked",
+        });
+    };
+    let mut worked: u32 = 0;
+    let mut offclock_minutes: u32 = 0;
+    let mut offclock_sessions: u32 = 0;
+    let mut pomodoros: u32 = 0;
+    for session in &daily.closed_pomodoros {
+        pomodoros += 1;
+        let Some(minutes) = session.counted_minutes() else {
+            continue;
+        };
+        match session.stats_clock() {
+            Some(StatsClock::Worked) => worked += minutes,
+            Some(StatsClock::OffClock) => {
+                offclock_minutes += minutes;
+                offclock_sessions += 1;
+            }
+            _ => {}
+        }
+    }
+    let done = ctx
+        .index
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.status_type == "DONE"
+                && task.done.diagnostic == DateDiagnostic::Ok
+                && task.done.date == Some(day)
+        })
+        .count();
+    let so_far = day == ctx.today;
+    json!({
+        "facts": [
+            { "label": "Worked", "display": format_minutes(i64::from(worked)), "so_far": so_far, "typical_words": "" },
+            { "label": "Off-clock", "display": format_minutes(i64::from(offclock_minutes)), "so_far": so_far, "typical_words": "" },
+            { "label": "Pomodoros", "display": pomodoros.to_string(), "so_far": so_far, "typical_words": "" },
+            { "label": "Done", "display": done.to_string(), "so_far": so_far, "typical_words": "" },
+        ],
+        "off_clock_count": offclock_sessions,
+        "coverage": "",
+    })
+}
+
 fn share_percent(share: &str) -> f64 {
     share
         .trim()
@@ -770,12 +956,85 @@ fn lane_rows<'a>(ctx: &'a Ctx, lane: &str) -> Vec<&'a Value> {
 }
 
 fn time_section(ctx: &mut Ctx) -> Result<Value, BriefError> {
-    match ctx.id {
-        PeriodId::Week { .. } => Ok(week_time(ctx)),
-        PeriodId::Quarter { .. } => quarter_time(ctx),
-        PeriodId::Year(_) => Ok(year_time(ctx)),
-        PeriodId::AllTime => unreachable!("all_time refused above"),
+    if ctx.day.is_some() {
+        return Ok(day_time(ctx));
     }
+    match ctx.id {
+        Some(PeriodId::Week { .. }) => Ok(week_time(ctx)),
+        Some(PeriodId::Quarter { .. }) => quarter_time(ctx),
+        Some(PeriodId::Year(_)) => Ok(year_time(ctx)),
+        _ => unreachable!("day or period"),
+    }
+}
+
+/// Day time by root parent with correctly split linked minutes: the same
+/// splitter the stats `root_parent` lanes use, over the one-day span, so
+/// task rows under a root never outrank that root. Period-only
+/// parts/practice/typical comparisons stay period-only.
+fn day_time(ctx: &mut Ctx) -> Value {
+    let engine = HomesEngine::new(&ctx.index);
+    let mut scored: Vec<(&IndexedTask, u32)> = ctx
+        .index
+        .tasks
+        .iter()
+        .map(|task| (task, linked_for(task, ctx)))
+        .filter(|(_, minutes)| *minutes > 0)
+        .collect();
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then(left.0.description.cmp(&right.0.description))
+    });
+    let total: u32 = scored.iter().map(|(_, minutes)| minutes).sum();
+    let mut by_root: BTreeMap<String, Vec<(&IndexedTask, u32)>> =
+        BTreeMap::new();
+    for (task, minutes) in scored {
+        let home = engine.home_for_task(
+            task_effective_path(task),
+            task.line_number,
+            &task.line,
+        );
+        by_root
+            .entry(home.root_parent)
+            .or_default()
+            .push((task, minutes));
+    }
+    let mut scored_roots: Vec<(u32, Value)> = by_root
+        .into_iter()
+        .map(|(label, rows)| {
+            let minutes: u32 = rows.iter().map(|(_, value)| value).sum();
+            let share = if total > 0 {
+                format!("{}%", (minutes as f64 / total as f64 * 100.0).round())
+            } else {
+                String::new()
+            };
+            let tasks: Vec<Value> = rows
+                .iter()
+                .take(3)
+                .map(|(task, value)| {
+                    json!({
+                        "link": task_link(task),
+                        "minutes": value,
+                        "display": format_minutes(i64::from(*value)),
+                    })
+                })
+                .collect();
+            (
+                minutes,
+                json!({
+                    "label": label,
+                    "display": format_minutes(i64::from(minutes)),
+                    "share": share,
+                    "tasks": tasks,
+                }),
+            )
+        })
+        .collect();
+    scored_roots.sort_by(|left, right| right.0.cmp(&left.0));
+    let roots: Vec<Value> =
+        scored_roots.into_iter().map(|(_, row)| row).collect();
+    json!({ "roots": roots, "types": [] })
 }
 
 /// Root parents at or above 5% of Worked, each with its top three
@@ -858,7 +1117,7 @@ fn quarter_time(ctx: &Ctx) -> Result<Value, BriefError> {
     let empty = Vec::new();
     let rows = lane_rows(ctx, "root_parent");
     let mut prev_shares: BTreeMap<String, Value> = BTreeMap::new();
-    if let Some(prev) = ctx.id.prev() {
+    if let Some(prev) = ctx.id.and_then(|id| id.prev()) {
         let now = bob_env::current_datetime();
         let prev_report = report::build_report(
             &ctx.vault,
@@ -961,6 +1220,9 @@ fn year_time(ctx: &Ctx) -> Value {
 }
 
 fn parts_section(ctx: &Ctx) -> Value {
+    if ctx.day.is_some() {
+        return Value::Array(Vec::new());
+    }
     let empty = Vec::new();
     let children = ctx
         .report
@@ -1143,7 +1405,7 @@ fn finished_section(ctx: &Ctx) -> Finished {
     prj.sort_by(|left, right| left.description.cmp(&right.description));
     let projects_total = prj.len();
     prj.truncate(ctx.finish_cap);
-    let group_by_area = matches!(ctx.id, PeriodId::Year(_));
+    let group_by_area = matches!(ctx.id, Some(PeriodId::Year(_)));
     let projects: Vec<Value> = prj
         .iter()
         .map(|task| {
@@ -1465,7 +1727,10 @@ fn still_open_section(ctx: &Ctx) -> Value {
             "as_of": as_of,
             "omitted_reason": Value::Null,
         });
-        if matches!(ctx.id, PeriodId::Quarter { .. } | PeriodId::Year(_)) {
+        if matches!(
+            ctx.id,
+            Some(PeriodId::Quarter { .. }) | Some(PeriodId::Year(_))
+        ) {
             let mut stalled: Vec<Value> = ctx
                 .index
                 .tasks
@@ -1524,7 +1789,10 @@ fn still_open_section(ctx: &Ctx) -> Value {
         "as_of": end.format("%Y-%m-%d").to_string(),
         "omitted_reason": "blocked state has no history",
     });
-    if matches!(ctx.id, PeriodId::Quarter { .. } | PeriodId::Year(_)) {
+    if matches!(
+        ctx.id,
+        Some(PeriodId::Quarter { .. }) | Some(PeriodId::Year(_))
+    ) {
         let mut stalled: Vec<Value> = ctx
             .index
             .tasks
@@ -1820,7 +2088,7 @@ fn dated_entry_text(line: &str) -> Option<String> {
 /// Year only: recurring `#gtd` rows created, cancelled, or
 /// finished in the year, plus the review-closed rate per quarter.
 fn practice_section(ctx: &Ctx) -> Value {
-    if !matches!(ctx.id, PeriodId::Year(_)) {
+    if !matches!(ctx.id, Some(PeriodId::Year(_))) {
         return Value::Null;
     }
     let mut created: Vec<Value> = Vec::new();
@@ -2113,35 +2381,32 @@ fn pomodoro_notes(ctx: &Ctx) -> Vec<Value> {
     notes
 }
 
-/// This note's human sections, the previous note's Reflection, the
-/// parent's Outcomes and Theme, and (year only) the goal and vision
-/// notes. Labelled data, not instructions.
+/// v3 neighbour shape: this note's intentions verbatim, its summary
+/// and reflection, and the previous note's summary, reflection,
+/// carried-forward label/body, and questions. Labelled data, not
+/// instructions. The v2 `own` / `parent_outcomes` / `parent_theme` /
+/// `prev_reflection` / `prev_review.headline` spellings are gone; other
+/// CLI contracts keep their compatibility `headline` fields.
 fn neighbours_section(ctx: &Ctx) -> Value {
-    let note_path = ctx
-        .report
-        .get("note")
-        .and_then(|note| note.get("path"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let own = ctx
-        .buffers
-        .get(&note_path)
-        .map(|contents| own_sections(ctx.id, contents))
-        .unwrap_or_default();
-    let prev_path = ctx
-        .report
-        .get("links")
-        .and_then(|links| links.get("prev"))
-        .and_then(|prev| prev.get("path"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let prev_fields = ctx.id.prev().and_then(|id| {
+    let own_fields = ctx.fields.intentions.value.clone().unwrap_or_default();
+    let own_summary = ctx.fields.summary.value.clone().unwrap_or_default();
+    let own_reflection =
+        ctx.fields.reflection.value.clone().unwrap_or_default();
+    let intentions = intention_bullets(&own_fields);
+    let prev_info: Option<NoteSubject> = match ctx.subject {
+        NoteSubject::Day(date) => date.pred_opt().map(NoteSubject::Day),
+        NoteSubject::Period(id) => id.prev().map(NoteSubject::Period),
+    };
+    let prev_fields = prev_info.and_then(|subject| {
         ctx.buffers
-            .get(&prev_path)
-            .map(|contents| intentions::read(contents, NoteSubject::Period(id)))
+            .get(&ctx.prev_path)
+            .map(|contents| intentions::read(contents, subject))
     });
+    let prev_summary = prev_fields
+        .as_ref()
+        .and_then(|fields| fields.summary.value.as_deref())
+        .unwrap_or_default()
+        .to_string();
     let prev_reflection = prev_fields
         .as_ref()
         .and_then(|fields| fields.reflection.value.as_deref())
@@ -2150,26 +2415,18 @@ fn neighbours_section(ctx: &Ctx) -> Value {
     let prev_review = previous_review(
         prev_fields
             .as_ref()
-            .and_then(|fields| fields.summary.value.as_deref())
-            .unwrap_or_default(),
-        prev_fields
-            .as_ref()
             .map_or("", |fields| fields.review_body.as_str()),
     );
-    let parent_path = ctx
-        .report
-        .get("links")
-        .and_then(|links| links.get("parent"))
-        .and_then(|parent| parent.get("path"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let parent_intentions = ctx
-        .id
-        .parent()
-        .and_then(|id| {
-            ctx.buffers.get(&parent_path).map(|contents| {
-                intentions::read(contents, NoteSubject::Period(id))
+    let parent_subject: Option<NoteSubject> = match ctx.subject {
+        NoteSubject::Day(date) => {
+            Some(NoteSubject::Period(PeriodId::week_for_date(date)))
+        }
+        NoteSubject::Period(id) => id.parent().map(NoteSubject::Period),
+    };
+    let parent_intentions = parent_subject
+        .and_then(|subject| {
+            ctx.buffers.get(&ctx.parent_path).map(|contents| {
+                intentions::read(contents, subject)
                     .intentions
                     .value
                     .unwrap_or_default()
@@ -2178,15 +2435,19 @@ fn neighbours_section(ctx: &Ctx) -> Value {
         .unwrap_or_default();
     let parent_intentions = intention_bullets(&parent_intentions);
     let mut section = json!({
-        "own": own,
-        "prev_reflection": prev_reflection,
-        "prev_review": prev_review,
-        // Brief v2 retains its legacy keys; unified parent intentions occupy
-        // Outcomes once, while Theme stays empty to avoid duplicating a year.
-        "parent_outcomes": parent_intentions,
-        "parent_theme": "",
+        "intentions": intentions,
+        "parent_intentions": parent_intentions,
+        "summary": own_summary,
+        "reflection": truncate_words(&own_reflection, 300),
+        "previous": {
+            "summary": prev_summary,
+            "reflection": prev_reflection,
+            "carried_label": prev_review.get("carried_label").cloned().unwrap_or(Value::String(String::new())),
+            "carried": prev_review.get("carried").cloned().unwrap_or(Value::String(String::new())),
+            "questions": prev_review.get("questions").cloned().unwrap_or(Value::String(String::new())),
+        },
     });
-    if matches!(ctx.id, PeriodId::Year(_)) {
+    if matches!(ctx.id, Some(PeriodId::Year(_))) {
         section["h3_goal"] = ctx
             .buffers
             .get("h3_goal.md")
@@ -2206,10 +2467,11 @@ fn neighbours_section(ctx: &Ctx) -> Value {
 /// Cap for each previous-Review part the brief carries.
 const PREV_PART_WORDS: usize = 150;
 
-/// The previous same-kind summary and Review's Carried forward block
-/// (`Still open` in v1 drafts) and Questions block, each verbatim and capped.
-/// Absent parts are empty strings.
-fn previous_review(summary: &str, review: &str) -> Value {
+/// The previous Review's Carried forward block (`Still open` in v1
+/// drafts) and Questions block, each verbatim and capped. The previous
+/// summary rides in `previous.summary`, not here. Absent parts are
+/// empty strings.
+fn previous_review(review: &str) -> Value {
     let parts = review_parts(review);
     let (carried_label, carried) = parts
         .iter()
@@ -2225,10 +2487,98 @@ fn previous_review(summary: &str, review: &str) -> Value {
         .map(|(_, body)| cap_words_keep_lines(body, PREV_PART_WORDS))
         .unwrap_or_default();
     json!({
-        "headline": summary,
         "carried_label": carried_label,
         "carried": carried,
         "questions": questions,
+    })
+}
+
+/// Seven day-summary slots for a week brief, Monday–Sunday, with
+/// canonical date/path, summary, and summary state. Missing
+/// notes/summaries are empty values, never a refusal. Coverage counts
+/// actual nonempty summaries, never a child's display headline.
+fn day_summaries(ctx: &Ctx) -> (Vec<Value>, Value) {
+    let Some(id) = ctx.id else {
+        return (
+            Vec::new(),
+            json!({ "summarized": 0, "total": 7, "display": "0/7 days summarized" }),
+        );
+    };
+    let days = match id {
+        PeriodId::Week { .. } => id.week_dates(),
+        _ => {
+            return (
+                Vec::new(),
+                json!({ "summarized": 0, "total": 7, "display": "0/7 days summarized" }),
+            )
+        }
+    };
+    let mut slots = Vec::new();
+    let mut summarized = 0u64;
+    for date in days {
+        let path = NoteSubject::day_path(date)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let fields = ctx
+            .buffers
+            .get(&path)
+            .map(|contents| intentions::read(contents, NoteSubject::Day(date)));
+        let summary = fields
+            .as_ref()
+            .and_then(|read| read.summary.value.clone())
+            .unwrap_or_default();
+        let state = fields
+            .map(|read| {
+                crate::native::intentions::summary_state(&read)
+                    .as_str()
+                    .to_string()
+            })
+            .unwrap_or_else(|| "empty".to_string());
+        if !summary.trim().is_empty() {
+            summarized += 1;
+        }
+        slots.push(json!({
+            "date": date.format("%Y-%m-%d").to_string(),
+            "path": path,
+            "summary": summary,
+            "summary_state": state,
+        }));
+    }
+    let coverage = json!({
+        "summarized": summarized,
+        "total": 7,
+        "display": format!("{summarized}/7 days summarized"),
+    });
+    (slots, coverage)
+}
+
+/// Event counts in the observed span, with titles withheld. The event
+/// privacy rule applies across every evidence projection: task aliases
+/// and quoted event notes never carry event titles.
+fn events_section(ctx: &Ctx) -> Value {
+    let Some(end) = ctx.observed_end else {
+        return json!({ "count": 0, "display": "no events" });
+    };
+    let mut count = 0u64;
+    let mut dates: Vec<NaiveDate> =
+        ctx.index.daily_notes.keys().copied().collect();
+    dates.sort();
+    for date in dates {
+        if date < ctx.span_start || date > end {
+            continue;
+        }
+        let Some(daily) = ctx.index.daily_notes.get(&date) else {
+            continue;
+        };
+        let Some(contents) = ctx.buffers.get(&daily.path) else {
+            continue;
+        };
+        count += crate::native::event_task::events_in_note(contents, date).len()
+            as u64;
+    }
+    json!({
+        "count": count,
+        "display": if count == 1 { "1 event".to_string() } else { format!("{count} events") },
     })
 }
 
@@ -2282,24 +2632,6 @@ fn cap_words_keep_lines(text: &str, cap: usize) -> String {
         break;
     }
     lines.join("\n").trim_end().to_string()
-}
-
-/// This note's human sections verbatim, by kind.
-fn own_sections(id: PeriodId, contents: &str) -> Value {
-    let fields = intentions::read(contents, NoteSubject::Period(id));
-    let values = fields.intentions.value.unwrap_or_default();
-    let key = match id {
-        PeriodId::Week { .. } => "Intentions",
-        PeriodId::Quarter { .. } => "Outcomes",
-        PeriodId::Year(_) => "Intentions",
-        PeriodId::AllTime => return Value::Object(serde_json::Map::new()),
-    };
-    let body = intention_bullets(&values);
-    let mut own = serde_json::Map::new();
-    if !body.is_empty() {
-        own.insert(key.to_owned(), Value::String(body));
-    }
-    Value::Object(own)
 }
 
 fn intention_bullets(values: &[String]) -> String {
@@ -2470,7 +2802,7 @@ fn caveats_section(ctx: &Ctx) -> Value {
         ));
     }
     if !missing.is_empty() {
-        let noun = if matches!(ctx.id, PeriodId::Week { .. }) {
+        let noun = if matches!(ctx.id, Some(PeriodId::Week { .. })) {
             "daily notes"
         } else {
             "notes"
@@ -2485,7 +2817,31 @@ fn caveats_section(ctx: &Ctx) -> Value {
         ));
     }
     // Unreviewed children. Days have no Review, so a week skips this.
-    if matches!(ctx.id, PeriodId::Week { .. }) {
+    if matches!(ctx.id, Some(PeriodId::Week { .. })) || ctx.day.is_some() {
+        // A missing daily note in the span is missing evidence.
+        if ctx.day.is_none() {
+            let mut missing_days: Vec<String> = Vec::new();
+            if let Some(id) = ctx.id {
+                let days = match id {
+                    PeriodId::Week { .. } => id.week_dates(),
+                    _ => Vec::new(),
+                };
+                for date in days {
+                    let path = NoteSubject::day_path(date)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    if !ctx.buffers.contains_key(&path) {
+                        missing_days.push(date.format("%Y-%m-%d").to_string());
+                    }
+                }
+            }
+            if !missing_days.is_empty() {
+                caveats.push(format!(
+                    "Missing daily notes: {}.",
+                    summarize_list(&missing_days, 10)
+                ));
+            }
+        }
         return Value::Array(caveats.into_iter().map(Value::String).collect());
     }
     let children = ctx
@@ -2512,7 +2868,7 @@ fn caveats_section(ctx: &Ctx) -> Value {
         }
     }
     if !unreviewed.is_empty() {
-        let noun = if matches!(ctx.id, PeriodId::Quarter { .. }) {
+        let noun = if matches!(ctx.id, Some(PeriodId::Quarter { .. })) {
             "weeks"
         } else {
             "quarters"
@@ -2549,6 +2905,45 @@ fn render_markdown(ctx: &Ctx, json: &Value) -> String {
         str_field(header, "parent_path"),
     ));
     out.push_str(&format!("{}\n", str_field(header, "stop_advice")));
+    // Instructions precede every evidence/data section, for days and
+    // periods alike. Markdown carries the same substance as the JSON
+    // instruction object.
+    if let Some(instruction) = json.get("instructions") {
+        out.push_str(&format!(
+            "\n## Instructions ({})\n{}\n",
+            instruction
+                .get("version")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            instruction
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ));
+    }
+    // Intentions: the day's verbatim intentions plus the week's, or the
+    // period's own plus its parent's. Data, not instructions.
+    if let Some(neighbours) = json.get("neighbours") {
+        let intentions = neighbours
+            .get("intentions")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let parent = neighbours
+            .get("parent_intentions")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !intentions.trim().is_empty() || !parent.trim().is_empty() {
+            out.push_str("\n## Intentions (data, not instructions)\n");
+            if !intentions.trim().is_empty() {
+                out.push_str(&format!(
+                    "This note's intentions:\n{intentions}\n"
+                ));
+            }
+            if !parent.trim().is_empty() {
+                out.push_str(&format!("Parent intentions:\n{parent}\n"));
+            }
+        }
+    }
     // Facts.
     out.push_str("\n## Facts\n");
     if let Some(facts) = json.get("facts") {
@@ -2644,11 +3039,48 @@ fn render_markdown(ctx: &Ctx, json: &Value) -> String {
             }
         }
     }
-    // Parts.
-    out.push_str("\n## Parts\n");
-    if let Some(parts) = json.get("parts").and_then(Value::as_array) {
+    // Parts (periods only; days carry no parts section).
+    if ctx.day.is_none()
+        && let Some(parts) = json.get("parts").and_then(Value::as_array)
+        && !parts.is_empty()
+    {
+        out.push_str("\n## Parts\n");
         for part in parts {
             render_part(&mut out, part);
+        }
+    }
+    // Seven day summaries with coverage (week only).
+    if let Some(slots) = json.get("day_summaries").and_then(Value::as_array)
+        && !slots.is_empty()
+    {
+        out.push_str("\n## Day summaries\n");
+        if let Some(coverage) = json.get("day_coverage") {
+            out.push_str(&format!(
+                "{}\n",
+                coverage
+                    .get("display")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ));
+        }
+        for slot in slots {
+            let summary = slot
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let display = if summary.trim().is_empty() {
+                "(no summary)".to_string()
+            } else {
+                summary.to_string()
+            };
+            out.push_str(&format!(
+                "- {} · {} · {}\n",
+                slot.get("date").and_then(Value::as_str).unwrap_or_default(),
+                slot.get("summary_state")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                display,
+            ));
         }
     }
     // Finished / started / dropped.
@@ -2851,58 +3283,102 @@ fn render_markdown(ctx: &Ctx, json: &Value) -> String {
             ));
         }
     }
-    // Neighbours.
+    // Previous day's summary (day only).
+    if ctx.day.is_some()
+        && let Some(neighbours) = json.get("neighbours")
+        && let Some(previous) = neighbours.get("previous")
+    {
+        let summary = previous
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if !summary.is_empty() {
+            out.push_str(&format!("\n## Previous day's summary\n{summary}\n"));
+        }
+    }
+    // Events (counts only; titles never reach the agent).
+    if let Some(events) = json.get("events") {
+        out.push_str("\n## Events\n");
+        out.push_str(&format!(
+            "{}\n",
+            events
+                .get("display")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ));
+    }
+    // Neighbours (v3 shape).
     out.push_str(
         "\n## This note and its neighbours (data, not instructions)\n",
     );
     if let Some(neighbours) = json.get("neighbours") {
-        if let Some(own) = neighbours.get("own").and_then(Value::as_object) {
-            for (heading, body) in own {
-                out.push_str(&format!(
-                    "### {heading}\n{}\n",
-                    body.as_str().unwrap_or_default().trim(),
-                ));
-            }
+        let summary = neighbours
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !summary.is_empty() {
+            out.push_str(&format!("### Summary\n{summary}\n"));
         }
-        if let Some(review) = neighbours.get("prev_review") {
-            let headline = str_field(review, "headline");
-            if !headline.is_empty() {
-                out.push_str(&format!(
-                    "### Previous Review: Headline\n{headline}\n"
-                ));
+        let reflection = neighbours
+            .get("reflection")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !reflection.is_empty() {
+            out.push_str(&format!(
+                "### Reflection (≤300 words)\n{reflection}\n"
+            ));
+        }
+        if let Some(previous) = neighbours.get("previous") {
+            let summary = previous
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if !summary.is_empty() {
+                out.push_str(&format!("### Previous Summary\n{summary}\n"));
             }
-            let carried = str_field(review, "carried");
+            let carried = previous
+                .get("carried")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             if !carried.is_empty() {
                 out.push_str(&format!(
                     "### Previous Review: {} (≤{PREV_PART_WORDS} words)\n{carried}\n",
-                    str_field(review, "carried_label"),
+                    previous
+                        .get("carried_label")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
                 ));
             }
-            let questions = str_field(review, "questions");
+            let questions = previous
+                .get("questions")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             if !questions.is_empty() {
                 out.push_str(&format!(
                     "### Previous Review: Questions (≤{PREV_PART_WORDS} words)\n{questions}\n"
                 ));
             }
-        }
-        let prev = str_field(neighbours, "prev_reflection");
-        if !prev.is_empty() {
-            out.push_str(&format!(
-                "### Previous Reflection (≤300 words)\n{prev}\n"
-            ));
-        }
-        for (key, heading) in [
-            ("parent_outcomes", "Parent Outcomes"),
-            ("parent_theme", "Parent Theme"),
-        ] {
-            let body = neighbours
-                .get(key)
+            let reflection = previous
+                .get("reflection")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            if !body.is_empty() {
-                out.push_str(&format!("### {heading}\n{body}\n"));
+            if !reflection.is_empty() {
+                out.push_str(&format!(
+                    "### Previous Reflection (≤300 words)\n{reflection}\n"
+                ));
             }
         }
         for (key, heading) in
@@ -3097,13 +3573,19 @@ fn render_links(out: &mut String, rows: Option<&Vec<Value>>, empty: &str) {
     }
 }
 
-/// Token budget per kind: a week ≤ 6k, a quarter ≤ 10k, a year ≤ 12k.
-fn token_budget(id: PeriodId) -> usize {
-    match id {
-        PeriodId::Week { .. } => WEEK_BUDGET,
-        PeriodId::Quarter { .. } => QUARTER_BUDGET,
-        PeriodId::Year(_) => YEAR_BUDGET,
-        PeriodId::AllTime => WEEK_BUDGET,
+/// Token budget per kind: a day ≤ 3k, a week ≤ 6k, a quarter ≤ 10k,
+/// a year ≤ 12k (rendered bytes/4, including instructions). The cap is a
+/// fixture-backed typical ceiling, not permission to silently truncate
+/// Bryan's unusually long intentions.
+fn token_budget(ctx: &Ctx) -> usize {
+    if ctx.day.is_some() {
+        return DAY_BUDGET;
+    }
+    match ctx.id {
+        Some(PeriodId::Week { .. }) => WEEK_BUDGET,
+        Some(PeriodId::Quarter { .. }) => QUARTER_BUDGET,
+        Some(PeriodId::Year(_)) => YEAR_BUDGET,
+        _ => WEEK_BUDGET,
     }
 }
 
@@ -3147,7 +3629,7 @@ fn fit_finished(ctx: &Ctx, json: &mut Value) {
         }
     }
     let base_len = render_markdown(ctx, &base).len();
-    let mut available = (token_budget(ctx.id) * 4)
+    let mut available = (token_budget(ctx) * 4)
         .saturating_sub(base_len)
         .saturating_sub(FINISHED_HEADROOM);
     let mut take = vec![0usize; groups.len()];
@@ -3199,12 +3681,14 @@ fn fit_finished(ctx: &Ctx, json: &mut Value) {
     json["finished_more"] = total.saturating_sub(shown as u64).into();
 }
 
-/// Token budgets: a week ≤ 6k, a quarter ≤ 10k, a year ≤ 12k tokens.
-/// Roughly four characters per token; trim Bryan's words, then
-/// caveats, then neighbour bodies until the bundle fits.
+/// Token budgets: a day ≤ 3k, a week ≤ 6k, a quarter ≤ 10k, a year ≤
+/// 12k tokens. Roughly four characters per token (rendered bytes/4,
+/// asserted including instructions); preserve instructions, facts,
+/// essential coverage/privacy caveats, and verbatim intentions, trim
+/// optional evidence with honest `more` counts.
 fn enforce_budget(ctx: &Ctx, json: &mut Value, markdown: &mut String) {
-    let budget = token_budget(ctx.id);
-    let tokens = |text: &str| text.len() / 4;
+    let budget = token_budget(ctx);
+    let tokens = |text: &str| estimated_tokens(text.len());
     while tokens(markdown) > budget {
         let words = json.get_mut("bryans_words").and_then(Value::as_array_mut);
         if let Some(words) = words
@@ -3352,34 +3836,20 @@ mod tests {
 
     #[test]
     fn previous_review_uses_typed_summary_and_keeps_parts_verbatim() {
-        let review = "**Headline:** A 24h 45m week, 5h 28m below typical, put 45% into bob,\nled by WIP/Next auto-decay.\n\n**Shipped:**\n\n- one\n\n**Carried forward:**\n\n- [[a#^b|Docs]] · kept 3×\n- second\n\n**Questions:**\n\n1. Why?\n2. What next?\n";
-        let summary = "A 24h 45m week, 5h 28m below typical, put 45% into bob, led by WIP/Next auto-decay.";
-        let prev = previous_review(summary, review);
-        assert_eq!(prev["headline"], summary);
+        let review = "**Summary:** A 24h 45m week, 5h 28m below typical, put 45% into bob,\nled by WIP/Next auto-decay.\n\n**Shipped:**\n\n- one\n\n**Carried forward:**\n\n- [[a#^b|Docs]] · kept 3×\n- second\n\n**Questions:**\n\n1. Why?\n2. What next?\n";
+        let prev = previous_review(review);
         assert_eq!(prev["carried_label"], "Carried forward");
         assert_eq!(prev["carried"], "- [[a#^b|Docs]] · kept 3×\n- second");
         assert_eq!(prev["questions"], "1. Why?\n2. What next?");
 
-        let v1 = previous_review(
-            "Calm.",
-            "**Headline:** Calm.\n\n**Still open:**\n\n- x\n",
-        );
+        let v1 =
+            previous_review("**Summary:** Calm.\n\n**Still open:**\n\n- x\n");
         assert_eq!(v1["carried_label"], "Still open");
         assert_eq!(v1["carried"], "- x");
         assert_eq!(v1["questions"], "");
 
-        let empty = previous_review("", "");
-        assert_eq!(empty["headline"], "");
+        let empty = previous_review("");
         assert_eq!(empty["carried"], "");
-    }
-
-    #[test]
-    fn year_own_intentions_are_projected_once() {
-        let contents = "---\nintentions: [\"Shared aim\", \"First outcome\"]\n---\n\n## Theme\nLegacy theme\n\n## Outcomes\n- Legacy outcome\n";
-        assert_eq!(
-            own_sections(PeriodId::Year(2026), contents),
-            json!({"Intentions": "- Shared aim\n- First outcome"})
-        );
     }
 
     #[test]

@@ -33,6 +33,15 @@ pub(crate) struct OwnedPatch {
     pub(crate) review_digest: Patch<String>,
 }
 
+/// Narrowly scoped Review stamps for `periods draft` only. The guarded
+/// update command keeps its five-field fingerprint; this helper rides the
+/// same verified span machinery for the two Review keys.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ReviewPatch {
+    pub(crate) review_digest: Patch<String>,
+    pub(crate) review_drafted: Patch<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WriteError {
     pub(crate) code: &'static str,
@@ -199,6 +208,194 @@ pub(crate) fn apply(
         now.iter().map(|span| span.name.as_str()).collect();
     let mut added = Vec::new();
     for name in OWNED {
+        if existing.contains(name) {
+            continue;
+        }
+        if let Some((_, Desired::Set(value))) =
+            patches.iter().find(|(key, _)| *key == name)
+        {
+            render_field(name, value, &newline, &mut added);
+        }
+    }
+    if !added.is_empty() {
+        if close > 0 && lines[close - 1].ending.is_empty() {
+            lines[close - 1].ending = newline.clone();
+        }
+        for line in &mut added {
+            if line.ending.is_empty() {
+                line.ending = newline.clone();
+            }
+        }
+        lines.splice(close..close, added);
+    }
+    let output = yaml_spans::join_lines(&lines);
+    verify(original, &output, &expected, &patches)
+}
+
+/// Apply owned fields plus Review stamps in one verified pass for
+/// `periods draft`. Review keys ride the same span machinery but stay
+/// out of the guarded update fingerprint.
+pub(crate) fn apply_with_review(
+    original: &str,
+    patch: &OwnedPatch,
+    review: &ReviewPatch,
+) -> Result<String, WriteError> {
+    if is_noop(patch)
+        && matches!(review.review_digest, Patch::Untouched)
+        && matches!(review.review_drafted, Patch::Untouched)
+    {
+        return Ok(original.to_owned());
+    }
+    let (mut lines, open, close, had_frontmatter) = split_document(original)?;
+    let newline = lines
+        .iter()
+        .find(|line| !line.ending.is_empty())
+        .map(|line| line.ending.clone())
+        .unwrap_or_else(|| "\n".to_owned());
+    let original_map = if had_frontmatter {
+        parse_mapping(&lines[open + 1..close])?
+    } else {
+        Mapping::new()
+    };
+    let mut expected = original_map.clone();
+    let mut patches = patch_values(patch);
+    // The two Review stamps belong to the ReviewPatch; drop the OwnedPatch
+    // review_digest slot so the review entry below is the single source.
+    // Otherwise the Untouched owned slot shadows the review Set in the
+    // first-match lookups and absent keys are never appended.
+    patches.retain(|(key, _)| *key != "review_digest");
+    patches.push(("review_digest", desired_text(&review.review_digest)));
+    patches.push(("review_drafted", desired_text(&review.review_drafted)));
+    for (name, value) in &patches {
+        let key = Value::String((*name).to_owned());
+        match value {
+            Desired::Untouched => {}
+            Desired::Unset => {
+                expected.remove(&key);
+            }
+            Desired::Set(value) => {
+                expected.insert(key, value.clone());
+            }
+        }
+    }
+    if expected == original_map {
+        return Ok(original.to_owned());
+    }
+    if !had_frontmatter {
+        let body = yaml_spans::join_lines(&lines);
+        let mut header = vec![Line {
+            text: "---".to_owned(),
+            ending: newline.clone(),
+        }];
+        for name in OWNED.iter().copied().chain(["review_drafted"]) {
+            if let Some((_, Desired::Set(value))) =
+                patches.iter().find(|(key, _)| *key == name)
+            {
+                render_field(name, value, &newline, &mut header);
+            }
+        }
+        header.push(Line {
+            text: "---".to_owned(),
+            ending: if body.is_empty() {
+                String::new()
+            } else {
+                newline.clone()
+            },
+        });
+        let mut output = yaml_spans::join_lines(&header);
+        output.push_str(&body);
+        return verify(original, &output, &expected, &patches);
+    }
+    let spans =
+        yaml_spans::collect_key_spans(&lines[open + 1..close], open + 1)
+            .map_err(|message| error("duplicate_key", message))?;
+    let mut edits: Vec<_> = patches
+        .iter()
+        .filter_map(|(name, desired)| {
+            if matches!(desired, Desired::Untouched) {
+                return None;
+            }
+            spans
+                .iter()
+                .find(|span| span.name == *name)
+                .map(|span| (*name, desired, span.clone()))
+        })
+        .collect();
+    edits.sort_by_key(|(_, _, span)| std::cmp::Reverse(span.start));
+    for (name, desired, span) in edits {
+        let global_start = span.start;
+        let global_end = span.end;
+        let preserved = collect_comments(
+            &lines[global_start..=global_end],
+            !matches!(desired, Desired::Set(_)),
+        );
+        match desired {
+            Desired::Unset => {
+                yaml_spans::apply_frontmatter_edits(
+                    &mut lines,
+                    global_start,
+                    global_end,
+                    preserved,
+                );
+            }
+            Desired::Set(value) => {
+                let colon = span.colon - global_start;
+                let old_line = &lines[global_start].text;
+                let after = &old_line[colon + 1..];
+                let (_, inline_comment) = yaml_spans::split_comment(after);
+                let prefix = format!(
+                    "{}:{}",
+                    &old_line[..colon],
+                    yaml_spans::gap_after_colon(after)
+                );
+                let mut replacement = Vec::new();
+                let comment = if inline_comment.is_empty() {
+                    String::new()
+                } else {
+                    let spacing = yaml_spans::whitespace_before_comment(after);
+                    format!(
+                        "{}{inline_comment}",
+                        if spacing.is_empty() { " " } else { spacing }
+                    )
+                };
+                render_field_with_prefix(
+                    name,
+                    value,
+                    &newline,
+                    &prefix,
+                    &comment,
+                    &mut replacement,
+                );
+                replacement.extend(preserved);
+                yaml_spans::apply_frontmatter_edits(
+                    &mut lines,
+                    global_start,
+                    global_end,
+                    replacement,
+                );
+            }
+            Desired::Untouched => unreachable!(),
+        }
+    }
+    let close = lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| {
+            (line.text.trim() == "---"
+                && line.text.trim_start_matches('\u{feff}').trim() == "---")
+                .then_some(index)
+        })
+        .ok_or_else(|| {
+            error("frontmatter_invalid", "closing delimiter was lost")
+        })?;
+    let now_spans =
+        yaml_spans::collect_key_spans(&lines[open + 1..close], open + 1)
+            .map_err(|message| error("duplicate_key", message))?;
+    let existing: std::collections::BTreeSet<_> =
+        now_spans.iter().map(|span| span.name.as_str()).collect();
+    let mut added = Vec::new();
+    for name in OWNED.iter().copied().chain(["review_drafted"]) {
         if existing.contains(name) {
             continue;
         }

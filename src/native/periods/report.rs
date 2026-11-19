@@ -481,6 +481,97 @@ fn merge_warnings(existing: Value, top_roots_warning: Option<&str>) -> Value {
     Value::Array(warnings)
 }
 
+/// Minimal report shell for a single day: identity, note existence and
+/// review state, and prev/parent/next links. Day evidence (facts, time,
+/// words, still open) comes from the stats index over the one-day span,
+/// never from the containing week's totals.
+pub(crate) fn day_report_shell(
+    vault: &Path,
+    today: NaiveDate,
+    now: NaiveDateTime,
+    day: NaiveDate,
+) -> Value {
+    use crate::native::intentions::{self, NoteSubject};
+    let path = NoteSubject::day_path(day);
+    let note_path = vault.join(&path);
+    let contents = fs::read_to_string(&note_path).ok();
+    let fields = intentions::read(
+        contents.as_deref().unwrap_or(""),
+        NoteSubject::Day(day),
+    );
+    let review_state = intentions::evaluate(&fields, false);
+    let summary = fields.summary.value.clone().unwrap_or_default();
+    let intentions_list = fields.intentions.value.clone().unwrap_or_default();
+    let reflection_lead = note::parse_reflection_lead(
+        &fields.reflection.value.clone().unwrap_or_default(),
+    );
+    let week = PeriodId::week_for_date(day);
+    let state_name = if day < today {
+        "closed"
+    } else if day > today {
+        "future"
+    } else {
+        "open"
+    };
+    let prev = day.pred_opt().map(|date| {
+        let target = NoteSubject::day_path(date).to_string_lossy().replace('\\', "/");
+        json!({ "id": date.format("%Y-%m-%d").to_string(), "path": target, "label": "← prev day" })
+    });
+    let next = day.succ_opt().map(|date| {
+        let target = NoteSubject::day_path(date).to_string_lossy().replace('\\', "/");
+        json!({ "id": date.format("%Y-%m-%d").to_string(), "path": target, "label": "next day →" })
+    });
+    let mut links = Map::new();
+    links.insert(
+        "parent".to_string(),
+        json!({ "id": week.to_string(), "path": week.path().to_string_lossy(), "label": format!("↑ {}", week) }),
+    );
+    links.insert("prev".to_string(), prev.unwrap_or(Value::Null));
+    links.insert("next".to_string(), next.unwrap_or(Value::Null));
+    json!({
+        "ok": true,
+        "schema_version": SCHEMA_VERSION,
+        "today": date_text(today),
+        "generated_at": now.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        "period": {
+            "id": day.format("%Y-%m-%d").to_string(),
+            "kind": "day",
+            "title": day.format("%a %b %-d, %Y").to_string(),
+            "range_label": day.format("%Y-%m-%d").to_string(),
+            "start": date_text(day),
+            "end": date_text(day),
+            "days": 1,
+            "weeks": 0,
+            "state": state_name,
+            "observed_through": if day > today { Value::Null } else { json!(date_text(std::cmp::min(day, today))) },
+            "coverage": { "tracked_days": 0, "elapsed_days": 1, "total_days": 1, "display": "" },
+        },
+        "note": {
+            "path": path.to_string_lossy(),
+            "exists": contents.is_some(),
+            "instructions_version": note::parse_instructions_version(contents.as_deref().unwrap_or("")),
+            "review": {
+                "state": review_state.as_str(),
+                "headline": summary,
+                "intentions": intentions_list,
+                "summary": summary,
+                "summary_state": crate::native::intentions::summary_state(&fields).as_str(),
+                "reflection_lead": reflection_lead,
+            },
+        },
+        "links": Value::Object(links),
+        "facts": [],
+        "lanes": {},
+        "charts": {},
+        "columns": [],
+        "groups": [],
+        "children": [],
+        "homes": {},
+        "theme_hues": {},
+        "warnings": [],
+    })
+}
+
 pub(crate) fn period_span(
     id: PeriodId,
     vault: &Path,
