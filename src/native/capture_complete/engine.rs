@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use std::path::Path;
+use std::{collections::BTreeMap, time::Duration};
 
 use super::{
     candidates::{
@@ -13,7 +13,7 @@ use super::{
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
         CompletionRelation, DrawerTarget, OverrideCompletion, PickerDescriptor,
-        PickerKind, PickerScope, Replacement, SCHEMA_VERSION,
+        PickerKind, PickerScope, Replacement, WorkLogCandidate, SCHEMA_VERSION,
     },
     pomodoros::{
         apply_bare_start_name_replacements, pomodoro_candidates,
@@ -26,8 +26,13 @@ use crate::native::{
         self, CompletionContext, DependencyTarget, DependencyTargetKind,
         RelationDirection,
     },
-    capture_links, capture_task_wikilinks, pomodoro,
+    capture_links, capture_task_wikilinks,
+    log_history::{self, LogKind},
+    pomodoro,
 };
+
+const MAX_WORK_LOG_CANDIDATES: usize = 3;
+const WORK_LOG_MIN_QUERY_CHARS: usize = 2;
 
 /// `true` when `cursor` sits in Work Log text: a bullet line or an inline
 /// entry on the close line. Block-link completion is suppressed there
@@ -188,6 +193,7 @@ fn build_result_inner(
             | CompletionContext::PomodoroSplitType
             | CompletionContext::PomodoroMergeSrc
             | CompletionContext::PomodoroMergeDest
+            | CompletionContext::WorkLog
             | CompletionContext::NotebookSectionBullet
             | CompletionContext::WikilinkTask
             | CompletionContext::RecordTarget
@@ -302,11 +308,16 @@ fn build_result_inner(
         });
     }
 
-    let Some(field) = capture_language::completion_field_at_with(
-        raw_text,
-        cursor,
-        Some(&notebook_policy),
-    ) else {
+    let field =
+        capture_language::work_log_completion_field_at(raw_text, cursor)
+            .or_else(|| {
+                capture_language::completion_field_at_with(
+                    raw_text,
+                    cursor,
+                    Some(&notebook_policy),
+                )
+            });
+    let Some(field) = field else {
         return Ok(CaptureCompleteResult::empty(cursor));
     };
     let transfer_role =
@@ -634,6 +645,10 @@ fn build_result_inner(
                 bob_dir,
                 &field.query,
             )?
+        }
+        CompletionContext::WorkLog => {
+            let (rows, warnings) = work_log_candidates(bob_dir, &field.query)?;
+            (Candidates::WorkLog(rows), warnings)
         }
         CompletionContext::ActiveTask => {
             active_task_candidates(bob_dir, &field.query)
@@ -1005,6 +1020,7 @@ fn build_result_inner(
             | CompletionContext::RelationTo
             | CompletionContext::RelationFrom
             | CompletionContext::RelationLabel
+            | CompletionContext::WorkLog
     ) {
         (
             Some(field.query.clone()),
@@ -1034,7 +1050,8 @@ fn build_result_inner(
     // opens with nothing selected, from a typed one. Every other
     // `section` menu keeps its query-free shape.
     let query = match field.context {
-        CompletionContext::NotebookSectionBullet => Some(field.query.clone()),
+        CompletionContext::NotebookSectionBullet
+        | CompletionContext::WorkLog => Some(field.query.clone()),
         CompletionContext::Section
             if notebook_target.is_some()
                 || is_notebook_section_menu(&candidates) =>
@@ -1458,6 +1475,9 @@ fn initial_selection(
     raw_text: &str,
     result: &CaptureCompleteResult,
 ) -> Option<&'static str> {
+    if matches!(result.context, Some(CompletionContext::WorkLog)) {
+        return Some("none");
+    }
     if matches!(result.context, Some(CompletionContext::ProjectTaskMove)) {
         return match &result.candidates {
             Candidates::ProjectTaskMove(rows)
@@ -1518,6 +1538,32 @@ fn initial_selection(
         .next()
         .is_none_or(char::is_whitespace);
     (left_edge && right_edge).then_some("none")
+}
+
+fn work_log_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> Result<(Vec<WorkLogCandidate>, Vec<String>), CompleteError> {
+    if query.chars().count() < WORK_LOG_MIN_QUERY_CHARS {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let catalog = log_history::load(bob_dir, Some(Duration::from_secs(30)))
+        .map_err(|error| CompleteError::io(error.to_string()))?;
+    let candidates =
+        log_history::rank_phrases(&catalog, LogKind::Work, Some(query))
+            .into_iter()
+            .take(MAX_WORK_LOG_CANDIDATES)
+            .map(|row| WorkLogCandidate {
+                replacement: row.phrase.text.clone(),
+                text: row.phrase.text.clone(),
+                key: row.phrase.key.clone(),
+                uses: row.phrase.uses,
+                last_used: row.phrase.last_used.clone(),
+                recency_rank: row.phrase.recency_rank,
+                matched: row.matched,
+            })
+            .collect();
+    Ok((candidates, catalog.warnings.clone()))
 }
 
 fn completion_owner(

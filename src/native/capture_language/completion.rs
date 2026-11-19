@@ -35,6 +35,8 @@ pub(crate) enum CompletionContext {
     PomodoroStartName,
     PomodoroPastName,
     PomodoroPastSegment,
+    /// A Work Log entry summary in a close or past record.
+    WorkLog,
     Task,
     /// A `#<type>` task-type marker at either item edge.
     TaskType,
@@ -3295,6 +3297,33 @@ pub(super) fn completion_marker_index(
     }
 
     None
+}
+
+/// Identify the summary field of a Work Log entry for capture-complete.
+/// Marker parsing deliberately keeps Work Log text literal, so this field is
+/// separate from `completion_field_at` and is consulted only after the
+/// capture-complete wikilink paths have had a chance to claim the cursor.
+pub(crate) fn work_log_completion_field_at(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<CompletionField> {
+    if !cursor_in_close_log_text(raw_text, cursor) {
+        return None;
+    }
+    let item = super::editor_parse::editor_item_at(raw_text, cursor)?;
+    let span = item.spans.iter().find(|span| {
+        span.kind == SpanKind::PomodoroCloseLogSummary
+            && span.start <= cursor
+            && cursor <= span.end
+    })?;
+    Some(CompletionField {
+        context: CompletionContext::WorkLog,
+        route: None,
+        block_id: None,
+        query: raw_text.get(span.start..span.end)?.to_string(),
+        replacement: (span.start, span.end),
+        bare_name: false,
+    })
 }
 
 /// Split one `@`-token the same way [`classify_route_token`],

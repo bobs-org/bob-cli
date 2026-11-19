@@ -21,6 +21,7 @@ mod records;
 mod relations;
 mod routes_tasks;
 mod task_links;
+mod work_log;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

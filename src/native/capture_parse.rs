@@ -342,7 +342,7 @@ including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
 including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
 the `~` (`pomodoro_close_drop`), and each numbered or star entry index \
-(`pomodoro_close_log_index`; positional entries get no index span, a star bullet's `*` gets one, and entry text \
+(`pomodoro_close_log_index`; positional entries get no index span, a star bullet's `*` gets one, and each entry's summary text carries a `pomodoro_close_log_summary` span, while entry text \
 renders as neutral prose but keeps \
 its wikilink spans); the human `close` line reads \
 `x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
@@ -5508,6 +5508,30 @@ record:
         assert_eq!(mixed["items"][0]["mode"], "pomodoro_adjust");
         assert_eq!(mixed["items"][1]["mode"], "pomodoro_close");
         assert_eq!(mixed["items"][1]["pomodoro_close"]["raw"], "x");
+    }
+
+    #[test]
+    fn json_marks_work_log_entry_summaries_with_additive_spans() {
+        for raw in [
+            "x wired the lexer",
+            "x\n- 1 wired the lexer",
+            "x=3=1 wired the lexer",
+        ] {
+            let value = json(raw);
+            let expected_start = raw.find("wired the lexer").expect("summary");
+            let summary = value["spans"]
+                .as_array()
+                .expect("spans")
+                .iter()
+                .find(|span| span["kind"] == "pomodoro_close_log_summary")
+                .unwrap_or_else(|| panic!("missing summary span for {raw:?}"));
+            assert_eq!(summary["start"], expected_start, "{raw:?}");
+            assert_eq!(
+                summary["end"],
+                expected_start + "wired the lexer".len(),
+                "{raw:?}"
+            );
+        }
     }
 
     #[test]

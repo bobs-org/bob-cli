@@ -12,6 +12,7 @@ use crate::native::{
     capture_pomodoros::{self, PomodoroState},
     capture_targets::CaptureTargetKind,
     capture_task_wikilinks::WikilinkTaskCandidate,
+    log_history::MatchKind as LogMatchKind,
     note_catalog::{NoteGroup, NoteKindKey},
     pomodoro_homes::Hue,
     pomodoro_themes::ThemeRef,
@@ -1150,6 +1151,20 @@ pub(super) enum Candidates {
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
     WikilinkTask(Vec<WikilinkTaskCandidate>),
     PastSegment(Vec<PastSegmentCandidate>),
+    WorkLog(Vec<WorkLogCandidate>),
+}
+
+/// One vault-derived Work Log phrase that can replace the entry summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct WorkLogCandidate {
+    pub(super) replacement: String,
+    pub(super) text: String,
+    pub(super) key: String,
+    pub(super) uses: u64,
+    pub(super) last_used: String,
+    pub(super) recency_rank: usize,
+    #[serde(rename = "match", skip_serializing_if = "Option::is_none")]
+    pub(super) matched: Option<LogMatchKind>,
 }
 
 /// One timeline segment row for the `pomodoro_past_segment` context.
@@ -1222,6 +1237,7 @@ impl Candidates {
             Self::WikilinkBlock(items) => items.len(),
             Self::WikilinkTask(items) => items.len(),
             Self::PastSegment(items) => items.len(),
+            Self::WorkLog(items) => items.len(),
         }
     }
 }

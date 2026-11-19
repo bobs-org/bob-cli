@@ -86,6 +86,7 @@ pub(crate) use self::completion::project_task_block_id_detail;
 pub(crate) use self::completion::project_task_move_detail;
 pub(crate) use self::completion::relation_label_token_at;
 pub(crate) use self::completion::transfer_completion_role;
+pub(crate) use self::completion::work_log_completion_field_at;
 pub(crate) use self::completion::CompletionContext;
 pub(crate) use self::completion::CompletionField;
 pub(crate) use self::completion::MergeInCompletionRole;

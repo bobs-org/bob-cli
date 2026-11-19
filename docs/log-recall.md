@@ -138,6 +138,16 @@ Merging a later scan is idempotent.
 | Mac Capture pull-in cancel reason | Cancel |
 | Mac inline Work Log completion | Work |
 
+For inline Work Log completion, `capture-parse` marks only the entry summary
+with `pomodoro_close_log_summary`. `capture-complete` returns context
+`work_log` with a replacement range over that summary. It filters the full
+summary draft and returns the top three Work phrases once it contains at least
+two characters; shorter drafts return no candidates. Each candidate exposes
+the phrase as both `replacement` and `text`, plus its normalized `key`, `uses`,
+`last_used`, `recency_rank`, and optional `match` tier. The response sets
+`initial_selection: "none"`, so accepting a phrase is always an explicit row
+choice and replaces only the summary.
+
 The typed-date `scheduled` stage and relation stages are excluded. Capture has
 no Schedule or Rotten prompt. See [JSON outputs](reference/json-outputs.md#task-log-reports)
 for the catalog response shape.

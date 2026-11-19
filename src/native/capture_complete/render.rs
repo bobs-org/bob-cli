@@ -749,6 +749,20 @@ pub(super) fn candidate_lines(
                 (item.replacement.clone(), detail)
             })
             .collect(),
+        Candidates::WorkLog(items) => items
+            .iter()
+            .map(|item| {
+                (
+                    item.replacement.clone(),
+                    format!(
+                        "{} use{} · last {}",
+                        item.uses,
+                        if item.uses == 1 { "" } else { "s" },
+                        item.last_used
+                    ),
+                )
+            })
+            .collect(),
     }
 }
 
@@ -847,6 +861,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::PomodoroStartName => "pomodoro_start_name",
         CompletionContext::PomodoroPastName => "pomodoro_past_name",
         CompletionContext::PomodoroPastSegment => "pomodoro_past_segment",
+        CompletionContext::WorkLog => "work_log",
         CompletionContext::Task => "task",
         CompletionContext::Drawer => "drawer",
         CompletionContext::NotebookSectionBullet => "notebook_section_bullet",

@@ -138,6 +138,15 @@ impl LogCatalog {
     }
 }
 
+/// Rank one kind's catalog for other native Bob surfaces.
+pub(crate) fn rank_phrases<'a>(
+    catalog: &'a LogCatalog,
+    kind: LogKind,
+    query: Option<&str>,
+) -> Vec<RankedPhrase<'a>> {
+    rank::rank(catalog.phrases_for(kind), query)
+}
+
 /// Load a catalog. A max age is only used by keystroke-heavy callers such as
 /// capture-complete; `None` always performs a stat walk before returning.
 pub(crate) fn load(

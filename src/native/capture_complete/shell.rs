@@ -1141,6 +1141,7 @@ pub(crate) fn shell_completion(
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock
         | CompletionContext::WikilinkTask
+        | CompletionContext::WorkLog
         | CompletionContext::RecordTarget
         | CompletionContext::RecordField
         | CompletionContext::RecordValue => return Ok(None),

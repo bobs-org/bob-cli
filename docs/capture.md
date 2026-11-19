@@ -8978,7 +8978,12 @@ A start token or a close token requests no completion: a cursor on that
 token, including anywhere inside the task-number lists or a dangling
 separator, returns an empty success. In Work Log text under or on the
 close line, marker and block-link completion are suppressed and note and heading
-completion keep working. The picker's in-progress
+completion keep working. The entry summary alone carries the
+`pomodoro_close_log_summary` capture-parse span. At that span,
+`capture-complete` returns context `work_log`, replaces only the summary, and
+offers up to three matching Work Log phrases after two typed characters. A
+shorter query has no candidates, and the response has
+`initial_selection: "none"`. The picker's in-progress
 `@^`, `@route^`, `@^id`, `@:`, `@route:`, and `@:id` spellings are unchanged,
 and `@^id@` and `@:id@` carry the project-note intent with `needs: ["route"]`
 (the `:` form reports `pomodoro_project_note`, and keeps it while its ID or
