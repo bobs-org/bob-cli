@@ -14,7 +14,8 @@ use clap::{
 
 use super::{
     ack, charts, check, config_report, config_update, dates, ensure,
-    import_run, list, output, report, scan, status, subscriptions_report,
+    import_delete, import_run, list, output, report, scan, status,
+    subscriptions_report,
 };
 use crate::native::{env as bob_env, host_paths};
 
@@ -228,10 +229,10 @@ pub(crate) fn build_cli_import() -> ClapCommand {
     ClapCommand::new("bob bank import")
         .about("Import posted bank transactions from QFX, OFX, or Wells Fargo CSV")
         .long_about(
-            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. FILE accepts `~` and glob patterns (`*`, `?`, `[...]`), which bob expands itself, so callers without a shell, such as Command Mode, can pass `~/Downloads/*.qfx`; an existing file always wins over pattern interpretation, and a pattern that matches nothing is refused. Refused input exits 2; runtime failures exit 1.",
+            "Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. FILE accepts `~` and glob patterns (`*`, `?`, `[...]`), which bob expands itself, so callers without a shell, such as Command Mode, can pass `~/Downloads/*.qfx`; an existing file always wins over pattern interpretation, and a pattern that matches nothing is refused. `-D` permanently deletes every FILE only after the whole batch is recorded (committed, or already seen) and only while the file still matches what bob read; a refused or failed import keeps every file, and a file bob could not delete is reported and exits 1. Refused input exits 2; runtime failures exit 1.",
         )
         .after_help(
-            "Examples:\n  bob bank import ~/Downloads/*.qfx\n  bob bank import -d ~/Downloads/checking.qfx\n  bob bank import -a checking -f json ~/Downloads/export.csv\n  bob bank import -F\n\nSee docs/bank.md for import matching and recovery behavior.",
+            "Examples:\n  bob bank import ~/Downloads/*.qfx\n  bob bank import -D ~/Downloads/*.qfx\n  bob bank import -d ~/Downloads/checking.qfx\n  bob bank import -a checking -f json ~/Downloads/export.csv\n  bob bank import -F\n\nSee docs/bank.md for import matching and recovery behavior.",
         )
         .disable_help_flag(true)
         .arg(
@@ -250,10 +251,19 @@ pub(crate) fn build_cli_import() -> ClapCommand {
                 .help("Choose a configured importable account"),
         )
         .arg(bob_dir_arg())
+        .arg(delete_arg())
         .arg(dry_run_arg())
         .arg(restore_missing_arg())
         .arg(format_arg())
         .arg(help_arg())
+}
+
+fn delete_arg() -> Arg {
+    Arg::new("delete")
+        .long("delete")
+        .short('D')
+        .action(ArgAction::SetTrue)
+        .help("Delete each FILE after the whole batch is recorded")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -526,6 +536,7 @@ fn execute_import(matches: &ArgMatches) -> i32 {
     let vault = vault_from(matches);
     let json = format_is_json(matches);
     let dry_run = matches.get_flag("dry-run");
+    let delete = matches.get_flag("delete");
     let force_restore = matches.get_flag("restore-missing");
     let now = bob_env::current_datetime();
     let today = now.date();
@@ -535,6 +546,20 @@ fn execute_import(matches: &ArgMatches) -> i32 {
         .map(|files| files.cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     let requested_account = opt_string(matches, "account");
+    if delete && operands.is_empty() {
+        let mut report = import_run::ImportReport::failed(
+            dry_run,
+            today,
+            import_delete::missing_files_failure(),
+        );
+        report.delete = Some(import_delete::DeleteReport::empty());
+        if json {
+            println!("{}", report.to_json());
+        } else {
+            import_run::print_human(&report);
+        }
+        return report.exit_code();
+    }
     if operands.is_empty() && !force_restore {
         let report = import_run::ImportReport::failed(
             dry_run,
@@ -551,11 +576,14 @@ fn execute_import(matches: &ArgMatches) -> i32 {
     let paths = match host_paths::expand_operands(&operands) {
         Ok(paths) => paths,
         Err(error) => {
-            let report = import_run::ImportReport::failed(
+            let mut report = import_run::ImportReport::failed(
                 dry_run,
                 today,
                 import_run::operand_error_failure(error),
             );
+            if delete {
+                report.delete = Some(import_delete::DeleteReport::empty());
+            }
             if json {
                 println!("{}", report.to_json());
             } else {
@@ -564,14 +592,34 @@ fn execute_import(matches: &ArgMatches) -> i32 {
             return report.exit_code();
         }
     };
+    if delete
+        && let Err(failure) =
+            import_delete::check_delete_supported(&paths, &vault)
+    {
+        let mut report =
+            import_run::ImportReport::failed(dry_run, today, failure);
+        report.delete =
+            Some(import_delete::DeleteReport::kept_import_failed(&paths));
+        if json {
+            println!("{}", report.to_json());
+        } else {
+            import_run::print_human(&report);
+        }
+        return report.exit_code();
+    }
     let prepared = match import_run::prepare_sources(&paths) {
         Ok(prepared) => prepared,
         Err(error) => {
-            let report = import_run::ImportReport::failed(
+            let mut report = import_run::ImportReport::failed(
                 dry_run,
                 today,
                 import_run::source_error_failure(error),
             );
+            if delete {
+                report.delete = Some(
+                    import_delete::DeleteReport::kept_import_failed(&paths),
+                );
+            }
             if json {
                 println!("{}", report.to_json());
             } else {
@@ -580,7 +628,7 @@ fn execute_import(matches: &ArgMatches) -> i32 {
             return report.exit_code();
         }
     };
-    let report = if dry_run {
+    let mut report = if dry_run {
         import_run::dry_run_with_restore(
             &vault,
             &prepared,
@@ -600,7 +648,33 @@ fn execute_import(matches: &ArgMatches) -> i32 {
             force_restore,
         )
     };
-    let mut report = report;
+    if delete {
+        if report.failure.is_some() {
+            report.delete =
+                Some(import_delete::DeleteReport::kept_import_failed(&paths));
+        } else if dry_run {
+            report.delete =
+                Some(import_delete::DeleteReport::would_delete(&paths));
+        } else {
+            let sources: Vec<PathBuf> =
+                prepared.iter().map(|source| source.path.clone()).collect();
+            let cleanup = import_delete::remove_sources(&prepared);
+            if cleanup.has_kept() {
+                let kept: Vec<import_delete::DeleteFileOutcome> = cleanup
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        file.status == import_delete::DeleteStatus::Kept
+                    })
+                    .cloned()
+                    .collect();
+                report.delete_error =
+                    Some(import_delete::delete_failed_failure(&kept));
+                let _ = sources;
+            }
+            report.delete = Some(cleanup);
+        }
+    }
     if !dry_run && report.failure.is_none() {
         import_run::refresh_accounts(&mut report, &vault, today);
     }

@@ -19,7 +19,7 @@ bob bank check [-b DIR] [-f human|json]
 bob bank config [show] [-b DIR] [-f human|json]
 bob bank config update [-b DIR] [-d] [-f human|json] [-i FILE]
 bob bank ensure [-b DIR] [-D DAY] [-f human|json] [-o]
-bob bank import [FILE...] [-a ALIAS] [-b DIR] [-d] [-F] [-f human|json]
+bob bank import [FILE...] [-a ALIAS] [-b DIR] [-D] [-d] [-F] [-f human|json]
 bob bank report [-b DIR] [-D DAY] [-f human|json] [-m MONTH] [-p PERIOD] [-s] [-w WEEK] [-y YEAR]
 bob bank subscriptions [-a] [-b DIR] [-f human|json]
 ```
@@ -37,7 +37,8 @@ bob bank subscriptions [-a] [-b DIR] [-f human|json]
   on a refusal.
 - `ensure` exits 2 on an invalid day or configuration.
 - `import` exits 2 on refused input or an unsafe/ambiguous batch, and 1
-  on runtime failures.
+  on runtime failures. `import -D` exits 1 when the import succeeded but a
+  file could not be deleted.
 - Real I/O failures are reported on stderr and exit 1.
 - `check`, `config show`, `list`, and `report` are read-only: vault
   bytes, index, and HEAD are unchanged. `ensure` and `ack` are guarded
@@ -353,9 +354,9 @@ single editor transaction as the tick. Bryan's edits always win.
 
 ## Import
 
-`bob bank import [FILE...] [-a ALIAS] [-d] [-F]` plans the whole batch
-before writing, then records posted exports in one guarded, committed
-transaction. Omitting FILE is refused input (exit 2) before the
+`bob bank import [FILE...] [-a ALIAS] [-D] [-d] [-F]` plans the whole
+batch before writing, then records posted exports in one guarded,
+committed transaction. Omitting FILE is refused input (exit 2) before the
 maintenance lock or pre-sync unless `-F` (or `--force`) explicitly
 requests restoration from the journal. Files are parsed before the maintenance
 path is entered, so a malformed member refuses the full batch with no
@@ -377,6 +378,23 @@ when the pattern component starts with `.`. A pattern with no matching files
 is refused before the vault lock or sync lifecycle. Repeating a path or using
 overlapping patterns imports each file only once, in the order of the
 operands and then the glob matches.
+
+### Deleting imported downloads (-D)
+
+`-D` (or `--delete`) permanently deletes every FILE after the whole batch
+is recorded, so the Monday download leaves no account-number PII behind.
+The gate is narrow: deletion runs only after a successful apply
+(committed, or an already-seen replay with no new commit), only for files
+outside the vault (symlinks, directories, and other non-regular files
+are refused with exit 2 before anything is parsed), and only while each
+file still matches the bytes bob read — a file that changed since the
+read is kept. A refused or failed import keeps every file. Deletion is
+permanent and never journaled: `-F` restores rows, never the QFX file.
+When cleanup keeps a file, the import still counts: exit 1, the commit
+sha still prints, and re-running the same command is a seen no-op that
+retries only the cleanup. JSON carries an additive `delete` object
+(`files` with `path`, `status` of `would_delete` | `deleted` | `kept`,
+and `reason` / `message` for kept files); it is `null` without `-D`.
 
 ### Sources
 
@@ -600,6 +618,10 @@ restoration details, affected paths, commit/sync results, a subscription
 summary line when there is news
 (`🔁 N rows linked to subscriptions · N possible new subscriptions · N price changes — bob bank check`),
 and a next action. It respects `NO_COLOR` and pipes. Usage errors exit 2.
+With `-D`, a dry run prints `Would delete …` after the `Affected:` line,
+a successful run prints `Deleted …` after the commit or replay line, and
+a refused or failed batch prints `Kept … — nothing is deleted until the
+whole batch imports.` on stderr.
 
 ### Current limits
 

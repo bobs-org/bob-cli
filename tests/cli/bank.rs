@@ -1864,3 +1864,484 @@ fn report_balances_settle_across_imports() {
     assert_eq!(payload["balances"][0]["state"], "settled");
     assert_eq!(payload["balances"][0]["cents"], 200_000);
 }
+
+#[test]
+fn delete_help_lists_flag_and_missing_file_is_refused() {
+    let vault = syncable(HUB);
+    let help = run(&vault, &["import", "--help"]);
+    assert_success(&help);
+    let text = stdout(&help);
+    assert!(text.contains("-D, --delete"), "{text}");
+    let short = text.find("-b,").unwrap_or(usize::MAX);
+    let delete = text.find("-D,").unwrap_or(usize::MAX);
+    let dry = text.find("-d,").unwrap_or(usize::MAX);
+    assert!(short < delete && delete < dry, "{text}");
+
+    for extra in [vec![], vec!["-F"]] {
+        let mut args = vec!["import", "-D", "-f", "json"];
+        args.extend(extra);
+        let output = run(&vault, &args);
+        assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+        let payload = json(&output);
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["error"]["code"], "bank_import_missing_files");
+        assert_eq!(
+            payload["error"]["message"],
+            "-D needs at least one FILE to delete"
+        );
+        assert_eq!(payload["delete"]["files"].as_array().unwrap().len(), 0);
+    }
+}
+
+#[test]
+fn delete_real_import_unlinks_batch_and_reports_json() {
+    let vault = syncable(HUB);
+    let first = write_download_qfx(
+        &vault,
+        "Checking1.qfx",
+        &one_transaction_qfx("fit-del-1", "DEL ONE"),
+    );
+    let second = write_download_qfx(
+        &vault,
+        "Checking1 (1).qfx",
+        &one_transaction_qfx("fit-del-2", "DEL TWO"),
+    );
+    let csv_path = vault._temp.path().join("home-dir/Downloads/export.csv");
+    fs::write(&csv_path, "11/12/2026,-5.00,*,,\"COFFEE 9999\"\n").expect("csv");
+
+    let imported = run(
+        &vault,
+        &[
+            "import",
+            "-D",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            "~/Downloads/*.qfx",
+            path_str(&csv_path),
+        ],
+    );
+    assert_success(&imported);
+    let payload = json(&imported);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(
+        payload["delete"]["files"].as_array().unwrap().len(),
+        3,
+        "{payload}"
+    );
+    for file in payload["delete"]["files"].as_array().unwrap() {
+        assert_eq!(file["status"], "deleted");
+        assert!(file["reason"].is_null(), "{payload}");
+        assert!(file["message"].is_null(), "{payload}");
+    }
+    assert!(!first.exists(), "first download is deleted");
+    assert!(!second.exists(), "second download is deleted");
+    assert!(!csv_path.exists(), "csv download is deleted");
+
+    let human = {
+        let vault = syncable(HUB);
+        let _a = write_download_qfx(
+            &vault,
+            "A.qfx",
+            &one_transaction_qfx("fit-h-1", "HUMAN ONE"),
+        );
+        let _b = write_download_qfx(
+            &vault,
+            "B.qfx",
+            &one_transaction_qfx("fit-h-2", "HUMAN TWO"),
+        );
+        run(
+            &vault,
+            &["import", "-D", "-a", "checking", "~/Downloads/*.qfx"],
+        )
+    };
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("Deleted 2 files from ~/Downloads:"), "{text}");
+    assert!(text.contains("A.qfx") && text.contains("B.qfx"), "{text}");
+}
+
+#[test]
+fn delete_seen_replay_unlinks_the_redownload() {
+    let vault = syncable(HUB);
+    let body = one_transaction_qfx("fit-replay-1", "REPLAY STORE");
+    let first = write_download_qfx(&vault, "Checking1.qfx", &body);
+    assert_success(&run(
+        &vault,
+        &[
+            "import",
+            "-D",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            path_str(&first),
+        ],
+    ));
+    assert!(!first.exists());
+
+    let redownload = write_download_qfx(&vault, "Checking1 (1).qfx", &body);
+    let replay = run(
+        &vault,
+        &[
+            "import",
+            "-D",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            path_str(&redownload),
+        ],
+    );
+    assert_success(&replay);
+    let payload = json(&replay);
+    assert_eq!(payload["ok"], true, "{payload}");
+    assert!(payload["commit"].is_null(), "{payload}");
+    assert_eq!(
+        payload["delete"]["files"][0]["status"], "deleted",
+        "{payload}"
+    );
+    assert!(!redownload.exists(), "re-downloaded seen file is deleted");
+
+    let redownload = write_download_qfx(&vault, "Checking1 (2).qfx", &body);
+    let human = run(
+        &vault,
+        &["import", "-D", "-a", "checking", path_str(&redownload)],
+    );
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("No changes; no import commit."), "{text}");
+    assert!(
+        text.contains("Deleted ~/Downloads/Checking1 (2).qfx"),
+        "{text}"
+    );
+    assert!(!redownload.exists());
+}
+
+#[test]
+fn delete_dry_run_reports_would_delete_and_keeps_bytes() {
+    let vault = syncable(HUB);
+    let first = write_download_qfx(
+        &vault,
+        "Checking1.qfx",
+        &one_transaction_qfx("fit-dry-1", "DRY ONE"),
+    );
+    let preview = run(
+        &vault,
+        &[
+            "import",
+            "-D",
+            "-d",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            path_str(&first),
+        ],
+    );
+    assert_success(&preview);
+    let payload = json(&preview);
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(
+        payload["delete"]["files"][0]["status"], "would_delete",
+        "{payload}"
+    );
+    assert!(
+        payload["delete"]["files"][0]["reason"].is_null(),
+        "{payload}"
+    );
+    assert!(first.exists(), "dry run keeps the download");
+
+    let human = run(
+        &vault,
+        &["import", "-D", "-d", "-a", "checking", path_str(&first)],
+    );
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(
+        text.contains("Would delete ~/Downloads/Checking1.qfx"),
+        "{text}"
+    );
+    let affected = text.find("Affected:").unwrap_or(usize::MAX);
+    let would = text.find("Would delete").unwrap_or(usize::MAX);
+    let diff = text.find("---").unwrap_or(usize::MAX);
+    assert!(affected < would && would < diff, "{text}");
+}
+
+#[test]
+fn delete_refusals_keep_every_byte() {
+    let vault = syncable(HUB);
+    fs::create_dir_all(vault._temp.path().join("home-dir/Downloads"))
+        .expect("Downloads");
+    let bad = write_download_qfx(
+        &vault,
+        "truncated.qfx",
+        "<OFX><STMTRS><BANKTRANLIST><DTSTART>20261101</DTSTART><DTEND>20261112</DTEND><STMTTRN><TRNAMT>-1.00</TRNAMT><FITID>x</FITID>",
+    );
+    let head = stdout(&git_in(&vault.path, ["rev-parse", "HEAD"]));
+    let refused = run(
+        &vault,
+        &[
+            "import",
+            "-D",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            path_str(&bad),
+        ],
+    );
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "{}",
+        format_output(&refused)
+    );
+    let payload = json(&refused);
+    assert_eq!(payload["delete"]["files"][0]["status"], "kept", "{payload}");
+    assert_eq!(
+        payload["delete"]["files"][0]["reason"], "import_failed",
+        "{payload}"
+    );
+    assert!(bad.exists(), "malformed source is kept");
+    assert_eq!(stdout(&git_in(&vault.path, ["rev-parse", "HEAD"])), head);
+
+    let missing = run(
+        &vault,
+        &[
+            "import",
+            "-D",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            "~/Downloads/*.ofx",
+        ],
+    );
+    assert_eq!(
+        missing.status.code(),
+        Some(2),
+        "{}",
+        format_output(&missing)
+    );
+    assert_eq!(
+        json(&missing)["delete"]["files"].as_array().unwrap().len(),
+        0
+    );
+
+    let csv_path = write_download_qfx(
+        &vault,
+        "nocct.qfx",
+        &one_transaction_qfx("fit-x", "X"),
+    );
+    fs::write(&csv_path, "11/12/2026,-5.00,*,,\"NOACCT 1111\"\n").expect("csv");
+    let unresolved =
+        run(&vault, &["import", "-D", "-f", "json", path_str(&csv_path)]);
+    assert_eq!(
+        unresolved.status.code(),
+        Some(2),
+        "{}",
+        format_output(&unresolved)
+    );
+    assert!(csv_path.exists(), "unresolved account keeps the file");
+    assert_eq!(
+        json(&unresolved)["delete"]["files"][0]["reason"],
+        "import_failed"
+    );
+    let kept = run(&vault, &["import", "-D", "-a", "checking", path_str(&bad)]);
+    assert_eq!(kept.status.code(), Some(2), "{}", format_output(&kept));
+    let err = stderr(&kept);
+    assert!(err.contains("Kept ~/Downloads/truncated.qfx"), "{err}");
+}
+
+#[test]
+fn delete_gate_refuses_symlink_and_vault_files() {
+    let vault = syncable(HUB);
+    let real = write_download_qfx(
+        &vault,
+        "real.qfx",
+        &one_transaction_qfx("fit-g-1", "GATE ONE"),
+    );
+    #[cfg(unix)]
+    {
+        let link = vault._temp.path().join("home-dir/Downloads/link.qfx");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let head = stdout(&git_in(&vault.path, ["rev-parse", "HEAD"]));
+        let refused = run(
+            &vault,
+            &[
+                "import",
+                "-D",
+                "-a",
+                "checking",
+                "-f",
+                "json",
+                path_str(&link),
+            ],
+        );
+        assert_eq!(
+            refused.status.code(),
+            Some(2),
+            "{}",
+            format_output(&refused)
+        );
+        let payload = json(&refused);
+        assert_eq!(payload["error"]["code"], "bank_import_delete_unsupported");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("is a symlink"),
+            "{payload}"
+        );
+        assert!(
+            real.exists() && link.exists() || real.exists(),
+            "nothing is written or deleted"
+        );
+        assert_eq!(stdout(&git_in(&vault.path, ["rev-parse", "HEAD"])), head);
+        fs::remove_file(&link).ok();
+    }
+
+    let inside = vault.path.join("export.qfx");
+    fs::write(&inside, one_transaction_qfx("fit-g-2", "GATE TWO"))
+        .expect("vault file");
+    let refused = run(
+        &vault,
+        &[
+            "import",
+            "-D",
+            "-a",
+            "checking",
+            "-f",
+            "json",
+            path_str(&inside),
+        ],
+    );
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "{}",
+        format_output(&refused)
+    );
+    assert_eq!(
+        json(&refused)["error"]["code"],
+        "bank_import_delete_unsupported"
+    );
+    assert!(inside.exists(), "vault file is never deleted");
+}
+
+#[test]
+fn delete_json_is_null_without_the_flag() {
+    let vault = syncable(HUB);
+    let qfx = write_qfx(
+        &vault,
+        "plain.qfx",
+        &one_transaction_qfx("fit-null-1", "NULL STORE"),
+    );
+    let imported = run(
+        &vault,
+        &["import", "-a", "checking", "-f", "json", path_str(&qfx)],
+    );
+    assert_success(&imported);
+    assert!(json(&imported)["delete"].is_null());
+}
+
+#[test]
+fn delete_unlink_failure_reports_and_retry_finishes_cleanup() {
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let vault = syncable(HUB);
+    let qfx = write_download_qfx(
+        &vault,
+        "Checking1.qfx",
+        &one_transaction_qfx("fit-io-1", "IO STORE"),
+    );
+    let downloads = vault._temp.path().join("home-dir/Downloads");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&downloads, fs::Permissions::from_mode(0o555))
+            .expect("read-only");
+        let output = run(
+            &vault,
+            &[
+                "import",
+                "-D",
+                "-a",
+                "checking",
+                "-f",
+                "json",
+                path_str(&qfx),
+            ],
+        );
+        fs::set_permissions(&downloads, fs::Permissions::from_mode(0o755))
+            .expect("writable");
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        let payload = json(&output);
+        assert_eq!(payload["ok"], false, "{payload}");
+        assert_eq!(payload["error"]["code"], "bank_delete_failed", "{payload}");
+        assert!(!payload["commit"].is_null(), "{payload}");
+        assert_eq!(
+            payload["delete"]["files"][0]["status"], "kept",
+            "{payload}"
+        );
+        assert_eq!(payload["delete"]["files"][0]["reason"], "io", "{payload}");
+        assert!(qfx.exists(), "locked download is kept");
+
+        let retry = run(
+            &vault,
+            &[
+                "import",
+                "-D",
+                "-a",
+                "checking",
+                "-f",
+                "json",
+                path_str(&qfx),
+            ],
+        );
+        assert_success(&retry);
+        let payload = json(&retry);
+        assert_eq!(payload["ok"], true, "{payload}");
+        assert_eq!(
+            payload["delete"]["files"][0]["status"], "deleted",
+            "{payload}"
+        );
+        assert!(!qfx.exists(), "retry finishes the cleanup");
+    }
+
+    {
+        let vault = syncable(HUB);
+        let qfx = write_download_qfx(
+            &vault,
+            "Checking1.qfx",
+            &one_transaction_qfx("fit-io-2", "IO HUMAN"),
+        );
+        let downloads = vault._temp.path().join("home-dir/Downloads");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&downloads, fs::Permissions::from_mode(0o555))
+            .expect("read-only");
+        let output =
+            run(&vault, &["import", "-D", "-a", "checking", path_str(&qfx)]);
+        fs::set_permissions(&downloads, fs::Permissions::from_mode(0o755))
+            .expect("writable");
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        let text = stdout(&output);
+        assert!(text.contains("Committed bank: import"), "{text}");
+        assert!(text.contains("Next:"), "{text}");
+        let err = stderr(&output);
+        assert!(
+            err.contains("import succeeded, but could not delete 1 file"),
+            "{err}"
+        );
+        assert!(
+            err.contains("changed since bob read it")
+                || err.contains("Permission denied"),
+            "{err}"
+        );
+        assert!(qfx.exists(), "locked download is kept");
+    }
+}

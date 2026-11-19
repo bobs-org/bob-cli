@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use super::{
     config::{self, AccountStatus, BankConfig, Category, ConfigParse},
+    import_delete::{self, DeleteReport},
     import_plan::{
         self, BatchPlan, MonthEdit, PlanInput, PlanRefusal, ReadDep,
     },
@@ -35,6 +36,7 @@ use crate::native::{
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedSource {
     pub(crate) label: String,
+    pub(crate) path: PathBuf,
     pub(crate) statement: ParsedStatement,
 }
 
@@ -50,6 +52,8 @@ pub(crate) struct ImportReport {
     pub(crate) sync_post: Option<&'static str>,
     pub(crate) warnings: Vec<String>,
     pub(crate) failure: Option<TxnFailure>,
+    pub(crate) delete: Option<DeleteReport>,
+    pub(crate) delete_error: Option<TxnFailure>,
 }
 
 impl ImportReport {
@@ -69,12 +73,20 @@ impl ImportReport {
             sync_post: None,
             warnings: Vec::new(),
             failure: Some(failure),
+            delete: None,
+            delete_error: None,
         }
     }
 
     pub(crate) fn exit_code(&self) -> i32 {
         match &self.failure {
-            None => 0,
+            None => {
+                if self.delete.as_ref().is_some_and(DeleteReport::has_kept) {
+                    1
+                } else {
+                    0
+                }
+            }
             Some(failure) if failure.code.starts_with("bank_import_") => 2,
             Some(failure) if failure.code == "stale_note" => 2,
             Some(_) => 1,
@@ -130,14 +142,15 @@ impl ImportReport {
             .as_ref()
             .map(subscription_counts)
             .unwrap_or((0, 0, 0));
+        let failed = self.failure.is_some() || self.delete_error.is_some();
         let mut payload = json!({
             "schema_version": 1,
-            "ok": self.failure.is_none(),
+            "ok": !failed,
             "today": self.today.format("%Y-%m-%d").to_string(),
             "categories": categories.iter().map(Category::to_json).collect::<Vec<_>>(),
             "accounts": accounts.iter().map(AccountStatus::to_json).collect::<Vec<_>>(),
             "issues": {
-                "errors": if self.failure.is_some() { 1 } else { 0 },
+                "errors": if failed { 1 } else { 0 },
                 "warnings": findings.len(),
             },
             "dry_run": self.dry_run,
@@ -164,8 +177,10 @@ impl ImportReport {
                 "candidates": candidates,
                 "price_changes": price_changes,
             },
+            "delete": self.delete.as_ref().map_or(Value::Null, DeleteReport::to_json),
         });
-        if let Some(failure) = &self.failure {
+        let error = self.failure.as_ref().or(self.delete_error.as_ref());
+        if let Some(failure) = error {
             payload["error"] = json!({
                 "code": failure.code,
                 "message": failure.message,
@@ -318,7 +333,11 @@ pub(crate) fn prepare_sources(
             }
         })?;
         let statement = source::parse_export(&label, &bytes, order)?;
-        prepared.push(PreparedSource { label, statement });
+        prepared.push(PreparedSource {
+            label,
+            path: path.clone(),
+            statement,
+        });
     }
     Ok(prepared)
 }
@@ -761,6 +780,8 @@ pub(crate) fn dry_run_with_restore(
             sync_post: Some("skipped"),
             warnings: Vec::new(),
             failure: None,
+            delete: None,
+            delete_error: None,
         },
         Err(failure) => ImportReport::failed(true, today, failure),
     }
@@ -883,6 +904,8 @@ pub(crate) fn apply_with_restore(
             sync_post: Some(result.sync_post),
             warnings: result.post_sync_warning.into_iter().collect(),
             failure: None,
+            delete: None,
+            delete_error: None,
         },
         Err(failure) => ImportReport::failed(false, today, failure),
     }
@@ -897,9 +920,27 @@ struct ApplyContext {
 pub(crate) fn print_human(report: &ImportReport) {
     let styler = Styler::detect();
     if let Some(failure) = &report.failure {
-        eprintln!("{} bob bank import: {}", styler.red("✗"), failure.message);
+        if let Some(first) = failure.message.lines().next() {
+            eprintln!("{} bob bank import: {first}", styler.red("✗"));
+        }
+        for line in failure.message.lines().skip(1) {
+            eprintln!("  {line}");
+        }
         if let Some(hint) = &failure.hint {
             eprintln!("  {}", styler.dim(hint));
+        }
+        if let Some(delete) = &report.delete
+            && !delete.files.is_empty()
+        {
+            let paths: Vec<PathBuf> =
+                delete.files.iter().map(|file| file.path.clone()).collect();
+            eprintln!(
+                "  {}",
+                styler.dim(&format!(
+                    "Kept {} — nothing is deleted until the whole batch imports.",
+                    import_delete::describe_paths(&paths)
+                ))
+            );
         }
         return;
     }
@@ -915,7 +956,11 @@ pub(crate) fn print_human(report: &ImportReport) {
             (Some(start), Some(end)) => format!("{start}–{end}"),
             _ => "date range unavailable".to_owned(),
         };
-        println!("{} · {} · {range}", file.file, file.account);
+        println!(
+            "{} · {} · {range}",
+            host_paths::display_path(Path::new(&file.file)),
+            file.account
+        );
         println!(
             "  New {} · matched {} · seen {} · ambiguous {} · before start {}",
             file.counts.new,
@@ -1000,6 +1045,19 @@ pub(crate) fn print_human(report: &ImportReport) {
         println!("Affected: {}", paths.join(", "));
     }
     if report.dry_run {
+        if let Some(delete) = &report.delete
+            && !delete.files.is_empty()
+        {
+            let paths: Vec<PathBuf> =
+                delete.files.iter().map(|file| file.path.clone()).collect();
+            println!(
+                "{}",
+                styler.yellow(&format!(
+                    "Would delete {}",
+                    import_delete::describe_paths(&paths)
+                ))
+            );
+        }
         for edit in &plan.month_edits {
             println!("{}", text_diff_for(edit));
         }
@@ -1013,8 +1071,50 @@ pub(crate) fn print_human(report: &ImportReport) {
             report.sync_pre.unwrap_or("unknown"),
             report.sync_post.unwrap_or("unknown")
         );
+        if let Some(delete) = &report.delete
+            && !delete.files.is_empty()
+        {
+            let deleted: Vec<PathBuf> = delete
+                .files
+                .iter()
+                .filter(|file| {
+                    file.status == import_delete::DeleteStatus::Deleted
+                })
+                .map(|file| file.path.clone())
+                .collect();
+            if !deleted.is_empty() {
+                println!(
+                    "{}",
+                    styler.green(&format!(
+                        "Deleted {}",
+                        import_delete::describe_paths(&deleted)
+                    ))
+                );
+            }
+        }
     } else {
         println!("No changes; no import commit.");
+        if let Some(delete) = &report.delete
+            && !delete.files.is_empty()
+        {
+            let deleted: Vec<PathBuf> = delete
+                .files
+                .iter()
+                .filter(|file| {
+                    file.status == import_delete::DeleteStatus::Deleted
+                })
+                .map(|file| file.path.clone())
+                .collect();
+            if !deleted.is_empty() {
+                println!(
+                    "{}",
+                    styler.green(&format!(
+                        "Deleted {}",
+                        import_delete::describe_paths(&deleted)
+                    ))
+                );
+            }
+        }
     }
     for warning in &report.warnings {
         println!("warning: {warning}");
@@ -1026,6 +1126,18 @@ pub(crate) fn print_human(report: &ImportReport) {
         println!("{}", walk_next_line(plan));
     } else {
         println!("Next: check the import summary with `bob bank report`.");
+    }
+    if let Some(error) = &report.delete_error {
+        let mut lines = error.message.lines();
+        if let Some(first) = lines.next() {
+            eprintln!("{} bob bank import: {first}", styler.red("✗"));
+        }
+        for line in lines {
+            eprintln!("  {line}");
+        }
+        if let Some(hint) = &error.hint {
+            eprintln!("  {}", styler.dim(hint));
+        }
     }
 }
 
@@ -1354,6 +1466,7 @@ mod tests {
     fn prepared(label: &str, order: usize, contents: &str) -> PreparedSource {
         PreparedSource {
             label: label.to_owned(),
+            path: PathBuf::from(label),
             statement: source::parse_export(label, contents.as_bytes(), order)
                 .expect("synthetic CSV parses"),
         }
@@ -1373,6 +1486,7 @@ mod tests {
         );
         PreparedSource {
             label: label.to_owned(),
+            path: PathBuf::from(label),
             statement: source::parse_export(label, contents.as_bytes(), order)
                 .expect("synthetic OFX parses"),
         }

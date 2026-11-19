@@ -17,6 +17,7 @@ pub(crate) mod grammar;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod identity;
 #[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod import_delete;
 pub(crate) mod import_plan;
 pub(crate) mod import_run;
 pub(crate) mod journal;

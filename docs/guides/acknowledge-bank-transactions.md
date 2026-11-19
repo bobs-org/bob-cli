@@ -29,20 +29,26 @@ default dates (at least 14 days back, so the overlap heals a skipped
 week), and run one command on the Mac:
 
 ```bash
-bob bank import ~/Downloads/*.qfx && rm ~/Downloads/*.qfx
+bob bank import -D ~/Downloads/*.qfx
 ```
 
-The `rm` removes the download because the QFX holds the full account
-number, and `&&` never deletes after a refused import.
+`-D` deletes each download after the whole batch is recorded. The QFX
+holds the full account number, so deletion is the point: no PII stays on
+disk, and a refused or failed import keeps every file. It also works
+from Command Mode: Enter previews the diffs and the would-delete list,
+and Ctrl+Enter imports and deletes.
 
 ```text { .no-copy title="Output" }
-🏦 Import · WF Checking · Nov 1 – Nov 14 · Checking1.qfx
-  9 new (waiting) · 23 matched your rows · 41 already seen · 0 ambiguous · 4 before start
-  out $1,204.33 · in +$2,500.00
-  ledger balance $12,345.67 as of Nov 14 · ✓ balanced
-  → bank/2026-11.md  +9 rows, 23 IDs
-Committed bank: import 9 rows (checking).
-Next: file the 9 waiting rows in bank/2026-11.md — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them).
+~/Downloads/Checking1.qfx · checking · 2026-11-01–2026-11-14
+  New 4 · matched 0 · seen 0 · ambiguous 0 · before start 0
+  Out $279.24 · In +$2,500.00
+Accounts:
+  WF Checking · unverified
+Affected: .bob/bank/mac.jsonl, bank/2026-11.md
+Committed bank: import 4 rows (checking) (93af45072163384ce068c0f4d998408c9f7ff5d0)
+Sync: pre ok, post ok
+Deleted ~/Downloads/Checking1.qfx
+Next: file the 4 waiting rows in bank/2026-11.md — ]b walks them oldest first, Ctrl+Enter files each (or bob bank to list them).
 ```
 
 Import writes new rows unchecked, matches typed rows by account, exact

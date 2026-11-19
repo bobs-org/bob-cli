@@ -426,7 +426,7 @@ Examples:
   bob bank config update -d -i envelope.json  Preview a setup edit
   bob bank report                 Report this month's totals
   bob bank ensure -D today        Ensure today's heading
-  bob bank import ~/Downloads/*.qfx  Import posted transactions
+  bob bank import -D ~/Downloads/*.qfx  Import, then delete the downloads
   bob bank ack -D 2026-11-10      Acknowledge one day
   bob bank check -f json         Findings as JSON
   bob bank subscriptions         Report subscription records

@@ -36,7 +36,7 @@ Examples:
   bob bank config update -d -i envelope.json  Preview a setup edit
   bob bank report                 Report this month's totals
   bob bank ensure -D today        Ensure today's heading
-  bob bank import ~/Downloads/*.qfx  Import posted transactions
+  bob bank import -D ~/Downloads/*.qfx  Import, then delete the downloads
   bob bank ack -D 2026-11-10      Acknowledge one day
   bob bank check -f json         Findings as JSON
   bob bank subscriptions         Report subscription records
@@ -194,7 +194,7 @@ See docs/bank.md for the bank contract.
 Import posted bank transactions
 
 ```text title="bob bank import --help"
-Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. FILE accepts `~` and glob patterns (`*`, `?`, `[...]`), which bob expands itself, so callers without a shell, such as Command Mode, can pass `~/Downloads/*.qfx`; an existing file always wins over pattern interpretation, and a pattern that matches nothing is refused. Refused input exits 2; runtime failures exit 1.
+Plans the whole batch before writing. Existing rows are matched only by account, exact signed cents, and the documented posted-date window; new rows and the private bank journal commit together. `-F` deliberately restores journaled transactions whose rows were deleted. An ignored journal destination is refused before rows are installed. FILE accepts `~` and glob patterns (`*`, `?`, `[...]`), which bob expands itself, so callers without a shell, such as Command Mode, can pass `~/Downloads/*.qfx`; an existing file always wins over pattern interpretation, and a pattern that matches nothing is refused. `-D` permanently deletes every FILE only after the whole batch is recorded (committed, or already seen) and only while the file still matches what bob read; a refused or failed import keeps every file, and a file bob could not delete is reported and exits 1. Refused input exits 2; runtime failures exit 1.
 
 Usage: bob bank import [OPTIONS] [FILE]...
 
@@ -208,6 +208,9 @@ Options:
 
   -b, --bob-dir <DIR>
           Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -D, --delete
+          Delete each FILE after the whole batch is recorded
 
   -d, --dry-run
           Preview diffs without writing
@@ -226,6 +229,7 @@ Options:
 
 Examples:
   bob bank import ~/Downloads/*.qfx
+  bob bank import -D ~/Downloads/*.qfx
   bob bank import -d ~/Downloads/checking.qfx
   bob bank import -a checking -f json ~/Downloads/export.csv
   bob bank import -F
