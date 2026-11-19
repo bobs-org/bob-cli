@@ -17,6 +17,7 @@ pub(crate) mod instructions;
 pub(crate) mod labels;
 pub(crate) mod list;
 pub(crate) mod migrate;
+pub(crate) mod migrate_intentions;
 pub(crate) mod note;
 pub(crate) mod problems;
 pub(crate) mod report;

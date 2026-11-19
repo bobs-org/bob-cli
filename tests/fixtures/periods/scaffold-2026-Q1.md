@@ -20,8 +20,6 @@ tags:
 
 ```
 
-## Outcomes
-
 ## Weeks
 
 ```bob-period-parts
@@ -29,8 +27,6 @@ tags:
 ```
 
 ## Review
-
-## Reflection
 
 > [!agent]- Agent instructions · quarterly v3
 > **You are drafting the summary and `## Review` of 2026-Q1 (ISO weeks W1–W13 · Dec 29,

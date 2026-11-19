@@ -94,17 +94,17 @@ single trailing newline.
 Week (`2026/2026-W45.md`): frontmatter (`parent`, `type: [[day]]`,
 `id`, `date`, `end`, one alias, tag `weekly`), `#` title, the
 prev/up/next nav line, the seven day links, the `bob-stats-strip`
-fence, `## Intentions`, `## Days` with the `bob-period-parts` fence,
-`## Review`, `## Reflection`, and the weekly callout.
+fence, `## Days` with the `bob-period-parts` fence,
+`## Review`, and the weekly callout.
 
 Quarter: frontmatter with tag `quarterly`, the title, nav, the week
-child links, the strip fence, `## Outcomes`, `## Weeks` with the parts
-fence, `## Review`, `## Reflection`, and the quarterly callout.
+child links, the strip fence, `## Weeks` with the parts
+fence, `## Review`, and the quarterly callout.
 
 Year: frontmatter with tag `yearly` (the id is quoted: `id: "2026"`),
 the title with its week count, nav, the quarter child links, the strip
-fence, `## Theme`, `## Outcomes`, `## Quarters` with the parts fence,
-`## Review`, `## Reflection`, and the yearly callout.
+fence, `## Quarters` with the parts fence,
+`## Review`, and the yearly callout.
 
 All time: frontmatter (`parent: [[org]]`, `type: [[day]]`,
 `id: all_time`, alias `All time`, tag `all-time`), `# All time`,
@@ -465,7 +465,9 @@ first day of the current ISO year) and runs through the current week +
    notes (`2024.md`, `2025.md`) get only their `parent` rewritten to
    `"[[all_time]]"`.
 3. Creates every missing quarter and week note in the range. Empty
-   notes are filled. Notes with content are never touched (`existing`).
+   notes are filled. Notes with content keep their body unless the
+   intentions step rewrites them (below); otherwise they are
+   `existing`.
 4. Rewrites every canonical daily note dated on or after the range
    start (future dailies included): `parent:` becomes
    `"[[GGGG/GGGG-Www]]"` with the original quote style; a nav line that
@@ -473,7 +475,24 @@ first day of the current ISO year) and runs through the current week +
    `^\[\[(\d{4}/\d{8})\|prev\]\]\s+\|\s+\[\[(\d{4}/\d{8})\|next\]\]\s*$`
    becomes `[[prev|prev]] · [[GGGG/GGGG-Www|Www]] · [[next|next]]`.
    Anything else is `nav_skipped`.
-5. Never creates, edits, or deletes monthly notes.
+5. Moves the old body shapes into frontmatter (idempotent): a daily
+   `**Headline:**` paragraph becomes `intentions`, a daily
+   `**Reflection:**` preamble paragraph becomes `reflection`, an empty
+   `**Headline:**` slot is removed, week `## Intentions` and quarter
+   `## Outcomes` bullets become `intentions`, year `## Theme` (first)
+   plus `## Outcomes` become `intentions`, `## Reflection` becomes
+   `reflection`, and a Review opening `**Headline:**` (or
+   `**Summary:**`) paragraph becomes `summary`. Placeholders (`NOT
+   SET`, `TBD`, `TODO`, lone `-`), nested bullets, and non-singleton
+   prose are reported and left in place; conflicts with existing
+   frontmatter are reported and both copies are left. Emptied
+   `## Intentions`, `## Outcomes`, `## Theme`, and `## Reflection`
+   headings are removed; `## Review` and callouts stay. A `drafted`
+   Review keeps its state with a copied `summary_drafted` and a
+   restamped `review_digest`; `edited` and `reflected` notes keep no new
+   stamps.
+6. Never creates, edits, or deletes monthly notes. Notes outside
+   `--since` are untouched.
 
 Apply (`-a`) snapshots daily `worked`, `done`, and `created` (with
 `root_parent` and `theme` parts) over the adopted range, writes, then
@@ -482,8 +501,9 @@ recomputes. Any difference restores every file and fails with
 requires zero `dangling_daily_parent` problems in the range. The
 commit subject is `periods: adopt the period-note tree for ISO
 <years>`. Dry run prints counts per action, one sample daily diff,
-`nav_skipped` / `existing` / adopted paths, and the subject `-a` will
-commit.
+`nav_skipped` / `existing` / adopted paths, the additive
+`intentions: {migrated, placeholders, conflicts, skipped}` lists, and
+the subject `-a` will commit.
 
 ## Problems
 

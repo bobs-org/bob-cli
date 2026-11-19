@@ -295,7 +295,9 @@ pub(crate) fn parse_instructions_version(contents: &str) -> Option<u32> {
 /// Required headings and fences for `id` are present.
 ///
 /// The migrate phase reports this as `unscaffolded`; core keeps the
-/// check beside the parser it guards.
+/// check beside the parser it guards. After the intentions migration
+/// the old Intentions/Outcomes/Theme/Reflection sections are gone, so
+/// both the old and the new anatomy pass.
 #[allow(dead_code)]
 pub(crate) fn structure_ok(id: PeriodId, contents: &str) -> bool {
     let sections = parse_sections(contents);
@@ -303,27 +305,20 @@ pub(crate) fn structure_ok(id: PeriodId, contents: &str) -> bool {
     let has_parts = contents.contains("```bob-period-parts");
     match id {
         PeriodId::Week { .. } => {
-            sections.contains_key("Intentions")
-                && sections.contains_key("Days")
+            sections.contains_key("Days")
                 && sections.contains_key("Review")
-                && sections.contains_key("Reflection")
                 && has_strip
                 && has_parts
         }
         PeriodId::Quarter { .. } => {
-            sections.contains_key("Outcomes")
-                && sections.contains_key("Weeks")
+            sections.contains_key("Weeks")
                 && sections.contains_key("Review")
-                && sections.contains_key("Reflection")
                 && has_strip
                 && has_parts
         }
         PeriodId::Year(_) => {
-            sections.contains_key("Theme")
-                && sections.contains_key("Outcomes")
-                && sections.contains_key("Quarters")
+            sections.contains_key("Quarters")
                 && sections.contains_key("Review")
-                && sections.contains_key("Reflection")
                 && has_strip
                 && has_parts
         }

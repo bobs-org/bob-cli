@@ -161,10 +161,8 @@ fn render_week(id: PeriodId) -> String {
         week_nav(id),
         week_day_links(id),
         "```bob-stats-strip\n\n```".to_string(),
-        "## Intentions".to_string(),
         format!("## Days\n\n```bob-period-parts\n\n```"),
         "## Review".to_string(),
-        "## Reflection".to_string(),
         instructions::render(id),
     ];
     format!("{}\n", parts.join("\n\n"))
@@ -178,10 +176,8 @@ fn render_quarter(id: PeriodId) -> String {
         quarter_nav(id),
         quarter_child_links(id),
         "```bob-stats-strip\n\n```".to_string(),
-        "## Outcomes".to_string(),
         format!("## Weeks\n\n```bob-period-parts\n\n```"),
         "## Review".to_string(),
-        "## Reflection".to_string(),
         instructions::render(id),
     ];
     format!("{}\n", parts.join("\n\n"))
@@ -195,11 +191,8 @@ fn render_year(id: PeriodId) -> String {
         year_nav(id),
         year_child_links(id),
         "```bob-stats-strip\n\n```".to_string(),
-        "## Theme".to_string(),
-        "## Outcomes".to_string(),
         format!("## Quarters\n\n```bob-period-parts\n\n```"),
         "## Review".to_string(),
-        "## Reflection".to_string(),
         instructions::render(id),
     ];
     format!("{}\n", parts.join("\n\n"))
@@ -241,12 +234,12 @@ mod tests {
         assert!(!first.ends_with("\n\n"));
         assert!(first.contains("parent: \"[[2026/2026-Q4]]\""));
         assert!(first.contains("# 2026-W45 · Nov 2 – 8"));
-        assert!(first.contains("## Intentions"));
+        assert!(!first.contains("## Intentions"));
         assert!(first.contains("## Days"));
         assert!(first.contains("```bob-stats-strip"));
         assert!(first.contains("```bob-period-parts"));
         assert!(first.contains("## Review"));
-        assert!(first.contains("## Reflection"));
+        assert!(!first.contains("## Reflection"));
         assert!(first.contains("Agent instructions · weekly v3"));
     }
 
@@ -259,7 +252,7 @@ mod tests {
         let rendered = render(quarter);
         assert!(rendered
             .contains("# 2026-Q4 · W40–W53 · Sep 28, 2026 – Jan 3, 2027"));
-        assert!(rendered.contains("## Outcomes"));
+        assert!(!rendered.contains("## Outcomes"));
         assert!(rendered.contains("## Weeks"));
 
         let year = PeriodId::Year(2026);
@@ -267,7 +260,8 @@ mod tests {
         assert!(
             rendered.contains("# 2026 · Dec 29, 2025 – Jan 3, 2027 · 53 weeks")
         );
-        assert!(rendered.contains("## Theme"));
+        assert!(!rendered.contains("## Theme"));
+        assert!(!rendered.contains("## Outcomes"));
         assert!(rendered.contains("## Quarters"));
 
         let rendered = render(PeriodId::AllTime);

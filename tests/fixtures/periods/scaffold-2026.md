@@ -20,10 +20,6 @@ tags:
 
 ```
 
-## Theme
-
-## Outcomes
-
 ## Quarters
 
 ```bob-period-parts
@@ -31,8 +27,6 @@ tags:
 ```
 
 ## Review
-
-## Reflection
 
 > [!agent]- Agent instructions · yearly v3
 > **You are drafting the summary and `## Review` of 2026 (ISO year · Dec 29, 2025 – Jan

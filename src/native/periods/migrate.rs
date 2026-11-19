@@ -2,8 +2,10 @@
 //!
 //! Dry run by default. `-a/--apply` runs one `vault_rewrite` transaction
 //! that creates missing period notes, adopts in-range year notes,
-//! re-parents out-of-range year notes and canonical dailies, and adds
-//! the week nav link. The contract lives in `docs/periods.md`.
+//! re-parents out-of-range year notes and canonical dailies, adds
+//! the week nav link, and moves the old Headline/Intentions/Outcomes/
+//! Theme/Reflection/Review-opener shapes into frontmatter. The contract
+//! lives in `docs/periods.md`.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsString;
@@ -25,9 +27,11 @@ use super::super::{
     vault_rewrite::{self, FileRewrite, ReadyPlan, TxnFailure},
 };
 use super::calendar::PeriodId;
+use super::migrate_intentions;
 use super::note;
 use super::problems::{collect_problems, scan_canonical_dailies, ProblemKind};
 use super::scaffold;
+use crate::native::intentions::NoteSubject;
 
 const COMMAND_NAME: &str = "bob periods migrate";
 const SCHEMA_VERSION: u32 = 1;
@@ -135,6 +139,10 @@ struct MigratePlan {
     rewritten: Vec<String>,
     nav_skipped: Vec<String>,
     existing: Vec<String>,
+    intentions_migrated: Vec<String>,
+    intentions_placeholders: Vec<String>,
+    intentions_conflicts: Vec<String>,
+    intentions_skipped: Vec<String>,
     iso_years: Vec<i32>,
     sample_diff: Option<String>,
     range_start: Option<NaiveDate>,
@@ -257,23 +265,24 @@ fn build_plan(
         ..MigratePlan::default()
     };
 
-    plan_create_or_fill(vault, PeriodId::AllTime, &mut plan)?;
+    plan_create_or_fill(vault, PeriodId::AllTime, today, &mut plan)?;
 
-    plan_year_notes(vault, &iso_years, &mut plan)?;
+    plan_year_notes(vault, &iso_years, today, &mut plan)?;
 
     let weeks = weeks_covering(range_start, range_end);
     let quarters = unique_parents(&weeks);
     for id in quarters.into_iter().chain(weeks) {
-        plan_create_or_fill(vault, id, &mut plan)?;
+        plan_create_or_fill(vault, id, today, &mut plan)?;
     }
 
-    plan_dailies(vault, range_start, &mut plan)?;
+    plan_dailies(vault, range_start, today, &mut plan)?;
     Ok(plan)
 }
 
 fn plan_create_or_fill(
     vault: &Path,
     id: PeriodId,
+    today: NaiveDate,
     plan: &mut MigratePlan,
 ) -> Result<(), MigrateError> {
     let relative = path_string(id.path());
@@ -308,24 +317,63 @@ fn plan_create_or_fill(
                     );
                 }
                 plan.filled.push(relative);
-            } else {
+            } else if matches!(id, PeriodId::AllTime) {
                 plan.existing.push(relative);
+            } else {
+                let subject = NoteSubject::Period(id);
+                let outcome = migrate_intentions::migrate_note_contents(
+                    &contents, subject, today,
+                );
+                record_intentions(plan, &relative, &outcome);
+                if let Some(after) = outcome.after {
+                    push_file(
+                        plan,
+                        FileRewrite {
+                            path: relative.clone(),
+                            before_contents: Some(contents),
+                            after_contents: after,
+                        },
+                    );
+                    plan.intentions_migrated.push(relative);
+                } else {
+                    plan.existing.push(relative);
+                }
             }
             Ok(())
         }
     }
 }
 
+fn record_intentions(
+    plan: &mut MigratePlan,
+    relative: &str,
+    outcome: &migrate_intentions::IntentionsOutcome,
+) {
+    for detail in &outcome.placeholders {
+        plan.intentions_placeholders
+            .push(format!("{relative}: {detail}"));
+    }
+    for detail in &outcome.conflicts {
+        plan.intentions_conflicts
+            .push(format!("{relative}: {detail}"));
+    }
+    for detail in &outcome.skipped {
+        plan.intentions_skipped
+            .push(format!("{relative}: {detail}"));
+    }
+}
+
 fn plan_year_notes(
     vault: &Path,
     iso_years: &[i32],
+    today: NaiveDate,
     plan: &mut MigratePlan,
 ) -> Result<(), MigrateError> {
     let in_range: BTreeSet<i32> = iso_years.iter().copied().collect();
     let mut seen_in_range: BTreeSet<i32> = BTreeSet::new();
     let Ok(entries) = fs::read_dir(vault) else {
         for year in iso_years {
-            plan_create_or_fill(vault, PeriodId::Year(*year), plan)?;
+            plan_create_or_fill(vault, PeriodId::Year(*year), today, plan)?;
         }
         return Ok(());
     };
@@ -353,14 +401,39 @@ fn plan_year_notes(
         if in_range.contains(&year) {
             seen_in_range.insert(year);
             if contents.trim().is_empty() {
-                plan_create_or_fill(vault, id, plan)?;
+                plan_create_or_fill(vault, id, today, plan)?;
                 continue;
             }
             if already_adopted(&contents, id) {
-                plan.existing.push(relative);
+                let outcome = migrate_intentions::migrate_note_contents(
+                    &contents,
+                    NoteSubject::Period(id),
+                    today,
+                );
+                record_intentions(plan, &relative, &outcome);
+                if let Some(after) = outcome.after {
+                    push_file(
+                        plan,
+                        FileRewrite {
+                            path: relative.clone(),
+                            before_contents: Some(contents),
+                            after_contents: after,
+                        },
+                    );
+                    plan.intentions_migrated.push(relative);
+                } else {
+                    plan.existing.push(relative);
+                }
                 continue;
             }
-            let after = adopt_year(id, &contents);
+            let adopted = adopt_year(id, &contents);
+            let outcome = migrate_intentions::migrate_note_contents(
+                &adopted,
+                NoteSubject::Period(id),
+                today,
+            );
+            record_intentions(plan, &relative, &outcome);
+            let after = outcome.after.unwrap_or(adopted);
             if after != contents {
                 push_file(
                     plan,
@@ -370,6 +443,10 @@ fn plan_year_notes(
                         after_contents: after,
                     },
                 );
+            }
+            if outcome.migrated && !plan.intentions_migrated.contains(&relative)
+            {
+                plan.intentions_migrated.push(relative.clone());
             }
             plan.adopted.push(relative);
         } else {
@@ -393,7 +470,7 @@ fn plan_year_notes(
     }
     for year in iso_years {
         if !seen_in_range.contains(year) {
-            plan_create_or_fill(vault, PeriodId::Year(*year), plan)?;
+            plan_create_or_fill(vault, PeriodId::Year(*year), today, plan)?;
         }
     }
     Ok(())
@@ -402,6 +479,7 @@ fn plan_year_notes(
 fn plan_dailies(
     vault: &Path,
     range_start: NaiveDate,
+    today: NaiveDate,
     plan: &mut MigratePlan,
 ) -> Result<(), MigrateError> {
     for (date, relative, contents) in scan_canonical_dailies(vault) {
@@ -409,13 +487,23 @@ fn plan_dailies(
             continue;
         }
         let week = PeriodId::week_for_date(date);
-        let (after, nav_rewritten, nav_skipped) =
+        let (after_nav, nav_rewritten, nav_skipped) =
             rewrite_daily(&contents, week);
+        let outcome = migrate_intentions::migrate_note_contents(
+            &after_nav,
+            NoteSubject::Day(date),
+            today,
+        );
+        record_intentions(plan, &relative, &outcome);
+        let after = outcome.after.unwrap_or(after_nav);
         if after == contents {
             continue;
         }
         if nav_skipped {
             plan.nav_skipped.push(relative.clone());
+        }
+        if outcome.migrated && !plan.intentions_migrated.contains(&relative) {
+            plan.intentions_migrated.push(relative.clone());
         }
         if plan.sample_diff.is_none() {
             plan.sample_diff = Some(sample_diff(&relative, &contents, &after));
@@ -903,7 +991,12 @@ fn print_success(report: &MigrateReport, format: OutputFormat) {
 fn print_human(report: &MigrateReport) {
     let plan = &report.plan;
     let verb = if report.dry_run { "would " } else { "" };
-    if plan.files.is_empty() && plan.nav_skipped.is_empty() {
+    if plan.files.is_empty()
+        && plan.nav_skipped.is_empty()
+        && plan.intentions_placeholders.is_empty()
+        && plan.intentions_conflicts.is_empty()
+        && plan.intentions_skipped.is_empty()
+    {
         println!("nothing to do");
         return;
     }
@@ -912,11 +1005,30 @@ fn print_human(report: &MigrateReport) {
     print_count(verb, "adopt", &plan.adopted);
     print_count(verb, "reparent", &plan.reparented);
     print_count(verb, "rewrite", &plan.rewritten);
+    print_count(verb, "intentions", &plan.intentions_migrated);
     if !plan.existing.is_empty() {
         println!("{}existing {}", verb, join_sample(&plan.existing));
     }
     if !plan.nav_skipped.is_empty() {
         println!("nav_skipped {}", join_sample(&plan.nav_skipped));
+    }
+    if !plan.intentions_placeholders.is_empty() {
+        println!(
+            "intentions_placeholders {}",
+            join_sample(&plan.intentions_placeholders)
+        );
+    }
+    if !plan.intentions_conflicts.is_empty() {
+        println!(
+            "intentions_conflicts {}",
+            join_sample(&plan.intentions_conflicts)
+        );
+    }
+    if !plan.intentions_skipped.is_empty() {
+        println!(
+            "intentions_skipped {}",
+            join_sample(&plan.intentions_skipped)
+        );
     }
     if let Some(diff) = &plan.sample_diff {
         println!("sample daily diff:\n{diff}");
@@ -959,6 +1071,12 @@ fn print_json(report: &MigrateReport) {
         "rewritten": plan.rewritten,
         "nav_skipped": plan.nav_skipped,
         "existing": plan.existing,
+        "intentions": {
+            "migrated": plan.intentions_migrated,
+            "placeholders": plan.intentions_placeholders,
+            "conflicts": plan.intentions_conflicts,
+            "skipped": plan.intentions_skipped,
+        },
         "commit_subject": report.subject,
         "sha": report.sha,
         "sample_diff": plan.sample_diff,

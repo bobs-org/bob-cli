@@ -620,6 +620,196 @@ fn migrate_apply_commits_the_tree_and_reruns_cleanly() {
     assert_eq!(log_after, subjects);
 }
 
+#[test]
+fn migrate_intentions_moves_old_shapes_and_reports() {
+    let temp = TempDir::new("bob-cli-periods-migrate-intentions");
+    let vault = temp.path().join("vault");
+    write_dataview_tasks_settings(&vault);
+    fs::create_dir_all(vault.join("2026")).unwrap();
+    fs::create_dir_all(vault.join("2025")).unwrap();
+    // Adopted year with Theme + Outcomes (filled).
+    fs::write(
+        vault.join("2026.md"),
+        "---\nparent: \"[[all_time]]\"\ntype: \"[[day]]\"\nid: \"2026\"\ndate: 2025-12-29\nend: 2027-01-03\naliases:\n  - \"2026\"\ntags:\n  - yearly\n---\n\n# 2026\n\n[[2025|‹ 2025]] · [[all_time|↑ All time]] · [[2027|2027 ›]]\n\n[[2026/2026-Q1|Q1]] · [[2026/2026-Q2|Q2]] · [[2026/2026-Q3|Q3]] · [[2026/2026-Q4|Q4]]\n\n```bob-stats-strip\n\n```\n\n## Theme\n\nMake room for deep work\n\n## Outcomes\n\n- Ship the album\n- Keep the notes\n\n## Quarters\n\n```bob-period-parts\n\n```\n\n## Review\n\nOld review.\n",
+    )
+    .unwrap();
+    // Week with three intentions (block links) + reflection + drafted Review.
+    // Drafted: Review opens with Headline and carries a matching digest.
+    let review_body = "**Headline:** A calm week\n\nDid the work.\n";
+    // Compute the old whole-Review digest in-test (same recipe as bob).
+    let digest = {
+        let normalized = review_body.replace("\r\n", "\n").replace('\r', "\n");
+        let lines: Vec<String> = normalized
+            .lines()
+            .map(|l| l.trim_end().to_owned())
+            .collect();
+        let canonical = lines.join("\n").trim().to_owned();
+        let mut hasher = sha2::Sha256::new();
+        use sha2::Digest as _;
+        hasher.update(canonical.as_bytes());
+        let hex = hex::encode(hasher.finalize());
+        format!("sha256:{}", &hex[..16])
+    };
+    fs::write(
+        vault.join("2026/2026-W45.md"),
+        format!(
+            "---\nparent: \"[[2026/2026-Q4]]\"\ntype: \"[[day]]\"\nid: 2026-W45\ndate: 2026-11-02\nend: 2026-11-08\naliases:\n  - \"2026-W45\"\ntags:\n  - weekly\nreview_digest: {digest}\nreview_drafted: 2026-11-03\n---\n\n# 2026-W45\n\n[[2026/2026-W44|‹ W44]] · [[2026/2026-Q4|↑ 2026-Q4]] · [[2026/2026-W46|W46 ›]]\n\n[[2026/20261102|Mon Nov 2]]\n\n```bob-stats-strip\n\n```\n\n## Intentions\n\n- Ship [[work#^a|the alias]]\n- Keep [[bob#^b]]\n- Third [[areas/work]]\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n\n{review_body}\n\n## Reflection\n\nFirst [[work#^a]]\n\nSecond paragraph.\n"
+        ),
+    )
+    .unwrap();
+    // Placeholder week: NOT SET stays, reflection with block link migrates.
+    fs::write(
+        vault.join("2026/2026-W46.md"),
+        "---\nparent: \"[[2026/2026-Q4]]\"\ntype: \"[[day]]\"\nid: 2026-W46\n---\n\n# 2026-W46\n\n## Intentions\n\n- NOT SET\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n\nOld.\n\n## Reflection\n\nThinking about [[work#^r]]\n",
+    )
+    .unwrap();
+    // Nested week: left in place.
+    fs::write(
+        vault.join("2026/2026-W44.md"),
+        "---\nparent: \"[[2026/2026-Q4]]\"\ntype: \"[[day]]\"\nid: 2026-W44\n---\n\n# 2026-W44\n\n## Intentions\n\n- Ship it\n  - nested detail\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n",
+    )
+    .unwrap();
+    // Quarter with outcomes.
+    fs::write(
+        vault.join("2026/2026-Q4.md"),
+        "---\nparent: \"[[2026]]\"\ntype: \"[[day]]\"\nid: 2026-Q4\n---\n\n# 2026-Q4\n\n## Outcomes\n\n- First [[work#^a]]\n- Second thing\n- Third thing\n\n## Weeks\n\n```bob-period-parts\n\n```\n\n## Review\n",
+    )
+    .unwrap();
+    // Daily with Headline + Reflection.
+    fs::write(
+        vault.join("2026/20261102.md"),
+        "---\nparent: '[[2026/202611]]'\n---\n\n[[2026/20261101|prev]]  | [[2026/20261103|next]]\n\n**Headline:** Ship the thing [[bob#^x]]\n\n**Reflection:** Tired but [[work#^y]] helped.\n\n## Pomodoros\n",
+    )
+    .unwrap();
+    // Future daily with empty slot (in range, since range ends Nov 15).
+    fs::write(
+        vault.join("2026/20261104.md"),
+        "---\nparent: '[[2026/202611]]'\n---\n\n**Headline:**\n\n## Pomodoros\n",
+    )
+    .unwrap();
+    // Out-of-range daily: before range_start (2025-12-29), must stay untouched.
+    fs::create_dir_all(vault.join("2025")).unwrap();
+    fs::write(
+        vault.join("2025/20251228.md"),
+        "---\nparent: '[[2025/202512]]'\n---\n\n**Headline:** Out of range stays\n",
+    )
+    .unwrap();
+    // Monthly note: never touched.
+    fs::write(
+        vault.join("2026/202611.md"),
+        "---\nparent: [[2026]]\n---\n\n# November\n",
+    )
+    .unwrap();
+    init_git_vault(&vault);
+    let monthly_before =
+        fs::read_to_string(vault.join("2026/202611.md")).unwrap();
+    let ooo_before =
+        fs::read_to_string(vault.join("2025/20251228.md")).unwrap();
+
+    let output = migrate(&vault, &["-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("migrate JSON");
+    let intentions = &body["intentions"];
+    let migrated = intentions["migrated"].as_array().expect("migrated");
+    assert!(
+        migrated.iter().any(|p| p == "2026/20261102.md"),
+        "daily Headline migrates: {body}"
+    );
+    assert!(
+        migrated.iter().any(|p| p == "2026/2026-W45.md"),
+        "week intentions migrate: {body}"
+    );
+    assert!(
+        migrated.iter().any(|p| p == "2026/2026-Q4.md"),
+        "quarter outcomes migrate: {body}"
+    );
+    assert!(
+        migrated.iter().any(|p| p == "2026.md"),
+        "year theme+outcomes migrate: {body}"
+    );
+    let placeholders =
+        intentions["placeholders"].as_array().expect("placeholders");
+    assert!(
+        placeholders
+            .iter()
+            .any(|p| p.as_str().unwrap().contains("2026/2026-W46.md")),
+        "W46 placeholder reported: {body}"
+    );
+    let skipped = intentions["skipped"].as_array().expect("skipped");
+    assert!(
+        skipped
+            .iter()
+            .any(|p| p.as_str().unwrap().contains("2026/2026-W44.md")),
+        "nested week reported: {body}"
+    );
+
+    let apply = migrate(&vault, &["-a", "-o", "-f", "json"]);
+    assert_success(&apply);
+    let applied: serde_json::Value =
+        serde_json::from_str(&stdout(&apply)).expect("apply JSON");
+    assert!(applied["sha"].as_str().is_some_and(|s| !s.is_empty()));
+
+    let daily = fs::read_to_string(vault.join("2026/20261102.md")).unwrap();
+    assert!(daily.contains("intentions:"), "{daily}");
+    assert!(!daily.contains("**Headline:**"), "{daily}");
+    assert!(!daily.contains("**Reflection:**"), "{daily}");
+
+    let future = fs::read_to_string(vault.join("2026/20261104.md")).unwrap();
+    assert!(!future.contains("**Headline:**"), "{future}");
+
+    let week = fs::read_to_string(vault.join("2026/2026-W45.md")).unwrap();
+    assert!(week.contains("intentions:"), "{week}");
+    assert!(!week.contains("## Intentions"), "{week}");
+    assert!(!week.contains("## Reflection"), "{week}");
+    assert!(week.contains("summary:"), "{week}");
+    assert!(!week.contains("**Headline:**"), "{week}");
+    assert!(week.contains("## Review"), "{week}");
+    assert!(week.contains("## Days"), "{week}");
+
+    let placeholder =
+        fs::read_to_string(vault.join("2026/2026-W46.md")).unwrap();
+    assert!(placeholder.contains("## Intentions"), "{placeholder}");
+    assert!(placeholder.contains("NOT SET"), "{placeholder}");
+    assert!(placeholder.contains("reflection:"), "{placeholder}");
+    assert!(!placeholder.contains("## Reflection"), "{placeholder}");
+
+    let nested = fs::read_to_string(vault.join("2026/2026-W44.md")).unwrap();
+    assert!(nested.contains("## Intentions"), "{nested}");
+
+    let quarter = fs::read_to_string(vault.join("2026/2026-Q4.md")).unwrap();
+    assert!(quarter.contains("intentions:"), "{quarter}");
+    assert!(!quarter.contains("## Outcomes"), "{quarter}");
+
+    let year = fs::read_to_string(vault.join("2026.md")).unwrap();
+    assert!(year.contains("intentions:"), "{year}");
+    assert!(!year.contains("## Theme"), "{year}");
+    assert!(!year.contains("## Outcomes"), "{year}");
+
+    assert_eq!(
+        fs::read_to_string(vault.join("2026/202611.md")).unwrap(),
+        monthly_before,
+        "monthly notes stay untouched"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("2025/20251228.md")).unwrap(),
+        ooo_before,
+        "out-of-range dailies stay untouched"
+    );
+
+    let after = snapshot_tree(&vault);
+    let rerun = migrate(&vault, &["-a", "-o", "-f", "json"]);
+    assert_success(&rerun);
+    let rerun_body: serde_json::Value =
+        serde_json::from_str(&stdout(&rerun)).expect("rerun JSON");
+    assert!(
+        rerun_body["sha"].is_null(),
+        "re-run must not commit:\n{}",
+        stdout(&rerun)
+    );
+    assert_eq!(snapshot_tree(&vault), after, "re-run is a no-op");
+}
+
 fn snapshot_tree(vault: &std::path::Path) -> Vec<(String, String)> {
     let mut rows = Vec::new();
     fn walk(
@@ -1749,17 +1939,19 @@ fn brief_carries_the_previous_review() {
         periods_command(vault.path(), "ensure", &["-d", "2026-10-19", "-q"]);
     let w43 = vault.path().join("2026/2026-W43.md");
     let scaffold = fs::read_to_string(&w43).expect("W43 scaffold");
-    let review = "## Review\n\n\
-        **Headline:** Shipped the widget and the launch,\n\
+    let review_body = "**Headline:** Shipped the widget and the launch,\n\
         then planned the next slice.\n\n\
         **Shipped:**\n\n\
         - [[proj#^ship|Widget]]\n\n\
         **Carried forward:**\n\n\
         - [[proj#^stuck|Stuck project]] · kept 3×\n\n\
         **Questions:**\n\n\
-        1. Is the stuck project waiting on a decision?\n\n\
-        ## Reflection\n";
-    let updated = scaffold.replacen("## Review\n\n## Reflection\n", review, 1);
+        1. Is the stuck project waiting on a decision?\n";
+    let updated = scaffold.replacen(
+        "## Review\n\n",
+        &format!("## Review\n\n{review_body}\n"),
+        1,
+    );
     assert_ne!(updated, scaffold, "scaffold carries an empty Review");
     fs::write(&w43, updated).unwrap();
     let body = brief_json(vault.path(), "2026-W44");
@@ -2218,9 +2410,7 @@ fn draft_accepts_a_valid_text_and_a_second_draft() {
     let after = fs::read_to_string(vault.path().join("2026/2026-W44.md"))
         .expect("drafted note");
     assert!(
-        after.contains(
-            "## Review\n\nShipped the widget slice.\n\n## Reflection"
-        ),
+        after.contains("## Review\n\nShipped the widget slice.\n"),
         "remaining text becomes only the Review body:\n{after}"
     );
     assert!(
@@ -2556,7 +2746,7 @@ fn draft_aborts_when_the_note_changes_under_it() {
     std::thread::sleep(std::time::Duration::from_millis(1000));
     let changed = fs::read_to_string(&note)
         .unwrap()
-        .replace("## Reflection\n", "## Reflection\n\nConcurrent edit.\n");
+        .replace("## Review\n", "## Review\n\nConcurrent edit.\n");
     fs::write(&note, &changed).unwrap();
     drop(held);
     let output = child.wait_with_output().expect("racing draft");
@@ -2601,7 +2791,7 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
                 "Agent instructions · weekly v3",
                 "Agent instructions · weekly v2",
             )
-            .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n"),
+            .replacen("---\n", "---\nreflection: Bryan reflected.\n", 1),
     )
     .unwrap();
     git_in(&vault, ["add", "-A"]);
@@ -2664,7 +2854,7 @@ fn ensure_refresh_skips_reflected_and_commits_once() {
                 "Agent instructions · weekly v3",
                 "Agent instructions · weekly v2",
             )
-            .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n"),
+            .replacen("---\n", "---\nreflection: Bryan reflected.\n", 1,),
         "reflected notes stay untouched"
     );
 
@@ -3690,9 +3880,10 @@ fn draft_eligibility_matrix_guards_both_kinds() {
     // Period: an edited Review body refuses a first summary even when
     // the summary key is absent.
     let week = vault.path().join("2026/2026-W44.md");
-    let edited_review = fs::read_to_string(&week).unwrap().replace(
-        "## Review\n\n## Reflection",
-        "## Review\n\nBryan wrote this.\n\n## Reflection",
+    let edited_review = fs::read_to_string(&week).unwrap().replacen(
+        "## Review\n\n",
+        "## Review\n\nBryan wrote this.\n\n",
+        1,
     );
     fs::write(&week, edited_review).unwrap();
     let first =
@@ -3790,7 +3981,7 @@ fn draft_period_splitting_caps_and_reflected_result() {
     // A first draft after reflection remains reflected with a drafted summary.
     let reflected = fs::read_to_string(vault.path().join("2026/2026-Q4.md"))
         .unwrap()
-        .replace("## Reflection\n", "## Reflection\n\nBryan reflected.\n");
+        .replacen("---\n", "---\nreflection: Bryan reflected.\n", 1);
     fs::write(vault.path().join("2026/2026-Q4.md"), reflected).unwrap();
     let quarter = write_review(
         vault.path(),

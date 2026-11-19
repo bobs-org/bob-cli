@@ -20,8 +20,6 @@ tags:
 
 ```
 
-## Intentions
-
 ## Days
 
 ```bob-period-parts
@@ -29,8 +27,6 @@ tags:
 ```
 
 ## Review
-
-## Reflection
 
 > [!agent]- Agent instructions · weekly v3
 > **You are drafting the summary and `## Review` of week 2026-W01 (Mon Dec 29 – Sun Jan

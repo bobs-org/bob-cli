@@ -265,7 +265,7 @@ See docs/periods.md for summaries, review states, and JSON.
 Adopt the period-note tree (dry run by default)
 
 ```text title="bob periods migrate --help"
-Adopt the period-note tree: create all_time.md and the ISO week/quarter/year notes in range, adopt in-range year notes (keeping zorg_* keys and archiving the old body), re-parent out-of-range year notes and canonical daily notes, and add the week link on standard prev/next nav lines. Dry run by default. -a/--apply runs one verified vault-rewrite commit. See docs/periods.md for the range, verify, and JSON.
+Adopt the period-note tree: create all_time.md and the ISO week/quarter/year notes in range, adopt in-range year notes (keeping zorg_* keys and archiving the old body), re-parent out-of-range year notes and canonical daily notes, add the week link on standard prev/next nav lines, and move Headline/Intentions/Outcomes/Theme/Reflection/Review-opener shapes into frontmatter. Dry run by default. -a/--apply runs one verified vault-rewrite commit. See docs/periods.md for the range, verify, and JSON.
 
 Usage: bob periods migrate [OPTIONS]
 
