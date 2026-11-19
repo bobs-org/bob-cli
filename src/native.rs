@@ -69,6 +69,7 @@ mod event_task;
 pub(crate) mod file_coordination;
 mod freshness;
 mod gcal;
+pub(crate) mod intentions;
 // Consumer: the Gmail renderer phases bob-cli-hg.3.1.2–.4 consume this pure model.
 mod darwin_notify;
 mod gkeep;

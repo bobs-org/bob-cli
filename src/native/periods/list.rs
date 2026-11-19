@@ -44,6 +44,7 @@ struct ListRow {
     path: String,
     review_state: &'static str,
     headline: Option<String>,
+    summary: Option<String>,
 }
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
@@ -217,7 +218,7 @@ fn scan_vault(vault: &Path) -> Vec<ListRow> {
 
 fn push_row(vault: &Path, path: &Path, id: PeriodId, rows: &mut Vec<ListRow>) {
     let contents = fs::read_to_string(path).unwrap_or_default();
-    let parsed = note::parse(&contents);
+    let parsed = note::parse_for_period(&contents, id);
     let display = path
         .strip_prefix(vault)
         .map(|relative| relative.to_string_lossy().into_owned())
@@ -227,7 +228,8 @@ fn push_row(vault: &Path, path: &Path, id: PeriodId, rows: &mut Vec<ListRow>) {
         kind: kind_of(id),
         path: display,
         review_state: parsed.review_state.as_str(),
-        headline: parsed.headline,
+        headline: parsed.headline.clone(),
+        summary: parsed.headline,
     });
 }
 
@@ -248,14 +250,14 @@ fn print_success(
                         "drafted" | "edited" => styler.yellow("·"),
                         _ => styler.cyan("–"),
                     };
-                    let headline = row.headline.as_deref().unwrap_or_default();
+                    let headline = row.summary.as_deref().unwrap_or_default();
                     let mut line = format!(
-                        "{mark} {} {}",
+                        "{mark} {} Summary: {}",
                         row.id,
                         truncate(headline, width.saturating_sub(12))
                     );
                     if headline.is_empty() {
-                        line = format!("{mark} {}", row.id);
+                        line = format!("{mark} {} Summary: –", row.id);
                     }
                     println!("{line}");
                 }
@@ -274,6 +276,7 @@ fn print_success(
                         "path": row.path,
                         "review_state": row.review_state,
                         "headline": row.headline,
+                        "summary": row.summary,
                     })
                 })
                 .collect();
@@ -354,6 +357,7 @@ mod tests {
                 path: "2026/2026-W44.md".to_string(),
                 review_state: "empty",
                 headline: None,
+                summary: None,
             },
             ListRow {
                 id: PeriodId::Year(2026),
@@ -361,6 +365,7 @@ mod tests {
                 path: "2026.md".to_string(),
                 review_state: "empty",
                 headline: None,
+                summary: None,
             },
             ListRow {
                 id: PeriodId::Week {
@@ -371,6 +376,7 @@ mod tests {
                 path: "2026/2026-W45.md".to_string(),
                 review_state: "empty",
                 headline: None,
+                summary: None,
             },
         ];
         let mut sorted = rows;

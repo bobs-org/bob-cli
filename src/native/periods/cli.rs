@@ -53,14 +53,14 @@ pub(crate) fn ensure_command() -> ClapCommand {
 
 pub(crate) fn list_command() -> ClapCommand {
     ClapCommand::new("bob periods list")
-        .about("List period notes with review states (default)")
+        .about("List period notes with review states and summaries (default)")
         .long_about(
             "List the period notes that exist, newest first, grouped year → \
              quarter → weeks. Each row shows its review-state mark and its \
-             Headline. -p/--problems reports dangling daily parents, missing \
+             Summary. -p/--problems reports dangling daily parents, missing \
              period notes, unscaffolded notes, wrong parents, task rows, and \
              stale instructions. The command is read-only. See docs/periods.md \
-             for the review states, problems, and JSON.",
+             for summaries, review states, problems, and JSON.",
         )
         .after_help(
             "Examples:\n  \
@@ -77,7 +77,7 @@ pub(crate) fn list_command() -> ClapCommand {
              0  list\n  \
              1  vault I/O failure\n  \
              2  usage error\n\n\
-             See docs/periods.md for the review states and JSON.",
+             See docs/periods.md for summaries, review states, and JSON.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

@@ -1,0 +1,29 @@
+{
+  "recipe": "Normalize CRLF and lone CR to LF, strip trailing whitespace from each line, trim the joined text, SHA-256 UTF-8 bytes, and keep the first 16 lowercase hex characters prefixed by sha256:.",
+  "vectors": [
+    {
+      "name": "empty",
+      "input": "",
+      "normalized": "",
+      "digest": "sha256:e3b0c44298fc1c14"
+    },
+    {
+      "name": "unicode_and_markdown_link",
+      "input": "🍅 [[bob#^decay|decay]] café",
+      "normalized": "🍅 [[bob#^decay|decay]] café",
+      "digest": "sha256:bda07c30ce6366c3"
+    },
+    {
+      "name": "lone_cr_crlf_and_trailing_whitespace",
+      "input": "Line one  \rLine two\t \r\n [[note]]  ",
+      "normalized": "Line one\nLine two\n [[note]]",
+      "digest": "sha256:0052a90501e04406"
+    },
+    {
+      "name": "outer_and_line_whitespace",
+      "input": "  first  \nsecond\t  ",
+      "normalized": "first\nsecond",
+      "digest": "sha256:4252f8d56b4bb236"
+    }
+  ]
+}

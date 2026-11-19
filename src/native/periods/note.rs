@@ -6,42 +6,11 @@
 
 use std::collections::BTreeMap;
 
-use sha2::{Digest, Sha256};
-
 use super::calendar::PeriodId;
 use crate::native::daily_headline::ends_headline_paragraph;
+use crate::native::intentions::{self, NoteSubject};
 
-/// Review state, computed by first match: reflected, drafted, edited,
-/// then empty.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReviewState {
-    Reflected,
-    Drafted,
-    Edited,
-    Empty,
-}
-
-impl ReviewState {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Reflected => "reflected",
-            Self::Drafted => "drafted",
-            Self::Edited => "edited",
-            Self::Empty => "empty",
-        }
-    }
-
-    /// The one-character mark the list shows for a state.
-    #[allow(dead_code)]
-    pub(crate) fn mark(self) -> &'static str {
-        match self {
-            Self::Reflected => "✓",
-            Self::Drafted => "·",
-            Self::Edited => "·",
-            Self::Empty => "–",
-        }
-    }
-}
+pub(crate) use crate::native::intentions::ReviewState;
 
 /// A parsed period note: its sections, frontmatter keys, review state,
 /// Headline, Reflection lead, and instruction version.
@@ -61,22 +30,23 @@ pub(crate) struct ParsedNote {
 
 /// Parse `contents` into sections and frontmatter-derived state.
 pub(crate) fn parse(contents: &str) -> ParsedNote {
+    parse_for_period(
+        contents,
+        PeriodId::Week {
+            year: 1970,
+            week: 1,
+        },
+    )
+}
+
+pub(crate) fn parse_for_period(contents: &str, id: PeriodId) -> ParsedNote {
     let frontmatter = parse_frontmatter(contents);
     let sections = parse_sections(contents);
-    let reflection = sections.get("Reflection").cloned().unwrap_or_default();
+    let fields = intentions::read(contents, NoteSubject::Period(id));
     let review = sections.get("Review").cloned().unwrap_or_default();
-    let review_state = if !reflection.trim().is_empty() {
-        ReviewState::Reflected
-    } else if review.trim().is_empty() {
-        ReviewState::Empty
-    } else {
-        let digest = review_digest(&review);
-        match frontmatter.get("review_digest") {
-            Some(stored) if stored == &digest => ReviewState::Drafted,
-            _ => ReviewState::Edited,
-        }
-    };
-    let headline = parse_headline(&review);
+    let review_state = intentions::evaluate(&fields, !review.trim().is_empty());
+    let headline = fields.summary.value;
+    let reflection = fields.reflection.value.unwrap_or_default();
     let reflection_lead = parse_reflection_lead(&reflection);
     let instructions_version = parse_instructions_version(contents);
     ParsedNote {
@@ -93,16 +63,7 @@ pub(crate) fn parse(contents: &str) -> ParsedNote {
 /// characters over the body after normalizing line endings to `\n`,
 /// stripping trailing whitespace from each line, and trimming.
 pub(crate) fn review_digest(review_body: &str) -> String {
-    let normalized = review_body.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<String> = normalized
-        .lines()
-        .map(|line| line.trim_end().to_string())
-        .collect();
-    let trimmed = lines.join("\n").trim().to_string();
-    let mut hasher = Sha256::new();
-    hasher.update(trimmed.as_bytes());
-    let hex_digest = hex::encode(hasher.finalize());
-    format!("sha256:{}", &hex_digest[..16])
+    intentions::digest(review_body)
 }
 
 /// Keep a bob rewrite from reading as Bryan's edit.
@@ -178,25 +139,9 @@ pub(crate) fn carry_review_digest(before: &str, after: &str) -> String {
 /// spaces, else none. The paragraph ends at a blank line, a list item,
 /// or the next bold `**Part:**` label, so a hard-wrapped Headline still
 /// reaches parent notes as one sentence.
+#[cfg(test)]
 pub(crate) fn parse_headline(review_body: &str) -> Option<String> {
-    let mut lines = review_body.lines();
-    while let Some(line) = lines.next() {
-        let Some(rest) = line.trim().strip_prefix("**Headline:**") else {
-            continue;
-        };
-        let mut words: Vec<&str> = rest.split_whitespace().collect();
-        for next in lines.by_ref() {
-            if ends_headline_paragraph(next) {
-                break;
-            }
-            words.extend(next.split_whitespace());
-        }
-        if words.is_empty() {
-            continue;
-        }
-        return Some(words.join(" "));
-    }
-    None
+    crate::native::intentions::legacy::opening_headline(review_body)
 }
 
 /// The opening `**Headline:**` paragraph of `text` with its soft-wrapped

@@ -21,8 +21,8 @@ use super::{
         SessionClock,
     },
     capture_drawers, capture_language, capture_pomodoro_close,
-    capture_pomodoros_agenda, config, daily_headline, env as bob_env, markdown,
-    note_tasks, plan_budget, pomodoro, pomodoro_homes,
+    capture_pomodoros_agenda, config, env as bob_env, markdown, note_tasks,
+    plan_budget, pomodoro, pomodoro_homes,
     pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
     style::{display_width, pad_right, Styler},
 };
@@ -84,10 +84,9 @@ It also reports max_task_link_count, the largest numbered Task Link lineup among
 open entries. Open entries are listed by default; use \
 --all to include completed entries. A missing daily note or missing \
 Pomodoros section returns a successful empty list with a warning.\n\n\
-With --tasks, the top-level headline is today's Daily Headline display text, \
-or null when the daily note is missing or the slot is empty. Human output prints \
-it as one bold line under the header when present. Without --tasks the key is \
-omitted. Each listed entry also carries its agenda payload: the entry \
+With --tasks, the top-level intentions is today's array of display strings; \
+headline remains the first intention's display text, or null when the list is empty. Human output prints \
+it as one bold line under the header when present. Both keys are omitted without --tasks. Each listed entry also carries its agenda payload: the entry \
 role, naive start/end datetimes, clock classification, the retired-link count, session \
 notes, the resolved Task Link lineup with operator numbers, clean titles, \
 statuses, task-block lines, event chips for links to today's Event Tasks, and \
@@ -216,6 +215,8 @@ struct CapturePomodorosResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     headline: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    intentions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     completed_summary: Option<capture_pomodoros_agenda::CompletedSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_budget: Option<CapturePomodorosPlanBudget>,
@@ -309,6 +310,7 @@ fn list_capture_pomodoros(
                 warnings,
                 date: request.include_tasks.then(|| agenda_date.to_string()),
                 headline: request.include_tasks.then_some(None),
+                intentions: request.include_tasks.then_some(Vec::new()),
                 completed_summary: empty_summary(),
                 plan_budget: None,
                 events: None,
@@ -508,6 +510,21 @@ fn list_capture_pomodoros(
         });
     }
 
+    let subject = crate::native::intentions::NoteSubject::resolve(
+        &agenda_date.format("%Y-%m-%d").to_string(),
+        agenda_date,
+    )
+    .map(|info| info.subject)
+    .unwrap_or(crate::native::intentions::NoteSubject::Day(agenda_date));
+    let intentions: Vec<String> =
+        crate::native::intentions::read(&contents, subject)
+            .intentions
+            .value
+            .unwrap_or_default()
+            .iter()
+            .map(|value| crate::native::daily_headline::display_text(value))
+            .collect();
+
     Ok(CapturePomodorosResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
@@ -518,9 +535,8 @@ fn list_capture_pomodoros(
         pomodoros,
         warnings,
         date: request.include_tasks.then(|| agenda_date.to_string()),
-        headline: request.include_tasks.then(|| {
-            daily_headline::parse(&contents).map(|headline| headline.display)
-        }),
+        headline: request.include_tasks.then(|| intentions.first().cloned()),
+        intentions: request.include_tasks.then_some(intentions),
         completed_summary,
         plan_budget,
         events,
@@ -2011,6 +2027,7 @@ mod tests {
             warnings: Vec::new(),
             date: None,
             headline: None,
+            intentions: None,
             completed_summary: None,
             plan_budget: None,
             events: None,
@@ -2120,9 +2137,14 @@ mod tests {
             with_tasks.headline,
             Some(Some("Ship the alias".to_string()))
         );
+        assert_eq!(
+            with_tasks.intentions,
+            Some(vec!["Ship the alias".to_string()])
+        );
         let value: serde_json::Value =
             serde_json::from_str(&success_json(&with_tasks)).expect("json");
         assert_eq!(value["headline"], "Ship the alias");
+        assert_eq!(value["intentions"], serde_json::json!(["Ship the alias"]));
 
         let without_tasks =
             crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
@@ -2134,9 +2156,11 @@ mod tests {
             })
             .expect("no-tasks success");
         assert_eq!(without_tasks.headline, None);
+        assert_eq!(without_tasks.intentions, None);
         let omitted: serde_json::Value =
             serde_json::from_str(&success_json(&without_tasks)).expect("json");
         assert!(omitted.get("headline").is_none());
+        assert!(omitted.get("intentions").is_none());
 
         write_file(&day_path, "# Day\n\n**Headline:**\n\n## Pomodoros\n");
         let empty =
@@ -2149,9 +2173,11 @@ mod tests {
             })
             .expect("empty slot success");
         assert_eq!(empty.headline, Some(None));
+        assert_eq!(empty.intentions, Some(vec![]));
         let empty_json: serde_json::Value =
             serde_json::from_str(&success_json(&empty)).expect("json");
         assert!(empty_json["headline"].is_null());
+        assert_eq!(empty_json["intentions"], serde_json::json!([]));
 
         let missing = list_capture_pomodoros(&CapturePomodorosRequest {
             bob_dir: temp.path().join("missing"),
@@ -2160,6 +2186,7 @@ mod tests {
         })
         .expect("missing note success");
         assert_eq!(missing.headline, Some(None));
+        assert_eq!(missing.intentions, Some(vec![]));
         let human = human_success(&with_tasks, &Styler::plain());
         assert!(
             human.contains("Ship the alias"),
@@ -2241,6 +2268,7 @@ mod tests {
             warnings: vec!["watch out".to_string()],
             date: None,
             headline: None,
+            intentions: None,
             completed_summary: None,
             plan_budget: None,
             events: None,

@@ -18,6 +18,64 @@ pub(crate) struct Line {
     pub(crate) ending: String,
 }
 
+/// A top-level YAML mapping entry measured in source lines. `start` and
+/// `end` include the complete value span; `colon` is the key-line byte index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeySpan {
+    pub(crate) name: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) colon: usize,
+}
+
+/// Collect root mapping spans and refuse semantic duplicate keys (including
+/// differently quoted spellings) before a span writer edits the document.
+pub(crate) fn collect_key_spans(
+    lines: &[Line],
+    offset: usize,
+) -> Result<Vec<KeySpan>, String> {
+    let mut spans: Vec<KeySpan> = Vec::new();
+    let mut seen = HashSet::new();
+    for (index, line) in lines.iter().enumerate() {
+        if indentation(&line.text) != 0
+            || line.text.trim().is_empty()
+            || line.text.trim_start().starts_with('#')
+        {
+            continue;
+        }
+        let Some((name, colon)) = parse_key(&line.text, 0) else {
+            continue;
+        };
+        if !seen.insert(name.clone()) {
+            return Err(format!("duplicate frontmatter key {name:?}"));
+        }
+        if let Some(previous) = spans.last_mut() {
+            previous.end = offset + index - 1;
+        }
+        spans.push(KeySpan {
+            name,
+            start: offset + index,
+            end: offset + index,
+            colon: offset + index + colon,
+        });
+    }
+    if let Some(last) = spans.last_mut() {
+        last.end = offset + lines.len().saturating_sub(1);
+    }
+    Ok(spans)
+}
+
+/// Apply one already-validated source line replacement. Domain writers own
+/// parsing, serialization, and verification; this is their shared splice.
+pub(crate) fn apply_frontmatter_edits(
+    lines: &mut Vec<Line>,
+    start: usize,
+    end: usize,
+    replacement: Vec<Line>,
+) {
+    lines.splice(start..=end, replacement);
+}
+
 /// Split `text` into lines, preserving `\n` / `\r\n` endings and a
 /// missing final newline.
 pub(crate) fn split_lines(text: &str) -> Vec<Line> {
@@ -371,13 +429,49 @@ pub(crate) fn render_scalar(value: &YamlValue) -> String {
         YamlValue::Null => "null".to_owned(),
         YamlValue::Bool(value) => value.to_string(),
         YamlValue::Number(value) => value.to_string(),
-        YamlValue::String(value) => {
-            crate::native::records::yaml_string_scalar(value)
-        }
+        YamlValue::String(value) => yaml_string_scalar(value),
         YamlValue::Sequence(_) => "[]".to_owned(),
         YamlValue::Mapping(_) => "{}".to_owned(),
         YamlValue::Tagged(tagged) => render_scalar(&tagged.value),
     }
+}
+
+/// One YAML string scalar: plain when it parses back as exactly the same
+/// string, otherwise JSON-quoted (which YAML double-quoted style accepts).
+/// Keeping this here makes string emission domain-neutral for span writers.
+pub(crate) fn yaml_string_scalar(text: &str) -> String {
+    let plain_safe = !text.is_empty()
+        && text == text.trim()
+        && !text.contains(['\n', '\r'])
+        && !looks_typed(text);
+    if plain_safe
+        && matches!(serde_yaml::from_str::<YamlValue>(text), Ok(YamlValue::String(ref parsed)) if parsed == text)
+        && matches!(serde_yaml::from_str::<YamlValue>(&format!("k: {text}")), Ok(YamlValue::Mapping(ref map)) if map.get(YamlValue::String("k".to_owned())).and_then(YamlValue::as_str) == Some(text))
+    {
+        return text.to_owned();
+    }
+    serde_json::to_string(text).expect("JSON string quoting never fails")
+}
+
+fn looks_typed(text: &str) -> bool {
+    if matches!(
+        text.to_ascii_lowercase().as_str(),
+        "true"
+            | "false"
+            | "null"
+            | "yes"
+            | "no"
+            | "on"
+            | "off"
+            | "y"
+            | "n"
+            | "~"
+    ) {
+        return true;
+    }
+    let first = text.chars().next();
+    first.is_some_and(|ch| ch.is_ascii_digit() || matches!(ch, '+' | '-' | '.'))
+        && !text.contains(char::is_whitespace)
 }
 
 #[cfg(test)]

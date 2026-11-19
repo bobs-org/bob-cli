@@ -118,45 +118,125 @@ Ownership:
 - **Strip and parts table** belong to bob-ledger-tools, rendered live.
   No number is ever written into Markdown.
 - **`## Review`** belongs to an agent, through `bob periods draft`.
-- **`## Intentions` / `## Outcomes` / `## Theme`, `## Reflection`,
-  `## Notes`** belong to Bryan. No tool or agent writes them.
+- Frontmatter **`intentions` and `reflection`** belong to Bryan. The older
+  `## Intentions` / `## Outcomes` / `## Theme` and `## Reflection` body forms
+  remain readable but are not rewritten by these readers.
+- Frontmatter **`summary` and its stamps** are agent-owned draft data, except
+  that Bryan may edit the summary; `## Notes` remains Bryan-owned.
 
 Period notes hold no task rows.
 
-## Review state and Headline
+## Intentions, summary, and reflection
 
-Sections are the bodies under exact `## <Name>` headings up to the
-next `## ` heading, the `> [!agent]` callout, `## Archive`, or EOF,
-with blank lines trimmed.
+Canonical daily notes (`YYYY/YYYYMMDD.md`) and week, quarter, and year
+notes share three fields. `all_time` and unrelated notes do not own these
+fields; in particular, a catalog `summary` on an unrelated note is not an
+intention summary. The period identity comes from the note path, never a
+stored `period:` property.
 
-Review state (first match wins):
+```yaml
+intentions:
+  - "Add ≥30 records to the [[sase_blog_zettel]] album"
+  - Ship the record walk rail
+summary: "Added 14 records and shipped the record walk rail."
+summary_digest: sha256:c65f7e03e99444e1
+summary_drafted: 2026-11-19
+reflection: |-
+  Tired all day; I started Rocket League far too early.
+```
 
-- `reflected`: `## Reflection` has text;
-- `drafted`: Review has text, and frontmatter `review_digest` equals
-  its digest;
-- `edited`: Review has text, and the digest is absent or different;
-- `empty`: none of the above.
+- **`intentions`** is an ordered YAML list of one-line Markdown strings.
+  Empty and absent mean no intentions. Three items is a soft cap for guidance;
+  readers and writers preserve Bryan's text above the cap. A scalar string is
+  read as one item with an `intentions_shape` diagnostic. Non-string list
+  members are skipped with diagnostics; empty or multiline members are
+  reported rather than flattened into valid items.
+- **`summary`** is one paragraph on one YAML scalar line. A day allows 1–3
+  sentences, at most 60 words and two links. A period keeps the existing cap
+  of 25 words. These are drafting limits; readers never truncate stored text.
+- **`reflection`** is Bryan's free Markdown, including multiple paragraphs.
+- **`summary_digest`** and **`summary_drafted`** stamp the summary only.
+  Period notes keep `review_digest` and `review_drafted` for the `## Review`
+  body only. The summary and Review can therefore be drafted or edited
+  independently.
 
-Digest: `sha256:` plus the first 16 hex characters of SHA-256 over the
-Review body, after normalizing line endings to `\n`, stripping trailing
-whitespace from each line, and trimming. `review_drafted: YYYY-MM-DD`
-records the draft day.
+Absent keys mean empty. A present `null`, empty string, or empty list means
+empty too, but it blocks fallback to older body text. Wrong YAML types and
+invalid stamps produce diagnostics without scalar coercion. Duplicate keys,
+invalid or non-mapping YAML, and unclosed frontmatter make the typed fields
+empty with a diagnostic; the reader never partially trusts a malformed map.
+An absent frontmatter block is distinct and allows the legacy reader.
 
-A bob rewrite is not Bryan's edit. When `bob task archive` repairs a
-link inside a `drafted` Review (moving it to `done/`), or a shared
-vault-rewrite transaction (`bob types rename`, relation-label renames,
-`bob periods migrate`, …) changes one, the same write restamps
-`review_digest` so the state stays `drafted`. `review_drafted` keeps
-its day. An `edited` or `reflected` note is never restamped.
+For existing notes, fallback is per key and only applies when that key is
+absent:
 
-Headline: the one line a parent shows for its child. A week, quarter, or
-year gets it from the opening `**Headline:**` paragraph of its `## Review`
-(soft-wrapped lines joined by single spaces; the paragraph ends at a blank
-line, a list item, a heading, a fence, or the next bold `**Part:**` label).
-A day gets it from the `**Headline:**` (or `**Headline**:`) line in the
-daily note's preamble; bob reads that line and never writes it. Days have
-no Review. Reflection lead: the first sentence of `## Reflection`, capped
-at 40 words with `…`. Instructions version: parsed from the callout title
+| Subject | Legacy intentions | Legacy summary | Legacy reflection |
+| --- | --- | --- | --- |
+| Day | First non-empty preamble `**Headline:**` / `**Headline**:` paragraph | — | Preamble `**Reflection:**` / `**Reflection**:` paragraph |
+| Week | Top-level bullets of `## Intentions` | Opening `**Headline:**` paragraph of `## Review` | `## Reflection` body |
+| Quarter | Top-level bullets of `## Outcomes` | Opening `**Headline:**` paragraph of `## Review` | `## Reflection` body |
+| Year | `## Theme` paragraph, then top-level `## Outcomes` bullets | Opening `**Headline:**` paragraph of `## Review` | `## Reflection` body |
+
+Frontmatter wins on conflicts. Markdown and links stay intact. Nested bullets,
+fenced examples, placeholders, and legacy body text are not migrated or
+rewritten by these readers.
+
+Review state is shared by all projections:
+
+- `reflected`: reflection has text;
+- `drafted`: at least one agent part exists and every present part matches its
+  stamp;
+- `edited`: at least one agent part exists and any present part has a missing
+  or mismatched stamp;
+- `empty`: no agent part exists.
+
+For a day, the only agent part is `summary`. For a period, `summary` and the
+remaining `## Review` body are separate parts. Intentions and orphan stamps do
+not count as agent parts. `summary_state` independently reports `empty`,
+`drafted`, or `edited`, even when reflection makes the overall state
+`reflected`. A summary read from the legacy Review opener retains the old
+whole-Review digest rule; it is not checked against a nonexistent summary
+stamp. A frontmatter summary is checked with its own `summary_digest`.
+
+All stamps use the same digest recipe: normalize CRLF and lone CR to LF, strip
+trailing whitespace on each line, trim the joined text, SHA-256 its UTF-8
+bytes, and keep the first 16 lowercase hex characters after `sha256:`.
+Exact vectors, with escaped input bytes and expected output, are shared in
+`tests/fixtures/intentions/digest-vectors.json` for Rust and plugin tests:
+
+| Input | Digest |
+| --- | --- |
+| `""` | `sha256:e3b0c44298fc1c14` |
+| `"🍅 [[bob#^decay|decay]] café"` | `sha256:bda07c30ce6366c3` |
+| `"Line one  \rLine two\t \r\n [[note]]  "` | `sha256:0052a90501e04406` |
+| `"  first  \nsecond\t  "` | `sha256:4252f8d56b4bb236` |
+
+The field patcher is a pure `original bytes + explicit owned-key patch → new
+bytes or typed refusal` operation. It edits spans rather than serializing the
+whole YAML map, preserving BOM, newline style, comments, unrelated key order
+and bytes, body bytes, and a missing final newline. Existing keys keep their
+positions; new keys append in this order: `intentions`, `summary`,
+`summary_digest`, `summary_drafted`, `reflection`. Empty values delete the
+key. Before success it reparses the full mapping, verifies every requested
+value and all unmodified values, and refuses with `write_verify_failed` if
+they differ. It performs no file write, lock, or ownership decision.
+
+Parent and strip headlines use the same projection: a closed child shows its
+summary; a current or future child shows its intentions joined with `·`; all
+other cases are empty. A closed day never falls back to its old planned
+intention when its summary is missing. `capture-pomodoros --tasks` deliberately
+keeps its compatibility headline as the first intention's display text and
+adds the display-string array `intentions`; without `--tasks`, both keys are
+omitted. These are reader/resolver contracts, not new CLI commands; later
+period update and summary phases own those commands.
+
+The shared subject reader recognizes canonical day and period notes without
+mistaking date-like notebook filenames for daily notes. A missing day returns
+`missing_note` with a hint to open that day in Obsidian; a missing period
+suggests `bob periods ensure <PERIOD>`. It does not create either note.
+
+Reflection lead remains the first sentence of reflection, capped at 40 words
+with `…`. Instructions version remains parsed from the callout title
 `Agent instructions · <kind> v<N>` (currently v2).
 
 ## Agent instruction callouts (v2)
@@ -254,9 +334,10 @@ and never push (vault-sync commits, and agents commit as the vault's
   `{ok, schema_version, created[], filled[], existing[], dry_run}`.
 - `bob periods list [-f human|json] [-k/--kind week|quarter|year] [-p/--problems] [-y/--year YEAR]`:
   read-only. Prints the period notes that exist, newest first, grouped
-  year → quarter → weeks, each with its review-state mark and Headline.
-  JSON returns `{ok, schema_version, rows[]}` with
-  `{id, kind, path, review_state, headline}` rows. `-p` adds the
+  year → quarter → weeks, each with its review-state mark and Summary.
+  JSON returns `{ok, schema_version, rows[]}` with the existing
+  `{id, kind, path, review_state, headline}` fields and additive `summary`.
+  `-p` adds the
   problems report below.
 - `bob periods migrate [-a/--apply] [-f human|json] [-o/--offline] [-s/--since DATE]`:
   dry run by default. `-a` writes one `vault_rewrite` transaction and
@@ -386,14 +467,14 @@ The schema-1 JSON object has these top-level members:
 | `ok`, `schema_version` | `true`, `1` |
 | `today`, `generated_at` | The pinned local date and report timestamp |
 | `period` | Canonical id, kind, short label, title, date range, week/day counts, state, observed-through date, and coverage |
-| `note` | Period-note path, existence, instruction version, review state, and Headline |
+| `note` | Period-note path, existence, instruction version, review state, intentions, summary, summary state, reflection lead, and legacy-compatible Headline |
 | `links` | Parent, previous, and next note ids, paths, and labels |
 | `facts` | Visible Day-strip facts in `worked`, `reviewed`, `done`, `created`, `review_closed` order |
 | `lanes` | Worked root-parent and type parts, with labels, minutes, displays, shares, and a type-fold flag |
 | `charts` | Schema-1 Roots and Types series for the period strip: top-N root parents, configured types (or top 7 components), folded rest, and unattributed time |
-| `columns` | Render-ready strip columns: seven days for a week, weeks for a quarter/year, and quarters for all time |
+| `columns` | Render-ready strip columns: seven days for a week, weeks for a quarter/year, and quarters for all time; rows add `intentions`, `summary`, `summary_state`, `reflection_lead`, and projected `headline` |
 | `groups` | Quarter Worked totals for a year, or year totals for all time |
-| `children` | Parts-table rows: days, weeks, quarters, or years |
+| `children` | Parts-table rows: days, weeks, quarters, or years; rows and their period `review` objects add intention/summary fields and the same projected `headline` |
 | `homes`, `theme_hues` | The Stats home and type catalogs used by the Day strip |
 | `warnings` | Report warnings; empty when none apply. Invalid `stats.period_strip.top_roots` adds `period_strip_top_roots_invalid` |
 
@@ -455,19 +536,21 @@ observed column and child, and for the whole period, Σ `stacks.roots` = Σ
 `columns` include the date/period id, kind, labels, path and existence, start
 and end, state, Worked value/display/`display_short`/quality, a root-parent
 `stack`, chart `stacks`, mark, month `tick`, and parent `group` where relevant.
-Week-report day columns also carry `headline` (the day's display string, or
-`null`). Day marks are `met`, `missed`, `open`, or null; period marks use the
-child note's review state. Current columns include today's provisional value.
-Future columns remain identifiable and carry no values, except a future day's
-`headline` when that day's note already has one.
+Day and period rows also carry `intentions` (display strings), full `summary`,
+`summary_state`, `reflection_lead`, and `headline`. That headline is the
+summary for a closed child, intentions joined by `·` for a current or future
+child, or `null` when the projection is empty. Day marks are `met`, `missed`,
+`open`, or null; period marks use the child note's review state. Current
+columns include today's provisional value. Future columns remain identifiable
+and carry the same field projection even when they have no stats values.
 
 `children` rows carry their id, kind, label, range label, note path and
-existence, and state. Non-future rows add Worked and Done, review state,
-Headline and Reflection lead, closeout for days, and the top three
-root-parent `mostly` shares plus their automatic `mostly_display`. Week-report
-day children also carry `headline` (display string or `null`) for past,
-current, and future days. A future row otherwise contains only its link
-identity and dates. The weekly `columns` and `children` repeat the same day
+existence, and state. Rows add intentions, summary, summary state, reflection lead, and projected
+headline. Non-future rows also add Worked and Done, review state, closeout for
+days, and the top three root-parent `mostly` shares plus their automatic
+`mostly_display`. Day children carry the same projection for past, current, and
+future days. A future row otherwise contains its link identity, dates, and
+field projection. The weekly `columns` and `children` repeat the same day
 data; quarter columns and children repeat the same week data. Year columns
 are weeks grouped by quarter and all-time columns are quarters grouped by
 year. `groups` carry `key`, `label`, and `worked_display`.
@@ -590,14 +673,17 @@ caveats, are trimmed. Sections:
    before the caps apply. Only the checkbox marker is trimmed (a
    leading `x` in real prose survives), link-only children are
    skipped, and `[[...]]` spans flatten to display text in aliases.
-10. **This note and its neighbours**: this note's human sections
-    verbatim; from the previous same-kind note, its Review's Headline
-    (the whole first paragraph, joined onto one line), its
+10. **This note and its neighbours**: this note's typed intentions,
+    rendered as bullet text under the v2 `own` key (week `Intentions`,
+    quarter `Outcomes`, year `Intentions` once); from the previous
+    same-kind note, its typed summary as the Review Headline, its
     `**Carried forward:**` part (`**Still open:**` in v1 drafts), and
-    its `**Questions:**` part, each verbatim and capped at 150 words
-    with line breaks kept, then its Reflection (≤300 words); the
-    parent's Outcomes and Theme; year only: `h3_goal.md` and
-    `h4_vision.md` bodies (≤400 words each). Markdown headings read
+    its `**Questions:**` part from the Review body, each verbatim and
+    capped at 150 words with line breaks kept, then its typed Reflection
+    (≤300 words); the parent's typed intentions use the compatibility
+    `parent_outcomes` key and `parent_theme` stays empty, so unified year
+    intentions appear once; year only: `h3_goal.md` and `h4_vision.md`
+    bodies (≤400 words each). Markdown headings read
     `### Previous Review: Headline`, `### Previous Review: Carried
     forward (≤150 words)` (or `Still open`), `### Previous Review:
     Questions (≤150 words)`, and `### Previous Reflection (≤300

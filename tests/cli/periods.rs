@@ -193,6 +193,93 @@ fn list_shows_review_states_and_filters() {
 }
 
 #[test]
+fn intentions_fields_reach_period_list_and_report_projections() {
+    let vault = vault_dir("intentions-fields");
+    write_dataview_tasks_settings(vault.path());
+    let config = vault.path().join("bob-config.yml");
+    write_charts_config(&config, "");
+
+    write_file(
+        &vault.path().join("2026/2026-W44.md"),
+        "---\nintentions: [\"Close the week\"]\nsummary: \"Shipped [[bob|Bob]]\"\n---\n# W44\n",
+    );
+    write_file(
+        &vault.path().join("2026/2026-W47.md"),
+        "---\nintentions:\n  - \"Set the weekly direction\"\nsummary: \"Still in progress\"\n---\n# W47\n",
+    );
+    write_file(
+        &vault.path().join("2026/20261116.md"),
+        "---\nintentions: [\"Old plan\"]\n---\n# Monday\n",
+    );
+    write_file(
+        &vault.path().join("2026/20261117.md"),
+        "---\nintentions: [\"Old plan\"]\nsummary: \"Finished [[bob|Bob]]\"\n---\n# Tuesday\n",
+    );
+    write_file(
+        &vault.path().join("2026/20261119.md"),
+        "---\nintentions: [\"Write [[bob|the contract]]\", \"Ship it\"]\nsummary: \"Today's progress\"\n---\n# Thursday\n",
+    );
+    write_file(
+        &vault.path().join("2026/20261120.md"),
+        "---\nintentions: [\"Plan tomorrow\"]\nsummary: \"Future summary\"\n---\n# Friday\n",
+    );
+
+    let mut show = bob_command();
+    show.args(["periods", "show", "2026-W47", "-f", "json"])
+        .env("BOB_DIR", vault.path())
+        .env("BOB_NOW", "2026-11-19 12:00:00")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("NO_COLOR", "1");
+    let output = show.output().expect("run intentions period show");
+    assert_success(&output);
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("show JSON");
+    assert_eq!(
+        report["note"]["review"]["intentions"],
+        serde_json::json!(["Set the weekly direction"])
+    );
+    assert_eq!(report["note"]["review"]["summary"], "Still in progress");
+    let columns = report["columns"].as_array().unwrap();
+    let column = |id: &str| columns.iter().find(|row| row["id"] == id).unwrap();
+    assert_eq!(
+        column("2026-11-16")["intentions"],
+        serde_json::json!(["Old plan"])
+    );
+    assert!(
+        column("2026-11-16")["headline"].is_null(),
+        "closed day with no summary must not fall back to its intention"
+    );
+    assert_eq!(column("2026-11-17")["headline"], "Finished Bob");
+    assert_eq!(
+        column("2026-11-19")["headline"],
+        "Write the contract · Ship it"
+    );
+    assert_eq!(column("2026-11-20")["headline"], "Plan tomorrow");
+    let children = report["children"].as_array().unwrap();
+    let child = |id: &str| children.iter().find(|row| row["id"] == id).unwrap();
+    assert_eq!(child("2026-11-17")["summary"], "Finished [[bob|Bob]]");
+    assert_eq!(
+        child("2026-11-19")["intentions"],
+        serde_json::json!(["Write the contract", "Ship it"])
+    );
+
+    let list_output = list(vault.path(), &["-f", "json"]);
+    assert_success(&list_output);
+    let list_json: serde_json::Value =
+        serde_json::from_str(&stdout(&list_output)).unwrap();
+    let week = list_json["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "2026-W44")
+        .unwrap();
+    assert_eq!(week["summary"], "Shipped [[bob|Bob]]");
+    let human = list(vault.path(), &[]);
+    assert_success(&human);
+    assert!(stdout(&human).contains("Summary:"));
+}
+
+#[test]
 fn periods_help_lists_options_alphabetically() {
     let ensure_help = bob_command()
         .arg("periods")
@@ -1567,6 +1654,58 @@ fn brief_carries_the_previous_review() {
 }
 
 #[test]
+fn brief_neighbours_use_intention_fields_and_keep_legacy_review_parts() {
+    let vault = vault_dir("brief-intention-fields");
+    write_reviews_fixture(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-19", "-q"]);
+
+    fs::write(
+        vault.path().join("2026/2026-W44.md"),
+        "---\nintentions: [\"Frontmatter week intention\"]\n---\n\n\
+         ## Intentions\n\n- Legacy week intention\n\n## Review\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("2026/2026-W43.md"),
+        "---\nsummary: \"Frontmatter previous summary\"\n\
+         reflection: \"Frontmatter previous reflection.\"\n---\n\n\
+         ## Review\n\n**Headline:** Legacy review headline.\n\n\
+         **Carried forward:**\n\n- Keep this detail.\n\n## Reflection\n\nLegacy reflection.\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("2026/2026-Q4.md"),
+        "---\nintentions: [\"Frontmatter parent intention\"]\n---\n\n\
+         ## Theme\n\nLegacy theme.\n\n## Outcomes\n\n- Legacy outcome.\n",
+    )
+    .unwrap();
+
+    let body = brief_json(vault.path(), "2026-W44");
+    assert_eq!(
+        body["neighbours"]["own"]["Intentions"],
+        "- Frontmatter week intention"
+    );
+    assert_eq!(
+        body["neighbours"]["prev_review"]["headline"],
+        "Frontmatter previous summary"
+    );
+    assert_eq!(
+        body["neighbours"]["prev_review"]["carried"],
+        "- Keep this detail."
+    );
+    assert_eq!(
+        body["neighbours"]["prev_reflection"],
+        "Frontmatter previous reflection."
+    );
+    assert_eq!(
+        body["neighbours"]["parent_outcomes"],
+        "- Frontmatter parent intention"
+    );
+    assert_eq!(body["neighbours"]["parent_theme"], "");
+}
+
+#[test]
 fn brief_output_is_deterministic() {
     let vault = vault_dir("brief-deterministic");
     write_reviews_fixture(vault.path());
@@ -2696,19 +2835,34 @@ fn periods_show_human_output_is_unchanged_by_charts() {
     assert_stdout_has_no_ansi(&output);
 }
 
-fn write_headline_day(vault: &std::path::Path, date: &str, headline: &str) {
+fn write_day_fields(
+    vault: &std::path::Path,
+    date: &str,
+    intentions: &[&str],
+    summary: Option<&str>,
+) {
     let compact = date.replace('-', "");
     let year = &date[..4];
-    let body = if headline.is_empty() {
-        format!("# {date}\n\n**Headline:**\n\n## Pomodoros\n")
-    } else {
-        format!("# {date}\n\n**Headline:** {headline}\n\n## Pomodoros\n")
-    };
+    let mut body = String::from("---\n");
+    if !intentions.is_empty() {
+        body.push_str("intentions:\n");
+        for intention in intentions {
+            body.push_str("  - ");
+            body.push_str(&serde_json::to_string(intention).unwrap());
+            body.push('\n');
+        }
+    }
+    if let Some(summary) = summary {
+        body.push_str("summary: ");
+        body.push_str(&serde_json::to_string(summary).unwrap());
+        body.push('\n');
+    }
+    body.push_str(&format!("---\n# {date}\n\n## Pomodoros\n"));
     write_file(&vault.join(format!("{year}/{compact}.md")), &body);
 }
 
 #[test]
-fn week_report_and_brief_carry_day_headlines() {
+fn week_report_and_brief_carry_day_intentions_and_summaries() {
     let vault = vault_dir("day-headlines");
     write_dataview_tasks_settings(vault.path());
     let config = vault.path().join("bob-config.yml");
@@ -2716,22 +2870,25 @@ fn week_report_and_brief_carry_day_headlines() {
     let _ =
         periods_command(vault.path(), "ensure", &["-d", "2026-11-10", "-q"]);
     // 2026-W46: Mon 9 – Sun 15 Nov. REVIEWS_NOW is Tue 10.
-    write_headline_day(
+    write_day_fields(
         vault.path(),
         "2026-11-09",
-        "Capture merge-in arrow shipped",
+        &[],
+        Some("Capture merge-in arrow shipped"),
     );
-    write_headline_day(
+    write_day_fields(
         vault.path(),
         "2026-11-10",
-        "Daily headline designed and planned",
+        &["Daily headline designed and planned"],
+        None,
     );
-    write_headline_day(
+    write_day_fields(
         vault.path(),
         "2026-11-11",
-        "Converge take-home submitted",
+        &["Converge take-home submitted"],
+        None,
     );
-    write_headline_day(vault.path(), "2026-11-12", "");
+    write_day_fields(vault.path(), "2026-11-12", &[], None);
 
     let week = show_json(vault.path(), &config, "2026-W46");
     let by_id = |rows: &serde_json::Value, id: &str| {
@@ -2775,8 +2932,8 @@ fn week_report_and_brief_carry_day_headlines() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|child| child.get("headline").is_none()),
-        "quarter children keep Headline under review: {}",
+            .all(|child| child["headline"].is_null()),
+        "quarter children have no summary or intentions headline: {}",
         quarter["children"]
     );
 

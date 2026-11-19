@@ -345,9 +345,10 @@ pub(crate) fn build_report(
             json!({ "root_parent": [], "theme": [], "types_folded": false });
         report["charts"] =
             charts::charts_json(&charts::empty(top_roots, types_policy), 0);
-        report["columns"] = Value::Array(empty_future_columns(vault, id, span));
+        report["columns"] =
+            Value::Array(empty_future_columns(vault, id, span, today));
         report["children"] =
-            Value::Array(empty_future_children(vault, id, span));
+            Value::Array(empty_future_children(vault, id, span, today));
         report["groups"] = json!([]);
         report["homes"] = daily.homes;
         report["theme_hues"] = daily.theme_hues;
@@ -547,7 +548,9 @@ fn report_base(
             )))
         }
     };
-    let parsed = note::parse(contents.as_deref().unwrap_or(""));
+    let parsed = note::parse_for_period(contents.as_deref().unwrap_or(""), id);
+    let projection =
+        period_projection(contents.as_deref().unwrap_or(""), id, today);
     let state_name = state_name(state);
     let observed_through = match state {
         PeriodState::Future => Value::Null,
@@ -603,7 +606,14 @@ fn report_base(
             "path": path.to_string_lossy(),
             "exists": contents.is_some(),
             "instructions_version": parsed.instructions_version,
-            "review": { "state": parsed.review_state.as_str(), "headline": parsed.headline },
+            "review": {
+                "state": parsed.review_state.as_str(),
+                "headline": parsed.headline,
+                "intentions": projection.intentions,
+                "summary": projection.summary,
+                "summary_state": projection.summary_state,
+                "reflection_lead": projection.reflection_lead,
+            },
         },
         "links": Value::Object(links),
         "facts": [],
@@ -1190,29 +1200,30 @@ fn build_column(
         let state = day_state(day, today);
         let path = daily_path(day);
         let path_exists = vault.join(&path).is_file();
+        let fields = day_fields_json(vault, day, today);
         if state == PeriodState::Future {
-            return Ok(json!({
+            let result = json!({
                 "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon),
                 "caption": day_caption(day), "path": path, "exists": path_exists,
                 "start": date_text(day), "end": date_text(day), "state": "future", "partial": null,
                 "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": null,
-                "headline": day_headline_json(vault, day),
-            }));
+            });
+            return Ok(with_day_fields(result, fields));
         }
         let worked = daily
             .metrics
             .get("worked")
             .map(|metric| aggregate("worked", metric, spec.span, today));
         let closeout = closeout_for_day(day, daily, today);
-        return Ok(json!({
+        let result = json!({
             "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon),
             "caption": day_caption(day), "path": path, "exists": path_exists,
             "start": date_text(day), "end": date_text(day), "state": state_name(state), "partial": null,
             "worked": worked.as_ref().map(worked_column), "stack": worked.as_ref().map(|value| stack_value(value, homes)).unwrap_or_default(),
             "stacks": worked.as_ref().map(|value| charts::stacks_json(period_charts, &value.parts)).unwrap_or_else(charts::empty_stacks),
             "mark": closeout, "tick": null, "group": spec.group,
-            "headline": day_headline_json(vault, day),
-        }));
+        });
+        return Ok(with_day_fields(result, fields));
     }
     let child_id = spec.id.expect("period column has a period id");
     let state = child_id.state(today);
@@ -1232,8 +1243,9 @@ fn build_column(
     let partial = period_bounds(child_id).is_some_and(|natural| {
         natural.start != spec.span.start || natural.end != spec.span.end
     });
+    let fields = review_state_for(vault, child_id, today)?;
     let mark = if matches!(child_id, PeriodId::Week { .. }) {
-        Some(review_state_for(vault, child_id)?.0)
+        Some(fields.state.clone())
     } else {
         None
     };
@@ -1258,6 +1270,11 @@ fn build_column(
         },
         "mark": mark, "tick": tick, "group": spec.group,
         "range_label": range_label,
+        "headline": fields.parent_headline,
+        "intentions": fields.intentions,
+        "summary": fields.summary,
+        "summary_state": fields.summary_state,
+        "reflection_lead": fields.reflection_lead,
     }))
 }
 
@@ -1275,7 +1292,8 @@ fn build_child(
         let path = daily_path(day);
         let exists = vault.join(&path).is_file();
         if state == PeriodState::Future {
-            return Ok(json!({
+            let fields = day_fields_json(vault, day, today);
+            let result = json!({
                 "id": date_text(day),
                 "kind": "day",
                 "label": labels::day_label(day, day.weekday() == Weekday::Mon),
@@ -1284,8 +1302,8 @@ fn build_child(
                 "exists": exists,
                 "state": "future",
                 "stacks": charts::empty_stacks(),
-                "headline": day_headline_json(vault, day),
-            }));
+            });
+            return Ok(with_day_fields(result, fields));
         }
         let mut child = build_column(
             vault,
@@ -1350,6 +1368,20 @@ fn build_child(
     });
     if state == PeriodState::Future || observed_end.is_none() {
         child["stacks"] = charts::empty_stacks();
+        let review = review_state_for(vault, id, today)?;
+        child["headline"] = review
+            .parent_headline
+            .clone()
+            .map_or(Value::Null, Value::String);
+        child["review"] = review.review_json();
+        child["intentions"] = json!(review.intentions);
+        child["summary"] =
+            review.summary.clone().map_or(Value::Null, Value::String);
+        child["summary_state"] = json!(review.summary_state);
+        child["reflection_lead"] = review
+            .reflection_lead
+            .clone()
+            .map_or(Value::Null, Value::String);
         return Ok(child);
     }
     let span = observed_span(spec.span, observed_end);
@@ -1366,8 +1398,20 @@ fn build_child(
         .as_ref()
         .map(simple_metric_child)
         .unwrap_or(Value::Null);
-    let review = review_state_for(vault, id)?;
-    child["review"] = json!({ "state": review.0, "headline": review.1, "reflection_lead": review.2 });
+    let review = review_state_for(vault, id, today)?;
+    child["headline"] = review
+        .parent_headline
+        .clone()
+        .map_or(Value::Null, Value::String);
+    child["review"] = review.review_json();
+    child["intentions"] = json!(review.intentions);
+    child["summary"] =
+        review.summary.clone().map_or(Value::Null, Value::String);
+    child["summary_state"] = json!(review.summary_state);
+    child["reflection_lead"] = review
+        .reflection_lead
+        .clone()
+        .map_or(Value::Null, Value::String);
     child["closeout"] = Value::Null;
     if let Some(aggregate) = worked {
         child["mostly"] = json!(mostly_rows(&aggregate, homes));
@@ -1426,14 +1470,38 @@ fn closeout_for_day(
     }
 }
 
+#[derive(Debug, Clone)]
+struct NoteProjection {
+    state: String,
+    intentions: Vec<String>,
+    summary: Option<String>,
+    summary_state: String,
+    reflection_lead: Option<String>,
+    parent_headline: Option<String>,
+}
+
+impl NoteProjection {
+    fn review_json(&self) -> Value {
+        json!({
+            "state": self.state,
+            "headline": self.summary,
+            "intentions": self.intentions,
+            "summary": self.summary,
+            "summary_state": self.summary_state,
+            "reflection_lead": self.reflection_lead,
+        })
+    }
+}
+
 fn review_state_for(
     vault: &Path,
     id: PeriodId,
-) -> Result<(String, Option<String>, Option<String>), ShowError> {
+    today: NaiveDate,
+) -> Result<NoteProjection, ShowError> {
     let path = vault.join(id.path());
     let contents = match fs::read_to_string(&path) {
-        Ok(contents) => Some(contents),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => {
             return Err(ShowError::io(format!(
                 "read {}: {error}",
@@ -1441,12 +1509,85 @@ fn review_state_for(
             )))
         }
     };
-    let parsed = note::parse(contents.as_deref().unwrap_or(""));
-    Ok((
-        parsed.review_state.as_str().to_string(),
-        parsed.headline,
-        parsed.reflection_lead,
-    ))
+    Ok(period_projection(&contents, id, today))
+}
+
+fn period_projection(
+    contents: &str,
+    id: PeriodId,
+    today: NaiveDate,
+) -> NoteProjection {
+    let fields = crate::native::intentions::read(
+        contents,
+        crate::native::intentions::NoteSubject::Period(id),
+    );
+    let state = crate::native::intentions::evaluate(
+        &fields,
+        !fields.review_body.trim().is_empty(),
+    );
+    let summary_state =
+        crate::native::intentions::state::summary_state(&fields)
+            .as_str()
+            .to_owned();
+    let intentions: Vec<String> = fields
+        .intentions
+        .value
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .map(|value| daily_headline::display_text(value))
+        .collect();
+    let summary = fields.summary.value.clone();
+    let parent_headline = if id.state(today) == PeriodState::Closed {
+        summary
+            .as_deref()
+            .map(daily_headline::display_text)
+            .filter(|value| !value.is_empty())
+    } else {
+        let joined = intentions.join(" · ");
+        (!joined.is_empty()).then_some(joined)
+    };
+    let reflection_lead = fields
+        .reflection
+        .value
+        .as_deref()
+        .and_then(note::parse_reflection_lead);
+    NoteProjection {
+        state: state.as_str().to_owned(),
+        intentions,
+        summary,
+        summary_state,
+        reflection_lead,
+        parent_headline,
+    }
+}
+
+fn period_projection_from_vault(
+    vault: &Path,
+    id: PeriodId,
+    today: NaiveDate,
+) -> NoteProjection {
+    let contents =
+        fs::read_to_string(vault.join(id.path())).unwrap_or_default();
+    period_projection(&contents, id, today)
+}
+
+fn attach_period_projection(row: &mut Value, projection: NoteProjection) {
+    row["headline"] = projection
+        .parent_headline
+        .clone()
+        .map_or(Value::Null, Value::String);
+    row["intentions"] = json!(projection.intentions);
+    row["summary"] = projection
+        .summary
+        .clone()
+        .map_or(Value::Null, Value::String);
+    row["summary_state"] = json!(projection.summary_state);
+    row["reflection_lead"] = projection
+        .reflection_lead
+        .clone()
+        .map_or(Value::Null, Value::String);
+    row["review"] = projection.review_json();
 }
 
 fn mostly_rows(aggregate: &Aggregate, homes: &Value) -> Vec<Value> {
@@ -1564,24 +1705,40 @@ fn group_row(
     })
 }
 
-fn empty_future_columns(vault: &Path, id: PeriodId, span: Span) -> Vec<Value> {
+fn empty_future_columns(
+    vault: &Path,
+    id: PeriodId,
+    span: Span,
+    today: NaiveDate,
+) -> Vec<Value> {
     column_specs(id, span).into_iter().map(|spec| {
         if let Some(day) = spec.day {
-            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": day_caption(day), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group, "headline": day_headline_json(vault, day) })
+            let row = json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "caption": day_caption(day), "start": date_text(day), "end": date_text(day), "state": "future", "partial": null, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group });
+            with_day_fields(row, day_fields_json(vault, day, today))
         } else {
             let child = spec.id.expect("period spec id");
-            json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "caption": labels::short_label(child), "path": child.path().to_string_lossy(), "exists": false, "start": date_text(spec.span.start), "end": date_text(spec.span.end), "state": "future", "partial": false, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group })
+            let mut row = json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "caption": labels::short_label(child), "path": child.path().to_string_lossy(), "exists": vault.join(child.path()).is_file(), "start": date_text(spec.span.start), "end": date_text(spec.span.end), "state": "future", "partial": false, "worked": null, "stack": [], "stacks": charts::empty_stacks(), "mark": null, "tick": null, "group": spec.group });
+            attach_period_projection(&mut row, period_projection_from_vault(vault, child, today));
+            row
         }
     }).collect()
 }
 
-fn empty_future_children(vault: &Path, id: PeriodId, span: Span) -> Vec<Value> {
+fn empty_future_children(
+    vault: &Path,
+    id: PeriodId,
+    span: Span,
+    today: NaiveDate,
+) -> Vec<Value> {
     child_specs(id, span).into_iter().map(|spec| {
         if let Some(day) = spec.day {
-            json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "range_label": date_text(day), "path": daily_path(day), "exists": false, "state": "future", "stacks": charts::empty_stacks(), "headline": day_headline_json(vault, day) })
+            let row = json!({ "id": date_text(day), "kind": "day", "label": labels::day_label(day, day.weekday() == Weekday::Mon), "range_label": date_text(day), "path": daily_path(day), "exists": vault.join(daily_path(day)).is_file(), "state": "future", "stacks": charts::empty_stacks() });
+            with_day_fields(row, day_fields_json(vault, day, today))
         } else {
             let child = spec.id.expect("period child id");
-            json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "range_label": labels::range_label(spec.span.start, spec.span.end), "path": child.path().to_string_lossy(), "exists": false, "state": "future", "stacks": charts::empty_stacks() })
+            let mut row = json!({ "id": child.to_string(), "kind": kind_name(child), "label": labels::short_label(child), "range_label": labels::range_label(spec.span.start, spec.span.end), "path": child.path().to_string_lossy(), "exists": vault.join(child.path()).is_file(), "state": "future", "stacks": charts::empty_stacks() });
+            attach_period_projection(&mut row, period_projection_from_vault(vault, child, today));
+            row
         }
     }).collect()
 }
@@ -1730,13 +1887,58 @@ fn daily_path(day: NaiveDate) -> String {
     )
 }
 
-fn day_headline_json(vault: &Path, day: NaiveDate) -> Value {
-    match fs::read_to_string(vault.join(daily_path(day))) {
-        Ok(contents) => daily_headline::parse(&contents)
-            .map(|headline| json!(headline.display))
-            .unwrap_or(Value::Null),
-        Err(_) => Value::Null,
+fn day_fields_json(vault: &Path, day: NaiveDate, today: NaiveDate) -> Value {
+    let contents =
+        fs::read_to_string(vault.join(daily_path(day))).unwrap_or_default();
+    let fields = crate::native::intentions::read(
+        &contents,
+        crate::native::intentions::NoteSubject::Day(day),
+    );
+    let intentions: Vec<String> = fields
+        .intentions
+        .value
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .map(|value| daily_headline::display_text(value))
+        .collect();
+    let summary = fields.summary.value.clone();
+    let summary_state =
+        crate::native::intentions::state::summary_state(&fields).as_str();
+    let reflection_lead = fields
+        .reflection
+        .value
+        .as_deref()
+        .and_then(note::parse_reflection_lead);
+    let headline = if day < today {
+        summary
+            .as_deref()
+            .map(daily_headline::display_text)
+            .filter(|value| !value.is_empty())
+    } else {
+        let joined = intentions.join(" · ");
+        (!joined.is_empty()).then_some(joined)
+    };
+    json!({
+        "headline": headline,
+        "intentions": intentions,
+        "summary": summary,
+        "summary_state": summary_state,
+        "reflection_lead": reflection_lead,
+    })
+}
+
+fn with_day_fields(mut value: Value, fields: Value) -> Value {
+    for key in [
+        "headline",
+        "intentions",
+        "summary",
+        "summary_state",
+        "reflection_lead",
+    ] {
+        value[key] = fields[key].clone();
     }
+    value
 }
 
 fn date_text(date: NaiveDate) -> String {

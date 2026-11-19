@@ -205,7 +205,7 @@ See docs/periods.md for the calendar, scaffolds, and JSON.
 List period notes with review states (default)
 
 ```text title="bob periods list --help"
-List the period notes that exist, newest first, grouped year → quarter → weeks. Each row shows its review-state mark and its Headline. -p/--problems reports dangling daily parents, missing period notes, unscaffolded notes, wrong parents, task rows, and stale instructions. The command is read-only. See docs/periods.md for the review states, problems, and JSON.
+List the period notes that exist, newest first, grouped year → quarter → weeks. Each row shows its review-state mark and its Summary. -p/--problems reports dangling daily parents, missing period notes, unscaffolded notes, wrong parents, task rows, and stale instructions. The command is read-only. See docs/periods.md for summaries, review states, problems, and JSON.
 
 Usage: bob periods list [OPTIONS]
 
@@ -250,7 +250,7 @@ Exit codes:
   1  vault I/O failure
   2  usage error
 
-See docs/periods.md for the review states and JSON.
+See docs/periods.md for summaries, review states, and JSON.
 ```
 
 ## bob periods migrate

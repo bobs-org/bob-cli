@@ -10780,8 +10780,9 @@ untypeable slugs stay in the list with `selectable: false`.
 
 With `-t/--tasks`, `capture-pomodoros` resolves each listed entry's Task Links
 into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
-name or today), `headline` (today's Daily Headline display text, or `null`
-when the daily note is missing or the slot is empty; omitted without
+name or today), `intentions` (an array of display strings, empty when the note
+is missing or has no intentions), `headline` (the first intention's display
+text, or `null` when the list is empty; omitted along with `intentions` without
 `--tasks`), and `completed_summary` (`count` of completed ledger entries and
 their summed `minutes`: each worked entry's recorded `[t:: Nm]` or stopwatch
 duration; off-clock sessions contribute to neither Worked count nor minutes).
@@ -10793,7 +10794,7 @@ Each entry adds a derived `homes` object (the shared R9 shape from
 [Pomodoro homes](pomodoro-homes.md): `state`,
 `kind`, `label`, nullable `chip` and `hue`, and `parts`). Open entries are a
 forecast; completed entries are an attribution with `minutes` on each part.
-Human output prints the Daily Headline as one bold line under the header
+Human output prints the compatible headline as one bold line under the header
 when present, and appends a dim chip with its forecast `○` or attributed `●`
 dot after the entry name when `chip` is set. The schema stays version `1`.
 Calls without `--tasks` omit `homes`. When the day note has an `## Events` section,

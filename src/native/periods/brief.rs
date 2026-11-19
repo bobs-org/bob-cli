@@ -21,12 +21,13 @@ use serde_json::{json, Value};
 
 use super::{
     calendar::{PeriodId, PeriodState},
-    cli, note, report,
+    cli, report,
 };
 use crate::native::{
     config,
     daily_headline::{flatten_wikilinks, wikilink_display},
     env as bob_env,
+    intentions::{self, NoteSubject},
     pomodoro_homes::split_minutes,
     stats::{
         clock::StatsClock,
@@ -2136,17 +2137,25 @@ fn neighbours_section(ctx: &Ctx) -> Value {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let prev_sections = ctx
-        .buffers
-        .get(&prev_path)
-        .map(|contents| note::parse(contents).sections)
+    let prev_fields = ctx.id.prev().and_then(|id| {
+        ctx.buffers
+            .get(&prev_path)
+            .map(|contents| intentions::read(contents, NoteSubject::Period(id)))
+    });
+    let prev_reflection = prev_fields
+        .as_ref()
+        .and_then(|fields| fields.reflection.value.as_deref())
+        .map(|reflection| truncate_words(reflection, 300))
         .unwrap_or_default();
-    let prev_reflection = truncate_words(
-        &prev_sections.get("Reflection").cloned().unwrap_or_default(),
-        300,
+    let prev_review = previous_review(
+        prev_fields
+            .as_ref()
+            .and_then(|fields| fields.summary.value.as_deref())
+            .unwrap_or_default(),
+        prev_fields
+            .as_ref()
+            .map_or("", |fields| fields.review_body.as_str()),
     );
-    let prev_review =
-        previous_review(prev_sections.get("Review").map_or("", String::as_str));
     let parent_path = ctx
         .report
         .get("links")
@@ -2155,17 +2164,27 @@ fn neighbours_section(ctx: &Ctx) -> Value {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let parent_sections = ctx
-        .buffers
-        .get(&parent_path)
-        .map(|contents| note::parse(contents).sections)
+    let parent_intentions = ctx
+        .id
+        .parent()
+        .and_then(|id| {
+            ctx.buffers.get(&parent_path).map(|contents| {
+                intentions::read(contents, NoteSubject::Period(id))
+                    .intentions
+                    .value
+                    .unwrap_or_default()
+            })
+        })
         .unwrap_or_default();
+    let parent_intentions = intention_bullets(&parent_intentions);
     let mut section = json!({
         "own": own,
         "prev_reflection": prev_reflection,
         "prev_review": prev_review,
-        "parent_outcomes": parent_sections.get("Outcomes").cloned().unwrap_or_default(),
-        "parent_theme": parent_sections.get("Theme").cloned().unwrap_or_default(),
+        // Brief v2 retains its legacy keys; unified parent intentions occupy
+        // Outcomes once, while Theme stays empty to avoid duplicating a year.
+        "parent_outcomes": parent_intentions,
+        "parent_theme": "",
     });
     if matches!(ctx.id, PeriodId::Year(_)) {
         section["h3_goal"] = ctx
@@ -2187,15 +2206,11 @@ fn neighbours_section(ctx: &Ctx) -> Value {
 /// Cap for each previous-Review part the brief carries.
 const PREV_PART_WORDS: usize = 150;
 
-/// The previous same-kind Review's Headline (its whole first paragraph,
-/// joined onto one line), its Carried forward block (`Still open` in v1
-/// drafts), and its Questions block, each verbatim and capped. Absent
-/// parts are empty strings.
-fn previous_review(review: &str) -> Value {
+/// The previous same-kind summary and Review's Carried forward block
+/// (`Still open` in v1 drafts) and Questions block, each verbatim and capped.
+/// Absent parts are empty strings.
+fn previous_review(summary: &str, review: &str) -> Value {
     let parts = review_parts(review);
-    // The same paragraph rule parents use, so a hard-wrapped v1
-    // Headline arrives whole.
-    let headline = note::parse_headline(review).unwrap_or_default();
     let (carried_label, carried) = parts
         .iter()
         .find(|(label, _)| label == "Carried forward")
@@ -2210,7 +2225,7 @@ fn previous_review(review: &str) -> Value {
         .map(|(_, body)| cap_words_keep_lines(body, PREV_PART_WORDS))
         .unwrap_or_default();
     json!({
-        "headline": headline,
+        "headline": summary,
         "carried_label": carried_label,
         "carried": carried,
         "questions": questions,
@@ -2271,22 +2286,29 @@ fn cap_words_keep_lines(text: &str, cap: usize) -> String {
 
 /// This note's human sections verbatim, by kind.
 fn own_sections(id: PeriodId, contents: &str) -> Value {
-    let sections = note::parse(contents).sections;
-    let pick = |names: &[&str]| -> Value {
-        let mut picked = serde_json::Map::new();
-        for name in names {
-            if let Some(body) = sections.get(*name) {
-                picked.insert((*name).to_string(), Value::String(body.clone()));
-            }
-        }
-        Value::Object(picked)
+    let fields = intentions::read(contents, NoteSubject::Period(id));
+    let values = fields.intentions.value.unwrap_or_default();
+    let key = match id {
+        PeriodId::Week { .. } => "Intentions",
+        PeriodId::Quarter { .. } => "Outcomes",
+        PeriodId::Year(_) => "Intentions",
+        PeriodId::AllTime => return Value::Object(serde_json::Map::new()),
     };
-    match id {
-        PeriodId::Week { .. } => pick(&["Intentions"]),
-        PeriodId::Quarter { .. } => pick(&["Outcomes"]),
-        PeriodId::Year(_) => pick(&["Theme", "Outcomes"]),
-        PeriodId::AllTime => Value::Object(serde_json::Map::new()),
+    let body = intention_bullets(&values);
+    let mut own = serde_json::Map::new();
+    if !body.is_empty() {
+        own.insert(key.to_owned(), Value::String(body));
     }
+    Value::Object(own)
+}
+
+fn intention_bullets(values: &[String]) -> String {
+    values
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("- {}", value.trim()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn truncate_words(text: &str, cap: usize) -> String {
@@ -3329,26 +3351,35 @@ mod tests {
     }
 
     #[test]
-    fn previous_review_joins_the_headline_and_keeps_parts_verbatim() {
+    fn previous_review_uses_typed_summary_and_keeps_parts_verbatim() {
         let review = "**Headline:** A 24h 45m week, 5h 28m below typical, put 45% into bob,\nled by WIP/Next auto-decay.\n\n**Shipped:**\n\n- one\n\n**Carried forward:**\n\n- [[a#^b|Docs]] · kept 3×\n- second\n\n**Questions:**\n\n1. Why?\n2. What next?\n";
-        let prev = previous_review(review);
-        assert_eq!(
-            prev["headline"],
-            "A 24h 45m week, 5h 28m below typical, put 45% into bob, led by WIP/Next auto-decay."
-        );
+        let summary = "A 24h 45m week, 5h 28m below typical, put 45% into bob, led by WIP/Next auto-decay.";
+        let prev = previous_review(summary, review);
+        assert_eq!(prev["headline"], summary);
         assert_eq!(prev["carried_label"], "Carried forward");
         assert_eq!(prev["carried"], "- [[a#^b|Docs]] · kept 3×\n- second");
         assert_eq!(prev["questions"], "1. Why?\n2. What next?");
 
-        let v1 =
-            previous_review("**Headline:** Calm.\n\n**Still open:**\n\n- x\n");
+        let v1 = previous_review(
+            "Calm.",
+            "**Headline:** Calm.\n\n**Still open:**\n\n- x\n",
+        );
         assert_eq!(v1["carried_label"], "Still open");
         assert_eq!(v1["carried"], "- x");
         assert_eq!(v1["questions"], "");
 
-        let empty = previous_review("");
+        let empty = previous_review("", "");
         assert_eq!(empty["headline"], "");
         assert_eq!(empty["carried"], "");
+    }
+
+    #[test]
+    fn year_own_intentions_are_projected_once() {
+        let contents = "---\nintentions: [\"Shared aim\", \"First outcome\"]\n---\n\n## Theme\nLegacy theme\n\n## Outcomes\n- Legacy outcome\n";
+        assert_eq!(
+            own_sections(PeriodId::Year(2026), contents),
+            json!({"Intentions": "- Shared aim\n- First outcome"})
+        );
     }
 
     #[test]

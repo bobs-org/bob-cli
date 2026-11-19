@@ -124,6 +124,7 @@
     "synced_at": null
   },
   "headline": null,
+  "intentions": [],
   "max_task_link_count": 2,
   "ok": true,
   "plan_budget": {

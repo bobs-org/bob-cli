@@ -85,6 +85,10 @@ else:
             .env("BOB_DIR", self.path("vault"))
             .env("XDG_STATE_HOME", self.path("state"))
             .env("BOB_TICK_STEP_EXE", self.path("step.py"))
+            // Tick uses its own scheduler clock, while readiness resolves
+            // today's note through bob_env::now(). Pin both to keep the
+            // fixture stable after the host calendar rolls over.
+            .env("BOB_NOW", at)
             .env("BOB_TICK_NOW", at)
             .env("TICK_FIXTURE", self.dir.path())
             .env("HOSTNAME", "test-host")

@@ -16,45 +16,9 @@ pub(crate) struct DailyHeadline {
 /// Parse the first non-empty `**Headline:**` / `**Headline**:` paragraph
 /// in the preamble (after YAML frontmatter, before the first `## `
 /// heading, skipping fenced blocks). An empty slot is not a Headline.
+#[cfg(test)]
 pub(crate) fn parse(contents: &str) -> Option<DailyHeadline> {
-    let lines: Vec<&str> = contents.lines().collect();
-    let start = markdown::strictly_closed_frontmatter_end(&lines)
-        .map(|end| end + 1)
-        .unwrap_or(0);
-    let fenced = markdown::fenced_lines(&lines, start..lines.len());
-    let mut index = start;
-    while index < lines.len() {
-        if fenced.contains(&index) {
-            index += 1;
-            continue;
-        }
-        let line = lines[index];
-        if is_preamble_end(line) {
-            break;
-        }
-        if let Some(rest) = headline_label_rest(line) {
-            let mut words: Vec<&str> = rest.split_whitespace().collect();
-            let mut next = index + 1;
-            while next < lines.len() {
-                if fenced.contains(&next)
-                    || ends_headline_paragraph(lines[next])
-                {
-                    break;
-                }
-                words.extend(lines[next].split_whitespace());
-                next += 1;
-            }
-            if !words.is_empty() {
-                let text = words.join(" ");
-                let display = flatten_display(&text);
-                return Some(DailyHeadline { text, display });
-            }
-            index = next.max(index + 1);
-            continue;
-        }
-        index += 1;
-    }
-    None
+    crate::native::intentions::legacy::parse_daily_headline(contents)
 }
 
 /// Whether `line` ends a Headline paragraph: a blank line, a list item,
@@ -138,27 +102,6 @@ fn replace_wikilinks(text: &str) -> String {
     out
 }
 
-fn is_preamble_end(line: &str) -> bool {
-    markdown::atx_heading(line).is_some_and(|(level, _)| level >= 2)
-}
-
-/// Remainder after a `**Headline:**` or `**Headline**:` label. The label
-/// matches ASCII-case-insensitively.
-fn headline_label_rest(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    let rest = trimmed.strip_prefix("**")?;
-    let close = rest.find("**")?;
-    let label = &rest[..close];
-    let after = &rest[close + 2..];
-    if label.eq_ignore_ascii_case("Headline:") {
-        return Some(after);
-    }
-    if label.eq_ignore_ascii_case("Headline") {
-        return after.strip_prefix(':');
-    }
-    None
-}
-
 fn is_bold_label(trimmed: &str) -> bool {
     let Some(rest) = trimmed.strip_prefix("**") else {
         return false;
@@ -181,6 +124,11 @@ fn flatten_display(text: &str) -> String {
         .replace("==", "")
         .replace('`', "");
     stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Shared display projection for one Markdown intention/summary string.
+pub(crate) fn display_text(text: &str) -> String {
+    flatten_display(text)
 }
 
 fn replace_markdown_links(text: &str) -> String {

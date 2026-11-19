@@ -3,6 +3,10 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # Horizontal rule drawn beneath each section title (single source for width/char).
 rule := "────────────────────────────────────────────────"
 rustc_gate := "-D unused -A unused_extern_crates -A unused_macro_rules -D private_interfaces"
+# bob-cli-nh.2 consumes the shared intention patch API and its verified writer.
+# --epic-symbol 'bob-cli-nh.2(intentions::write::Patch)'
+# --epic-symbol 'bob-cli-nh.2(intentions::write::apply)'
+# --epic-symbol 'bob-cli-nh.2(intentions::subject::read_existing)'
 # Mechanical Clippy classes denied by just lint / just check on Linux and macOS.
 # Advisory classes stay at their default levels; see docs/develop/ci.md.
 clippy_gate := (
