@@ -535,7 +535,9 @@ fn yaml_field_state(raw: Option<&YamlValue>) -> FieldInputState {
                 "<unsupported YAML value>".to_owned(),
             ]),
             Some(inputs) if inputs.is_empty() => FieldInputState::SuppliedEmpty,
-            Some(inputs) => FieldInputState::SuppliedValues(inputs),
+            // YAML has already delimited list members. Only CLI `-s`
+            // occurrences use the comma-separated input grammar.
+            Some(inputs) => FieldInputState::SuppliedLiteralValues(inputs),
         },
     }
 }

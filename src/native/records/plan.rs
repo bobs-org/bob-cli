@@ -1364,7 +1364,9 @@ fn yaml_to_current(
     if inputs.is_empty() {
         return None;
     }
-    match super::schema::validate_field_values(field, &inputs, today) {
+    // Stored YAML members are literal, including commas. Re-parsing them
+    // as CLI input changes current values and turns identical saves into edits.
+    match super::schema::validate_literal_values(field, &inputs, today) {
         Ok(value) => Some(value),
         Err(_) => Some(fallback_current(field, &inputs)),
     }

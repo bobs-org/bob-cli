@@ -550,10 +550,10 @@ fn field_state(note: &IndexedRecord, field: &RecordField) -> FieldInputState {
         None => FieldInputState::Absent,
         Some(IndexedFieldValue::Null) => FieldInputState::SuppliedEmpty,
         Some(IndexedFieldValue::Scalar(value)) => {
-            FieldInputState::SuppliedValues(vec![value.clone()])
+            FieldInputState::SuppliedLiteralValues(vec![value.clone()])
         }
         Some(IndexedFieldValue::List(values)) => {
-            FieldInputState::SuppliedValues(values.clone())
+            FieldInputState::SuppliedLiteralValues(values.clone())
         }
         Some(IndexedFieldValue::Unsupported) => {
             FieldInputState::SuppliedValues(vec![

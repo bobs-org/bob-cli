@@ -3154,6 +3154,15 @@ fn update_envelope_typed_numbers_and_comma_lists_round_trip() {
         .expect("tags property");
     assert_eq!(tags["value"], serde_json::json!(["a,b", "c"]));
 
+    let shown = show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    );
+    assert_success(&shown);
+    let shown = show_json(&shown);
+    assert_eq!(property(&shown, "tags")["raw"], tags["value"]);
+    assert_eq!(property(&shown, "tags")["value"], tags["value"]);
+
     // Undo replays with expect = fingerprint_after and ops = inverse_ops.
     let after = payload["fingerprint_after"].as_str().unwrap().to_owned();
     let inverse = payload["inverse_ops"].clone();
@@ -3169,6 +3178,118 @@ fn update_envelope_typed_numbers_and_comma_lists_round_trip() {
         fs::read_to_string(fixture.vault.join("eat/ninja_sushi.md")).unwrap();
     assert!(!restored.contains("tags:"), "{restored}");
     assert!(restored.contains("rating: 4"), "{restored}");
+}
+
+#[test]
+fn show_record_literal_list_choices_keep_commas() {
+    let fixture = envelope_fixture();
+    let album = fixture.vault.join("eat.md");
+    let schema = fs::read_to_string(&album).unwrap().replace(
+        "tags: {list: true}",
+        "tags: {list: true, values: {'Science, fiction': Fiction, 'c,d': Other}}",
+    );
+    write_file(&album, &schema);
+    let note = fixture.vault.join("eat/ninja_sushi.md");
+    let original = fs::read_to_string(&note).unwrap().replacen(
+        "---\n",
+        "---\ntags: [\"Science, fiction\", \"c,d\"]\n",
+        1,
+    );
+    write_file(&note, &original);
+    let shown = show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    );
+    assert_success(&shown);
+    let shown = show_json(&shown);
+    let tags = property(&shown, "tags");
+    assert_eq!(tags["state"], "set");
+    assert_eq!(
+        tags["value"],
+        serde_json::json!(["Science, fiction", "c,d"])
+    );
+    assert_eq!(tags["display"], "Fiction, Other");
+    assert!(shown["record"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|finding| finding["field"] != "tags"
+            && finding["key_path"] != "tags"));
+    assert_eq!(fs::read_to_string(&note).unwrap(), original);
+}
+
+#[test]
+fn update_envelope_literal_list_noop_preserves_bytes() {
+    let fixture = envelope_fixture();
+    let note = fixture.vault.join("eat/ninja_sushi.md");
+    let original = fs::read_to_string(&note).unwrap();
+    let original = original.replacen(
+        "---\n",
+        "---\ntags: [\"Science, fiction\", \"c,d\"]\n",
+        1,
+    );
+    write_file(&note, &original);
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"tags","value":["Science, fiction","c,d"]}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    assert_eq!(payload["changed"], serde_json::json!([]));
+    assert_eq!(payload["fingerprint_after"], fingerprint);
+    assert_eq!(fs::read_to_string(&note).unwrap(), original);
+}
+
+#[test]
+fn update_envelope_literal_list_current_and_undo_keep_commas() {
+    let fixture = envelope_fixture();
+    let note = fixture.vault.join("eat/ninja_sushi.md");
+    let original = fs::read_to_string(&note).unwrap().replacen(
+        "---\n",
+        "---\ntags:\n  - \"Science, fiction\"\n  - \"c,d\"\n",
+        1,
+    );
+    write_file(&note, &original);
+    let fingerprint = show_fingerprint(&fixture, "ninja_sushi");
+    let output = envelope_run(
+        &fixture,
+        &envelope_doc(
+            &fingerprint,
+            r#"{"op":"field.set","field":"tags","value":["replacement"]}"#,
+        ),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let payload = envelope_json(&output);
+    let tags = payload["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "tags")
+        .unwrap();
+    let expected = serde_json::json!(["Science, fiction", "c,d"]);
+    assert_eq!(tags["before"], expected);
+    assert_eq!(payload["inverse_ops"][0]["value"], expected);
+    let replay = serde_json::json!({
+        "schema_version": 1,
+        "expect": payload["fingerprint_after"],
+        "ops": payload["inverse_ops"],
+    });
+    let output = envelope_run(&fixture, &replay.to_string(), &["-f", "json"]);
+    assert_success(&output);
+    assert_eq!(envelope_json(&output)["fingerprint_after"], fingerprint);
+    assert_eq!(fs::read_to_string(&note).unwrap(), original);
+    let shown = show_record(
+        &fixture,
+        &["show", "restaurant", "ninja_sushi", "-f", "json"],
+    );
+    assert_success(&shown);
+    assert_eq!(property(&show_json(&shown), "tags")["value"], expected);
 }
 
 #[test]
