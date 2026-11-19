@@ -12,8 +12,8 @@ See [Capture contract](../capture.md).
 capture directive.
 
 Examples use synthetic notes (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
-Options precede drafts; `--` ends option parsing. Unknown alphabetic options
-before the draft fail; use `--` for literal `-o` or `--flag` text.
+Options precede drafts. Unknown alphabetic options before drafts fail;
+`--` makes `-o` or `--flag` literal.
 
 ## Token index
 
@@ -99,7 +99,7 @@ Incomplete **picker** input cannot execute.
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
 | `,` | Parent picker; glued `@route:id` / `@route^id` | Alias `+`; continue target runs with ` +`; change `:`/`^` to `+` |
-| `.` | Item start; after `@route`; spaced modifier | Alias `@`; `^`; `&`. Spaced `;` aliases `*` |
+| `.` | Mac Capture picker positions | `@` before routing; `^` glued to `@route`; `&` spaced after routing. Spaced `;` gives `*` |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge; `@parent^id@` | Pomodoro note; create a notebook |
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
@@ -538,9 +538,9 @@ Contract: [Going to a task with '/'](../capture.md#going-to-a-task-with).
 
 ### `//<query>` {#double-slash-picker}
 
-Whole-draft Go To Notes picker (`note_goto`); accepting opens a note without
-capture. `capture-complete -A` selects archived notes instead of living notes;
-hidden paths stay excluded.
+Whole-draft Go To Notes picker (`note_goto`). Mac Capture opens selections
+in Obsidian; `bob capture` refuses the query. `capture-complete -A` lists
+archived notes instead of living notes; hidden paths stay excluded.
 
 ```bash
 bob capture '//cash'
@@ -1499,10 +1499,10 @@ Contract: [Directives (`%`)](../capture.md#directives).
 
 ### `%c` / `%c<N>` {#percent-clipboard}
 
-`%c` reads the live clipboard; `%c3` reads three values. `-c, --clip` forces
-`%c`; `-n, --no-clip` reports `clip.status: not_read` in previews and refuses
-real clipboard capture. File paths import images into `img/`, videos into
-`vid/`, and other files into `file/`. Mid-line `50%` stays prose:
+`%c` reads the live clipboard once; `%c3` reads three history entries,
+newest first. `-c, --clip` requests `%c`. With `-n, --no-clip`, previews
+report `clip.status: not_read`; clipboard captures fail. File paths import
+to `img/` (images), `vid/` (MP4/MOV/WebM/MKV), or `file/` (others). `50%` stays prose:
 
 ```bash
 bob capture 'Keep 50% @work'

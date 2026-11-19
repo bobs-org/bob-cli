@@ -57,15 +57,16 @@ on any host and show the pin.
 ## Scheduling and gates
 
 With no step names, `bob tick` runs due steps. Due time is measured from the
-last start, rounded down to the minute; a failed or timed-out run still starts
-the next interval. Waiting and skipped steps do not consume it. A backwards
-clock change is ignored with a warning.
+last start, rounded down to the minute; a failed or timed-out child still starts
+the next interval. Skipped steps, closed precondition gates, and Gmail's
+`vault_busy` result do not consume it. A backwards clock change is ignored
+with a warning.
 
 Naming steps runs only those steps now, in catalog order, while keeping safety
 gates. `--all` runs every step that is not `off`, including manual steps. A
-scheduled intake step that ran also brings due `projects` and `tasks` forward;
-if either derive step could not run, a saved follow-up makes the next
-scheduled pass run it.
+scheduled intake step that starts also brings interval-based `projects` and
+`tasks` forward, even before their next interval. If either cannot start,
+a saved follow-up retries it on the next scheduled pass.
 
 Calendar and task reconciliation wait until today's daily note exists, is
 rendered, and contains `## Pomodoros`. Calendar runs include yesterday on the
@@ -114,16 +115,17 @@ and `last_summary`. Reference gates can add `fingerprint_changed`, `hook`,
 and `full_scan_due_at`. Summaries contain counts or scheduler status, never
 mail or calendar text.
 
-Read-only views neither spawn children nor change state or `last.json`:
+Read-only views run no steps and leave scheduler state and `last.json` unchanged:
 
 | View | JSON fields |
 | --- | --- |
 | `bob tick -d -f json` | `mode: "plan"`; per-step `would_run` reflects cadence and gates. No row claims work ran. |
-| `bob tick -s -f json` | `mode: "status"`; saved step results with current gate information when due. Optional step names filter the board. |
+| `bob tick -s -f json` | `mode: "status"`; saved step results with current gate information for steps selected by the scheduler. Optional step names filter the board. |
 
 Receipts have `schema_version: 1` and `command: "tick"`, with no `ok` field;
-read `exit_code` and each step's outcome. A wrong-host read-only view adds
-`banner`. An already-running response has `reason: "already_running"` and
+`exit_code` describes this invocation. In status mode, check the saved step
+outcomes for previous failures. A wrong-host read-only view adds `banner`.
+An already-running response has `reason: "already_running"` and
 `steps: []`, without receipt timestamps. Configuration and writer errors
 print to stderr without a JSON receipt, even with `-f json`.
 

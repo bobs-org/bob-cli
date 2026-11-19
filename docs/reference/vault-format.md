@@ -462,19 +462,21 @@ Contract: [Albums and record notes](../records.md).
 
 Record notes live at `<album>/<stem>.md` with `type: "[[record]]"`,
 `parent: "[[<album>]]"`, `title`, schema fields, and `created`. Bob writes
-no H1. Ordinary bullets live under `## Notes`, created only when needed;
-`dated_notes: true` dates them.
+no `#` title heading. Ordinary bullets live under `## Notes`, created only
+when needed; `dated_notes: true` dates them.
 
-New records start with a [generated walk line](../records.md#record-walk):
-previous record, album, and next record in title order, wrapping at both ends.
-A single-record album has only the album link. `bob albums sync` repairs
-these lines; positions and counts are never stored.
+A [walk line](../records.md#record-walk) starts each new record's body:
+links to the previous record, album, and next record in title order, wrapping
+at both ends. With one record, only the album link appears. `bob albums sync`
+fills missing lines and refreshes stale ones; damaged lines require manual repair.
+Positions and counts are never stored.
 
 For a `restaurant` album owning `eat/`, `Ramen Nagi @eat/` plus its required
 field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi` updates supplied
-fields and appends notes. Writes update the index; creates also update neighbours.
+fields and appends notes. Writes refresh the album index; creates also refresh
+neighbours' walk lines when safe.
 `bob records show TYPE STEM` reads one record; `bob records tidy` removes empty
-Notes sections and redundant H1s. `bob albums create` creates schemas.
+Notes sections and redundant H1s. `bob albums create` creates albums and schemas.
 
 Contract: [Albums and record notes](../records.md).
 
