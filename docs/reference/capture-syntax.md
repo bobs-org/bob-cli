@@ -12,7 +12,8 @@ See [Capture contract](../capture.md).
 capture directive.
 
 Examples use synthetic notes (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
-Options precede drafts; `--` ends option parsing.
+Options precede drafts; `--` ends option parsing. Unknown alphabetic options
+before the draft fail; use `--` for literal `-o` or `--flag` text.
 
 ## Token index
 
@@ -98,7 +99,7 @@ Incomplete **picker** input cannot execute.
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
 | `,` | Parent picker; glued `@route:id` / `@route^id` | Alias `+`; continue target runs with ` +`; change `:`/`^` to `+` |
-| `.` | After `@route`, a space, or an item start | Alias `^`, `@`, or `&`; spaced `;` aliases `*` |
+| `.` | Item start; after `@route`; spaced modifier | Alias `@`; `^`; `&`. Spaced `;` aliases `*` |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge; `@parent^id@` | Pomodoro note; create a notebook |
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
@@ -537,8 +538,9 @@ Contract: [Going to a task with '/'](../capture.md#going-to-a-task-with).
 
 ### `//<query>` {#double-slash-picker}
 
-Incomplete Go To Notes picker (`note_goto`); accepting opens notes in
-Obsidian without capture.
+Whole-draft Go To Notes picker (`note_goto`); accepting opens a note without
+capture. `capture-complete -A` selects archived notes instead of living notes;
+hidden paths stay excluded.
 
 ```bash
 bob capture '//cash'
@@ -1497,12 +1499,10 @@ Contract: [Directives (`%`)](../capture.md#directives).
 
 ### `%c` / `%c<N>` {#percent-clipboard}
 
-Capture clipboard content as child bullets. `%c` reads the live clipboard
-once; `%c3` reads three values. `-c, --clip` forces a clipboard read as if
-`%c` were written. `-n, --no-clip` never reads the clipboard: a dry run
-reports `clip.status: not_read`, and a real capture refuses. Mid-line `50%`
-stays prose. Clipboard backends are stubbed in this isolated fixture, so
-the example keeps the percent as body text.
+`%c` reads the live clipboard; `%c3` reads three values. `-c, --clip` forces
+`%c`; `-n, --no-clip` reports `clip.status: not_read` in previews and refuses
+real clipboard capture. File paths import images into `img/`, videos into
+`vid/`, and other files into `file/`. Mid-line `50%` stays prose:
 
 ```bash
 bob capture 'Keep 50% @work'

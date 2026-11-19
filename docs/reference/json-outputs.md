@@ -14,8 +14,9 @@ stdout `schema_version` counts.
 
 JSON goes to stdout, chatter to stderr; usage errors exit 2.
 
-Versioned helpers include `ok: true` and often `schema_version`; some
-capture-helper errors return `{"ok":false,"error":"…"}` unversioned.
+Most versioned helpers include `ok` and `schema_version`; `tick` uses
+`exit_code` without `ok`. Some capture-helper errors return
+`{"ok":false,"error":"…"}` unversioned.
 
 `…` marks omissions.
 
@@ -24,7 +25,7 @@ bob capture-parse -f json -- 'Buy milk @dev'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":27,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
+{"ok":true,"schema_version":1,"grammar":28,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
 ```
 
 ```bash
@@ -77,7 +78,7 @@ bob capture-parse -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":27,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category","location"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
+{"ok":true,"schema_version":1,"grammar":28,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category","location"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
 ```
 
 Existing `@eat/ninja_sushi` is `record_update` (`stem_source: "existing"`). Fields
@@ -119,7 +120,7 @@ bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":27,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status","assist_version":1},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"💚 Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
+{"ok":true,"schema_version":1,"grammar":28,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status","assist_version":1},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"💚 Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
 ```
 
 Accepting inserts `- status:: liked`. `-n` walks remaining required fields.
@@ -130,7 +131,7 @@ bob capture-complete -F visited -c 16 -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":27,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"visited","assist_version":1,"edit":{"replacement_range":{"start":16,"end":16},"replacement":"\n- visited:: ","cursor_after":29,"continuation":{"cursor":29,"next_missing_field":false}}},"candidates":[{"replacement":"\n- visited:: today","value":"today","display":"today","kind":"date","cursor_after":34}]}
+{"ok":true,"schema_version":1,"grammar":28,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"visited","assist_version":1,"edit":{"replacement_range":{"start":16,"end":16},"replacement":"\n- visited:: ","cursor_after":29,"continuation":{"cursor":29,"next_missing_field":false}}},"candidates":[{"replacement":"\n- visited:: today","value":"today","display":"today","kind":"date","cursor_after":34}]}
 ```
 
 `@` inserts `eat/ ` (`kind: "record"`). Empty `@eat#` expands `replacement`
@@ -141,7 +142,7 @@ bob capture-complete -c 5 -f json -- '@eat#'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":27,"cursor":5,"replacement":{"start":0,"end":5},"context":"section","candidates":[{"kind":"record_create","replacement":"@eat/ ","label":"🍽️ New restaurant · eat/","route":"eat/","type":"restaurant","cursor_after":6,"continuation":{"cursor":6,"next_missing_field":true}},{"replacement":"@eat#Ideas","title":"Ideas","level":1}]}
+{"ok":true,"schema_version":1,"grammar":28,"cursor":5,"replacement":{"start":0,"end":5},"context":"section","candidates":[{"kind":"record_create","replacement":"@eat/ ","label":"🍽️ New restaurant · eat/","route":"eat/","type":"restaurant","cursor_after":6,"continuation":{"cursor":6,"next_missing_field":true}},{"replacement":"@eat#Ideas","title":"Ideas","level":1}]}
 ```
 
 Near-spellings warn `record_value_near` with no rewrite. Parse reports
@@ -486,6 +487,7 @@ no `--format json` or `--json` flag.
 | `bob plugins` and `bob plugins list` | `-f json` (default is `table`) | Repo plugins with version, sync, vault state, and optional deployment provenance | Unversioned (`ok`, no `schema_version`) | [Bob Plugins](../plugins.md) |
 | `bob plugins sync` | `-f json` | Copied, skipped, and unchanged files with backups and optional deployment provenance, plus `not_configured` repo ids the `plugins.sync` allowlist leaves out | Unversioned (`ok`, no `schema_version`) | [Bob Plugins](../plugins.md) |
 | `bob vault-sync status` | `--json` / `-j` | Direct `StatusRecord`: `last_attempt_at`, `last_success_at`, `local_sha`, `remote_sha`, `files_committed`, `push_retries`, `duration_ms`, `conflicts`, `interrupted_merge_recovered`, `aborted_merge_head`, `halted_merge_head`, `interrupted_fast_forward_recovered`, `last_error`, `clobbers`, `recent_clobbers`, `pending_task_losses` (`id`, `path`, `kind`, `open`, `task`, `base_commit`, `line`, `first_seen`, `inbound_links`), `task_losses` and `recent_task_losses` (`id`, `path`, `kind`, `task`, `inbound_links`, `base_commit`, `restore_hint`, `detected_at`) | Unversioned (no `ok`, no `schema_version`) | [Vault Git sync](../vault-git-sync.md) |
+| `bob tick` | `-f json`; `-d` preview, `-s` status | `command: "tick"`, host, vault, trigger, timestamps, `exit_code`, and ordered `steps[]` with outcomes, reasons, summaries, gates, and scheduling history. Read-only views add `mode`; plan rows add `would_run`. No `ok` field. | `schema_version: 1` | [Results and recovery](../tick.md#results-and-recovery) |
 | `bob completion status` | `--json` / `-j` | Protocol, executable, and per-shell install state | `schema_version: 1`, `protocol: 1` | [Completion](../completion.md) |
 
 ## Other structured formats

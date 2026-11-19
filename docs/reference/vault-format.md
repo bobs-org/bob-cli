@@ -460,18 +460,21 @@ Contract: [Albums and record notes](../records.md).
 
 ### Record notes
 
-Each album owns one folder. Record notes use `type: "[[record]]"` and
-`parent: "[[<album>]]"`. Notes live at `<dir>/<stem>.md`; Bob writes the
-album parent, type, title, schema fields, and created date, and no H1 — the
-frontmatter `title` is the title's one home.
-Ordinary note bullets live under `## Notes` (which exists only when there are
-bullets), with dates when `dated_notes: true`.
+Record notes live at `<album>/<stem>.md` with `type: "[[record]]"`,
+`parent: "[[<album>]]"`, `title`, schema fields, and `created`. Bob writes
+no H1. Ordinary bullets live under `## Notes`, created only when needed;
+`dated_notes: true` dates them.
+
+New records start with a [generated walk line](../records.md#record-walk):
+previous record, album, and next record in title order, wrapping at both ends.
+A single-record album has only the album link. `bob albums sync` repairs
+these lines; positions and counts are never stored.
 
 For a `restaurant` album owning `eat/`, `Ramen Nagi @eat/` plus its required
 field bullets creates `eat/ramen_nagi.md`. `@eat/ramen_nagi` updates supplied
-fields and appends notes; record writes also update the album's records index.
-Create new schemas with `bob albums create`. The retired hidden
-`bob records init` command always refuses and points to that command.
+fields and appends notes. Writes update the index; creates also update neighbours.
+`bob records show TYPE STEM` reads one record; `bob records tidy` removes empty
+Notes sections and redundant H1s. `bob albums create` creates schemas.
 
 Contract: [Albums and record notes](../records.md).
 
@@ -802,8 +805,9 @@ vault/
 ├── lib/                     # library PDFs (configurable)
 │   └── papers/example.pdf
 ├── xlib/                    # host-local intake queue
-├── img/                     # images written by bob capture
-├── file/                    # saved clipboard snippets
+├── img/                     # imported images
+├── vid/                     # imported MP4, MOV, WebM, and MKV videos
+├── file/                    # other imported files and clipboard snippets
 ├── _conflicts/              # local copies vault-sync could not merge
 ├── _templates/              # skipped by lane queries
 ├── .bob/                    # machine data; never scanned as notes

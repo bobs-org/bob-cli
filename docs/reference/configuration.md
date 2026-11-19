@@ -5,18 +5,15 @@ description: Configuration file precedence, supported YAML settings, environment
 
 # Bob configuration and environment
 
-This page covers configuration read by the Rust `bob` CLI. Obsidian plugin
-settings have separate owners and are described in the [Obsidian plugins
-reference](plugins/index.md); Bob CLI does not validate plugin settings.
+Configuration for `bob`. [Obsidian plugin settings](plugins/index.md) are
+validated separately.
 
 ## Configuration file
 
-The CLI reads one YAML file. A nonempty `BOB_CONFIG_FILE` selects the exact
-file. Otherwise, a nonempty `XDG_CONFIG_HOME` selects
-`$XDG_CONFIG_HOME/bob/config.yml`; the final default is
-`$HOME/.config/bob/config.yml` (shown as `~/.config/bob/config.yml`). Empty
-environment values count as unset. Bob expands a leading `~` or `~/` in the
-selected file path and in `XDG_CONFIG_HOME`; it does not expand `~someone`.
+The CLI reads one YAML file: `BOB_CONFIG_FILE`, then
+`$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`.
+Empty environment values count as unset. The selected path and
+`XDG_CONFIG_HOME` expand leading `~` or `~/`, but not `~someone`.
 
 ```yaml
 timezone: America/New_York
@@ -346,6 +343,20 @@ Gmail `gogcli` store there supplies credentials.
 See [Gmail configuration](../gmail.md#configuration) and
 [archive eligibility and undo](../gmail.md#archive-on-close).
 
+### `tick`
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `tick.writer` | Nonempty host label | `gcal.writer`, else any host |
+| `tick.steps.gcal`, `tick.steps.gmail` | Cadence | `1h` |
+| `tick.steps.gkeep` | Cadence | `manual` |
+| `tick.steps.refs`, `tick.steps.projects`, `tick.steps.tasks` | Cadence | `15m` |
+
+Cadences are integer `m`/`h`/`d` intervals (`5m`–`7d`), `manual`, or `off`;
+YAML `false` also disables a step. Unknown keys, steps, or values fail
+`bob tick`; other commands ignore this block. See [scheduler gates and
+results](../tick.md).
+
 ### `stats`
 
 | Key | Type and allowed values | Default | Effect |
@@ -367,15 +378,13 @@ accept `field`, `source`, and `unit`; journal entries accept `select` and
 `tiers`; formulas accept `expr` and `unit`. Kind-specific requirements and
 allowed values are defined in the [stats configuration contract](../stats.md#stats-config).
 
-Malformed definitions warn without blocking other metrics. Unknown top-level keys are
-ignored by the current section parsers.
+Malformed metric definitions warn without blocking other metrics.
 
 ## `BOB_*` environment variables
 
-Unset or empty values use the listed fallback unless a row says otherwise.
-Path values support a leading `~` only where noted. Command overrides below
-are executable names or paths; command strings split on whitespace and do not
-interpret shell quotes unless their contract says otherwise.
+Unset or empty values use the listed fallback unless noted. Paths expand `~`
+only where noted. Command strings split on whitespace without shell quoting
+unless their contract says otherwise.
 
 ### Vault, clock, and state
 
@@ -391,8 +400,8 @@ interpret shell quotes unless their contract says otherwise.
 | `BOB_VAULT_SYNC_NOTIFY` | Desktop notification on each quarantined clobber | Exact value `0`, `false`, or `no` suppresses desktop notifications: the vault-sync clobber/conflict notifications and the Gmail archive receipt notification (`osascript` on macOS, `notify-send` on Linux). |
 | `BOB_VAULT_SYNC_STATE_FILE` | `$XDG_STATE_HOME/bob-cli/vault-sync.json`, else `$HOME/.local/state/bob-cli/vault-sync.json` | Vault-sync status JSON path. |
 | `BOB_CLI_USE_SCRIPT` | Native Rust path | Exact value `1` selects an embedded shell compatibility implementation where supported. See [compatibility shims](compatibility.md#compatibility-shims). |
-| `BOB_PROGRESS` | Progress only on a TTY stderr | Exact value `1` prints line-oriented progress on stderr even when it is not a TTY. Progress never uses `\r` redraws on a non-TTY. Native sites: `bob ref create` fetch/capture/compose lines and `bob gkeep` spinner labels. Compatibility shims have no progress redraws to adapt. |
-| `BOB_RUN_RECEIPT` | No receipt | Path of a JSON file bob writes after it chooses an exit code, including the quiet-EPIPE 0: `{"schema_version":1,"exit_code":N,"finished_at":"<RFC3339>"}`. The write is a temp file in the same directory, then a rename. A failed write prints one stderr warning and leaves the exit code unchanged. Panic and signal paths write no receipt. Every command is covered, including script-backed ones, because the write lives in the top-level runner. |
+| `BOB_PROGRESS` | Progress only on TTY stderr | Exact `1` enables line-oriented stderr progress for `bob ref create` fetch/capture/compose and `bob gkeep` spinners. Non-TTY output never uses `\r` redraws; compatibility shims have none. |
+| `BOB_RUN_RECEIPT` | No receipt | JSON output path for every command, including script-backed commands and quiet-EPIPE exit 0: `{"schema_version":1,"exit_code":N,"finished_at":"<RFC3339>"}`. Writes atomically through a same-directory temporary file. Failure warns once on stderr without changing the exit code. Panic and unhandled signals produce no receipt. |
 
 ### Capture and query adapters
 

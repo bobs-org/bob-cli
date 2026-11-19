@@ -85,7 +85,8 @@ short summary. Waiting covers unmet preconditions such as a missing daily
 note or a busy vault. Exit status is 0 when steps succeeded, waited, or were
 not due; 1 when a step failed; and 2 for usage/configuration errors or a
 writer-host mismatch. A step timeout fails that step and the later steps
-continue after its process group is stopped.
+continue after its process group is stopped. A handled signal exits with
+`128 + signal number` (for example, 143 for `SIGTERM`).
 
 Reasons are stable codes: `due`, `never_ran`, `follows_intake`, `follow_up`,
 `named`, and `all` explain a run; `not_due`, `manual`, `off`, and `unchanged`
@@ -108,8 +109,23 @@ The receipt (`last.json`) carries `schema_version`, `command`, `host`,
 Each step row carries `name`, `cadence`, `outcome`, `reason`, `detail`,
 `started_at`, `duration_ms`, `exit_code`, `summary`, `next_due_at`,
 `last_success_at`, and, for gated steps, a `gate` object with `kind`, `open`,
-`reason`, and `detail`. Summaries are counts only; no mail or calendar text
-is recorded.
+`reason`, and `detail`. It also carries `last_finished_at`, `last_outcome`,
+and `last_summary`. Reference gates can add `fingerprint_changed`, `hook`,
+and `full_scan_due_at`. Summaries contain counts or scheduler status, never
+mail or calendar text.
+
+Read-only views neither spawn children nor change state or `last.json`:
+
+| View | JSON fields |
+| --- | --- |
+| `bob tick -d -f json` | `mode: "plan"`; per-step `would_run` reflects cadence and gates. No row claims work ran. |
+| `bob tick -s -f json` | `mode: "status"`; saved step results with current gate information when due. Optional step names filter the board. |
+
+Receipts have `schema_version: 1` and `command: "tick"`, with no `ok` field;
+read `exit_code` and each step's outcome. A wrong-host read-only view adds
+`banner`. An already-running response has `reason: "already_running"` and
+`steps: []`, without receipt timestamps. Configuration and writer errors
+print to stderr without a JSON receipt, even with `-f json`.
 
 `SIGINT`, `SIGTERM`, and `SIGHUP` stop the active child process group and
 record an interrupted failure. If `bob tick` itself receives `SIGKILL`, the
