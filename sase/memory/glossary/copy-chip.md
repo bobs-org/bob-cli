@@ -26,5 +26,6 @@ own lines, never a nested subtask's). Two or more chips on the line, or in the t
 with the cursor on none is ambiguous and never guessed. `Mod+Shift+Y` uses the rule
 without the task step.
 
-Not a secret store, a protocol handler, or a Copy card template
-(`copy.templates`). See [Bob Chips](https://bobs-org.github.io/reference/plugins/bob-chips/).
+Not a secret store, a protocol handler, a Copy card template
+(`copy.templates`), or a [[command-chip]] (`run:` spans, which `gy` never
+copies). See [Bob Chips](https://bobs-org.github.io/reference/plugins/bob-chips/).

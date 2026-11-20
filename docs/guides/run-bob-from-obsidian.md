@@ -77,6 +77,65 @@ shell is started. Commands excluded from the catalog are refused. To run a
 Vim ex command instead, prefix it with `:` in the sheet (for example,
 `:%s/foo/bar/`) or use the Vim routing described below.
 
+## Run a command from a note
+
+A command chip turns a bob command written in a note into a one-gesture run.
+It needs the **Bob Chips** plugin beside Bob Command Mode. Write an inline
+code span that starts with `run:` and holds a complete `bob` command line,
+optionally with a label in brackets:
+
+```markdown
+- [ ] Run `run: bob task reconcile`
+- [ ] Run `run[Sync calendar and inboxes]: bob gcal sync -n 2 && bob gkeep pull && bob gmail sync`
+```
+
+With the cursor elsewhere, the first span shows a ▶ pill with its command,
+and the second shows its label and a faint step count. Plain `` `bob …` ``
+spans stay inline code; only the `run:` prefix makes a chip.
+`Mod+Shift+Y` (**Make or edit chip**) writes one for you and checks each
+step as you type.
+
+Click a chip to run it the way `Ctrl+Enter` runs a sheet row. A writer runs
+now and skips its preview, a report opens its output, and a command that
+asks for confirmation still shows its confirm card. Shift+Click opens the
+chip in Command Mode instead, so you can preview or review it first. While
+it runs, the chip's glyph spins, and clicking it again opens the live
+output instead of starting a second run.
+
+In the editor, `⌘↵` (Meta+Enter) runs the chip under the cursor, the
+cursor line's only chip, or, on a line without links, the only chip in the
+cursor's task. The chip it would run gets an accent border, and a muted
+`⌘↵ Run` keycap appears at the end of the cursor line. With two chips on
+the line, `⌘↵` asks you to move onto one; with no chip, it keeps its usual
+behavior.
+
+To run several commands in order, join them with `&&` in one span, or
+write a `bob-run` fence with one command per line:
+
+````markdown
+```bob-run Morning sync
+bob gcal sync -n 2
+bob gkeep pull
+bob gmail sync
+```
+````
+
+The steps run as one Command Mode sequence and stop at the first failure.
+
+Note text is an attack surface, so a chip can only do what you could
+already do from the sheet. Every step must start with the word `bob` and
+name a command in bob's catalog. There is no shell: pipes, redirects, `;`,
+and variables are refused, and a refused chip shows ⊘ with bob's reason.
+Commands that ask for confirmation always ask. Chips run only on desktop.
+In notes under `mail/`, `ref/`, `ref_history/`, `.bob/`, or `_conflicts/`,
+on mobile, or without Command Mode, a chip shows a copy glyph and only
+copies its text.
+
+Running a chip never completes, freshens, or advances its task; complete
+the task yourself with `Ctrl+Enter` in the editor. See
+[Bob Chips](../reference/plugins/bob-chips.md#command-chips) for the full
+rules.
+
 ## Read output and history
 
 The pager streams standard output and errors, and saved output remains
@@ -129,5 +188,6 @@ older than the plugin expects.
 ## Related
 
 - [Bob Command Mode reference](https://bobs-org.github.io/reference/plugins/bob-command-mode/)
+- [Bob Chips reference](../reference/plugins/bob-chips.md)
 - [Obsidian plugins](../reference/plugins/index.md)
 - [Continue in Obsidian](../start/obsidian.md)
