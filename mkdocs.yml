@@ -72,6 +72,7 @@ plugins:
         keyboard.md: reference/mac-capture/keyboard.md
         refs.md: reference/mac-capture/refs.md
         refs-inspector.md: reference/mac-capture/refs-inspector.md
+        reference/plugins/bob-copy-chips.md: reference/plugins/bob-chips.md
         pomodoro-themes.md: task-types.md
         reference/cli/capture-task-sections.md: reference/cli/capture-drawers.md
         reference/cli/themes.md: reference/cli/types.md

@@ -278,7 +278,7 @@ the task-link picker instead. Not the SASE TUI's command-mode panel. See
 *Aliases: chip, copy card fence, bob-copy.*
 
 Authored click-to-copy text in an Obsidian note: an inline code span that starts
-with `copy:` (or `copy[LABEL]:`) or a `bob-copy` fence. The `bob-copy-chips`
+with `copy:` (or `copy[LABEL]:`) or a `bob-copy` fence. The `bob-chips`
 plugin renders the span as a quiet pill and the fence as a titled card. One
 click, `gy` (normal mode, the `copy-on-cursor-line` command), or `Mod+Y` then
 `C` copies the payload byte-exact from source. `Mod+Shift+Y` makes, converts,
@@ -298,7 +298,7 @@ with the cursor on none is ambiguous and never guessed. `Mod+Shift+Y` uses the r
 without the task step.
 
 Not a secret store, a protocol handler, or a Copy card template
-(`copy.templates`). See `docs/bob-copy-chips.md`.
+(`copy.templates`). See [Bob Chips](https://bobs-org.github.io/reference/plugins/bob-chips/).
 
 ### Daily Headline {#daily-headline}
 
