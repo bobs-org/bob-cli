@@ -669,6 +669,12 @@ fn migrate_intentions_moves_old_shapes_and_reports() {
         "---\nparent: \"[[2026/2026-Q4]]\"\ntype: \"[[day]]\"\nid: 2026-W44\n---\n\n# 2026-W44\n\n## Intentions\n\n- Ship it\n  - nested detail\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n",
     )
     .unwrap();
+    // Old-scaffold week whose slots were never filled: the empty headings go.
+    fs::write(
+        vault.join("2026/2026-W43.md"),
+        "---\nparent: \"[[2026/2026-Q4]]\"\ntype: \"[[day]]\"\nid: 2026-W43\n---\n\n# 2026-W43\n\n```bob-stats-strip\n\n```\n\n## Intentions\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n\n## Reflection\n\n> [!agent]- Agent instructions · weekly v2\n> Draft the Review.\n",
+    )
+    .unwrap();
     // Quarter with outcomes.
     fs::write(
         vault.join("2026/2026-Q4.md"),
@@ -776,6 +782,14 @@ fn migrate_intentions_moves_old_shapes_and_reports() {
 
     let nested = fs::read_to_string(vault.join("2026/2026-W44.md")).unwrap();
     assert!(nested.contains("## Intentions"), "{nested}");
+
+    let empty = fs::read_to_string(vault.join("2026/2026-W43.md")).unwrap();
+    assert!(!empty.contains("## Intentions"), "{empty}");
+    assert!(!empty.contains("## Reflection"), "{empty}");
+    assert!(empty.contains("## Days"), "{empty}");
+    assert!(empty.contains("## Review"), "{empty}");
+    assert!(empty.contains("> [!agent]- Agent instructions"), "{empty}");
+    assert!(!empty.contains("intentions:"), "{empty}");
 
     let quarter = fs::read_to_string(vault.join("2026/2026-Q4.md")).unwrap();
     assert!(quarter.contains("intentions:"), "{quarter}");

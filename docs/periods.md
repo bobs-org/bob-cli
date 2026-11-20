@@ -487,7 +487,11 @@ first day of the current ISO year) and runs through the current week +
    prose are reported and left in place; conflicts with existing
    frontmatter are reported and both copies are left. Emptied
    `## Intentions`, `## Outcomes`, `## Theme`, and `## Reflection`
-   headings are removed; `## Review` and callouts stay. A `drafted`
+   headings are removed, and so are those slots when they are already
+   blank (old-scaffold leftovers, future notes included). A slot with
+   any text, placeholders included, keeps its heading. Fenced lines are
+   never headings, and nothing at or below the agent callout or
+   `## Archive` is touched; `## Review` and callouts stay. A `drafted`
    Review keeps its state with a copied `summary_drafted` and a
    restamped `review_digest`; `edited` and `reflected` notes keep no new
    stamps.

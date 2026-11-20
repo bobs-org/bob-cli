@@ -4,7 +4,9 @@
 //! frontmatter: daily Headline/Reflection, week Intentions, quarter
 //! Outcomes, year Theme + Outcomes, `## Reflection`, and the Review
 //! opener. Placeholders and conflicts are reported, never migrated.
-//! Emptied headings are removed; `## Review` and callouts stay.
+//! Emptied headings are removed, and so are legacy slot headings that
+//! were already empty (old-scaffold leftovers); `## Review` and callouts
+//! stay.
 
 use chrono::NaiveDate;
 
@@ -460,9 +462,16 @@ fn migrate_period(
         }
     }
 
+    // Old scaffolds emitted empty legacy slot headings. They carry no
+    // text, so they go even when nothing else migrates; the problems
+    // report counts them as `legacy_period_text`.
+    let empty_slots = legacy_slot_names(id);
+    let has_empty_slots =
+        remove_empty_sections(contents, empty_slots).is_some();
     if !out.migrated
         && sections_to_remove.is_empty()
         && new_review_body.is_none()
+        && !has_empty_slots
     {
         return out;
     }
@@ -487,6 +496,9 @@ fn migrate_period(
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
         );
+    }
+    if let Some(removed) = remove_empty_sections(&intermediate, empty_slots) {
+        intermediate = removed;
     }
     let after = match apply_with_review(&intermediate, &patch, &review_patch) {
         Ok(after) => after,
@@ -693,6 +705,15 @@ fn remove_daily_paragraph(contents: &str, wanted: &str) -> Option<String> {
             {
                 end += 1;
             }
+            // A paragraph between two blank lines leaves one blank line,
+            // not two.
+            if index > 0
+                && lines[index - 1].trim().is_empty()
+                && lines.get(end).is_some_and(|l| l.trim().is_empty())
+                && !fenced.contains(&end)
+            {
+                end += 1;
+            }
             let mut out: Vec<String> = Vec::new();
             out.extend_from_slice(&lines[..index]);
             out.extend_from_slice(&lines[end..]);
@@ -773,15 +794,108 @@ fn collapse_double_blank(text: &str) -> String {
     out
 }
 
+/// The legacy slot headings a period kind's old scaffold carried.
+fn legacy_slot_names(id: PeriodId) -> &'static [&'static str] {
+    match id {
+        PeriodId::Week { .. } => &["Intentions", "Reflection"],
+        PeriodId::Quarter { .. } => &["Outcomes", "Reflection"],
+        PeriodId::Year(_) => &["Theme", "Outcomes", "Reflection"],
+        PeriodId::AllTime => &[],
+    }
+}
+
+/// Index of the first line after the frontmatter (0 when there is none).
+fn body_start(lines: &[String]) -> usize {
+    frontmatter_end(lines).map_or(0, |end| end + 1)
+}
+
+/// Whether the period reader stops at this line: the agent callout or
+/// the `## Archive` heading.
+fn ends_period_sections(line: &str) -> bool {
+    line.starts_with("> [!agent]")
+        || line.trim() == "## Archive"
+        || line.starts_with("## Archive ")
+}
+
+/// Remove each `## <name>` heading in `names` whose section holds only
+/// blank lines. Only the reader's view is scanned: fenced lines never
+/// count as headings and the scan stops at the agent callout or
+/// `## Archive`. A section with any text keeps its heading. Returns
+/// `None` when nothing was removed.
+fn remove_empty_sections(contents: &str, names: &[&str]) -> Option<String> {
+    if names.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = contents.lines().map(str::to_string).collect();
+    let start = body_start(&lines);
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let fenced = markdown::fenced_lines(&refs, start..lines.len());
+    let mut skip = vec![false; lines.len()];
+    let mut removed = false;
+    let mut index = start;
+    while index < lines.len() {
+        if fenced.contains(&index) {
+            index += 1;
+            continue;
+        }
+        let line = &lines[index];
+        if ends_period_sections(line) {
+            break;
+        }
+        let Some(name) = line.strip_prefix("## ") else {
+            index += 1;
+            continue;
+        };
+        if !names.contains(&name.trim()) {
+            index += 1;
+            continue;
+        }
+        let mut next = index + 1;
+        while next < lines.len() && lines[next].trim().is_empty() {
+            next += 1;
+        }
+        let empty = next == lines.len()
+            || lines[next].starts_with("## ")
+            || ends_period_sections(&lines[next]);
+        if empty {
+            for flag in &mut skip[index..next] {
+                *flag = true;
+            }
+            removed = true;
+        }
+        index = next;
+    }
+    if !removed {
+        return None;
+    }
+    let kept: Vec<String> = lines
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, l)| (!skip[i]).then_some(l))
+        .collect();
+    let mut joined = kept.join("\n");
+    if contents.ends_with('\n') && !joined.ends_with('\n') {
+        joined.push('\n');
+    }
+    Some(collapse_double_blank(&joined))
+}
+
 fn remove_period_sections(contents: &str, names: &[&str]) -> String {
     let lines: Vec<String> = contents.lines().map(str::to_string).collect();
     let mut skip = vec![false; lines.len()];
-    let mut index = 0;
-    // Skip frontmatter.
-    if let Some(end) = frontmatter_end(&lines) {
-        index = end + 1;
-    }
+    let mut index = body_start(&lines);
+    // Match the reader: fenced lines are never headings, and nothing at
+    // or below the agent callout or `## Archive` is a period section.
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let fenced = markdown::fenced_lines(&refs, index..lines.len());
     while index < lines.len() {
+        if fenced.contains(&index) {
+            index += 1;
+            continue;
+        }
+        if ends_period_sections(&lines[index]) {
+            break;
+        }
         if let Some(name) = lines[index].strip_prefix("## ") {
             let name = name.trim().to_string();
             if names.contains(&name.as_str()) {
@@ -789,10 +903,9 @@ fn remove_period_sections(contents: &str, names: &[&str]) -> String {
                 // or Archive heading, else EOF.
                 let mut limit = lines.len();
                 for j in index + 1..lines.len() {
-                    if lines[j].starts_with("## ")
-                        || lines[j].starts_with("> [!agent]")
-                        || lines[j].trim() == "## Archive"
-                        || lines[j].starts_with("## Archive ")
+                    if !fenced.contains(&j)
+                        && (lines[j].starts_with("## ")
+                            || ends_period_sections(&lines[j]))
                     {
                         limit = j;
                         break;
@@ -904,8 +1017,26 @@ mod tests {
         assert!(after.contains("intentions:"), "{after}");
         assert!(after.contains("Ship the thing"), "{after}");
         assert!(!after.contains("**Headline:**"), "{after}");
+        assert!(!after.contains("\n\n\n"), "one blank line stays: {after:?}");
         // Idempotent.
         let rerun = migrate_note_contents(&after, day("2026-11-19"), today);
+        assert!(rerun.after.is_none(), "{rerun:?}");
+    }
+
+    #[test]
+    fn adjacent_headline_and_reflection_leave_one_blank_line() {
+        // The live 20261118 shape: both labels on consecutive lines.
+        let before = "---\nid: 20261118\n---\n\n# 2026-11-18 Wed\n\n[[2026/20261117|prev]] · [[2026/2026-W47|W47]] · [[2026/20261119|next]]\n\n**Headline:** Add records\n**Reflection**: Tired today.\n\n- [x] #task [[gtd_daily]] ^gtd\n";
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(before, day("2026-11-18"), today);
+        let after = out.after.expect("migrates");
+        assert!(after.contains("intentions:"), "{after}");
+        assert!(after.contains("reflection: Tired today."), "{after}");
+        assert!(
+            after.contains("|next]]\n\n- [x] #task [[gtd_daily]] ^gtd\n"),
+            "{after:?}"
+        );
+        let rerun = migrate_note_contents(&after, day("2026-11-18"), today);
         assert!(rerun.after.is_none(), "{rerun:?}");
     }
 
@@ -1045,6 +1176,87 @@ mod tests {
             ),
             crate::native::intentions::state::ReviewState::Drafted,
             "{after}"
+        );
+    }
+
+    #[test]
+    fn empty_week_slots_from_the_old_scaffold_are_removed() {
+        // The live old-scaffold week anatomy (W27-W45, W48).
+        let before = "---\nparent: \"[[2026/2026-Q4]]\"\nid: 2026-W47\n---\n\n# 2026-W47\n\n```bob-stats-strip\n\n```\n\n## Intentions\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n\nOld review.\n\n## Reflection\n\n> [!agent]- Agent instructions · weekly v2\n> text\n";
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(before, week_subject(), today);
+        let after = out.after.clone().expect("empty slots are removed");
+        assert!(!after.contains("## Intentions"), "{after}");
+        assert!(!after.contains("## Reflection"), "{after}");
+        assert!(after.contains("## Days"), "{after}");
+        assert!(after.contains("## Review\n\nOld review."), "{after}");
+        assert!(after.contains("> [!agent]- Agent instructions"), "{after}");
+        assert!(!after.contains("\n\n\n"), "{after}");
+        assert!(!after.contains("intentions:"), "{after}");
+        assert!(!after.contains("reflection:"), "{after}");
+        assert!(out.placeholders.is_empty(), "{out:?}");
+        assert!(out.conflicts.is_empty(), "{out:?}");
+        let fields = crate::native::intentions::read(&after, week_subject());
+        let legacy = legacy::find_legacy_fields(
+            IntentionsKind::Period(PeriodId::Week {
+                year: 2026,
+                week: 47,
+            }),
+            &after,
+        );
+        assert!(legacy.slots.is_empty(), "{:?}\n{after}", legacy.slots);
+        assert!(fields.intentions.value.is_none(), "{after}");
+        let rerun = migrate_note_contents(&after, week_subject(), today);
+        assert!(rerun.after.is_none(), "{rerun:?}");
+    }
+
+    #[test]
+    fn empty_year_and_quarter_slots_are_removed_but_archive_stays() {
+        let year = "---\nparent: \"[[all_time]]\"\n---\n\n# 2026\n\n## Theme\n\n## Outcomes\n\n## Quarters\n\n```bob-period-parts\n## Outcomes\n```\n\n## Review\n\n## Reflection\n\n> [!agent]- Agent instructions · yearly v2\n> text\n\n## Archive\n\n## Theme\n\nOld zorg theme.\n";
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(year, year_subject(), today);
+        let after = out.after.clone().expect("empty year slots are removed");
+        let (live, archive) = after.split_once("## Archive").expect("archive");
+        assert!(!live.contains("## Theme"), "{after}");
+        assert!(!live.contains("## Reflection"), "{after}");
+        assert!(
+            live.contains("```bob-period-parts\n## Outcomes\n```"),
+            "fenced lines are not headings: {after}"
+        );
+        assert_eq!(live.matches("## Outcomes").count(), 1, "{after}");
+        assert!(live.contains("## Quarters"), "{after}");
+        assert!(live.contains("## Review"), "{after}");
+        assert!(archive.contains("## Theme\n\nOld zorg theme."), "{after}");
+        assert!(!after.contains("intentions:"), "{after}");
+        let rerun = migrate_note_contents(&after, year_subject(), today);
+        assert!(rerun.after.is_none(), "{rerun:?}");
+
+        let quarter = "---\nparent: \"[[2026]]\"\n---\n\n# 2026-Q4\n\n## Outcomes\n\n## Weeks\n\n```bob-period-parts\n\n```\n\n## Review\n\n## Reflection\n";
+        let out = migrate_note_contents(quarter, quarter_subject(), today);
+        let after = out.after.expect("empty quarter slots are removed");
+        assert!(!after.contains("## Outcomes"), "{after}");
+        assert!(!after.contains("## Reflection"), "{after}");
+        assert!(after.ends_with("## Review\n"), "{after:?}");
+    }
+
+    #[test]
+    fn slots_with_text_keep_their_headings() {
+        // A placeholder stays (reported) while the empty Reflection goes.
+        let placeholder = "---\nid: 2026-W47\n---\n\n# 2026-W47\n\n## Intentions\n\n- NOT SET\n\n## Days\n\n## Review\n\n## Reflection\n";
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(placeholder, week_subject(), today);
+        let after = out.after.clone().expect("empty Reflection is removed");
+        assert!(after.contains("## Intentions\n\n- NOT SET"), "{after}");
+        assert!(!after.contains("## Reflection"), "{after}");
+        assert!(!out.placeholders.is_empty(), "{out:?}");
+
+        // A fence-only Reflection is text the reader skips: never removed.
+        let fenced = week_note("## Reflection\n\n```text\nkeep me\n```\n");
+        let out = migrate_note_contents(&fenced, week_subject(), today);
+        let kept = out.after.unwrap_or_else(|| fenced.clone());
+        assert!(
+            kept.contains("## Reflection\n\n```text\nkeep me\n```"),
+            "{kept}"
         );
     }
 
