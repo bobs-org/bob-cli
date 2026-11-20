@@ -43,9 +43,8 @@ The recipe pulls this checkout with `--ff-only`, then pulls available sibling
 checkouts before it starts any build. It shows a compact “What’s new” digest for
 commits since each checkout's last successful install. It then installs `bob`,
 deploys the plugin ids in `plugins.sync` from `../bob-plugins` with
-`bob plugins sync --no-pull --repo`. On macOS it rebuilds and reinstalls
-`../bob-mac-capture` only when its app files changed since its last install;
-see [Restart Mac Capture](#restart-mac-capture). During a build, one live line reports the current
+`bob plugins sync --no-pull --repo`, and on macOS
+installs `../bob-mac-capture`. During a build, one live line reports the current
 activity and elapsed time. An ETA appears only after this host has enough
 comparable build history. Cargo output is saved to a log; if a build fails, the
 installer prints a short excerpt and the log path. Confirm each named row in the
@@ -122,7 +121,7 @@ These environment variables control the optional display and its local state:
 
 | Variable | Effect |
 | --- | --- |
-| `BOB_INSTALL_UI=0` | Disable the helper UI and digest; Mac Capture reinstalls every run. |
+| `BOB_INSTALL_UI=0` | Disable the helper UI and digest. |
 | `BOB_INSTALL_UI_PYTHON=/path` | Use this Python interpreter when it is version 3.9 or newer. |
 | `BOB_INSTALL_VERBOSE=1` | Stream raw build and sync output; disable live build rows. |
 | `BOB_INSTALL_NOTIFY=0` | Suppress the completion bell and macOS banner. |
@@ -175,49 +174,6 @@ banner does not change the restart. On Linux it uses the Obsidian CLI
 `restart` when that CLI is registered at `~/.local/bin/obsidian`. A stopped
 Obsidian is never launched. The pending marker lives under
 `~/.local/state/bob-cli/install-all/`.
-
-## Restart Mac Capture
-
-A Mac Capture reinstall quits a running copy and starts the new one, and that
-restart stashes a nonempty unsent draft (see
-[Recover a stuck Mac Capture panel](recover-mac-capture.md)). So on macOS,
-`just install-all` rebuilds, reinstalls, and restarts Mac Capture only when the
-installed app differs from what `../bob-mac-capture` would build. Otherwise the
-step leaves the running app alone: no signing check, build, swap, or restart.
-It prints one skip row instead:
-
-```text { .no-copy title="Output when Mac Capture is current" }
-  –  bob-mac-capture   2 new commits · a2aab30 → 11dcba7 · only docs/tests changed since @a2aab30 · not rebuilt
-```
-
-The check compares file contents with the commit of the last successful
-install, including uncommitted and untracked files. Changes only to docs,
-tests, CI workflows, `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`,
-`.swift-format`, and the docs, fixture, test, CI, and type-check helper scripts
-in `Scripts/` do not count. Every other path counts, including `Package.swift`,
-`Sources/`, `Resources/`, the `justfile`, and the build and install scripts.
-When only those ignored files changed and the checkout is clean, the install
-record moves to the current commit, so the next digest does not repeat them.
-
-These cases always reinstall, whatever changed:
-
-- the app is missing from `~/Applications`;
-- the installed app is signed ad-hoc, unless `CODESIGN_IDENTITY=-`;
-- the app was replaced after its last recorded install, for example by
-  `just install` in the Mac Capture checkout;
-- the last install had uncommitted changes, came from another checkout, or
-  has no record.
-
-A reinstall prints its reason first, for example
-`rebuild  1 app file changed since @a2aab30`. To reinstall and restart an
-unchanged app, pass `-f`:
-
-```bash
-just install-all -f
-```
-
-Without the helper (`BOB_INSTALL_UI=0`, or no Python 3.9 or newer), Mac Capture
-reinstalls on every run.
 
 ## If it goes wrong
 

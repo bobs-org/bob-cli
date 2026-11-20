@@ -96,19 +96,11 @@ recipe_install_all() {
 """
 
 FAKE_MAC_JUSTFILE = """recipe_install() {
-  local status app
   printf 'install\n' >> "$SANDBOX_OUT/mac_order"
   echo "Building for production..."
   echo "Build complete!"
   if [[ -n "${FAKE_MAC_SLEEP:-}" ]]; then sleep "$FAKE_MAC_SLEEP"; fi
-  status="${FAKE_MAC_INSTALL_STATUS:-0}"
-  # Like the real install, a swapped-in app gets a fresh executable mtime.
-  if [[ "$status" == 0 || "$status" == 72 ]]; then
-    app="$HOME/Applications/Bob Mac Capture.app/Contents/MacOS"
-    mkdir -p "$app"
-    printf 'fake app\n' > "$app/BobMacCapture"
-  fi
-  return "$status"
+  return "${FAKE_MAC_INSTALL_STATUS:-0}"
 }
 recipe_signing_check() {
   printf 'signing-check\n' >> "$SANDBOX_OUT/mac_order"
@@ -305,21 +297,13 @@ class Sandbox:
             _git(dest, "config", "user.email", "install-all@test")
             _git(dest, "config", "user.name", "install-all-test")
 
-    def commit_and_push(
-        self, name: str, message: str, path: Optional[str] = None
-    ) -> tuple:
-        """Add one commit on the remote via the pusher clone; return (full, short).
-
-        *path* is repo-relative; the default top-level ``note-N.txt`` counts
-        as an app change for bob-mac-capture.
-        """
+    def commit_and_push(self, name: str, message: str) -> tuple:
+        """Add one commit on the remote via the pusher clone; return (full, short)."""
         pusher = self.pushers / name
         self._files += 1
-        rel = path or f"note-{self._files}.txt"
-        target = pusher / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
+        target = pusher / f"note-{self._files}.txt"
         target.write_text(f"{message}\n", encoding="utf-8")
-        _git(pusher, "add", rel)
+        _git(pusher, "add", target.name)
         _git(pusher, "commit", "-m", message)
         _git(pusher, "push", "origin", "HEAD")
         full = _git(pusher, "rev-parse", "HEAD").stdout.strip()
@@ -381,22 +365,6 @@ class Sandbox:
             cwd=str(self.root),
             timeout=180,
         )
-
-    @property
-    def mac_app(self) -> Path:
-        return self.home / "Applications" / "Bob Mac Capture.app"
-
-    def mac_order(self) -> list:
-        path = self.out / "mac_order"
-        if not path.exists():
-            return []
-        return path.read_text(encoding="utf-8").splitlines()
-
-    def run_record(self, run_id: str, name: str) -> Optional[dict]:
-        path = self.state / "bob-cli" / "install-all" / "runs" / run_id / name
-        if not path.exists():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
 
     def watermark_sha(self, repo: str) -> str:
         raw = (self.state / "bob-cli" / "install-all" / "installed.json").read_text(
@@ -956,183 +924,6 @@ class EarnedEtaTests(_InstallAllCase):
         self.assertNotIn(" · about usual", out)
         self.assertNotIn("faster than usual", out)
         self.assertNotIn("slower than usual", out)
-
-
-
-class MacCaptureSkipTests(_InstallAllCase):
-    """Darwin runs rebuild Mac Capture only when its app no longer matches."""
-
-    def _install(self, *args: str, **overrides: str) -> subprocess.CompletedProcess:
-        env = {"FAKE_UNAME": "Darwin"}
-        env.update(overrides)
-        proc = self.sbox.run(*args, **env)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        return proc
-
-    def _maccap_head(self) -> str:
-        return _git(self.sbox.maccap, "rev-parse", "HEAD").stdout.strip()
-
-    def test_second_run_with_nothing_new_skips(self) -> None:
-        first = self._install()
-        self.assertIn("rebuild  app not installed at ~/Applications/", first.stdout)
-        self.assertEqual(self.sbox.mac_order(), ["install"])
-        head = self._maccap_head()
-        proc = self._install()
-        self.assertEqual(self.sbox.mac_order(), ["install"])
-        self.assertIn(f"app current @{head[:7]}", proc.stdout)
-        self.assertIn("not rebuilt", proc.stdout)
-        self.assertNotIn("rebuild  ", proc.stdout)
-        self.assertRegex(
-            proc.stdout,
-            r"–  bob-mac-capture +up to date · \w+ · app current @\w+ · not rebuilt",
-        )
-        self.assertIn("ALL INSTALLED", proc.stdout.strip().splitlines()[-1])
-        self.assertEqual(self.sbox.watermark_sha("bob-mac-capture"), head)
-
-    def test_docs_only_push_skips_and_advances_watermark(self) -> None:
-        self._install(BOB_INSTALL_RUN_ID="docs-1")
-        old = self._maccap_head()
-        new, _ = self.sbox.commit_and_push(
-            "bob-mac-capture", "fix(docs): correct the capture panel guide", "docs/guide.md"
-        )
-        proc = self._install(BOB_INSTALL_RUN_ID="docs-2")
-        self.assertEqual(self.sbox.mac_order(), ["install"])
-        # This run's digest still reads the old watermark.
-        self.assertIn("correct the capture panel guide", proc.stdout)
-        digest = self.sbox.run_record("docs-2", "digest.json") or {}
-        self.assertIn("bob-mac-capture", [repo["name"] for repo in digest.get("repos", [])])
-        self.assertIn(f"only docs/tests changed since @{old[:7]} · not rebuilt", proc.stdout)
-        self.assertEqual(self.sbox.watermark_sha("bob-mac-capture"), new)
-
-        again = self._install(BOB_INSTALL_RUN_ID="docs-3")
-        self.assertEqual(self.sbox.mac_order(), ["install"])
-        self.assertIn(f"app current @{new[:7]}", again.stdout)
-        self.assertNotIn("correct the capture panel guide", again.stdout)
-        digest = self.sbox.run_record("docs-3", "digest.json") or {}
-        self.assertNotIn(
-            "bob-mac-capture", [repo["name"] for repo in digest.get("repos", [])]
-        )
-
-    def test_sources_push_rebuilds(self) -> None:
-        self._install()
-        old = self._maccap_head()
-        new, _ = self.sbox.commit_and_push(
-            "bob-mac-capture", "feat(panel): widen the capture panel", "Sources/App/Panel.swift"
-        )
-        proc = self._install()
-        self.assertIn(f"rebuild  1 app file changed since @{old[:7]}", proc.stdout)
-        self.assertNotIn("not rebuilt", proc.stdout)
-        self.assertEqual(self.sbox.mac_order(), ["install", "install"])
-        self.assertEqual(self.sbox.watermark_sha("bob-mac-capture"), new)
-
-    def test_force_flag_reinstalls_current_app_across_self_update(self) -> None:
-        self._install()
-        # The bob-cli commit makes install_all re-exec itself, so -f reaches
-        # the new script only through the environment handoff.
-        self.sbox.commit_and_push("bob-cli", "fix(cli): exercise the force handoff")
-        forced = self._install("-f")
-        self.assertEqual(forced.stdout.count("INSTALL ALL"), 1)
-        self.assertIn("1 new commit", forced.stdout)
-        self.assertIn("rebuild  forced by --force-mac-capture", forced.stdout)
-        self.assertEqual(self.sbox.mac_order(), ["install", "install"])
-
-        long_form = self._install("--force-mac-capture")
-        self.assertIn("rebuild  forced by --force-mac-capture", long_form.stdout)
-        self.assertEqual(len(self.sbox.mac_order()), 3)
-
-        plain = self._install()
-        self.assertIn("not rebuilt", plain.stdout)
-        self.assertEqual(len(self.sbox.mac_order()), 3)
-        self.assertIn("-f, --force-mac-capture", self.sbox.run("--help").stdout)
-
-    def test_deleted_app_bundle_reinstalls(self) -> None:
-        self._install()
-        shutil.rmtree(self.sbox.mac_app)
-        proc = self._install()
-        self.assertIn(
-            "rebuild  app not installed at ~/Applications/Bob Mac Capture.app",
-            proc.stdout,
-        )
-        self.assertEqual(self.sbox.mac_order(), ["install", "install"])
-        self.assertTrue((self.sbox.mac_app / "Contents" / "MacOS" / "BobMacCapture").exists())
-
-    def test_artifact_newer_than_install_record_reinstalls(self) -> None:
-        self._install()
-        exe = self.sbox.mac_app / "Contents" / "MacOS" / "BobMacCapture"
-        future = time.time() + 3600
-        os.utime(exe, (future, future))
-        proc = self._install()
-        self.assertIn("rebuild  app was replaced outside install-all", proc.stdout)
-        self.assertEqual(self.sbox.mac_order(), ["install", "install"])
-
-    def test_skip_on_pty_never_runs_signing_check(self) -> None:
-        status, raw, err = _run_install_all_pty(self.sbox, FAKE_UNAME="Darwin")
-        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
-        self.assertEqual(self.sbox.mac_order(), ["signing-check", "install"])
-        status, raw, err = _run_install_all_pty(self.sbox, FAKE_UNAME="Darwin")
-        out = raw.decode("utf-8", "replace")
-        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
-        self.assertIn("not rebuilt", out)
-        self.assertNotIn("signing  ", out)
-        self.assertEqual(self.sbox.mac_order(), ["signing-check", "install"])
-
-    def test_ui_zero_always_reinstalls(self) -> None:
-        self._install()
-        proc = self._install(BOB_INSTALL_UI="0")
-        self.assertEqual(self.sbox.mac_order(), ["install", "install"])
-        self.assertNotIn("not rebuilt", proc.stdout)
-        self.assertNotIn("rebuild  ", proc.stdout)
-        self.assertIn("installed ~/Applications/Bob Mac Capture.app", proc.stdout)
-
-    def test_failed_pull_with_current_app_warns(self) -> None:
-        self._install()
-        _git(
-            self.sbox.maccap,
-            "remote",
-            "set-url",
-            "origin",
-            str(self.sbox.root / "no-such-remote.git"),
-        )
-        proc = self._install()
-        self.assertEqual(self.sbox.mac_order(), ["install"])
-        self.assertRegex(
-            proc.stdout,
-            r"⚠  bob-mac-capture +pull failed — using local checkout · "
-            r"app current @\w+ · not rebuilt",
-        )
-        self.assertIn("INSTALLED WITH 1 WARNING", proc.stdout)
-
-    def test_skipped_step_is_left_out_of_plan_record(self) -> None:
-        _seed_bobcli_history(self.sbox)
-        self._install()
-        # A bob-cli commit keeps its predicted kind off the no-op path.
-        self.sbox.commit_and_push("bob-cli", "fix(cli): keep the plan honest")
-        status, raw, err = _run_install_all_pty(
-            self.sbox, cols=100, FAKE_UNAME="Darwin", BOB_INSTALL_RUN_ID="plan-skip"
-        )
-        out = raw.decode("utf-8", "replace")
-        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
-        self.assertIn("not rebuilt", out)
-        self.assertIn("usually", out)
-        plan = self.sbox.run_record("plan-skip", "plan.json")
-        self.assertIsNotNone(plan)
-        assert plan is not None
-        self.assertTrue(plan["shown"], plan)
-
-        # A forced rebuild needs Mac Capture history this host lacks, so no
-        # plan range is earned.
-        status, raw, err = _run_install_all_pty(
-            self.sbox,
-            "--force-mac-capture",
-            cols=100,
-            FAKE_UNAME="Darwin",
-            BOB_INSTALL_RUN_ID="plan-forced",
-        )
-        self.assertEqual(status, 0, err.decode("utf-8", "replace"))
-        forced = self.sbox.run_record("plan-forced", "plan.json")
-        self.assertIsNotNone(forced)
-        assert forced is not None
-        self.assertFalse(forced["shown"], forced)
 
 
 if __name__ == "__main__":

@@ -14,16 +14,7 @@ if sys.path[:1] != [_LIB_S]:
         sys.path.remove(_LIB_S)
     sys.path.insert(0, _LIB_S)
 
-from install_ui import (  # noqa: E402
-    app_current,
-    commits,
-    digest,
-    estimate,
-    history,
-    live,
-    state,
-    term,
-)
+from install_ui import commits, digest, estimate, history, live, state, term  # noqa: E402
 
 
 def _warn(message: str) -> None:
@@ -39,16 +30,6 @@ def _crash() -> int:
         loc = str(state.state_dir() / "crash.log")
     _warn(f"install_ui: internal error (details in {loc})")
     return 70
-
-
-def cmd_app_current(args: argparse.Namespace) -> int:
-    verdict = app_current.evaluate(args.repo, args.dir, args.artifact)
-    sys.stdout.write(verdict.reason + "\n")
-    if not verdict.current:
-        return 1
-    if args.advance:
-        app_current.apply_advance(args.repo, verdict)
-    return 0
 
 
 def cmd_mark_installed(args: argparse.Namespace) -> int:
@@ -302,30 +283,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="command")
     sub.required = True
-
-    current = sub.add_parser(
-        "app-current",
-        help="Exit 0 when an installed app still matches its checkout, 1 to rebuild.",
-        description=(
-            "Compare an installed app with its checkout and print one reason line. "
-            "Exit 0 when it is current (only ignored paths changed since the last "
-            "install), 1 when it needs a rebuild."
-        ),
-    )
-    current.add_argument(
-        "-A", "--advance",
-        action="store_true",
-        help="When current and the tree is clean, move the watermark to HEAD.",
-    )
-    current.add_argument(
-        "-a", "--artifact",
-        required=True,
-        metavar="PATH",
-        help="Installed file that stands for the app.",
-    )
-    current.add_argument("-d", "--dir", required=True, metavar="DIR", help="Checkout directory.")
-    current.add_argument("-r", "--repo", required=True, metavar="NAME", help="Repository name.")
-    current.set_defaults(func=cmd_app_current)
 
     dg = sub.add_parser(
         "digest",
