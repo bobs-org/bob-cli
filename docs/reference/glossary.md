@@ -275,8 +275,8 @@ Hammerspoon [Mac Menu Bar Pomodoro Indicator](#mac-menu-bar-pomodoro-indicator).
 An authored one-gesture bob run in an Obsidian note: an inline code span that
 starts with `run:` (or `run[LABEL]:`) whose payload is one `bob` command line or
 several joined by `&&`, or a `bob-run` fence with one command per line. Every step
-starts with the word `bob`. The `bob-chips` plugin renders the span as a quiet
-pill with a ▶ glyph and the fence as a titled sequence card. A click runs it
+starts with the word `bob`. The `bob-chips` plugin renders the span as a pill
+with a solid accent ▶ run well and the fence as a titled sequence card. A click runs it
 through [Command Mode](#command-mode)'s engine the way `Ctrl+Enter` runs a sheet row. So does
 `⌘↵` (Meta+Enter) when the chip is under the cursor, is the cursor line's only
 command chip, or, on a line with no link, is its task's only one. Previews are
