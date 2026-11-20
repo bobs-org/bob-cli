@@ -238,6 +238,11 @@ fn sections(contents: &str) -> BTreeMap<String, String> {
     let mut body = Vec::new();
     for (line_index, line) in lines.iter().enumerate().skip(index) {
         if fenced.contains(&line_index) {
+            // Keep fenced lines in the current section body; they are
+            // never headings, callouts, or Archive.
+            if current.is_some() {
+                body.push((*line).to_owned());
+            }
             continue;
         }
         if line.starts_with("> [!agent]")
@@ -309,6 +314,10 @@ fn paragraph(body: &str) -> Option<String> {
 }
 
 fn paragraph_slot(body: &str) -> Option<String> {
+    let body_lines: Vec<&str> = body.lines().collect();
+    if !markdown::fenced_lines(&body_lines, 0..body_lines.len()).is_empty() {
+        return None;
+    }
     let mut lines = Vec::new();
     for line in body.lines() {
         if lines.is_empty() && line.trim().is_empty() {

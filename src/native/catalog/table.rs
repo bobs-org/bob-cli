@@ -1650,6 +1650,12 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
                  from a terminal",
     },
     Excluded {
+        path: &["periods", "update"],
+        reason:
+            "JSON-input intention edit owned by the Intention Card; run it \
+                 from a terminal",
+    },
+    Excluded {
         path: &["pomodoro", "notify"],
         reason: "Long-running notifier that never exits",
     },

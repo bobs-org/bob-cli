@@ -744,9 +744,12 @@ mod tests {
             },
         ];
         let (patch, _) = plan_ops(&fields, &ops).unwrap();
+        // [one, two] → insert(1, "middle") → [one, middle, two]
+        // → move(2→0) → [two, one, middle] → replace(1, "two again")
+        // → [two, two again, middle].
         assert_eq!(
             patch.intentions,
-            Patch::Set(vec!["two".into(), "two again".into(), "one".into()])
+            Patch::Set(vec!["two".into(), "two again".into(), "middle".into()])
         );
         assert_eq!(
             plan_ops(&fields, &[Op::IntentionsRemove { index: 9 }])

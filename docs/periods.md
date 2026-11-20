@@ -721,6 +721,35 @@ The `expect` fingerprint is SHA-256 over canonical JSON of the five owned values
 with absent values represented as null. It excludes the rest of the note, so task,
 Pomodoro, and other body edits do not stale the card. A dry run may omit `expect`
 to read the current fields and fingerprint; applying an update always requires it.
+
+An empty-ops dry run (`{"schema_version": 1, "ops": []}` with `-n`) is the card
+editor's read path. It returns `ok: true` with `before`, `after`, and the
+fingerprint even when the stored fields are malformed. Then `warnings[]` (each
+`{code, message}`) carries one of:
+
+- `frontmatter_invalid`: the YAML is unclosed or unparseable, or has duplicate
+  keys. All fields then read as empty because absence cannot be inferred.
+- A field-shape code: `intentions_shape`, `intentions_type`, `intentions_value`,
+  `summary_shape`, `reflection_shape`, `stamp_shape`, or `stamp_value`. The
+  affected field is empty or partial.
+
+Clients must treat those warnings as blocking, not as valid emptiness. The
+intention card editor and its YAML Done do this. `intentions_over_soft_cap` is
+the one advisory warning: more than three intentions; the text is never refused.
+An unclosed-frontmatter empty-ops dry run looks like:
+
+```json
+{
+  "ok": true,
+  "before": {"intentions": [], "reflection": null, "summary": null, "summary_state": "empty"},
+  "after": {"intentions": [], "reflection": null, "summary": null, "summary_state": "empty"},
+  "warnings": [{"code": "frontmatter_invalid", "message": "frontmatter block is not closed"}]
+}
+```
+
+(`schema_version`, `subject`, `dry_run`, fingerprints, `changed`, and `inverse_ops`
+are unchanged from a well-formed empty-ops dry run.)
+
 The JSON report returns `{subject, dry_run, fingerprint_before,
 fingerprint_after, before, after, changed, inverse_ops, warnings[]}`. `before` and
 `after` contain intentions, summary, summary state, and reflection. Apply

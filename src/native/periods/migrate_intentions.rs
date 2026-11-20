@@ -535,6 +535,11 @@ fn parse_bullet_section(body: &str) -> BulletParse {
         return BulletParse::Empty;
     }
     let lines: Vec<&str> = body.lines().collect();
+    if !markdown::fenced_lines(&lines, 0..lines.len()).is_empty() {
+        return BulletParse::Invalid(
+            "fenced block is left in place".to_string(),
+        );
+    }
     let mut values: Vec<String> = Vec::new();
     let mut active: Option<usize> = None;
     for line in &lines {
@@ -592,6 +597,12 @@ fn parse_theme_paragraph(body: &str) -> ThemeParse {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return ThemeParse::Empty;
+    }
+    let lines: Vec<&str> = body.lines().collect();
+    if !markdown::fenced_lines(&lines, 0..lines.len()).is_empty() {
+        return ThemeParse::Invalid(
+            "fenced block is left in place".to_string(),
+        );
     }
     // A theme is one paragraph: no bullets, no blank-line paragraph break.
     for line in body.lines() {
@@ -935,9 +946,14 @@ fn remove_period_sections(contents: &str, names: &[&str]) -> String {
 fn replace_review_body(contents: &str, body: &str) -> Option<String> {
     let lines: Vec<String> = contents.lines().map(str::to_string).collect();
     let heading = lines.iter().position(|l| l.trim_end() == "## Review")?;
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let fenced = markdown::fenced_lines(&refs, heading + 1..lines.len());
     let mut limit = lines.len();
     for (i, line) in lines.iter().enumerate().skip(heading + 1) {
-        if line.starts_with("## ") || line.starts_with("> [!agent]") {
+        if fenced.contains(&i) {
+            continue;
+        }
+        if line.starts_with("## ") || ends_period_sections(line) {
             limit = i;
             break;
         }
@@ -1060,7 +1076,7 @@ mod tests {
 
     fn week_note(sections: &str) -> String {
         format!(
-            "---\nparent: \"[[2026/2026-Q4]]\"\ntype: \"[[day]]\"\nid: 2026-W47\n---\n\n# 2026-W47\n\n{sections}\n\n```bob-stats-strip\n\n```\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n\nOld review.\n"
+            "---\nparent: \"[[2026/2026-Q4]]\"\ntype: \"[[day]]\"\nid: 2026-W47\n---\n\n# 2026-W47\n\n```bob-stats-strip\n\n```\n\n{sections}\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n\nOld review.\n"
         )
     }
 
@@ -1250,13 +1266,113 @@ mod tests {
         assert!(!after.contains("## Reflection"), "{after}");
         assert!(!out.placeholders.is_empty(), "{out:?}");
 
-        // A fence-only Reflection is text the reader skips: never removed.
+        // A fence-only Reflection is legacy period text: migrate moves it.
         let fenced = week_note("## Reflection\n\n```text\nkeep me\n```\n");
         let out = migrate_note_contents(&fenced, week_subject(), today);
-        let kept = out.after.unwrap_or_else(|| fenced.clone());
+        let after = out.after.expect("fence-only Reflection migrates");
+        assert!(!after.contains("## Reflection"), "{after}");
+        let fields = crate::native::intentions::read(&after, week_subject());
+        assert_eq!(
+            fields.reflection.value.as_deref(),
+            Some("```text\nkeep me\n```"),
+            "{after}"
+        );
+        let rerun = migrate_note_contents(&after, week_subject(), today);
+        assert!(rerun.after.is_none(), "{rerun:?}");
+    }
+
+    #[test]
+    fn reflection_keeps_a_fenced_code_block_verbatim() {
+        let body = "Kept prose.\n\n```rust\nfn x() {}\n```";
+        let before = week_note(&format!("## Reflection\n\n{body}\n"));
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(&before, week_subject(), today);
+        let after = out.after.expect("migrates");
+        assert!(!after.contains("## Reflection"), "{after}");
+        assert!(after.contains("## Days"), "{after}");
+        let fields = crate::native::intentions::read(&after, week_subject());
+        assert_eq!(fields.reflection.value.as_deref(), Some(body), "{after}");
+        let rerun = migrate_note_contents(&after, week_subject(), today);
+        assert!(rerun.after.is_none(), "{rerun:?}");
+    }
+
+    #[test]
+    fn review_opener_keeps_a_fenced_heading_once() {
+        let before = "---\nparent: \"[[2026/2026-Q4]]\"\nid: 2026-W47\n---\n\n# 2026-W47\n\n## Days\n\n```bob-period-parts\n\n```\n\n## Review\n\n**Headline:** A calm week\n\n```md\n## not a heading\nkeep me\n```\n\n## Extra\n\nAfter review.\n";
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(before, week_subject(), today);
+        let after = out.after.expect("migrates");
+        assert!(after.contains("summary:"), "{after}");
+        assert!(!after.contains("**Headline:**"), "{after}");
+        assert_eq!(
+            after
+                .matches("```md\n## not a heading\nkeep me\n```")
+                .count(),
+            1,
+            "{after}"
+        );
+        assert!(after.contains("## Extra\n\nAfter review."), "{after}");
+        let fields = crate::native::intentions::read(&after, week_subject());
+        assert_eq!(fields.summary.value.as_deref(), Some("A calm week"));
         assert!(
-            kept.contains("## Reflection\n\n```text\nkeep me\n```"),
-            "{kept}"
+            fields
+                .review_body
+                .contains("```md\n## not a heading\nkeep me\n```"),
+            "{after}"
+        );
+        let rerun = migrate_note_contents(&after, week_subject(), today);
+        assert!(rerun.after.is_none(), "{rerun:?}");
+    }
+
+    #[test]
+    fn intentions_with_a_fenced_block_are_left_in_place() {
+        let before = week_note(
+            "## Intentions\n\n- Ship it\n\n```text\nnot a bullet\n```\n",
+        );
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(&before, week_subject(), today);
+        assert!(out.after.is_none(), "{out:?}");
+        assert!(
+            out.skipped.iter().any(|s| s.contains("fenced block")),
+            "{out:?}"
+        );
+        assert!(before.contains("## Intentions"), "{before}");
+    }
+
+    #[test]
+    fn year_theme_with_a_fenced_block_is_left_in_place() {
+        let before = "---\nparent: \"[[all_time]]\"\n---\n\n# 2026\n\n## Theme\n\nMake room\n\n```text\nnot a theme\n```\n\n## Quarters\n\n```bob-period-parts\n\n```\n\n## Review\n";
+        let today = NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let out = migrate_note_contents(before, year_subject(), today);
+        assert!(out.after.is_none(), "{out:?}");
+        assert!(
+            out.skipped
+                .iter()
+                .any(|s| s.contains("Theme") && s.contains("fenced block")),
+            "{out:?}"
+        );
+        let values = legacy::intentions(
+            IntentionsKind::Period(PeriodId::Year(2026)),
+            before,
+        );
+        assert!(values.is_none(), "{values:?}");
+    }
+
+    #[test]
+    fn fence_only_reflection_is_legacy_period_text() {
+        let before = week_note("## Reflection\n\n```text\nkeep me\n```\n");
+        let legacy = legacy::find_legacy_fields(
+            IntentionsKind::Period(PeriodId::Week {
+                year: 2026,
+                week: 47,
+            }),
+            &before,
+        );
+        assert!(legacy.slots.contains(&"week ## Reflection"), "{legacy:?}");
+        assert_eq!(
+            legacy.reflection.as_deref(),
+            Some("```text\nkeep me\n```"),
+            "{legacy:?}"
         );
     }
 
