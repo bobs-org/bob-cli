@@ -394,7 +394,7 @@
       "now": "2026-09-30 09:02:00",
       "vault": {
         ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
-        "done/old.md": "- [x] #task Old kept ^kept\n",
+        "done/old.md": "- [x] #task Old kept ^old-kept\n",
         "keep.md": "- [ ] #task Locked kept ^locked-kept\n",
         "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
       },
@@ -415,7 +415,7 @@
           "text": "Locked kept"
         },
         {
-          "block_id": "kept",
+          "block_id": "old-kept",
           "disabled_reason": null,
           "group": "completed",
           "hidden": false,
@@ -423,9 +423,48 @@
           "link_target": "done/old",
           "locator": "old",
           "note_path": "done/old.md",
-          "replacement": "[[done/old#^kept]]",
+          "replacement": "[[done/old#^old-kept]]",
           "status_symbol": "x",
           "text": "Old kept"
+        }
+      ]
+    },
+    {
+      "name": "rank-history-best-match-first",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n",
+        "work.md": "- [ ] #task Polish the widget ^polish\n- [x] #task Widget launch ^widget-launch\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "widget",
+      "rows": [
+        {
+          "block_id": "widget-launch",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 2,
+          "link_target": "work",
+          "locator": "work",
+          "note_path": "work.md",
+          "replacement": "[[work#^widget-launch]]",
+          "status_symbol": "x",
+          "text": "Widget launch"
+        },
+        {
+          "block_id": "polish",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "work",
+          "locator": "work",
+          "note_path": "work.md",
+          "replacement": "[[work#^polish]]",
+          "status_symbol": " ",
+          "text": "Polish the widget"
         }
       ]
     },

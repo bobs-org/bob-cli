@@ -619,26 +619,44 @@ fn all_tasks_does_not_change_the_pool() {
 }
 
 #[test]
-fn query_ranks_open_matches_ahead_of_history() {
+fn query_ranks_history_by_score_and_open_first_on_ties() {
     let temp = TempDir::new("bob-cli-complete-wikilink-task-rank");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     write_fixture(&vault);
+    write_file(
+        &vault.join("work.md"),
+        concat!(
+            "- [x] #task Gadget review ^gadget-closed\n",
+            "- [ ] #task Gadget review ^gadget-open\n",
+        ),
+    );
 
     let text = "Follow up ((meals";
     let json = complete_json(&vault, text.len(), text);
     assert_eq!(json["query"], "meals");
     assert_eq!(candidate_texts(&json), vec!["Plan meals"]);
 
+    // `^kept` matches the completed `Old kept` as a field prefix, so it
+    // outranks the open rows that match `kept` only as a later word.
     let text = "Follow up ((kept";
     let json = complete_json(&vault, text.len(), text);
     let texts = candidate_texts(&json);
+    assert_eq!(texts[0], "Old kept", "best match leads: {texts:?}");
+    assert_eq!(json["candidates"][0]["group"], "completed");
     assert!(texts.contains(&"Locked kept".to_string()), "{texts:?}");
-    assert!(texts.contains(&"Old kept".to_string()), "{texts:?}");
     assert!(texts.contains(&"Yesterday kept".to_string()), "{texts:?}");
-    let locked = texts.iter().position(|text| text == "Locked kept").unwrap();
-    let old = texts.iter().position(|text| text == "Old kept").unwrap();
-    assert!(locked < old, "open matches precede completed: {texts:?}");
+
+    // At equal score, the open row precedes completed history.
+    let text = "Follow up ((gadget";
+    let json = complete_json(&vault, text.len(), text);
+    let ids: Vec<&str> = json["candidates"]
+        .as_array()
+        .expect("candidates array")
+        .iter()
+        .map(|candidate| candidate["block_id"].as_str().expect("block id"))
+        .collect();
+    assert_eq!(ids, vec!["gadget-open", "gadget-closed"], "{json}");
 
     let text = "Follow up ((done-deed";
     let json = complete_json(&vault, text.len(), text);

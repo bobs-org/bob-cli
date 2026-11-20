@@ -8,6 +8,17 @@ description: Bob's shared vocabulary, generated from the glossary memory web.
 
 Bob's shared vocabulary, generated from the glossary memory web.
 
+### Album Card {#album-card}
+
+A [Property Card](#property-card) for one album: its row in the owner's generated `[!albums]`
+catalog in an area or project note, showing the total record count, the first
+nonempty group chip, and the age since the latest record; and the generated
+`[!records]` index on the album note itself, with Bob's tally, group order,
+and empty-album teaching line. Counts come from the shared
+`bob albums list -f json` report. Painting, peeking, and navigation never
+write the vault; syncing explicitly invokes Bob's writer. See
+`docs/reference/plugins/albums.md`.
+
 ### Album Note {#album-note}
 
 A root-level Bob vault Markdown note with frontmatter `type: "[[album]]"` that owns
@@ -66,6 +77,18 @@ also carry an optional one-line `summary:`, shown after its link in the catalog.
 *Aliases: bank chip, daily bank chip.*
 
 A read-only money summary that follows one [Day Strip](#day-strip) or [Stats Strip](#stats-strip) and covers exactly that strip's period: a day, ISO week, quarter, ISO week-year, or all time over the bank's own history. bob supplies the counted totals, waiting [Bank Row](#bank-row)s, and coverage from `bob bank report`. In counts `income` and `refund` inflows; Out counts outflows except transfers and cash-account rows. Each side appears only above $0.00, and the badge hides when both sides and period waiting are zero. In uses a `+` and green ink, Out uses body ink, and waiting uses warning ink. The chrome tints green only when In exceeds Out; otherwise it is neutral for counted money or amber for waiting without money. Color never carries meaning alone, and the badge names partial coverage. Its tooltip includes exact cents, excluded money, largest outflows, waiting, and coverage. Click, Enter, or Space opens the oldest waiting row, a day heading, the single [Bank Month Note](#bank-month-note), or `bank.md`; it never creates a note or writes the vault. `stats.bank_badge` (alias `stats.bank_chip`) controls every host. The badge is not a Stats metric, not a `bob-bank` card, and does not appear in `bob-period-parts`.
+
+### Bank Card {#bank-card}
+
+*Aliases: bob-bank, setup panel.*
+
+A [Property Card](#property-card) rendering of bank state. The `bob-bank` fences render
+read-only views: `view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`,
+and `view: subscriptions` on `subscriptions.md`. The bank card under `# 🏦 Bank`
+(formerly the Setup panel) draws `bob bank config` categories, accounts, rules,
+and findings; `==`, ⊞ Edit, or Command Mode opens the bank card editor.
+Painting writes nothing and mobile stays read-only. Not the [Bank Badge](#bank-badge),
+the Bank Period Charts panel, or a Stats fact. See `docs/bank.md`.
 
 ### Bank Closing {#bank-closing}
 
@@ -315,6 +338,10 @@ It shows in the week [Period Note](#period-note) Days table and strip, `bob peri
 Review's agent-drafted Headline, a [Pomodoro](#pomodoro) entry line, or the ★ type
 highlight. Not the [Day Strip](#day-strip).
 
+Superseded: [Intention](#intention) retires the preamble `**Headline:**` line —
+intentions, the agent-drafted summary, and reflection now live in frontmatter
+and show in the intention card.
+
 ### Day Strip {#day-strip}
 
 *Aliases: day stats.*
@@ -402,6 +429,35 @@ inbox files set `ready_cap: off`. bob-plugins and `docs/projects.md` ("Inbox rou
 say "inbox note" (`api.inboxRoute.isInboxNote`); that is not a Google Keep inbox note,
 the Keep item `bob gkeep` drains. bob-cli capture's `INBOX_FILE` constant and
 `kind: inbox` target mean only `mac_inbox.md`, the default capture route.
+
+### Intention {#intention}
+
+*Aliases: daily intentions, weekly intentions.*
+
+One Bryan-written line naming the result that would make a day or period count:
+the one concept ("daily intentions", "weekly intentions", ...) replacing the
+retired daily [Daily Headline](#daily-headline) and the old period `Intentions` / `Outcomes` /
+`Theme` body sections. Stored as an ordered frontmatter `intentions` list of
+trimmed, non-empty one-line Markdown strings (`[[links]]` allowed) on canonical
+daily notes and week, quarter, and year notes; never on `all_time`. Its
+siblings are the agent-drafted `summary` and Bryan's `reflection`, and the
+three show together in the [Intention Card](#intention-card). Soft cap 3, reported as info;
+Bryan's text is never refused. Absent means empty. Not a task, a
+[Pomodoro](#pomodoro) entry, or the agent's summary. See `docs/periods.md`.
+
+### Intention Card {#intention-card}
+
+*Aliases: intentions card.*
+
+A [Property Card](#property-card) Bob Ledger Tools paints at the top of a canonical daily or
+period note in Reading view and Live Preview when any of `intentions`,
+`summary`, or `reflection` is nonempty. It shows the numbered [Intention](#intention)s,
+SUMMARY with provenance (`✦ agent` for a stamped draft, `✎ edited` otherwise),
+REFLECTION, and the parent line; a recent closed subject missing a band shows
+one quiet pending line instead. `==` opens the card editor; every write goes
+through `bob periods update` with the server's field fingerprint, and the card
+fails open. Desktop-only: Source mode, embeds, popovers, and mobile keep native
+Properties. See `docs/reference/plugins/intention-card.md`.
 
 ### Keep Streak {#keep-streak}
 
@@ -594,12 +650,14 @@ Each `parent` is the next period up (a daily note's is its week, a year's is
 days. bob creates them, create-only and one week ahead (`bob periods ensure`).
 
 Each opens with a [Stats Strip](#stats-strip) and a live parts table that summarizes every child
-with its Headline or the root parents it mostly went to. It then holds:
+with its projected headline — the summary for a closed child, intentions joined
+with `·` for a current or future child — or the root parents it mostly went to.
+It then holds:
 
-- Bryan's `Intentions`, `Outcomes`, or `Theme`;
+- Bryan's [Intention](#intention)s, the agent-drafted `summary`, and Bryan's `reflection`
+  in frontmatter, shown in the [Intention Card](#intention-card);
 - a `## Review` that an agent may draft only through `bob periods draft`, while it
   is empty or still unedited;
-- Bryan's `## Reflection`;
 - a folded `[!agent]` callout with the complete, versioned drafting instructions.
 
 Period notes hold no task rows. Monthly notes are retired: months are a Stats
@@ -677,6 +735,33 @@ canceled to `status: canceled`, and reopening a terminal project to `status: wip
 open nonterminal project's status is preserved. New lines include `#prj`; legacy lines
 without that tag remain recognized. See `docs/projects.md` and
 [Projects Block Their Tasks From The ^prj Line](../develop/decisions.md#projects-block-from-prj-line).
+
+### Property Card {#property-card}
+
+*Aliases: card family.*
+
+The shared family of note-top panels — album, bank, record, and intention
+cards — built on the bob-ledger-tools kit. The kit owns the `.bob-property-card`
+chrome, the `==` dispatcher registry (bank → album → record → intention, then
+extensions), owned-key property hiding, and the host mount lifecycle. "Card"
+means the panel; "card editor" means what `==` opens. Painting reads the
+metadata cache and confirmed source bytes, never spawns bob, and never writes
+the vault; a failed mount leaves native Properties visible. See
+`docs/develop/plugins/architecture.md`.
+
+### Record Card {#record-card}
+
+*Aliases: record sheet.*
+
+A [Property Card](#property-card) (formerly the record sheet) Bob Ledger Tools paints at the
+top of a canonical album [Record Note](#record-note) body in Reading view and Live Preview.
+When hide-eligible, the native title and album-schema rows hide behind the
+card; `parent`, `type`, `created`, legacy, and unrelated keys stay in
+Properties. The Record Card editor is the keyboard-first editor for the
+record's values. A recognized walk line becomes a rail under the card with the
+album-ring position. The card reads the cached album report: opening, folding,
+or collapsing a record never requests a new report and never writes the note.
+Source mode keeps native YAML. See `docs/reference/plugins/record-card.md`.
 
 ### Record Note {#record-note}
 

@@ -2325,7 +2325,8 @@ order is same-note open tasks, In Progress, Next, other open tasks grouped
 by note, then completed/cancelled history, with hidden tasks last within
 their section; queries rank with the same tiered AND-term matcher as the
 `:` picker (task text, exact note locator, block ID, path, section) and
-keep completed history findable behind open matches. Each row carries the
+rank completed history by score too, with open matches ahead only at
+equal score. Each row carries the
 exact `note_path` (with extension, never a lowercased route), display
 `locator`, stable `group`, `already_dependency`, and optional
 `disabled_reason`; ID-less rows carry `requires_block_id` with suggestions

@@ -613,11 +613,10 @@ fn canonical_key(
     }
 }
 
-/// Order catalog tasks for the picker: query matches first (open
-/// matches by score, then completed-history matches by score, ties
-/// keep canonical order), or the plain canonical order for an empty
-/// query. Completed history always trails open matches so searches
-/// still find it without burying actionable rows.
+/// Order catalog tasks for the picker: query matches by score, with
+/// ties in canonical order, or the plain canonical order for an empty
+/// query. Completed history ranks by score too, so a closed task that
+/// matches best leads; it trails open matches only at equal score.
 pub(crate) fn order_for_picker<'a>(
     tasks: &'a [DependencyTask],
     query: &str,
@@ -633,19 +632,17 @@ pub(crate) fn order_for_picker<'a>(
             .map(|score| (task, score))
         })
         .collect();
-    // Score dominates; the canonical key breaks ties; the open flag
-    // keeps completed history behind open matches at any score. The
-    // sort is stable, so full ties keep catalog (path/line) order.
+    // Score dominates; the canonical key breaks ties, and its first
+    // component sends completed history (section 4) behind open
+    // matches only at equal score. The sort is stable, so full ties
+    // keep catalog (path/line) order.
     scored.sort_by(|left, right| {
         let (left_task, left_score) = left;
         let (right_task, right_score) = right;
-        u8::from(!left_task.open)
-            .cmp(&u8::from(!right_task.open))
-            .then_with(|| right_score.cmp(left_score))
-            .then_with(|| {
-                canonical_key(left_task, owner_note)
-                    .cmp(&canonical_key(right_task, owner_note))
-            })
+        right_score.cmp(left_score).then_with(|| {
+            canonical_key(left_task, owner_note)
+                .cmp(&canonical_key(right_task, owner_note))
+        })
     });
     scored.into_iter().map(|(task, _)| task).collect()
 }
@@ -1011,6 +1008,31 @@ mod tests {
         // History stays findable through search.
         let ordered = order_for_picker(&discovered.tasks, "kept", None);
         assert_eq!(texts(&ordered), vec!["Old kept"]);
+    }
+
+    #[test]
+    fn completed_history_ranks_by_score_and_trails_only_on_ties() {
+        let temp = vault_fixture();
+        write_file(
+            &temp.path().join("work.md"),
+            concat!(
+                "- [ ] #task Polish the widget ^polish\n",
+                "- [x] #task Widget launch ^widget-launch\n",
+                "- [x] #task Gadget review ^gadget-closed\n",
+                "- [ ] #task Gadget review ^gadget-open\n",
+            ),
+        );
+        let discovered = discover(temp.path());
+        // A closed field-prefix match outranks an open later-word match.
+        let ordered = order_for_picker(&discovered.tasks, "widget", None);
+        assert_eq!(texts(&ordered), vec!["Widget launch", "Polish the widget"]);
+        // An equal-score open/closed pair still lists the open one first.
+        let ordered = order_for_picker(&discovered.tasks, "gadget", None);
+        let ids: Vec<Option<&str>> = ordered
+            .iter()
+            .map(|task| task.block_id.as_deref())
+            .collect();
+        assert_eq!(ids, vec![Some("gadget-open"), Some("gadget-closed")]);
     }
 
     #[test]

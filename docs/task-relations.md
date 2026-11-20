@@ -815,6 +815,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG21 | Ctrl+Shift+L / Ctrl+Shift+Alt+L on a Depends-On or BLOCKS line | opens the owner's Links / Linked-from stage |
 | LG22 | Ctrl+Shift+B / Ctrl+Shift+Alt+B on a LINKS / LINKED FROM line | opens the owner's Depends on / Blocks stage |
 | LG23 | ⇧↵ in a Links / Linked-from stage | no-op: nothing links, unlinks, or opens |
+| LG24 | Links stage query that a closed task matches best | the closed row ranks by score inside RESULTS; CLOSED appears only on an empty filter |
 
 ### LC — chips
 

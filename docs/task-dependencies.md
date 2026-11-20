@@ -295,8 +295,9 @@ with no R0 or D3.
 | Anywhere | palette command **Edit task dependencies** (`edit-task-dependencies`, no default hotkey) | the task under the cursor |
 | Prose with several links, or a selection spanning tasks | any | refused with a short reason |
 
-Layout reuses the `bob-cnp` modal styling, with `CURRENT`,
-`RESULTS`, and `BLOCKED` sections, a search row, and a footer of
+Layout reuses the `bob-cnp` modal styling, with `CURRENT` and
+`RESULTS` sections (plus a `BLOCKED` section on an empty filter), a
+search row, and a footer of
 `↑↓ navigate · ⇥ mark · ↵ toggle · esc dismiss`.
 
 ### 6.2 Pool
@@ -335,19 +336,23 @@ The stage ports `capture_link_tasks.rs::rank`:
   cleaned description, `route:blockId`, block id, note route, and
   section heading: field prefix 3, word prefix 2, substring 1,
   in-order subsequence 0. Scores are summed.
-- Ties keep canonical order: same note in document order, then
+- Match score leads: a Blocked candidate that matches better ranks
+  above Ready ones inside RESULTS. Ties order open candidates, then
+  Blocked, each in canonical order: same note in document order, then
   In Progress, Next, Ready (by path, then line), then `#hide`.
-- Blocked candidates render in their own BLOCKED section beneath
-  RESULTS.
-- BLOCKED badges name what blocks the candidate, counted from its own
+- Blocked rows keep their muted title and a 🔒 badge that names what
+  blocks the candidate, counted from its own
   Depends-On line whether or not it carries a `^blockId`: `🔒 waits on N`
   only when N >= 1 open prerequisites remain (the stage never shows
   `waits on 0`); with no open prerequisite, a future
   `[scheduled:: YYYY-MM-DD]` reads `🔒 scheduled YYYY-MM-DD`, and otherwise
   the row reads `🔒 blocked`.
 - An empty query shows CURRENT, then open tasks in the same note, then
-  the In Progress and Next lanes.
-- At most about 60 rows render. Typing reaches the rest.
+  the In Progress and Next lanes. Every score ties there, so any
+  Blocked rows follow the open ones under a BLOCKED header.
+- At most about 60 rows render, counted over the merged score order,
+  so a strong Blocked match is never folded behind weaker Ready rows.
+  Typing reaches the rest.
 - Matched characters are highlighted.
 - The row badge shows the block id, never the path-encoded id.
 
@@ -5033,8 +5038,10 @@ With an empty query, rows rank as follows:
    document order, then the remaining tasks in canonical order.
 3. BLOCKED last. Hidden tasks are muted and last within each group.
 
-For a typed query, match score leads and this order breaks ties. The
-stage renders about 60 rows and then a stage-more row.
+For a typed query, match score leads and this order breaks ties. Rows
+render in one RESULTS list; Blocked rows stay marked by 🔒 and keep
+their consequence copy. The stage renders about 60 rows, counted over
+that merged order, and then a stage-more row.
 
 ### 15.4 Task Card row and stage rows
 

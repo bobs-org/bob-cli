@@ -297,6 +297,34 @@ fn query_ranks_matches_and_keeps_history_findable() {
 }
 
 #[test]
+fn query_ranks_completed_history_by_score() {
+    let temp = TempDir::new("bob-cli-complete-dependency-history-rank");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_fixture(&vault);
+    write_file(
+        &vault.join("work.md"),
+        concat!(
+            "- [ ] #task Polish the widget ^polish\n",
+            "- [x] #task Widget launch ^widget-launch\n",
+        ),
+    );
+    let before = snapshot(&vault);
+
+    // A completed field-prefix match outranks an open later-word match.
+    let text = "Buy Groceries! &widget";
+    let json = complete_json(&vault, text.len(), text);
+    let texts = candidate_texts(&json);
+    assert_eq!(
+        texts,
+        vec!["Widget launch", "Polish the widget"],
+        "{texts:?}"
+    );
+    assert_eq!(json["candidates"][0]["group"], "completed");
+    assert_eq!(snapshot(&vault), before);
+}
+
+#[test]
 fn refetch_at_replacement_start_returns_the_full_snapshot() {
     let temp = TempDir::new("bob-cli-complete-dependency-refetch");
     let vault = temp.path().join("vault");
