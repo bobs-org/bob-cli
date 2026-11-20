@@ -2,6 +2,10 @@
 keyword: Daily Headline
 aliases:
   - "day headline"
+metadata:
+  status: superseded
+  superseded_by:
+    - glossary:intention
 ---
 
 One Bryan-written `**Headline:**` (or `**Headline**:`) sentence in a daily
@@ -14,3 +18,7 @@ It shows in the week [[period-note]] Days table and strip, `bob periods show` /
 `brief` day rows, and the top of the Bob Mac Capture idle agenda. Not a period
 Review's agent-drafted Headline, a [[pomodoro]] entry line, or the ★ type
 highlight. Not the [[day-strip]].
+
+Superseded: [[glossary:intention]] retires the preamble `**Headline:**` line —
+intentions, the agent-drafted summary, and reflection now live in frontmatter
+and show in the intention card.

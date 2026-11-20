@@ -19,12 +19,14 @@ Each `parent` is the next period up (a daily note's is its week, a year's is
 days. bob creates them, create-only and one week ahead (`bob periods ensure`).
 
 Each opens with a [[stats-strip]] and a live parts table that summarizes every child
-with its Headline or the root parents it mostly went to. It then holds:
+with its projected headline — the summary for a closed child, intentions joined
+with `·` for a current or future child — or the root parents it mostly went to.
+It then holds:
 
-- Bryan's `Intentions`, `Outcomes`, or `Theme`;
+- Bryan's [[intention]]s, the agent-drafted `summary`, and Bryan's `reflection`
+  in frontmatter, shown in the [[intention-card]];
 - a `## Review` that an agent may draft only through `bob periods draft`, while it
   is empty or still unedited;
-- Bryan's `## Reflection`;
 - a folded `[!agent]` callout with the complete, versioned drafting instructions.
 
 Period notes hold no task rows. Monthly notes are retired: months are a Stats
