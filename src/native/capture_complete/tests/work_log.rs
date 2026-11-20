@@ -51,13 +51,77 @@ fn work_log_completion_uses_recent_work_phrases_without_selection() {
 #[test]
 fn work_log_completion_waits_for_two_typed_characters() {
     let temp = work_log_vault();
-    let raw = "x a";
-    let menu = result(temp.path(), raw, raw.len());
+    for raw in ["x a", "x a "] {
+        let menu = result(temp.path(), raw, raw.len());
+        assert_eq!(menu.context, None, "{raw:?}");
+        assert!(menu.candidates.is_empty(), "{raw:?}");
+    }
+}
 
+#[test]
+fn work_log_completion_queries_only_text_before_the_cursor() {
+    let temp = work_log_vault();
+    let raw = "x auth retry";
+    let cursor = raw.find("au").expect("au") + "au".len();
+    let field = capture_language::work_log_completion_field_at(raw, cursor)
+        .expect("missing Work Log field");
+    assert_eq!(field.context, CompletionContext::WorkLog);
+    assert_eq!(field.query, "au");
+    assert_eq!(field.replacement, (2, raw.len()));
+    let menu = result(temp.path(), raw, cursor);
     assert_eq!(menu.context, Some(CompletionContext::WorkLog));
-    assert_eq!(menu.query.as_deref(), Some("a"));
-    assert_eq!(menu.initial_selection, Some("none"));
-    assert!(menu.candidates.is_empty());
+    assert_eq!(menu.query.as_deref(), Some("au"));
+    assert_eq!(
+        menu.replacement,
+        super::super::model::Replacement {
+            start: 2,
+            end: raw.len(),
+        }
+    );
+}
+
+#[test]
+fn work_log_completion_drops_the_exact_current_summary() {
+    let temp = work_log_vault();
+    let raw = "x Auth  Retry";
+    let menu = result(temp.path(), raw, raw.len());
+    assert_eq!(menu.context, None, "{menu:?}");
+    assert!(menu.candidates.is_empty(), "{menu:?}");
+    if let Candidates::WorkLog(rows) = &menu.candidates {
+        assert!(rows.iter().all(|row| row.key != "auth retry"), "{rows:?}");
+    }
+}
+
+#[test]
+fn work_log_completion_caps_at_eight_rows() {
+    let temp = TempDir::new("bob-cli-capture-complete-work-log-cap");
+    let mut log = String::from("- [ ] Task ^task\n  - 🛠️ **WORK LOG**\n");
+    for n in 1..=12 {
+        log.push_str(&format!(
+            "    - *2026-11-19 08:{n:02}* — auth phrase {n}\n"
+        ));
+    }
+    write_file(&temp.path().join("task.md"), &log);
+    let raw = "x auth";
+    let menu = result(temp.path(), raw, raw.len());
+    assert_eq!(menu.context, Some(CompletionContext::WorkLog));
+    let Candidates::WorkLog(rows) = menu.candidates else {
+        panic!("expected Work Log phrase candidates");
+    };
+    assert_eq!(rows.len(), 8);
+}
+
+#[test]
+fn work_log_completion_ignores_summaries_with_wikilinks() {
+    let temp = work_log_vault();
+    let raw = "x auth [[retry]]";
+    assert!(
+        capture_language::work_log_completion_field_at(raw, raw.len())
+            .is_none(),
+        "{raw:?}"
+    );
+    let menu = result(temp.path(), raw, raw.len());
+    assert_ne!(menu.context, Some(CompletionContext::WorkLog), "{menu:?}");
 }
 
 #[test]

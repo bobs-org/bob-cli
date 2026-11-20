@@ -2817,7 +2817,10 @@ pub(super) fn parse_editor_close_item<'a>(
         ) {
             Ok(lexed) => {
                 for entry in &lexed.entries {
-                    base_spans.push(close_log_summary_span(entry.text_range));
+                    if !entry.text.contains("[[") {
+                        base_spans
+                            .push(close_log_summary_span(entry.text_range));
+                    }
                     // Positional entries carry no index range, like a
                     // defaulted inline entry: no index span.
                     if let Some((start, end)) = entry.index_range {
@@ -3109,7 +3112,9 @@ pub(super) fn parse_editor_close_item<'a>(
                     section_action: None,
                 });
             }
-            base_spans.push(close_log_summary_span(text_range));
+            if !text.contains("[[") {
+                base_spans.push(close_log_summary_span(text_range));
+            }
             base_spans.sort_by_key(|span| (span.start, span.end));
             let mut spec =
                 close_spec_from_lex(first.to_string(), &lexed_selection)
@@ -3673,11 +3678,13 @@ fn parse_editor_past_item<'a>(
                 let mut spans = base_past_spans.clone();
                 spans.extend(close_sub_spans.clone());
                 for entry in &lexed.entries {
-                    spans.push(mk_span(
-                        entry.text_range.0,
-                        entry.text_range.1,
-                        SpanKind::PomodoroCloseLogSummary,
-                    ));
+                    if !entry.text.contains("[[") {
+                        spans.push(mk_span(
+                            entry.text_range.0,
+                            entry.text_range.1,
+                            SpanKind::PomodoroCloseLogSummary,
+                        ));
+                    }
                     if let Some((s, e)) = entry.index_range {
                         spans.push(mk_span(
                             s,
@@ -3944,11 +3951,13 @@ fn parse_editor_past_item<'a>(
             if let Some((s, e)) = index_range {
                 spans.push(mk_span(s, e, SpanKind::PomodoroCloseLogIndex));
             }
-            spans.push(mk_span(
-                text_range.0,
-                text_range.1,
-                SpanKind::PomodoroCloseLogSummary,
-            ));
+            if !text.contains("[[") {
+                spans.push(mk_span(
+                    text_range.0,
+                    text_range.1,
+                    SpanKind::PomodoroCloseLogSummary,
+                ));
+            }
             spans.sort_by_key(|s| (s.start, s.end));
             let mut close =
                 close_spec_from_lex(split.close_text.clone(), &lexed_selection);

@@ -31,7 +31,7 @@ use crate::native::{
     pomodoro,
 };
 
-const MAX_WORK_LOG_CANDIDATES: usize = 3;
+const MAX_WORK_LOG_CANDIDATES: usize = 8;
 const WORK_LOG_MIN_QUERY_CHARS: usize = 2;
 
 /// `true` when `cursor` sits in Work Log text: a bullet line or an inline
@@ -308,17 +308,45 @@ fn build_result_inner(
         });
     }
 
-    let field =
-        capture_language::work_log_completion_field_at(raw_text, cursor)
-            .or_else(|| {
-                capture_language::completion_field_at_with(
+    let work_log_field =
+        capture_language::work_log_completion_field_at(raw_text, cursor);
+    let mut cached_work_log: Option<(Vec<WorkLogCandidate>, Vec<String>)> =
+        None;
+    let field = match work_log_field {
+        Some(work_log) => {
+            let whole = raw_text
+                .get(work_log.replacement.0..work_log.replacement.1)
+                .unwrap_or("");
+            let (rows, warnings) =
+                work_log_candidates(bob_dir, &work_log.query, whole)?;
+            if rows.is_empty() {
+                match capture_language::completion_field_at_with(
                     raw_text,
                     cursor,
                     Some(&notebook_policy),
-                )
-            });
-    let Some(field) = field else {
-        return Ok(CaptureCompleteResult::empty(cursor));
+                ) {
+                    Some(fallback) => fallback,
+                    None => {
+                        return Ok(CaptureCompleteResult::empty(cursor));
+                    }
+                }
+            } else {
+                cached_work_log = Some((rows, warnings));
+                work_log
+            }
+        }
+        None => {
+            match capture_language::completion_field_at_with(
+                raw_text,
+                cursor,
+                Some(&notebook_policy),
+            ) {
+                Some(fallback) => fallback,
+                None => {
+                    return Ok(CaptureCompleteResult::empty(cursor));
+                }
+            }
+        }
     };
     let transfer_role =
         capture_language::transfer_completion_role(raw_text, cursor);
@@ -647,8 +675,19 @@ fn build_result_inner(
             )?
         }
         CompletionContext::WorkLog => {
-            let (rows, warnings) = work_log_candidates(bob_dir, &field.query)?;
-            (Candidates::WorkLog(rows), warnings)
+            if let Some((rows, warnings)) = cached_work_log.take() {
+                (Candidates::WorkLog(rows), warnings)
+            } else {
+                let whole = raw_text
+                    .get(field.replacement.0..field.replacement.1)
+                    .unwrap_or("");
+                let (rows, warnings) =
+                    work_log_candidates(bob_dir, &field.query, whole)?;
+                if rows.is_empty() {
+                    return Ok(CaptureCompleteResult::empty(cursor));
+                }
+                (Candidates::WorkLog(rows), warnings)
+            }
         }
         CompletionContext::ActiveTask => {
             active_task_candidates(bob_dir, &field.query)
@@ -1543,15 +1582,18 @@ fn initial_selection(
 fn work_log_candidates(
     bob_dir: &Path,
     query: &str,
+    whole_summary: &str,
 ) -> Result<(Vec<WorkLogCandidate>, Vec<String>), CompleteError> {
     if query.chars().count() < WORK_LOG_MIN_QUERY_CHARS {
         return Ok((Vec::new(), Vec::new()));
     }
     let catalog = log_history::load(bob_dir, Some(Duration::from_secs(30)))
         .map_err(|error| CompleteError::io(error.to_string()))?;
+    let exclude_key = log_history::normalize(whole_summary);
     let candidates =
         log_history::rank_phrases(&catalog, LogKind::Work, Some(query))
             .into_iter()
+            .filter(|row| row.phrase.key != exclude_key)
             .take(MAX_WORK_LOG_CANDIDATES)
             .map(|row| WorkLogCandidate {
                 replacement: row.phrase.text.clone(),

@@ -156,6 +156,11 @@ pub(crate) fn load(
     scan::load(vault, max_age)
 }
 
+/// Normalize a Work Log summary for exact-key comparison.
+pub(crate) fn normalize(text: &str) -> String {
+    rank::normalize(text)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum MatchKind {

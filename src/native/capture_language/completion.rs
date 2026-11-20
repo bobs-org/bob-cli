@@ -3316,11 +3316,19 @@ pub(crate) fn work_log_completion_field_at(
             && span.start <= cursor
             && cursor <= span.end
     })?;
+    let summary = raw_text.get(span.start..span.end)?;
+    if summary.contains("[[") {
+        return None;
+    }
+    let before = raw_text.get(span.start..cursor)?;
+    if before.chars().filter(|ch| !ch.is_whitespace()).count() < 2 {
+        return None;
+    }
     Some(CompletionField {
         context: CompletionContext::WorkLog,
         route: None,
         block_id: None,
-        query: raw_text.get(span.start..span.end)?.to_string(),
+        query: raw_text.get(span.start..cursor)?.to_string(),
         replacement: (span.start, span.end),
         bare_name: false,
     })

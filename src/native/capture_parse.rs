@@ -342,7 +342,7 @@ including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
 including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
 the `~` (`pomodoro_close_drop`), and each numbered or star entry index \
-(`pomodoro_close_log_index`; positional entries get no index span, a star bullet's `*` gets one, and each entry's summary text carries a `pomodoro_close_log_summary` span, while entry text \
+(`pomodoro_close_log_index`; positional entries get no index span, a star bullet's `*` gets one, and each entry's summary text carries a `pomodoro_close_log_summary` span only for summaries without `[[`, while entry text \
 renders as neutral prose but keeps \
 its wikilink spans); the human `close` line reads \
 `x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
@@ -5530,6 +5530,21 @@ record:
                 summary["end"],
                 expected_start + "wired the lexer".len(),
                 "{raw:?}"
+            );
+        }
+        for raw in [
+            "x wired [[the lexer",
+            "x\n- 1 wired [[the lexer",
+            "x=3=1 wired [[the lexer",
+        ] {
+            let value = json(raw);
+            assert!(
+                value["spans"]
+                    .as_array()
+                    .expect("spans")
+                    .iter()
+                    .all(|span| span["kind"] != "pomodoro_close_log_summary"),
+                "unexpected summary span for {raw:?}: {value}"
             );
         }
     }
