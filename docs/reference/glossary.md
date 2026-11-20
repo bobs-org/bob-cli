@@ -328,7 +328,7 @@ the task-link picker instead. Not the SASE TUI's command-mode panel. See
 
 Authored click-to-copy text in an Obsidian note: an inline code span that starts
 with `copy:` (or `copy[LABEL]:`) or a `bob-copy` fence. The `bob-chips`
-plugin renders the span as a quiet pill and the fence as a titled card. One
+plugin renders the span as a pill with a solid blue copy well and the fence as a titled card. One
 click, `gy` (normal mode, the `copy-on-cursor-line` command), or `Mod+Y` then
 `C` copies the payload byte-exact from source. `Mod+Shift+Y` makes, converts,
 or edits a chip; Alt+Click on a Live Preview chip opens the same card. Payloads
