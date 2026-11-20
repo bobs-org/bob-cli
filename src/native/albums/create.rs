@@ -59,10 +59,11 @@ pub(crate) struct NewAlbumInput<'a> {
     pub(crate) label: &'a str,
 }
 
-/// The contract file: canonical key order `parent`, `type`, `summary`,
-/// optional `emoji`, `created`, then `record` with `noun` and `label`
-/// (`record.fields` stays omitted until real values settle); an H1; one
-/// intro line teaching capture and linking the starter Base.
+/// The contract file: canonical key order `parent`, `type`, `title`,
+/// `summary`, optional `emoji`, `created`, then `record` with `noun` and
+/// `label` (`record.fields` stays omitted until real values settle). There
+/// is no H1; the title lives in `title`. [`plan_create`] appends one intro
+/// line teaching capture and linking the starter Base.
 pub(crate) fn render_new_album(input: &NewAlbumInput<'_>) -> String {
     let mut out = String::from("---\n");
     out.push_str(&format!(
@@ -70,6 +71,7 @@ pub(crate) fn render_new_album(input: &NewAlbumInput<'_>) -> String {
         yaml_string_scalar(&format!("[[{}]]", input.parent_link))
     ));
     out.push_str(&format!("type: {}\n", yaml_string_scalar("[[album]]")));
+    out.push_str(&format!("title: {}\n", yaml_string_scalar(input.title)));
     out.push_str(&format!("summary: {}\n", yaml_string_scalar(input.summary)));
     if let Some(emoji) = input.emoji.filter(|emoji| !emoji.is_empty()) {
         out.push_str(&format!("emoji: {}\n", yaml_string_scalar(emoji)));
@@ -83,8 +85,7 @@ pub(crate) fn render_new_album(input: &NewAlbumInput<'_>) -> String {
         &[],
         &[],
     ));
-    out.push_str("---\n\n");
-    out.push_str(&format!("# {}\n", input.title));
+    out.push_str("---\n");
     out
 }
 
@@ -195,8 +196,9 @@ fn render_schema_scalar(value: &RecordScalar) -> String {
     }
 }
 
-/// The intro line under the H1: teaches the capture route and links the
-/// starter Base. The empty index below repeats the route on its own.
+/// The intro line under the frontmatter: teaches the capture route and
+/// links the starter Base. The empty index below repeats the route on its
+/// own.
 pub(crate) fn render_intro(plural: &str, stem: &str) -> String {
     format!(
         "Track {plural} with `Name @{stem}/`; browse every record in [[{stem}.base]].\n"
@@ -604,6 +606,18 @@ pub(crate) fn plan_create(
                 None,
             )
         })?;
+    // The frontmatter `title` is the only title a new album has, so a
+    // quoting slip must refuse rather than ship a different title.
+    if declaration.title != title {
+        return Err(CreateRefusal::new(
+            "album_invalid",
+            format!(
+                "the planned album title {title:?} read back as {:?}",
+                declaration.title
+            ),
+            None,
+        ));
+    }
     let plural = resolved_plural(&declaration);
     let singular = resolved_singular(&declaration);
     let nouns = RecordNouns {
@@ -918,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_canonical_key_order_h1_intro_and_label() {
+    fn renders_canonical_key_order_title_key_no_h1_and_label() {
         let text = render_new_album(&NewAlbumInput {
             parent_link: "body",
             summary: "Places to eat.",
@@ -930,10 +944,33 @@ mod tests {
         });
         assert_eq!(
             text,
-            "---\nparent: \"[[body]]\"\ntype: \"[[album]]\"\nsummary: Places to eat.\nemoji: 🍽️\ncreated: 2026-11-09T09:14:00+0000\nrecord:\n  noun: restaurant\n  label: Restaurant\n---\n\n# Restaurants\n"
+            "---\nparent: \"[[body]]\"\ntype: \"[[album]]\"\ntitle: Restaurants\nsummary: Places to eat.\nemoji: 🍽️\ncreated: 2026-11-09T09:14:00+0000\nrecord:\n  noun: restaurant\n  label: Restaurant\n---\n"
         );
+        assert!(!text.lines().any(|line| line.starts_with("# ")));
         assert!(render_intro("restaurants", "eat").contains("`Name @eat/`"));
         assert!(render_intro("restaurants", "eat").contains("[[eat.base]]"));
+    }
+
+    #[test]
+    fn titles_needing_quotes_round_trip_through_the_parse_back() {
+        let (_temp, vault) = plan_fixture();
+        for title in ["Eat & Drink", "2026", "yes", "a: b", "\"quoted\""] {
+            let plan = plan_over(&vault, |request| {
+                request.title = Some(title.to_owned());
+            })
+            .unwrap_or_else(|refusal| panic!("{title}: {refusal:?}"));
+            assert_eq!(plan.title, title);
+            let declaration = super::super::parse_album_declaration(
+                &plan.path,
+                &plan.contents,
+            )
+            .expect("album parses");
+            assert_eq!(declaration.title, title);
+            assert_eq!(
+                declaration.title_key,
+                super::super::FrontmatterTitle::Valid(title.to_owned())
+            );
+        }
     }
 
     #[test]
@@ -991,7 +1028,16 @@ mod tests {
         assert_eq!(plan.title, "Eat");
         assert_eq!(plan.label, "Restaurant");
         assert!(plan.contents.contains("parent: \"[[body]]\""));
-        assert!(plan.contents.contains("# Eat\n"));
+        assert!(plan
+            .contents
+            .contains("\ntype: \"[[album]]\"\ntitle: Eat\n"));
+        assert!(!plan.contents.contains("# Eat\n"));
+        assert!(plan.contents.starts_with("---\n"));
+        assert!(
+            plan.contents.contains("\n---\n\nTrack restaurants"),
+            "{}",
+            plan.contents
+        );
         assert!(plan.contents.contains("`Name @eat/`"));
         assert!(plan.contents.contains("## Records"));
         assert!(plan.contents.contains("> [!records] No restaurants yet"));

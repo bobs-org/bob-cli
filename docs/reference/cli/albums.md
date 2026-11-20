@@ -11,7 +11,7 @@ Inspect album notes
 ```text title="bob albums --help"
 Inspect album notes
 
-Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit. `update` edits one album schema from a JSON envelope in one scoped commit.
+Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `tidy` moves album H1 titles into frontmatter `title`, as a dry run unless `-a` is passed. `create` makes an album with its Base and catalog rows in one guarded commit. `update` edits one album schema from a JSON envelope in one scoped commit.
 
 Usage: bob albums [COMMAND]
 
@@ -20,6 +20,7 @@ Commands:
   create  Create an album with its Base and catalog rows
   list    List albums grouped by root (default)
   sync    Repair generated records indexes, record walks, and album catalogs
+  tidy    Move album H1 titles into frontmatter `title` (dry run by default)
   update  Update an album record schema through a guarded JSON envelope
 
 Options:
@@ -34,6 +35,8 @@ Examples:
   bob albums check -f json         Findings as JSON
   bob albums sync -d               Preview index repairs as diffs
   bob albums sync                  Repair every healthy album index
+  bob albums tidy                  Preview title moves as diffs
+  bob albums tidy -a               Move titles into frontmatter in one commit
   bob albums create body eat -n restaurant -s 'Places to eat.'
                                    Create eat.md with its Base and catalog rows
   bob albums update eat -i envelope.json
@@ -195,6 +198,44 @@ Examples:
   bob albums sync -b ~/bob-work -f json
 
 See docs/records.md for the index, catalog, and sync contract.
+```
+
+## bob albums tidy
+
+Move album H1 titles into frontmatter `title` (dry run by default)
+
+```text title="bob albums tidy --help"
+Give each root album a bob-owned frontmatter `title` and drop its redundant H1. An album without `title` gains `title: <its current title>`, inserted after `type`: the first H1 before a bullet or `##` (wikilinks to display text), else the first alias, else the humanized stem. Walk lines, `[!records]` indexes, and `[!albums]` catalogs therefore keep the same text. The first body H1 is then removed when it is the first body content outside fenced code and its text equals that title exactly. A differing H1, an H1 after other content, a later H1, and an H1 inside fenced code are kept and reported. An unusable `title` or damaged frontmatter leaves the album unchanged with a warning. Without `-a` the run is a dry run: it prints unified diffs and takes no lock, writes nothing, runs no Git, and does no sync. `-a` takes the shared vault lock, pre-syncs, replans, guards each album by its full preimage, verifies that each rewritten album keeps its title and plans no further change, makes one scoped `albums: tidy (N notes)` commit, and post-syncs only when it committed. STEM selects one root album by its exact stem. Caution: an older bob reads album titles only from the H1, so its `bob albums sync` would rewrite walk lines and catalog rows to the humanized stem; apply only after every host that runs album sync has this bob.
+
+Usage: bob albums tidy [OPTIONS] [STEM]
+
+Arguments:
+  [STEM]
+          Album stem; selects the root <stem>.md note
+
+Options:
+  -a, --apply
+          Write the plan and make one verified commit
+
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+Examples:
+  bob albums tidy
+  bob albums tidy eat
+  bob albums tidy -f json
+  bob albums tidy -a
+
+See docs/records.md for the album title rule.
 ```
 
 ## bob albums update

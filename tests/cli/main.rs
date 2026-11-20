@@ -3,6 +3,7 @@
 mod albums;
 mod albums_create;
 mod albums_sync;
+mod albums_tidy;
 mod albums_update;
 mod aliases;
 mod areas;

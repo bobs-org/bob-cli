@@ -10,6 +10,7 @@ pub(crate) mod output;
 pub(crate) mod registry;
 pub(crate) mod report;
 pub(crate) mod sync;
+pub(crate) mod tidy;
 pub(crate) mod update;
 pub(crate) mod walk;
 pub(crate) mod write;
@@ -18,6 +19,7 @@ pub(crate) use cli::{
     build_cli_check, build_cli_create, build_cli_list, build_cli_sync,
     build_cli_update,
 };
+pub(crate) use tidy::build_cli_tidy;
 
 use std::{collections::HashMap, path::Path};
 
@@ -57,11 +59,28 @@ pub(crate) struct AlbumFinding {
     pub(crate) suggestions: Vec<String>,
 }
 
+/// The album's frontmatter `title` key, decoded from its own span only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FrontmatterTitle {
+    /// No top-level `title` key.
+    Absent,
+    /// A one-line, nonblank YAML string, trimmed.
+    Valid(String),
+    /// The key is present but blank, multi-line, not a string, or not
+    /// parseable; readers fall back to the H1, alias, or stem title.
+    Invalid,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AlbumDeclaration {
     pub(crate) path: String,
     pub(crate) stem: String,
+    /// Display title: a valid frontmatter `title` wins, else the first H1
+    /// before a bullet or `##`, the first alias, then the humanized stem.
     pub(crate) title: String,
+    /// How the frontmatter `title` key decoded, so tidy can tell an absent
+    /// key from an unusable one.
+    pub(crate) title_key: FrontmatterTitle,
     pub(crate) emoji: Option<String>,
     pub(crate) summary: Option<String>,
     pub(crate) parent: Option<String>,
@@ -119,8 +138,24 @@ pub(crate) fn parse_album_declaration(
     let created = top_level_string(&frontmatter, "created");
     let index_by = top_level_string(&frontmatter, "index_by");
     let summary = decode_summary(&frontmatter);
-    let aliases = first_alias(contents);
-    let title = derive_title(contents, aliases.as_deref(), &stem);
+    let (title_key, title_line) = frontmatter_title(&frontmatter);
+    let title = match &title_key {
+        FrontmatterTitle::Valid(title) => title.clone(),
+        FrontmatterTitle::Absent | FrontmatterTitle::Invalid => {
+            let aliases = first_alias(contents);
+            derive_title(contents, aliases.as_deref(), &stem)
+        }
+    };
+    if title_key == FrontmatterTitle::Invalid {
+        findings.push(finding(
+            "album_title_invalid",
+            AlbumIssueSeverity::Warning,
+            &path,
+            title_line,
+            Some("title".to_owned()),
+            "frontmatter title must be one nonblank line; using the H1, alias, or stem title",
+        ));
+    }
     for (code, message, line) in
         summary_findings(summary.as_deref(), &frontmatter)
     {
@@ -278,6 +313,7 @@ pub(crate) fn parse_album_declaration(
         path,
         stem,
         title,
+        title_key,
         emoji,
         summary,
         parent,
@@ -331,6 +367,47 @@ fn top_level_string(
     } else {
         Some(strip_yaml_comment(value).to_owned())
     }
+}
+
+/// Decode the top-level `title` entry from its own span: the first column-0
+/// `title:` line plus any indented or blank continuation lines up to the
+/// next column-0 non-blank line, parsed as a one-key mapping. A malformed
+/// neighbouring key (such as a broken `record:` block) therefore cannot hide
+/// the title. Returns the decoded state and the key's physical 1-based line.
+fn frontmatter_title(
+    frontmatter: &Frontmatter<'_>,
+) -> (FrontmatterTitle, Option<usize>) {
+    let Some(start) = frontmatter.lines.iter().position(|line| {
+        line.strip_prefix("title")
+            .is_some_and(|rest| rest.starts_with(':'))
+    }) else {
+        return (FrontmatterTitle::Absent, None);
+    };
+    let mut end = start + 1;
+    while end < frontmatter.lines.len() {
+        let line = frontmatter.lines[end];
+        if !line.starts_with([' ', '\t']) && !line.trim().is_empty() {
+            break;
+        }
+        end += 1;
+    }
+    let yaml = frontmatter.lines[start..end].join("\n");
+    let value = match serde_yaml::from_str::<Value>(&yaml) {
+        Ok(Value::Mapping(mapping)) => mapping_get(&mapping, "title").cloned(),
+        _ => None,
+    };
+    let state = match value {
+        Some(Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() || trimmed.contains(['\n', '\r']) {
+                FrontmatterTitle::Invalid
+            } else {
+                FrontmatterTitle::Valid(trimmed.to_owned())
+            }
+        }
+        _ => FrontmatterTitle::Invalid,
+    };
+    (state, Some(start + 2))
 }
 
 fn decode_summary(frontmatter: &Frontmatter<'_>) -> Option<String> {
@@ -949,5 +1026,96 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.code == "album_summary_missing"));
+    }
+
+    fn title_findings(
+        declaration: &super::AlbumDeclaration,
+    ) -> Vec<&super::AlbumFinding> {
+        declaration
+            .findings
+            .iter()
+            .filter(|finding| finding.code == "album_title_invalid")
+            .collect()
+    }
+
+    #[test]
+    fn frontmatter_title_beats_h1_alias_and_stem() {
+        let declaration = parse(
+            "---\ntype: [[album]]\ntitle: Restaurants\naliases: [Food]\nsummary: Food\nrecord: {noun: restaurant}\n---\n\n# Eat Here\n",
+        );
+        assert_eq!(declaration.title, "Restaurants");
+        assert_eq!(
+            declaration.title_key,
+            super::FrontmatterTitle::Valid("Restaurants".to_owned())
+        );
+        assert!(title_findings(&declaration).is_empty());
+
+        let quoted = parse(
+            "---\ntype: [[album]]\ntitle: \"  Ma \\\"Pa\\\" Deli  \"\nsummary: Food\nrecord: {noun: restaurant}\n---\n",
+        );
+        assert_eq!(quoted.title, "Ma \"Pa\" Deli");
+    }
+
+    #[test]
+    fn unusable_frontmatter_titles_fall_back_and_warn_with_their_line() {
+        for title in [
+            "title: \"  \"",
+            "title: 42",
+            "title: [a]",
+            "title: |\n  first\n  second",
+            "title:",
+            "title: \"unclosed",
+        ] {
+            let declaration = parse(&format!(
+                "---\ntype: [[album]]\nsummary: Food\n{title}\nrecord: {{noun: restaurant}}\n---\n\n# Eat Here\n"
+            ));
+            assert_eq!(declaration.title, "Eat Here", "{title}");
+            assert_eq!(
+                declaration.title_key,
+                super::FrontmatterTitle::Invalid,
+                "{title}"
+            );
+            let findings = title_findings(&declaration);
+            assert_eq!(findings.len(), 1, "{title}");
+            assert_eq!(findings[0].severity, AlbumIssueSeverity::Warning);
+            assert_eq!(findings[0].line_number, Some(4), "{title}");
+            assert_eq!(findings[0].key_path.as_deref(), Some("title"));
+            assert_eq!(
+                findings[0].message,
+                "frontmatter title must be one nonblank line; using the H1, alias, or stem title"
+            );
+        }
+    }
+
+    #[test]
+    fn absent_title_keeps_the_h1_alias_and_stem_chain() {
+        let h1 = parse(
+            "---\ntype: [[album]]\naliases: [Food]\nrecord: {noun: restaurant}\n---\n\n# Eat Here\n",
+        );
+        assert_eq!(h1.title, "Eat Here");
+        assert_eq!(h1.title_key, super::FrontmatterTitle::Absent);
+        let alias = parse(
+            "---\ntype: [[album]]\naliases: [Food]\nrecord: {noun: restaurant}\n---\n\nIntro.\n",
+        );
+        assert_eq!(alias.title, "Food");
+        let stem = parse_album_declaration(
+            Path::new("tv_shows.md"),
+            "---\ntype: [[album]]\nrecord: {noun: show}\n---\n",
+        )
+        .unwrap();
+        assert_eq!(stem.title, "tv shows");
+        for declaration in [&h1, &alias, &stem] {
+            assert!(title_findings(declaration).is_empty());
+        }
+    }
+
+    #[test]
+    fn malformed_record_section_does_not_hide_a_valid_title() {
+        let declaration = parse(
+            "---\ntype: [[album]]\ntitle: Restaurants\nrecord: {noun: restaurant, fields: {status: [}\n---\n\n# Eat\n",
+        );
+        assert!(declaration.schema_diagnostic.is_some());
+        assert_eq!(declaration.title, "Restaurants");
+        assert!(title_findings(&declaration).is_empty());
     }
 }

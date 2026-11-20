@@ -1640,6 +1640,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
                  from a terminal",
     },
     Excluded {
+        path: &["albums", "tidy"],
+        reason: "One-time migration; run it from a terminal",
+    },
+    Excluded {
         path: &["albums", "update"],
         reason: "JSON-input schema edit owned by the Schema Card; run it \
                  from a terminal",

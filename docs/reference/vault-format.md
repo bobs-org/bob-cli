@@ -444,17 +444,19 @@ Contract: [Notebooks](../notebooks.md).
 
 ### Album notes
 
-An album is a vault-root Markdown file with `type: "[[album]]"`. Its stem is
-the record folder and route. Canonical records use `type: "[[record]]"`;
+An album is a vault-root note with `type: "[[album]]"`. Its stem is the
+record folder and route. Canonical records use `type: "[[record]]"`;
 `record.noun` names the kind and legacy type spelling. `record.fields` is
 optional. `index_by` and `index_facets` shape grouping peeks, subgroup
 headings, and row facets. Each album owns a `[!records]` index; each owner
 area or project owns a stable `[!albums]` catalog. `list` and `check` report
 `index.state` and `catalogs[].state` (`current`, `missing`, `stale`,
 `damaged`) without writing. `bob albums sync` repairs both in one guarded
-commit. A broken album fails only its own route. `bob albums create PARENT
+commit. A broken album fails only its route. `bob albums create PARENT
 STEM -n NOUN -s SUMMARY` creates the album, starter Base, and affected owner
-catalogs together; the record folder is created with its first record.
+catalogs together; the first record creates the folder. Frontmatter `title`
+names the album (else its H1, alias, or stem); create writes no H1, and
+`bob albums tidy` migrates H1 titles.
 
 Contract: [Albums and record notes](../records.md).
 

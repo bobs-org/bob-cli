@@ -469,6 +469,15 @@ const ALBUMS_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "tidy",
+        about:
+            "Move album H1 titles into frontmatter `title` (dry run by default)",
+        leaf: Leaf {
+            native_command: NativeCommand::AlbumsTidy,
+            script_command: None,
+        },
+    },
+    Member {
         name: "update",
         about: "Update an album record schema through a guarded JSON envelope",
         leaf: Leaf {
@@ -488,6 +497,8 @@ Examples:
   bob albums check -f json         Findings as JSON
   bob albums sync -d               Preview index repairs as diffs
   bob albums sync                  Repair every healthy album index
+  bob albums tidy                  Preview title moves as diffs
+  bob albums tidy -a               Move titles into frontmatter in one commit
   bob albums create body eat -n restaurant -s 'Places to eat.'
                                    Create eat.md with its Base and catalog rows
   bob albums update eat -i envelope.json
@@ -1140,7 +1151,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: ALBUMS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `create` makes an album with its Base and catalog rows in one guarded commit. `update` edits one album schema from a JSON envelope in one scoped commit.",
+                "Bare `bob albums` runs the read-only list. `list` shows albums grouped by root. `check` lints albums against the contract. `sync` repairs generated records indexes and album catalogs in one guarded transaction. `tidy` moves album H1 titles into frontmatter `title`, as a dry run unless `-a` is passed. `create` makes an album with its Base and catalog rows in one guarded commit. `update` edits one album schema from a JSON envelope in one scoped commit.",
             ),
             after_help: ALBUMS_AFTER_HELP,
             usage: "bob albums [COMMAND]",
@@ -2718,6 +2729,7 @@ mod tests {
             NativeCommand::AlbumsCreate,
             NativeCommand::AlbumsList,
             NativeCommand::AlbumsSync,
+            NativeCommand::AlbumsTidy,
             NativeCommand::AlbumsUpdate,
             NativeCommand::AreasCheck,
             NativeCommand::AreasList,

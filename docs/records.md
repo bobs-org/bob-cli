@@ -33,6 +33,7 @@ record folder (`eat.md` owns `eat/`). Albums must live at the vault root.
 ---
 parent: "[[body]]"
 type: "[[album]]"
+title: Eat
 summary: Places to eat around here.
 emoji: 🍽️
 index_by: location
@@ -47,8 +48,6 @@ record:
     category: {required: true, suggest: true}
     location: {required: true, suggest: true}
 ---
-
-# Eat
 ```
 
 - **Parent:** exactly one quoted `"[[stem]]"` that resolves to an area or
@@ -63,6 +62,10 @@ record:
   legacy patterns follow [Schema](#schema) below. `label` defaults to the
   noun in title case; the display `singular` is that lowered label
   (acronym labels stay as-is), and `plural` is the singular plus `s`.
+- **Title:** frontmatter `title` (one nonblank line) wins, else the first H1
+  before the first bullet or `##` (wikilinks to display text), the first
+  alias, then the humanized stem; an unusable `title` warns
+  `album_title_invalid`.
 - **Summary:** one plain line; more than 140 characters produces a warning.
 - **Grouping:** `status` choices when present, otherwise the first choices
   field, otherwise none. Empty groups are omitted. Missing, unknown, or
@@ -123,6 +126,7 @@ defaults to the read-only `list`.
 bob albums [list] [-b DIR] [-f human|json] [-r ROOT]
 bob albums check [-b DIR] [-f human|json]
 bob albums sync [-b DIR] [-d] [-f human|json]
+bob albums tidy [STEM] [-a] [-b DIR] [-f human|json]
 bob albums create PARENT STEM -n NOUN -s SUMMARY [-b DIR] [-d] [-e EMOJI] [-f human|json] [-l LABEL] [-o] [-t TITLE]
 bob albums update STEM [-b DIR] [-d] [-f human|json] [-i FILE]
 ```
@@ -155,6 +159,50 @@ exits 1 if an album or catalog is damaged or a runtime operation fails. An
 unreadable or incomplete source is never treated as an empty folder. In
 `bob nightly`, album sync runs directly after `notebooks` and before
 `records`; a failed maintenance step does not prevent that final publish.
+
+### Tidying album titles
+
+`bob albums tidy [STEM]` moves each root album's title into a bob-owned
+frontmatter `title` key so the album card can be its only visible title:
+
+```sh
+bob albums tidy
+bob albums tidy eat
+bob albums tidy -a
+```
+
+An album without `title` gains `title: <its current title>` after `type`
+(else after `parent`, else first): the first H1 before a bullet or `##`,
+else the first alias, else the humanized stem. Every reader already shows
+that title, so walk lines, `[!records]` indexes, and `[!albums]` catalogs
+do not change. Tidy then removes the first body H1 when it is the first
+body content outside fenced code and equals the title exactly, with the
+blank lines after it. It keeps and reports a differing H1 (including one
+with wikilinks or emphasis), an H1 that is not the first body content, a
+later H1, and an H1 inside fenced code. An unusable `title`, duplicate
+frontmatter keys, or a missing closing `---` leave the album unchanged and
+add a warning. A second run plans nothing. `STEM` is an exact root album
+stem; an unknown stem exits 2 before any lock.
+
+Without `-a/--apply`, the run is a dry run: it prints unified diffs and
+takes no lock, writes nothing, runs no Git, and does no sync. `-a` takes the
+shared maintenance lock, pre-syncs, replans, guards each album by its full
+preimage, verifies that each rewritten album keeps its planned title and
+plans no further change, makes one scoped `albums: tidy (N notes)` commit,
+and post-syncs only when it committed. A no-op writes nothing and skips
+post-sync. `bob nightly` never runs album tidy.
+
+JSON uses schema version 1 with `command: "tidy"`, `dry_run`,
+`counts {scanned, changed, title_added, h1_removed, h1_kept}`, `changes[]`
+(`path`, `title`, `title_added`, `h1_removed`, `h1_kept_reason`, plus
+`diff` on dry runs), `kept_h1[]` (`path`, `reason`), `commit`, `sync`,
+`warnings[]`, `io_errors[]`, and `error` on failure.
+
+An older bob reads album titles only from the H1. If it runs
+`bob albums sync` after tidy removes an H1, it rewrites walk lines and
+catalog rows to the humanized stem. Apply tidy only once every host that
+runs album sync has this bob; albums created by this bob already have no
+H1.
 
 ### Tidying empty Notes sections and redundant H1s
 
@@ -257,10 +305,10 @@ lines.
 bob albums create body eat -n restaurant -s 'Places to eat around here.'
 ```
 
-The new note carries canonical frontmatter (`parent`, `type`, `summary`,
-optional `emoji`, `created`, then `record:` with `noun` and `label`),
-an H1, an intro teaching `Name @<stem>/` and linking `<stem>.base`, and
-the empty-state records index. `-d` prints the new-file and catalog diffs
+The new note carries canonical frontmatter (`parent`, `type`, `title`,
+`summary`, optional `emoji`, `created`, then `record:` with `noun` and
+`label`), no H1, an intro teaching `Name @<stem>/` and linking
+`<stem>.base`, and the empty-state records index. `-d` prints the new-file and catalog diffs
 without locks, writes, Git, or sync. Validation and refusals exit 2
 (unknown or cyclic parents, existing destinations, claimed stems or nouns,
 an existing record folder even when empty, or a damaged affected catalog).

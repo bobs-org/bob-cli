@@ -125,6 +125,11 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &["albums", "tidy"],
+        arg: "stem",
+        kind: Kind::AlbumStem,
+    },
+    Entry {
         path: &["albums", "update"],
         arg: "stem",
         kind: Kind::AlbumStem,

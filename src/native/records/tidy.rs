@@ -326,7 +326,7 @@ fn removal_names(change: &ChangedFile) -> String {
     kinds.join(", ")
 }
 
-fn color_diff(diff: &str, styler: &Styler) -> String {
+pub(crate) fn color_diff(diff: &str, styler: &Styler) -> String {
     let mut out = String::new();
     for line in diff.lines() {
         let painted = if line.starts_with("+++") || line.starts_with("---") {

@@ -10,7 +10,7 @@ use std::{
 
 const NOW: &str = "2026-11-09 09:14:00";
 
-const EXPECTED_ALBUM: &str = "---\nparent: \"[[body]]\"\ntype: \"[[album]]\"\nsummary: Places to eat.\ncreated: 2026-11-09T09:14:00+0000\nrecord:\n  noun: restaurant\n  label: Restaurant\n---\n\n# Eat\n\nTrack restaurants with `Name @eat/`; browse every record in [[eat.base]].\n\n## Records\n\n> [!records] No restaurants yet\n>\n> Add one with `Name @eat/`.\n";
+const EXPECTED_ALBUM: &str = "---\nparent: \"[[body]]\"\ntype: \"[[album]]\"\ntitle: Eat\nsummary: Places to eat.\ncreated: 2026-11-09T09:14:00+0000\nrecord:\n  noun: restaurant\n  label: Restaurant\n---\n\nTrack restaurants with `Name @eat/`; browse every record in [[eat.base]].\n\n## Records\n\n> [!records] No restaurants yet\n>\n> Add one with `Name @eat/`.\n";
 
 const EXPECTED_BASE: &str = "filters:\n  and:\n    - file.inFolder(\"eat\")\n    - note.type == link(\"record\")\nformulas:\n  name: if(title, file.asLink(title), file.asLink())\nproperties:\n  formula.name:\n    displayName: Restaurant\nviews:\n  - type: table\n    name: \"All Restaurants\"\n    groupBy:\n      property: status\n      direction: ASC\n    order:\n      - formula.name\n      - status\n    sort:\n      - property: formula.name\n        direction: ASC\n    summaries:\n      formula.name: Count\n";
 
@@ -305,7 +305,11 @@ fn create_optional_fields_quote_warn_and_shape_the_base() {
     assert!(album.contains("\nsummary: \"yes\"\n"), "{album}");
     assert!(album.contains("\n  label: Diner\n"), "{album}");
     assert!(album.contains("\nemoji: 🎬\n"), "{album}");
-    assert!(album.contains("# Movies\n"), "{album}");
+    assert!(
+        album.contains("\ntype: \"[[album]]\"\ntitle: Movies\n"),
+        "{album}"
+    );
+    assert!(!album.contains("# Movies"), "{album}");
     assert!(
         album.contains("Track diners with `Name @movies/`"),
         "{album}"
@@ -373,7 +377,8 @@ fn create_renders_literal_markdown_metacharacters() {
         album.contains("summary: \"Read [[raw]] & stuff: a *real* guide\"\n"),
         "{album}"
     );
-    assert!(album.contains("# Eat & Drink\n"), "{album}");
+    assert!(album.contains("\ntitle: Eat & Drink\n"), "{album}");
+    assert!(!album.contains("# Eat & Drink"), "{album}");
     let body = read(&vault, "body.md");
     assert!(
         body.contains("[[eat|Eat & Drink]]"),
