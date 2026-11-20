@@ -234,7 +234,7 @@ fn note_landing_line(
     }
 }
 
-fn landed_note(
+pub(super) fn landed_note(
     mut note: OpenNoteJson,
     text: Option<&str>,
     line: Option<usize>,

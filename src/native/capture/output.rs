@@ -543,6 +543,10 @@ pub(super) struct CaptureResult {
     /// Notes Control-Return should open. Always present (empty when
     /// nothing opens). Never per item.
     pub(super) open_notes: Vec<OpenNoteJson>,
+    /// Navigation-only successor landing requested with `--jump-offer`.
+    /// Omitted when this capture did not pin a target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) jump: Option<CaptureJumpJson>,
     /// Draft-level successor-offer summary. Present on every success.
     pub(super) pull_in: PullInJson,
     /// Applied card verdicts, in flag order. Omitted when empty.
@@ -598,6 +602,7 @@ impl CaptureResult {
         task_blocks: Vec<TaskBlockJson>,
         section_blocks: Vec<SectionBlockJson>,
         open_notes: Vec<OpenNoteJson>,
+        jump: Option<CaptureJumpJson>,
         pull_in: PullInJson,
         offer_closes: Vec<OfferCloseJson>,
         inbox_route: InboxRouteReport,
@@ -640,6 +645,7 @@ impl CaptureResult {
             task_blocks,
             section_blocks,
             open_notes,
+            jump,
             pull_in,
             offer_closes,
             inbox_route,
@@ -1556,6 +1562,22 @@ pub(super) struct TaskCompleteOfferDestinationJson {
     pub(super) fallback: bool,
 }
 
+/// One post-write successor landing requested with `--jump-offer`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CaptureJumpJson {
+    pub(super) key: String,
+    pub(super) n: usize,
+    pub(super) label: String,
+    pub(super) outcome: &'static str,
+    pub(super) landing: Option<OpenNoteJson>,
+}
+
+/// Feature-detection gate for successor jump targets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInJumpJson {
+    pub(super) supported: bool,
+}
+
 /// Top-level successor-offer summary, present on every success.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PullInJson {
@@ -1567,6 +1589,9 @@ pub(super) struct PullInJson {
     /// success from a bob that accepts `-x`/`-X` (§12.5, §12.14); older
     /// bobs omit it, which is the Mac's feature gate.
     pub(super) close: PullInCloseJson,
+    /// Successor jump capability. Older bobs omit it, which is the
+    /// Mac's feature gate for `--jump-offer`.
+    pub(super) jump: PullInJumpJson,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) groups: Vec<PullInGroupJson>,
     /// Bob-authored picker title, capsule, and glyph. Omitted when there
@@ -1596,6 +1621,7 @@ impl PullInJson {
                 done_count: 0,
                 cancelled_count: 0,
             },
+            jump: PullInJumpJson { supported: true },
             groups: Vec::new(),
             copy: None,
         }
@@ -2486,6 +2512,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         print_type_agreement(result);
         print_album_files(result);
         print_walk_files(result);
+        print_jump_receipt(result);
         return;
     }
 
@@ -2529,6 +2556,27 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     print_type_agreement(result);
     print_album_files(result);
     print_walk_files(result);
+    print_jump_receipt(result);
+}
+
+fn print_jump_receipt(result: &CaptureResult) {
+    let Some(jump) = result.jump.as_ref() else {
+        return;
+    };
+    let marker = Styler::detect().cyan("↗");
+    match jump.landing.as_ref().and_then(|landing| {
+        landing
+            .line
+            .map(|line| (landing.relative_path.as_str(), line))
+    }) {
+        Some((path, line)) => {
+            println!("{marker} jump  “{}”  {path}:{line}", jump.label);
+        }
+        None => println!(
+            "{marker} jump target “{}” not found after writes",
+            jump.label
+        ),
+    }
 }
 
 fn print_type_agreement(result: &CaptureResult) {
@@ -7984,6 +8032,43 @@ impl CaptureError {
             kind: CaptureErrorKind::Usage,
             message: lines.join("\n"),
             code: Some("offer_close_stale".to_string()),
+            extra: Some(extra),
+            human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
+            typed: None,
+        }
+    }
+
+    /// Unknown, stale, or out-of-range `-j` selector: a usage error
+    /// (exit 2) that writes nothing and lists the current offers.
+    pub(super) fn offer_jump_stale(
+        pull_in: &PullInJson,
+        offers: &[TaskCompleteUnblockedJson],
+        bad: &[String],
+    ) -> Self {
+        let mut lines = vec![format!(
+            "stale, unknown, or out-of-range --jump-offer pick: {}",
+            bad.join(", ")
+        )];
+        lines.extend(offer_list_lines(offers));
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "pull_in".to_string(),
+            serde_json::to_value(pull_in).expect("serialize pull_in"),
+        );
+        extra.insert(
+            "offers".to_string(),
+            serde_json::to_value(offers).expect("serialize offers"),
+        );
+        Self {
+            kind: CaptureErrorKind::Usage,
+            message: lines.join("\n"),
+            code: Some("offer_jump_stale".to_string()),
             extra: Some(extra),
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),

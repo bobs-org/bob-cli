@@ -20,6 +20,13 @@ pub(super) fn plan_with_pull_in(
             let mut batch = plan_capture_batch(request, routing)?;
             number_draft_offers(&mut batch.items, None);
             let pull_in = assemble_pull_in(&batch.items, choice, &[]);
+            if let Some(selector) = request.jump_offer.clone() {
+                request.jump_offer = Some(resolve_jump_offer(
+                    &batch.items,
+                    &selector,
+                    &pull_in,
+                )?);
+            }
             if request.pull_in.is_none()
                 && request.require_pull_in_choice
                 && pull_in.offer_count > 0
@@ -33,6 +40,25 @@ pub(super) fn plan_with_pull_in(
             Ok((batch, pull_in))
         }
         Some(PullInPicks::All) => {
+            if let Some(selector) = request.jump_offer.clone() {
+                request.selection = SuccessorSelection::None;
+                let mut probe = plan_probe(request, routing)?;
+                number_draft_offers(&mut probe.items, None);
+                let probe_map = offer_n_map(&probe.items);
+                let probe_pull_in = assemble_pull_in(&probe.items, choice, &[]);
+                let key = resolve_jump_offer(
+                    &probe.items,
+                    &selector,
+                    &probe_pull_in,
+                )?;
+                request.jump_offer = Some(key.clone());
+                request.selection = SuccessorSelection::All;
+                let mut batch = plan_capture_batch(request, routing)?;
+                number_draft_offers(&mut batch.items, Some(&probe_map));
+                let pull_in = assemble_pull_in(&batch.items, choice, &[]);
+                validate_jump_key(&batch.items, &key, &pull_in)?;
+                return Ok((batch, pull_in));
+            }
             request.selection = SuccessorSelection::All;
             let mut batch = plan_capture_batch(request, routing)?;
             number_draft_offers(&mut batch.items, None);
@@ -41,6 +67,27 @@ pub(super) fn plan_with_pull_in(
         }
         Some(PullInPicks::Tokens { numbers, keys }) if numbers.is_empty() => {
             let requested = keys.clone();
+            if let Some(selector) = request.jump_offer.clone() {
+                request.selection = SuccessorSelection::None;
+                let mut probe = plan_probe(request, routing)?;
+                number_draft_offers(&mut probe.items, None);
+                let probe_map = offer_n_map(&probe.items);
+                let probe_pull_in = assemble_pull_in(&probe.items, choice, &[]);
+                let key = resolve_jump_offer(
+                    &probe.items,
+                    &selector,
+                    &probe_pull_in,
+                )?;
+                request.jump_offer = Some(key.clone());
+                request.selection =
+                    SuccessorSelection::Keys(keys.into_iter().collect());
+                let mut batch = plan_capture_batch(request, routing)?;
+                number_draft_offers(&mut batch.items, Some(&probe_map));
+                reject_unknown_keys(&batch.items, &requested)?;
+                let pull_in = assemble_pull_in(&batch.items, choice, &[]);
+                validate_jump_key(&batch.items, &key, &pull_in)?;
+                return Ok((batch, pull_in));
+            }
             request.selection =
                 SuccessorSelection::Keys(keys.into_iter().collect());
             let mut batch = plan_capture_batch(request, routing)?;
@@ -73,6 +120,17 @@ pub(super) fn plan_with_pull_in(
             if !bad.is_empty() {
                 return Err(unknown_pick_error(&probe.items, &bad));
             }
+            let probe_pull_in = assemble_pull_in(&probe.items, choice, &[]);
+            let jump_key = request
+                .jump_offer
+                .clone()
+                .map(|selector| {
+                    resolve_jump_offer(&probe.items, &selector, &probe_pull_in)
+                })
+                .transpose()?;
+            if let Some(key) = jump_key.as_ref() {
+                request.jump_offer = Some(key.clone());
+            }
             let requested = mapped.clone();
             request.selection =
                 SuccessorSelection::Keys(mapped.into_iter().collect());
@@ -80,9 +138,75 @@ pub(super) fn plan_with_pull_in(
             number_draft_offers(&mut batch.items, Some(&probe_map));
             reject_unknown_keys(&batch.items, &requested)?;
             let pull_in = assemble_pull_in(&batch.items, choice, &[]);
+            if let Some(key) = jump_key.as_deref() {
+                validate_jump_key(&batch.items, key, &pull_in)?;
+            }
             Ok((batch, pull_in))
         }
     }
+}
+
+/// Plan an unselected probe while temporarily parking inbox-route answers.
+/// Those answers are validated against the final selected candidates, as in
+/// the numeric `--pull-in` path.
+fn plan_probe(
+    request: &mut CaptureRequest,
+    routing: Option<&UrlRoutingPolicy>,
+) -> Result<PlannedCaptureBatch, CaptureError> {
+    let parked_routes = std::mem::take(&mut request.inbox_routes);
+    let result = plan_capture_batch(request, routing);
+    request.inbox_routes = parked_routes;
+    result
+}
+
+fn resolve_jump_offer(
+    items: &[PlannedCaptureItem],
+    selector: &str,
+    pull_in: &PullInJson,
+) -> Result<String, CaptureError> {
+    let key = if !selector.is_empty()
+        && selector.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        selector
+            .parse::<usize>()
+            .ok()
+            .filter(|number| *number > 0)
+            .and_then(|number| key_for_number(items, number))
+    } else {
+        surviving_keys(items)
+            .contains(selector)
+            .then(|| selector.to_string())
+    };
+    let Some(key) = key else {
+        return Err(jump_stale_error(items, pull_in, &[selector.to_string()]));
+    };
+    Ok(key)
+}
+
+fn validate_jump_key(
+    items: &[PlannedCaptureItem],
+    key: &str,
+    pull_in: &PullInJson,
+) -> Result<(), CaptureError> {
+    if surviving_keys(items).contains(key) {
+        Ok(())
+    } else {
+        Err(jump_stale_error(items, pull_in, &[key.to_string()]))
+    }
+}
+
+fn jump_stale_error(
+    items: &[PlannedCaptureItem],
+    pull_in: &PullInJson,
+    bad: &[String],
+) -> CaptureError {
+    let offers: Vec<TaskCompleteUnblockedJson> = items
+        .iter()
+        .flat_map(|item| super::output::all_offer_rows(&item.result))
+        .filter(|row| row.offer.is_some())
+        .cloned()
+        .collect();
+    CaptureError::offer_jump_stale(pull_in, &offers, bad)
 }
 
 /// Plan a capture with staged card verdicts (`-x`/`-X`): probe first so
@@ -139,6 +263,21 @@ fn plan_with_offer_verdicts(
         &pull_in_keys,
         &probe.items,
     )?;
+    let probe_choice = match pull_in_choice(request.pull_in.as_ref()) {
+        None if !resolved.is_empty() => Some("none"),
+        choice => choice,
+    };
+    let probe_pull_in = assemble_pull_in(&probe.items, probe_choice, &resolved);
+    let jump_key = request
+        .jump_offer
+        .clone()
+        .map(|selector| {
+            resolve_jump_offer(&probe.items, &selector, &probe_pull_in)
+        })
+        .transpose()?;
+    if let Some(key) = jump_key.as_ref() {
+        request.jump_offer = Some(key.clone());
+    }
     let verdict_keys: BTreeSet<String> =
         resolved.iter().map(|verdict| verdict.key.clone()).collect();
     // Verdict rows ride `apply_selection` as not-selected recover rows,
@@ -169,6 +308,9 @@ fn plan_with_offer_verdicts(
     };
     let pull_in =
         assemble_pull_in(&batch.items, choice, &request.offer_verdicts);
+    if let Some(key) = jump_key.as_deref() {
+        validate_jump_key(&batch.items, key, &pull_in)?;
+    }
     Ok((batch, pull_in))
 }
 
@@ -535,6 +677,7 @@ pub(super) fn assemble_pull_in(
             done_count,
             cancelled_count,
         },
+        jump: super::output::PullInJumpJson { supported: true },
         groups,
         copy,
     }

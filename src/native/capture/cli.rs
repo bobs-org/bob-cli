@@ -612,6 +612,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(format_arg())
         .arg(help_arg())
         .arg(inbox_route_arg())
+        .arg(jump_offer_arg())
         .arg(move_in_arg())
         .arg(no_clip_arg())
         .arg(no_ref_arg())
@@ -708,6 +709,14 @@ pub(super) fn inbox_route_arg() -> Arg {
         .help(
             "Route an inbox task this capture changes: <N|KEY>=<NOTE> moves it, <N|KEY>= keeps it in its inbox, keep keeps every otherwise unanswered candidate; repeatable",
         )
+}
+
+pub(super) fn jump_offer_arg() -> Arg {
+    Arg::new("jump-offer")
+        .long("jump-offer")
+        .short('j')
+        .value_name("N|KEY")
+        .help("Focus this offer after the capture (any verdict); one offer")
 }
 
 pub(super) fn move_in_arg() -> Arg {
@@ -903,6 +912,8 @@ pub(super) struct CaptureRequest {
     pub(super) no_clip: bool,
     pub(super) no_ref: bool,
     pub(super) pull_in: Option<PullInPicks>,
+    /// Raw selector, resolved to a stable offer key by `plan_with_pull_in`.
+    pub(super) jump_offer: Option<String>,
     pub(super) complete_offers: Vec<String>,
     pub(super) cancel_offers: Vec<String>,
     /// Staged card verdicts resolved against the probe offer list by
@@ -990,6 +1001,7 @@ impl CaptureRequest {
                 .get_one::<String>("pull-in")
                 .map(|raw| parse_pull_in_picks(raw))
                 .transpose()?,
+            jump_offer: matches.get_one::<String>("jump-offer").cloned(),
             complete_offers: matches
                 .get_many::<String>("complete-offer")
                 .map(|values| values.cloned().collect())

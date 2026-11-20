@@ -66,6 +66,7 @@ mod ensure_next;
 mod event_conflict;
 mod existing_task_link;
 mod inbox_route;
+mod jump;
 mod keep_moving_net;
 mod link_guard;
 mod meet_event_run;
@@ -428,6 +429,11 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let theme_refs = append_theme_refs(&request, &mut batch);
     append_unconfigured_theme_warnings(&request, &mut batch);
     let open_notes = build_open_notes(&request.bob_dir, &batch);
+    let jump = jump::build_capture_jump(
+        &request.bob_dir,
+        &batch,
+        request.jump_offer.as_deref(),
+    );
     if !request.dry_run {
         commit_capture_batch(&mut batch, &request.bob_dir)?;
         let pending_gmail_urls: std::collections::HashSet<_> = batch
@@ -493,6 +499,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.task_blocks,
         batch.section_blocks,
         open_notes,
+        jump,
         pull_in,
         batch.offer_closes,
         batch.inbox_route,

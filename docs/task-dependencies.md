@@ -2601,6 +2601,16 @@ arrays in the same gesture. Rows without `close` keep the v3 presentation
 and cannot receive a verdict. The cycler attaches descriptors only when
 `api.successors.version >= 4`; an older picker keeps today's behavior.
 
+**Picker API v5 (jump successor).** Nav bumps `api.successors.version` to
+`5`. A model opts in with `jump: {supported: true}`. `Ctrl+J` toggles a
+single offer key without changing the highlight or its verdict. `pick()`
+resolves `{picks: [{key, destination?}], closes?: [{key,
+outcome: "done"|"cancelled", reason?}], jump?: {key}}` or `null`.
+A jump-only result is a commit, not `null`; it may contain an empty
+`picks` array. The caller keeps the pin independent from verdicts and
+marks, then focuses that offer after all writes land. Models without the
+capability keep the v4 behavior.
+
 **Notice API v2 (keep-moving).** `api.notice.version` is `2`.
 `buildUnblockedNoticeModel` reads an optional `keep_moving` row array.
 When every row is keep-moving, the card title is `Keep ‹N› moving` with
@@ -2631,17 +2641,29 @@ Offer verdict flags are additive to `-p`:
 ```text
   -X, --cancel-offer <N|KEY>[=REASON]  Cancel one offer; REASON goes to its Cancel Log.
   -x, --complete-offer <PICKS>         Mark offer(s) Done; PICKS is a comma list.
+  -j, --jump-offer <N|KEY>              Focus this offer after the capture (any verdict); one offer
 ```
 
-Both options are repeatable and accept the numbered offers or stable offer
-keys. `-X` addresses one offer per occurrence and splits on the first `=`;
-commas in its reason are literal. A verdict is an explicit pull-in choice for
+All three options accept the numbered offers or stable offer keys. `-x` and
+`-X` are repeatable; `-j` selects one offer. `-X` addresses one offer per
+occurrence and splits on the first `=`; commas in its reason are literal. A
+verdict is an explicit pull-in choice for
 `--require-pull-in-choice`. `-p all` selects every selectable offer that has
 no verdict. Selecting one row for pull-in and Done/Cancel, or selecting it
 for both Done and Cancel, is the write-free teaching refusal
 `offer_verdict_conflict`; the refusal lists current rows and eligibility.
 Unknown, stale, or ineligible verdict targets are also refused before any
 capture write.
+
+`-j, --jump-offer <N|KEY>` selects one offer by the same numbered offer
+list or stable key. It is navigation only: it does not pull in the task,
+change a verdict, or count as the explicit choice required by
+`--require-pull-in-choice`. Use `-p none -j N` to leave the row open and
+focus it. The selected row's outcome is reported as `pulled_in`, `done`,
+`cancelled`, or `left`. Unknown, stale, and out-of-range selectors,
+including any selector when no offers exist, refuse write-free with exit
+2 and `code: "offer_jump_stale"`; the JSON includes `pull_in` and the
+current flat `offers` list.
 
 Hidden internal `--require-pull-in-choice` (no short alias; internal
 subprocess argument, absent from `--help`): when offers exist and no
@@ -3776,6 +3798,61 @@ surface that owns them and are marked UI-only in the fixture.
 | SV20 | Done recovers a NEW dependent without `[fresh::]` | Dependent recovers without an `[unblocked::]` stamp (WRITE skip); consequence keeps `· unblocks “{D}”` with no tickler suffix |
 | SV21 | Done recovers a scheduled-tickler dependent | Dependent recovers without an `[unblocked::]` stamp (WRITE skip); consequence keeps the unblock suffix with no tickler suffix |
 | SV22 | Two roots jointly unblock one dependent | Each root alone recovers nothing; the joint close recovers one dependent with `[unblocked:: today]` |
+
+### 12.24 JS — jump successor contract and vectors
+
+`-j, --jump-offer <N|KEY>` pins one successor offer for navigation after
+the capture. The pin does not change the selected offers or their verdicts.
+It can be combined with `-p`, `-x`, and `-X`; a verdict wins for the
+reported outcome (`done` or `cancelled`), otherwise a selected row reports
+`pulled_in`, and an unselected row reports `left`. `-j` alone is not a
+pull-in choice, so `--require-pull-in-choice -j KEY` still refuses with
+`pull_in_choice_required` when offers exist.
+
+Every successful preview and real capture advertises
+`pull_in.jump: {"supported": true}`. When `-j` is supplied, the batch
+adds this top-level object:
+
+```json
+"jump": {
+  "key": "dev.md#^fixmig",
+  "n": 2,
+  "label": "Fix the migration",
+  "outcome": "left",
+  "landing": {
+    "path": "/abs/dev.md", "relative_path": "dev.md",
+    "role": "note", "label": "dev",
+    "line": 42, "ref": "42:35a733bd", "block_id": "fixmig"
+  }
+}
+```
+
+`landing` is `null` when the committed row cannot be found again. That
+does not fail or replay the capture. Bob resolves the target from final
+staged text in this order: the task's routed move, its block ID (including
+an ID minted by pull-in), then its cleaned description and settled
+ordinal among ID-less tasks. The landing's `line`, `ref`, and `block_id`
+come from that final physical line; pre-write offer line numbers are not
+used. Dry-run and real-run JSON have the same jump object. Human output
+adds `↗ jump  “S”  dev.md:42`, or
+`↗ jump target “S” not found after writes` when `landing` is `null`.
+
+`offer_jump_stale` is a Usage refusal with exit 2. Its message starts
+with the stale selector and then lists the current numbered offers; JSON
+includes top-level `pull_in` and `offers`. It writes no vault files.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| JS1 | `-p none -j 2` on a recovering dependent | No pick; `outcome: "left"`; landing follows the final open task line |
+| JS2 | `-p 2 -j 2` | `pulled_in`; landing includes the minted block ID |
+| JS3 | `-x 2 -j 2` | `done`; landing is the final `[x]` line |
+| JS4 | `-X 1=why -X 2 -j 2`, with both offers in one note | `cancelled`; landing remains exact after the earlier Cancel Log shifts lines |
+| JS5 | Pull in an inbox offer routed by `-i` | Landing follows the moved task to its destination note |
+| JS6 | `-j 9`, or `-j` with a stale key | `offer_jump_stale`, exit 2, current `offers`, and byte-identical vault |
+| JS7 | JS2 with `--dry-run` | Same `jump` object as the real run |
+| JS8 | `-j 2` without `-p` when a choice is required | `pull_in_choice_required`; jump is not a choice |
+| JS9 | `-j KEY` for an ID-less keep-moving or note-pull row | Landing uses cleaned description and settled ordinal |
+| JS10 | Any preview with offers | `pull_in.jump.supported == true` |
 
 ## 13. Project dependencies
 

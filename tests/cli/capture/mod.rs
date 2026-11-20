@@ -108,6 +108,7 @@ mod sections;
 mod sub_bullet;
 mod successor_compatibility;
 mod successor_integration;
+mod successor_jump;
 mod successor_offers;
 mod successor_verdicts;
 mod targets;

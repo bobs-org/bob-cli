@@ -395,6 +395,7 @@ fn json_success_shape_is_stable() {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        None,
         PullInJson::empty(),
         Vec::new(),
         InboxRouteReport::empty(),

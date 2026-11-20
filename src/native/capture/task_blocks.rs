@@ -1164,6 +1164,7 @@ mod tests {
             no_clip: true,
             no_ref: false,
             pull_in: None,
+            jump_offer: None,
             complete_offers: Vec::new(),
             cancel_offers: Vec::new(),
             offer_verdicts: Vec::new(),

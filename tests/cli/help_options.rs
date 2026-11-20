@@ -93,7 +93,11 @@ fn capture_help_lists_options_alphabetically() {
             "-E, --expand",
             "-f, --format",
             "-h, --help",
+            "-i, --inbox-route",
+            "-j, --jump-offer",
+            "-m, --move-in",
             "-n, --no-clip",
+            "-R, --no-ref",
             "-p, --pull-in",
             "-r, --route",
             "-s, --section",
@@ -101,7 +105,11 @@ fn capture_help_lists_options_alphabetically() {
         ],
     );
     assert!(
-        help.contains("-E, --expand")
+        help.contains("-j, --jump-offer <N|KEY>")
+            && help.contains(
+                "Focus this offer after the capture (any verdict); one offer"
+            )
+            && help.contains("-E, --expand")
             && help.contains("before vault access or planning")
             && help
                 .contains("all other capture options are accepted and ignored"),

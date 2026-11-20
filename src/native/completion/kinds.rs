@@ -874,6 +874,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "jump-offer",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "jobs",
         kind: Kind::FreeText,
     },

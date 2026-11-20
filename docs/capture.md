@@ -7845,7 +7845,8 @@ joined with single spaces, never newlines. Editor clients such as Bob Mac Captur
 call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`,
-`placement`, `open_notes`, `pull_in`, `inbox_route`, and `move_choice`
+`placement`, `open_notes`, `jump` (when `-j` is used), `pull_in`,
+`inbox_route`, and `move_choice`
 (`supported: true` on every success; see [Routing inbox tasks out](#routing-inbox-tasks-out)
 and [Choosing parent tasks in](#choosing-parent-tasks-in)).
 `open_notes` is a batch-level array on every success (dry-run and real run
@@ -7872,7 +7873,7 @@ post-image line. A record create or update also adds batch-level `note_files` (o
 when empty); see [Record notes](#record-notes). On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on
-`pull_in_choice_required`,
+`pull_in_choice_required`, `offer_jump_stale`,
 `inbox_route_choice_required`, `inbox_route_stale`, `inbox_route_refused`, and
 move-choice refusal codes.
 
@@ -8195,11 +8196,20 @@ present or a successor linked); previously it was always `null`. After
 all items are planned, net batch reporting drops any offer whose later
 item linked, completed, re-blocked, or dropped it, or whose task is no
 longer open (SL20). Every successful capture JSON (dry-run too) carries
-top-level `pull_in` with `supported: true`, `offer_count`, `choice`
+top-level `pull_in` with `supported: true`, `jump: {supported: true}`,
+`offer_count`, `choice`
 (`null` / `"all"` / `"none"` / `"subset"`), `picked_count`, and one
 group entry per offered group, each with bob-authored `copy`; folded
 counts apply where defined. Dry-run JSON equals real-run JSON with the
-same flags. The batch-level
+same flags. When `-j, --jump-offer <N|KEY>` is supplied, the batch adds a
+top-level `jump` object with the stable `key`, number `n`, display `label`,
+derived `outcome` (`pulled_in`, `done`, `cancelled`, or `left`), and a
+`landing` using the `open_notes` shape. Bob re-finds the landing in final
+staged text by routed move, block ID, then cleaned description and settled
+ordinal for ID-less tasks. A missing target sets `landing: null` without
+failing the capture. Dry-run and real-run JSON have the same jump object;
+see [task-dependencies.md §12.24](task-dependencies.md#1224-js--jump-successor-contract-and-vectors).
+The batch-level
 `task_blocks` array gains roles `"completed"` (the root and each closed
 subtask), `"unblocked"` (each recovered or picked dependent), and
 `"keep_moving"` (each keep-moving pick), and `"relation_successor"`

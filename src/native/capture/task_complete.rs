@@ -1996,46 +1996,69 @@ fn successor_task_lookup(
             offer.group == "keep_moving" || offer.group == "note_pull"
         })
     {
-        // Project-created, keep-moving, and note-pull ID-less rows have
-        // no stable block identity, so resolve by cleaned description plus
-        // their duplicate ordinal among the tasks that are still ID-less.
-        // The planner records that settled ordinal after the picks have
-        // minted their IDs; the ordinal inside the public key
-        // (`path@digest` or `path@digest~N`) counts the pre-pick render
-        // and is only the fallback. Line numbers shift when later items
-        // insert context, and raw `row.text` keeps inline fields like
-        // `[type:: ...]`, so compare cleaned text on both sides.
-        let settings = note_tasks::read_settings(bob_dir);
-        let expected = note_tasks::clean_description(
-            &row.text,
-            &settings.global_filter,
-            None,
-        );
-        let ordinal = row
-            .offer
-            .as_ref()
-            .map(|offer| {
-                offer
-                    .settled_ordinal
-                    .unwrap_or_else(|| offer_key_duplicate_ordinal(&offer.key))
+        return successor_idless_task_lookup(row, &tasks, bob_dir);
+    }
+    tasks
+        .iter()
+        .find(|task| task.line_index + 1 == row.line)
+        .cloned()
+}
+
+/// Resolve a successor row in final staged text. Unlike the status lookup,
+/// this always uses cleaned-description identity for ID-less rows because
+/// pre-write line numbers may have shifted by the time a jump lands.
+pub(super) fn successor_task_line_after_write(
+    row: &TaskCompleteUnblockedJson,
+    text: &str,
+    bob_dir: &Path,
+) -> Option<usize> {
+    let tasks_settings =
+        crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    let tasks =
+        crate::native::task_status_hooks::parse_tasks(text, &tasks_settings);
+    if !row.block_id.is_empty() {
+        return tasks
+            .iter()
+            .find(|task| {
+                task.block_id.as_deref() == Some(row.block_id.as_str())
             })
-            .unwrap_or(1);
-        let mut matches = tasks.iter().filter(|task| {
+            .map(|task| task.line_index + 1);
+    }
+    successor_idless_task_lookup(row, &tasks, bob_dir)
+        .map(|task| task.line_index + 1)
+}
+
+/// Resolve an ID-less offer by cleaned description and its settled ordinal
+/// among ID-less duplicates. Both status checks and post-write jump landing
+/// use this identity rule.
+fn successor_idless_task_lookup(
+    row: &TaskCompleteUnblockedJson,
+    tasks: &[crate::native::task_status_hooks::TaskLine],
+    bob_dir: &Path,
+) -> Option<crate::native::task_status_hooks::TaskLine> {
+    let settings = note_tasks::read_settings(bob_dir);
+    let expected =
+        note_tasks::clean_description(&row.text, &settings.global_filter, None);
+    let ordinal = row
+        .offer
+        .as_ref()
+        .map(|offer| {
+            offer
+                .settled_ordinal
+                .unwrap_or_else(|| offer_key_duplicate_ordinal(&offer.key))
+        })
+        .unwrap_or(1);
+    tasks
+        .iter()
+        .filter(|task| {
             task.block_id.is_none()
                 && note_tasks::clean_description(
                     &task.description,
                     &settings.global_filter,
                     None,
                 ) == expected
-        });
-        if let Some(task) = matches.nth(ordinal.saturating_sub(1)) {
-            return Some(task.clone());
-        }
-        return None;
-    }
-    tasks
-        .iter()
-        .find(|task| task.line_index + 1 == row.line)
+        })
+        .nth(ordinal.saturating_sub(1))
         .cloned()
 }
 

@@ -121,6 +121,9 @@ Options:
   -i, --inbox-route <ANSWER>
           Route an inbox task this capture changes: <N|KEY>=<NOTE> moves it, <N|KEY>= keeps it in its inbox, keep keeps every otherwise unanswered candidate; repeatable
 
+  -j, --jump-offer <N|KEY>
+          Focus this offer after the capture (any verdict); one offer
+
   -m, --move-in <PICKS>
           Answer a - ^^ move choice: none, all, or a comma list of row numbers and keys; a leading : also links; repeatable
 
