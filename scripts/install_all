@@ -3,27 +3,35 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/install_all [-h|--help] [-v|--verbose]
+Usage: scripts/install_all [-f|--force-mac-capture] [-h|--help] [-v|--verbose]
 
 Pull and install bob-cli from this checkout, then pull and deploy the sibling
 bob-plugins and bob-mac-capture checkouts that live next to it. When a sibling
 it would install is missing and the run is interactive, it first asks whether
 to clone it over SSH from git@github.com:bobs-org/<repo>.git; otherwise that
-sibling is skipped. When the plugin sync changes the vault, a running Obsidian
-is then restarted so it loads the new plugins. On macOS it posts a Notification
-Center banner before that restart. Usually run through `just install-all`.
+sibling is skipped. On macOS, Bob Mac Capture is rebuilt, reinstalled, and
+restarted only when its app files changed since its last install. When the
+plugin sync changes the vault, a running Obsidian is then restarted so it loads
+the new plugins. On macOS it posts a Notification Center banner before that
+restart. Usually run through `just install-all`.
 
 Options:
-  -h, --help     Show this help and exit.
-  -v, --verbose  Stream raw build and plugin-sync output.
+  -f, --force-mac-capture  Rebuild, reinstall, and restart Bob Mac Capture
+                           even when its app is current.
+  -h, --help               Show this help and exit.
+  -v, --verbose            Stream raw build and plugin-sync output.
 EOF
 }
 
+force_requested=0
 verbose_requested=0
 while [[ $# -gt 0 ]]; do
   arg="$1"
   shift
   case "$arg" in
+    -f|--force-mac-capture)
+      force_requested=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -64,13 +72,23 @@ header_done="${BOB_INSTALL_ALL_HEADER_DONE:-}"
 clones_offered="${BOB_INSTALL_ALL_CLONES_OFFERED:-}"
 plugins_clone_state="${BOB_INSTALL_ALL_PLUGINS_CLONE:-}"
 mac_capture_clone_state="${BOB_INSTALL_ALL_MAC_CAPTURE_CLONE:-}"
+# Flags do not survive the self-update re-exec, so --force-mac-capture rides
+# along in this handoff variable.
+if [[ "${BOB_INSTALL_ALL_FORCE_MAC_CAPTURE:-}" == 1 ]]; then
+  force_mac_capture=1
+else
+  force_mac_capture=0
+fi
 run_id="${BOB_INSTALL_RUN_ID:-}"
 unset BOB_INSTALL_ALL_ELAPSED BOB_INSTALL_ALL_SELF_PULL \
   BOB_INSTALL_ALL_SELF_PULL_DETAIL BOB_INSTALL_ALL_SELF_PULL_OLD \
   BOB_INSTALL_ALL_SELF_PULL_NEW BOB_INSTALL_ALL_PROTOCOL \
   BOB_INSTALL_ALL_HEADER_DONE \
   BOB_INSTALL_ALL_CLONES_OFFERED BOB_INSTALL_ALL_PLUGINS_CLONE \
-  BOB_INSTALL_ALL_MAC_CAPTURE_CLONE
+  BOB_INSTALL_ALL_MAC_CAPTURE_CLONE BOB_INSTALL_ALL_FORCE_MAC_CAPTURE
+if (( force_requested )); then
+  force_mac_capture=1
+fi
 if [[ -z "$run_id" ]]; then
   run_id="$(date +%Y%m%d-%H%M%S)-$$"
 fi
@@ -117,6 +135,10 @@ if ! command -v install_ui_run >/dev/null 2>&1; then
 fi
 plugins_dir="$parent/bob-plugins"
 mac_capture_dir="$parent/bob-mac-capture"
+mac_capture_app="$HOME/Applications/Bob Mac Capture.app"
+# Whether this run rebuilds Mac Capture, and why; set once by mac_capture_decide.
+maccap_rebuild=1
+maccap_reason=""
 # Recorded pull results, one set per repo. The header pulls fill them in and
 # the steps and the digest consume them; steps never pull again.
 cli_pull_state=""; cli_pull_detail=""; cli_pull_output=""
@@ -866,6 +888,23 @@ mac_capture_step() {
     step_warning=$((step_warning + 1))
   fi
 
+  # A current app is left alone: no signing prompt, build, swap, restart, or watermark.
+  if [[ "$maccap_rebuild" == 0 ]]; then
+    detail="$pull_detail · $maccap_reason · not rebuilt"
+    if (( step_warning > 0 )); then
+      glyph_line 33 '  ' '⚠' "$detail"
+      add_summary 'bob-mac-capture' warn "$detail" ''
+      WARNINGS=$((WARNINGS + step_warning))
+    else
+      glyph_line 2 '  ' '–' "$detail"
+      add_summary 'bob-mac-capture' skip "$detail" ''
+    fi
+    return 0
+  fi
+  if [[ -n "$maccap_reason" ]]; then
+    dim_row "rebuild  $maccap_reason"
+  fi
+
   if [[ -t 0 && -t 1 ]] && \
       just --justfile "$mac_capture_dir/justfile" --show signing-check >/dev/null 2>&1; then
     command_line "just --justfile $(display_path "$mac_capture_dir/justfile") signing-check"
@@ -925,7 +964,7 @@ mac_capture_step() {
       detail="$pull_detail · install failed (exit $install_status)"
     fi
   fi
-  if [[ "$status" == ok || "$status" == warn ]] && [[ -z "${CODESIGN_IDENTITY:-}" ]] && mac_capture_is_adhoc "$HOME/Applications/Bob Mac Capture.app"; then
+  if [[ "$status" == ok || "$status" == warn ]] && [[ -z "${CODESIGN_IDENTITY:-}" ]] && mac_capture_is_adhoc "$mac_capture_app"; then
     step_warning=$((step_warning + 1))
     detail="$detail · installed ad-hoc · Accessibility grant resets each install · rerun from a GUI Terminal or unlock the login keychain to sign with the stable identity"
   fi
@@ -958,6 +997,40 @@ mac_capture_is_adhoc() {
   [[ -x /usr/bin/codesign && -d "$app_path" ]] || return 1
   codesign_output="$(/usr/bin/codesign -dv "$app_path" 2>&1 || true)"
   [[ "$codesign_output" == *'Signature=adhoc'* ]]
+}
+
+# Decides once whether this run rebuilds Mac Capture. A rebuild restarts a
+# running copy, so skip it when the installed app still matches the checkout.
+# Without the helper, every run rebuilds with no reason row, as before.
+mac_capture_decide() {
+  local verdict verdict_status
+  maccap_rebuild=1
+  maccap_reason=""
+  if [[ "$force_mac_capture" == 1 ]]; then
+    maccap_reason='forced by --force-mac-capture'
+    return 0
+  fi
+  # Only a reinstall can upgrade an ad-hoc signature to the stable identity.
+  if [[ "${CODESIGN_IDENTITY:-}" != '-' ]] && mac_capture_is_adhoc "$mac_capture_app"; then
+    maccap_reason='installed app is signed ad-hoc'
+    return 0
+  fi
+  if verdict="$(install_ui app-current --repo bob-mac-capture --dir "$mac_capture_dir" \
+      --artifact "$mac_capture_app/Contents/MacOS/BobMacCapture" --advance 2>/dev/null)"; then
+    verdict_status=0
+  else
+    verdict_status=$?
+  fi
+  verdict="${verdict%%$'\n'*}"
+  case "$verdict_status" in
+    0)
+      maccap_rebuild=0
+      maccap_reason="$verdict"
+      ;;
+    1)
+      maccap_reason="$verdict"
+      ;;
+  esac
 }
 
 obsidian_step() {
@@ -1246,7 +1319,7 @@ print_plan() {
   pargs[${#pargs[@]}]='bob-plugins'
   pargs[${#pargs[@]}]='--aux'
   pargs[${#pargs[@]}]='obsidian'
-  if mac_capture_eligible; then
+  if mac_capture_eligible && [[ "$maccap_rebuild" == 1 ]]; then
     pargs[${#pargs[@]}]='--step'
     pargs[${#pargs[@]}]="bob-mac-capture=$mac_capture_dir"
     pargs[${#pargs[@]}]='--parser'
@@ -1358,6 +1431,9 @@ if [[ "$PULL_STATE" == updated && -z "$self_pull_state" ]]; then
   export BOB_INSTALL_ALL_CLONES_OFFERED=1
   export BOB_INSTALL_ALL_PLUGINS_CLONE="$plugins_clone_state"
   export BOB_INSTALL_ALL_MAC_CAPTURE_CLONE="$mac_capture_clone_state"
+  if [[ "$force_mac_capture" == 1 ]]; then
+    export BOB_INSTALL_ALL_FORCE_MAC_CAPTURE=1
+  fi
   exec "$root/scripts/install_all" "$@"
 fi
 
@@ -1392,6 +1468,10 @@ maccap_pull_pre="$PULL_PRE"
 maccap_pull_post="$PULL_POST"
 
 print_digest
+# After the digest, which must read the old watermark before --advance moves it.
+if mac_capture_eligible; then
+  mac_capture_decide
+fi
 counting_rows=1
 print_plan
 

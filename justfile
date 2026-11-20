@@ -169,6 +169,7 @@ install *shells:
 
 # Offers to clone missing sibling checkouts over SSH; otherwise they are skipped.
 # Pull + install bob-cli, bob-plugins, and bob-mac-capture; restart Obsidian if plugins changed.
+# Mac Capture rebuilds only when its app files changed; pass `-f` to force it.
 # Pass `-v` to stream raw compiler and plugin-sync output.
 [positional-arguments]
 install-all *args:
