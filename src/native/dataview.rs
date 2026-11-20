@@ -36,6 +36,9 @@ use value::*;
 use vault::*;
 
 pub(crate) use error::DataviewError;
+pub(crate) use native::read_inline_query_prefix;
+#[cfg(test)]
+pub(crate) use native::DEFAULT_INLINE_QUERY_PREFIX;
 use sources::{
     collect_native_markdown_paths, native_frontmatter_block,
     native_link_target, normalize_note_path, note_stem, unquote_native_scalar,

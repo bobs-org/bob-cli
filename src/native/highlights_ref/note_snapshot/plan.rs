@@ -5,7 +5,7 @@ use serde_yaml::Value as YamlValue;
 
 use super::{
     classify::{ClassifiedNote, NoteKind, SourceLoader, SourceStore},
-    obsidian::project_obsidian_syntax,
+    obsidian::{project_obsidian_syntax, SnapshotSettings},
     resolve::AttachmentIndex,
     serialize::serialize_projected_markdown,
     transclusion::{
@@ -14,9 +14,7 @@ use super::{
     },
     view::{Inline, SnapshotMasthead, SnapshotSummary, SnapshotWarning},
 };
-use crate::native::{
-    parent_notes::ResolvedParent, task_status_hooks::TasksSettings,
-};
+use crate::native::parent_notes::ResolvedParent;
 
 /// Where the selected note display title came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,7 +62,7 @@ pub(crate) struct SnapshotPlan {
 pub(crate) fn plan_snapshot<L: SourceLoader>(
     store: &mut SourceStore<L>,
     note: ClassifiedNote,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
     snapshot_date: NaiveDate,
     title_override: Option<&str>,
     include_closed: bool,
@@ -441,8 +439,7 @@ mod tests {
         };
         let parent =
             default_parent(&mut store, &note).expect("infer parent from cache");
-        let settings =
-            crate::native::task_status_hooks::read_tasks_settings(&root);
+        let settings = SnapshotSettings::read(&root);
         let plan = plan_snapshot(
             &mut store,
             note,

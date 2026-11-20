@@ -19,8 +19,8 @@ use super::{
     },
     obsidian::{
         project_obsidian_syntax, project_obsidian_syntax_selection,
-        replace_wikilinks_for_excerpt, PendingEmbed, SyntaxProjection,
-        TitleCandidate,
+        replace_wikilinks_for_excerpt, PendingEmbed, SnapshotSettings,
+        SyntaxProjection, TitleCandidate,
     },
     resolve::{
         build_fragment_index, obsidian_uri_with_fragment, AttachmentIndex,
@@ -39,7 +39,6 @@ use super::{
 use crate::native::{
     capture::{parse_managed_task_log_marker, ManagedTaskLogKind},
     markdown::strictly_closed_frontmatter_end,
-    task_status_hooks::TasksSettings,
 };
 use crate::native::{
     projects::ProjectStatus,
@@ -85,7 +84,7 @@ pub(crate) struct SnapshotProjection {
 pub(crate) fn project_snapshot<L: SourceLoader>(
     store: &mut SourceStore<L>,
     note: &ClassifiedNote,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
     options: SnapshotProjectionOptions,
 ) -> Result<SnapshotProjection, String> {
     let mut attachments =
@@ -113,7 +112,7 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
 pub(crate) fn project_snapshot_from_syntax<L: SourceLoader>(
     store: &mut SourceStore<L>,
     note: &ClassifiedNote,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
     options: SnapshotProjectionOptions,
     mut attachments: AttachmentIndex,
     syntax: SyntaxProjection,
@@ -360,7 +359,7 @@ pub(crate) fn project_snapshot_from_syntax<L: SourceLoader>(
 pub(crate) fn project_bob_snapshot<L: SourceLoader>(
     store: &mut SourceStore<L>,
     note: &ClassifiedNote,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
     options: SnapshotProjectionOptions,
 ) -> Result<SnapshotProjection, String> {
     project_snapshot(store, note, settings, options)
@@ -369,7 +368,7 @@ pub(crate) fn project_bob_snapshot<L: SourceLoader>(
 struct Expander<'a, L: SourceLoader> {
     store: &'a mut SourceStore<L>,
     attachments: &'a mut AttachmentIndex,
-    settings: &'a TasksSettings,
+    settings: &'a SnapshotSettings,
     root: SourceIdentity,
     vault_root: PathBuf,
     vault_name: String,
@@ -386,7 +385,7 @@ impl<'a, L: SourceLoader> Expander<'a, L> {
     fn new(
         store: &'a mut SourceStore<L>,
         attachments: &'a mut AttachmentIndex,
-        settings: &'a TasksSettings,
+        settings: &'a SnapshotSettings,
         root: SourceIdentity,
         root_anchors: Vec<SnapshotAnchor>,
     ) -> Self {
@@ -1202,7 +1201,7 @@ fn compose_bob_masthead<L: SourceLoader>(
     snapshot_date: chrono::NaiveDate,
     include_closed: bool,
     store: &mut SourceStore<L>,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
 ) {
     let metadata = frontmatter.map(|front| &front.metadata);
     let category = if *kind == NoteKind::Area {
@@ -1398,7 +1397,7 @@ fn parent_label<L: SourceLoader>(
     metadata: &YamlValue,
     source: &SourceIdentity,
     store: &mut SourceStore<L>,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
 ) -> Option<String> {
     let raw = yaml_scalar_text(metadata_value(metadata, "parent")?)?;
     let parsed = super::resolve::parse_link_target(&raw);
@@ -2528,7 +2527,7 @@ mod tests {
         task_status_hooks::{TaskStatusType, TasksSettings},
     };
 
-    fn settings() -> TasksSettings {
+    fn settings() -> SnapshotSettings {
         TasksSettings {
             global_filter: "#task".to_string(),
             done_statuses: BTreeSet::from(['x', 'X']),
@@ -2544,6 +2543,7 @@ mod tests {
             status_definitions: Vec::new(),
             status_settings_error: None,
         }
+        .into()
     }
 
     fn test_snapshot_date() -> chrono::NaiveDate {

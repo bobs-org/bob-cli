@@ -1565,6 +1565,7 @@ mod tests {
         classify_target, sha256_hex, source_identity, CountingLoader,
         SnapshotTarget, SourceStore,
     };
+    use super::super::obsidian::SnapshotSettings;
     use super::super::serialize::serialize_projected_markdown;
     use super::super::transclusion::{
         project_snapshot, SnapshotProjection, SnapshotProjectionOptions,
@@ -1579,7 +1580,7 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 10, 16).expect("test date")
     }
 
-    fn settings() -> TasksSettings {
+    fn settings() -> SnapshotSettings {
         TasksSettings {
             global_filter: "#task".to_string(),
             done_statuses: BTreeSet::from(['x', 'X']),
@@ -1595,6 +1596,7 @@ mod tests {
             status_definitions: Vec::new(),
             status_settings_error: None,
         }
+        .into()
     }
 
     fn masthead() -> SnapshotMasthead {

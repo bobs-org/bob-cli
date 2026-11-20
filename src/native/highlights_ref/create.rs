@@ -2800,8 +2800,7 @@ fn create_vault_note_route(
             now,
             bob_env::configured_timezone(),
         );
-    let settings =
-        crate::native::task_status_hooks::read_tasks_settings(&config.bob_dir);
+    let settings = note_snapshot::SnapshotSettings::read(&config.bob_dir);
     let parent = options
         .resolved_parent
         .clone()

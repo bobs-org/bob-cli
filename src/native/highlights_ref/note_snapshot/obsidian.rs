@@ -59,11 +59,50 @@ use super::view::{
     SourceLocation, TaskSource,
 };
 use crate::native::collect_done::trailing_block_id_in_line;
+use crate::native::dataview::read_inline_query_prefix;
 use crate::native::markdown::{
     atx_heading, closes_fence, fence_marker, fenced_lines,
     multiline_comment_lines, strictly_closed_frontmatter_end,
 };
-use crate::native::task_status_hooks::{TaskStatusType, TasksSettings};
+use crate::native::task_status_hooks::{
+    read_tasks_settings, TaskStatusType, TasksSettings,
+};
+
+/// Vault plugin settings that shape a note projection: the Tasks status
+/// symbols and Dataview's active inline-query prefix.
+#[derive(Debug, Clone)]
+pub(crate) struct SnapshotSettings {
+    /// The vault's Tasks plugin settings (checkbox status symbols).
+    pub tasks: TasksSettings,
+    /// Dataview's active inline DQL prefix; `None` when inline queries are
+    /// off, so no inline code span is a live query.
+    pub inline_query_prefix: Option<String>,
+}
+
+impl SnapshotSettings {
+    /// Read the Tasks and Dataview settings from `vault`, each falling back
+    /// to its plugin defaults.
+    pub(crate) fn read(vault: &Path) -> Self {
+        Self {
+            tasks: read_tasks_settings(vault),
+            inline_query_prefix: read_inline_query_prefix(vault),
+        }
+    }
+}
+
+/// Test seam: Tasks settings with Dataview's default inline prefix.
+#[cfg(test)]
+impl From<TasksSettings> for SnapshotSettings {
+    fn from(tasks: TasksSettings) -> Self {
+        Self {
+            tasks,
+            inline_query_prefix: Some(
+                crate::native::dataview::DEFAULT_INLINE_QUERY_PREFIX
+                    .to_string(),
+            ),
+        }
+    }
+}
 
 /// Field keys dropped as hidden bookkeeping. Matching is case-sensitive,
 /// mirroring the shared inline-field scanner. Every other bracketed or
@@ -212,7 +251,7 @@ pub(crate) fn project_obsidian_syntax<L: SourceLoader>(
     store: &mut SourceStore<L>,
     attachments: &mut AttachmentIndex,
     host: &SourceIdentity,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
 ) -> Result<SyntaxProjection, String> {
     let bytes = store.read_canonical(&host.canonical_path)?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
@@ -231,7 +270,7 @@ pub(crate) fn project_obsidian_syntax_selection<L: SourceLoader>(
     full_source_bytes: &[u8],
     selected_text: &str,
     first_line: usize,
-    settings: &TasksSettings,
+    settings: &SnapshotSettings,
 ) -> Result<SyntaxProjection, String> {
     let full_text = String::from_utf8_lossy(full_source_bytes).into_owned();
     let mut selected = "\n".repeat(first_line.saturating_sub(1));
@@ -284,7 +323,7 @@ struct Projector<'a, L: SourceLoader> {
     vault_root: PathBuf,
     vault: VaultNotes,
     host_file_uri: String,
-    settings: &'a TasksSettings,
+    settings: &'a SnapshotSettings,
     host_index: FragmentIndex,
     fragment_cache: HashMap<PathBuf, Option<FragmentIndex>>,
     used_anchors: HashSet<String>,
@@ -307,7 +346,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         attachments: &'a mut AttachmentIndex,
         host: &'a SourceIdentity,
         host_index_text: &str,
-        settings: &'a TasksSettings,
+        settings: &'a SnapshotSettings,
     ) -> Self {
         let vault_name = store.vault_name().to_string();
         let vault_root = store.vault_root().to_path_buf();
@@ -1060,20 +1099,21 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             parse_task_marker(&line.text).expect("task checked by caller");
         let width = indent_width(marker.indent);
         let (body, block_id) = strip_trailing_block_id(marker.body);
-        let status = match status_for_symbol(marker.symbol, self.settings) {
-            Some(status) => status,
-            None => {
-                self.warn(
-                    SnapshotWarningKind::UnknownTaskStatus,
-                    Some(line.line_no),
-                    format!(
-                        "unknown task status '[{}]'; showing as open",
-                        marker.symbol
-                    ),
-                );
-                SnapshotTaskStatus::Open
-            }
-        };
+        let status =
+            match status_for_symbol(marker.symbol, &self.settings.tasks) {
+                Some(status) => status,
+                None => {
+                    self.warn(
+                        SnapshotWarningKind::UnknownTaskStatus,
+                        Some(line.line_no),
+                        format!(
+                            "unknown task status '[{}]'; showing as open",
+                            marker.symbol
+                        ),
+                    );
+                    SnapshotTaskStatus::Open
+                }
+            };
         let mut content = self.parse_inlines(body, Some(line.line_no));
         trim_inline_edges(&mut content);
         let anchor = block_id.clone().map(|id| {
@@ -1752,7 +1792,10 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             && !is_escaped(text, cursor)
             && let Some((content, consumed)) = match_code_span(text, cursor)
         {
-            if is_inline_query(&content) {
+            if is_inline_query(
+                &content,
+                self.settings.inline_query_prefix.as_deref(),
+            ) {
                 return Some((
                     vec![Inline::Link {
                         label: vec![Inline::Text(
@@ -2156,11 +2199,17 @@ fn match_code_span(text: &str, cursor: usize) -> Option<(String, usize)> {
     None
 }
 
-/// True for an inline-query code span: `` `= ...` `` (Dataview inline
-/// form). Ordinary code, including `a=b`, is never a query.
-fn is_inline_query(content: &str) -> bool {
-    match content.trim_start_matches([' ', '\t']).strip_prefix('=') {
-        Some(rest) => rest.is_empty() || rest.starts_with([' ', '\t']),
+/// True for an inline-query code span under the vault's active Dataview
+/// inline prefix: `` `<prefix> ...` `` with whitespace and a non-blank
+/// query after the prefix. With inline queries off (`None`) every span is
+/// code. A bare prefix stays code, as in Dataview's Reading view, and so
+/// do `a=b`, `` `==` ``, and `` `=x` `` under the default `=` prefix.
+fn is_inline_query(content: &str, prefix: Option<&str>) -> bool {
+    let Some(prefix) = prefix.filter(|prefix| !prefix.is_empty()) else {
+        return false;
+    };
+    match content.trim_start_matches([' ', '\t']).strip_prefix(prefix) {
+        Some(rest) => rest.starts_with([' ', '\t']) && !rest.trim().is_empty(),
         None => false,
     }
 }
@@ -3416,6 +3465,14 @@ mod tests {
         files: &[(&str, &str)],
         host: &str,
     ) -> (tempfile::TempDir, SyntaxProjection) {
+        project_host_with(files, host, &fake_settings().into())
+    }
+
+    fn project_host_with(
+        files: &[(&str, &str)],
+        host: &str,
+        settings: &SnapshotSettings,
+    ) -> (tempfile::TempDir, SyntaxProjection) {
         let directory = test_vault(files);
         let root = directory.path().canonicalize().expect("canonical root");
         let mut store = SourceStore::with_loader(&root, FilesystemSourceLoader)
@@ -3429,7 +3486,7 @@ mod tests {
             &mut store,
             &mut attachments,
             &identity,
-            &fake_settings(),
+            settings,
         )
         .expect("project host");
         (directory, projection)
@@ -4502,7 +4559,7 @@ mod tests {
         let identity =
             source_identity(&vault_root, &canonical).expect("identity");
         let mut attachments = AttachmentIndex::new(vault_root);
-        let settings = fake_settings();
+        let settings = fake_settings().into();
         let mut projector = Projector::new(
             &mut store,
             &mut attachments,
@@ -4667,6 +4724,75 @@ mod tests {
             inline,
             Inline::Code(code) if code == "a=b"
         )));
+    }
+
+    /// Project `contents` as `Host.md` under `prefix` and return the first
+    /// paragraph's inlines.
+    fn inline_query_paragraph(
+        contents: &str,
+        prefix: Option<&str>,
+    ) -> Vec<Inline> {
+        let settings = SnapshotSettings {
+            tasks: fake_settings(),
+            inline_query_prefix: prefix.map(str::to_string),
+        };
+        let (_dir, projection) =
+            project_host_with(&[("Host.md", contents)], "Host.md", &settings);
+        let Some(Block::Paragraph(inlines)) = projection.blocks.first() else {
+            panic!("para: {:?}", projection.blocks);
+        };
+        inlines.clone()
+    }
+
+    fn is_query_link(inline: &Inline) -> bool {
+        matches!(
+            inline,
+            Inline::Link { label, target: LinkTarget::ObsidianUri(_) }
+            if flatten_inlines(label) == "Open live query"
+        )
+    }
+
+    fn has_code(inlines: &[Inline], text: &str) -> bool {
+        inlines
+            .iter()
+            .any(|inline| matches!(inline, Inline::Code(code) if code == text))
+    }
+
+    #[test]
+    fn disabled_inline_queries_keep_query_spans_as_code() {
+        let inlines = inline_query_paragraph("See `= 2 + 2`.\n", None);
+        assert!(has_code(&inlines, "= 2 + 2"), "{inlines:?}");
+        assert!(!inlines.iter().any(is_query_link), "{inlines:?}");
+    }
+
+    #[test]
+    fn inline_queries_follow_the_vault_prefix() {
+        let inlines = inline_query_paragraph(
+            "See `dv= 2 + 2` and `= 2 + 2`.\n",
+            Some("dv="),
+        );
+        assert_eq!(
+            inlines
+                .iter()
+                .filter(|inline| is_query_link(inline))
+                .count(),
+            1,
+            "{inlines:?}"
+        );
+        assert!(is_query_link(&inlines[1]), "{inlines:?}");
+        assert!(has_code(&inlines, "= 2 + 2"), "{inlines:?}");
+    }
+
+    #[test]
+    fn bob_equals_vocabulary_stays_code_on_default_prefix() {
+        let inlines = inline_query_paragraph(
+            "Keys `=` and `==`, close `=x`, alias `a=b`, blank `=   `.\n",
+            Some("="),
+        );
+        assert!(!inlines.iter().any(is_query_link), "{inlines:?}");
+        for code in ["=", "==", "=x", "a=b"] {
+            assert!(has_code(&inlines, code), "{code}: {inlines:?}");
+        }
     }
 
     #[test]

@@ -38,8 +38,8 @@ pub(crate) use classify::{
 };
 #[allow(unused_imports)]
 pub(crate) use obsidian::{
-    project_obsidian_syntax, status_for_symbol, PendingEmbed, SyntaxProjection,
-    TitleCandidate,
+    project_obsidian_syntax, status_for_symbol, PendingEmbed, SnapshotSettings,
+    SyntaxProjection, TitleCandidate,
 };
 pub(crate) use plan::{plan_snapshot, SnapshotPlan};
 #[allow(unused_imports)]

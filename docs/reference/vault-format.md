@@ -832,6 +832,7 @@ vault/
 | `done/` | Created by archive | none |
 | Record folders | Created on first record write | Album stem |
 | `.obsidian/plugins/obsidian-tasks-plugin/data.json` | Needed for Dataview Tasks and Blocked writes | none |
+| `.obsidian/plugins/dataview/data.json` | Optional; read by `bob query` rendering and snapshot inline-query detection | none |
 
 `.bob/` is machine data (preference journals, Keep import receipts, and
 saved reference sources). Note walkers never scan it as vault notes:

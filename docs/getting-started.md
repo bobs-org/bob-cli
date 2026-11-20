@@ -58,6 +58,14 @@ refuse a non-Dataview format. Blocked transitions also require the compatible
 `?` definition described in [task status hooks](task-status-hooks.md#derived-blocked-status)
 (`bob task reconcile`; formerly `bob task-status-hooks`, still accepted).
 
+Bob's keys and capture grammar put inline code that starts with `=` in notes,
+such as `` `==` `` and `` `=x` ``. Dataview's Live Preview claims any inline
+code span that starts with one of its inline query prefixes, even when inline
+queries are turned off. Move `inlineQueryPrefix` and `inlineJsQueryPrefix` in
+`.obsidian/plugins/dataview/data.json` off the default `=` and `$=`, for
+example to `dv=` and `dvjs=`, and keep inline JavaScript queries off unless you
+use them. Restart Dataview after changing the file outside Obsidian.
+
 Capture routes select root-level notes: `@work` writes `work.md`. Route names
 are lowercased and accept ASCII letters, digits, `_`, and `-`; picker-discovered
 filenames must already have lowercase stems. A missing target note

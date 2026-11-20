@@ -1377,7 +1377,7 @@ mod tests {
         classify_target, source_identity, FilesystemSourceLoader,
         SnapshotTarget, SourceStore,
     };
-    use super::super::obsidian::project_obsidian_syntax;
+    use super::super::obsidian::{project_obsidian_syntax, SnapshotSettings};
     use super::super::resolve::AttachmentIndex;
     use super::super::transclusion::{
         project_snapshot, SnapshotProjectionOptions,
@@ -1401,7 +1401,7 @@ mod tests {
 
     /// Vault Tasks settings mirroring the corpus: `*` Next, `?` Blocked,
     /// `/` In Progress, `-` Canceled.
-    fn settings() -> TasksSettings {
+    fn settings() -> SnapshotSettings {
         TasksSettings {
             global_filter: "#task".to_string(),
             done_statuses: BTreeSet::from(['x', 'X']),
@@ -1417,6 +1417,7 @@ mod tests {
             status_definitions: Vec::new(),
             status_settings_error: None,
         }
+        .into()
     }
 
     fn vault(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -1601,7 +1602,7 @@ mod tests {
         let identity =
             source_identity(&vault_root, &canonical).expect("identity");
         let mut attachments = AttachmentIndex::new(vault_root);
-        let empty_settings = TasksSettings {
+        let empty_settings: SnapshotSettings = TasksSettings {
             global_filter: String::new(),
             done_statuses: BTreeSet::from(['x', 'X']),
             status_types: BTreeMap::from([
@@ -1610,7 +1611,8 @@ mod tests {
             ]),
             status_definitions: Vec::new(),
             status_settings_error: None,
-        };
+        }
+        .into();
         let projection = project_obsidian_syntax(
             &mut store,
             &mut attachments,
