@@ -119,6 +119,9 @@ groups:
       - stem: task-split
         summary: "`bob task split` promoting bullets into tasks, stubs, mentions, and conformance vectors"
         order: 35
+      - stem: task-requirements
+        summary: "Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors"
+        order: 55
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
         order: 36

@@ -938,6 +938,8 @@ the NEW and TICKLER review tiers resurface unpicked work.
   offers.
 - **Predecessor (P).** A task this gesture moved from open to Done. That
   covers the root and every embedded subtask closed with it.
+- **Requirements.** A closing set with Pending [task requirements](task-requirements.md)
+  opens one requirements group per owner, placed first on the card (§12.25 there).
 - **Offer (D).** A task this gesture fully unblocked that would have
   been auto-linked under the old successor-link rule, plus every
   available open resident of a project whose `^prj` this gesture

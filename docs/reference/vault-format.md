@@ -87,6 +87,9 @@ Contract: [Getting started](../getting-started.md#vault-requirements),
 [Task Status Hooks](../task-status-hooks.md),
 [Next and Pending are sticky](../develop/decisions.md#task-lanes-are-sticky).
 
+A checkbox child without `#task` under a task or another such child is not a
+lane: it is a [task requirement](../task-requirements.md).
+
 ## Authored and derived fields
 
 Edit the human-owned inputs. Reconciliation and capture project the rest.

@@ -368,6 +368,7 @@ nav:
               - "Event link times": event-link-times.md
               - "Mail link marks": mail-link-marks.md
               - "Log Recall": log-recall.md
+              - "Task requirements": task-requirements.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md

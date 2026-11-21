@@ -1084,6 +1084,9 @@ as `@sase#future-work` or `@sase#"Future Work"`; both file under
 ```markdown
 ## Tasks
 
+A `- [ ] text` bullet whose structural parent is a task or another such
+bullet is a [task requirement](task-requirements.md), not a note.
+
 - [ ] #task Existing thing [created::2026-10-01] ^existing
 ```
 

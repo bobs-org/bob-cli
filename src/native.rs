@@ -124,6 +124,10 @@ mod task_locator;
 mod task_merge;
 mod task_move;
 pub(crate) mod task_relations;
+// Later epic phases (reader-hardening, block-layout, close-engine) build on
+// the requirement recognizer; tests are its only consumer until then.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod task_reqs;
 mod task_root;
 mod task_split;
 mod task_status_groups;

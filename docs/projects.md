@@ -206,6 +206,9 @@ Task statuses follow the Tasks plugin convention:
 [-]  canceled
 ```
 
+A `^prj` task may own [task requirements](task-requirements.md): they are the
+project's completion criteria.
+
 ## Sync Rules
 
 `bob projects sync` applies these rules:

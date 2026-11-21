@@ -9,7 +9,7 @@ use super::{
     },
     markdown,
     note_tasks::{self, NoteTask, NoteTaskSettings},
-    task_dependencies, task_relations,
+    task_dependencies, task_relations, task_reqs,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,10 +32,21 @@ pub(crate) enum ManagedLogKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TaskChildKind {
     Authored,
-    Drawer { title: String },
+    Drawer {
+        title: String,
+    },
     ManagedLink(ManagedLinkKind),
     ManagedLog(ManagedLogKind),
-    NestedTask { open: bool },
+    NestedTask {
+        open: bool,
+    },
+    /// A checkbox child without the global filter: a requirement candidate.
+    /// Structural position (parent chain, fences) is decided by
+    /// [`task_reqs`][crate::native::task_reqs]; this single-line check only
+    /// separates checkbox children from plain authored notes.
+    Requirement {
+        mark: task_reqs::ReqMark,
+    },
 }
 
 impl TaskChildKind {
@@ -53,10 +64,22 @@ pub(crate) struct ClassifiedTaskChild {
 
 /// Classify one list-item line. `nested_task_open` comes from Bob's task
 /// scanner when the caller has a note context; `None` means this caller only
-/// needs the managed-line and drawer predicates.
+/// needs the managed-line and drawer predicates. The default global filter
+/// (`#task`) separates requirement checkboxes from nested tasks.
 pub(crate) fn classify_task_child(
     line: &str,
     nested_task_open: Option<bool>,
+) -> TaskChildKind {
+    classify_task_child_with_filter(line, nested_task_open, "#task")
+}
+
+/// [`classify_task_child`] with an explicit global filter, so recursive
+/// consumers can reuse the same whole-token match [`task_reqs`][crate::native::task_reqs]
+/// uses for requirement recognition.
+pub(crate) fn classify_task_child_with_filter(
+    line: &str,
+    nested_task_open: Option<bool>,
+    global_filter: &str,
 ) -> TaskChildKind {
     if task_relations::parse::is_subprojects_line(line) {
         return TaskChildKind::ManagedLink(ManagedLinkKind::SubProjects);
@@ -88,7 +111,19 @@ pub(crate) fn classify_task_child(
     }
 
     if let Some(open) = nested_task_open {
-        return TaskChildKind::NestedTask { open };
+        if carries_task_filter(line, global_filter) {
+            return TaskChildKind::NestedTask { open };
+        }
+    } else if carries_task_filter(line, global_filter) {
+        // Without a note context the caller cannot tell open from closed;
+        // the line is still a task boundary, never a requirement.
+        return TaskChildKind::Authored;
+    }
+
+    if let Some(mark) =
+        task_reqs::checkbox_mark_without_filter(line, global_filter)
+    {
+        return TaskChildKind::Requirement { mark };
     }
 
     if let Some(body) = list_item_body(line) {
@@ -101,6 +136,14 @@ pub(crate) fn classify_task_child(
     }
 
     TaskChildKind::Authored
+}
+
+/// True when the checkbox body carries the task filter as a whole token.
+fn carries_task_filter(line: &str, global_filter: &str) -> bool {
+    list_item_body(line).is_some_and(|body| {
+        !global_filter.is_empty()
+            && body.split_whitespace().any(|token| token == global_filter)
+    })
 }
 
 /// Classify list-item direct children of `parent`, preserving source order.
@@ -147,9 +190,10 @@ pub(crate) fn classify_direct_children(
             }
             Some(ClassifiedTaskChild {
                 line_index,
-                kind: classify_task_child(
+                kind: classify_task_child_with_filter(
                     line.text,
                     tasks_by_line.get(&line_index).copied(),
+                    &settings.global_filter,
                 ),
             })
         })

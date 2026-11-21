@@ -23,7 +23,8 @@ A splittable bullet is one of:
 
 It must be a plain bullet with non-empty text once its `^anchor` is removed.
 An unchecked `- [ ] text` without `#task` is also splittable, and it becomes
-an open task.
+an open task. Carrying a [task requirement](task-requirements.md) into its
+own task follows the same engine (§6 there).
 
 These are never splittable, and each gets a teaching notice or code:
 

@@ -35,6 +35,8 @@ The checkbox is the lane. Bob uses six:
 | `[x]` | Done | Completed work. |
 | `[-]` | Cancelled | Dropped work. |
 
+A checkbox under a task that lacks `#task` is not a lane at all: it is a [task requirement](../task-requirements.md), met with its task.
+
 Do not confuse the Ready lane with the freshness-gated READY view. The lane is what the checkbox says; the READY view is a review-time subset of visible work that excludes the NEW and ROTTEN review buckets. Whole-lane pressure stays visible even when some rows are held out for review. Lane, Today, freshness state, and review tier are different dimensions: changing one never implicitly rewrites another.
 
 ## Sticky commitments

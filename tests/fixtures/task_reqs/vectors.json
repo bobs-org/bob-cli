@@ -1,0 +1,1100 @@
+{
+  "schema_version": 1,
+  "contract": "docs/task-requirements.md §1–§2",
+  "max_depth": 16,
+  "cases": [
+    {
+      "id": "RQ1",
+      "title": "depth-1 requirement with note, drawer, and log neighbours",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- Fixture: windows.csv",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Handles supported inputs",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 4,
+            "notes": [[4, 4]]
+          }
+        ],
+        "probes": [
+          {"line": 1, "owner": 1, "is_req": false},
+          {"line": 2, "owner": null, "is_req": false},
+          {"line": 3, "owner": 1, "is_req": true},
+          {"line": 4, "owner": null, "is_req": false},
+          {"line": 6, "owner": null, "is_req": false}
+        ]
+      }
+    },
+    {
+      "id": "RQ2",
+      "title": "nesting to depth 3 with notes between branches",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- [ ] Preserves CRLF",
+        "\t\t\t- Fixture: windows.csv",
+        "\t\t- [ ] Handles empty input",
+        "\t- [ ] Benchmarks within 5%"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Handles supported inputs",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 6,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Handles Windows files",
+            "anchor": null,
+            "path": "1.1",
+            "subtree_end": 5,
+            "notes": [[5, 5]]
+          },
+          {
+            "line": 4,
+            "depth": 3,
+            "parent": 3,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Preserves CRLF",
+            "anchor": null,
+            "path": "1.1.1",
+            "subtree_end": 4,
+            "notes": []
+          },
+          {
+            "line": 6,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Handles empty input",
+            "anchor": null,
+            "path": "1.2",
+            "subtree_end": 6,
+            "notes": []
+          },
+          {
+            "line": 7,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Benchmarks within 5%",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 7,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 4, "owner": 1, "is_req": true},
+          {"line": 5, "owner": null, "is_req": false}
+        ]
+      }
+    },
+    {
+      "id": "RQ3",
+      "title": "mixed tab and space indentation",
+      "source_lines": [
+        "- [ ] #task Mixed indents ^mixed",
+        "\t- [ ] Tab req",
+        "\t  - [ ] Space-augmented child"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Tab req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 3,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Space-augmented child",
+            "anchor": null,
+            "path": "1.1",
+            "subtree_end": 3,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ4",
+      "title": "loose notes and pasted checklists stay plain",
+      "source_lines": [
+        "- [ ] #task Loose notes ^loose",
+        "\t- A loose note",
+        "\t- [ ] First requirement",
+        "\t- NOTES",
+        "\t\t- [ ] pasted checklist",
+        "\t\t- another pasted item"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "First requirement",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 3,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 2, "owner": null, "is_req": false},
+          {"line": 5, "owner": null, "is_req": false},
+          {"line": 6, "owner": null, "is_req": false}
+        ]
+      }
+    },
+    {
+      "id": "RQ5",
+      "title": "nested #task lines start their own ownership boundary",
+      "source_lines": [
+        "- [ ] #task Outer ^outer",
+        "\t- [ ] Outer req",
+        "\t- [ ] #task Inner subtask ^inner",
+        "\t\t- [ ] Inner req",
+        "\t\t- [ ] #task Deep task ^deep",
+        "\t\t\t- [ ] Deep req"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Outer req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 1,
+            "parent": null,
+            "owner": 3,
+            "mark": "open",
+            "state": "pending",
+            "text": "Inner req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 4,
+            "notes": []
+          },
+          {
+            "line": 6,
+            "depth": 1,
+            "parent": null,
+            "owner": 5,
+            "mark": "open",
+            "state": "pending",
+            "text": "Deep req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 6,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 3, "owner": 3, "is_req": false},
+          {"line": 4, "owner": 3, "is_req": true},
+          {"line": 6, "owner": 5, "is_req": true}
+        ]
+      }
+    },
+    {
+      "id": "RQ6",
+      "title": "fences inside list items and quote lines are never reqs",
+      "source_lines": [
+        "- [ ] #task Fences ^fences",
+        "\t- ```markdown",
+        "\t- [ ] looks direct but fenced",
+        "\t- ```",
+        "\t- [ ] Real req",
+        "> - [ ] quoted stays plain"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 5,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Real req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 5,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 3, "owner": null, "is_req": false},
+          {"line": 6, "owner": null, "is_req": false}
+        ]
+      }
+    },
+    {
+      "id": "RQ7",
+      "title": "checkboxes under drawers, notes, managed lines, and logs",
+      "source_lines": [
+        "- [ ] #task Containers ^containers",
+        "\t- NOTES",
+        "\t\t- [ ] drawer checkbox",
+        "\t- a plain note",
+        "\t\t- [ ] under a note",
+        "\t- ⛓️ **DEPENDS ON:** [[#^x]]",
+        "\t\t- [ ] under a managed line",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- [ ] under a log",
+        "\t- [ ] Real req"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 10,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Real req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 10,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 3, "owner": null, "is_req": false},
+          {"line": 5, "owner": null, "is_req": false},
+          {"line": 7, "owner": null, "is_req": false},
+          {"line": 9, "owner": null, "is_req": false}
+        ]
+      }
+    },
+    {
+      "id": "RQ8",
+      "title": "every mark under an open owner",
+      "source_lines": [
+        "- [ ] #task Marks ^marks",
+        "\t- [ ] open req",
+        "\t- [-] dropped req",
+        "\t- [>] [[#^other|Carried there]]",
+        "\t- [x] hand ticked",
+        "\t- [?] flagged unknown"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "open req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "dropped",
+            "state": "dropped",
+            "text": "dropped req",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 3,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "carried",
+            "state": "carried",
+            "text": "[[#^other|Carried there]]",
+            "anchor": null,
+            "path": "3",
+            "subtree_end": 4,
+            "notes": []
+          },
+          {
+            "line": 5,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "legacy-met",
+            "state": "met",
+            "text": "hand ticked",
+            "anchor": null,
+            "path": "4",
+            "subtree_end": 5,
+            "notes": []
+          },
+          {
+            "line": 6,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "unknown",
+            "state": "pending",
+            "text": "flagged unknown",
+            "anchor": null,
+            "path": "5",
+            "subtree_end": 6,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ9",
+      "title": "open reqs are met under a done owner",
+      "source_lines": [
+        "- [x] #task Done work ^done [completion:: 2026-11-20]",
+        "\t- [ ] met by close",
+        "\t- [-] stays dropped",
+        "\t- [>] [[#^o|Carried]]",
+        "\t- [x] hand ticked"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "met",
+            "text": "met by close",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "dropped",
+            "state": "dropped",
+            "text": "stays dropped",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 3,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "carried",
+            "state": "carried",
+            "text": "[[#^o|Carried]]",
+            "anchor": null,
+            "path": "3",
+            "subtree_end": 4,
+            "notes": []
+          },
+          {
+            "line": 5,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "legacy-met",
+            "state": "met",
+            "text": "hand ticked",
+            "anchor": null,
+            "path": "4",
+            "subtree_end": 5,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ10",
+      "title": "open reqs are moot under a cancelled owner",
+      "source_lines": [
+        "- [-] #task Cancelled work ^cancelled",
+        "\t- [ ] now moot",
+        "\t- [?] flagged moot"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "moot",
+            "text": "now moot",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "unknown",
+            "state": "moot",
+            "text": "flagged moot",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 3,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ11",
+      "title": "dropped ancestors exclude, explicit descendants keep history",
+      "source_lines": [
+        "- [ ] #task Branch drop ^branch",
+        "\t- [-] dropped root",
+        "\t\t- [ ] excluded middle",
+        "\t\t\t- [ ] excluded leaf",
+        "\t\t- [-] explicitly dropped child",
+        "\t\t- [>] [[#^o|carried child]]",
+        "\t- [ ] live sibling"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "dropped",
+            "state": "dropped",
+            "text": "dropped root",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 6,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "open",
+            "state": "excluded",
+            "excluded_by": 2,
+            "excluded_because": "dropped",
+            "text": "excluded middle",
+            "anchor": null,
+            "path": "1.1",
+            "subtree_end": 4,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 3,
+            "parent": 3,
+            "owner": 1,
+            "mark": "open",
+            "state": "excluded",
+            "excluded_by": 3,
+            "excluded_because": "dropped",
+            "text": "excluded leaf",
+            "anchor": null,
+            "path": "1.1.1",
+            "subtree_end": 4,
+            "notes": []
+          },
+          {
+            "line": 5,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "dropped",
+            "state": "dropped",
+            "text": "explicitly dropped child",
+            "anchor": null,
+            "path": "1.2",
+            "subtree_end": 5,
+            "notes": []
+          },
+          {
+            "line": 6,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "carried",
+            "state": "carried",
+            "text": "[[#^o|carried child]]",
+            "anchor": null,
+            "path": "1.3",
+            "subtree_end": 6,
+            "notes": []
+          },
+          {
+            "line": 7,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "live sibling",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 7,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ12",
+      "title": "carried ancestors exclude their branch",
+      "source_lines": [
+        "- [ ] #task Carry branch ^carryb",
+        "\t- [>] [[#^new|Carried root]]",
+        "\t\t- [ ] excluded by carry"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "carried",
+            "state": "carried",
+            "text": "[[#^new|Carried root]]",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 3,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "open",
+            "state": "excluded",
+            "excluded_by": 2,
+            "excluded_because": "carried",
+            "text": "excluded by carry",
+            "anchor": null,
+            "path": "1.1",
+            "subtree_end": 3,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ13",
+      "title": "hand-ticked intermediate leaves pending descendants pending",
+      "source_lines": [
+        "- [ ] #task Ticked middle ^ticked",
+        "\t- [x] ticked parent",
+        "\t\t- [ ] still pending"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "legacy-met",
+            "state": "met",
+            "text": "ticked parent",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 3,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "still pending",
+            "anchor": null,
+            "path": "1.1",
+            "subtree_end": 3,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ14",
+      "title": "depth past MAX_REQ_DEPTH is reported, never flattened",
+      "source_lines": [
+        "- [ ] #task Deep chain ^deep",
+        "\t- [ ] Level 1",
+        "\t\t- [ ] Level 2",
+        "\t\t\t- [ ] Level 3",
+        "\t\t\t\t- [ ] Level 4",
+        "\t\t\t\t\t- [ ] Level 5",
+        "\t\t\t\t\t\t- [ ] Level 6",
+        "\t\t\t\t\t\t\t- [ ] Level 7",
+        "\t\t\t\t\t\t\t\t- [ ] Level 8",
+        "\t\t\t\t\t\t\t\t\t- [ ] Level 9",
+        "\t\t\t\t\t\t\t\t\t\t- [ ] Level 10",
+        "\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 11",
+        "\t\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 12",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 13",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 14",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 15",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 16",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 17",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] Level 18"
+      ],
+      "expect": {
+        "nodes": [
+          {"line": 2, "depth": 1, "parent": null, "owner": 1, "mark": "open", "state": "pending", "text": "Level 1", "anchor": null, "path": "1", "subtree_end": 19, "notes": []},
+          {"line": 3, "depth": 2, "parent": 2, "owner": 1, "mark": "open", "state": "pending", "text": "Level 2", "anchor": null, "path": "1.1", "subtree_end": 19, "notes": []},
+          {"line": 4, "depth": 3, "parent": 3, "owner": 1, "mark": "open", "state": "pending", "text": "Level 3", "anchor": null, "path": "1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 5, "depth": 4, "parent": 4, "owner": 1, "mark": "open", "state": "pending", "text": "Level 4", "anchor": null, "path": "1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 6, "depth": 5, "parent": 5, "owner": 1, "mark": "open", "state": "pending", "text": "Level 5", "anchor": null, "path": "1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 7, "depth": 6, "parent": 6, "owner": 1, "mark": "open", "state": "pending", "text": "Level 6", "anchor": null, "path": "1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 8, "depth": 7, "parent": 7, "owner": 1, "mark": "open", "state": "pending", "text": "Level 7", "anchor": null, "path": "1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 9, "depth": 8, "parent": 8, "owner": 1, "mark": "open", "state": "pending", "text": "Level 8", "anchor": null, "path": "1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 10, "depth": 9, "parent": 9, "owner": 1, "mark": "open", "state": "pending", "text": "Level 9", "anchor": null, "path": "1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 11, "depth": 10, "parent": 10, "owner": 1, "mark": "open", "state": "pending", "text": "Level 10", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 12, "depth": 11, "parent": 11, "owner": 1, "mark": "open", "state": "pending", "text": "Level 11", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 13, "depth": 12, "parent": 12, "owner": 1, "mark": "open", "state": "pending", "text": "Level 12", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 14, "depth": 13, "parent": 13, "owner": 1, "mark": "open", "state": "pending", "text": "Level 13", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 15, "depth": 14, "parent": 14, "owner": 1, "mark": "open", "state": "pending", "text": "Level 14", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 16, "depth": 15, "parent": 15, "owner": 1, "mark": "open", "state": "pending", "text": "Level 15", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 17, "depth": 16, "parent": 16, "owner": 1, "mark": "open", "state": "pending", "text": "Level 16", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": []},
+          {"line": 18, "depth": 17, "parent": 17, "owner": 1, "mark": "open", "state": "pending", "text": "Level 17", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": [], "depth_exceeded": true},
+          {"line": 19, "depth": 18, "parent": 18, "owner": 1, "mark": "open", "state": "pending", "text": "Level 18", "anchor": null, "path": "1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1", "subtree_end": 19, "notes": [], "depth_exceeded": true}
+        ]
+      }
+    },
+    {
+      "id": "RQ15",
+      "title": "duplicate texts in different branches give distinct row keys",
+      "source_lines": [
+        "- [ ] #task Dupes ^dupes",
+        "\t- [ ] Same words",
+        "\t\t- [ ] Same words",
+        "\t- [ ] Same words"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Same words",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 3,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 2,
+            "parent": 2,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Same words",
+            "anchor": null,
+            "path": "1.1",
+            "subtree_end": 3,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Same words",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 4,
+            "notes": []
+          }
+        ],
+        "assert_distinct_keys": true,
+        "owner_key": "Dupes.md#^dupes"
+      }
+    },
+    {
+      "id": "RQ16",
+      "title": "trailing anchors are captured and cleaned",
+      "source_lines": [
+        "- [ ] #task Anchors ^anchors",
+        "\t- [ ] Has an anchor ^keep-me",
+        "\t- [>] [[#^other|Carried stub]]"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Has an anchor",
+            "anchor": "keep-me",
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "carried",
+            "state": "carried",
+            "text": "[[#^other|Carried stub]]",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 3,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ17",
+      "title": "multiple owners keep separate forests in one note",
+      "source_lines": [
+        "- [ ] #task First ^first",
+        "\t- [ ] First req",
+        "- [ ] #task Second ^second",
+        "\t- [ ] Second req"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "First req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 1,
+            "parent": null,
+            "owner": 3,
+            "mark": "open",
+            "state": "pending",
+            "text": "Second req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 4,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ18",
+      "title": "cross-note carried stubs keep their link bytes",
+      "source_lines": [
+        "- [ ] #task Cross carry ^cross",
+        "\t- [>] [[other#^tid|Carried across]]"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "carried",
+            "state": "carried",
+            "text": "[[other#^tid|Carried across]]",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "RQ19",
+      "title": "#task matches as a whole token only",
+      "source_lines": [
+        "- [ ] #task Tokens ^tokens",
+        "\t- [ ] Fix #tasks later",
+        "\t- [ ] #taskbar item",
+        "\t- [ ] #task Real subtask"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Fix #tasks later",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "#taskbar item",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 3,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 4, "owner": 4, "is_req": false}
+        ]
+      }
+    },
+    {
+      "id": "RQ20",
+      "title": "the contract §1 example end to end",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- [ ] Preserves CRLF",
+        "\t\t\t- Fixture: windows.csv",
+        "\t\t- [ ] Handles empty input",
+        "\t- [-] Benchmarks within 5% of v1",
+        "\t\t- ❌ **CANCEL LOG**",
+        "\t\t\t- *2026-11-21* — v1 is gone",
+        "\t- [>] [[#^export-docs|Docs cover every flag]]",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 3,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Handles supported inputs",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 7,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 2,
+            "parent": 3,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Handles Windows files",
+            "anchor": null,
+            "path": "1.1",
+            "subtree_end": 6,
+            "notes": [[6, 6]]
+          },
+          {
+            "line": 5,
+            "depth": 3,
+            "parent": 4,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Preserves CRLF",
+            "anchor": null,
+            "path": "1.1.1",
+            "subtree_end": 5,
+            "notes": []
+          },
+          {
+            "line": 7,
+            "depth": 2,
+            "parent": 3,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "Handles empty input",
+            "anchor": null,
+            "path": "1.2",
+            "subtree_end": 7,
+            "notes": []
+          },
+          {
+            "line": 8,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "dropped",
+            "state": "dropped",
+            "text": "Benchmarks within 5% of v1",
+            "anchor": null,
+            "path": "2",
+            "subtree_end": 10,
+            "notes": []
+          },
+          {
+            "line": 11,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "carried",
+            "state": "carried",
+            "text": "[[#^export-docs|Docs cover every flag]]",
+            "anchor": null,
+            "path": "3",
+            "subtree_end": 11,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 2, "owner": null, "is_req": false},
+          {"line": 6, "owner": null, "is_req": false},
+          {"line": 13, "owner": null, "is_req": false}
+        ]
+      }
+    },
+    {
+      "id": "RQ21",
+      "title": "empty checkbox and tab-indented subtask boundary",
+      "source_lines": [
+        "- [ ] #task Edges ^edges",
+        "\t- [ ]",
+        "\t- [ ] #task Tab subtask ^tabsub",
+        "\t\t- [ ] Tabbed req"
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "line": 2,
+            "depth": 1,
+            "parent": null,
+            "owner": 1,
+            "mark": "open",
+            "state": "pending",
+            "text": "",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 2,
+            "notes": []
+          },
+          {
+            "line": 4,
+            "depth": 1,
+            "parent": null,
+            "owner": 3,
+            "mark": "open",
+            "state": "pending",
+            "text": "Tabbed req",
+            "anchor": null,
+            "path": "1",
+            "subtree_end": 4,
+            "notes": []
+          }
+        ],
+        "probes": [
+          {"line": 3, "owner": 3, "is_req": false}
+        ]
+      }
+    }
+  ]
+}

@@ -86,6 +86,7 @@ queued intake; full scans also synchronize annotations. The
 | [bank.md](bank.md) | Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON |
 | [tick.md](tick.md) | `bob tick` ordered background work, cadence, gates, and results |
 | [log-recall.md](log-recall.md) | Vault-derived phrase history from Schedule, Work, Rotten, and Cancel Logs, including `bob logs list` and shared client behavior |
+| [task-requirements.md](task-requirements.md) | Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and
