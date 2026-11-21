@@ -371,6 +371,24 @@ Superseded: [Intention](#intention) retires the preamble `**Headline:**` line �
 intentions, the agent-drafted summary, and reflection now live in frontmatter
 and show in the intention card.
 
+### Day and Period Card {#intention-card}
+
+*Aliases: intentions card, intention card, day card, period card.*
+
+A [Property Card](#property-card) (formerly the intention card) Bob Ledger Tools always mounts
+as the title block of a canonical daily, week, quarter, or year note in Reading
+view and Live Preview: a leaf tile, a `DAY`/`WEEK`/`QUARTER`/`YEAR` kicker, and a
+title computed from the path, in the temporal accent, never an area hue. A
+recognized nav line becomes a docked rail; periods add child chips. The numbered
+[Intention](#intention)s, SUMMARY with provenance (`✦ agent` for a stamped draft, `✎ edited`
+otherwise), REFLECTION, and parent-line bands stay content-gated. Current and
+future subjects with no intentions show a `＋ Set intentions` ghost, and a recent
+closed subject missing a band shows one quiet pending line. `==` opens the card
+editor; every write goes through `bob periods update` with the server's field
+fingerprint. The card fails open: a lost title slot falls back to the body
+without owning the title, and malformed values, Source mode, embeds, popovers,
+and mobile keep native rendering. See `docs/reference/plugins/intention-card.md`.
+
 ### Day Strip {#day-strip}
 
 *Aliases: day stats.*
@@ -470,23 +488,9 @@ retired daily [Daily Headline](#daily-headline) and the old period `Intentions` 
 trimmed, non-empty one-line Markdown strings (`[[links]]` allowed) on canonical
 daily notes and week, quarter, and year notes; never on `all_time`. Its
 siblings are the agent-drafted `summary` and Bryan's `reflection`, and the
-three show together in the [Intention Card](#intention-card). Soft cap 3, reported as info;
+three show together in the [Day and Period Card](#intention-card). Soft cap 3, reported as info;
 Bryan's text is never refused. Absent means empty. Not a task, a
 [Pomodoro](#pomodoro) entry, or the agent's summary. See `docs/periods.md`.
-
-### Intention Card {#intention-card}
-
-*Aliases: intentions card.*
-
-A [Property Card](#property-card) Bob Ledger Tools paints at the top of a canonical daily or
-period note in Reading view and Live Preview when any of `intentions`,
-`summary`, or `reflection` is nonempty. It shows the numbered [Intention](#intention)s,
-SUMMARY with provenance (`✦ agent` for a stamped draft, `✎ edited` otherwise),
-REFLECTION, and the parent line; a recent closed subject missing a band shows
-one quiet pending line instead. `==` opens the card editor; every write goes
-through `bob periods update` with the server's field fingerprint, and the card
-fails open. Desktop-only: Source mode, embeds, popovers, and mobile keep native
-Properties. See `docs/reference/plugins/intention-card.md`.
 
 ### Keep Streak {#keep-streak}
 
@@ -684,7 +688,7 @@ with `·` for a current or future child — or the root parents it mostly went t
 It then holds:
 
 - Bryan's [Intention](#intention)s, the agent-drafted `summary`, and Bryan's `reflection`
-  in frontmatter, shown in the [Intention Card](#intention-card);
+  in frontmatter, shown in the [Day and Period Card](#intention-card);
 - a `## Review` that an agent may draft only through `bob periods draft`, while it
   is empty or still unedited;
 - a folded `[!agent]` callout with the complete, versioned drafting instructions.
@@ -769,27 +773,37 @@ without that tag remain recognized. See `docs/projects.md` and
 
 *Aliases: card family.*
 
-The shared family of note-top panels — album, bank, record, and intention
+The shared family of note-top panels — album, record, day, period, and bank
 cards — built on the bob-ledger-tools kit. The kit owns the `.bob-property-card`
-chrome, the `==` dispatcher registry (bank → album → record → intention, then
-extensions), owned-key property hiding, and the host mount lifecycle. "Card"
-means the panel; "card editor" means what `==` opens. Painting reads the
-metadata cache and confirmed source bytes, never spawns bob, and never writes
-the vault; a failed mount leaves native Properties visible. See
-`docs/develop/plugins/architecture.md`.
+chrome, the `==` dispatcher registry (bank → album → record → day and period,
+then extensions), owned-key property hiding, the host mount lifecycle, and the
+title block. On album, record, day, and period notes the card is the note's one
+visible title: a species glyph tile and kicker word (ALBUM, RECORD, DAY, WEEK,
+QUARTER, YEAR) name the species, and hue never does. The inline title and the
+recognized H1 or nav lines hide at render time only; a Live Preview cursor or
+selection on them reveals the raw Markdown. Title ownership is separate from
+Properties row ownership, and the bank card shows its species badge without
+owning the title. "Card" means the panel; "card editor" means what `==` opens.
+Painting reads the metadata cache and confirmed source bytes, never spawns bob,
+and never writes the vault; a failed mount restores the native title, H1, and
+Properties. See `docs/develop/plugins/architecture.md`.
 
 ### Record Card {#record-card}
 
 *Aliases: record sheet.*
 
-A [Property Card](#property-card) (formerly the record sheet) Bob Ledger Tools paints at the
-top of a canonical album [Record Note](#record-note) body in Reading view and Live Preview.
-When hide-eligible, the native title and album-schema rows hide behind the
-card; `parent`, `type`, `created`, legacy, and unrelated keys stay in
-Properties. The Record Card editor is the keyboard-first editor for the
-record's values. A recognized walk line becomes a rail under the card with the
-album-ring position. The card reads the cached album report: opening, folding,
-or collapsing a record never requests a new report and never writes the note.
+A [Property Card](#property-card) (formerly the record sheet) Bob Ledger Tools paints in the
+title slot of a canonical album [Record Note](#record-note), above native Properties, in
+Reading view and Live Preview. A sheet tile and a `RECORD` kicker naming the
+parent album lead the title, which paints from local metadata before any report.
+Whenever the card owns the title, the inline title and a matching first-body H1
+or walk line hide at render time, and a Live Preview cursor reveals the raw line.
+Separately, when hide-eligible, the album-schema rows hide behind the card;
+`parent`, `type`, `created`, legacy, and unrelated keys stay in Properties. The
+Record Card editor is the keyboard-first editor for the record's values. A
+recognized walk line becomes a rail docked inside the card with the album-ring
+position. The card reads the cached album report: opening, folding, or
+collapsing a record never requests a new report and never writes the note.
 Source mode keeps native YAML. See `docs/reference/plugins/record-card.md`.
 
 ### Record Note {#record-note}
