@@ -3,6 +3,10 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # Horizontal rule drawn beneath each section title (single source for width/char).
 rule := "────────────────────────────────────────────────"
 rustc_gate := "-D unused -A unused_extern_crates -A unused_macro_rules -D private_interfaces"
+# libtest threads per test binary for `just test` and `just check`:
+# min(16, logical CPUs) unless the caller exports RUST_TEST_THREADS.
+# Spawned `bob` children cap their own pools via BOB_MAX_THREADS (tests/).
+test_threads := env("RUST_TEST_THREADS", if num_cpus() =~ '^([1-9]|1[0-5])$' { num_cpus() } else { "16" })
 # Mechanical Clippy classes denied by just lint / just check on Linux and macOS.
 # Advisory classes stay at their default levels; see docs/develop/ci.md.
 clippy_gate := (
@@ -70,14 +74,14 @@ lint: (_banner "33" "🔍" "LINT")
     cargo clippy --workspace --all-targets --all-features -- {{rustc_gate}} {{clippy_gate}}
 
 test: (_banner "32" "🧪" "TEST")
-    cargo test --workspace --no-fail-fast
+    RUST_TEST_THREADS={{test_threads}} cargo test --workspace --no-fail-fast
 
 # Canonical verification gate: formatting, lints, then every test binary
 # (lib, all tests/* binaries, doctests) even when one binary fails.
 check: (_banner "32" "✅" "CHECK")
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --all-features -- {{rustc_gate}} {{clippy_gate}}
-    cargo test --workspace --no-fail-fast
+    RUST_TEST_THREADS={{test_threads}} cargo test --workspace --no-fail-fast
 
 # Render a themed section banner: blank line, bold colored title + icon, colored rule.
 # Emits ANSI styling on a TTY and clean plain text when output is piped/redirected.

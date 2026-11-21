@@ -111,6 +111,8 @@ impl GkeepEnv {
         command
             .env("BOB_DIR", self.vault())
             .env("BOB_CONFIG_FILE", self.config())
+            // Cap worker pools: libtest already runs tests in parallel.
+            .env("BOB_MAX_THREADS", "2")
             .env_remove("BOB_GKEEP_ADAPTER")
             .env(
                 "BOB_VAULT_SYNC_LOCK_FILE",

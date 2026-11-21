@@ -158,6 +158,8 @@ impl GcalEnv {
                 ("HOSTNAME", std::ffi::OsStr::new(HOST)),
                 ("BOB_NOW", std::ffi::OsStr::new(NOW)),
                 ("BOB_GCAL_CONSENT_SECS", std::ffi::OsStr::new("20")),
+                // Cap worker pools: libtest already runs tests in parallel.
+                ("BOB_MAX_THREADS", std::ffi::OsStr::new("2")),
                 ("NO_COLOR", std::ffi::OsStr::new("1")),
             ]
             .into_iter()

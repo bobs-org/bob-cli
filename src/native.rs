@@ -157,6 +157,7 @@ pub(crate) use vault_sync::{
 };
 mod vault_task_loss;
 mod walks;
+pub(crate) mod worker_threads;
 pub(crate) mod yaml_spans;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

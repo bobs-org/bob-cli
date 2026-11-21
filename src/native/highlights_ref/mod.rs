@@ -512,9 +512,7 @@ fn jobs_from_matches(matches: &ArgMatches) -> usize {
 }
 
 fn default_jobs() -> usize {
-    thread::available_parallelism()
-        .map(|cores| cores.get())
-        .unwrap_or(1)
+    crate::native::worker_threads::available(1)
 }
 
 fn run_sync(matches: &ArgMatches) -> i32 {

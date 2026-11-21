@@ -232,9 +232,7 @@ fn refresh_files(
     // Bound both thread count and the minimum work per thread. In particular,
     // small vaults stay sequential. Each file belongs to exactly one worker;
     // every call still checks every file's mtime/size, including untyped notes.
-    let workers = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1)
+    let workers = crate::native::worker_threads::available(1)
         .min(4)
         .min(files.len() / 256)
         .max(1);

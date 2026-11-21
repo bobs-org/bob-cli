@@ -85,6 +85,13 @@ just check
 release-tool checks). `just check` runs format, the shared Clippy gate, and
 `cargo test --no-fail-fast`.
 
+`just test` and `just check` run each test binary with at most 16 test threads
+(fewer on hosts with fewer logical CPUs); export `RUST_TEST_THREADS` to override.
+The shared test spawn helpers also set `BOB_MAX_THREADS=2` on the `bob` children
+they start, so concurrent tests do not each start one worker per CPU. A test that needs a
+different pool size sets its own `BOB_MAX_THREADS` on the command; the later value
+wins. CI runs `cargo test` directly and keeps libtest's default thread count.
+
 When full=true, Linux installs zsh, pandoc, poppler utilities, TeX packages, fonts, and
 other tools needed by tests that otherwise self-skip. A ci/full* push also enables this
 set of tools. macOS installs Bash 5 for tests that need it while preserving its native

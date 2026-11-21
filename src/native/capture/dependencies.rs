@@ -820,9 +820,7 @@ fn read_snapshot_parallel(
     if pairs.is_empty() {
         return SnapshotWorkerOutput::default();
     }
-    let worker_count = std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(4)
+    let worker_count = crate::native::worker_threads::available(4)
         .min(pairs.len())
         .max(1);
     if worker_count <= 1 {

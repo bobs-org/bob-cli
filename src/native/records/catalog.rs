@@ -631,9 +631,7 @@ fn index_pending(
             })
             .collect();
     }
-    let workers = thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
+    let workers = crate::native::worker_threads::available(1)
         .clamp(1, 8)
         .min(pending.len());
     let chunk_size = pending.len().div_ceil(workers);

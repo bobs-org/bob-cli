@@ -61,6 +61,8 @@ impl Drop for TempDir {
 fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
+    // Cap worker pools: libtest already runs these tests in parallel.
+    command.env("BOB_MAX_THREADS", "2");
     let nonce = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let isolation = std::env::temp_dir()
         .join(format!("bob-cli-test-iso-{}-{nonce}", std::process::id()));

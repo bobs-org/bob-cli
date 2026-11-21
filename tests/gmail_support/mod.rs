@@ -180,6 +180,8 @@ impl GmailEnv {
             .env("GIT_AUTHOR_DATE", "2026-11-05T17:00:00Z")
             .env("GIT_COMMITTER_DATE", "2026-11-05T17:00:00Z")
             .env("BOB_GMAIL_CONSENT_SECS", "20")
+            // Cap worker pools: libtest already runs tests in parallel.
+            .env("BOB_MAX_THREADS", "2")
             .env("NO_COLOR", "1")
             .env(
                 "BOB_VAULT_SYNC_LOCK_FILE",

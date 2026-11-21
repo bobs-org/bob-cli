@@ -1637,8 +1637,12 @@ fn fixture_vault_path() -> PathBuf {
         .join("tests/fixtures/dataview_parity/vault")
 }
 
+/// A `bob` child with its worker pools capped: libtest already runs
+/// these tests in parallel.
 fn bob_command() -> Command {
-    Command::new(BOB_BIN)
+    let mut command = Command::new(BOB_BIN);
+    command.env("BOB_MAX_THREADS", "2");
+    command
 }
 
 fn copy_dir_all(from: &Path, to: &Path) -> io::Result<()> {

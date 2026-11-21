@@ -607,7 +607,7 @@ fn tasks_short_flags_files_stdin_and_comments_reach_filterless_slice() {
         format_output(&origin)
     );
 
-    let mut child = Command::new(BOB_BIN)
+    let mut child = bob_command()
         .arg("query")
         .arg("-b")
         .arg(fixture_vault_path())
@@ -1891,12 +1891,20 @@ fn assert_description_prefixes(
     }
 }
 
+/// A `bob` child with its worker pools capped: libtest already runs
+/// these tests in parallel.
+fn bob_command() -> Command {
+    let mut command = Command::new(BOB_BIN);
+    command.env("BOB_MAX_THREADS", "2");
+    command
+}
+
 fn run_fixture(args: &[&str]) -> Output {
     run_tasks(&fixture_vault_path(), args)
 }
 
 fn run_tasks(vault: &Path, args: &[&str]) -> Output {
-    Command::new(BOB_BIN)
+    bob_command()
         .arg("query")
         .arg("--bob-dir")
         .arg(vault)

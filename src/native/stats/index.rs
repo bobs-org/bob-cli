@@ -392,9 +392,7 @@ where
     if relative_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let worker_count = std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(4)
+    let worker_count = crate::native::worker_threads::available(4)
         .min(relative_paths.len())
         .max(1);
     let next = AtomicUsize::new(0);
@@ -460,9 +458,7 @@ fn parse_markdown_files_parallel(
     if buffers.is_empty() {
         return Vec::new();
     }
-    let worker_count = std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(4)
+    let worker_count = crate::native::worker_threads::available(4)
         .min(buffers.len())
         .max(1);
     let next = AtomicUsize::new(0);

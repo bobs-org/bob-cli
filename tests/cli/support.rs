@@ -30,10 +30,16 @@ pub(crate) const TEST_MISSING_CONFIG_FILE: &str =
 pub(crate) const TEST_MISSING_WEB_CLIP_ADAPTER: &str =
     "/definitely/missing/bob-cli-test-web-clip-adapter";
 pub(crate) const BOB_COMPLETION_TEST_DEADLINE_MS: &str = "10000";
+/// Worker-pool cap for every spawned `bob`. libtest already runs many
+/// tests at once, so a child sized to every CPU multiplies into hundreds
+/// of threads; two workers still exercise each pool's parallel path.
+/// Tests that exercise pool sizing set their own `BOB_MAX_THREADS`.
+pub(crate) const TEST_MAX_THREADS: &str = "2";
 
 pub(crate) fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
+    command.env("BOB_MAX_THREADS", TEST_MAX_THREADS);
     command.env("BOB_REF_JOBS_KICK", "off");
     command.env("BOB_GMAIL_KICK", "off");
     command.env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER);

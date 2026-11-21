@@ -400,6 +400,7 @@ unless their contract says otherwise.
 | `BOB_VAULT_SYNC_NOTIFY` | Desktop notification on each quarantined clobber | Exact value `0`, `false`, or `no` suppresses desktop notifications: the vault-sync clobber/conflict notifications and the Gmail archive receipt notification (`osascript` on macOS, `notify-send` on Linux). |
 | `BOB_VAULT_SYNC_STATE_FILE` | `$XDG_STATE_HOME/bob-cli/vault-sync.json`, else `$HOME/.local/state/bob-cli/vault-sync.json` | Vault-sync status JSON path. |
 | `BOB_CLI_USE_SCRIPT` | Native Rust path | Exact value `1` selects an embedded shell compatibility implementation where supported. See [compatibility shims](compatibility.md#compatibility-shims). |
+| `BOB_MAX_THREADS` | One per CPU | Positive integer caps parallel scan workers, including the `bob ref scan --jobs` default. |
 | `BOB_PROGRESS` | Progress only on TTY stderr | Exact `1` also enables progress on non-TTY stderr, including `bob ref create` fetch/capture/compose and `bob gkeep` spinners. Non-TTY progress uses lines; TTY spinners still redraw. |
 | `BOB_RUN_RECEIPT` | No receipt | JSON receipt path with an existing parent directory, for every command including script-backed commands and quiet-EPIPE exit 0: `{"schema_version":1,"exit_code":N,"finished_at":"<RFC3339>"}`. Writes atomically through a same-directory temporary file. Failure warns once on stderr without changing the exit code. Panic and unhandled signals produce no receipt. |
 

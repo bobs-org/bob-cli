@@ -274,9 +274,7 @@ impl PairCensus {
             cache_failures: BTreeSet<String>,
         }
 
-        let worker_count = std::thread::available_parallelism()
-            .map(|parallelism| parallelism.get())
-            .unwrap_or(4)
+        let worker_count = crate::native::worker_threads::available(4)
             .min(paths.len())
             .max(1);
         let next = AtomicUsize::new(0);

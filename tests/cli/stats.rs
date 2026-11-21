@@ -203,6 +203,30 @@ fn metrics_json_omits_points() {
         .any(|metric| metric["id"] == "worked"));
 }
 
+/// `BOB_MAX_THREADS` sizes the stats read and parse pools. Any cap,
+/// including values it must ignore, leaves the output unchanged.
+#[test]
+fn worker_cap_never_changes_stats_output() {
+    let run = |cap: Option<&str>| {
+        let mut command = stats_command();
+        match cap {
+            Some(cap) => command.env("BOB_MAX_THREADS", cap),
+            None => command.env_remove("BOB_MAX_THREADS"),
+        };
+        let output = command
+            .args(["stats", "-r", RANGE, "-f", "json"])
+            .output()
+            .expect("run bob stats -f json");
+        assert_success(&output);
+        assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+        stdout(&output)
+    };
+    let uncapped = run(None);
+    for cap in ["1", "3", "4096", "0", "-1", "many", ""] {
+        assert_eq!(run(Some(cap)), uncapped, "BOB_MAX_THREADS={cap:?}");
+    }
+}
+
 #[test]
 fn unknown_metric_is_exit_two_json_envelope() {
     let output = stats_command()

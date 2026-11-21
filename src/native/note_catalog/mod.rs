@@ -925,10 +925,7 @@ impl Facts {
 
 /// Worker count for catalog scans, bounded by the job size.
 fn read_thread_count(jobs: usize) -> usize {
-    std::thread::available_parallelism()
-        .map(|threads| threads.get().max(1))
-        .unwrap_or(4)
-        .min(jobs)
+    crate::native::worker_threads::available(4).min(jobs)
 }
 
 /// Read, parse, and classify every candidate prefix across worker
