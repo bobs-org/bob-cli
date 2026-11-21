@@ -124,6 +124,7 @@ mod task_children;
 mod task_command_shell;
 mod task_complete;
 pub(crate) mod task_dependencies;
+mod task_drawer_rename;
 mod task_fields;
 mod task_locator;
 mod task_merge;
@@ -211,6 +212,7 @@ pub(crate) enum NativeCommand {
     MoveDoneTasks,
     TaskMerge,
     TaskMove,
+    TaskRenameDrawer,
     TaskRestore,
     TaskSplit,
     TaskTidy,
@@ -334,6 +336,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::MoveDoneTasks => collect_done::run(args),
         NativeCommand::TaskMerge => task_merge::run(args),
         NativeCommand::TaskMove => task_move::run(args),
+        NativeCommand::TaskRenameDrawer => task_drawer_rename::run(args),
         NativeCommand::TaskRestore => task_move::run_restore(args),
         NativeCommand::TaskSplit => task_split::run(args),
         NativeCommand::TaskTidy => task_tidy::run(args),

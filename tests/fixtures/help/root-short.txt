@@ -19,8 +19,8 @@ Tasks and projects:
   logs         List and search phrase history from task logs
   projects     List and sync project notes via their ^prj tasks
   relations    List, hide, unhide, and rename relation labels
-  task         Task maintenance: archive, merge, move, reconcile, reroll,
-               restore, split, tidy
+  task         Task maintenance: archive, merge, move, reconcile, reroll, split,
+               tidy, and more
 
 Vault:
   albums       Inspect album notes

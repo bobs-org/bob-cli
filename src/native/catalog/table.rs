@@ -1751,6 +1751,11 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason: "Restore an archived task; run it from a terminal",
     },
     Excluded {
+        path: &["task", "rename-drawer"],
+        reason: "Vault-wide drawer rename, dry run by default; review and \
+                 apply it from a terminal",
+    },
+    Excluded {
         path: &["task", "tidy"],
         reason: "Vault-wide block repair, dry run by default; review and \
                  apply it from a terminal",

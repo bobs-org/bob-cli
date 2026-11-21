@@ -1005,6 +1005,16 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &["task", "rename-drawer"],
+        arg: "new",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "rename-drawer"],
+        arg: "old",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["task", "tidy"],
         arg: "route",
         kind: Kind::Route,

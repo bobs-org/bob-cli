@@ -1,31 +1,33 @@
-Task maintenance: archive, merge, move, reconcile, reroll, restore, split, tidy
+Task maintenance: archive, merge, move, reconcile, reroll, split, tidy, and more
 
 Every `bob task` command rewrites task lines across the whole vault.
 
 Usage: bob task <COMMAND>
 
 Commands:
-  archive    Move done and canceled tasks from area and project notes
-  merge      Fold tasks into a task, drawer, or note section
-  move       Move open tasks between notes and repair vault links
-  reconcile  Reconcile task statuses from the Pomodoro ledger and dependencies
-  reroll     Re-roll due prioritized tasks within their priority windows
-  restore    Restore archived tasks to their source notes
-  split      Split task notes into linked tasks
-  tidy       Repair open task blocks into canonical child order
+  archive        Move done and canceled tasks from area and project notes
+  merge          Fold tasks into a task, drawer, or note section
+  move           Move open tasks between notes and repair vault links
+  reconcile      Reconcile statuses from the Pomodoro ledger and dependencies
+  rename-drawer  Rename a task drawer and its project sections everywhere
+  reroll         Re-roll due prioritized tasks within their priority windows
+  restore        Restore archived tasks to their source notes
+  split          Split task notes into linked tasks
+  tidy           Repair open task blocks into canonical child order
 
 Options:
   -h, --help  Print help
 
 Examples:
-  bob task archive               Archive done and canceled tasks
-  bob task merge --dry-run       Preview folding tasks into another task
-  bob task move --dry-run        Preview moving tasks and repairing links
-  bob task split --dry-run       Preview splitting task notes into tasks
-  bob task reconcile --dry-run   Preview task status reconciliation
-  bob task reroll --dry-run      Preview re-rolling due prioritized tasks
-  bob task restore --dry-run     Preview restoring archived tasks home
-  bob task tidy                  Preview repairing open task blocks
+  bob task archive                 Archive done and canceled tasks
+  bob task merge --dry-run         Preview folding tasks into another task
+  bob task move --dry-run          Preview moving tasks and repairing links
+  bob task split --dry-run         Preview splitting task notes into tasks
+  bob task reconcile --dry-run     Preview task status reconciliation
+  bob task rename-drawer OLD NEW   Preview renaming a drawer everywhere
+  bob task reroll --dry-run        Preview re-rolling due prioritized tasks
+  bob task restore --dry-run       Preview restoring archived tasks home
+  bob task tidy                    Preview repairing open task blocks
 
 See also: bob plan, bob ready, bob freshness, bob projects, bob query
 Run 'bob task <command> --help' for more information on a command.

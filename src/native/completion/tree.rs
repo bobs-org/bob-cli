@@ -237,6 +237,9 @@ impl NativeCommand {
             }
             NativeCommand::TaskSplit => crate::native::task_split::build_cli(),
             NativeCommand::TaskTidy => crate::native::task_tidy::build_cli(),
+            NativeCommand::TaskRenameDrawer => {
+                crate::native::task_drawer_rename::build_cli()
+            }
             NativeCommand::ThemesColor => {
                 crate::native::pomodoro_themes::write::build_cli_color()
             }

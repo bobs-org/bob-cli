@@ -194,10 +194,17 @@ const TASK_MEMBERS: &[Member] = &[
     },
     Member {
         name: "reconcile",
-        about:
-            "Reconcile task statuses from the Pomodoro ledger and dependencies",
+        about: "Reconcile statuses from the Pomodoro ledger and dependencies",
         leaf: Leaf {
             native_command: NativeCommand::TaskStatusHooks,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "rename-drawer",
+        about: "Rename a task drawer and its project sections everywhere",
+        leaf: Leaf {
+            native_command: NativeCommand::TaskRenameDrawer,
             script_command: None,
         },
     },
@@ -264,14 +271,15 @@ const POMODORO_MEMBERS: &[Member] = &[
 
 const TASK_AFTER_HELP: &str = "\
 Examples:
-  bob task archive               Archive done and canceled tasks
-  bob task merge --dry-run       Preview folding tasks into another task
-  bob task move --dry-run        Preview moving tasks and repairing links
-  bob task split --dry-run       Preview splitting task notes into tasks
-  bob task reconcile --dry-run   Preview task status reconciliation
-  bob task reroll --dry-run      Preview re-rolling due prioritized tasks
-  bob task restore --dry-run     Preview restoring archived tasks home
-  bob task tidy                  Preview repairing open task blocks
+  bob task archive                 Archive done and canceled tasks
+  bob task merge --dry-run         Preview folding tasks into another task
+  bob task move --dry-run          Preview moving tasks and repairing links
+  bob task split --dry-run         Preview splitting task notes into tasks
+  bob task reconcile --dry-run     Preview task status reconciliation
+  bob task rename-drawer OLD NEW   Preview renaming a drawer everywhere
+  bob task reroll --dry-run        Preview re-rolling due prioritized tasks
+  bob task restore --dry-run       Preview restoring archived tasks home
+  bob task tidy                    Preview repairing open task blocks
 
 See also: bob plan, bob ready, bob freshness, bob projects, bob query
 Run 'bob task <command> --help' for more information on a command.";
@@ -1140,7 +1148,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "task",
-        about: "Task maintenance: archive, merge, move, reconcile, reroll, restore, split, tidy",
+        about: "Task maintenance: archive, merge, move, reconcile, reroll, split, tidy, and more",
         section: Section::TasksAndProjects,
         target: Target::Group(Group {
             members: TASK_MEMBERS,
@@ -2782,6 +2790,7 @@ mod tests {
             NativeCommand::MoveDoneTasks,
             NativeCommand::TaskMerge,
             NativeCommand::TaskMove,
+            NativeCommand::TaskRenameDrawer,
             NativeCommand::TaskRestore,
             NativeCommand::TaskSplit,
             NativeCommand::TaskTidy,
