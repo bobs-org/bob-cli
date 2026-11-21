@@ -3858,9 +3858,11 @@ staged text in this order: the task's routed move, its unique block ID
 (including an ID minted by pull-in; a duplicated `^id` is missing), then
 its cleaned description and settled ordinal among ID-less same-description
 tasks (unrelated twins count; earlier twins that minted an ID this batch
-do not). The counted ordinal out of range, or the row's own line no
-longer matching that identity, yields `landing: null` rather than another
-task's line. The landing's `line`, `ref`, and `block_id` come from that
+do not). That ordinal is counted in the snapshot the offer was planned
+against, then carried through later insertions; a stale final-text line
+is never recertified. The counted ordinal out of range, or the row's own
+line no longer matching that identity, yields `landing: null` rather than
+another task's line. The landing's `line`, `ref`, and `block_id` come from that
 final physical line; pre-write offer line numbers are not used. Dry-run
 and real-run JSON have the same jump object. Human output adds
 `↗ jump  “S”  dev.md:42`, or
@@ -3887,6 +3889,7 @@ includes top-level `pull_in` and `offers`. It writes no vault files.
 | JS13 | Two ID-less same-description dependents, `-p 1 -j 2` | Landing found (line 2), not null |
 | JS14 | Target identity cannot be settled | `landing: null`, exit 0, writes kept, lost receipt printed |
 | JS15 | `-j 9` while offers exist | `offer_jump_stale`, exit 2, vault byte-identical |
+| JS16 | Later item inserts a child above two ID-less Betas; `-j KEY` of the second (`-p none`, or `-p 1` of the earlier twin) | Landing is the second Beta's post-write line; unique `~2` key is unchanged |
 
 ## 13. Project dependencies
 

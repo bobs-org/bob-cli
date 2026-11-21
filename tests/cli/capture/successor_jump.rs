@@ -462,6 +462,81 @@ fn jump_two_idless_dependents_finds_the_second() {
     assert!(physical.contains("Beta"), "{physical}");
 }
 
+// JS16: a later item that inserts a child above two ID-less Betas must
+// not recertify the second offer from its stale line in the final text.
+// Unique-key selection stays on the original ~2 key after display numbers
+// would have shifted. An earlier picked twin that minted an ID leaves the
+// ID-less set, so the same key still lands on the remaining second Beta.
+#[test]
+fn jump_idless_lands_after_later_item_inserts_above() {
+    let deps = concat!(
+        "- [ ] #task Above ^above\n",
+        "- [?] #task Beta [dependsOn:: bar]\n",
+        "- [?] #task Beta [dependsOn:: bar]\n",
+    );
+    {
+        let (_temp, vault, day) = vault("bob-cli-jump-idless-insert", deps);
+        let preview = capture_json(&vault, &day, &[], "!sase:bar", true);
+        let offers = preview["task_complete"]["unblocked"]
+            .as_array()
+            .expect("unblocked offers");
+        assert_eq!(offers.len(), 2, "{preview}");
+        let second_key = offers[1]["offer"]["key"]
+            .as_str()
+            .expect("second offer key")
+            .to_string();
+        assert!(
+            second_key.ends_with("~2"),
+            "unique key should keep the ID-less duplicate suffix: {second_key}"
+        );
+
+        let json = capture_json(
+            &vault,
+            &day,
+            &["-p", "none", "-j", &second_key],
+            "!sase:bar\n\n@deps+above\n- extra note",
+            false,
+        );
+        assert_eq!(json["jump"]["key"], second_key);
+        assert_eq!(json["jump"]["outcome"], "left");
+        let (line, _, physical) = landing_line(&json, &vault);
+        assert_eq!(line, 4, "{json}");
+        assert!(physical.contains("Beta"), "{physical}");
+        assert!(
+            !physical.contains("extra note"),
+            "must not land on the inserted child: {physical}"
+        );
+    }
+
+    let (_temp, vault, day) = vault("bob-cli-jump-idless-insert-pick", deps);
+    let preview = capture_json(&vault, &day, &[], "!sase:bar", true);
+    let second_key = preview["task_complete"]["unblocked"][1]["offer"]["key"]
+        .as_str()
+        .expect("second offer key")
+        .to_string();
+    let json = capture_json(
+        &vault,
+        &day,
+        &["-p", "1", "-j", &second_key],
+        "!sase:bar\n\n@deps+above\n- extra note",
+        false,
+    );
+    assert_eq!(json["jump"]["key"], second_key, "{json}");
+    assert_eq!(json["jump"]["outcome"], "left", "{json}");
+    let (line, text, physical) = landing_line(&json, &vault);
+    assert_eq!(line, 4, "{json}");
+    assert!(physical.contains("Beta"), "{physical}");
+    assert!(
+        !physical.contains('^'),
+        "second Beta should stay ID-less after the earlier twin minted: {physical}"
+    );
+    let first = text.lines().nth(2).expect("first Beta after insert");
+    assert!(
+        first.contains('^'),
+        "earlier twin should mint an ID: {first}"
+    );
+}
+
 // JS15: `-j 9` while offers exist is a write-free stale refusal.
 #[test]
 fn jump_out_of_range_while_offers_exist_refuses_write_free() {

@@ -1582,7 +1582,9 @@ pub(super) fn apply_successor_net_post_pass(
             record.offers.retain(|offer| surviving.contains(&offer.key));
         }
     }
-    settle_idless_offer_ordinals(items, planner, bob_dir, &tasks_settings);
+    // ID-less ordinals are captured per item against the snapshot
+    // `row.line` was planned in; a later recount here would use a stale
+    // line in the final text and certify another task.
     // A group with no surviving selectable row is silent, folds included.
     super::keep_moving_net::prune_empty_folds(items);
     // Relation groups with no surviving row are silent too; the
@@ -1991,18 +1993,10 @@ fn successor_task_lookup(
             task.block_id.as_deref() == Some(row.block_id.as_str())
         });
     }
-    if row.trigger == crate::native::task_complete::PROJECT_CREATED_TRIGGER
-        || row.trigger == crate::native::task_complete::NOTE_PULL_TRIGGER
-        || row.offer.as_ref().is_some_and(|offer| {
-            offer.group == "keep_moving" || offer.group == "note_pull"
-        })
-    {
-        return successor_idless_task_lookup(row, &tasks, bob_dir);
-    }
-    tasks
-        .iter()
-        .find(|task| task.line_index + 1 == row.line)
-        .cloned()
+    // ID-less identity is the ordinal captured in the snapshot `row.line`
+    // was planned in. A later insertion makes that line stale, so exact
+    // line lookup would drop this offer or certify another twin.
+    successor_idless_task_lookup(row, &tasks, bob_dir)
 }
 
 /// Resolve a successor row in final staged text. Unlike the status lookup,
@@ -2086,9 +2080,12 @@ fn successor_idless_task_lookup(
 }
 
 /// Count each surviving ID-less offer among equal-description ID-less
-/// tasks in the final staged note. Picks that minted an ID have left
-/// that set; unrelated twins that were never offers still count.
-fn settle_idless_offer_ordinals(
+/// tasks in the snapshot this item just planned. `row.line` is valid
+/// there; later items may insert above it. Picks that minted an ID
+/// have already left that set; unrelated twins that were never offers
+/// still count. Call after each item is planned, before later items
+/// shift the note. Already-settled rows (note-pull, project) stay.
+pub(super) fn settle_idless_offer_ordinals(
     items: &mut [PlannedCaptureItem],
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
@@ -2100,7 +2097,10 @@ fn settle_idless_offer_ordinals(
             let Some(offer) = row.offer.as_mut() else {
                 return;
             };
-            if offer.selected || !row.block_id.is_empty() {
+            if offer.settled_ordinal.is_some()
+                || offer.selected
+                || !row.block_id.is_empty()
+            {
                 return;
             }
             let absolute = bob_dir.join(&row.note_path);

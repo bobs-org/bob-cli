@@ -13,6 +13,23 @@ pub(super) fn clip_plan_error(
     }
 }
 
+fn settle_latest_idless_offer_ordinals(
+    items: &mut [PlannedCaptureItem],
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) {
+    let Some(item) = items.last_mut() else {
+        return;
+    };
+    super::task_complete::settle_idless_offer_ordinals(
+        std::slice::from_mut(item),
+        planner,
+        bob_dir,
+        tasks_settings,
+    );
+}
+
 pub(super) fn append_clip_plan_warnings(
     plan: &capture_clip::ClipPlan,
     warnings: &mut Vec<CaptureWarning>,
@@ -377,6 +394,8 @@ pub(super) fn plan_capture_batch_with_config_path(
         capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
     let mut block_tracker = PomodoroBlockTracker::new(day_relative.clone());
     let task_settings = note_tasks::read_settings(&request.bob_dir);
+    let tasks_plugin_settings =
+        crate::native::task_status_hooks::read_tasks_settings(&request.bob_dir);
     let mut task_tracker = TaskBlockTracker::new(task_settings.clone());
     let mut section_tracker = SectionBlockTracker::new();
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
@@ -828,6 +847,12 @@ pub(super) fn plan_capture_batch_with_config_path(
                 );
                 planned.result.gmail = gmail_previews[items.len()].clone();
                 items.push(planned);
+                settle_latest_idless_offer_ordinals(
+                    &mut items,
+                    &mut planner,
+                    &request.bob_dir,
+                    &tasks_plugin_settings,
+                );
             }
             for member in &preflight.members {
                 recorded_past_windows.push((member.start_min, member.end_min));
@@ -871,6 +896,12 @@ pub(super) fn plan_capture_batch_with_config_path(
                 }
                 planned.result.gmail = gmail_previews[items.len()].clone();
                 items.push(planned);
+                settle_latest_idless_offer_ordinals(
+                    &mut items,
+                    &mut planner,
+                    &request.bob_dir,
+                    &tasks_plugin_settings,
+                );
                 dedupe_fanout_group_warnings(
                     &mut warnings,
                     warning_start,
@@ -968,6 +999,12 @@ pub(super) fn plan_capture_batch_with_config_path(
             );
             planned.result.gmail = gmail_previews[items.len()].clone();
             items.push(planned);
+            settle_latest_idless_offer_ordinals(
+                &mut items,
+                &mut planner,
+                &request.bob_dir,
+                &tasks_plugin_settings,
+            );
             dedupe_fanout_group_warnings(
                 &mut warnings,
                 warning_start,
