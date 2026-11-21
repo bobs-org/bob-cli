@@ -19,6 +19,7 @@ metadata:
     - decisions/task-move-never-advances-the-walk
     - decisions/alt-n-answers-from-due-rows
     - decisions/ctrl-enter-leaves-pre
+    - decisions/successor-jump-parks-the-walk
 ---
 
 **Applies to.** bob-plugins (bob-navigation-hotkeys, task-status-cycler,
@@ -82,4 +83,6 @@ Superseded in part: Ctrl+Shift+M only — a move never advances the walk; see
 [[decisions/task-move-never-advances-the-walk]]. The off-landing stay no
 longer holds for `Alt+N`, which answers from any due walk row; see
 [[decisions/alt-n-answers-from-due-rows]]. Ctrl+Enter now leaves PRE from
-the last chore; see [[decisions/ctrl-enter-leaves-pre]].
+the last chore; see [[decisions/ctrl-enter-leaves-pre]]. A pinned successor
+close parks the walk instead of advancing; see
+[[decisions/successor-jump-parks-the-walk]].

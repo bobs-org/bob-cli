@@ -2608,7 +2608,9 @@ resolves `{picks: [{key, destination?}], closes?: [{key,
 outcome: "done"|"cancelled", reason?}], jump?: {key}}` or `null`.
 A jump-only result is a commit, not `null`; it may contain an empty
 `picks` array. The caller keeps the pin independent from verdicts and
-marks, then focuses that offer after all writes land. Models without the
+marks, then focuses that offer after all writes land. On a `]s` landing,
+that landing parks the walk at the closed row's neighbour instead of
+advancing; focusing the pinned task never stamps it. Models without the
 capability keep the v4 behavior.
 
 **Notice API v2 (keep-moving).** `api.notice.version` is `2`.
@@ -3803,6 +3805,8 @@ surface that owns them and are marked UI-only in the fixture.
 
 `-j, --jump-offer <N|KEY>` pins one successor offer for navigation after
 the capture. The pin does not change the selected offers or their verdicts.
+On a `]s` landing, a committed pin parks the walk at the closed row's
+neighbour instead of advancing; focusing the pinned task never stamps it.
 It can be combined with `-p`, `-x`, and `-X`; a verdict wins for the
 reported outcome (`done` or `cancelled`), otherwise a selected row reports
 `pulled_in`, and an unselected row reports `left`. `-j` alone is not a

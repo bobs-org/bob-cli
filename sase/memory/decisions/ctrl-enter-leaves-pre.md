@@ -10,8 +10,10 @@ summary:
   A wrap back to a skipped chore still stays, and lane rows still never
   step onto POST."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-11-16
+  superseded_by:
+    - decisions/successor-jump-parks-the-walk
 ---
 
 **Applies to.** bob-plugins (bob-navigation-hotkeys), bob-cli docs, and the Bob
@@ -68,3 +70,6 @@ mistake, or the guard swallows deliberate keys.
 Links [[decisions/answering-advances-the-walk]] (the walk-advance rule this
 changes for the last PRE chore) and [[decisions/review-walk-is-tiered]] (the
 tier order the exit lands in).
+
+Superseded in part: a pinned successor close parks the walk instead of the
+PRE-exit advance; see [[decisions/successor-jump-parks-the-walk]].

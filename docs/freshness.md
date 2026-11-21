@@ -756,7 +756,11 @@ same default as any other generic stamp.
    moves on to the next remaining review item in the same keystroke —
    including a resolving Task Card commit. Ctrl+Shift+M never advances: it moves the
    task and follows it to its destination note, `<C-o>` returns to the source, and the
-   next `]s` resumes the walk where the moved row was. The walk follows rows by
+   next `]s` resumes the walk where the moved row was. A close from a `]s`
+   landing whose successor card committed with a Ctrl+J jump pin lands on the
+   pinned task and parks the walk; the next `]s` / `[s` resumes at the closed
+   row's neighbour. Focusing the pinned task never stamps it and never uses up
+   a review landing. The walk follows rows by
    note and line text and moves only from the row just answered, so a move, a
    Work Log, Rotten Log, or SCHEDULE LOG insert, or any other line shift never makes an
    answer or `]s` skip rows or jump ahead. Alt+F is the one answer that
@@ -816,7 +820,7 @@ inbox task (every non-closing Ctrl+Shift+P answer, Ctrl+Shift+Enter, and Alt+N a
 as the last step before writing, then answers → next); route to a
 project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence
 (Ctrl+Shift+P `b` → next); wording wrong (edit, then Alt+F stays);
-already done (Ctrl+Enter → next, never onto a checklist row); recurring occurrence due
+already done (Ctrl+Enter → next, never onto a checklist row; a jump pin parks and lands on the pin); recurring occurrence due
 (Ctrl+Enter done · Ctrl+Shift+Enter today · Ctrl+Shift+P reschedule · `]s` skip — never stamped).
 
 A landing is the exact row `]s` just put the cursor on, in today's walk:
@@ -836,7 +840,7 @@ live current review task exists and is not selected, `]s` / `[s` (and
 Ctrl+Alt+J/K) first return to it: `[s` returns too, the count is ignored,
 there is a `<C-o>` jump back, the landing is re-armed, and `[S` / `]S` group
 jumps never return. It ends on a new landing, an answer on its landing, a landed
-Ctrl+Shift+M park, a stamp or applied decision-card choice on the row
+Ctrl+Shift+M park, a pinned-close park, a stamp or applied decision-card choice on the row
 itself, an empty queue, the day change or a reload, or when its row is no
 longer due with the same path and text; a stamp or answer elsewhere does
 not end it.
@@ -1817,6 +1821,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   a checklist stage. The nav and freshness docs describe the stage-end tick and
   continuous walk across stage boundaries.
 - 2026-11-16: Ctrl+Enter on the last PRE chore lands on the next review group with a 1.5 s extra-press guard (nav 2.83.0).
+- 2026-11-21: a successor-card Ctrl+J jump pin lands on the pinned offer after the close and parks the walk; the next ]s resumes at the closed row's neighbour (nav 2.95.0 / successors v5 / reviewWalk v2 / notice v5, cycler 1.52.0 / api v6, Mac Capture Pull-In card).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

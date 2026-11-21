@@ -63,7 +63,7 @@ the advance walks through).
 
 ## Answering A Walk Landing Advances The Walk {#answering-advances-the-walk}
 
-**Status:** Superseded in part by [A Task Move Never Advances The Walk](#task-move-never-advances-the-walk), [Alt+N Answers From Due Rows](#alt-n-answers-from-due-rows), [Ctrl+Enter Carries The Last PRE Chore Into The Next Group](#ctrl-enter-leaves-pre)
+**Status:** Superseded in part by [A Task Move Never Advances The Walk](#task-move-never-advances-the-walk), [Alt+N Answers From Due Rows](#alt-n-answers-from-due-rows), [Ctrl+Enter Carries The Last PRE Chore Into The Next Group](#ctrl-enter-leaves-pre), [A Jump Successor Lands Last And Parks The Walk](#successor-jump-parks-the-walk)
 
 A gesture that started on the row ]s just landed on, and whose committed write takes that row out of today's walk, advances the walk exactly once to the next remaining review item: Ctrl+Enter close, Ctrl+Alt+F, Alt+N, the Ctrl+Shift+Enter link, a resolving Task Card commit, and Ctrl+Shift+M. Alt+F is the one stay answer; Ctrl+Enter never crosses the PRE/POST boundary; a short gesture lock swallows double presses; every walk landing records a <C-o> jump.
 
@@ -128,7 +128,9 @@ Superseded in part: Ctrl+Shift+M only — a move never advances the walk; see
 [A Task Move Never Advances The Walk](#task-move-never-advances-the-walk). The off-landing stay no
 longer holds for `Alt+N`, which answers from any due walk row; see
 [Alt+N Answers From Due Rows](#alt-n-answers-from-due-rows). Ctrl+Enter now leaves PRE from
-the last chore; see [Ctrl+Enter Carries The Last PRE Chore Into The Next Group](#ctrl-enter-leaves-pre).
+the last chore; see [Ctrl+Enter Carries The Last PRE Chore Into The Next Group](#ctrl-enter-leaves-pre). A pinned successor
+close parks the walk instead of advancing; see
+[A Jump Successor Lands Last And Parks The Walk](#successor-jump-parks-the-walk).
 
 ## bob-cli Releases Ride a Daily Train {#bob-cli-releases-ride-a-daily-train}
 
@@ -675,7 +677,7 @@ yes`, `g4_close_policy = keep`, and `memory_consumption_record = yes`;
 
 ## Ctrl+Enter Carries The Last PRE Chore Into The Next Group {#ctrl-enter-leaves-pre}
 
-**Status:** Accepted
+**Status:** Superseded in part by [A Jump Successor Lands Last And Parks The Walk](#successor-jump-parks-the-walk)
 
 On the last PRE row the walk landed on, Ctrl+Enter completes the chore and lands where ]s would. A short guard swallows a repeated rapid press. A wrap back to a skipped chore still stays, and lane rows still never step onto POST.
 
@@ -733,6 +735,9 @@ mistake, or the guard swallows deliberate keys.
 Links [Answering A Walk Landing Advances The Walk](#answering-advances-the-walk) (the walk-advance rule this
 changes for the last PRE chore) and [Review Walk Is Tiered With Daily Lane Review](#review-walk-is-tiered) (the
 tier order the exit lands in).
+
+Superseded in part: a pinned successor close parks the walk instead of the
+PRE-exit advance; see [A Jump Successor Lands Last And Parks The Walk](#successor-jump-parks-the-walk).
 
 ## Decay Decisions Are Available Immediately {#decay-decisions-are-available-immediately}
 
@@ -3263,6 +3268,50 @@ alone is retired; a project's own prerequisites and date still originate on its 
 
 Superseded in part: the parent project's trigger (c) pull-in is now offered and linked
 only when picked. See [Unblocked Tasks Are Offered, Never Auto-Linked](#unblocked-tasks-are-offered).
+
+## A Jump Successor Lands Last And Parks The Walk {#successor-jump-parks-the-walk}
+
+**Status:** Accepted
+
+Ctrl+J pins at most one successor offer per card. After every write lands, Bob focuses that task; a pinned close from a ]s landing parks the walk at the closed row's neighbour instead of advancing.
+
+**Applies to.** bob-plugins (bob-navigation-hotkeys, task-status-cycler),
+Bob Mac Capture, bob-cli docs, and the Bob vault review ritual.
+
+**Claim.** Ctrl+J pins at most one successor offer per card. The pin is
+navigation only. After every write lands, Bob focuses that task. A pinned
+close that started on a `]s` landing parks the walk at the closed row's
+neighbour instead of advancing. The pin wins over Mac Capture's open-notes
+landing.
+
+**Why.** The research bottom line, plus the park precedent in
+[A Task Move Never Advances The Walk](#task-move-never-advances-the-walk): Bryan wants to land on the
+chosen successor and keep working there, so the walk must wait.
+
+Rejected alternatives:
+
+- **Keying the pin off the ⌘↩ submit modifier.** That couples navigation to
+  one capture key and leaves Obsidian closes without a pin.
+- **Landing after the walk advance.** Two landings: the next review row,
+  then the pin. The walk would already have left the closed neighbour.
+- **Persisting the pin in the vault.** The pin is not a write; it dies with
+  the card.
+
+Evidence:
+`research:202611/successor_jump_pin/successor_jump_pin.md`;
+`plan:202611/successor_jump_pin.md`;
+bob-navigation-hotkeys 2.95.0 (successors v5, reviewWalk v2, notice v5);
+task-status-cycler 1.52.0 (api v6);
+`docs/freshness.md` §§6/13 and `docs/task-dependencies.md` §12.24 in bob-cli.
+
+**Cost.** Reaching the next review item after a pinned close takes one `]s`.
+
+**Reopens when.** Bryan presses `]s` after nearly every pinned close.
+
+Links [A Task Move Never Advances The Walk](#task-move-never-advances-the-walk) (the park this close
+reuses), [Answering A Walk Landing Advances The Walk](#answering-advances-the-walk) (the advance this close
+stays out of), and [Ctrl+Enter Carries The Last PRE Chore Into The Next Group](#ctrl-enter-leaves-pre) (the PRE-exit a
+pinned last-chore close replaces).
 
 ## sync-sorts-event-task-links {#sync-sorts-event-task-links}
 
