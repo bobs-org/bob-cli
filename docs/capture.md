@@ -9848,7 +9848,7 @@ types `#` and `\` types `%`.
 ## `bob capture-complete`
 
 ```bash
-bob capture-complete --cursor BYTE [-a|--all-tasks] [-A|--archived-notes] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-n|--next-missing-field] [-F|--record-field KEY] [--] [TEXT]...
+bob capture-complete --cursor BYTE [-a|--all-tasks] [-A|--archived-notes] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-L|--links-only] [-n|--next-missing-field] [-F|--record-field KEY] [-S|--source-note PATH] [--] [TEXT]...
 ```
 
 In a `<` source slot, `< +` / `< +query` opens the
@@ -10399,7 +10399,16 @@ note ordering, with document order breaking ties within a note. Inbound counts
 resolve exact vault-relative targets and unique note stems, and do not count
 self-links. This covers `[[note`, `[[##…`, `[[^^…`, and record
 link-value suggestions. Tiers follow the same path rules as `//`
-([Going to a note with '//'](#going-to-a-note-with)). Target-scoped
+([Going to a note with '//'](#going-to-a-note-with)). Pass `-L/--links-only`
+to complete wikilinks in plain prose instead of a capture draft: only note,
+heading, and block fields complete (`[[note`, `[[#...]]`, `[[##...]]`,
+`[[^^...]]`), every other caret position returns an empty success, and capture
+grammar — routes, markers, records, Work Log phrases, and `((` — never applies,
+including the Work Log block-link suppression. Pair it with `-S/--source-note
+PATH` so same-note `[[#...]]` and `[[#^...]]` resolve against that
+vault-relative note; without it those fields return an empty success. For
+example, `bob capture-complete -L -S sase.md -c 9 -f json -- 'See [[#De'`
+lists that note's matching headings. Target-scoped
 completion (`[[note#`, `[[note#^`, `[[#`, `[[#^`) and link resolution are
 unchanged, so an archived note stays linkable. A `((query` token in free
 text — at line start or after a space or tab, outside code and existing

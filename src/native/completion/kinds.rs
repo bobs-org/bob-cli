@@ -857,6 +857,13 @@ const TABLE: &[Entry] = &[
         arg: "record-field",
         kind: Kind::FreeText,
     },
+    // Vault-relative note that plain-prose same-note links resolve
+    // against.
+    Entry {
+        path: &["capture-complete"],
+        arg: "source-note",
+        kind: Kind::VaultNote,
+    },
     Entry {
         path: &[],
         arg: "email",

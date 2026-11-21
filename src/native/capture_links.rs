@@ -465,6 +465,17 @@ pub(crate) fn block_candidates(
 }
 
 impl LinkCompletionField {
+    /// `true` for `[[#...]]` / `[[#^...]]` fields, which resolve against
+    /// the caller's current note. Plain-prose callers (`--links-only`)
+    /// must supply that note explicitly.
+    pub(crate) fn is_same_note_scope(&self) -> bool {
+        matches!(
+            self.target,
+            LinkCompletionTarget::Heading(LinkSearchScope::Current(_))
+                | LinkCompletionTarget::Block(LinkSearchScope::Current(_))
+        )
+    }
+
     fn replacement_text(&self, mut replacement: String) -> String {
         if self.suffix_close {
             replacement.push_str("]]");

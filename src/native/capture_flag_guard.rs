@@ -108,13 +108,15 @@ pub(crate) fn capture_complete_spec() -> GuardSpec {
         long("cursor", true),
         FORMAT,
         HELP,
+        long("links-only", false),
         long("next-missing-field", false),
         long("record-field", true),
+        long("source-note", true),
     ];
     GuardSpec {
         longs: LONGS,
-        short_values: "bcfF",
-        short_flags: "aAChn",
+        short_values: "bcfFS",
+        short_flags: "aAChLn",
         equals_only_shorts: "",
     }
 }

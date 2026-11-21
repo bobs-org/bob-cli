@@ -27,6 +27,8 @@ On a first-level `- ^` or `- :` bullet in a sealed project-note item (`@<route>^
 
 When the cursor is inside an Obsidian wikilink, wikilink completion takes precedence over capture-marker completion. Note completion covers `[[note` and offers Markdown note paths, stems, and aliases. Heading and block completion cover target-qualified links like `[[note#Head` and `[[note#^block`, same-destination links like `[[#Head`, and vault-wide searches like `[[##Head` and `[[^^block`. Vault-wide suggestions (`[[note`, `[[##Head`, `[[^^block`, and record link values) list living notes first; archived and hidden notes follow. Candidate replacements own the missing closing delimiter when needed and report the final cursor offset. A `((query` token in free text opens `wikilink_task`: every task in the vault-wide catalog (open and completed history, including ID-less rows), grouped this-note / In Progress / Next / other open notes / completed, with backend-formatted `[[target#^id]]` replacements, `link_target`, `cursor_after`, disabled reasons, and a vault-scoped picker descriptor (`kind: wikilink_task`, `scope_token: "(("`). Shell completion returns nothing for this field. The replacement covers the `((query` token (including a closed `((query))`), and `query` is the bytes after `((` up to the cursor.
 
+Pass -L/--links-only to complete wikilinks in plain prose instead of a capture draft: only note, heading, and block fields complete (`[[note`, `[[#...]]`, `[[##...]]`, `[[^^...]]`), every other caret position returns an empty success, and capture grammar — routes, markers, records, Work Log phrases, and `((` — never applies, including the Work Log block-link suppression. Pair it with -S/--source-note PATH so same-note `[[#...]]` and `[[#^...]]` resolve against that vault-relative note; without it those fields return an empty success.
+
 Usage: bob capture-complete [OPTIONS] --cursor <BYTE> [TEXT]...
 
 Arguments:
@@ -58,11 +60,17 @@ Options:
   -h, --help
           Show help
 
+  -L, --links-only
+          Complete wikilinks in plain prose: only note, heading, and block fields complete, capture grammar never applies
+
   -n, --next-missing-field
           Offer the first missing required field of the record item containing the cursor
 
   -F, --record-field <KEY>
           Offer values for declared record field KEY on the item containing the cursor, even when no bullet exists
+
+  -S, --source-note <PATH>
+          Vault-relative note same-note [[#...]] links resolve against (requires --links-only)
 
 Examples:
   bob capture-complete --cursor 1 --format json -- '@'
@@ -76,6 +84,8 @@ Examples:
   bob capture-complete -a -c 6 -f json -- '@file+'
   bob capture-complete -a -c 8 -f json -- '@@file'
   bob capture-complete -c 5 -- '[[sas'
+  bob capture-complete -L -c 9 -f json -- 'Read [[da because of the outage'
+  bob capture-complete -L -S sase.md -c 10 -f json -- 'See [[#De'
   bob capture-complete -c 1 -- '^'
   bob capture-complete -c 1 -- ':'
   bob capture-complete -c 1 -f json -- '/'

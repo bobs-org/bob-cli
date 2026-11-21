@@ -132,8 +132,10 @@ impl RecordVault {
                 all_tasks: false,
                 archived_notes: false,
                 closed_tasks: false,
+                links_only: false,
                 next_missing_field: next_missing,
                 record_field,
+                source_note: None,
             })
             .expect("targeted complete")
         } else {

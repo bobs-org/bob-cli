@@ -49,8 +49,10 @@ pub(super) struct CompleteRequest<'a> {
     pub(super) all_tasks: bool,
     pub(super) archived_notes: bool,
     pub(super) closed_tasks: bool,
+    pub(super) links_only: bool,
     pub(super) next_missing_field: bool,
     pub(super) record_field: Option<&'a str>,
+    pub(super) source_note: Option<&'a str>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -68,14 +70,21 @@ pub(super) fn build_result(
         all_tasks,
         archived_notes: false,
         closed_tasks,
+        links_only: false,
         next_missing_field: false,
         record_field: None,
+        source_note: None,
     })
 }
 
 pub(super) fn build_result_for(
     request: &CompleteRequest<'_>,
 ) -> Result<CaptureCompleteResult, CompleteError> {
+    if request.links_only {
+        let mut result = links_only_result(request)?;
+        result.initial_selection = initial_selection(request.raw_text, &result);
+        return Ok(result);
+    }
     let cursor_field =
         capture_language::completion_field_at(request.raw_text, request.cursor);
     let directive_owns_cursor = cursor_field
@@ -105,6 +114,122 @@ pub(super) fn build_result_for(
     let mut result = build_result_inner(request)?;
     result.initial_selection = initial_selection(request.raw_text, &result);
     Ok(result)
+}
+
+/// Plain-prose completion for `--links-only`: only wikilink note,
+/// heading, and block fields complete. Capture grammar never applies, so
+/// routes, markers, records, Work Log phrases, and `((` stay literal, and
+/// the Work Log block-link suppression does not apply.
+fn links_only_result(
+    request: &CompleteRequest<'_>,
+) -> Result<CaptureCompleteResult, CompleteError> {
+    let has_source = request.source_note.is_some_and(|note| !note.is_empty());
+    let current_note = request.source_note.unwrap_or("");
+    let Some(field) = capture_links::completion_field_at(
+        request.raw_text,
+        request.cursor,
+        current_note.to_string(),
+    ) else {
+        return Ok(CaptureCompleteResult::empty(request.cursor));
+    };
+    // Same-note `[[#...]]` / `[[#^...]]` fields need an explicit
+    // `--source-note`; without one they stay an empty success.
+    if field.is_same_note_scope() && !has_source {
+        return Ok(CaptureCompleteResult::empty(request.cursor));
+    }
+    wikilink_field_result(request.bob_dir, request.cursor, &field)
+}
+
+fn wikilink_field_result(
+    bob_dir: &Path,
+    cursor: usize,
+    field: &capture_links::LinkCompletionField,
+) -> Result<CaptureCompleteResult, CompleteError> {
+    let index =
+        capture_links::NoteIndex::read(bob_dir).map_err(CompleteError::io)?;
+    let candidates = match field.context {
+        CompletionContext::WikilinkNote => Candidates::WikilinkNote(
+            capture_links::note_candidates(field, &index),
+        ),
+        CompletionContext::WikilinkHeading => Candidates::WikilinkHeading(
+            capture_links::heading_candidates(field, &index),
+        ),
+        CompletionContext::WikilinkBlock => Candidates::WikilinkBlock(
+            capture_links::block_candidates(field, &index),
+        ),
+        CompletionContext::Route
+        | CompletionContext::Section
+        | CompletionContext::PomodoroBlockId
+        | CompletionContext::TaskBlockId
+        | CompletionContext::ProjectTaskBlockId
+        | CompletionContext::ProjectTaskMove
+        | CompletionContext::PomodoroName
+        | CompletionContext::PomodoroStartName
+        | CompletionContext::PomodoroPastName
+        | CompletionContext::PomodoroPastSegment
+        | CompletionContext::Task
+        | CompletionContext::Drawer
+        | CompletionContext::ActiveTask
+        | CompletionContext::TaskLink
+        | CompletionContext::TaskGoto
+        | CompletionContext::NoteGoto
+        | CompletionContext::TaskParent
+        | CompletionContext::TaskDependency
+        | CompletionContext::BlockedTask
+        | CompletionContext::RelationTo
+        | CompletionContext::RelationFrom
+        | CompletionContext::RelationLabel
+        | CompletionContext::TaskComplete
+        | CompletionContext::TaskType
+        | CompletionContext::Directive
+        | CompletionContext::PomodoroSplitBase
+        | CompletionContext::PomodoroSplitType
+        | CompletionContext::PomodoroMergeSrc
+        | CompletionContext::PomodoroMergeDest
+        | CompletionContext::WorkLog
+        | CompletionContext::NotebookSectionBullet
+        | CompletionContext::WikilinkTask
+        | CompletionContext::RecordTarget
+        | CompletionContext::RecordField
+        | CompletionContext::RecordValue => {
+            unreachable!("link field context")
+        }
+    };
+
+    Ok(CaptureCompleteResult {
+        ok: true,
+        schema_version: SCHEMA_VERSION,
+        grammar: capture_language::GRAMMAR_REVISION,
+        cursor,
+        replacement: Replacement {
+            start: field.replacement.0,
+            end: field.replacement.1,
+        },
+        context: Some(field.context),
+        initial_selection: None,
+        subject: None,
+        candidates,
+        target: None,
+        theme_suggestion: None,
+        r#override: None,
+        block_id: None,
+        warnings: index.warnings(),
+        query: None,
+        owner: None,
+        relation: None,
+        relation_cancel: None,
+        relation_complete: None,
+        relation_merge: None,
+        relation_successor: None,
+        picker: None,
+        note_goto: None,
+        hidden_count: None,
+        one_off: None,
+        project_task_move: None,
+        record: None,
+        diagnostics: Vec::new(),
+        place_menu: None,
+    })
 }
 
 fn build_result_inner(
@@ -146,97 +271,14 @@ fn build_result_inner(
     ) {
         // In Work Log text, block-link candidates are suppressed because
         // entries reject block links; note and heading completion keeps
-        // working.
+        // working. Plain-prose (`--links-only`) callers never capture, so
+        // the suppression does not apply there.
         if matches!(field.context, CompletionContext::WikilinkBlock)
             && cursor_in_close_log_text(raw_text, cursor)
         {
             return Ok(CaptureCompleteResult::empty(cursor));
         }
-        let index = capture_links::NoteIndex::read(bob_dir)
-            .map_err(CompleteError::io)?;
-        let candidates = match field.context {
-            CompletionContext::WikilinkNote => Candidates::WikilinkNote(
-                capture_links::note_candidates(&field, &index),
-            ),
-            CompletionContext::WikilinkHeading => Candidates::WikilinkHeading(
-                capture_links::heading_candidates(&field, &index),
-            ),
-            CompletionContext::WikilinkBlock => Candidates::WikilinkBlock(
-                capture_links::block_candidates(&field, &index),
-            ),
-            CompletionContext::Route
-            | CompletionContext::Section
-            | CompletionContext::PomodoroBlockId
-            | CompletionContext::TaskBlockId
-            | CompletionContext::ProjectTaskBlockId
-            | CompletionContext::ProjectTaskMove
-            | CompletionContext::PomodoroName
-            | CompletionContext::PomodoroStartName
-            | CompletionContext::PomodoroPastName
-            | CompletionContext::PomodoroPastSegment
-            | CompletionContext::Task
-            | CompletionContext::Drawer
-            | CompletionContext::ActiveTask
-            | CompletionContext::TaskLink
-            | CompletionContext::TaskGoto
-            | CompletionContext::NoteGoto
-            | CompletionContext::TaskParent
-            | CompletionContext::TaskDependency
-            | CompletionContext::BlockedTask
-            | CompletionContext::RelationTo
-            | CompletionContext::RelationFrom
-            | CompletionContext::RelationLabel
-            | CompletionContext::TaskComplete
-            | CompletionContext::TaskType
-            | CompletionContext::Directive
-            | CompletionContext::PomodoroSplitBase
-            | CompletionContext::PomodoroSplitType
-            | CompletionContext::PomodoroMergeSrc
-            | CompletionContext::PomodoroMergeDest
-            | CompletionContext::WorkLog
-            | CompletionContext::NotebookSectionBullet
-            | CompletionContext::WikilinkTask
-            | CompletionContext::RecordTarget
-            | CompletionContext::RecordField
-            | CompletionContext::RecordValue => {
-                unreachable!("link field context")
-            }
-        };
-
-        return Ok(CaptureCompleteResult {
-            ok: true,
-            schema_version: SCHEMA_VERSION,
-            grammar: capture_language::GRAMMAR_REVISION,
-            cursor,
-            replacement: Replacement {
-                start: field.replacement.0,
-                end: field.replacement.1,
-            },
-            context: Some(field.context),
-            initial_selection: None,
-            subject: None,
-            candidates,
-            target: None,
-            theme_suggestion: None,
-            r#override: None,
-            block_id: None,
-            warnings: index.warnings(),
-            query: None,
-            owner: None,
-            relation: None,
-            relation_cancel: None,
-            relation_complete: None,
-            relation_merge: None,
-            relation_successor: None,
-            picker: None,
-            note_goto: None,
-            hidden_count: None,
-            one_off: None,
-            project_task_move: None,
-            record: None,
-            diagnostics: Vec::new(),
-            place_menu: None,
-        });
+        return wikilink_field_result(bob_dir, cursor, &field);
     }
 
     // A valid edge `#` owns the caret even when it sits inside a
