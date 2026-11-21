@@ -977,6 +977,46 @@ mod tests {
     }
 
     #[test]
+    fn noted_row_learns_the_same_payee_as_the_row_without_a_note() {
+        fn parsed_payee(line: &str) -> String {
+            let super::super::grammar::LineKind::Checkbox { status, body } =
+                super::super::grammar::classify_line(line)
+            else {
+                panic!("expected checkbox: {line}");
+            };
+            let super::super::grammar::RowParse::Parsed(row) =
+                super::super::grammar::parse_row(status, body)
+            else {
+                panic!("expected parsed row: {line}");
+            };
+            row.payee
+        }
+        let with_note = parsed_payee(
+            "- [x] $13.71 Smashburger — with Kelly ^bank-aaaaaaaa",
+        );
+        let without = parsed_payee("- [x] $13.71 Smashburger ^bank-aaaaaaaa");
+        assert_eq!(with_note, without);
+        assert_eq!(with_note, "Smashburger");
+        let config = plain_hub();
+        let learned_noted = LearnedName {
+            payee: with_note,
+            category: Some("dining".to_owned()),
+            links: Vec::new(),
+        };
+        let learned_plain = LearnedName {
+            payee: without,
+            category: Some("dining".to_owned()),
+            links: Vec::new(),
+        };
+        assert_eq!(
+            named(&config, "SMASHBURGER", None, Some(&learned_noted), None)
+                .payee,
+            named(&config, "SMASHBURGER", None, Some(&learned_plain), None)
+                .payee
+        );
+    }
+
+    #[test]
     fn learned_payees_are_cleaned_only_when_they_still_carry_noise() {
         let config = plain_hub();
         let noisy = LearnedName {

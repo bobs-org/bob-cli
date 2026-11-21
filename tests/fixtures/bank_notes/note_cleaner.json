@@ -1,0 +1,119 @@
+{
+  "about": "Shared bank row note-cleaner vectors. Keep byte-identical: bob-cli tests/fixtures/bank_notes/note_cleaner.json and bob-plugins plugins/bob-ledger-tools/scripts/fixtures/bank/note-cleaner.json.",
+  "cases": [
+    {
+      "line": "- [x] $13.71 Smashburger !! -- with Kelly",
+      "payee": "Smashburger",
+      "flagged": true,
+      "note": "with Kelly"
+    },
+    {
+      "line": "- [ ] $23.21 Amazon Reta* 125dt [cat:: kids] — LEGO set for Max's birthday ^bank-8f3a2c1d",
+      "payee": "Amazon Reta* 125dt",
+      "flagged": false,
+      "note": "LEGO set for Max's birthday"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — wow! great",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "wow! great"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — LEGO — for Max",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "LEGO — for Max"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — split -- three ways",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "split -- three ways"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — -5 off coupon",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "-5 off coupon"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe -- ascii marker note",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "ascii marker note"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe [cat:: coffee] ⚑ — ask Kelly ^bank-ab12",
+      "payee": "Corner Cafe",
+      "flagged": true,
+      "note": "ask Kelly"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe [[eat/cafe|☕]] ⚑ — ask Kelly ^bank-ab12",
+      "payee": "Corner Cafe",
+      "flagged": true,
+      "note": "ask Kelly"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe ⚑ [[eat/cafe|☕]] — ask Kelly",
+      "payee": "Corner Cafe",
+      "flagged": true,
+      "note": "ask Kelly"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — with [[people/kelly|Kelly]] at lunch",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "with at lunch"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — note [x:: y] tail",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "note tail"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — spaced    out\twords",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "spaced out words"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe ⚑ wow!! nice",
+      "payee": "Corner Cafe",
+      "flagged": true,
+      "note": "wow nice"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe — — double marker",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": "double marker"
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe ⚑",
+      "payee": "Corner Cafe",
+      "flagged": true,
+      "note": null
+    },
+    {
+      "line": "- [ ] $5.00 Corner Cafe —",
+      "payee": "Corner Cafe",
+      "flagged": false,
+      "note": null
+    },
+    {
+      "line": "- [ ] $12.00 Lunch [cat:: dining] — split $25 w/ Alex ‼ (cat: x) ⚐ ^ word ^bank-1a2b",
+      "payee": "Lunch",
+      "flagged": false,
+      "note": "split $25 w/ Alex ‼ (cat: x) ⚐ ^ word"
+    },
+    {
+      "line": "- [x] $3.00 Tea — see ^ ref",
+      "payee": "Tea",
+      "flagged": false,
+      "note": "see ^ ref"
+    }
+  ]
+}

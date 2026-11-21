@@ -314,6 +314,12 @@ checklist line.
 - [x] $13.71 Smashburger [cat:: dining] [acct:: card] [[eat/smashburger|🍽️]] ⚑ — with Kelly ^bank-8f3a2c1d
 ```
 
+Canonical tail order:
+
+```text
+- [ ] $AMOUNT Payee [cat:: k] [acct:: a] [[links]] ⚑ — note ^bank-id
+```
+
 - **Box.** `[ ]` is waiting; `[x]` or `[X]` is acknowledged. Any other
   status is `bank_row_status`.
 - **Amount.** Optional `**…**` bold, then an optional sign (`+`, `-`, or
@@ -324,6 +330,11 @@ checklist line.
   `⚑`, `!!`, or trailing ` ^id`. Trimmed; must not be empty.
 - **Tail**, in any order: `[cat:: key]`, `[acct:: alias]`, wikilinks, `⚑`
   or `!!` (flag), and a note after the first `—`, `--`, or flag.
+- **Note.** After the first `⚑`, `!!`, `—`, or `--` (not followed by `-`)
+  that is not inside a field or link, the note value is that tail with
+  whole `[k:: v]` fields, whole `[[…]]` wikilinks, `⚑`, and `!!` removed,
+  whitespace collapsed, and one leading `—` or `--` marker dropped. Empty
+  means no note.
 - **ID.** Trailing `^bank-<hex>` carries bank identity. Any other trailing
   block ID is ignored.
 - **Empty stub.** `- [x] $` or `- [ ] $` with nothing after `$` is ignored

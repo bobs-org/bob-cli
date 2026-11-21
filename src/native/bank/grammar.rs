@@ -434,15 +434,7 @@ fn parse_row_tail(tail: &str) -> RowTail {
         }
         index += tail[index..].chars().next().map_or(1, char::len_utf8);
     }
-    let note = note_start.and_then(|start| {
-        let raw = strip_markers_fields_links(tail[start..].trim());
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    });
+    let note = note_start.and_then(|start| clean_note(&tail[start..]));
     RowTail {
         category,
         account,
@@ -481,7 +473,19 @@ fn parse_inline_field(text: &str) -> Option<InlineField> {
     })
 }
 
-fn strip_markers_fields_links(text: &str) -> String {
+fn clean_note(text: &str) -> Option<String> {
+    let stripped = strip_fields_links_flags(text);
+    let collapsed = collapse_whitespace(&stripped);
+    let without_marker = drop_leading_note_marker(&collapsed);
+    let trimmed = without_marker.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn strip_fields_links_flags(text: &str) -> String {
     let mut out = String::new();
     let mut index = 0;
     while index < text.len() {
@@ -505,19 +509,27 @@ fn strip_markers_fields_links(text: &str) -> String {
             index += 2;
             continue;
         }
-        if text[index..].starts_with('—') {
-            index += '—'.len_utf8();
-            continue;
-        }
-        if text[index..].starts_with("--") {
-            index += 2;
-            continue;
-        }
         let ch = text[index..].chars().next().unwrap();
         out.push(ch);
         index += ch.len_utf8();
     }
     out
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn drop_leading_note_marker(text: &str) -> &str {
+    if let Some(rest) = text.strip_prefix('—') {
+        return rest;
+    }
+    if let Some(rest) = text.strip_prefix("--")
+        && !rest.starts_with('-')
+    {
+        return rest;
+    }
+    text
 }
 
 pub(crate) fn parse_day_heading(
@@ -741,6 +753,39 @@ mod tests {
         assert!(row.flagged);
         assert_eq!(row.note.as_deref(), Some("with Kelly"));
         assert_eq!(row.payee, "Smashburger");
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct NoteCleanerCase {
+        line: String,
+        payee: String,
+        flagged: bool,
+        note: Option<String>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct NoteCleanerFixture {
+        cases: Vec<NoteCleanerCase>,
+    }
+
+    #[test]
+    fn shared_note_cleaner_vectors() {
+        let fixture: NoteCleanerFixture = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/bank_notes/note_cleaner.json"
+        ))
+        .expect("note cleaner fixture");
+        for case in fixture.cases {
+            let LineKind::Checkbox { status, body } = classify_line(&case.line)
+            else {
+                panic!("expected checkbox: {}", case.line);
+            };
+            let RowParse::Parsed(row) = parse_row(status, body) else {
+                panic!("expected parsed row: {}", case.line);
+            };
+            assert_eq!(row.payee, case.payee, "{}", case.line);
+            assert_eq!(row.flagged, case.flagged, "{}", case.line);
+            assert_eq!(row.note, case.note, "{}", case.line);
+        }
     }
 
     #[test]
