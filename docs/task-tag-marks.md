@@ -4,9 +4,10 @@ This guide is the authoritative display contract for task tag marks,
 in the style of `docs/date-marks.md`. The JavaScript mirror lives in
 bob-ledger-tools (`src/138-task-tag-marks.js`,
 `src/138-checklist-task-marks.js`, and `src/138-prj-hide-marks.js`
-pure core plus `src/264-plugin-task-tag-marks.js` Live Preview,
-rendered views, and toggle); its tests run the conformance vectors
-below verbatim. There
+pure core, `src/139-task-reqs.js` requirement recognizer, and
+`src/264-plugin-task-tag-marks.js` / `src/264-plugin-task-reqs.js` Live
+Preview, rendered views, and toggle); its tests run the conformance
+vectors below verbatim. There
 is **no api namespace** (the top-level api stays v3; add one only
 when a consumer exists).
 
@@ -26,7 +27,8 @@ before: - [ ] #task Rename the queue input  ▮▮▮  + Sep 29  ⧗ today
 after:  - [ ] ⌗ Rename the queue input  ▮▮▮  + Sep 29  ⧗ today      (⌗ ≈ the teal identity hash glyph)
         - [ ] #FIX Significantly speed up sase commits               (explicit FIX in FIX ink)
         - [ ] ⌗ Restart athena                                       (inherited BUILD: hash only)
-        - [ ] Pack charger                                           (plain checklist: no glyph, unchanged)
+        - [ ] ⌗⌗ Pack charger                                         (requirement at depth 1)
+- [ ] Pack charger                                                   (plain checklist outside a task)
 dash.md Tasks results:  - [ ] Rename the queue input  ▮▮▮  + Sep 29   (tasks_results = hide: tag dropped)
 ```
 
@@ -255,6 +257,40 @@ explicit type is `#task · type FIX`.
   and date marks. The date mark's whitespace fold may start exactly
   at the tag's end (adjacent is fine, never overlapping). Vector TT16
   asserts this.
+
+## Requirement marks
+
+A requirement is a checkbox list item without the whole `#task` token
+whose nearest shallower list item is a tracked task or another
+requirement. Its owner is that task, and its depth is one plus its
+requirement ancestors. A note, drawer, managed link, or log between the
+checkbox and its owner breaks the chain. Nested `#task` rows start a new
+owner. Checkboxes in quotes and fenced code stay native Markdown.
+The full recognition and state contract is
+[Task requirements](task-requirements.md) §1–§4; the plugin copies the
+canonical RQ vectors from bob-cli.
+
+Live Preview and Reading view draw a tightly kerned `⌗` run in the
+owner's task-type ink, or teal when the owner has no type. Depth 1 uses
+two hashes, depth 2 uses three, and depth 3 or greater uses four. The
+run's ink does not encode state:
+
+| State | Rendering |
+| --- | --- |
+| Pending | Full owner ink. |
+| Met / Moot | The owner's done or cancelled line treatment, with a faded run. |
+| Dropped | Muted, struck text; its Cancel Log remains visible below. |
+| Carried | The run gains a small arrow; its link keeps the live Task-Link mark. |
+| Excluded | Muted without strike-through; the tooltip names the excluding ancestor. |
+
+The checkbox remains in the document but is replaced by the glyph and
+cannot be clicked while task tag marks are on. Touching the marker in
+Live Preview restores the raw `- [ ] ` bytes. The existing task-tag
+session toggle restores native checkboxes. Tooltips and checkbox
+accessible labels read `Requirement · level {d} of “{Owner}” · {state}`
+followed by: `Part of this task's scope. Met when the task closes. Drop
+it or make it a task.` The renderer adds attributes only; it creates no
+DOM nodes and never changes Markdown.
 
 ## Tasks query results
 
@@ -643,6 +679,11 @@ malformed canonical form), and picker / Task Card display-text
 parity for `#prj` and `#hide` (deferred to a follow-up).
 
 ## Conformance vectors
+
+Requirement rendering uses the byte-for-byte `tests/fixtures/task_reqs/`
+copy of bob-cli's RQ vectors. The plugin conformance test compares each
+recognized row's source line, owner, depth, raw mark, clean text, and
+derived state with that fixture.
 
 Live Preview core: `taskTagMarkRanges(lineText)` returns
 `[{ from, to, kind }]` in UTF-16 line offsets, where `kind` is `task | ref
