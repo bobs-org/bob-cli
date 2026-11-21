@@ -10,7 +10,7 @@ use super::{
     grouping::{group_records, GroupingRecord, RecordGroup},
     index::{self, IndexState},
     registry::{AlbumEntry, AlbumRegistry, DiscoveryHealth},
-    walk::{self, AlbumWalkState, WalkLineState, WalkScope},
+    walk::{self, AlbumWalkState, WalkGroup, WalkLineState, WalkScope},
     write::folder_complete,
     AlbumDeclaration, AlbumFinding, AlbumIssueSeverity,
 };
@@ -115,6 +115,7 @@ pub(crate) struct AlbumReportEntry {
     pub(crate) fields: Vec<AlbumField>,
     pub(crate) group_field: Option<String>,
     pub(crate) index_by: Option<String>,
+    pub(crate) walk_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
     pub(crate) records: usize,
     pub(crate) groups: Vec<RecordGroup>,
@@ -139,6 +140,7 @@ pub(crate) struct AlbumWalkReport {
     pub(crate) total: usize,
     pub(crate) counts: AlbumWalkCounts,
     pub(crate) order: Vec<String>,
+    pub(crate) groups: Vec<WalkGroup>,
 }
 
 impl AlbumWalkReport {
@@ -153,8 +155,22 @@ impl AlbumWalkReport {
                 "damaged": self.counts.damaged,
             },
             "order": self.order,
+            "groups": self.groups.iter().map(walk_group_json).collect::<Vec<_>>(),
         })
     }
+}
+
+fn walk_group_json(group: &WalkGroup) -> Value {
+    json!({
+        "value": group.value,
+        "label": group.label,
+        "count": group.count,
+        "head": {
+            "stem": group.head.stem,
+            "path": group.head.path,
+            "title": group.head.title,
+        },
+    })
 }
 
 impl AlbumReportEntry {
@@ -180,6 +196,7 @@ impl AlbumReportEntry {
             "fields": self.fields.iter().map(AlbumField::to_json).collect::<Vec<_>>(),
             "group_field": self.group_field,
             "index_by": self.index_by,
+            "walk_by": self.walk_by,
             "index_facets": self.index_facets,
             "records": self.records,
             "groups": self.groups.iter().map(|group| json!({
@@ -274,7 +291,11 @@ impl AlbumReport {
         json!({
             "ok": self.ok(),
             "schema_version": SCHEMA_VERSION,
-            "capabilities": ["record_values_v1", "record_walk_v1"],
+            "capabilities": [
+                "record_values_v1",
+                "record_walk_v1",
+                "record_walk_groups_v1",
+            ],
             "albums": self.albums.iter().map(AlbumReportEntry::to_json).collect::<Vec<_>>(),
             "catalogs": self.catalogs.iter().map(AlbumCatalogRecord::to_json).collect::<Vec<_>>(),
             "counts": {
@@ -470,6 +491,7 @@ pub(crate) fn project_album_from_folder(
         total: walk_plan.total,
         counts: walk_counts,
         order: walk_plan.order.clone(),
+        groups: walk_plan.groups.clone(),
     };
     let mut walk_findings: Vec<AlbumFinding> = Vec::new();
     match walk_plan.state {
@@ -561,6 +583,7 @@ pub(crate) fn project_album_from_folder(
             fields,
             group_field: grouping.group_field,
             index_by: declaration.index_by.clone(),
+            walk_by: declaration.walk_by.clone(),
             index_facets: grouping.index_facets,
             records: members.len(),
             groups: grouping.groups,

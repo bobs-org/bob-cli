@@ -50,7 +50,10 @@
     { "name": "trim-ascii-arrows", "title": "< Pho House >", "stem": "pho_house", "expected": "Pho House" },
     { "name": "drop-wikilink-syntax", "title": "Ramen |[Nagi] #^", "stem": "ramen", "expected": "Ramen Nagi" },
     { "name": "empty-title-uses-humanized-stem", "title": "|[]#^", "stem": "the_taste", "expected": "the taste" },
-    { "name": "empty-humanized-stem-uses-bare-stem", "title": "‹›", "stem": "!!!", "expected": "!!!" }
+    { "name": "empty-humanized-stem-uses-bare-stem", "title": "‹›", "stem": "!!!", "expected": "!!!" },
+    { "name": "strip-embedded-guillemets", "title": "Part « 2 »", "stem": "part_2", "expected": "Part 2" },
+    { "name": "strip-edge-guillemets", "title": "« Title »", "stem": "title", "expected": "Title" },
+    { "name": "only-guillemets-uses-humanized-stem", "title": "«»", "stem": "the_taste", "expected": "the taste" }
   ],
   "lines": [
     {
@@ -126,6 +129,457 @@
       "markdown": "---\ntype: record\n---\n\n```md\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n```\n",
       "state": "missing",
       "reason": null
+    }
+  ],
+  "grouped": [
+    {
+      "name": "section-groups-skip-empty-trail-needs-and-wrap",
+      "walk_by": "section",
+      "fields": [
+        {
+          "key": "section",
+          "label": "Section",
+          "list": false,
+          "choices": [
+            { "value": "intro", "label": "Intro" },
+            { "value": "empty", "label": "Empty" },
+            { "value": "body", "label": "Body" },
+            { "value": "outro", "label": "Outro" }
+          ]
+        },
+        {
+          "key": "status",
+          "label": "Status",
+          "list": false,
+          "choices": [
+            { "value": "open", "label": "Open" },
+            { "value": "done", "label": "Done" }
+          ]
+        }
+      ],
+      "records": [
+        { "path": "z/b.md", "stem": "b", "title": "Beta", "fields": { "section": "body", "status": "open" } },
+        { "path": "z/a.md", "stem": "a", "title": "Alpha", "fields": { "section": "intro", "status": "done" } },
+        { "path": "z/c.md", "stem": "c", "title": "Gamma", "fields": { "section": "body", "status": "done" } },
+        { "path": "z/needs.md", "stem": "needs", "title": "Needs", "fields": { "status": "open" } },
+        { "path": "z/outro.md", "stem": "outro", "title": "Omega", "fields": { "section": "outro", "status": "open" } }
+      ],
+      "expected_order": ["a", "b", "c", "outro", "needs"],
+      "expected_groups": [
+        {
+          "value": "intro",
+          "label": "Intro",
+          "count": 1,
+          "head": { "stem": "a", "path": "z/a.md", "title": "Alpha" }
+        },
+        {
+          "value": "body",
+          "label": "Body",
+          "count": 2,
+          "head": { "stem": "b", "path": "z/b.md", "title": "Beta" }
+        },
+        {
+          "value": "outro",
+          "label": "Outro",
+          "count": 1,
+          "head": { "stem": "outro", "path": "z/outro.md", "title": "Omega" }
+        },
+        {
+          "value": null,
+          "label": "⚠️ Needs section",
+          "count": 1,
+          "head": { "stem": "needs", "path": "z/needs.md", "title": "Needs" }
+        }
+      ],
+      "expected_membership": [
+        {
+          "stem": "a",
+          "group": {
+            "field": "section",
+            "value": "intro",
+            "label": "Intro",
+            "index": 1,
+            "count": 4,
+            "position": 1,
+            "size": 1
+          },
+          "prev_group": {
+            "value": null,
+            "label": "⚠️ Needs section",
+            "head": { "stem": "needs", "path": "z/needs.md", "title": "Needs" },
+            "wraps": true
+          },
+          "next_group": {
+            "value": "body",
+            "label": "Body",
+            "head": { "stem": "b", "path": "z/b.md", "title": "Beta" },
+            "wraps": false
+          }
+        },
+        {
+          "stem": "b",
+          "group": {
+            "field": "section",
+            "value": "body",
+            "label": "Body",
+            "index": 2,
+            "count": 4,
+            "position": 1,
+            "size": 2
+          },
+          "prev_group": {
+            "value": "intro",
+            "label": "Intro",
+            "head": { "stem": "a", "path": "z/a.md", "title": "Alpha" },
+            "wraps": false
+          },
+          "next_group": {
+            "value": "outro",
+            "label": "Outro",
+            "head": { "stem": "outro", "path": "z/outro.md", "title": "Omega" },
+            "wraps": false
+          }
+        },
+        {
+          "stem": "c",
+          "group": {
+            "field": "section",
+            "value": "body",
+            "label": "Body",
+            "index": 2,
+            "count": 4,
+            "position": 2,
+            "size": 2
+          },
+          "prev_group": {
+            "value": "intro",
+            "label": "Intro",
+            "head": { "stem": "a", "path": "z/a.md", "title": "Alpha" },
+            "wraps": false
+          },
+          "next_group": {
+            "value": "outro",
+            "label": "Outro",
+            "head": { "stem": "outro", "path": "z/outro.md", "title": "Omega" },
+            "wraps": false
+          }
+        },
+        {
+          "stem": "outro",
+          "group": {
+            "field": "section",
+            "value": "outro",
+            "label": "Outro",
+            "index": 3,
+            "count": 4,
+            "position": 1,
+            "size": 1
+          },
+          "prev_group": {
+            "value": "body",
+            "label": "Body",
+            "head": { "stem": "b", "path": "z/b.md", "title": "Beta" },
+            "wraps": false
+          },
+          "next_group": {
+            "value": null,
+            "label": "⚠️ Needs section",
+            "head": { "stem": "needs", "path": "z/needs.md", "title": "Needs" },
+            "wraps": false
+          }
+        },
+        {
+          "stem": "needs",
+          "group": {
+            "field": "section",
+            "value": null,
+            "label": "⚠️ Needs section",
+            "index": 4,
+            "count": 4,
+            "position": 1,
+            "size": 1
+          },
+          "prev_group": {
+            "value": "outro",
+            "label": "Outro",
+            "head": { "stem": "outro", "path": "z/outro.md", "title": "Omega" },
+            "wraps": false
+          },
+          "next_group": {
+            "value": "intro",
+            "label": "Intro",
+            "head": { "stem": "a", "path": "z/a.md", "title": "Alpha" },
+            "wraps": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "integer-like-choice-keys-keep-declared-order",
+      "walk_by": "rank",
+      "fields": [
+        {
+          "key": "rank",
+          "label": "Rank",
+          "list": false,
+          "choices": [
+            { "value": "10", "label": "Ten" },
+            { "value": "2", "label": "Two" },
+            { "value": "1", "label": "One" }
+          ]
+        }
+      ],
+      "records": [
+        { "path": "z/one.md", "stem": "one", "title": "One", "fields": { "rank": "1" } },
+        { "path": "z/ten.md", "stem": "ten", "title": "Ten", "fields": { "rank": "10" } },
+        { "path": "z/two.md", "stem": "two", "title": "Two", "fields": { "rank": "2" } }
+      ],
+      "expected_order": ["ten", "two", "one"],
+      "expected_groups": [
+        {
+          "value": "10",
+          "label": "Ten",
+          "count": 1,
+          "head": { "stem": "ten", "path": "z/ten.md", "title": "Ten" }
+        },
+        {
+          "value": "2",
+          "label": "Two",
+          "count": 1,
+          "head": { "stem": "two", "path": "z/two.md", "title": "Two" }
+        },
+        {
+          "value": "1",
+          "label": "One",
+          "count": 1,
+          "head": { "stem": "one", "path": "z/one.md", "title": "One" }
+        }
+      ]
+    },
+    {
+      "name": "title-ties-break-on-path",
+      "walk_by": "section",
+      "fields": [
+        {
+          "key": "section",
+          "label": "Section",
+          "list": false,
+          "choices": [{ "value": "body", "label": "Body" }]
+        }
+      ],
+      "records": [
+        { "path": "z/b.md", "stem": "b", "title": "Same", "fields": { "section": "body" } },
+        { "path": "z/a.md", "stem": "a", "title": "Same", "fields": { "section": "body" } }
+      ],
+      "expected_order": ["a", "b"],
+      "expected_groups": [
+        {
+          "value": "body",
+          "label": "Body",
+          "count": 2,
+          "head": { "stem": "a", "path": "z/a.md", "title": "Same" }
+        }
+      ],
+      "expected_membership": [
+        {
+          "stem": "a",
+          "group": {
+            "field": "section",
+            "value": "body",
+            "label": "Body",
+            "index": 1,
+            "count": 1,
+            "position": 1,
+            "size": 2
+          },
+          "prev_group": null,
+          "next_group": null
+        },
+        {
+          "stem": "b",
+          "group": {
+            "field": "section",
+            "value": "body",
+            "label": "Body",
+            "index": 1,
+            "count": 1,
+            "position": 2,
+            "size": 2
+          },
+          "prev_group": null,
+          "next_group": null
+        }
+      ]
+    },
+    {
+      "name": "needs-collects-missing-blank-list-unknown-and-null",
+      "walk_by": "section",
+      "fields": [
+        {
+          "key": "section",
+          "label": "Section",
+          "list": false,
+          "choices": [{ "value": "body", "label": "Body" }]
+        }
+      ],
+      "records": [
+        { "path": "z/ok.md", "stem": "ok", "title": "Ok", "fields": { "section": "body" } },
+        { "path": "z/missing.md", "stem": "missing", "title": "Missing", "fields": {} },
+        { "path": "z/blank.md", "stem": "blank", "title": "Blank", "fields": { "section": "" } },
+        { "path": "z/list.md", "stem": "list", "title": "List", "fields": { "section": ["body"] } },
+        { "path": "z/unknown.md", "stem": "unknown", "title": "Unknown", "fields": { "section": "nope" } },
+        { "path": "z/null.md", "stem": "null", "title": "Null", "fields": { "section": null } }
+      ],
+      "expected_order": ["ok", "blank", "list", "missing", "null", "unknown"],
+      "expected_groups": [
+        {
+          "value": "body",
+          "label": "Body",
+          "count": 1,
+          "head": { "stem": "ok", "path": "z/ok.md", "title": "Ok" }
+        },
+        {
+          "value": null,
+          "label": "⚠️ Needs section",
+          "count": 5,
+          "head": { "stem": "blank", "path": "z/blank.md", "title": "Blank" }
+        }
+      ]
+    },
+    {
+      "name": "empty-album-has-no-groups",
+      "walk_by": "section",
+      "fields": [
+        {
+          "key": "section",
+          "label": "Section",
+          "list": false,
+          "choices": [{ "value": "body", "label": "Body" }]
+        }
+      ],
+      "records": [],
+      "expected_order": [],
+      "expected_groups": []
+    },
+    {
+      "name": "two-groups-wrap-both-directions",
+      "walk_by": "section",
+      "fields": [
+        {
+          "key": "section",
+          "label": "Section",
+          "list": false,
+          "choices": [
+            { "value": "intro", "label": "Intro" },
+            { "value": "body", "label": "Body" }
+          ]
+        }
+      ],
+      "records": [
+        { "path": "z/zeta.md", "stem": "zeta", "title": "Zeta", "fields": { "section": "intro" } },
+        { "path": "z/alpha.md", "stem": "alpha", "title": "Alpha", "fields": { "section": "body" } }
+      ],
+      "expected_order": ["zeta", "alpha"],
+      "expected_groups": [
+        {
+          "value": "intro",
+          "label": "Intro",
+          "count": 1,
+          "head": { "stem": "zeta", "path": "z/zeta.md", "title": "Zeta" }
+        },
+        {
+          "value": "body",
+          "label": "Body",
+          "count": 1,
+          "head": { "stem": "alpha", "path": "z/alpha.md", "title": "Alpha" }
+        }
+      ],
+      "expected_membership": [
+        {
+          "stem": "zeta",
+          "group": {
+            "field": "section",
+            "value": "intro",
+            "label": "Intro",
+            "index": 1,
+            "count": 2,
+            "position": 1,
+            "size": 1
+          },
+          "prev_group": {
+            "value": "body",
+            "label": "Body",
+            "head": { "stem": "alpha", "path": "z/alpha.md", "title": "Alpha" },
+            "wraps": true
+          },
+          "next_group": {
+            "value": "body",
+            "label": "Body",
+            "head": { "stem": "alpha", "path": "z/alpha.md", "title": "Alpha" },
+            "wraps": false
+          }
+        },
+        {
+          "stem": "alpha",
+          "group": {
+            "field": "section",
+            "value": "body",
+            "label": "Body",
+            "index": 2,
+            "count": 2,
+            "position": 1,
+            "size": 1
+          },
+          "prev_group": {
+            "value": "intro",
+            "label": "Intro",
+            "head": { "stem": "zeta", "path": "z/zeta.md", "title": "Zeta" },
+            "wraps": false
+          },
+          "next_group": {
+            "value": "intro",
+            "label": "Intro",
+            "head": { "stem": "zeta", "path": "z/zeta.md", "title": "Zeta" },
+            "wraps": true
+          }
+        }
+      ],
+      "expected_lines": {
+        "album": { "stem": "z", "title": "Zettel" },
+        "lines": [
+          "[[z/alpha|‹ Alpha]] · [[z|↑ Zettel]] · [[z/alpha|Alpha ›]]",
+          "[[z/zeta|‹ Zeta]] · [[z|↑ Zettel]] · [[z/zeta|Zeta ›]]"
+        ]
+      }
+    },
+    {
+      "name": "group-major-three-member-ring-differs-from-title-order",
+      "walk_by": "section",
+      "fields": [
+        {
+          "key": "section",
+          "label": "Section",
+          "list": false,
+          "choices": [
+            { "value": "intro", "label": "Intro" },
+            { "value": "body", "label": "Body" }
+          ]
+        }
+      ],
+      "records": [
+        { "path": "z/zeta.md", "stem": "zeta", "title": "Zeta", "fields": { "section": "intro" } },
+        { "path": "z/alpha.md", "stem": "alpha", "title": "Alpha", "fields": { "section": "body" } },
+        { "path": "z/beta.md", "stem": "beta", "title": "Beta", "fields": { "section": "body" } }
+      ],
+      "expected_order": ["zeta", "alpha", "beta"],
+      "expected_lines": {
+        "album": { "stem": "z", "title": "Zettel" },
+        "lines": [
+          "[[z/beta|‹ Beta]] · [[z|↑ Zettel]] · [[z/alpha|Alpha ›]]",
+          "[[z/zeta|‹ Zeta]] · [[z|↑ Zettel]] · [[z/beta|Beta ›]]",
+          "[[z/alpha|‹ Alpha]] · [[z|↑ Zettel]] · [[z/zeta|Zeta ›]]"
+        ]
+      }
     }
   ]
 }

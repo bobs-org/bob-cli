@@ -33,8 +33,8 @@ use crate::native::{
         trim_yaml_scalar, Frontmatter,
     },
     records::schema::{
-        parse_album_record_schema, AlbumRecordSchemaParse, RecordDiagnostic,
-        RecordType,
+        parse_album_record_schema, AlbumRecordSchemaParse, FieldKind,
+        RecordDiagnostic, RecordType,
     },
 };
 
@@ -86,6 +86,9 @@ pub(crate) struct AlbumDeclaration {
     pub(crate) parent: Option<String>,
     pub(crate) created: Option<String>,
     pub(crate) index_by: Option<String>,
+    /// Effective walk grouping field: a declared non-list choices key, or
+    /// `None` when the key is absent or invalid.
+    pub(crate) walk_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
     /// Physical 1-based line of the `record:` key, when present.
     pub(crate) record_line: Option<usize>,
@@ -137,6 +140,7 @@ pub(crate) fn parse_album_declaration(
     let emoji = top_level_string(&frontmatter, "emoji");
     let created = top_level_string(&frontmatter, "created");
     let index_by = top_level_string(&frontmatter, "index_by");
+    let walk_by_raw = top_level_string(&frontmatter, "walk_by");
     let summary = decode_summary(&frontmatter);
     let (title_key, title_line) = frontmatter_title(&frontmatter);
     let title = match &title_key {
@@ -249,6 +253,18 @@ pub(crate) fn parse_album_declaration(
             "index_by must be a non-empty field name".to_owned(),
         ));
     }
+    if frontmatter_top_level_value(&frontmatter, "walk_by").is_some()
+        && walk_by_raw.is_none()
+    {
+        findings.push(finding(
+            "album_walk_by_invalid",
+            AlbumIssueSeverity::Warning,
+            &path,
+            line_by_path.get("walk_by").copied(),
+            Some("walk_by".to_owned()),
+            "walk_by must be a non-empty field name".to_owned(),
+        ));
+    }
     let mut index_facets =
         match parse_top_level_list(&frontmatter, "index_facets") {
             Ok(Some(facets)) => facets,
@@ -309,6 +325,43 @@ pub(crate) fn parse_album_declaration(
         }
     }
 
+    let walk_by = match walk_by_raw.as_deref() {
+        None => None,
+        Some(key) => match parsed_schema.record_type.as_ref() {
+            None => None,
+            Some(record_type) => match record_type.field(key) {
+                None => {
+                    findings.push(finding(
+                        "album_walk_field_unknown",
+                        AlbumIssueSeverity::Warning,
+                        &path,
+                        line_by_path.get("walk_by").copied(),
+                        Some("walk_by".to_owned()),
+                        format!("walk_by names undeclared field {key:?}"),
+                    ));
+                    None
+                }
+                Some(field) => match &field.kind {
+                    FieldKind::Choices(_) if !field.list => {
+                        Some(key.to_owned())
+                    }
+                    _ => {
+                        findings.push(finding(
+                            "album_walk_by_not_choices",
+                            AlbumIssueSeverity::Warning,
+                            &path,
+                            line_by_path.get("walk_by").copied(),
+                            Some("walk_by".to_owned()),
+                            "walk_by must name a single-value choices field"
+                                .to_owned(),
+                        ));
+                        None
+                    }
+                },
+            },
+        },
+    };
+
     Some(AlbumDeclaration {
         path,
         stem,
@@ -319,6 +372,7 @@ pub(crate) fn parse_album_declaration(
         parent,
         created,
         index_by,
+        walk_by,
         index_facets,
         record_line: record_section_line,
         schema_field_lines,
@@ -975,6 +1029,75 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.code == "album_index_field_unknown"));
+    }
+
+    #[test]
+    fn walk_by_validates_a_single_value_choices_field() {
+        let valid = parse_album_declaration(
+            Path::new("sample.md"),
+            "---\ntype: [[album]]\nsummary: Sample\nwalk_by: section\nindex_by: status\nrecord:\n  noun: sample\n  fields:\n    status: {values: {open: Open}}\n    section: {values: {intro: Intro, body: Body}}\n---\n",
+        )
+        .unwrap();
+        assert_eq!(valid.walk_by.as_deref(), Some("section"));
+        assert_eq!(valid.index_by.as_deref(), Some("status"));
+        assert!(valid.findings.is_empty());
+
+        let unknown = parse_album_declaration(
+            Path::new("sample.md"),
+            "---\ntype: [[album]]\nwalk_by: missing\nrecord: {noun: sample, fields: {status: {values: {open: Open}}}}\n---\n",
+        )
+        .unwrap();
+        assert_eq!(unknown.walk_by, None);
+        let finding = unknown
+            .findings
+            .iter()
+            .find(|finding| finding.code == "album_walk_field_unknown")
+            .expect("unknown walk_by finding");
+        assert_eq!(finding.severity, AlbumIssueSeverity::Warning);
+        assert_eq!(finding.key_path.as_deref(), Some("walk_by"));
+        assert_eq!(finding.line_number, Some(3));
+        assert_eq!(
+            finding.message,
+            "walk_by names undeclared field \"missing\""
+        );
+
+        let text_field = parse_album_declaration(
+            Path::new("sample.md"),
+            "---\ntype: [[album]]\nwalk_by: location\nrecord: {noun: sample, fields: {location: {}, status: {values: {open: Open}}}}\n---\n",
+        )
+        .unwrap();
+        assert_eq!(text_field.walk_by, None);
+        assert!(text_field.findings.iter().any(|finding| {
+            finding.code == "album_walk_by_not_choices"
+                && finding.message
+                    == "walk_by must name a single-value choices field"
+        }));
+
+        let list_field = parse_album_declaration(
+            Path::new("sample.md"),
+            "---\ntype: [[album]]\nwalk_by: tags\nrecord: {noun: sample, fields: {tags: {list: true, values: {a: A}}}}\n---\n",
+        )
+        .unwrap();
+        assert_eq!(list_field.walk_by, None);
+        assert!(list_field
+            .findings
+            .iter()
+            .any(|finding| finding.code == "album_walk_by_not_choices"));
+
+        let malformed = parse_album_declaration(
+            Path::new("sample.md"),
+            "---\ntype: [[album]]\nwalk_by: \"  \"\nrecord: {noun: sample, fields: {status: {values: {open: Open}}}}\n---\n",
+        )
+        .unwrap();
+        assert_eq!(malformed.walk_by, None);
+        let finding = malformed
+            .findings
+            .iter()
+            .find(|finding| finding.code == "album_walk_by_invalid")
+            .expect("malformed walk_by finding");
+        assert_eq!(finding.severity, AlbumIssueSeverity::Warning);
+        assert_eq!(finding.key_path.as_deref(), Some("walk_by"));
+        assert_eq!(finding.message, "walk_by must be a non-empty field name");
     }
 
     #[test]

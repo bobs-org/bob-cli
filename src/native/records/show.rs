@@ -406,24 +406,35 @@ fn record_walk_value(
     else {
         return Value::Null;
     };
-    let prev = record.slot.prev.as_ref().map(|prev| {
-        json!({
-            "stem": prev.stem,
-            "path": prev.path,
-            "title": prev.title,
-        })
-    });
-    let next = record.slot.next.as_ref().map(|next| {
-        json!({
-            "stem": next.stem,
-            "path": next.path,
-            "title": next.title,
-        })
-    });
+    let prev = record.slot.prev.as_ref().map(walk_member_json);
+    let next = record.slot.next.as_ref().map(walk_member_json);
     let reason = record
         .reason
         .map(|reason| Value::String(reason.as_str().to_owned()))
         .unwrap_or(Value::Null);
+    let group = record.slot.group.as_ref().map(|group| {
+        json!({
+            "field": group.field,
+            "value": group.value,
+            "label": group.label,
+            "index": group.index,
+            "count": group.count,
+            "position": group.position,
+            "size": group.size,
+        })
+    });
+    let prev_group = record
+        .slot
+        .group
+        .as_ref()
+        .and_then(|group| group.prev_group.as_ref())
+        .map(walk_group_stop_json);
+    let next_group = record
+        .slot
+        .group
+        .as_ref()
+        .and_then(|group| group.next_group.as_ref())
+        .map(walk_group_stop_json);
     json!({
         "state": record.state.as_str(),
         "reason": reason,
@@ -431,6 +442,26 @@ fn record_walk_value(
         "total": record.slot.total,
         "prev": prev.unwrap_or(Value::Null),
         "next": next.unwrap_or(Value::Null),
+        "group": group.unwrap_or(Value::Null),
+        "prev_group": prev_group.unwrap_or(Value::Null),
+        "next_group": next_group.unwrap_or(Value::Null),
+    })
+}
+
+fn walk_member_json(member: &album_walk::WalkMember) -> Value {
+    json!({
+        "stem": member.stem,
+        "path": member.path,
+        "title": member.title,
+    })
+}
+
+fn walk_group_stop_json(stop: &album_walk::WalkGroupStop) -> Value {
+    json!({
+        "value": stop.value,
+        "label": stop.label,
+        "head": walk_member_json(&stop.head),
+        "wraps": stop.wraps,
     })
 }
 

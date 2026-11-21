@@ -9,7 +9,9 @@ use std::{
 };
 
 use super::{
-    grouping::{title_order, GroupingRecord},
+    grouping::{
+        bucket_choice_members, needs_group_label, title_order, GroupingRecord,
+    },
     index::ALIAS_DROP,
     write::{folder_complete, overlay_folder_members},
     AlbumDeclaration,
@@ -19,7 +21,7 @@ use crate::native::{
     host_catalog::FileEdit,
     markdown::{closes_fence, fence_marker, split_line_ending, MarkdownFence},
     notebooks::catalog::inert_text,
-    records::FolderIndex,
+    records::{schema::RecordField, FolderIndex},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +102,46 @@ pub(crate) struct WalkSlot {
     pub(crate) total: usize,
     pub(crate) prev: Option<WalkMember>,
     pub(crate) next: Option<WalkMember>,
+    pub(crate) group: Option<WalkSlotGroup>,
+}
+
+/// Occupied walk group in ring order, including the trailing needs group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalkGroup {
+    pub(crate) value: Option<String>,
+    pub(crate) label: String,
+    pub(crate) count: usize,
+    pub(crate) head: WalkMember,
+}
+
+/// Adjacent occupied-group stop for `records show`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalkGroupStop {
+    pub(crate) value: Option<String>,
+    pub(crate) label: String,
+    pub(crate) head: WalkMember,
+    pub(crate) wraps: bool,
+}
+
+/// Per-slot group membership. Index and position are one-based.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalkSlotGroup {
+    pub(crate) field: String,
+    pub(crate) value: Option<String>,
+    pub(crate) label: String,
+    pub(crate) index: usize,
+    pub(crate) count: usize,
+    pub(crate) position: usize,
+    pub(crate) size: usize,
+    pub(crate) prev_group: Option<WalkGroupStop>,
+    pub(crate) next_group: Option<WalkGroupStop>,
+}
+
+/// Shared slots, groups, and heads for reports, show, and line planning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalkProjection {
+    pub(crate) slots: Vec<WalkSlot>,
+    pub(crate) groups: Vec<WalkGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,11 +161,12 @@ pub(crate) struct WalkWarning {
 pub(crate) struct AlbumWalkPlan {
     pub(crate) state: AlbumWalkState,
     pub(crate) total: usize,
-    /// Record stems in the same title order used by the records index.
+    /// Record stems in walk order: grouped when `walk_by` is effective.
     pub(crate) order: Vec<String>,
     pub(crate) records: Vec<WalkRecord>,
     pub(crate) edits: Vec<FileEdit>,
     pub(crate) warnings: Vec<WalkWarning>,
+    pub(crate) groups: Vec<WalkGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,8 +175,131 @@ pub(crate) enum WalkScope {
     Radius { created: HashSet<String> },
 }
 
-/// Build every ring slot from a title-sorted member slice.
-pub(crate) fn ring_slots(records: &[GroupingRecord]) -> Vec<WalkSlot> {
+/// Effective walk grouping field, or `None` for the flat title ring.
+pub(crate) fn walk_field(
+    declaration: &AlbumDeclaration,
+) -> Option<&RecordField> {
+    let key = declaration.walk_by.as_deref()?;
+    let field = declaration.record_type.as_ref()?.field(key)?;
+    match &field.kind {
+        crate::native::records::schema::FieldKind::Choices(_)
+            if !field.list =>
+        {
+            Some(field)
+        }
+        _ => None,
+    }
+}
+
+/// One walk projection for slots, groups, report, and show.
+pub(crate) fn project_walk(
+    records: &[GroupingRecord],
+    field: Option<&RecordField>,
+) -> WalkProjection {
+    let Some(field) = field else {
+        return WalkProjection {
+            slots: title_ring(records),
+            groups: Vec::new(),
+        };
+    };
+
+    let (occupied, needs) = bucket_choice_members(field, records);
+    let mut ordered_groups: Vec<(Option<String>, String, Vec<GroupingRecord>)> =
+        occupied
+            .into_iter()
+            .map(|bucket| {
+                let mut members =
+                    bucket.members.into_iter().cloned().collect::<Vec<_>>();
+                members.sort_by(title_order);
+                (Some(bucket.value), bucket.label, members)
+            })
+            .collect();
+    if !needs.is_empty() {
+        let mut members = needs.into_iter().cloned().collect::<Vec<_>>();
+        members.sort_by(title_order);
+        ordered_groups.push((None, needs_group_label(field), members));
+    }
+
+    let groups: Vec<WalkGroup> = ordered_groups
+        .iter()
+        .filter_map(|(value, label, members)| {
+            members.first().map(|head| WalkGroup {
+                value: value.clone(),
+                label: label.clone(),
+                count: members.len(),
+                head: member_from_group(head),
+            })
+        })
+        .collect();
+    let group_count = groups.len();
+    let members_flat: Vec<(usize, GroupingRecord)> = ordered_groups
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, (_, _, members))| {
+            members.into_iter().map(move |member| (index, member))
+        })
+        .collect();
+    let walk_members: Vec<WalkMember> = members_flat
+        .iter()
+        .map(|(_, record)| member_from_group(record))
+        .collect();
+    let total = walk_members.len();
+    let mut slots = Vec::with_capacity(total);
+    let mut position_in_group = 0;
+    let mut current_group = None;
+    for (index, (group_index, _)) in members_flat.iter().enumerate() {
+        if current_group != Some(*group_index) {
+            current_group = Some(*group_index);
+            position_in_group = 1;
+        } else {
+            position_in_group += 1;
+        }
+        let group = &groups[*group_index];
+        let (prev_group, next_group) = if group_count < 2 {
+            (None, None)
+        } else {
+            let prev_index = (*group_index + group_count - 1) % group_count;
+            let next_index = (*group_index + 1) % group_count;
+            (
+                Some(WalkGroupStop {
+                    value: groups[prev_index].value.clone(),
+                    label: groups[prev_index].label.clone(),
+                    head: groups[prev_index].head.clone(),
+                    wraps: *group_index == 0,
+                }),
+                Some(WalkGroupStop {
+                    value: groups[next_index].value.clone(),
+                    label: groups[next_index].label.clone(),
+                    head: groups[next_index].head.clone(),
+                    wraps: *group_index + 1 == group_count,
+                }),
+            )
+        };
+        slots.push(WalkSlot {
+            member: walk_members[index].clone(),
+            position: index + 1,
+            total,
+            prev: (total > 1)
+                .then(|| walk_members[(index + total - 1) % total].clone()),
+            next: (total > 1)
+                .then(|| walk_members[(index + 1) % total].clone()),
+            group: Some(WalkSlotGroup {
+                field: field.key.clone(),
+                value: group.value.clone(),
+                label: group.label.clone(),
+                index: group_index + 1,
+                count: group_count,
+                position: position_in_group,
+                size: group.count,
+                prev_group,
+                next_group,
+            }),
+        });
+    }
+    WalkProjection { slots, groups }
+}
+
+fn title_ring(records: &[GroupingRecord]) -> Vec<WalkSlot> {
     let mut ordered = records.to_vec();
     ordered.sort_by(title_order);
     let members: Vec<WalkMember> =
@@ -149,6 +315,7 @@ pub(crate) fn ring_slots(records: &[GroupingRecord]) -> Vec<WalkSlot> {
             prev: (total > 1)
                 .then(|| members[(index + total - 1) % total].clone()),
             next: (total > 1).then(|| members[(index + 1) % total].clone()),
+            group: None,
         })
         .collect()
 }
@@ -313,7 +480,10 @@ where
 
     let grouping_records: Vec<GroupingRecord> =
         members.iter().map(GroupingRecord::from_indexed).collect();
-    let slots = ring_slots(&grouping_records);
+    let field = walk_field(declaration);
+    let projection = project_walk(&grouping_records, field);
+    let slots = projection.slots;
+    let groups = projection.groups;
     let order: Vec<String> =
         slots.iter().map(|slot| slot.member.stem.clone()).collect();
     if slots.is_empty() {
@@ -324,6 +494,7 @@ where
             records: Vec::new(),
             edits: Vec::new(),
             warnings: Vec::new(),
+            groups,
         };
     }
 
@@ -335,7 +506,8 @@ where
                 .iter()
                 .map(GroupingRecord::from_indexed)
                 .collect();
-            ring_slots(&old_records)
+            project_walk(&old_records, field)
+                .slots
                 .into_iter()
                 .map(|slot| {
                     let line = render_walk_line(declaration, &slot);
@@ -409,6 +581,7 @@ where
         records,
         edits,
         warnings,
+        groups,
     }
 }
 
@@ -420,6 +593,7 @@ fn held_plan(total: usize) -> AlbumWalkPlan {
         records: Vec::new(),
         edits: Vec::new(),
         warnings: Vec::new(),
+        groups: Vec::new(),
     }
 }
 
@@ -452,7 +626,9 @@ fn member_from_group(record: &GroupingRecord) -> WalkMember {
 fn sanitize_candidate(candidate: &str) -> String {
     let filtered: String = candidate
         .chars()
-        .filter(|character| !ALIAS_DROP.contains(character))
+        .filter(|character| {
+            !ALIAS_DROP.contains(character) && !matches!(character, '«' | '»')
+        })
         .collect();
     let mut trimmed = filtered.trim().to_owned();
     loop {
@@ -679,9 +855,12 @@ mod tests {
         grouping::{group_records, GroupingRecord},
         parse_album_declaration,
     };
-    use crate::native::records::RecordCatalog;
+    use crate::native::records::{
+        schema::{FieldKind, RecordChoice, RecordField},
+        IndexedFieldValue, RecordCatalog,
+    };
     use proptest::prelude::*;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::path::Path;
 
     const VECTORS: &str =
@@ -720,6 +899,165 @@ mod tests {
         );
         parse_album_declaration(Path::new(&format!("{stem}.md")), &markdown)
             .expect("album declaration")
+    }
+
+    fn field_from(value: &Value) -> RecordField {
+        let choices = value["choices"]
+            .as_array()
+            .expect("choices")
+            .iter()
+            .map(|choice| RecordChoice {
+                value: choice["value"].as_str().expect("value").to_owned(),
+                label: choice["label"].as_str().expect("label").to_owned(),
+            })
+            .collect();
+        RecordField {
+            key: value["key"].as_str().expect("key").to_owned(),
+            label: value["label"].as_str().expect("label").to_owned(),
+            kind: FieldKind::Choices(choices),
+            required: false,
+            list: value["list"].as_bool().unwrap_or(false),
+            default: None,
+            suggest: false,
+            min: None,
+            max: None,
+        }
+    }
+
+    fn grouped_records_from(value: &Value) -> Vec<GroupingRecord> {
+        value
+            .as_array()
+            .expect("records array")
+            .iter()
+            .map(|record| {
+                let stem = record["stem"].as_str().expect("stem").to_owned();
+                let title = record["title"].as_str().expect("title");
+                let fields = record
+                    .get("fields")
+                    .and_then(Value::as_object)
+                    .map(|map| {
+                        map.iter()
+                            .map(|(key, value)| {
+                                let indexed = match value {
+                                    Value::String(text) => {
+                                        IndexedFieldValue::Scalar(text.clone())
+                                    }
+                                    Value::Array(items) => {
+                                        IndexedFieldValue::List(
+                                            items
+                                                .iter()
+                                                .filter_map(Value::as_str)
+                                                .map(str::to_owned)
+                                                .collect(),
+                                        )
+                                    }
+                                    Value::Null => IndexedFieldValue::Null,
+                                    _ => IndexedFieldValue::Unsupported,
+                                };
+                                (key.clone(), indexed)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                GroupingRecord {
+                    path: record["path"].as_str().expect("path").to_owned(),
+                    stem: stem.clone(),
+                    title: if title.trim().is_empty() {
+                        humanize_stem(&stem)
+                    } else {
+                        title.to_owned()
+                    },
+                    created: None,
+                    fields,
+                }
+            })
+            .collect()
+    }
+
+    fn walk_field_from(case: &Value) -> RecordField {
+        let key = case["walk_by"].as_str().expect("walk_by");
+        case["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .map(field_from)
+            .find(|field| field.key == key)
+            .expect("walk field")
+    }
+
+    fn group_json(group: &WalkGroup) -> Value {
+        json!({
+            "value": group.value,
+            "label": group.label,
+            "count": group.count,
+            "head": {
+                "stem": group.head.stem,
+                "path": group.head.path,
+                "title": group.head.title,
+            },
+        })
+    }
+
+    fn stop_json(stop: &WalkGroupStop) -> Value {
+        json!({
+            "value": stop.value,
+            "label": stop.label,
+            "head": {
+                "stem": stop.head.stem,
+                "path": stop.head.path,
+                "title": stop.head.title,
+            },
+            "wraps": stop.wraps,
+        })
+    }
+
+    fn membership_json(slot: &WalkSlot) -> Value {
+        let group = slot.group.as_ref().map(|group| {
+            json!({
+                "field": group.field,
+                "value": group.value,
+                "label": group.label,
+                "index": group.index,
+                "count": group.count,
+                "position": group.position,
+                "size": group.size,
+            })
+        });
+        json!({
+            "stem": slot.member.stem,
+            "group": group,
+            "prev_group": slot
+                .group
+                .as_ref()
+                .and_then(|group| group.prev_group.as_ref())
+                .map(stop_json),
+            "next_group": slot
+                .group
+                .as_ref()
+                .and_then(|group| group.next_group.as_ref())
+                .map(stop_json),
+        })
+    }
+
+    fn choices_field(key: &str, count: usize) -> RecordField {
+        RecordField {
+            key: key.to_owned(),
+            label: key.to_owned(),
+            kind: FieldKind::Choices(
+                (0..count)
+                    .map(|index| RecordChoice {
+                        value: format!("c{index}"),
+                        label: format!("C{index}"),
+                    })
+                    .collect(),
+            ),
+            required: false,
+            list: false,
+            default: None,
+            suggest: false,
+            min: None,
+            max: None,
+        }
     }
 
     #[test]
@@ -763,7 +1101,8 @@ mod tests {
         let vectors = vectors();
         for case in vectors["order"].as_array().expect("order cases") {
             let records = records_from(&case["records"]);
-            let actual: Vec<String> = ring_slots(&records)
+            let actual: Vec<String> = project_walk(&records, None)
+                .slots
                 .into_iter()
                 .map(|slot| slot.member.stem)
                 .collect();
@@ -793,7 +1132,8 @@ mod tests {
                 case["album"]["stem"].as_str().unwrap(),
                 case["album"]["title"].as_str().unwrap(),
             );
-            let slots = ring_slots(&records_from(&case["members"]));
+            let slots =
+                project_walk(&records_from(&case["members"]), None).slots;
             let actual: Vec<String> = slots
                 .iter()
                 .map(|slot| render_walk_line(&album, slot))
@@ -821,6 +1161,69 @@ mod tests {
                 actual.reason.map(WalkDamageReason::as_str),
                 case["reason"].as_str()
             );
+        }
+    }
+
+    #[test]
+    fn shared_grouped_order_groups_membership_and_lines() {
+        let vectors = vectors();
+        for case in vectors["grouped"].as_array().expect("grouped cases") {
+            let field = walk_field_from(case);
+            let records = grouped_records_from(&case["records"]);
+            let projection = project_walk(&records, Some(&field));
+            let actual_order: Vec<String> = projection
+                .slots
+                .iter()
+                .map(|slot| slot.member.stem.clone())
+                .collect();
+            let expected_order: Vec<String> = case["expected_order"]
+                .as_array()
+                .expect("expected_order")
+                .iter()
+                .map(|stem| stem.as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(actual_order, expected_order, "{}", case["name"]);
+
+            if let Some(expected_groups) = case.get("expected_groups") {
+                let actual_groups: Vec<Value> =
+                    projection.groups.iter().map(group_json).collect();
+                assert_eq!(
+                    Value::Array(actual_groups),
+                    *expected_groups,
+                    "{} groups",
+                    case["name"]
+                );
+            }
+
+            if let Some(expected_membership) = case.get("expected_membership") {
+                let actual_membership: Vec<Value> =
+                    projection.slots.iter().map(membership_json).collect();
+                assert_eq!(
+                    Value::Array(actual_membership),
+                    *expected_membership,
+                    "{} membership",
+                    case["name"]
+                );
+            }
+
+            if let Some(expected_lines) = case.get("expected_lines") {
+                let album = declaration(
+                    expected_lines["album"]["stem"].as_str().unwrap(),
+                    expected_lines["album"]["title"].as_str().unwrap(),
+                );
+                let actual: Vec<String> = projection
+                    .slots
+                    .iter()
+                    .map(|slot| render_walk_line(&album, slot))
+                    .collect();
+                let expected: Vec<String> = expected_lines["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| line.as_str().unwrap().to_owned())
+                    .collect();
+                assert_eq!(actual, expected, "{} lines", case["name"]);
+            }
         }
     }
 
@@ -905,7 +1308,7 @@ mod tests {
                     fields: Vec::new(),
                 })
                 .collect();
-            let slots = ring_slots(&records);
+            let slots = project_walk(&records, None).slots;
             let index_tally = group_records(&[], None, &[], &records).ungrouped.len();
             prop_assert_eq!(slots.len(), index_tally);
             let by_path: HashMap<String, &WalkSlot> = slots
@@ -946,6 +1349,142 @@ mod tests {
                 }
                 prop_assert_eq!(cursor.as_str(), slot.member.path.as_str());
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn grouped_ring_is_unique_contiguous_and_headed(
+            members in prop::collection::vec(("[A-Za-z0-9]{1,8}", 0usize..4), 1..24)
+        ) {
+            let field = choices_field("section", 4);
+            let records: Vec<GroupingRecord> = members
+                .iter()
+                .enumerate()
+                .map(|(index, (title, choice))| GroupingRecord {
+                    path: format!("z/{index:03}.md"),
+                    stem: format!("{index:03}"),
+                    title: title.clone(),
+                    created: None,
+                    fields: vec![(
+                        "section".to_owned(),
+                        IndexedFieldValue::Scalar(format!("c{choice}")),
+                    )],
+                })
+                .collect();
+            let projection = project_walk(&records, Some(&field));
+            let mut actual: Vec<String> = projection
+                .slots
+                .iter()
+                .map(|slot| slot.member.stem.clone())
+                .collect();
+            let mut expected: Vec<String> =
+                records.iter().map(|record| record.stem.clone()).collect();
+            actual.sort();
+            expected.sort();
+            prop_assert_eq!(actual, expected);
+
+            let mut seen = HashSet::new();
+            let mut last = None;
+            for slot in &projection.slots {
+                let key = slot.group.as_ref().unwrap().value.clone();
+                if last.as_ref() != Some(&key) {
+                    prop_assert!(!seen.contains(&key));
+                    seen.insert(key.clone());
+                    last = Some(key);
+                }
+            }
+
+            for (index, group) in projection.groups.iter().enumerate() {
+                let first = projection
+                    .slots
+                    .iter()
+                    .find(|slot| slot.group.as_ref().unwrap().index == index + 1)
+                    .expect("group head");
+                prop_assert_eq!(&first.member, &group.head);
+                prop_assert_eq!(first.group.as_ref().unwrap().position, 1);
+            }
+
+            let by_path: HashMap<String, &WalkSlot> = projection
+                .slots
+                .iter()
+                .map(|slot| (slot.member.path.clone(), slot))
+                .collect();
+            for slot in &projection.slots {
+                if projection.slots.len() == 1 {
+                    prop_assert!(slot.prev.is_none() && slot.next.is_none());
+                    continue;
+                }
+                let next = slot.next.as_ref().unwrap();
+                prop_assert_eq!(
+                    by_path[next.path.as_str()]
+                        .prev
+                        .as_ref()
+                        .unwrap()
+                        .path
+                        .as_str(),
+                    slot.member.path.as_str()
+                );
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn moving_one_grouped_value_changes_at_most_five_lines(
+            members in prop::collection::vec(("[A-Za-z0-9]{1,8}", 0usize..4), 2..24),
+            mover in 0usize..24,
+            new_choice in 0usize..4
+        ) {
+            let mover = mover % members.len();
+            let old_choice = members[mover].1;
+            prop_assume!(old_choice != new_choice);
+            let field = choices_field("section", 4);
+            let album = declaration("z", "Zettel");
+            let records: Vec<GroupingRecord> = members
+                .iter()
+                .enumerate()
+                .map(|(index, (title, choice))| GroupingRecord {
+                    path: format!("z/{index:03}.md"),
+                    stem: format!("{index:03}"),
+                    title: title.clone(),
+                    created: None,
+                    fields: vec![(
+                        "section".to_owned(),
+                        IndexedFieldValue::Scalar(format!("c{choice}")),
+                    )],
+                })
+                .collect();
+            let before = project_walk(&records, Some(&field));
+            let mut after_records = records.clone();
+            after_records[mover].fields = vec![(
+                "section".to_owned(),
+                IndexedFieldValue::Scalar(format!("c{new_choice}")),
+            )];
+            let after = project_walk(&after_records, Some(&field));
+            let before_lines: HashMap<String, String> = before
+                .slots
+                .iter()
+                .map(|slot| {
+                    (
+                        slot.member.path.clone(),
+                        render_walk_line(&album, slot),
+                    )
+                })
+                .collect();
+            let changed = after
+                .slots
+                .iter()
+                .filter(|slot| {
+                    before_lines.get(&slot.member.path)
+                        != Some(&render_walk_line(&album, slot))
+                })
+                .count();
+            prop_assert!(
+                changed <= 5,
+                "changed {changed} lines moving {} from c{old_choice} to c{new_choice}",
+                records[mover].path
+            );
         }
     }
 

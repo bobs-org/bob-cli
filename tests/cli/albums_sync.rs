@@ -476,6 +476,65 @@ fn hand_edited_and_duplicate_index_regions_are_repaired() {
 }
 
 #[test]
+fn grouped_sync_orders_walk_lines_and_is_idempotent() {
+    let temp = TempDir::new("album-sync-grouped");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    fs::create_dir_all(vault.join("zettel")).expect("zettel folder");
+    write(&vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+    write(
+        &vault,
+        "zettel.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Notes.\nwalk_by: section\nrecord:\n  noun: note\n  fields:\n    section:\n      values: {intro: Intro, body: Body}\n    status:\n      values: {open: Open, done: Done}\n---\n\n# Zettel\n",
+    );
+    write(
+        &vault,
+        "zettel/zeta.md",
+        "---\ntype: [[record]]\nparent: \"[[zettel]]\"\ntitle: Zeta\nsection: intro\nstatus: done\n---\n",
+    );
+    write(
+        &vault,
+        "zettel/alpha.md",
+        "---\ntype: [[record]]\nparent: \"[[zettel]]\"\ntitle: Alpha\nsection: body\nstatus: open\n---\n",
+    );
+    write(
+        &vault,
+        "zettel/beta.md",
+        "---\ntype: [[record]]\nparent: \"[[zettel]]\"\ntitle: Beta\nsection: body\nstatus: done\n---\n",
+    );
+    commit_all(&vault, "grouped walk fixture");
+
+    let first = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(first.status.code(), Some(0), "{}", format_output(&first));
+    let payload = json(&first);
+    assert_eq!(payload["ok"], true);
+    let album = &payload["albums"][0];
+    assert_eq!(album["walk_by"], "section");
+    assert_eq!(
+        album["walk"]["order"],
+        serde_json::json!(["zeta", "alpha", "beta"])
+    );
+    assert_eq!(album["walk"]["state"], "current");
+    assert_eq!(album["walk"]["groups"][0]["value"], "intro");
+    assert_eq!(album["walk"]["groups"][0]["head"]["stem"], "zeta");
+    assert_eq!(album["walk"]["groups"][1]["value"], "body");
+    assert_eq!(album["walk"]["groups"][1]["head"]["stem"], "alpha");
+    assert_eq!(walk_line(&vault, "zettel/zeta.md"), "[[zettel/beta|‹ Beta]] · [[zettel|↑ Zettel]] · [[zettel/alpha|Alpha ›]]");
+    assert_eq!(
+        walk_line(&vault, "zettel/alpha.md"),
+        "[[zettel/zeta|‹ Zeta]] · [[zettel|↑ Zettel]] · [[zettel/beta|Beta ›]]"
+    );
+    assert_eq!(walk_line(&vault, "zettel/beta.md"), "[[zettel/alpha|‹ Alpha]] · [[zettel|↑ Zettel]] · [[zettel/zeta|Zeta ›]]");
+
+    let before = head(&vault);
+    let second = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(second.status.code(), Some(0), "{}", format_output(&second));
+    let again = json(&second);
+    assert_eq!(again["ok"], true);
+    assert!(changed_paths(&again).is_empty(), "{again}");
+    assert_eq!(head(&vault), before);
+}
+
+#[test]
 fn nightly_continues_after_album_failure_and_publishes_healthy_indexes() {
     let temp = TempDir::new("album-nightly");
     let vault = fixture(&temp, true);

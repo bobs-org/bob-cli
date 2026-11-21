@@ -3448,7 +3448,11 @@ fn update_envelope_capability_in_album_reports() {
         assert_success(&output);
         assert_eq!(
             json(&output)["capabilities"],
-            serde_json::json!(["record_values_v1", "record_walk_v1"]),
+            serde_json::json!([
+                "record_values_v1",
+                "record_walk_v1",
+                "record_walk_groups_v1"
+            ]),
             "{command} carries the capability flag"
         );
         assert_eq!(json(&output)["schema_version"], 1);
@@ -3844,6 +3848,9 @@ fn walk_show_reports_ring_positions() {
     assert_eq!(walk["total"], 3);
     assert_eq!(walk["prev"]["stem"], "apple");
     assert_eq!(walk["next"]["stem"], "zebra");
+    assert!(walk["group"].is_null());
+    assert!(walk["prev_group"].is_null());
+    assert!(walk["next_group"].is_null());
     let human = records_command(&fixture)
         .args(["show", "restaurant", "mango"])
         .output()
@@ -3925,6 +3932,115 @@ fn walk_show_is_null_when_the_album_is_held() {
     let text = stdout(&human);
     assert!(!text.contains("1 of 1"), "{text}");
     assert!(!text.contains("N of M"), "{text}");
+}
+
+#[test]
+fn walk_show_reports_grouped_membership_and_stops() {
+    let temp = TempDir::new("bob-cli-records-walk-groups");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(vault.join("zettel")).expect("zettel folder");
+    write_file(&config, RECORDS_CONFIG);
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("zettel.md"),
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Notes.\nwalk_by: section\nrecord:\n  noun: note\n  label: Note\n  fields:\n    status:\n      required: true\n      values: {open: Open, done: Done}\n    section:\n      values: {intro: Intro, body: Body}\n---\n\n# Zettel\n",
+    );
+    let write_grouped = |stem: &str, title: &str, section: &str, body: &str| {
+        write_file(
+            &vault.join(format!("zettel/{stem}.md")),
+            &format!(
+                "---\nparent: \"[[zettel]]\"\ntype: \"[[record]]\"\ntitle: \"{title}\"\nstatus: open\nsection: {section}\n---\n{body}"
+            ),
+        );
+    };
+    write_grouped(
+        "zeta",
+        "Zeta",
+        "intro",
+        "\n[[zettel/beta|‹ Beta]] · [[zettel|↑ Zettel]] · [[zettel/alpha|Alpha ›]]\n",
+    );
+    write_grouped(
+        "alpha",
+        "Alpha",
+        "body",
+        "\n[[zettel/zeta|‹ Zeta]] · [[zettel|↑ Zettel]] · [[zettel/beta|Beta ›]]\n",
+    );
+    write_grouped(
+        "beta",
+        "Beta",
+        "body",
+        "\n[[zettel/alpha|‹ Alpha]] · [[zettel|↑ Zettel]] · [[zettel/zeta|Zeta ›]]\n",
+    );
+    let fixture = RecordsFixture {
+        _temp: temp,
+        vault,
+        config,
+    };
+    let output = records_command(&fixture)
+        .args(["show", "note", "alpha", "-f", "json"])
+        .output()
+        .expect("show alpha");
+    assert_success(&output);
+    let payload = json(&output);
+    let walk = &payload["record"]["walk"];
+    assert_eq!(walk["state"], "current");
+    assert_eq!(walk["position"], 2);
+    assert_eq!(walk["total"], 3);
+    assert_eq!(walk["prev"]["stem"], "zeta");
+    assert_eq!(walk["next"]["stem"], "beta");
+    assert_eq!(
+        walk["group"],
+        serde_json::json!({
+            "field": "section",
+            "value": "body",
+            "label": "Body",
+            "index": 2,
+            "count": 2,
+            "position": 1,
+            "size": 2
+        })
+    );
+    assert_eq!(
+        walk["prev_group"],
+        serde_json::json!({
+            "value": "intro",
+            "label": "Intro",
+            "head": {
+                "stem": "zeta",
+                "path": "zettel/zeta.md",
+                "title": "Zeta"
+            },
+            "wraps": false
+        })
+    );
+    assert_eq!(
+        walk["next_group"],
+        serde_json::json!({
+            "value": "intro",
+            "label": "Intro",
+            "head": {
+                "stem": "zeta",
+                "path": "zettel/zeta.md",
+                "title": "Zeta"
+            },
+            "wraps": true
+        })
+    );
+
+    let first = records_command(&fixture)
+        .args(["show", "note", "zeta", "-f", "json"])
+        .output()
+        .expect("show zeta");
+    assert_success(&first);
+    let first_walk = &json(&first)["record"]["walk"];
+    assert_eq!(first_walk["group"]["index"], 1);
+    assert_eq!(first_walk["group"]["position"], 1);
+    assert_eq!(first_walk["prev_group"]["wraps"], true);
+    assert_eq!(first_walk["next_group"]["wraps"], false);
 }
 
 #[test]

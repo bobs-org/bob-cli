@@ -255,6 +255,7 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(eat["root"], "body");
     assert_eq!(eat["group_field"], "status");
     assert_eq!(eat["index_by"], "location");
+    assert!(eat["walk_by"].is_null());
     assert_eq!(
         eat["index_facets"],
         serde_json::json!(["category", "location"])
@@ -281,12 +282,17 @@ fn albums_list_and_check_json_shape() {
     assert_eq!(payload["counts"]["warnings"], 7);
     assert_eq!(
         payload["capabilities"],
-        serde_json::json!(["record_values_v1", "record_walk_v1"])
+        serde_json::json!([
+            "record_values_v1",
+            "record_walk_v1",
+            "record_walk_groups_v1"
+        ])
     );
     assert_eq!(eat["walk"]["state"], "stale");
     assert_eq!(eat["walk"]["total"], 4);
     assert_eq!(eat["walk"]["counts"]["missing"], 4);
     assert_eq!(eat["walk"]["counts"]["current"], 0);
+    assert_eq!(eat["walk"]["groups"], serde_json::json!([]));
     assert_eq!(
         eat["walk"]["order"],
         serde_json::json!(["ani_ramen_house", "bubble_tea", "cafe", "unknown"])
@@ -1402,6 +1408,144 @@ fn albums_index_warning_only_check_exits_zero() {
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["counts"]["errors"], 0);
     assert!(payload["counts"]["warnings"].as_u64().unwrap() >= 4);
+}
+
+#[test]
+fn walk_by_groups_the_report_independently_of_the_index() {
+    let (_temp, vault) = vault_fixture("albums-walk-by");
+    write_note(&vault, "body.md", area_note());
+    write_note(
+        &vault,
+        "zettel.md",
+        &album(
+            "body",
+            "Zettel",
+            "Notes.",
+            "note",
+            "walk_by: section\nindex_by: status\n",
+            "    status:\n      values: {open: Open, done: Done}\n    section:\n      values: {intro: Intro, empty: Empty, body: Body}\n",
+        ),
+    );
+    fs::create_dir_all(vault.join("zettel")).expect("zettel folder");
+    let record = |title: &str, fields: &str| {
+        format!(
+            "---\nparent: \"[[zettel]]\"\ntype: \"[[note]]\"\ntitle: {title}\n{fields}---\n\n# {title}\n"
+        )
+    };
+    write_note(
+        &vault,
+        "zettel/zeta.md",
+        &record("Zeta", "section: intro\nstatus: done\n"),
+    );
+    write_note(
+        &vault,
+        "zettel/alpha.md",
+        &record("Alpha", "section: body\nstatus: open\n"),
+    );
+    write_note(
+        &vault,
+        "zettel/beta.md",
+        &record("Beta", "section: body\nstatus: done\n"),
+    );
+    write_note(
+        &vault,
+        "zettel/needs.md",
+        &record("Needs", "status: open\n"),
+    );
+
+    let output = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list json");
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse");
+    assert_eq!(
+        payload["capabilities"],
+        serde_json::json!([
+            "record_values_v1",
+            "record_walk_v1",
+            "record_walk_groups_v1"
+        ])
+    );
+    let zettel = album_by_stem(&payload, "zettel");
+    assert_eq!(zettel["walk_by"], "section");
+    assert_eq!(zettel["group_field"], "status");
+    assert_eq!(zettel["index_by"], "status");
+    assert_eq!(
+        zettel["walk"]["order"],
+        serde_json::json!(["zeta", "alpha", "beta", "needs"])
+    );
+    assert_eq!(
+        zettel["walk"]["groups"],
+        serde_json::json!([
+            {
+                "value": "intro",
+                "label": "Intro",
+                "count": 1,
+                "head": {
+                    "stem": "zeta",
+                    "path": "zettel/zeta.md",
+                    "title": "Zeta"
+                }
+            },
+            {
+                "value": "body",
+                "label": "Body",
+                "count": 2,
+                "head": {
+                    "stem": "alpha",
+                    "path": "zettel/alpha.md",
+                    "title": "Alpha"
+                }
+            },
+            {
+                "value": null,
+                "label": "⚠️ Needs section",
+                "count": 1,
+                "head": {
+                    "stem": "needs",
+                    "path": "zettel/needs.md",
+                    "title": "Needs"
+                }
+            }
+        ])
+    );
+    let index_groups = zettel["groups"].as_array().unwrap();
+    assert_eq!(index_groups[0]["value"], "open");
+    assert_eq!(index_groups[1]["value"], "done");
+
+    write_note(
+        &vault,
+        "invalid.md",
+        &album(
+            "body",
+            "Invalid",
+            "Broken walk_by.",
+            "item",
+            "walk_by: missing\n",
+            "    status: {values: {open: Open}}\n",
+        ),
+    );
+    let invalid = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("invalid list");
+    let payload: Value =
+        serde_json::from_str(stdout(&invalid).trim()).expect("parse invalid");
+    let album = album_by_stem(&payload, "invalid");
+    assert!(album["walk_by"].is_null());
+    assert_eq!(album["walk"]["groups"], serde_json::json!([]));
+    assert!(
+        album["issues"].as_array().unwrap().iter().any(|issue| {
+            issue["code"] == "album_walk_field_unknown"
+                && issue["severity"] == "warning"
+                && issue["message"]
+                    == "walk_by names undeclared field \"missing\""
+        }),
+        "invalid walk_by finding: {album}"
+    );
+    assert_eq!(payload["counts"]["errors"], 0);
 }
 
 fn init_vault_git(vault: &Path) {

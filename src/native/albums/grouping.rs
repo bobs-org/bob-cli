@@ -97,6 +97,14 @@ pub(crate) struct RecordSubgroup {
     pub(crate) members: Vec<GroupingRecord>,
 }
 
+/// Occupied choice bucket in declared order, before title or subgroup sort.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChoiceBucket<'a> {
+    pub(crate) value: String,
+    pub(crate) label: String,
+    pub(crate) members: Vec<&'a GroupingRecord>,
+}
+
 /// Project counts, groups, peeks, facets, and freshness from schema
 /// plus folder members. `explicit_facets` is the authored `index_facets`
 /// list; an empty slice selects the default facet rule.
@@ -127,39 +135,18 @@ pub(crate) fn group_records(
         };
     };
 
-    let FieldKind::Choices(choices) = &group_field.kind else {
-        unreachable!("group_field only returns choices fields");
-    };
-    let mut buckets: Vec<Vec<&GroupingRecord>> =
-        (0..choices.len()).map(|_| Vec::new()).collect();
-    let mut needs: Vec<&GroupingRecord> = Vec::new();
-    for record in records {
-        match group_value(group_field, record) {
-            Some(value) => {
-                if let Some(index) =
-                    choices.iter().position(|choice| choice.value == value)
-                {
-                    buckets[index].push(record);
-                } else {
-                    needs.push(record);
-                }
-            }
-            None => needs.push(record),
-        }
-    }
-
-    let mut groups = Vec::new();
-    for (choice, members) in choices.iter().zip(buckets) {
-        if members.is_empty() {
-            continue;
-        }
-        groups.push(finish_group(
-            choice.value.clone(),
-            choice.label.clone(),
-            &members,
-            index_by,
-        ));
-    }
+    let (occupied, needs) = bucket_choice_members(group_field, records);
+    let groups = occupied
+        .iter()
+        .map(|bucket| {
+            finish_group(
+                bucket.value.clone(),
+                bucket.label.clone(),
+                &bucket.members,
+                index_by,
+            )
+        })
+        .collect();
     let needs_status = needs.len();
     let needs = if needs.is_empty() {
         None
@@ -201,6 +188,56 @@ pub(crate) fn group_field(fields: &[RecordField]) -> Option<&RecordField> {
         })
 }
 
+/// Needs-group heading for a walk grouped by `field`. Index grouping keeps
+/// the status wording even when the auto-picked field is not status.
+pub(crate) fn needs_group_label(field: &RecordField) -> String {
+    if field.key == "status" {
+        NEEDS_STATUS_LABEL.to_owned()
+    } else {
+        format!("⚠️ Needs {}", field.key)
+    }
+}
+
+/// Bucket records by a choices field in declared choice order. Empty
+/// choices are omitted. Missing, blank, malformed, list-shaped, and
+/// undeclared values collect in `needs`. Callers choose subgrouping.
+pub(crate) fn bucket_choice_members<'a>(
+    field: &RecordField,
+    records: &'a [GroupingRecord],
+) -> (Vec<ChoiceBucket<'a>>, Vec<&'a GroupingRecord>) {
+    let FieldKind::Choices(choices) = &field.kind else {
+        return (Vec::new(), records.iter().collect());
+    };
+    let mut buckets: Vec<Vec<&GroupingRecord>> =
+        (0..choices.len()).map(|_| Vec::new()).collect();
+    let mut needs: Vec<&GroupingRecord> = Vec::new();
+    for record in records {
+        match group_value(field, record) {
+            Some(value) => {
+                if let Some(index) =
+                    choices.iter().position(|choice| choice.value == value)
+                {
+                    buckets[index].push(record);
+                } else {
+                    needs.push(record);
+                }
+            }
+            None => needs.push(record),
+        }
+    }
+    let occupied = choices
+        .iter()
+        .zip(buckets)
+        .filter(|(_, members)| !members.is_empty())
+        .map(|(choice, members)| ChoiceBucket {
+            value: choice.value.clone(),
+            label: choice.label.clone(),
+            members,
+        })
+        .collect();
+    (occupied, needs)
+}
+
 fn facets(
     fields: &[RecordField],
     group_key: Option<&str>,
@@ -236,7 +273,10 @@ fn facets(
     selected
 }
 
-fn group_value(field: &RecordField, record: &GroupingRecord) -> Option<String> {
+pub(crate) fn group_value(
+    field: &RecordField,
+    record: &GroupingRecord,
+) -> Option<String> {
     let value = record
         .fields
         .iter()
@@ -861,6 +901,62 @@ mod tests {
         assert!(subgroups[1].missing);
         assert_eq!(subgroups[1].display, MISSING_SUBGROUP);
         assert_eq!(subgroups[1].members[0].title, "Place 07");
+    }
+
+    #[test]
+    fn walk_buckets_follow_an_explicit_non_status_field() {
+        let section = choices(
+            "section",
+            &[("intro", "Intro"), ("empty", "Empty"), ("body", "Body")],
+        );
+        let status = choices("status", &[("open", "Open"), ("done", "Done")]);
+        let records = vec![
+            record(
+                "z/b.md",
+                "Beta",
+                None,
+                &[("section", scalar("body")), ("status", scalar("open"))],
+            ),
+            record(
+                "z/a.md",
+                "Alpha",
+                None,
+                &[("section", scalar("intro")), ("status", scalar("done"))],
+            ),
+            record(
+                "z/c.md",
+                "Gamma",
+                None,
+                &[("section", scalar("body")), ("status", scalar("done"))],
+            ),
+            record("z/needs.md", "Needs", None, &[("status", scalar("open"))]),
+        ];
+        let (occupied, needs) = bucket_choice_members(&section, &records);
+        assert_eq!(
+            occupied
+                .iter()
+                .map(|bucket| bucket.value.as_str())
+                .collect::<Vec<_>>(),
+            ["intro", "body"]
+        );
+        assert_eq!(occupied[0].members[0].title, "Alpha");
+        assert_eq!(
+            occupied[1]
+                .members
+                .iter()
+                .map(|record| record.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Beta", "Gamma"]
+        );
+        assert_eq!(needs.len(), 1);
+        assert_eq!(needs[0].title, "Needs");
+        assert_eq!(needs_group_label(&section), "⚠️ Needs section");
+        assert_eq!(needs_group_label(&status), NEEDS_STATUS_LABEL);
+
+        let index =
+            group_records(&[status.clone(), section], None, &[], &records);
+        assert_eq!(index.group_field.as_deref(), Some("status"));
+        assert_eq!(index.groups[0].value, "open");
     }
 
     #[test]
