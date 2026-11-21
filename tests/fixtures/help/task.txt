@@ -1,4 +1,4 @@
-Task maintenance: archive, merge, move, reconcile, reroll, restore, split
+Task maintenance: archive, merge, move, reconcile, reroll, restore, split, tidy
 
 Every `bob task` command rewrites task lines across the whole vault.
 
@@ -12,6 +12,7 @@ Commands:
   reroll     Re-roll due prioritized tasks within their priority windows
   restore    Restore archived tasks to their source notes
   split      Split task notes into linked tasks
+  tidy       Repair open task blocks into canonical child order
 
 Options:
   -h, --help  Print help
@@ -24,6 +25,7 @@ Examples:
   bob task reconcile --dry-run   Preview task status reconciliation
   bob task reroll --dry-run      Preview re-rolling due prioritized tasks
   bob task restore --dry-run     Preview restoring archived tasks home
+  bob task tidy                  Preview repairing open task blocks
 
 See also: bob plan, bob ready, bob freshness, bob projects, bob query
 Run 'bob task <command> --help' for more information on a command.

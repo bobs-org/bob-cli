@@ -140,6 +140,7 @@ mod task_status_hooks;
 mod task_status_hooks_write;
 mod task_text_escape;
 mod task_theme;
+mod task_tidy;
 mod templater;
 #[cfg(test)]
 pub(crate) mod test_stub;
@@ -211,6 +212,7 @@ pub(crate) enum NativeCommand {
     TaskMove,
     TaskRestore,
     TaskSplit,
+    TaskTidy,
     Nightly,
     Tick,
     NotebooksCheck,
@@ -333,6 +335,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::TaskMove => task_move::run(args),
         NativeCommand::TaskRestore => task_move::run_restore(args),
         NativeCommand::TaskSplit => task_split::run(args),
+        NativeCommand::TaskTidy => task_tidy::run(args),
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::Tick => tick::run(args),
         NativeCommand::NotebooksCheck => notebooks::cli::run_check(args),

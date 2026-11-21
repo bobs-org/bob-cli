@@ -265,6 +265,45 @@ writes req completion.
 Only creating writers refuse depth: drop and restore are state edits and work
 at any depth.
 
+### 3.4 Tidying task blocks
+
+`bob task tidy [ROUTE...]` is the explicit, on-request repair of layout drift.
+It runs `plan_tidy` (§3.2) over every **open** `#task` block in the vault, so
+whole subtrees move into their zones and a req-owning task's loose notes are
+filed into `NOTES`. Nothing else ever reorders a block: no writer, no
+`bob task reconcile`, and no background pass.
+
+- **Scope.** Every note except archive history under `done/`, plus the
+  always-excluded `_generated/`, `_templates/`, `_conflicts/`, and dot
+  directories. Done and cancelled tasks are history and are never rewritten;
+  an open subtask under a closed task is still tidied. Each `ROUTE` narrows the
+  scope to one note: a capture route such as `bob` or `@bob`, or a
+  vault-relative path with or without `.md`. A route that names no note
+  (`unknown_route`) or a note out of scope (`route_out_of_scope`) exits 2
+  before anything is planned.
+- **One pass per note.** Tasks are planned top to bottom. A repair rewrites
+  only lines inside its own block, so the pass rescans after each repair and
+  resumes just below that task line; a nested subtask moved by its parent is
+  repaired next, in the same run.
+- **Dry run by default.** A bare run takes no lock, writes nothing, runs no
+  Git, and does no sync. Human output groups the repaired tasks by note, each
+  with a colored before/after excerpt of its block, and ends with
+  `{t} tasks in {n} notes · {m} moves · {s} notes filed under NOTES`.
+  `-f json` reports the same plan (`schema_version: 1`; see
+  [JSON outputs](reference/json-outputs.md)); each task's `line` is where the
+  task line sits after the repair.
+- **Apply.** `-a` takes the shared vault lock, pre-syncs, replans, writes every
+  note guarded by its full preimage (a note edited since planning fails as
+  `stale_note` and nothing is written), verifies that every rewritten note
+  plans no further repair, makes one scoped commit
+  `bob task tidy ({t} tasks in {n} notes)`, and post-syncs only when it
+  committed.
+- **Safety.** A planned note must keep every nonblank line exactly once,
+  indentation aside, and may only add the `NOTES` headers it reports. A note
+  that fails the check, or that a second pass would still change, is left
+  unchanged with a warning.
+- **Idempotent.** A second run reports nothing.
+
 ## 4. Rendering
 
 **Glyph.** The run reuses the tag-mark hash mask, tightly kerned: depth 1
@@ -383,8 +422,8 @@ mark, `[>]` stubs become `## Notes` lines verbatim, and loose notes plus
 (open, closed, and archived tasks, plus `^prj` `## Requirements` sections,
 which become `## Notes`), preserving content byte for byte; drawer bullets
 never become reqs. Where the owner already has `NOTES`, the two merge, and
-heading links are repaired. One `bob task tidy` pass then repairs open task
-blocks into canonical order. Both run as gated, previewed, one-commit
+heading links are repaired. One `bob task tidy` pass (§3.4) then repairs open
+task blocks into canonical order. Both run as gated, previewed, one-commit
 writes. (Shipped in the `drawer-rename`, `task-tidy`, and
 `vault-migration` phases.)
 

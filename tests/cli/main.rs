@@ -47,6 +47,7 @@ mod support;
 mod task_merge;
 mod task_move;
 mod task_status_hooks;
+mod task_tidy;
 mod themes;
 mod themes_migrate;
 mod themes_rename;

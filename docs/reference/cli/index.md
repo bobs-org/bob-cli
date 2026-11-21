@@ -47,7 +47,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob relations list`](relations.md#bob-relations-list) | List relation labels in the vault (default) |
 | [`bob relations rename`](relations.md#bob-relations-rename) | Rename a relation label everywhere in one commit |
 | [`bob relations unhide`](relations.md#bob-relations-unhide) | Show hidden relation labels in suggestions again |
-| [`bob task`](task.md) | Task maintenance: archive, merge, move, reconcile, reroll, restore, split |
+| [`bob task`](task.md) | Task maintenance: archive, merge, move, reconcile, reroll, restore, split, tidy |
 | [`bob task archive`](task.md#bob-task-archive) | Move done and canceled tasks from area and project notes |
 | [`bob task merge`](task.md#bob-task-merge) | Fold tasks into a task, drawer, or note section |
 | [`bob task move`](task.md#bob-task-move) | Move open tasks between notes and repair vault links |
@@ -55,6 +55,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob task reroll`](task.md#bob-task-reroll) | Re-roll due prioritized tasks within their priority windows |
 | [`bob task restore`](task.md#bob-task-restore) | Restore archived tasks to their source notes |
 | [`bob task split`](task.md#bob-task-split) | Split task notes into linked tasks |
+| [`bob task tidy`](task.md#bob-task-tidy) | Repair open task blocks into canonical child order |
 
 ## Vault
 
@@ -177,7 +178,7 @@ Tasks and projects:
   projects     List and sync project notes via their ^prj tasks
   relations    List, hide, unhide, and rename relation labels
   task         Task maintenance: archive, merge, move, reconcile, reroll,
-               restore, split
+               restore, split, tidy
 
 Vault:
   albums       Inspect album notes

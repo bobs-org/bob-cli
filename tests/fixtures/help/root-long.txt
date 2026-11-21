@@ -24,7 +24,7 @@ Tasks and projects:
   projects     List and sync project notes via their ^prj tasks
   relations    List, hide, unhide, and rename relation labels
   task         Task maintenance: archive, merge, move, reconcile, reroll,
-               restore, split
+               restore, split, tidy
 
 Vault:
   albums       Inspect album notes

@@ -225,6 +225,14 @@ const TASK_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "tidy",
+        about: "Repair open task blocks into canonical child order",
+        leaf: Leaf {
+            native_command: NativeCommand::TaskTidy,
+            script_command: None,
+        },
+    },
 ];
 
 const POMODORO_MEMBERS: &[Member] = &[
@@ -263,6 +271,7 @@ Examples:
   bob task reconcile --dry-run   Preview task status reconciliation
   bob task reroll --dry-run      Preview re-rolling due prioritized tasks
   bob task restore --dry-run     Preview restoring archived tasks home
+  bob task tidy                  Preview repairing open task blocks
 
 See also: bob plan, bob ready, bob freshness, bob projects, bob query
 Run 'bob task <command> --help' for more information on a command.";
@@ -1131,7 +1140,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "task",
-        about: "Task maintenance: archive, merge, move, reconcile, reroll, restore, split",
+        about: "Task maintenance: archive, merge, move, reconcile, reroll, restore, split, tidy",
         section: Section::TasksAndProjects,
         target: Target::Group(Group {
             members: TASK_MEMBERS,
@@ -2775,6 +2784,7 @@ mod tests {
             NativeCommand::TaskMove,
             NativeCommand::TaskRestore,
             NativeCommand::TaskSplit,
+            NativeCommand::TaskTidy,
             NativeCommand::Nightly,
             NativeCommand::Tick,
             NativeCommand::NotebooksCheck,
