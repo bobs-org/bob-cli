@@ -1394,6 +1394,184 @@ fn url_only_pdf_note_files_into_a_synced_vault() {
     assert_eq!(events[0]["path"], "lib/papers/paper.pdf");
 }
 
+/// A one-page render carrying one URI link annotation, standing in for
+/// the adapter's printed article.
+fn write_link_pdf(path: &Path, uri: &str) {
+    use lopdf::{dictionary, Document, Object, Stream};
+    let mut doc = Document::with_version("1.4");
+    let pages_id = doc.new_object_id();
+    let content_id = doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+    let annotation_id = doc.add_object(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Link",
+        "Rect" => vec![
+            Object::Integer(72),
+            Object::Integer(700),
+            Object::Integer(200),
+            Object::Integer(712),
+        ],
+        "A" => dictionary! {
+            "S" => "URI",
+            "URI" => Object::string_literal(uri),
+        },
+    });
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(612),
+            Object::Integer(792),
+        ],
+        "Contents" => content_id,
+        "Annots" => vec![Object::Reference(annotation_id)],
+    });
+    doc.set_object(
+        pages_id,
+        dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        },
+    );
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+    doc.save(path).expect("write link PDF");
+}
+
+fn pandoc_available() -> bool {
+    Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// One JSON Keep pull of an article note into a synced vault. With
+/// `source_view`, the fake adapter reports a source view and prints a
+/// link-annotated render, so ingest saves the source store.
+fn pull_article_json(prefix: &str, source_view: bool) -> (GkeepEnv, Output) {
+    const LINK: &str = "https://example.com/docs";
+    let (env, fake, state, _token) = setup(prefix);
+    env.init_synced_origin();
+    let (curl, root, log) = write_clip_curl(state.path());
+    let render = state.path().join("render");
+    fs::create_dir_all(&render).expect("render dir");
+    let source_html = render.join("source.html");
+    fs::write(
+        &source_html,
+        format!(
+            "<!DOCTYPE html>\n<html><body><article>\n<h1>Article One</h1>\n\
+             <p>Read the <a href=\"{LINK}\">docs</a> first.</p>\n\
+             </article></body></html>\n"
+        ),
+    )
+    .expect("write source view");
+    let mut response = serde_json::json!({
+        "protocol": 1,
+        "ok": true,
+        "op": "capture",
+        "kind": "article",
+        "final_url": "https://example.com/article-one",
+        "title": "Article One",
+        "author": "Jane Doe",
+        "published": "2026-04-27",
+        "site": "Example",
+        "description": "",
+        "metadata_sources": {},
+        "word_count": 6,
+        "capture": {
+            "browser": "chrome",
+            "browser_version": "154.0.0",
+            "mode": "headless",
+            "retried_after_challenge": false,
+        },
+        "fidelity": {"status": "ok"},
+        "images": {"total": 0, "kept": 0, "skipped_small": 0, "failed": 0},
+        "pdf_bytes": null,
+        "warnings": [],
+    });
+    if source_view {
+        response["source_html"] =
+            serde_json::json!(source_html.to_string_lossy());
+    }
+    let (clip, clip_root) = write_clip_adapter(
+        state.path(),
+        &serde_json::to_string(&response).expect("response JSON"),
+    );
+    write_link_pdf(&clip_root.join("fixture.pdf"), LINK);
+    let n1 = note("")
+        .id("note-1")
+        .text("https://example.com/article-one")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let mut extra = curl_env(&curl, &root, &log);
+    extra.push(("BOB_WEB_CLIP_ADAPTER", clip.to_str().expect("clip path")));
+    let out = run_pull(&env, &fake, &state, &["-f", "json"], &extra);
+    (env, out)
+}
+
+#[test]
+fn article_pull_saves_the_source_store_with_unchanged_json() {
+    if !pandoc_available() {
+        eprintln!("skipping article source store pull: pandoc is required");
+        return;
+    }
+    let (env, out) =
+        pull_article_json("bob-cli-gkeep-pull-ref-article-store", true);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let body = stdout(&out);
+    let doc: serde_json::Value =
+        serde_json::from_str(&body).expect("stdout is exactly one JSON doc");
+    assert_eq!(doc["notes"][0]["clip"]["outcome"], "created", "{doc}");
+    assert_eq!(doc["notes"][0]["clip"]["intake"], "ingested", "{doc}");
+    assert_eq!(doc["notes"][0]["clip"]["note"], "ref/blogs/article_one.md");
+    assert!(
+        !body.contains("source_markdown") && !stderr(&out).contains("warning"),
+        "ingest prints no store lines:\n{body}\n{}",
+        stderr(&out)
+    );
+
+    // The JSON document is the same with and without a saved store.
+    let (_plain_env, plain) =
+        pull_article_json("bob-cli-gkeep-pull-ref-article-plain", false);
+    assert_eq!(plain.status.code(), Some(0), "{}", stderr(&plain));
+    let plain_doc: serde_json::Value =
+        serde_json::from_str(&stdout(&plain)).expect("plain JSON parses");
+    assert_eq!(doc, plain_doc, "store must not change pull JSON");
+
+    let note_text =
+        fs::read_to_string(env.vault().join("ref/blogs/article_one.md"))
+            .expect("read filed note");
+    let pointer = note_text
+        .lines()
+        .find_map(|line| line.strip_prefix("source_markdown: "))
+        .unwrap_or_else(|| panic!("note must carry a pointer:\n{note_text}"))
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    assert!(
+        pointer.starts_with(".bob/ref-sources/blogs/article_one--"),
+        "{pointer}"
+    );
+    assert!(env.vault().join(&pointer).is_file(), "missing {pointer}");
+
+    let links = env
+        .command()
+        .args(["ref", "links", "article_one", "-f", "json"])
+        .output()
+        .expect("run bob ref links");
+    assert_eq!(links.status.code(), Some(0), "{}", stderr(&links));
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&links)).expect("links JSON");
+    assert_eq!(value["status"], "available", "{value}");
+    assert_eq!(value["links"][0]["url"], "https://example.com/docs");
+}
+
 #[test]
 fn second_note_with_same_url_reports_already_queued() {
     let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-queued");

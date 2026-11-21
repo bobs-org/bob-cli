@@ -974,6 +974,166 @@ fn ref_jobs_run_ingests_into_a_synced_vault() {
 }
 
 #[test]
+fn ref_jobs_run_saves_the_source_store_for_a_filed_article() {
+    use super::web_source_store::{
+        skip_unless_pandoc, stage_source_view, LINK_URI,
+    };
+    if skip_unless_pandoc("jobs run article source store") {
+        return;
+    }
+    let temp = TempDir::new("bob-cli-ref-jobs-store");
+    let vault = seed_jobs_git_vault(&temp);
+    let fake = FakeClip::new(&temp, "fake");
+    stage_source_view(&temp, &fake);
+    let curl = write_article_curl(temp.path(), 0);
+    seed_pending(&temp, &vault, "20261007T143012-aaaaaa", FIXED_CREATED_AT);
+    let before =
+        String::from_utf8(git_in(&vault, ["rev-parse", "HEAD"]).stdout)
+            .expect("head is utf8");
+    let before = before.trim().to_string();
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "1")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .output()
+        .expect("run bob ref jobs run with a source view");
+    assert_success(&output);
+    let report = stdout(&output);
+    // `post` is a skipped segment, so the stem is the adapter title.
+    assert!(
+        report.contains(
+            "✓ filed example.com/post → ref/blogs/fixture_article.md"
+        ),
+        "{report}"
+    );
+    // Ingest prints none of create's store report lines.
+    assert!(
+        !report.contains("source_markdown:")
+            && !report.contains("code:")
+            && !report.contains("links:"),
+        "{report}"
+    );
+    assert!(
+        !format_output(&output).contains("warning:"),
+        "a clean store writes no warning: {}",
+        format_output(&output)
+    );
+
+    let note = fs::read_to_string(vault.join("ref/blogs/fixture_article.md"))
+        .expect("read filed note");
+    let pointer = note
+        .lines()
+        .find_map(|line| line.strip_prefix("source_markdown: "))
+        .unwrap_or_else(|| panic!("note must carry a pointer:\n{note}"))
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    assert!(
+        pointer.starts_with(".bob/ref-sources/blogs/fixture_article--")
+            && pointer.ends_with("/source.md"),
+        "{pointer}"
+    );
+    assert!(vault.join(&pointer).is_file(), "missing store: {pointer}");
+    // The ingest commit carries the store unless the pre-sync already
+    // committed it, so check the whole range.
+    let committed = git_in(
+        &vault,
+        [
+            "log",
+            "--name-only",
+            "--format=",
+            &format!("{before}..HEAD"),
+        ],
+    );
+    let committed = String::from_utf8_lossy(&committed.stdout).into_owned();
+    let code_json = pointer.replace("/source.md", "/code.json");
+    for required in [pointer.as_str(), code_json.as_str()] {
+        assert!(
+            committed.lines().any(|line| line == required),
+            "{required} must be committed:\n{committed}"
+        );
+    }
+
+    let links = bob_command()
+        .args(["ref", "links", "fixture_article", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob ref links");
+    assert_success(&links);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&links)).expect("links JSON");
+    assert_eq!(value["status"], "available", "{value}");
+    assert_eq!(value["links"][0]["url"], LINK_URI, "{value}");
+}
+
+#[test]
+fn ref_jobs_run_queued_article_store_is_adopted_at_scan() {
+    use super::scan_intake::scan_command;
+    use super::web_source_store::{skip_unless_pandoc, stage_source_view};
+    if skip_unless_pandoc("jobs run queued article source store") {
+        return;
+    }
+    let temp = TempDir::new("bob-cli-ref-jobs-store-queued");
+    let vault = seed_jobs_git_vault(&temp);
+    let fake = FakeClip::new(&temp, "fake");
+    stage_source_view(&temp, &fake);
+    let curl = write_article_curl(temp.path(), 0);
+    seed_pending(&temp, &vault, "20261007T143012-aaaaaa", FIXED_CREATED_AT);
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "0")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .output()
+        .expect("run bob ref jobs run with intake off");
+    assert_success(&output);
+    assert!(vault.join("xlib/blogs/fixture_article.pdf").is_file());
+    let stores = vault.join(".bob/ref-sources/blogs");
+    let store_dirs: Vec<String> = fs::read_dir(&stores)
+        .expect("the queued capture still saves its store")
+        .map(|entry| {
+            entry
+                .expect("store entry")
+                .file_name()
+                .into_string()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(store_dirs.len(), 1, "{store_dirs:?}");
+    let pointer = format!(".bob/ref-sources/blogs/{}/source.md", store_dirs[0]);
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("drain the queued article");
+    assert_success(&output);
+    let filed = fs::read_to_string(vault.join("ref/blogs/fixture_article.md"))
+        .expect("read drained note");
+    assert!(
+        filed
+            .lines()
+            .any(|line| line.trim() == format!("source_markdown: {pointer}")),
+        "scan adopts the store by PDF digest:\n{filed}"
+    );
+}
+
+#[test]
 fn ref_jobs_run_rejects_an_invalid_ingest_on_create_env_before_xlib_write() {
     let temp = TempDir::new("bob-cli-ref-jobs-invalid-env");
     let vault = seed_jobs_git_vault(&temp);

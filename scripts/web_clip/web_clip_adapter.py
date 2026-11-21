@@ -2097,6 +2097,11 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             article_json_path: str | None = None
             rendered_output: dict | None = None
             if not dry_run:
+                # The masthead prints the recorded URL: Rust already cleaned
+                # the request URL, and the PDF marker records the same one.
+                # The post-redirect page URL is only the base for relative
+                # links. The response's final_url stays the landed URL for
+                # Rust's redirect guards.
                 article = {
                     "title": title,
                     "author": author,
@@ -2104,7 +2109,8 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                     "site": site,
                     "description": extracted.get("description"),
                     "html": sanitized,
-                    "source_url": final_url,
+                    "source_url": url,
+                    "base_url": final_url,
                     "captured": request.get("captured"),
                     "fidelity": {"status": status, **page_counts},
                     "images": images,
@@ -2513,12 +2519,19 @@ def dispatch(data: dict) -> dict:
     return OPS[data["op"]](data)
 
 
-def _fixture_hook_factory(directory: str, statuses: dict | None = None):
+def _fixture_hook_factory(directory: str, statuses: dict | None = None,
+                          landings: dict | None = None):
     """Serve ``directory/*.html`` at ``https://fixture.bob-clip.invalid/``.
 
     ``statuses`` maps a fixture name to its HTTP status (default 200); the
     403 entry proves a challenge page served as HTTP 403 still reaches the
     challenge fallback instead of failing as a network error.
+
+    ``landings`` maps a requested name to ``(fixture, landed_path)``: the
+    hook serves that fixture plus a relative ``next-part`` link, and a head
+    script moves the page to ``landed_path``. A fulfilled 3xx cannot stand
+    in for a redirect (Chromium sends the next hop past the route, to DNS),
+    so this is how fixtures land on a URL other than the request URL.
     """
 
     def _hook(route) -> bool:
@@ -2528,6 +2541,22 @@ def _fixture_hook_factory(directory: str, statuses: dict | None = None):
             return False
         if urlsplit(route.request.url).hostname != FIXTURE_HOST:
             return False
+        if name in (landings or {}):
+            fixture, landed = landings[name]
+            with open(os.path.join(directory, fixture), "rb") as handle:
+                body = handle.read()
+            script = ("<script>history.replaceState(null, '', "
+                      f"{json.dumps(landed)});</script>").encode()
+            body = body.replace(b"<head>", b"<head>" + script, 1)
+            body = body.replace(
+                b"</article>",
+                b'<p>Read the <a href="next-part">next part</a> of the '
+                b"series.</p></article>", 1)
+            route.fulfill(status=200,
+                          headers={"content-type":
+                                   "text/html; charset=utf-8"},
+                          body=body)
+            return True
         if not name or "/" in name or not name.endswith(".html"):
             return False
         path = os.path.join(directory, name)
@@ -3880,6 +3909,52 @@ def self_test() -> int:
           and "<p>A source dek.</p>" in source_view
           and "Ada Example · April 27, 2026" in source_view
           and "https://example.com/path/article" in source_view)
+    redirected_article = {
+        "title": "Moved title",
+        "captured": "2026-10-01",
+        "source_url": "https://example.com/post/moved",
+        "base_url": "https://www.example.com/landed/post?nd=1&dlsi=abc",
+        "word_count": 3,
+        "html": '<p>Read <a href="next">the next part</a>.</p>',
+    }
+    redirected_source = _render.assemble_source(redirected_article)
+    redirected_page = _render.assemble(redirected_article)
+    check("source view prints the recorded URL, not the landed URL",
+          '<a href="https://example.com/post/moved">'
+          "https://example.com/post/moved</a>" in redirected_source
+          and "dlsi" not in redirected_source)
+    check("source view resolves relative links against the landed URL",
+          'href="https://www.example.com/landed/next"' in redirected_source)
+    check("printed masthead prints the recorded URL, not the landed URL",
+          '<a href="https://example.com/post/moved">'
+          "https://example.com/post/moved</a>" in redirected_page
+          and "dlsi" not in redirected_page)
+    check("link base falls back to source_url for older article.json",
+          _render.link_base_url({"source_url": "https://example.com/a"})
+          == "https://example.com/a"
+          and _render.link_base_url(redirected_article)
+          == "https://www.example.com/landed/post?nd=1&dlsi=abc"
+          and _render.link_base_url({}) == "")
+    redirected_part, _part_images = _render.prepare_part(
+        redirected_article, os.path.join(offline_dir, "no-assets"), 1,
+        os.path.join(offline_dir, "part-assets"),
+        os.path.join(offline_dir, "part-render-assets"), [])
+    redirected_collection = _render.assemble_collection(
+        [redirected_part], {"title": "Packet", "captured": "2026-10-01"})
+    redirected_collection_source = _render.assemble_collection_source(
+        [redirected_article], {"title": "Packet", "captured": "2026-10-01"})
+    check("collection parts print the recorded URL and resolve links "
+          "against the landed URL",
+          'href="https://www.example.com/landed/next"'
+          in redirected_collection
+          and 'href="https://www.example.com/landed/next"'
+          in redirected_collection_source
+          and '<a href="https://example.com/post/moved">'
+          in redirected_collection
+          and '<a href="https://example.com/post/moved">'
+          in redirected_collection_source
+          and "dlsi" not in redirected_collection
+          and "dlsi" not in redirected_collection_source)
     check("source view resolves links and restores clean image origin",
           'href="https://example.com/next"' in source_view
           and '<img src="https://example.com/a.png" alt="figure" '
@@ -4283,6 +4358,51 @@ def self_test() -> int:
               and os.path.isfile(skip_resp["article_json"]))
         check("render false omits out_pdf",
               not os.path.isfile(os.path.join(skip_workdir, "render.pdf")))
+
+        landed_path = "/landed/article_basic.html?nd=1&dlsi=tracking"
+        landed_url = f"https://{FIXTURE_HOST}{landed_path}"
+        moved_url = f"https://{FIXTURE_HOST}/moved_article.html"
+        landing_hook = _fixture_hook_factory(
+            fixtures_dir,
+            landings={"moved_article.html": ("article_basic.html",
+                                             landed_path)})
+        moved_workdir = tempfile.mkdtemp(prefix="bob-clip-moved-")
+        moved_resp, _moved_debug = run_capture(
+            {"protocol": 1, "op": "capture", "url": moved_url,
+             "html_path": None, "workdir": moved_workdir,
+             "out_pdf": os.path.join(moved_workdir, "render.pdf"),
+             "dry_run": False, "captured": "2026-10-01",
+             "overrides": {"title": None, "author": None,
+                           "published": None}},
+            route_hook=landing_hook)
+        moved_article: dict = {}
+        moved_texts: list[str] = []
+        try:
+            with open(os.path.join(moved_workdir, "article.json"),
+                      encoding="utf-8") as handle:
+                moved_article = json.load(handle)
+            for path in (os.path.join(moved_workdir, "render",
+                                      "article.html"),
+                         moved_resp.get("source_html") or ""):
+                with open(path, encoding="utf-8") as handle:
+                    moved_texts.append(handle.read())
+        except (OSError, ValueError, TypeError):
+            pass
+        check("redirected capture keeps the landed final_url",
+              moved_resp.get("ok") is True
+              and moved_resp.get("final_url") == landed_url)
+        check("redirected article.json records the request URL",
+              moved_article.get("source_url") == moved_url
+              and moved_article.get("base_url") == landed_url)
+        check("redirected masthead and source view print the request URL",
+              len(moved_texts) == 2
+              and all(f'<a href="{moved_url}">{moved_url}</a>' in text
+                      and "dlsi" not in text
+                      for text in moved_texts))
+        check("redirected relative links resolve against the landed page",
+              len(moved_texts) == 2
+              and f'href="https://{FIXTURE_HOST}/landed/next-part"'
+              in moved_texts[1])
 
         compose_print_dir = os.path.join(collection_root, "print")
         os.makedirs(compose_print_dir, exist_ok=True)

@@ -422,6 +422,17 @@ def namespace_ids(markup: str, prefix: str) -> str:
     return _rewrite_start_tag_attributes(markup, rewrite)
 
 
+def link_base_url(article: dict) -> str:
+    """Return the base for an article's relative links.
+
+    ``source_url`` is the recorded (cleaned request) URL that the masthead
+    and source view print; ``base_url`` is the post-redirect page URL that
+    relative links resolve against. Older ``article.json`` files carry only
+    ``source_url``.
+    """
+    return article.get("base_url") or article.get("source_url") or ""
+
+
 def resolve_relative_hrefs(markup: str, base_url: str) -> str:
     """Resolve relative ``href`` / ``xlink:href`` against ``base_url``."""
     if not base_url:
@@ -702,8 +713,8 @@ def _source_document(title: str, body: str) -> str:
 
 def assemble_source(article: dict) -> str:
     """Build the semantic HTML source view for a single printed article."""
-    source_url = article.get("source_url") or ""
-    body = resolve_relative_hrefs(article.get("html") or "", source_url)
+    body = resolve_relative_hrefs(article.get("html") or "",
+                                  link_base_url(article))
     body = source_images(shift_headings(body))
     fields = _masthead_fields(article, body)
     masthead = [f'<h1>{html.escape(fields["title"])}</h1>']
@@ -731,8 +742,8 @@ def assemble_collection_source(parts: list[dict], collection: dict) -> str:
 
     sections: list[str] = []
     for part in parts:
-        source_url = part.get("source_url") or ""
-        body = resolve_relative_hrefs(part.get("html") or "", source_url)
+        body = resolve_relative_hrefs(part.get("html") or "",
+                                      link_base_url(part))
         body = source_images(shift_headings(body, target_level=3))
         fields = _masthead_fields(part, body)
         sections.append(f'<h2>{html.escape(fields["title"])}</h2>')
@@ -883,7 +894,7 @@ def prepare_part(article: dict, assets_dir: str, index: int,
     """Namespace ids, prefix assets, and normalize images for one part."""
     prefix = f"p{index}-"
     markup = article.get("html") or ""
-    markup = resolve_relative_hrefs(markup, article.get("source_url") or "")
+    markup = resolve_relative_hrefs(markup, link_base_url(article))
     markup = namespace_ids(markup, prefix)
     markup = prefix_part_assets(
         markup, assets_dir, prefix, combined_assets_dir)

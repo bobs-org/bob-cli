@@ -190,7 +190,11 @@ segments. Decoding runs once, so `%2541` stays distinct from `A`.
 
 The stored `source_url` is the parsed URL with its fragment and tracking
 parameters removed. The dedupe key's additional path-escape normalization
-is used for comparison, not written back over `source_url`.
+is used for comparison, not written back over `source_url`. The PDF
+masthead and the saved source view print this recorded URL, the same one
+the PDF marker stores, even when the page redirected. Relative article
+links still resolve against the post-redirect page: the adapter writes it
+to `article.json` as `base_url`, next to `source_url`.
 [Library lookup](ref.md#identity) uses the same key.
 
 Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a

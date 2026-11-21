@@ -1126,6 +1126,7 @@ pub(super) fn store_context_for_target(
 /// Write the store for one create, holding `bob_sync.lock`. Returns the
 /// outcome, or `None` for external targets. Store failures are returned
 /// as warnings, never as errors: the reference still files.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn write_for_create(
     config: &super::model::Config,
     target_plan: &super::stamp::TargetPlan,
@@ -1137,15 +1138,45 @@ pub(super) fn write_for_create(
     source_note_sha256: Option<String>,
     catalog: &CatalogOutcome,
 ) -> Option<StoreWriteOutcome> {
+    write_for_create_reporting(
+        config,
+        target_plan,
+        installed_pdf,
+        source_bytes,
+        route,
+        origin,
+        source_note,
+        source_note_sha256,
+        catalog,
+        &|line| eprintln!("{line}"),
+    )
+}
+
+/// [`write_for_create`] with every warning and wait line routed through
+/// `report` instead of stderr, for callers (URL ingest) that must print
+/// nothing themselves.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn write_for_create_reporting(
+    config: &super::model::Config,
+    target_plan: &super::stamp::TargetPlan,
+    installed_pdf: &std::path::Path,
+    source_bytes: &[u8],
+    route: &str,
+    origin: String,
+    source_note: Option<String>,
+    source_note_sha256: Option<String>,
+    catalog: &CatalogOutcome,
+    report: &dyn Fn(&str),
+) -> Option<StoreWriteOutcome> {
     let (ref_type, stem, pdf_rel) =
         store_context_for_target(config, target_plan)?;
     let pdf_sha256 = match super::io::sha256_file(installed_pdf) {
         Ok(sha) => sha,
         Err(error) => {
-            eprintln!(
+            report(&format!(
                 "warning: could not hash installed PDF {}: {error}; skipping source store",
                 installed_pdf.display()
-            );
+            ));
             return None;
         }
     };
@@ -1154,14 +1185,14 @@ pub(super) fn write_for_create(
     let _guard = match super::ob::acquire_lock_waiting(
         std::time::Duration::from_secs(60),
         || {
-            eprintln!("waiting for vault maintenance lock to save source…");
+            report("waiting for vault maintenance lock to save source…");
         },
     ) {
         Ok(guard) => guard,
         Err(error) => {
-            eprintln!(
+            report(&format!(
                 "warning: {error}; skipping source store (reference still filed)"
-            );
+            ));
             return None;
         }
     };
@@ -1181,23 +1212,23 @@ pub(super) fn write_for_create(
     match write_store(&config.bob_dir, params) {
         Ok(outcome) => {
             if let Some(warning) = &outcome.warning {
-                eprintln!("{warning}");
+                report(warning);
             }
             let verified = read_store(&config.bob_dir, &outcome.pointer);
             if verified.bytes.as_deref() != Some(source_bytes) {
-                eprintln!(
+                report(&format!(
                     "warning: saved source {} did not verify against its content-addressed pointer; reference still filed",
                     outcome.pointer
-                );
+                ));
                 None
             } else {
                 Some(outcome)
             }
         }
         Err(error) => {
-            eprintln!(
+            report(&format!(
                 "warning: could not write source store: {error}; reference still filed"
-            );
+            ));
             None
         }
     }

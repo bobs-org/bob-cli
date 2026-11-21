@@ -420,7 +420,50 @@ fn strip_page_extension(segment: &str) -> String {
 
 fn is_opaque_segment(candidate: &str) -> bool {
     let lower = candidate.to_ascii_lowercase();
-    super::collection_name::is_hex_id_word(&lower) || is_uuid(&lower)
+    super::collection_name::is_hex_id_word(&lower)
+        || is_uuid(&lower)
+        || is_base62_id(candidate)
+}
+
+/// A case-sensitive base62 id such as Spotify's `4UgVFWty2I8hGAgSvT7pjC`:
+/// at least 16 ASCII alphanumerics mixing digits, uppercase, and
+/// lowercase, so fragmented that its mean token length is under 2.5.
+/// Wordy CamelCase slugs (`iPhone15ProMaxReview`) keep long tokens.
+fn is_base62_id(candidate: &str) -> bool {
+    let bytes = candidate.as_bytes();
+    if bytes.len() < 16
+        || !bytes.iter().all(u8::is_ascii_alphanumeric)
+        || !bytes.iter().any(u8::is_ascii_digit)
+        || !bytes.iter().any(u8::is_ascii_uppercase)
+        || !bytes.iter().any(u8::is_ascii_lowercase)
+    {
+        return false;
+    }
+    // mean = len / tokens < 2.5, kept in integers.
+    bytes.len() * 2 < base62_token_count(bytes) * 5
+}
+
+/// Count tokens split at every letter/digit boundary and at CamelCase
+/// boundaries: before an uppercase letter that follows a lowercase one,
+/// or that starts an uppercase-then-lowercase word (`GPTSystem` →
+/// `GPT`, `System`).
+fn base62_token_count(bytes: &[u8]) -> usize {
+    let mut tokens = usize::from(!bytes.is_empty());
+    for index in 1..bytes.len() {
+        let previous = bytes[index - 1];
+        let current = bytes[index];
+        let boundary = previous.is_ascii_digit() != current.is_ascii_digit()
+            || current.is_ascii_uppercase()
+                && (previous.is_ascii_lowercase()
+                    || previous.is_ascii_uppercase()
+                        && bytes
+                            .get(index + 1)
+                            .is_some_and(u8::is_ascii_lowercase));
+        if boundary {
+            tokens += 1;
+        }
+    }
+    tokens
 }
 
 fn is_uuid(candidate: &str) -> bool {
@@ -848,6 +891,70 @@ mod tests {
             Some("a_good_title".to_string()),
             "a trailing UUID is removed from an otherwise useful slug"
         );
+        assert_eq!(
+            stem("https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC"),
+            None,
+            "an opaque base62 id falls back to the title stem"
+        );
+        assert_eq!(
+            stem("https://example.com/reviews/iPhone15ProMaxReview"),
+            Some("iphone15promaxreview".to_string()),
+            "a wordy CamelCase slug is still a stem"
+        );
+    }
+
+    #[test]
+    fn base62_ids_are_opaque_and_wordy_camel_case_is_not() {
+        for (segment, opaque) in [
+            ("4UgVFWty2I8hGAgSvT7pjC", true),
+            ("iPhone15ProMaxReview", false),
+            ("DeepSeekV3TechnicalReport", false),
+            ("GPT4oSystemCard", false),
+        ] {
+            assert_eq!(is_opaque_segment(segment), opaque, "{segment}");
+        }
+        assert_eq!(base62_token_count(b"GPT4oSystemCard"), 5);
+        assert_eq!(base62_token_count(b"iPhone15ProMaxReview"), 6);
+        // Each precondition alone keeps a fragmented segment readable.
+        assert!(!is_base62_id("4ugvfwty2i8hgagsvt7pjc"), "no uppercase");
+        assert!(!is_base62_id("UgVFWtyIhGAgSvTpjCxy"), "no digit");
+        assert!(!is_base62_id("4UgVFWty2I8hGAg"), "under 16 characters");
+        assert!(!is_base62_id("4UgVFWty2I8h-GAgSvT7pjC"), "not alphanumeric");
+    }
+
+    #[test]
+    fn random_22_character_base62_ids_are_mostly_opaque() {
+        const ALPHABET: &[u8] =
+            b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        // Fixed-seed xorshift64 keeps the sample reproducible.
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let total = 2_000;
+        let mut opaque = 0;
+        for _ in 0..total {
+            let id: String = (0..22)
+                .map(|_| ALPHABET[(next() % 62) as usize] as char)
+                .collect();
+            if is_opaque_segment(&id) {
+                opaque += 1;
+                let url = format!("https://open.spotify.com/episode/{id}");
+                assert_eq!(
+                    stem_from_url(
+                        &validate_and_clean(&url).expect("accept id URL")
+                    ),
+                    None,
+                    "{id} must not become a stem"
+                );
+            }
+        }
+        // About 94% of uniform ids mix all three classes and fragment
+        // below the 2.5 mean; the rest read too much like words.
+        assert!(opaque * 100 >= total * 90, "{opaque} of {total} opaque");
     }
 
     #[test]

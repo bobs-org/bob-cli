@@ -6,7 +6,8 @@
 //! command, catalogs it with the existing record filters, maps code
 //! pages from Chrome's print-time anchor destinations and link pages
 //! from the rendered PDF's URI annotations, and writes the `web_article`
-//! store plus its note pointer on every single-article create path.
+//! store plus its note pointer on every single-article create path and,
+//! quietly, on URL ingest (capture worker and Keep pull).
 //! Overwrites reuse [`prepare_web_store`] and stage the bytes into the
 //! same transaction as Markdown.
 
@@ -426,6 +427,64 @@ pub(super) fn persist_article_store(
             None
         }
     }
+}
+
+/// [`persist_article_store`] for URL ingest: the same convert, catalog,
+/// map, and write-once store, but it prints nothing. Ingest's contract
+/// forbids stdout and stderr, so every warning goes through `progress`
+/// and no `source_markdown:` / `code:` / `links:` lines are printed.
+/// Returns the verified pointer for intake, or `None` when no store was
+/// written (the reference still files).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn persist_article_store_quiet(
+    config: &Config,
+    plan: &TargetPlan,
+    rendered_pdf: &Path,
+    installed_pdf: &Path,
+    source_html: Option<&str>,
+    code_anchors: Option<&str>,
+    origin: String,
+    progress: Option<&dyn Fn(&str)>,
+) -> Option<String> {
+    let report = |line: &str| {
+        if let Some(progress) = progress {
+            progress(line);
+        }
+    };
+    if matches!(plan.workflow, TargetWorkflow::External) {
+        return None;
+    }
+    let prepared = match prepare_web_store(
+        source_html,
+        code_anchors,
+        rendered_pdf,
+        WEB_ARTICLE_ROUTE,
+    ) {
+        Ok(prepared) => prepared,
+        Err(skip) => {
+            report(&format!(
+                "warning: {}; skipping source store (reference still filed)",
+                skip.detail
+            ));
+            return None;
+        }
+    };
+    for warning in &prepared.warnings {
+        report(&format!("warning: {warning}"));
+    }
+    super::source_store::write_for_create_reporting(
+        config,
+        plan,
+        installed_pdf,
+        &prepared.source_bytes,
+        WEB_ARTICLE_ROUTE,
+        origin,
+        None,
+        None,
+        &prepared.catalog,
+        &report,
+    )
+    .map(|outcome| outcome.pointer)
 }
 
 #[cfg(test)]

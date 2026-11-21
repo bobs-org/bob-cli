@@ -10,9 +10,9 @@ use crate::support::*;
 use std::{fs, path::Path, process::Command};
 
 const ARTICLE_URL: &str = "https://example.com/article/hello";
-const LINK_URI: &str = "https://example.com/docs";
+pub(super) const LINK_URI: &str = "https://example.com/docs";
 
-fn skip_unless_pandoc(test_name: &str) -> bool {
+pub(super) fn skip_unless_pandoc(test_name: &str) -> bool {
     if Command::new("pandoc")
         .arg("--version")
         .output()
@@ -110,7 +110,7 @@ const ANCHOR_TEXT: &str = "fn main() {\n\tprintln!(\"hello\");\n}\n";
 
 /// Point the fake adapter at a source view plus anchors and swap its
 /// fixture PDF for one carrying Chrome-style destinations.
-fn stage_source_view(temp: &TempDir, fake: &FakeClip) {
+pub(super) fn stage_source_view(temp: &TempDir, fake: &FakeClip) {
     let render = temp.path().join("render");
     fs::create_dir_all(&render).expect("create render dir");
     fs::write(render.join("source.html"), SOURCE_HTML)

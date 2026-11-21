@@ -5,11 +5,13 @@
 //! blocks as create (`resolve_url_syntactic`, `fetch_and_route`, `sources`
 //! dedupe, `pdf_target` planning/stamp/install, `ClipAdapterClient`) with
 //! create's fixed reading-queue defaults (blogs/papers, status ready,
-//! no audio, no force) plus the caller's resolved parent route, holds the
-//! machine-wide ingest lock serializing the capture worker and Keep pull,
-//! and installs with fsync. `bob ref create` keeps its own printing routes
-//! and never calls [`ingest_url`]. Ingest writes nothing to stdout and
-//! prints nothing to stderr itself; short status lines go through
+//! no force; companion audio only when `%l` asks) plus the caller's
+//! resolved parent route, holds the machine-wide ingest lock serializing
+//! the capture worker and Keep pull, and installs with fsync. Web articles
+//! also save create's write-once source store and hand its pointer to
+//! intake. `bob ref create` keeps its own printing routes and never calls
+//! [`ingest_url`]. Ingest writes nothing to stdout and prints nothing to
+//! stderr itself; short status lines and warnings go through
 //! [`IngestRequest::progress`] only.
 
 use std::{
@@ -667,8 +669,10 @@ pub(crate) fn ingest_url(
         None
     };
 
-    let outcome = if let Some(paper) = arxiv {
-        ingest_arxiv_route(
+    // Only the web-article route saves a source store; its verified
+    // pointer rides intake the way create's does.
+    let (outcome, source_pointer) = if let Some(paper) = arxiv {
+        let outcome = ingest_arxiv_route(
             &config,
             &paper,
             &url,
@@ -677,7 +681,8 @@ pub(crate) fn ingest_url(
             request.parent,
             request.progress,
             listen_command.as_ref(),
-        )?
+        )?;
+        (outcome, None)
     } else {
         let mut scratch = super::workdir::ScratchDir::create("ingest")
             .map_err(command_error)?;
@@ -687,17 +692,20 @@ pub(crate) fn ingest_url(
         {
             super::target::CreateSource::PdfUrl {
                 url, downloaded, ..
-            } => ingest_pdf_url_route(
-                &config,
-                &url,
-                &downloaded,
-                &mut scratch,
-                &recorded,
-                superseded_legacy,
-                request.parent,
-                request.progress,
-                listen_command.as_ref(),
-            )?,
+            } => {
+                let outcome = ingest_pdf_url_route(
+                    &config,
+                    &url,
+                    &downloaded,
+                    &mut scratch,
+                    &recorded,
+                    superseded_legacy,
+                    request.parent,
+                    request.progress,
+                    listen_command.as_ref(),
+                )?;
+                (outcome, None)
+            }
             super::target::CreateSource::WebArticle { url } => {
                 ingest_article_route(
                     &config,
@@ -717,7 +725,13 @@ pub(crate) fn ingest_url(
             }
         }
     };
-    apply_intake(request, &config, outcome, keep_reason)
+    apply_intake(
+        request,
+        &config,
+        outcome,
+        keep_reason,
+        source_pointer.as_deref(),
+    )
 }
 
 /// The URL a Spotify request ingests, resolved before both dedupe
@@ -815,6 +829,7 @@ fn apply_intake(
     config: &Config,
     outcome: IngestOutcome,
     keep_reason: Option<&'static str>,
+    source_pointer: Option<&str>,
 ) -> Result<IngestOutcome, IngestError> {
     let IngestOutcome::Created {
         pdf,
@@ -857,7 +872,7 @@ fn apply_intake(
         super::intake::IntakeRequest {
             producer: request.producer,
             keep_reason,
-            expected_source_pointer: None,
+            expected_source_pointer: source_pointer,
             dry_run: false,
             progress: request.progress,
         },
@@ -1232,7 +1247,7 @@ fn ingest_article_route(
     parent: &str,
     progress: Option<&dyn Fn(&str)>,
     listen: Option<&ListenCommand>,
-) -> Result<IngestOutcome, IngestError> {
+) -> Result<(IngestOutcome, Option<String>), IngestError> {
     // Fail fast when the stem is already known, mirroring the web-article engine.
     if let Some(stem) = stem_from_url(url) {
         let pre_identity = DefaultTargetIdentity::Url {
@@ -1253,7 +1268,7 @@ fn ingest_article_route(
             &url.dedupe_key,
             Some(&pre_plan.target),
         ) {
-            return Ok(outcome);
+            return Ok((outcome, None));
         }
     }
     let workdir =
@@ -1350,7 +1365,7 @@ fn ingest_article_route(
         &url.dedupe_key,
         Some(&plan.target),
     ) {
-        return Ok(outcome);
+        return Ok((outcome, None));
     }
     let info = PdfInfo {
         title: Some(title.clone()),
@@ -1380,14 +1395,36 @@ fn ingest_article_route(
         stamp_and_install(&out_pdf, &plan.target, &marker, &info)
             .map_err(command_error)?;
     }
+    // The converted source view is stored write-once with its catalog,
+    // exactly as create stores it, but quietly: warnings go through
+    // `progress`. The verified pointer rides intake, and a queued birth
+    // adopts the store by PDF digest when `bob ref scan` files the note.
+    // The source view lives in the workdir, which stays alive until here.
+    let source_pointer = super::web_source::persist_article_store_quiet(
+        config,
+        &plan,
+        &out_pdf,
+        &plan.target,
+        response.source_html.as_deref(),
+        response.code_anchors.as_deref(),
+        response
+            .final_url
+            .clone()
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| url.cleaned.clone()),
+        progress,
+    );
     // Keep the workdir alive until after install; cleanup via drop.
     let _ = workdir.path();
-    Ok(clipped_created(
-        vault_relative_path_value(config, &plan.target),
-        INGEST_ARTICLE_REF_TYPE.to_string(),
-        Some(title),
-        IngestRoute::Article,
-        superseded_legacy,
+    Ok((
+        clipped_created(
+            vault_relative_path_value(config, &plan.target),
+            INGEST_ARTICLE_REF_TYPE.to_string(),
+            Some(title),
+            IngestRoute::Article,
+            superseded_legacy,
+        ),
+        source_pointer,
     ))
 }
 
