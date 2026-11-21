@@ -42,3 +42,50 @@ change edits the contract and this fixture together.
 - `expect.assert_distinct_keys` (optional): every node row key (built with
   `owner_key`) must be distinct and shaped
   `<owner_key>/req/<path>~<8 hex>`.
+
+# Layout and writer vectors
+
+`layout.json` (`RL1`–`RL52`) and `writes.json` (`RW1`–`RW53`) pin the task
+block layout module (`src/native/task_block_layout.rs`, contract
+`docs/task-requirements.md` §3). bob-cli owns both files; each plugin copies
+them byte for byte after updating bob-cli first. A behavior change edits the
+contract and these fixtures together. Source notes are `source_lines` joined
+with `\n` plus a trailing newline (`eol: "crlf"` joins with `\r\n`), and every
+line number is 1-based.
+
+## `layout.json`
+
+`slots[]`, `violations[]`, `tidy[]`, and `note_homes[]` each hold cases with
+`id`, `title`, `source_lines`, `task` (the task's line), and `expect`:
+
+- `slots[]` adds `kind` (`cancel-log`, `managed-link`, `req`, `authored`,
+  `drawer`, `notes-drawer`, `log`); `expect` is `{line, indent}`, the line to
+  insert before (one past the last line appends) and the indentation.
+- `violations[]`: `expect` lists `{line, kind}` with `kind` one of
+  `out-of-zone`, `notes-not-first`, `note-outside-notes`, in document order.
+- `tidy[]`: `expect` is `null` when the block is canonical (and for a task
+  that is not open), else `{lines, moves, notes_filed, notes_created}`. Applying
+  tidy to its own output must give `null`.
+- `note_homes[]`: `expect` is `{home: "loose", line, indent}`,
+  `{home: "notes", line}` (the existing `NOTES` drawer), or
+  `{home: "new-notes"}`.
+
+## `writes.json`
+
+`date` is the day every Cancel Log entry carries. Each case adds `op` and its
+inputs, plus an optional `preimage` that replaces the expected text of the
+target line (a mismatch must refuse as `req_stale`):
+
+- `drop`: `line`, `reason`. `expect`: `{lines, log, descendants}` with `log`
+  one of `none`, `created`, `prepended`.
+- `restore`: `line`. `expect`: `{lines, descendants}`.
+- `toggle`: `line`. `expect`: `{lines, direction, line, depth, scooped,
+  notes_created}` with `direction` `note-to-req` or `req-to-note`, and `line`
+  the toggled item's line after the write.
+- `insert`: `task`, `blocks` (each opens with `- [ ] text` and carries its own
+  relative indentation). `expect`: `{lines, first_line, line_count, scooped,
+  notes_created}`.
+
+Every `expect` is either that object or `{refused: code}`. The `NOTES` drawer
+is created only when a note lands in it (`notes_drawer_birth =
+with_first_note`).

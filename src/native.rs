@@ -115,6 +115,11 @@ mod tick;
 // Later epic phases connect these primitives to explicit relation gestures.
 #[cfg_attr(not(test), allow(dead_code))]
 mod task_cancel;
+// The layout module's req writers (drop, restore, toggle, insert) and tidy
+// planner are consumed by later epic phases; tests are their only caller
+// until then.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod task_block_layout;
 mod task_children;
 mod task_command_shell;
 mod task_complete;

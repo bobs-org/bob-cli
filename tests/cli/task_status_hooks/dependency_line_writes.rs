@@ -122,6 +122,47 @@ fn reconcile_dw2_inserts_adopted_line_after_cancel_log() {
 }
 
 #[test]
+fn reconcile_dw2_lands_after_the_whole_cancel_log_subtree() {
+    // A Cancel Log keeps its dated entries under the marker, so the adopted
+    // line lands after that subtree (the managed-link zone of the task block
+    // layout), never between the marker and its entries.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-dw2-entries");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task Adopter [dependsOn:: tasks__one] ^adopt\n",
+            "\t- ❌ **CANCEL LOG**\n",
+            "\t\t- *2026-11-01* — scope cut\n",
+            "- [ ] #task One [id:: tasks__one] ^one\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let applied = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply adoption");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        concat!(
+            "- [?] #task Adopter [dependsOn:: tasks__one] ^adopt\n",
+            "\t- ❌ **CANCEL LOG**\n",
+            "\t\t- *2026-11-01* — scope cut\n",
+            "\t- ⛓️ **DEPENDS ON:** [[#^one]]\n",
+            "- [ ] #task One [id:: tasks__one] ^one\n",
+            "\t- 🧱 **BLOCKS:** [[#^adopt]]\n",
+        )
+    );
+}
+
+#[test]
 fn reconcile_dw5_label_only_line_deletes_line_and_field() {
     // DW5/R9/DR16 (`docs/task-dependencies.md` §§4.2, 11.2): a label-only
     // line with nothing behind it is deleted with the field. The ghost id

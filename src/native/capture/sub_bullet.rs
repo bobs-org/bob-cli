@@ -154,25 +154,47 @@ pub(super) fn plan_sub_bullet_capture(
                 }),
             )
         } else {
-            let lines = line_spans(&contents);
-            let indentation = first_child_indentation(
-                &lines,
-                parent.line_index,
-                parent.block_end,
-                &parent.indentation,
-            )
-            .or_else(|| {
-                dominant_indent_unit(&lines)
-                    .map(|unit| format!("{}{}", parent.indentation, unit))
-            })
-            .unwrap_or_else(|| format!("{}\t", parent.indentation));
-            let insertion_offset = first_direct_managed_log_start(
-                &lines,
-                parent.line_index,
-                parent.block_end,
-            )
-            .unwrap_or(parent.block_end);
-            (contents, insertion_offset, indentation, None)
+            // The block-layout module owns the slot: a loose note keeps the
+            // tail slot before the managed logs, and a task that owns reqs
+            // keeps its notes in `NOTES` (`docs/task-requirements.md` §3).
+            match task_block_layout::note_home(&contents, parent, &settings) {
+                task_block_layout::NoteHome::Loose(slot) => {
+                    (contents, slot.offset, slot.indent, None)
+                }
+                task_block_layout::NoteHome::Notes(drawer) => {
+                    let insertion =
+                        capture_drawers::drawer_insertion(&contents, &drawer);
+                    (
+                        contents,
+                        insertion.offset,
+                        insertion.indentation,
+                        Some(DrawerJson {
+                            title: drawer.title,
+                            key: drawer.key,
+                            created: false,
+                        }),
+                    )
+                }
+                task_block_layout::NoteHome::NewNotes => {
+                    let (contents, drawer, created) =
+                        task_block_layout::ensure_notes_drawer(
+                            &contents, parent,
+                        )
+                        .map_err(CaptureError::io)?;
+                    let insertion =
+                        capture_drawers::drawer_insertion(&contents, &drawer);
+                    (
+                        contents,
+                        insertion.offset,
+                        insertion.indentation,
+                        Some(DrawerJson {
+                            title: drawer.title,
+                            key: drawer.key,
+                            created,
+                        }),
+                    )
+                }
+            }
         };
     let indented_block = capture_block
         .split('\n')

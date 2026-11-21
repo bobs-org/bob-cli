@@ -3465,13 +3465,12 @@ pub(super) fn plan_capture_item(
                             // The header would be created at the
                             // plain-child anchor; report where the notes
                             // would land without staging it.
-                            let lines = line_spans(&contents);
-                            let anchor = first_direct_managed_log_start(
-                                &lines,
-                                parent.line_index,
-                                parent.block_end,
-                            )
-                            .unwrap_or(parent.block_end);
+                            let anchor =
+                                task_block_layout::drawer_header_offset(
+                                    &contents,
+                                    parent,
+                                    key == task_block_layout::NOTES_TITLE,
+                                );
                             let placement = if anchor >= contents.len() {
                                 Placement::Appended
                             } else {
@@ -3490,19 +3489,46 @@ pub(super) fn plan_capture_item(
                     (Some(drawer.0), drawer.1)
                 }
             } else {
-                let lines = line_spans(&contents);
-                let offset = first_direct_managed_log_start(
-                    &lines,
-                    parent.line_index,
-                    parent.block_end,
-                )
-                .unwrap_or(parent.block_end);
+                // Report where the note lands without staging it: the
+                // block-layout module owns the slot (loose tail, or
+                // `NOTES` on a task that owns reqs).
+                let (drawer, offset) = match task_block_layout::note_home(
+                    &contents, parent, &settings,
+                ) {
+                    task_block_layout::NoteHome::Loose(slot) => {
+                        (None, slot.offset)
+                    }
+                    task_block_layout::NoteHome::Notes(drawer) => {
+                        let offset = capture_drawers::drawer_insertion(
+                            &contents, &drawer,
+                        )
+                        .offset;
+                        (
+                            Some(DrawerJson {
+                                title: drawer.title,
+                                key: drawer.key,
+                                created: false,
+                            }),
+                            offset,
+                        )
+                    }
+                    task_block_layout::NoteHome::NewNotes => (
+                        Some(DrawerJson {
+                            title: task_block_layout::NOTES_TITLE.to_string(),
+                            key: task_block_layout::NOTES_TITLE.to_string(),
+                            created: true,
+                        }),
+                        task_block_layout::drawer_header_offset(
+                            &contents, parent, true,
+                        ),
+                    ),
+                };
                 let placement = if offset >= contents.len() {
                     Placement::Appended
                 } else {
                     Placement::Inserted
                 };
-                (None, placement)
+                (drawer, placement)
             };
             let kind_label = capture_kind_label(&parsed.kind);
             let created = date_string(today);

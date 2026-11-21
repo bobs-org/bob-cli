@@ -155,6 +155,41 @@ pub(crate) fn classify_direct_children(
     parent: &NoteTask,
     settings: &NoteTaskSettings,
 ) -> Vec<ClassifiedTaskChild> {
+    let tasks_by_line: BTreeMap<usize, bool> =
+        note_tasks::scan(contents, settings)
+            .tasks()
+            .iter()
+            .map(|task| (task.line_index, task.status_type.is_open()))
+            .collect();
+    classify_direct_children_with(
+        contents,
+        parent,
+        &settings.global_filter,
+        |line_index| tasks_by_line.get(&line_index).copied(),
+    )
+}
+
+/// [`classify_direct_children`] without the whole-note task scan: a direct
+/// child that carries the global filter is a [`TaskChildKind::NestedTask`]
+/// (reported open, since only its boundary matters to layout callers), every
+/// other child classifies exactly as in the scanning form. The block-layout
+/// module uses this so a drawer slot can be found with no vault settings.
+pub(crate) fn classify_direct_children_by_filter(
+    contents: &str,
+    parent: &NoteTask,
+    global_filter: &str,
+) -> Vec<ClassifiedTaskChild> {
+    classify_direct_children_with(contents, parent, global_filter, |_| {
+        Some(true)
+    })
+}
+
+fn classify_direct_children_with(
+    contents: &str,
+    parent: &NoteTask,
+    global_filter: &str,
+    nested_task_open: impl Fn(usize) -> Option<bool>,
+) -> Vec<ClassifiedTaskChild> {
     let lines = line_spans(contents);
     if parent.line_index >= lines.len() {
         return Vec::new();
@@ -167,12 +202,6 @@ pub(crate) fn classify_direct_children(
         .map(|line| list_item_body(line.text).unwrap_or(line.text))
         .collect();
     let fenced = markdown::fenced_lines(&logical, 0..logical.len());
-    let tasks_by_line: BTreeMap<usize, bool> =
-        note_tasks::scan(contents, settings)
-            .tasks()
-            .iter()
-            .map(|task| (task.line_index, task.status_type.is_open()))
-            .collect();
 
     lines
         .iter()
@@ -192,8 +221,8 @@ pub(crate) fn classify_direct_children(
                 line_index,
                 kind: classify_task_child_with_filter(
                     line.text,
-                    tasks_by_line.get(&line_index).copied(),
-                    &settings.global_filter,
+                    nested_task_open(line_index),
+                    global_filter,
                 ),
             })
         })

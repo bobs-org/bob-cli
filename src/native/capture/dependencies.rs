@@ -1094,13 +1094,16 @@ fn first_child_indent(note: &EditableNote, task_at: usize) -> String {
 }
 
 /// Insertion slot for a new managed child: first except after an
-/// existing Cancel Log, which keeps the first slot.
+/// existing Cancel Log, which keeps the first slot together with its dated
+/// entries (the managed-link zone of `task_block_layout`).
 fn cancel_log_aware_slot(note: &EditableNote, task_at: usize) -> usize {
     let view: Vec<&str> = note.lines.iter().map(String::as_str).collect();
     let Some(first) = view.get(task_at) else {
         return task_at + 1;
     };
     let source_indent = task_status_hooks::leading_indentation_width(first);
+    let mut cancel_log = false;
+    let mut block_tail = task_at;
     for line_index in task_at + 1..view.len() {
         let line = view[line_index];
         if line.trim().is_empty() {
@@ -1109,17 +1112,26 @@ fn cancel_log_aware_slot(note: &EditableNote, task_at: usize) -> usize {
         if task_status_hooks::leading_indentation_width(line) <= source_indent {
             break;
         }
+        block_tail = line_index;
         if task_status_hooks::nearest_parent_list_item(&view, line_index)
             != Some(task_at)
         {
             continue;
         }
-        if task_status_hooks::is_cancel_log_line(line) {
-            return line_index + 1;
+        if cancel_log {
+            // The second direct child: the line lands before it.
+            return line_index;
         }
-        return task_at + 1;
+        if !task_status_hooks::is_cancel_log_line(line) {
+            return task_at + 1;
+        }
+        cancel_log = true;
     }
-    task_at + 1
+    if cancel_log {
+        block_tail + 1
+    } else {
+        task_at + 1
+    }
 }
 
 /// Replace one task line's status box (`- [X]`) with `replacement`.
@@ -3919,5 +3931,36 @@ mod tests {
                 .expect_err("the new project edge adds resident → target");
         assert!(error.message.contains("cycle"), "{error:?}");
         assert!(error.message.contains("work"), "{error:?}");
+    }
+}
+
+#[cfg(test)]
+mod cancel_log_slot_tests {
+    use super::*;
+
+    fn slot(contents: &str) -> usize {
+        cancel_log_aware_slot(&EditableNote::new(contents), 0)
+    }
+
+    #[test]
+    fn a_managed_child_lands_first_without_a_cancel_log() {
+        assert_eq!(slot("- [ ] #task A\n\t- note\n"), 1);
+        assert_eq!(slot("- [ ] #task A\n"), 1);
+    }
+
+    #[test]
+    fn a_managed_child_lands_after_the_whole_cancel_log_subtree() {
+        // The log keeps its dated entries: the new line never lands between
+        // the marker and its entries.
+        let with_sibling = "- [ ] #task A\n\t- ❌ **CANCEL LOG**\n\t\t- *2026-11-01* — a\n\t\t- *2026-10-01* — b\n\t- note\n";
+        assert_eq!(slot(with_sibling), 4);
+        let alone =
+            "- [ ] #task A\n\t- ❌ **CANCEL LOG**\n\t\t- *2026-11-01* — a\n- [ ] #task B\n";
+        assert_eq!(slot(alone), 3);
+        let at_eof =
+            "- [ ] #task A\n\t- ❌ **CANCEL LOG**\n\t\t- *2026-11-01* — a";
+        assert_eq!(slot(at_eof), 3);
+        // A header-only log still takes the first slot.
+        assert_eq!(slot("- [ ] #task A\n\t- ❌ **CANCEL LOG**\n\t- note\n"), 2);
     }
 }

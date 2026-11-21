@@ -35,6 +35,7 @@ use super::{
     markdown::fenced_lines,
     note_tasks::{self, BlockIdLookup, NoteTask, RefLookup, TaskRef},
     style::Styler,
+    task_block_layout,
 };
 
 /// A direct-child ALL-CAPS drawer bullet under a resolved task.
@@ -1392,12 +1393,14 @@ pub(crate) fn ensure_drawer(
                         .map(|unit| format!("{}{}", task.indentation, unit))
                 })
                 .unwrap_or_else(|| format!("{}\t", task.indentation));
-                let header_offset = first_direct_managed_log_start(
-                    &lines,
-                    task.line_index,
-                    task.block_end,
-                )
-                .unwrap_or(task.block_end);
+                // The block-layout module owns the slot: a created `NOTES`
+                // lands first among the drawers, every other drawer keeps
+                // its place before the managed logs.
+                let header_offset = task_block_layout::drawer_header_offset(
+                    contents,
+                    task,
+                    *key == task_block_layout::NOTES_TITLE,
+                );
                 let header = format!("{drawer_indent}- {title}");
                 let addition = insertion_text_preserving_line_endings(
                     contents,

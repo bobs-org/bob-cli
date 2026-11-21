@@ -108,9 +108,10 @@ impl ReconcileWorker<'_> {
     }
 
     /// Insertion slot for an adopted line: before the first direct
-    /// child — or before the second when a `❌ **CANCEL LOG**` child
-    /// holds the first slot — with the existing child indent, else
-    /// the parent indent plus one tab. `reuse` names a label-only
+    /// child — or before the second (after the whole subtree of the log)
+    /// when a `❌ **CANCEL LOG**` child holds the first slot — with the
+    /// existing child indent, else the parent indent plus one tab. This is
+    /// the managed-link zone of `task_block_layout`. `reuse` names a label-only
     /// line whose own indent is reused.
     pub(super) fn child_slot(
         &self,
@@ -127,6 +128,9 @@ impl ReconcileWorker<'_> {
         let parent_width =
             leading_indentation_width(refs[view.task.line_index]);
         let mut first_child: Option<(usize, String, bool)> = None;
+        // The last content line of the task block: a lone Cancel Log keeps
+        // its dated entries, so the slot after it is past that subtree.
+        let mut block_tail = view.task.line_index;
         for line_index in view.task.line_index + 1..refs.len() {
             let line = refs[line_index];
             if line.trim().is_empty() || snap.fenced.contains(&line_index) {
@@ -135,6 +139,7 @@ impl ReconcileWorker<'_> {
             if leading_indentation_width(line) <= parent_width {
                 break;
             }
+            block_tail = line_index;
             if nearest_parent_list_item(&refs, line_index)
                 != Some(view.task.line_index)
             {
@@ -161,7 +166,7 @@ impl ReconcileWorker<'_> {
             existing,
         );
         match first_child {
-            Some((line_index, _, true)) => (line_index + 1, indent),
+            Some((_, _, true)) => (block_tail + 1, indent),
             Some((line_index, _, false)) => (line_index, indent),
             None => (view.task.line_index + 1, indent),
         }

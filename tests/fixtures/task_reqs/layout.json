@@ -1,0 +1,1033 @@
+{
+  "schema_version": 1,
+  "contract": "docs/task-requirements.md §3",
+  "slots": [
+    {
+      "id": "RL1",
+      "title": "cancel log is the first child",
+      "kind": "cancel-log",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 2
+      }
+    },
+    {
+      "id": "RL2",
+      "title": "managed link follows the cancel log and Depends-On subtree",
+      "kind": "managed-link",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 5
+      }
+    },
+    {
+      "id": "RL3",
+      "title": "req goes after the last req subtree",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 8
+      }
+    },
+    {
+      "id": "RL4",
+      "title": "authored child on a req-owner ends the authored zone",
+      "kind": "authored",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 10
+      }
+    },
+    {
+      "id": "RL5",
+      "title": "plain drawer lands before the first log",
+      "kind": "drawer",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 14
+      }
+    },
+    {
+      "id": "RL6",
+      "title": "notes drawer lands first among the drawers",
+      "kind": "notes-drawer",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 3
+      }
+    },
+    {
+      "id": "RL7",
+      "title": "log lands at the end of the block",
+      "kind": "log",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 16
+      }
+    },
+    {
+      "id": "RL8",
+      "title": "req with no reqs yet lands right after the managed links",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+        "\t- a note",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 3
+      }
+    },
+    {
+      "id": "RL9",
+      "title": "req on a task with only a note lands before the note",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 2
+      }
+    },
+    {
+      "id": "RL10",
+      "title": "managed link before the first non-link child",
+      "kind": "managed-link",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 2
+      }
+    },
+    {
+      "id": "RL11",
+      "title": "zero-req note keeps the tail slot after the drawers",
+      "kind": "authored",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 5
+      }
+    },
+    {
+      "id": "RL12",
+      "title": "zero-req note with no logs appends at the end of the block",
+      "kind": "authored",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "- [ ] #task B ^b"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 3
+      }
+    },
+    {
+      "id": "RL13",
+      "title": "cancel log is not a managed-log anchor for a loose note",
+      "kind": "authored",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 4
+      }
+    },
+    {
+      "id": "RL14",
+      "title": "nested #task keeps the authored zone behind the reqs",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] req one",
+        "\t- [ ] #task Subtask ^sub",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 3
+      }
+    },
+    {
+      "id": "RL15",
+      "title": "authored child on a req-owner lands after the nested task",
+      "kind": "authored",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] req one",
+        "\t- [ ] #task Subtask ^sub",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 5
+      }
+    },
+    {
+      "id": "RL16",
+      "title": "a childless task takes the first line and a tab",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 2
+      }
+    },
+    {
+      "id": "RL17",
+      "title": "a childless task in a spaced note takes the dominant unit",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "- [ ] #task B ^b",
+        "  - note of b"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "  ",
+        "line": 2
+      }
+    },
+    {
+      "id": "RL18",
+      "title": "two-space indentation is reused",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "  - [ ] req",
+        "    - deep note",
+        "  - note",
+        "  - 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "  ",
+        "line": 4
+      }
+    },
+    {
+      "id": "RL19",
+      "title": "a nested task block ends before its sibling",
+      "kind": "drawer",
+      "source_lines": [
+        "- [ ] #task Outer ^outer",
+        "\t- [ ] #task Inner ^inner",
+        "\t\t- [ ] inner req",
+        "\t\t- inner note",
+        "\t\t- 🛠️ **WORK LOG**",
+        "\t- sibling note"
+      ],
+      "task": 2,
+      "expect": {
+        "indent": "\t\t",
+        "line": 5
+      }
+    },
+    {
+      "id": "RL20",
+      "title": "a fenced list-looking log is not a child",
+      "kind": "drawer",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ```text",
+        "\t  - [ ] not a req",
+        "\t  - 🛠️ **WORK LOG**",
+        "\t  ```",
+        "\t- [ ] real req"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 7
+      }
+    },
+    {
+      "id": "RL21",
+      "title": "blank lines inside a req subtree stay with it",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] req one",
+        "",
+        "\t\t- note after a blank",
+        "\t- loose note"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "\t",
+        "line": 5
+      }
+    },
+    {
+      "id": "RL22",
+      "title": "mixed indentation takes the first child's whitespace",
+      "kind": "req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "  - first child with spaces",
+        "\t  - second child with a tab and spaces"
+      ],
+      "task": 1,
+      "expect": {
+        "indent": "  ",
+        "line": 2
+      }
+    }
+  ],
+  "violations": [
+    {
+      "id": "RL23",
+      "title": "a canonical block has no violations",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": []
+    },
+    {
+      "id": "RL24",
+      "title": "a req after a note is out of zone",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": [
+        {
+          "kind": "note-outside-notes",
+          "line": 2
+        },
+        {
+          "kind": "out-of-zone",
+          "line": 3
+        }
+      ]
+    },
+    {
+      "id": "RL25",
+      "title": "notes that are not first among the drawers",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": [
+        {
+          "kind": "notes-not-first",
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "RL26",
+      "title": "a loose note beside reqs belongs in NOTES",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t- a loose note",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": [
+        {
+          "kind": "note-outside-notes",
+          "line": 3
+        }
+      ]
+    },
+    {
+      "id": "RL27",
+      "title": "a log before a drawer is out of zone",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked",
+        "\t- FUTURE WORK",
+        "\t\t- later"
+      ],
+      "task": 1,
+      "expect": [
+        {
+          "kind": "out-of-zone",
+          "line": 4
+        }
+      ]
+    },
+    {
+      "id": "RL28",
+      "title": "a cancel log that is not first is out of zone",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut"
+      ],
+      "task": 1,
+      "expect": [
+        {
+          "kind": "out-of-zone",
+          "line": 3
+        }
+      ]
+    },
+    {
+      "id": "RL29",
+      "title": "a task with no reqs may keep a note after its drawer",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- a note after the drawer",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": []
+    },
+    {
+      "id": "RL30",
+      "title": "a task with no reqs still needs managed links first",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t- ⛓️ **DEPENDS ON:** [[#^b]]"
+      ],
+      "task": 1,
+      "expect": [
+        {
+          "kind": "out-of-zone",
+          "line": 3
+        }
+      ]
+    },
+    {
+      "id": "RL31",
+      "title": "a nested task is not a loose note",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t- [ ] #task Subtask ^sub",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": []
+    },
+    {
+      "id": "RL32",
+      "title": "a req after a nested task is out of zone",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] #task Subtask ^sub",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": [
+        {
+          "kind": "out-of-zone",
+          "line": 3
+        }
+      ]
+    }
+  ],
+  "tidy": [
+    {
+      "id": "RL33",
+      "title": "a canonical block tidies to nothing",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": null
+    },
+    {
+      "id": "RL34",
+      "title": "a done task is never tidied",
+      "source_lines": [
+        "- [x] #task A [completion:: 2026-11-01] ^a",
+        "\t- a note",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": null
+    },
+    {
+      "id": "RL35",
+      "title": "a task with no reqs keeps its note after the drawer",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- a note after the drawer",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": null
+    },
+    {
+      "id": "RL36",
+      "title": "a req moves ahead of a note and the note is filed",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t- NOTES",
+          "\t\t- a note"
+        ],
+        "moves": 0,
+        "notes_created": true,
+        "notes_filed": 1
+      }
+    },
+    {
+      "id": "RL37",
+      "title": "whole req subtrees move with their notes and nested reqs",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked",
+        "\t- [ ] req one",
+        "\t\t- note of one",
+        "\t\t- [ ] nested req",
+        "\t\t\t- deep note",
+        "\t- [ ] req two",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+          "\t- [ ] req one",
+          "\t\t- note of one",
+          "\t\t- [ ] nested req",
+          "\t\t\t- deep note",
+          "\t- [ ] req two",
+          "\t- NOTES",
+          "\t\t- entry",
+          "\t- 🛠️ **WORK LOG**",
+          "\t\t- *2026-11-02* — worked"
+        ],
+        "moves": 1,
+        "notes_created": false,
+        "notes_filed": 0
+      }
+    },
+    {
+      "id": "RL38",
+      "title": "a log before the reqs moves to the end",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t- 🛠️ **WORK LOG**",
+          "\t\t- *2026-11-02* — worked"
+        ],
+        "moves": 1,
+        "notes_created": false,
+        "notes_filed": 0
+      }
+    },
+    {
+      "id": "RL39",
+      "title": "notes join an existing NOTES drawer and a nested task stays",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t- first loose note",
+        "\t\t- its child",
+        "\t- [ ] #task Subtask ^sub",
+        "\t\t- subtask note",
+        "\t- second loose note",
+        "\t- NOTES",
+        "\t\t- existing entry",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t- [ ] #task Subtask ^sub",
+          "\t\t- subtask note",
+          "\t- NOTES",
+          "\t\t- existing entry",
+          "\t\t- first loose note",
+          "\t\t\t- its child",
+          "\t\t- second loose note",
+          "\t- 🛠️ **WORK LOG**"
+        ],
+        "moves": 0,
+        "notes_created": false,
+        "notes_filed": 2
+      }
+    },
+    {
+      "id": "RL40",
+      "title": "NOTES moves first among the drawers",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t- NOTES",
+          "\t\t- entry",
+          "\t- FUTURE WORK",
+          "\t\t- later"
+        ],
+        "moves": 1,
+        "notes_created": false,
+        "notes_filed": 0
+      }
+    },
+    {
+      "id": "RL41",
+      "title": "a cancel log moves to the front",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+        "\t- [ ] a req",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- ❌ **CANCEL LOG**",
+          "\t\t- *2026-11-01* — scope cut",
+          "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+          "\t- [ ] a req"
+        ],
+        "moves": 1,
+        "notes_created": false,
+        "notes_filed": 0
+      }
+    },
+    {
+      "id": "RL42",
+      "title": "a created NOTES lands before other drawers and the logs",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- loose note",
+        "\t- [ ] a req",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t- NOTES",
+          "\t\t- loose note",
+          "\t- FUTURE WORK",
+          "\t\t- later",
+          "\t- 🛠️ **WORK LOG**"
+        ],
+        "moves": 0,
+        "notes_created": true,
+        "notes_filed": 1
+      }
+    },
+    {
+      "id": "RL43",
+      "title": "two-space indentation survives filing",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "  - loose note",
+        "    - its child",
+        "  - [ ] a req"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "  - [ ] a req",
+          "  - NOTES",
+          "    - loose note",
+          "      - its child"
+        ],
+        "moves": 0,
+        "notes_created": true,
+        "notes_filed": 1
+      }
+    },
+    {
+      "id": "RL44",
+      "title": "a nested task is tidied on its own",
+      "source_lines": [
+        "- [ ] #task Outer ^outer",
+        "\t- [ ] #task Inner ^inner",
+        "\t\t- loose inner note",
+        "\t\t- [ ] inner req",
+        "\t- outer note"
+      ],
+      "task": 2,
+      "expect": {
+        "lines": [
+          "- [ ] #task Outer ^outer",
+          "\t- [ ] #task Inner ^inner",
+          "\t\t- [ ] inner req",
+          "\t\t- NOTES",
+          "\t\t\t- loose inner note",
+          "\t- outer note"
+        ],
+        "moves": 0,
+        "notes_created": true,
+        "notes_filed": 1
+      }
+    },
+    {
+      "id": "RL45",
+      "title": "an orphan checklist under a note stays put",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t\t- [ ] checklist item",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": null
+    },
+    {
+      "id": "RL46",
+      "title": "mixed tab and space nesting moves with its subtree",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked",
+        "\t- [ ] a req",
+        "\t  - note of the req"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t  - note of the req",
+          "\t- 🛠️ **WORK LOG**",
+          "\t\t- *2026-11-02* — worked"
+        ],
+        "moves": 1,
+        "notes_created": false,
+        "notes_filed": 0
+      }
+    },
+    {
+      "id": "RL47",
+      "title": "mixed tab and space nesting is rebased by prefix when filed",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- loose note",
+        "\t  - its child",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": {
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t- NOTES",
+          "\t\t- loose note",
+          "\t\t  - its child"
+        ],
+        "moves": 0,
+        "notes_created": true,
+        "notes_filed": 1
+      }
+    }
+  ],
+  "note_homes": [
+    {
+      "id": "RL48",
+      "title": "a task with no reqs keeps the loose tail slot",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "home": "loose",
+        "indent": "\t",
+        "line": 3
+      }
+    },
+    {
+      "id": "RL49",
+      "title": "a req-owning task with NOTES files into it",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ❌ **CANCEL LOG**",
+        "\t\t- *2026-11-01* — scope cut",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] #task Write the docs ^docs",
+        "\t\t- note of the subtask",
+        "\t- NOTES",
+        "\t\t- Morgan reported the original issue.",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**",
+        "\t\t- *2026-11-02* — worked"
+      ],
+      "task": 1,
+      "expect": {
+        "home": "notes",
+        "line": 10
+      }
+    },
+    {
+      "id": "RL50",
+      "title": "a req-owning task without NOTES creates it",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req"
+      ],
+      "task": 1,
+      "expect": {
+        "home": "new-notes"
+      }
+    },
+    {
+      "id": "RL51",
+      "title": "a dropped req still makes the task a req owner",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [-] a dropped req",
+        "\t\t- ❌ **CANCEL LOG**",
+        "\t\t\t- *2026-11-01* — why"
+      ],
+      "task": 1,
+      "expect": {
+        "home": "new-notes"
+      }
+    },
+    {
+      "id": "RL52",
+      "title": "a checklist under a note does not make a req owner",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t\t- [ ] checklist item"
+      ],
+      "task": 1,
+      "expect": {
+        "home": "loose",
+        "indent": "\t",
+        "line": 4
+      }
+    }
+  ]
+}

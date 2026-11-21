@@ -727,6 +727,16 @@ pub(crate) fn is_req_line(
         .any(|node| node.line_index == line_index)
 }
 
+/// Every recognized requirement in the note, ordered by owner then document
+/// position. Writers that need more than one lookup (the node, its
+/// descendants, its siblings) build the forest once through this entry.
+pub(crate) fn note_req_forest(
+    contents: &str,
+    settings: &NoteTaskSettings,
+) -> Vec<ReqNode> {
+    forest_for_note(contents, settings)
+}
+
 /// 1-based sibling-ordinal path (`2.1.3`) for a req node.
 pub(crate) fn req_path(node: &ReqNode) -> String {
     node.path

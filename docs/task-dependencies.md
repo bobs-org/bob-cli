@@ -722,7 +722,7 @@ in §14. Managed-child-line vectors (MC) live in §11.8.
 | # | operation | before | after |
 | --- | --- | --- | --- |
 | DW1 | create as first child | task with a `🗓️ **SCHEDULE LOG**` child, no line, field `—` | line inserted before the log child; field set |
-| DW2 | create after Cancel Log | task with `❌ **CANCEL LOG**` then a prose child | line inserted second, after the Cancel Log |
+| DW2 | create after Cancel Log | task with `❌ **CANCEL LOG**` (with dated entries) then a prose child | line inserted second, after the Cancel Log and its entries |
 | DW3 | append | line `[[#^a]]`, field `id-a` | line `[[#^a]] • [[#^b]]`, field `id-a, id-b` |
 | DW4 | remove the middle link | line `a • b • c` | line `a • c`, field drops `id-b` |
 | DW5 | remove the last link | line `[[#^a]]`, field `id-a` | line deleted, field removed |

@@ -114,9 +114,10 @@ pending descendants stay Pending while the owner is open.
 
 ## 3. Task block layout and the NOTES drawer
 
-One shared module, `task_block_layout`, answers one question: "where does a
-new child of kind K go?". It has a JS twin backed by RL vectors. (Shipped in
-the `block-layout` phase; the zones below are normative now.)
+One shared module, `task_block_layout` (`src/native/task_block_layout.rs`),
+answers one question: "where does a new child of kind K go?". It has a
+JavaScript twin backed by the RL vectors, and its requirement writers (below)
+are backed by the RW vectors.
 
 The zones, in order:
 
@@ -143,18 +144,126 @@ keeps its notes in a `NOTES` drawer:
 
 - The gesture that gives a task its **first** req files that task's loose
   direct notes into `NOTES` in the same write. Only the task's own notes
-  move, never notes attached to reqs. The write is previewed in capture and
-  is one undo step in Obsidian. This is the "first-req scoop".
-- Later Bob-written notes to a req-owning task file into `NOTES`.
+  move, never notes attached to reqs, and nested `#task` subtasks stay where
+  they are. The write is previewed in capture and is one undo step in
+  Obsidian. This is the "first-req scoop".
+- Later Bob-written notes to a req-owning task file into `NOTES`. A capture
+  note, a carry, and a promotion row all go through `note_home`.
 - `@route+id#drawer` and explicit drawer bullets still win.
-- Zero-req tasks keep loose notes exactly as today.
+- Zero-req tasks keep loose notes exactly as today (see below).
 - Hand edits in Obsidian are never reshuffled. `bob task tidy` fixes drift
   on request.
 
 `NOTES` is created only when a note lands in it: the scoop moved at least
 one note, or a note is being written. A req-owning task with no notes has no
 `NOTES` header. This keeps the Task Drawer contract: a drawer is nonempty by
-construction.
+construction. Reviewer decision `notes_drawer_birth = with_first_note`.
+
+**Zero-req tasks keep today's placement.** A task with no reqs files a loose
+note at the tail, before its first Schedule, Work, or Rotten Log (else at the
+end of the block), and its authored notes and drawers may interleave: capture
+has always written notes after the drawers, and tidy never reshuffles that
+history. For such a task only the Cancel Log, managed-link, and log zones are
+enforced. The NOTES-first drawer rule applies to a task that owns a req.
+
+### 3.1 Insertion slots
+
+`insertion_offset(contents, task, kind)` returns a slot: the 0-based line to
+insert before (the line count appends), the byte offset of that line, and the
+indentation. The indentation is the first existing child's, else the note's
+dominant indent unit under the task, else a tab. Blank lines inside a child's
+extent travel with that child, and a slot never lands after a child's
+trailing blank lines.
+
+| Kind           | Slot                                                                                                                               |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `cancel-log`   | The task's first child, directly after the task line.                                                                              |
+| `managed-link` | After the last Cancel Log or managed-link subtree; else before the first child. Finer ordering inside the zone is the link writers'. |
+| `req`          | After the last req's subtree; else the managed-link slot.                                                                          |
+| `authored`     | A task that owns reqs: after the last child up to the authored zone. A task with no reqs: the tail slot.                           |
+| `drawer`       | Before the first Schedule, Work, or Rotten Log; else the end of the block.                                                         |
+| `notes-drawer` | Before the first drawer; else the `drawer` slot.                                                                                   |
+| `log`          | The end of the block.                                                                                                              |
+
+`note_home(contents, task)` answers where a Bob-written loose note files:
+`loose` (a task with no reqs: the `authored` tail slot), `notes` (the task's
+existing `NOTES` drawer), or `new-notes` (create `NOTES`, first among the
+drawers, then file in it). `ensure_drawer` routes through the same slots, so a
+created `NOTES` lands first among the drawers and every other created drawer
+keeps its place before the logs.
+
+The link and log writers already agree with the zones, and a test pins that:
+`blocks_insert_slot` and `relation_insert_slot` place BLOCKS, LINKS, and
+LINKED FROM inside the managed zone, the Depends-On line is the first child
+except after a Cancel Log, and a new managed log appends as the last child.
+
+### 3.2 Violations and tidy
+
+`layout_violations` reports each child that sits after a child of a later
+zone (`out-of-zone`), a `NOTES` drawer that is not first among the drawers
+(`notes-not-first`), and, on a req-owning task, a loose note outside `NOTES`
+(`note-outside-notes`).
+
+`plan_tidy(contents, task, policy)` is a pure plan for one **open** task
+block; a done or cancelled task is never tidied, because history is never
+rewritten. It:
+
+1. files a req-owning task's loose direct notes into `NOTES` (creating it
+   only when a note moves), rebasing their indentation under the drawer;
+2. moves whole child subtrees into their zones, with a stable sort so authored
+   order survives inside each zone and `NOTES` leads the drawers.
+
+It returns `None` when the block is already canonical, so a second run
+reports nothing. The plan carries `moves` (the fewest subtrees that changed
+place), `notes_filed`, and whether `NOTES` was created. A repair shifts the
+lines below it, so a caller applies one task at a time and rescans.
+
+### 3.3 Requirement line writers
+
+Each writer is a pure function over the whole note. The caller names the line
+and the exact text it expects there (the preimage); a moved or edited line
+refuses as `req_stale` rather than writing somewhere else. None of them ever
+writes req completion.
+
+- **`drop_req`** rewrites `[ ]` (or a flagged mark) to `[-]` and writes the
+  reason as a Cancel Log, the first child of the req, in the task cancel
+  shape: `- ❌ **CANCEL LOG**` over `- *YYYY-MM-DD* — reason`, newest first. An
+  empty reason writes no log unless the req already keeps one, which then
+  gains `*YYYY-MM-DD* — 🤷 no reason given`. A req under a done owner can be
+  dropped (the post-close card does so). It reports how many descendant reqs
+  went with it; their bytes are unchanged.
+- **`restore_req`** rewrites `[-]` back to `[ ]` and keeps the log, the way
+  reopening a task keeps its log.
+- **`toggle_note_req`** is Ctrl+]. A note becomes a req: at depth 1 the line
+  and its subtree move to the end of the reqs zone, and the task's first req
+  runs the first-req scoop in the same write; deeper, the toggle happens in
+  place. A req becomes a note: a leaf converts in place at depth 2 or more,
+  and at depth 1 the line and its subtree move into `NOTES`. A req with
+  descendant reqs refuses.
+- **`insert_reqs`** inserts depth-1 req blocks (relative indentation, each
+  opening with `- [ ] text`) at the end of the reqs zone and runs the
+  first-req scoop when the task had no req before.
+
+| Code              | Refused when                                                              |
+| ----------------- | ------------------------------------------------------------------------- |
+| `req_stale`       | The line no longer holds the expected text.                               |
+| `not_a_req`       | Drop or restore on a line that is not a requirement.                      |
+| `req_dropped`     | Drop or toggle on a dropped req.                                          |
+| `req_carried`     | Drop, restore, or toggle on a `[>]` stub: `Carried — open the linked task`. |
+| `req_met`         | Drop or restore on a hand-ticked `[x]` req.                               |
+| `req_excluded`    | Drop under a dropped or carried ancestor.                                 |
+| `req_not_dropped` | Restore on a pending req: the owner's Ctrl+Enter copy.                    |
+| `req_has_nested`  | Toggle to a note on a req with nested reqs.                               |
+| `req_in_drawer`   | Toggle on a note inside a drawer.                                         |
+| `req_parent`      | Toggle under a note, a managed line, or a checklist that is no req.       |
+| `not_a_note`      | Toggle on a drawer header, a nested task, or a managed line.              |
+| `req_depth`       | A write that would nest beyond `MAX_REQ_DEPTH`.                           |
+| `req_state`       | Insert of a block that is not an open `- [ ]` req.                        |
+| `req_empty`       | Insert with nothing to insert.                                            |
+| `not_a_task`      | Insert under a line that is not a task.                                   |
+
+Only creating writers refuse depth: drop and restore are state edits and work
+at any depth.
 
 ## 4. Rendering
 
@@ -282,10 +391,12 @@ writes. (Shipped in the `drawer-rename`, `task-tidy`, and
   and depth, every mark under open/done/cancelled owners, excluded
   descendants, the depth bound, anchors, whole-token `#task` matching, row
   keys, subtree ends, and note ranges.
-- **RL** (`tests/fixtures/task_reqs/layout.json`): block-layout slots and
-  tidy before/after. (Added in `block-layout`.)
+- **RL** (`tests/fixtures/task_reqs/layout.json`): insertion slots,
+  violations, tidy before/after, and note homes (§3.1–§3.2): Cancel Log,
+  nested tasks, mixed indentation, drawers, and fenced lookalikes.
 - **RW** (`tests/fixtures/task_reqs/writes.json`): drop, restore, toggle,
-  scoop, and both `notes_drawer_birth` branches. (Added in `block-layout`.)
+  insert, the first-req scoop, the `with_first_note` NOTES birth, CRLF notes,
+  and every refusal code (§3.3).
 - **RV** (`tests/fixtures/req_close/vectors.json`): close-card row building,
   verdict bytes, overlaps, staleness, jump landings, and copy strings.
   (Added in `close-engine`.)

@@ -1,0 +1,1123 @@
+{
+  "schema_version": 1,
+  "contract": "docs/task-requirements.md §2, §3, §5",
+  "date": "2026-11-21",
+  "cases": [
+    {
+      "id": "RW1",
+      "title": "drop a leaf req with a reason creates the cancel log first",
+      "op": "drop",
+      "line": 5,
+      "reason": "not needed in v1",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] Handles empty input",
+        "\t- NOTES",
+        "\t\t- first entry"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task Ship the exporter ^export",
+          "\t- [ ] Handles supported inputs",
+          "\t\t- [ ] Handles Windows files",
+          "\t\t\t- Fixture: windows.csv",
+          "\t- [-] Handles empty input",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — not needed in v1",
+          "\t- NOTES",
+          "\t\t- first entry"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW2",
+      "title": "drop a req with descendants counts them and keeps their bytes",
+      "op": "drop",
+      "line": 2,
+      "reason": "v1 is gone",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] Handles empty input",
+        "\t- NOTES",
+        "\t\t- first entry"
+      ],
+      "expect": {
+        "descendants": 1,
+        "lines": [
+          "- [ ] #task Ship the exporter ^export",
+          "\t- [-] Handles supported inputs",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — v1 is gone",
+          "\t\t- [ ] Handles Windows files",
+          "\t\t\t- Fixture: windows.csv",
+          "\t- [ ] Handles empty input",
+          "\t- NOTES",
+          "\t\t- first entry"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW3",
+      "title": "drop with an empty reason writes no log",
+      "op": "drop",
+      "line": 5,
+      "reason": "",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] Handles empty input",
+        "\t- NOTES",
+        "\t\t- first entry"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task Ship the exporter ^export",
+          "\t- [ ] Handles supported inputs",
+          "\t\t- [ ] Handles Windows files",
+          "\t\t\t- Fixture: windows.csv",
+          "\t- [-] Handles empty input",
+          "\t- NOTES",
+          "\t\t- first entry"
+        ],
+        "log": "none"
+      }
+    },
+    {
+      "id": "RW4",
+      "title": "drop prepends under an existing cancel log",
+      "op": "drop",
+      "line": 2,
+      "reason": "second reason",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t\t- ❌ **CANCEL LOG**",
+        "\t\t\t- *2026-11-01* — first reason",
+        "\t\t- a note on the req"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [-] a req",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — second reason",
+          "\t\t\t- *2026-11-01* — first reason",
+          "\t\t- a note on the req"
+        ],
+        "log": "prepended"
+      }
+    },
+    {
+      "id": "RW5",
+      "title": "drop with an empty reason under an existing log records no reason",
+      "op": "drop",
+      "line": 2,
+      "reason": "  ",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t\t- ❌ **CANCEL LOG**",
+        "\t\t\t- *2026-11-01* — first reason"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [-] a req",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — 🤷 no reason given",
+          "\t\t\t- *2026-11-01* — first reason"
+        ],
+        "log": "prepended"
+      }
+    },
+    {
+      "id": "RW6",
+      "title": "drop becomes the first child ahead of notes",
+      "op": "drop",
+      "line": 2,
+      "reason": "out of scope",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t\t- a note on the req"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [-] a req",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — out of scope",
+          "\t\t- a note on the req"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW7",
+      "title": "drop in a spaced note reuses its unit",
+      "op": "drop",
+      "line": 2,
+      "reason": "out of scope",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "  - [ ] a req",
+        "    - a note on the req"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "  - [-] a req",
+          "    - ❌ **CANCEL LOG**",
+          "      - *2026-11-21* — out of scope",
+          "    - a note on the req"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW8",
+      "title": "drop a nested req in place under its parent",
+      "op": "drop",
+      "line": 3,
+      "reason": "windows only later",
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- [ ] Handles supported inputs",
+        "\t\t- [ ] Handles Windows files",
+        "\t\t\t- Fixture: windows.csv",
+        "\t- [ ] Handles empty input",
+        "\t- NOTES",
+        "\t\t- first entry"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task Ship the exporter ^export",
+          "\t- [ ] Handles supported inputs",
+          "\t\t- [-] Handles Windows files",
+          "\t\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t\t- *2026-11-21* — windows only later",
+          "\t\t\t- Fixture: windows.csv",
+          "\t- [ ] Handles empty input",
+          "\t- NOTES",
+          "\t\t- first entry"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW9",
+      "title": "drop under a done owner is allowed",
+      "op": "drop",
+      "line": 2,
+      "reason": "not needed",
+      "source_lines": [
+        "- [x] #task A [completion:: 2026-11-21] ^a",
+        "\t- [ ] a req"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [x] #task A [completion:: 2026-11-21] ^a",
+          "\t- [-] a req",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — not needed"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW10",
+      "title": "drop a hand-flagged mark",
+      "op": "drop",
+      "line": 2,
+      "reason": "",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [?] a flagged req"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [-] a flagged req"
+        ],
+        "log": "none"
+      }
+    },
+    {
+      "id": "RW11",
+      "title": "drop keeps a trailing anchor",
+      "op": "drop",
+      "line": 2,
+      "reason": "superseded",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req ^req-anchor"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [-] a req ^req-anchor",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — superseded"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW12",
+      "title": "drop in a CRLF note keeps CRLF",
+      "op": "drop",
+      "eol": "crlf",
+      "line": 2,
+      "reason": "not needed",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [-] a req",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — not needed"
+        ],
+        "log": "created"
+      }
+    },
+    {
+      "id": "RW13",
+      "title": "drop refuses a dropped req",
+      "op": "drop",
+      "line": 2,
+      "reason": "again",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [-] already dropped"
+      ],
+      "expect": {
+        "refused": "req_dropped"
+      }
+    },
+    {
+      "id": "RW14",
+      "title": "drop refuses a carried req",
+      "op": "drop",
+      "line": 2,
+      "reason": "again",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [>] [[#^other|Carried]]"
+      ],
+      "expect": {
+        "refused": "req_carried"
+      }
+    },
+    {
+      "id": "RW15",
+      "title": "drop refuses a hand-ticked req",
+      "op": "drop",
+      "line": 2,
+      "reason": "again",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [x] ticked by hand"
+      ],
+      "expect": {
+        "refused": "req_met"
+      }
+    },
+    {
+      "id": "RW16",
+      "title": "drop refuses a req excluded by a dropped parent",
+      "op": "drop",
+      "line": 3,
+      "reason": "again",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [-] dropped parent",
+        "\t\t- [ ] excluded child"
+      ],
+      "expect": {
+        "refused": "req_excluded"
+      }
+    },
+    {
+      "id": "RW17",
+      "title": "drop refuses a req excluded by a carried parent",
+      "op": "drop",
+      "line": 3,
+      "reason": "again",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [>] [[#^other|Carried]]",
+        "\t\t- [ ] excluded child"
+      ],
+      "expect": {
+        "refused": "req_excluded"
+      }
+    },
+    {
+      "id": "RW18",
+      "title": "drop refuses a note",
+      "op": "drop",
+      "line": 2,
+      "reason": "not a req",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a plain note"
+      ],
+      "expect": {
+        "refused": "not_a_req"
+      }
+    },
+    {
+      "id": "RW19",
+      "title": "drop refuses a stale preimage",
+      "op": "drop",
+      "line": 2,
+      "preimage": "\t- [ ] an older version",
+      "reason": "stale",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req"
+      ],
+      "expect": {
+        "refused": "req_stale"
+      }
+    },
+    {
+      "id": "RW20",
+      "title": "restore a dropped req and keep its log",
+      "op": "restore",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [-] a req",
+        "\t\t- ❌ **CANCEL LOG**",
+        "\t\t\t- *2026-11-21* — v1 is gone"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t\t- ❌ **CANCEL LOG**",
+          "\t\t\t- *2026-11-21* — v1 is gone"
+        ]
+      }
+    },
+    {
+      "id": "RW21",
+      "title": "restore a dropped req with no log",
+      "op": "restore",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [-] a req"
+      ],
+      "expect": {
+        "descendants": 0,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req"
+        ]
+      }
+    },
+    {
+      "id": "RW22",
+      "title": "restore a dropped parent returns its descendants to pending",
+      "op": "restore",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [-] dropped parent",
+        "\t\t- [ ] child"
+      ],
+      "expect": {
+        "descendants": 1,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] dropped parent",
+          "\t\t- [ ] child"
+        ]
+      }
+    },
+    {
+      "id": "RW23",
+      "title": "restore refuses a pending req with the owner's copy",
+      "op": "restore",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a pending req"
+      ],
+      "expect": {
+        "refused": "req_not_dropped"
+      }
+    },
+    {
+      "id": "RW24",
+      "title": "restore refuses a carried req",
+      "op": "restore",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [>] [[#^other|Carried]]"
+      ],
+      "expect": {
+        "refused": "req_carried"
+      }
+    },
+    {
+      "id": "RW25",
+      "title": "the first req scoops loose notes into a new NOTES",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- Morgan reported the original issue.",
+        "\t\t- see the thread",
+        "\t- Fixture data lives in tests/data.",
+        "\t- [ ] #task Subtask ^sub",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "expect": {
+        "depth": 1,
+        "direction": "note-to-req",
+        "line": 3,
+        "lines": [
+          "- [ ] #task Ship the exporter ^export",
+          "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+          "\t- [ ] Morgan reported the original issue.",
+          "\t\t- see the thread",
+          "\t- [ ] #task Subtask ^sub",
+          "\t- NOTES",
+          "\t\t- Fixture data lives in tests/data.",
+          "\t- FUTURE WORK",
+          "\t\t- later",
+          "\t- 🛠️ **WORK LOG**"
+        ],
+        "notes_created": true,
+        "scooped": 1
+      }
+    },
+    {
+      "id": "RW26",
+      "title": "a later req moves to the end of the reqs zone without a scoop",
+      "op": "toggle",
+      "line": 5,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] first req",
+        "\t\t- note of the first req",
+        "\t- loose note",
+        "\t- another loose note",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "expect": {
+        "depth": 1,
+        "direction": "note-to-req",
+        "line": 4,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] first req",
+          "\t\t- note of the first req",
+          "\t- [ ] another loose note",
+          "\t- loose note",
+          "\t- NOTES",
+          "\t\t- entry"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW27",
+      "title": "a note under a req toggles in place at depth 2",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] a req",
+        "\t\t- a note on the req",
+        "\t\t\t- its child"
+      ],
+      "expect": {
+        "depth": 2,
+        "direction": "note-to-req",
+        "line": 3,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] a req",
+          "\t\t- [ ] a note on the req",
+          "\t\t\t- its child"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW28",
+      "title": "a note toggled at depth 1 on a task with NOTES keeps NOTES",
+      "op": "toggle",
+      "line": 4,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- NOTES",
+        "\t\t- entry",
+        "\t- loose note"
+      ],
+      "expect": {
+        "depth": 1,
+        "direction": "note-to-req",
+        "line": 2,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] loose note",
+          "\t- NOTES",
+          "\t\t- entry"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW29",
+      "title": "a req leaf toggles to a note in place at depth 2",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] outer",
+        "\t\t- [ ] inner leaf",
+        "\t\t\t- note of the leaf"
+      ],
+      "expect": {
+        "depth": 2,
+        "direction": "req-to-note",
+        "line": 3,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] outer",
+          "\t\t- inner leaf",
+          "\t\t\t- note of the leaf"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW30",
+      "title": "a depth-1 req moves into an existing NOTES as a note",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] first req",
+        "\t- [ ] second req",
+        "\t\t- note of the second",
+        "\t- NOTES",
+        "\t\t- entry",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "expect": {
+        "depth": 1,
+        "direction": "req-to-note",
+        "line": 5,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] first req",
+          "\t- NOTES",
+          "\t\t- entry",
+          "\t\t- second req",
+          "\t\t\t- note of the second",
+          "\t- 🛠️ **WORK LOG**"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW31",
+      "title": "a depth-1 req moves into a created NOTES first among the drawers",
+      "op": "toggle",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] only req",
+        "\t- FUTURE WORK",
+        "\t\t- later"
+      ],
+      "expect": {
+        "depth": 1,
+        "direction": "req-to-note",
+        "line": 3,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- NOTES",
+          "\t\t- only req",
+          "\t- FUTURE WORK",
+          "\t\t- later"
+        ],
+        "notes_created": true,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW32",
+      "title": "toggle refuses a req that has nested requirements",
+      "op": "toggle",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] parent req",
+        "\t\t- [ ] child one",
+        "\t\t- [ ] child two"
+      ],
+      "expect": {
+        "refused": "req_has_nested"
+      }
+    },
+    {
+      "id": "RW33",
+      "title": "toggle refuses a dropped req",
+      "op": "toggle",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [-] dropped req"
+      ],
+      "expect": {
+        "refused": "req_dropped"
+      }
+    },
+    {
+      "id": "RW34",
+      "title": "toggle refuses a carried req",
+      "op": "toggle",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [>] [[#^other|Carried]]"
+      ],
+      "expect": {
+        "refused": "req_carried"
+      }
+    },
+    {
+      "id": "RW35",
+      "title": "toggle refuses a note inside a drawer",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- NOTES",
+        "\t\t- an entry"
+      ],
+      "expect": {
+        "refused": "req_in_drawer"
+      }
+    },
+    {
+      "id": "RW36",
+      "title": "toggle refuses a note under another note",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t\t- a child of the note"
+      ],
+      "expect": {
+        "refused": "req_parent"
+      }
+    },
+    {
+      "id": "RW37",
+      "title": "toggle refuses a checklist item under a note",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note",
+        "\t\t- [ ] checklist item"
+      ],
+      "expect": {
+        "refused": "req_parent"
+      }
+    },
+    {
+      "id": "RW38",
+      "title": "toggle refuses a note under a managed line",
+      "op": "toggle",
+      "line": 3,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+        "\t\t- stray child"
+      ],
+      "expect": {
+        "refused": "req_parent"
+      }
+    },
+    {
+      "id": "RW39",
+      "title": "toggle refuses a drawer header",
+      "op": "toggle",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- FUTURE WORK",
+        "\t\t- later"
+      ],
+      "expect": {
+        "refused": "not_a_note"
+      }
+    },
+    {
+      "id": "RW40",
+      "title": "toggle refuses a nested task",
+      "op": "toggle",
+      "line": 2,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] #task Subtask ^sub"
+      ],
+      "expect": {
+        "refused": "not_a_note"
+      }
+    },
+    {
+      "id": "RW41",
+      "title": "toggle refuses a note below the depth bound",
+      "op": "toggle",
+      "line": 18,
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] level 1",
+        "\t\t- [ ] level 2",
+        "\t\t\t- [ ] level 3",
+        "\t\t\t\t- [ ] level 4",
+        "\t\t\t\t\t- [ ] level 5",
+        "\t\t\t\t\t\t- [ ] level 6",
+        "\t\t\t\t\t\t\t- [ ] level 7",
+        "\t\t\t\t\t\t\t\t- [ ] level 8",
+        "\t\t\t\t\t\t\t\t\t- [ ] level 9",
+        "\t\t\t\t\t\t\t\t\t\t- [ ] level 10",
+        "\t\t\t\t\t\t\t\t\t\t\t- [ ] level 11",
+        "\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 12",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 13",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 14",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 15",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 16",
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- a note too deep"
+      ],
+      "expect": {
+        "refused": "req_depth"
+      }
+    },
+    {
+      "id": "RW42",
+      "title": "toggle refuses a stale preimage",
+      "op": "toggle",
+      "line": 2,
+      "preimage": "\t- an older note",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- a note"
+      ],
+      "expect": {
+        "refused": "req_stale"
+      }
+    },
+    {
+      "id": "RW43",
+      "title": "insert the first req scoops loose notes into a new NOTES",
+      "op": "insert",
+      "blocks": [
+        "- [ ] Handles supported inputs"
+      ],
+      "source_lines": [
+        "- [ ] #task Ship the exporter ^export",
+        "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+        "\t- Morgan reported the original issue.",
+        "\t\t- see the thread",
+        "\t- Fixture data lives in tests/data.",
+        "\t- [ ] #task Subtask ^sub",
+        "\t- FUTURE WORK",
+        "\t\t- later",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "first_line": 3,
+        "line_count": 1,
+        "lines": [
+          "- [ ] #task Ship the exporter ^export",
+          "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
+          "\t- [ ] Handles supported inputs",
+          "\t- [ ] #task Subtask ^sub",
+          "\t- NOTES",
+          "\t\t- Morgan reported the original issue.",
+          "\t\t\t- see the thread",
+          "\t\t- Fixture data lives in tests/data.",
+          "\t- FUTURE WORK",
+          "\t\t- later",
+          "\t- 🛠️ **WORK LOG**"
+        ],
+        "notes_created": true,
+        "scooped": 2
+      }
+    },
+    {
+      "id": "RW44",
+      "title": "insert with no notes to scoop creates no NOTES",
+      "op": "insert",
+      "blocks": [
+        "- [ ] first req"
+      ],
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+        "\t- 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "first_line": 3,
+        "line_count": 1,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
+          "\t- [ ] first req",
+          "\t- 🛠️ **WORK LOG**"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW45",
+      "title": "insert after existing reqs does not scoop",
+      "op": "insert",
+      "blocks": [
+        "- [ ] second req"
+      ],
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] first req",
+        "\t\t- note of the req",
+        "\t- loose note"
+      ],
+      "task": 1,
+      "expect": {
+        "first_line": 4,
+        "line_count": 1,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] first req",
+          "\t\t- note of the req",
+          "\t- [ ] second req",
+          "\t- loose note"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW46",
+      "title": "insert a nested block with relative indentation",
+      "op": "insert",
+      "blocks": [
+        "- [ ] outer\n\t- [ ] inner\n\t\t- note of inner\n\t- plain note"
+      ],
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- note"
+      ],
+      "task": 1,
+      "expect": {
+        "first_line": 2,
+        "line_count": 4,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] outer",
+          "\t\t- [ ] inner",
+          "\t\t\t- note of inner",
+          "\t\t- plain note",
+          "\t- NOTES",
+          "\t\t- note"
+        ],
+        "notes_created": true,
+        "scooped": 1
+      }
+    },
+    {
+      "id": "RW47",
+      "title": "insert several blocks keeps their order",
+      "op": "insert",
+      "blocks": [
+        "- [ ] one",
+        "- [ ] two\n\t- [ ] two-a"
+      ],
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- [ ] existing",
+        "\t- NOTES",
+        "\t\t- entry"
+      ],
+      "task": 1,
+      "expect": {
+        "first_line": 3,
+        "line_count": 3,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] existing",
+          "\t- [ ] one",
+          "\t- [ ] two",
+          "\t\t- [ ] two-a",
+          "\t- NOTES",
+          "\t\t- entry"
+        ],
+        "notes_created": false,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW48",
+      "title": "insert into a spaced note uses its unit",
+      "op": "insert",
+      "blocks": [
+        "- [ ] first req\n  - nested note"
+      ],
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "  - loose note",
+        "  - 🛠️ **WORK LOG**"
+      ],
+      "task": 1,
+      "expect": {
+        "first_line": 2,
+        "line_count": 2,
+        "lines": [
+          "- [ ] #task A ^a",
+          "  - [ ] first req",
+          "    - nested note",
+          "  - NOTES",
+          "    - loose note",
+          "  - 🛠️ **WORK LOG**"
+        ],
+        "notes_created": true,
+        "scooped": 1
+      }
+    },
+    {
+      "id": "RW49",
+      "title": "insert into a CRLF note keeps CRLF",
+      "op": "insert",
+      "blocks": [
+        "- [ ] first req"
+      ],
+      "eol": "crlf",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "\t- loose note"
+      ],
+      "task": 1,
+      "expect": {
+        "first_line": 2,
+        "line_count": 1,
+        "lines": [
+          "- [ ] #task A ^a",
+          "\t- [ ] first req",
+          "\t- NOTES",
+          "\t\t- loose note"
+        ],
+        "notes_created": true,
+        "scooped": 1
+      }
+    },
+    {
+      "id": "RW50",
+      "title": "insert refuses a pre-checked req",
+      "op": "insert",
+      "blocks": [
+        "- [x] already met"
+      ],
+      "source_lines": [
+        "- [ ] #task A ^a"
+      ],
+      "task": 1,
+      "expect": {
+        "refused": "req_state"
+      }
+    },
+    {
+      "id": "RW51",
+      "title": "insert refuses an empty list",
+      "op": "insert",
+      "blocks": [],
+      "source_lines": [
+        "- [ ] #task A ^a"
+      ],
+      "task": 1,
+      "expect": {
+        "refused": "req_empty"
+      }
+    },
+    {
+      "id": "RW52",
+      "title": "insert refuses a block deeper than the bound",
+      "op": "insert",
+      "blocks": [
+        "- [ ] level 1\n\t- [ ] level 2\n\t\t- [ ] level 3\n\t\t\t- [ ] level 4\n\t\t\t\t- [ ] level 5\n\t\t\t\t\t- [ ] level 6\n\t\t\t\t\t\t- [ ] level 7\n\t\t\t\t\t\t\t- [ ] level 8\n\t\t\t\t\t\t\t\t- [ ] level 9\n\t\t\t\t\t\t\t\t\t- [ ] level 10\n\t\t\t\t\t\t\t\t\t\t- [ ] level 11\n\t\t\t\t\t\t\t\t\t\t\t- [ ] level 12\n\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 13\n\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 14\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 15\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 16\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t- [ ] level 17"
+      ],
+      "source_lines": [
+        "- [ ] #task A ^a"
+      ],
+      "task": 1,
+      "expect": {
+        "refused": "req_depth"
+      }
+    },
+    {
+      "id": "RW53",
+      "title": "insert refuses a stale task line",
+      "op": "insert",
+      "blocks": [
+        "- [ ] a req"
+      ],
+      "preimage": "- [ ] #task A (older) ^a",
+      "source_lines": [
+        "- [ ] #task A ^a"
+      ],
+      "task": 1,
+      "expect": {
+        "refused": "req_stale"
+      }
+    }
+  ]
+}

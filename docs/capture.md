@@ -7061,6 +7061,11 @@ inserted immediately before the earliest of those managed logs. A Schedule Log i
 markers do not move the insertion point. Tasks with neither managed log still
 append at the end of the task block.
 
+A task that owns a [requirement](task-requirements.md) keeps its notes in a
+`NOTES` drawer instead: a captured note files at the end of that drawer, and the
+drawer is created (first among the task's drawers) only when a note lands in
+it. A task with no requirements keeps the placement described above.
+
 The marker composes with terminal `s:<N>`, `$<N>`, and `%c` in
 either order. Scheduled properties are still rendered for consistency even
 though Obsidian Tasks does not read them from an ordinary bullet. Existing child
@@ -7076,7 +7081,8 @@ The same marker accepts an optional trailing `#<drawer>` selector, as in
 ALL-CAPS child drawer of that task: a slug (`#future-work`) or a quoted
 literal (`#"FUTURE WORK"`). Matching is exact by key, with reserved,
 near-duplicate, and ambiguous refusals, and a missing drawer is created using
-the drawer's child indentation. The captured block is appended at the end of
+the drawer's child indentation (a created `NOTES` drawer goes first among the
+task's drawers; any other new drawer goes before the managed logs). The captured block is appended at the end of
 that drawer's own block — before the next direct child of the parent task, and
 before a managed log nested under the drawer. On the project note's own
 `^prj` task the selector instead names one of the note's eligible `##`

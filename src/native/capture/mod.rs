@@ -41,7 +41,7 @@ use super::{
     },
     ref_jobs,
     style::Styler,
-    task_status_groups,
+    task_block_layout, task_status_groups,
     url_routing::{self, RefIntent, UrlIntent, UrlRoutingPolicy},
     vault_links,
 };

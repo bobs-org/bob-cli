@@ -155,6 +155,32 @@ fn inserts_before_managed_logs_in_draft_order() {
 }
 
 #[test]
+fn notes_on_a_req_owning_task_file_into_notes() {
+    let temp = TempDir::new("bob-cli-note-bullets-req-owner");
+    let vault = temp.path().join("vault");
+    write_cash(
+        &vault,
+        "- [ ] #task Parent ^parent\n\t- [ ] first requirement\n\t- \u{1f6e0}\u{fe0f} **WORK LOG**\n\t\t- *2026-08-01* \u{2014} worked\n",
+    );
+    let json = capture_json(&vault, "@cash+parent\n- first\n- second");
+    assert_eq!(
+        json["notes"].as_array().expect("notes array").len(),
+        2,
+        "{json}"
+    );
+    let file = fs::read_to_string(vault.join("cash.md")).expect("cash.md");
+    assert_eq!(
+        file,
+        "- [ ] #task Parent ^parent\n\t- [ ] first requirement\n\t- NOTES\n\t\t- first\n\t\t- second\n\t- \u{1f6e0}\u{fe0f} **WORK LOG**\n\t\t- *2026-08-01* \u{2014} worked\n"
+    );
+    // A task with no requirements keeps its loose note exactly as before.
+    write_cash(&vault, "- [ ] #task Parent ^parent\n\t- keep me\n");
+    capture_json(&vault, "@cash+parent\n- loose");
+    let file = fs::read_to_string(vault.join("cash.md")).expect("cash.md");
+    assert_eq!(file, "- [ ] #task Parent ^parent\n\t- keep me\n\t- loose\n");
+}
+
+#[test]
 fn two_bullets_naming_one_missing_drawer_merge() {
     let temp = TempDir::new("bob-cli-note-bullets-merge");
     let vault = temp.path().join("vault");
