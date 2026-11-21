@@ -268,11 +268,15 @@ warning summary.
 List and check share one JSON envelope (`schema_version: 1`). Albums are
 ordered by path. `parent` is the parent stem. `ok` is false when error
 findings exist or runtime I/O failed. Each album carries `noun`, `label`,
-`plural`, the additive display `singular`, and the `walk` object (`state`,
-`total`, `counts: {current, missing, stale, damaged}`, `order: [stem…]`,
-`[]` when held). The top level also carries
-`capabilities: ["record_values_v1", "record_walk_v1"]`, which the Record Card
-reads before enabling edits. See
+`plural`, the additive display `singular`, `walk_by` (the effective field key
+or `null`), and the `walk` object (`state`, `total`,
+`counts: {current, missing, stale, damaged}`, `order: [stem…]`, `groups`,
+and empty order/groups when held). Group entries contain the stored choice
+`value` (null for the trailing needs group), display `label`, `count`, and the
+first record as `head: {stem, path, title}`. Flat walks have no groups. The
+top level also carries `capabilities: ["record_values_v1", "record_walk_v1",
+"record_walk_groups_v1"]`; clients can use the last capability to enable
+grouped-walk controls. See
 [JSON outputs](reference/json-outputs.md#album-reports).
 
 Each album's ordered `fields[]` includes its label, kind, flags, typed default
@@ -283,9 +287,10 @@ its raw value is invalid elsewhere in the schema. `dated_notes`, `legacy`, and
 otherwise `legacy` preserves order and the fingerprint is `sha256:` plus 64
 lowercase hexadecimal digits. The fingerprint hashes the parsed schema's
 semantic content: noun, label, resolved plural, dated-note flag, ordered legacy
-patterns, and ordered fields and choices with every attribute. YAML formatting
-and source lines do not affect it. `bob records show -f json` uses the same
-field shape, with `line: null` when an album schema is unavailable.
+patterns, ordered fields and choices with every attribute, and the effective
+`walk_by` key. YAML formatting and source lines do not affect it. An unset
+`walk_by` retains the original fingerprint. `bob records show -f json` uses
+the same field shape, with `line: null` when an album schema is unavailable.
 
 ### Creating an album
 
@@ -341,7 +346,8 @@ is never blocked solely on unrelated failures.
 
 `bob albums update STEM [-i FILE]` applies one ordered JSON envelope to one
 root album: it validates ordered schema edits, preserves unrelated bytes,
-rebuilds the generated `[!records]` index in the same transaction, and returns
+rebuilds the generated `[!records]` index, replans affected walk lines in the
+same transaction, and returns
 safe inverse operations for Undo. `STEM` selects one root album note, never a
 record noun fallback or an arbitrary path; confinement and symlink safety are
 enforced. `-i -` reads stdin, and omitted `-i` has the same meaning. Options
@@ -371,6 +377,13 @@ a valid no-op.
 }
 ```
 
+To group record walks by a single-value choices field, use
+`{ "op": "walk_by.set", "field": "section" }`. Unset the selection with
+`{ "op": "walk_by.set", "field": null }`. The field must already be declared
+and eligible. Changing the selection or the selected field's choice order
+replans only walk lines that differ; the preview lists these file changes and
+the returned inverse restores the previous choice and top-level YAML span.
+
 Positions are zero-based. For moves, the selected entry is removed before
 indexing the remaining list; 0 prepends and the length appends. Adds default
 to append. Out-of-range positions refuse. Stable keys identify targets
@@ -389,6 +402,7 @@ albums output convention, preserving unchanged combined labels.
 | Operation | Inputs and behavior |
 | --------- | ------------------- |
 | `album.set` | `set` object with label, plural, dated_notes; optional `unset` array restoring the parser's absent/default state. Noun and legacy are not editable here. |
+| `walk_by.set` | Required `field`: a declared single-value choices field, or `null` to unset. Changes walk grouping and replans differing walk lines in the same transaction; the inverse restores the prior selection and authored top-level YAML span. |
 | `field.add` | label; optional kind (default text), list, suggest, position. Choices-kind additions supply a nonempty ordered `choices` array of label/emoji objects. A new field is optional; a later `field.set` may make it required. |
 | `field.set` | field key plus `set` for label, required, suggest, default, min, max, and optional `unset` property-name array. Key, kind, list, and choices are not mutable through this op. |
 | `field.move` | field key and position. |
@@ -411,12 +425,15 @@ explicitly with its target and complete-scan usage count plus an
 merge, noun change, and used removal. Typed errors carry `field`/`choice`,
 `key_path` where applicable, and `affected`. A removed field named by
 `index_by` or `index_facets` refuses rather than changing those top-level
-bytes. The group field prefers `status` choices, otherwise the first choices
-field, and recomputes after moves and removals to preview the regrouping. A
-cross-album storage clash names the conflicting key and album paths.
+bytes. The index chooses its group field independently (preferring `status`
+choices, otherwise the first choices field); `walk_by` explicitly chooses the
+walk's field and does not change index order or grouping. A selected walk field
+cannot be removed until `walk_by` is unset. Reordering its choices replans the
+walk; unrelated schema edits do not. A cross-album storage clash names the
+conflicting key and album paths.
 
-Dry run previews the entire intended edit, including the index diff, and
-reports zero record-file changes. It takes no lock, performs no Git or sync
+Dry run previews the entire intended edit, including index and walk diffs, and
+performs no record-file writes. It takes no lock, performs no Git or sync
 commands, and writes no vault or cache files. A net semantic no-op — an empty
 envelope or a batch restoring exactly its initial schema and order — returns
 original bytes and no edit before any canonical emission or index repair,
@@ -431,9 +448,10 @@ pre-syncs, replans fresh with the original `expect` (preflight bytes are never
 applied after pre-sync), then installs one album-note edit and makes one
 scoped `albums: update <stem>.md (<short op summary>)` commit — a count
 summary for multi-op envelopes. One envelope is one gesture and one commit.
-Owner catalogs, record files, and Base files stay byte-identical. The
-post-install verifier checks the actual schema and that the regenerated index
-is current; verification or commit failure rolls back safely. Typed semantic
+The album and each changed walk line are included; owner catalogs and Base
+files stay byte-identical. The post-install verifier checks the actual schema,
+regenerated index, and any replanned walk; verification or commit failure
+rolls back safely. Typed semantic
 failure details survive the transaction path.
 
 JSON uses schema version 1 for dry run, apply, no-op, and refusals alike:
@@ -485,6 +503,12 @@ Every record note carries one bob-maintained walk line as its first body
 line. It links the record to the previous and next records in its album, so
 `[n` / `]n` can follow the album ring with no key changes:
 
+An album may declare `walk_by: section` at the frontmatter top level, beside
+`index_by` and `index_facets`. The value must name a declared `Choices` field
+with `list: false`. Invalid or ineligible values produce a finding and use
+flat title order. The generated `[!records]` index keeps its independent group
+field and ordering.
+
 ```markdown
 ---
 parent: "[[eat]]"
@@ -508,14 +532,21 @@ documents `[n` / `]n` and the missing-record guard.
 - **Order and membership.** Members are the immediate Markdown children of
   the album folder, including readable members whose YAML is invalid. Nested
   files, non-Markdown files, `.base` files, and the album note are excluded.
-  Order is the album-wide `title_order` the `[!records]` index uses
-  (lowercase title, then vault-relative slash path, Unicode scalar order),
-  flat across status groups. The ring wraps at both ends; `M = 1` has no
-  arms and `M = 2` points both arms at the other record.
+  Without `walk_by`, order is the album-wide `title_order` the `[!records]`
+  index uses (lowercase title, then vault-relative slash path, Unicode scalar
+  order). With `walk_by: <field>`, records are grouped by that field's declared
+  choice order, then ordered by the same title/path rule within each group.
+  Empty choice groups are skipped. Missing, blank, malformed, list-shaped, or
+  undeclared values form one trailing `⚠️ Needs <field>` group (`⚠️ Needs a
+  status` for `status`). An invalid or ineligible declaration reports a
+  finding and falls back to flat title order; it does not damage walk lines.
+  Walk grouping is independent of the generated index's grouping and order.
+  Every member appears once. The ring wraps at both ends; `M = 1` has no arms
+  and `M = 2` points both arms at the other record.
 - **Bytes.** The canonical line for `M >= 2` is
   `[[<album>/<prev>|‹ <Prev>]] · [[<album>|↑ <Album>]] · [[<album>/<next>|<Next> ›]]`.
   Separators are `·` (U+00B7 with one space on each side). Labels drop
-  `|[]#^`, trim leading `‹`/`<` and trailing `›`/`>` from both ends, then
+  `|[]#^«»`, trim leading `‹`/`<` and trailing `›`/`>` from both ends, then
   escape active Markdown; an empty result falls back to the humanized stem,
   then the bare stem. Nothing is written for `M = 0`.
 - **Placement.** The line is inserted as the first body line: closing `---`,
@@ -528,21 +559,26 @@ documents `[n` / `]n` and the missing-record guard.
   `damaged` (reported, never written: `extra_text`, `duplicate_lines`, or
   `no_frontmatter`). Deleting the offending line heals a damaged record on
   the next sync.
-- **Owners and radius.** `bob albums sync` is the only repair owner. Capture
-  creates and `bob records new` stage only the lines their batch changes
-  (the new records plus neighbours whose canonical line differs); updates
-  and `bob records tidy` never touch walk lines. Tidy learns to see past
-  walk lines instead.
+- **Owners and radius.** `bob albums sync` is the full repair owner. Capture
+  creates and `bob records new` stage only the lines their batch changes (the
+  new records plus neighbours whose canonical line differs). A record update
+  that changes its effective `walk_by` value stages the field edit and changed
+  walk lines in one guarded transaction; unrelated, same-value, and notes-only
+  updates do not repair walks. `bob records tidy` never touches walk lines.
+  Tidy learns to see past walk lines instead.
 - **Churn.** One create rewrites 3 record files, a delete rewrites 2, a
   retitle that keeps its position rewrites 2, a retitle that reorders
-  rewrites at most 5, a status or field edit rewrites 0, and an album retitle
-  rewrites M (rare).
+  rewrites at most 5, a single membership move between `walk_by` groups
+  rewrites at most 5 walk lines, a status or unrelated field edit rewrites 0,
+  and an album retitle or whole-album regroup rewrites as many lines as differ
+  (up to M).
 - **Backfill.** The first real sync after this release backfills every
   record in one scoped commit, from nightly or the plugin watcher. After
   that the steady state is quiet: a second sync is a byte-identical no-op.
 
-`bob albums list|check` report each album's `walk` object (`state`, `total`,
-`counts`, `order`) and the `record_walk_v1` capability, with warnings
+`bob albums list|check` report each album's `walk_by`, `walk` object (`state`,
+`total`, `counts`, `order`, `groups`) and the `record_walk_groups_v1`
+capability, with warnings
 `album_walk_stale` (missing or stale lines, hint `bob albums sync`) and
 `album_walk_damaged` (damaged lines, count and first path). `bob albums sync`
 tags `changes[]` with `kind: "index" | "catalog" | "walk"` and counts
@@ -708,7 +744,8 @@ Markdown that commit writes. For a healthy album, `Blaze @eat` refuses with
 
 Capture plans created records' walk lines from the final batch overlay. It
 stages each created record and only the pre-existing neighbours whose lines
-change in the same guarded transaction; updates do not stage walk edits.
+change in the same guarded transaction; capture record updates do not stage
+walk edits.
 JSON `walk_files[]` lists each changed pre-existing record with its exact
 `before` and `after` Markdown. A damaged neighbour is left untouched and
 reported as `record_walk_damaged`.
@@ -875,7 +912,8 @@ suggestions; `top_values` stays capped at five) plus a `record` object:
 
 - `stem`, `path`, `title`, `heading` (the first H1, `null` when the note has none), `created`
 - `fingerprint` and `schema_fingerprint`
-- `frontmatter_end_line`, `group` (`{field, value, label}` or `null`)
+- `frontmatter_end_line`, `group` (`{field, value, label}` or `null`) from the
+  index's own group field
 - `properties[]`: schema fields in declaration order with `state`, typed
   `value`, `display`, `raw`, and the 1-based YAML `line` (or `null` when the
   key is absent)
@@ -883,9 +921,15 @@ suggestions; `top_values` stays capped at five) plus a `record` object:
 - `other[]`: remaining keys, each with a `legacy` flag from the album's
   `legacy` patterns
 - `findings[]`: this note's `bob records check` diagnostics
-- `walk`: `{state, reason, position, total, prev, next}` from the album's
-  title-ordered ring (`prev`/`next` are `{stem, path, title}` or `null`),
-  or `null` when the album is held. `state` is `current`, `missing`,
+- `walk`: `{state, reason, position, total, prev, next, group, prev_group,
+  next_group}` from the album ring (`prev`/`next` are `{stem, path, title}` or
+  `null`, and `group` is `null` when this album is ungrouped). Group metadata
+  is `{field, value, label, index, count, position, size}`; index and position
+  are one-based, count is the occupied group count, and size is this group's
+  membership. Group stops are `null` with fewer than two occupied groups;
+  otherwise each is `{value, label, head, wraps}` for the adjacent group's
+  first record. `wraps` is true only when crossing the first/last group edge.
+  The entire walk is `null` when the album is held. `state` is `current`, `missing`,
   `stale`, or `damaged`; `reason` names the damage (`extra_text`,
   `duplicate_lines`, `no_frontmatter`) or is `null`. The count is rendered
   live and never stored.

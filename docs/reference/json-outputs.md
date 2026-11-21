@@ -100,8 +100,10 @@ Record items add `record_note` summaries; incomplete drafts include `draft`,
 `walk_files[]` for pre-existing neighbours whose walk line changes; each entry
 contains the original and final Markdown. The created record's `markdown` is the
 exact committed text, including its walk line, while `body` remains authored
-content. Damaged neighbours appear as `record_walk_damaged` warnings and are not
-rewritten. Dry-run and commit share those bytes.
+content. Record creates and updates that change the selected `walk_by` value
+report changed pre-existing records in `walk_files[]` (`path`, `before`,
+`after`). Damaged neighbours appear as `record_walk_damaged` warnings and are
+not rewritten. Dry-run and commit share those bytes.
 
 ```bash
 bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/ninja_sushi' '- status:: liked')"
@@ -162,18 +164,18 @@ sets `one_off: true`.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob albums list` | `-f json` | Albums, groups, counts, issues, owner `catalogs`, `walk`, and `capabilities` (`record_walk_v1`) | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums list` | `-f json` | Albums, independent index groups and `walk_by`, walk order/groups with first-member heads, issues, owner `catalogs`, and `capabilities` (`record_walk_groups_v1`) | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
-| `bob albums sync` | `-f json` | Index entries, `walk`, owner `catalogs`, `kind`/`walk_lines`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
+| `bob albums sync` | `-f json` | Index entries, grouped `walk`, owner `catalogs`, `kind`/`walk_lines`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 | `bob albums tidy` | `-f json` | Tidied albums, counts, kept H1s, transaction results | `schema_version: 1` | [Tidying album titles](../records.md#tidying-album-titles) |
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
-| `bob albums update` | `-f json` | `stem`, fingerprints, `inverse_ops` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
+| `bob albums update` | `-f json` | `stem`, grouping-bound fingerprints, ordered results, schema changes in `changes[]` including walk lines, `inverse_ops` including `walk_by.set` | `schema_version: 1` | [Album update](../records.md#updating-an-album-schema) |
 
 ### Record reports {#record-reports}
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob records show` | `-f json` | Schema for `TYPE`; with `STEM`, one record's properties, identity, findings, full suggestions, fingerprint, and walk ring. Refusals add `error.code` | `schema_version: 1` | [Reading one record](../records.md#reading-one-record) |
+| `bob records show` | `-f json` | Schema for `TYPE`; with `STEM`, properties, identity, findings, full suggestions, fingerprint, group membership and directional group stops in the walk ring. Refusals add `error.code` | `schema_version: 1` | [Reading one record](../records.md#reading-one-record) |
 | `bob records check` | `-f json` | Types with findings, including `record_walk_stale` and `record_walk_damaged` warnings | `schema_version: 1` | [`bob records`](../records.md#bob-records) |
 | `bob records new` | `-f json` | Created record's exact `markdown`, optional `album_index`, `walk_files[]` for changed pre-existing neighbours, and `record_walk_damaged` warnings | `schema_version: 1` | [`bob records`](../records.md#bob-records) |
 | `bob records tidy` | `-f json` | Tidied notes, counts, and transaction results | `schema_version: 1` | [Tidying empty Notes sections and redundant H1s](../records.md#tidying-empty-notes-sections-and-redundant-h1s) |

@@ -243,7 +243,7 @@ See docs/records.md for the album title rule.
 Update an album record schema through a guarded JSON envelope
 
 ```text title="bob albums update --help"
-Apply an ordered JSON schema envelope to one root album: validate ordered schema edits, preserve unrelated bytes, rebuild the generated index in the same transaction, and return safe inverse operations for Undo. A stem selects one root album, never a record noun fallback or an arbitrary path. `-i -` reads stdin, and omitted `-i` has the same meaning. A schema no-op previews without a lock or sync; a changed apply takes the shared vault lock, pre-syncs, replans fresh, and makes one scoped `albums: update <stem>.md` commit. Validation or semantic refusal exits 2; runtime, lock, or transaction failures exit 1.
+Apply an ordered JSON schema envelope to one root album: validate ordered schema edits, preserve unrelated bytes, rebuild the generated index, replan affected record walk lines in the same transaction, and return safe inverse operations for Undo. The `walk_by.set` operation selects a declared single-value choices field for the walk order or uses null to unset it; the index keeps its independent ordering. A stem selects one root album, never a record noun fallback or an arbitrary path. `-i -` reads stdin, and omitted `-i` has the same meaning. A schema no-op previews without a lock or sync; a changed apply takes the shared vault lock, pre-syncs, replans fresh, and makes one scoped `albums: update <stem>.md` commit. Validation or semantic refusal exits 2; runtime, lock, or transaction failures exit 1.
 
 Usage: bob albums update [OPTIONS] <STEM>
 
