@@ -10382,8 +10382,19 @@ for `[[##...]]`. `wikilink_block` searches named block IDs in the analogous
 target, current-destination, or `[[^^...]]` vault-wide scope, except on a
 Work Log bullet line under a whole-item `x`, where block candidates are
 suppressed (entries reject block links) while note and heading completion
-keeps working. Vault-wide suggestions list living notes first; archived and
-hidden notes follow. This covers `[[note`, `[[##…`, `[[^^…`, and record
+keeps working. For an unclosed link, the replacement ends at the cursor, so
+text after the caret survives; bob appends `]]` unless the next character is
+`#` or `|`, which continues the authored link. In a closed link, completing
+the target replaces only that target and preserves an authored `#heading`,
+`#^block`, and `|alias`. Alias-match rows leave an authored alias alone and
+do not insert a display alias ahead of an authored subpath.
+Vault-wide suggestions list living notes first; archived and hidden notes
+follow. Within a tier, candidates rank by match quality, then shallower note
+paths, then the number of distinct notes linking to the candidate (higher
+first), then normalized path. Vault-wide heading and block rows use the same
+note ordering, with document order breaking ties within a note. Inbound counts
+resolve exact vault-relative targets and unique note stems, and do not count
+self-links. This covers `[[note`, `[[##…`, `[[^^…`, and record
 link-value suggestions. Tiers follow the same path rules as `//`
 ([Going to a note with '//'](#going-to-a-note-with)). Target-scoped
 completion (`[[note#`, `[[note#^`, `[[#`, `[[#^`) and link resolution are

@@ -1,0 +1,202 @@
+{
+  "version": 1,
+  "source": "tests/fixtures/wikilink_complete/vectors.json",
+  "fields": [
+    {
+      "name": "unclosed note ends at caret and preserves trailing prose",
+      "before": "Discuss [[pla",
+      "after": " tomorrow",
+      "expect": {
+        "context": "wikilink_note",
+        "scope": "note",
+        "query": "pla",
+        "replaced": "pla",
+        "accept": { "insert": "Plans]]", "result": "Discuss [[Plans]]▏ tomorrow" }
+      }
+    },
+    {
+      "name": "closed note reuses its closer once",
+      "before": "[[pla",
+      "after": "]]",
+      "expect": {
+        "context": "wikilink_note",
+        "scope": "note",
+        "query": "pla",
+        "replaced": "pla",
+        "accept": { "insert": "Plans", "result": "[[Plans]]▏" }
+      }
+    },
+    {
+      "name": "target replacement preserves authored subpath and alias",
+      "before": "[[Old",
+      "after": "#Overview|our plan]]",
+      "expect": {
+        "context": "wikilink_note",
+        "scope": "note",
+        "query": "Old",
+        "replaced": "Old",
+        "accept": { "insert": "New", "result": "[[New#Overview|our plan]]▏" }
+      }
+    },
+    {
+      "name": "alias match does not overwrite an authored alias",
+      "before": "[[AI",
+      "after": "|label]]",
+      "expect": {
+        "context": "wikilink_note",
+        "scope": "note",
+        "query": "AI",
+        "replaced": "AI",
+        "accept": { "insert": "Artificial Intelligence", "result": "[[Artificial Intelligence|label]]▏" }
+      }
+    },
+    { "name": "inline code is inert", "before": "`[[x", "after": "`", "expect": null },
+    { "name": "escaped opener is inert", "before": "\\[[x", "after": "", "expect": null },
+    {
+      "name": "embed opener completes like a link",
+      "before": "![[pla",
+      "after": "",
+      "expect": { "context": "wikilink_note", "scope": "note", "query": "pla", "replaced": "pla" }
+    },
+    {
+      "name": "current-note heading",
+      "before": "[[#He",
+      "after": "",
+      "current_note": "Current.md",
+      "expect": { "context": "wikilink_heading", "scope": "current", "target": "Current.md", "query": "He", "replaced": "He" }
+    },
+    {
+      "name": "current-note block",
+      "before": "[[#^cur",
+      "after": "",
+      "current_note": "Current.md",
+      "expect": { "context": "wikilink_block", "scope": "current", "target": "Current.md", "query": "cur", "replaced": "cur" }
+    },
+    {
+      "name": "vault-wide heading",
+      "before": "[[##Sec",
+      "after": "",
+      "expect": { "context": "wikilink_heading", "scope": "vault", "query": "Sec", "replaced": "##Sec" }
+    },
+    {
+      "name": "vault-wide block",
+      "before": "[[^^vec",
+      "after": "",
+      "expect": { "context": "wikilink_block", "scope": "vault", "query": "vec", "replaced": "^^vec" }
+    },
+    {
+      "name": "closed heading replaces only the heading component",
+      "before": "[[note#He",
+      "after": "ading]]",
+      "expect": {
+        "context": "wikilink_heading",
+        "scope": "target",
+        "target": "note",
+        "query": "He",
+        "replaced": "Heading",
+        "accept": { "insert": "Heading", "result": "[[note#Heading]]▏" }
+      }
+    },
+    {
+      "name": "unclosed heading ends at caret and keeps prose",
+      "before": "[[note#He",
+      "after": " more",
+      "expect": {
+        "context": "wikilink_heading",
+        "scope": "target",
+        "target": "note",
+        "query": "He",
+        "replaced": "He",
+        "accept": { "insert": "Heading]]", "result": "[[note#Heading]]▏ more" }
+      }
+    },
+    {
+      "name": "nested opener restarts the field",
+      "before": "[[a [[b",
+      "after": "",
+      "expect": { "context": "wikilink_note", "scope": "note", "query": "b", "replaced": "b" }
+    },
+    {
+      "name": "second link on a line owns the caret",
+      "before": "[[note]] then [[pla",
+      "after": "",
+      "expect": { "context": "wikilink_note", "scope": "note", "query": "pla", "replaced": "pla" }
+    },
+    {
+      "name": "emoji and RTL neighbours keep UTF-8 byte ranges intact",
+      "before": "🙂 قبل [[pla",
+      "after": " بعد",
+      "expect": { "context": "wikilink_note", "scope": "note", "query": "pla", "replaced": "pla" }
+    },
+    { "name": "caret in alias is not a completion field", "before": "[[Plans|our", "after": " plan]]", "expect": null },
+    {
+      "name": "authored heading continuation suppresses a synthesized closer",
+      "before": "[[Old",
+      "after": "#Overview",
+      "expect": {
+        "context": "wikilink_note",
+        "scope": "note",
+        "query": "Old",
+        "replaced": "Old",
+        "accept": { "insert": "New", "result": "[[New▏#Overview" }
+      }
+    }
+  ],
+  "tiers": [
+    { "path": "Note.md", "expect": "living" },
+    { "path": "done/Note.md", "expect": "archive" },
+    { "path": "_meta/Note.md", "expect": "hidden" },
+    { "path": "lib/Note.md", "expect": "hidden" },
+    { "path": "xlib/Note.md", "expect": "hidden" },
+    { "path": "papers/Sidecar.md", "pdf_siblings": ["papers/Sidecar.pdf"], "expect": "hidden" }
+  ],
+  "rank": {
+    "notes": [
+      { "path": "Plans.md", "aliases": [], "headings": [{ "title": "Section Plans", "level": 2 }], "blocks": ["vector-plans"], "inbound": 0 },
+      { "path": "New.md", "aliases": ["Old"], "headings": [], "blocks": [], "inbound": 0 },
+      { "path": "Artificial Intelligence.md", "aliases": ["AI"], "headings": [], "blocks": [], "inbound": 0 },
+      { "path": "note.md", "aliases": [], "headings": [{ "title": "Heading", "level": 1 }], "blocks": ["vector-note"], "inbound": 0 },
+      { "path": "Current.md", "aliases": [], "headings": [{ "title": "Heading", "level": 1 }], "blocks": ["current-block"], "inbound": 0 },
+      { "path": "b.md", "aliases": [], "headings": [], "blocks": ["vector-b"], "inbound": 0 },
+      { "path": "sase_root.md", "aliases": [], "headings": [{ "title": "Section Root", "level": 2 }], "blocks": ["vector-root"], "inbound": 0 },
+      { "path": "chat/sase_chat.md", "aliases": [], "headings": [{ "title": "Section Chat", "level": 2 }], "blocks": ["vector-chat"], "inbound": 1 },
+      { "path": "plans/sase_plan.md", "aliases": [], "headings": [{ "title": "Section Plan", "level": 2 }], "blocks": ["vector-plan"], "inbound": 5 },
+      { "path": "TiebreakerA.md", "aliases": [], "headings": [], "blocks": [], "inbound": 1 },
+      { "path": "TiebreakerB.md", "aliases": [], "headings": [], "blocks": [], "inbound": 4 },
+      { "path": "done/SaseArchive.md", "aliases": [], "headings": [{ "title": "Section Archive", "level": 2 }], "blocks": ["vector-archive"], "inbound": 0 },
+      { "path": "_meta/SaseHidden.md", "aliases": [], "headings": [{ "title": "Section Hidden", "level": 2 }], "blocks": ["vector-hidden"], "inbound": 0 }
+    ],
+    "cases": [
+      {
+        "name": "root paths outrank nested ties, then inbound count",
+        "before": "[[sase",
+        "after": "",
+        "expected": ["sase_root]]", "plans/sase_plan]]", "chat/sase_chat]]", "done/SaseArchive]]", "_meta/SaseHidden]]"]
+      },
+      {
+        "name": "inbound links break same-depth note ties",
+        "before": "[[tie",
+        "after": "",
+        "expected": ["TiebreakerB]]", "TiebreakerA]]"]
+      },
+      {
+        "name": "empty query keeps living then archive then hidden and stable ties",
+        "before": "[[",
+        "after": "",
+        "expected": ["TiebreakerB]]", "TiebreakerA]]", "Artificial Intelligence]]", "b]]", "Current]]", "New]]", "note]]", "Plans]]", "sase_root]]", "plans/sase_plan]]", "chat/sase_chat]]", "done/SaseArchive]]", "_meta/SaseHidden]]"]
+      },
+      {
+        "name": "vault headings rank by depth and inbound before ordinal",
+        "before": "[[##Sec",
+        "after": "",
+        "expected": ["Plans#Section Plans]]", "sase_root#Section Root]]", "plans/sase_plan#Section Plan]]", "chat/sase_chat#Section Chat]]", "done/SaseArchive#Section Archive]]", "_meta/SaseHidden#Section Hidden]]"]
+      },
+      {
+        "name": "vault blocks rank by depth and inbound",
+        "before": "[[^^vector",
+        "after": "",
+        "expected": ["b#^vector-b]]", "note#^vector-note]]", "Plans#^vector-plans]]", "sase_root#^vector-root]]", "plans/sase_plan#^vector-plan]]", "chat/sase_chat#^vector-chat]]", "done/SaseArchive#^vector-archive]]", "_meta/SaseHidden#^vector-hidden]]"]
+      }
+    ]
+  }
+}

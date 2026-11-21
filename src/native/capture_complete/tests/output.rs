@@ -158,7 +158,7 @@ fn wikilink_completion_takes_precedence_over_marker_text_inside_link() {
 
     let value = result(temp.path(), "[[Project @d", 11);
     assert_eq!(value.context, Some(CompletionContext::WikilinkNote));
-    assert_eq!(value.replacement, Replacement { start: 2, end: 12 });
+    assert_eq!(value.replacement, Replacement { start: 2, end: 11 });
 }
 
 #[test]

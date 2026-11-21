@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    collections::BTreeSet,
     ffi::OsStr,
     fs, io,
     path::{Path, PathBuf},
@@ -27,6 +28,8 @@ pub(crate) struct LinkCompletionField {
     pub(crate) query: String,
     pub(crate) replacement: (usize, usize),
     target: LinkCompletionTarget,
+    has_authored_alias: bool,
+    has_authored_subpath: bool,
     suffix_close: bool,
     existing_close_end: Option<usize>,
 }
@@ -60,6 +63,8 @@ struct NoteEntry {
     aliases: Vec<String>,
     headings: Vec<HeadingEntry>,
     blocks: Vec<BlockEntry>,
+    inbound: usize,
+    outbound_targets: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +235,7 @@ impl NoteIndex {
         }
         notes
             .sort_by(|left, right| compare_normalized(&left.path, &right.path));
+        count_inbound_links(&mut notes);
 
         Ok(Self {
             notes,
@@ -239,6 +245,16 @@ impl NoteIndex {
 
     pub(crate) fn warnings(&self) -> Vec<String> {
         self.warnings.clone()
+    }
+
+    #[cfg(test)]
+    fn from_entries_for_test(mut notes: Vec<NoteEntry>) -> Self {
+        notes
+            .sort_by(|left, right| compare_normalized(&left.path, &right.path));
+        Self {
+            notes,
+            warnings: Vec::new(),
+        }
     }
 
     /// Note insert targets matching `query`, as `(insert_target, stem)`.
@@ -284,6 +300,8 @@ pub(crate) fn note_candidates(
         tier_order(left.tier)
             .cmp(&tier_order(right.tier))
             .then_with(|| compare_score_rank(left_score, right_score))
+            .then_with(|| path_depth(&left.path).cmp(&path_depth(&right.path)))
+            .then_with(|| right.inbound.cmp(&left.inbound))
             .then_with(|| compare_normalized(&left.path, &right.path))
     });
     ranked.truncate(RESULT_LIMIT);
@@ -293,7 +311,9 @@ pub(crate) fn note_candidates(
         .map(|(score, note)| {
             let alias = score.kind.alias_match().then(|| score.value.clone());
             let mut replacement = note.insert_target.clone();
-            if let Some(alias) = &alias {
+            if let Some(alias) = alias.as_ref().filter(|_| {
+                !field.has_authored_alias && !field.has_authored_subpath
+            }) {
                 replacement.push('|');
                 replacement.push_str(alias);
             }
@@ -335,6 +355,17 @@ pub(crate) fn heading_candidates(
                 Ordering::Equal
             })
             .then_with(|| compare_score_rank(left_score, right_score))
+            .then_with(|| {
+                if matches!(scope, LinkSearchScope::Vault) {
+                    path_depth(&left_note.path)
+                        .cmp(&path_depth(&right_note.path))
+                        .then_with(|| {
+                            right_note.inbound.cmp(&left_note.inbound)
+                        })
+                } else {
+                    Ordering::Equal
+                }
+            })
             .then_with(|| compare_normalized(&left_note.path, &right_note.path))
             .then_with(|| left_heading.ordinal.cmp(&right_heading.ordinal))
         },
@@ -391,6 +422,17 @@ pub(crate) fn block_candidates(
                 Ordering::Equal
             })
             .then_with(|| compare_score_rank(left_score, right_score))
+            .then_with(|| {
+                if matches!(scope, LinkSearchScope::Vault) {
+                    path_depth(&left_note.path)
+                        .cmp(&path_depth(&right_note.path))
+                        .then_with(|| {
+                            right_note.inbound.cmp(&left_note.inbound)
+                        })
+                } else {
+                    Ordering::Equal
+                }
+            })
             .then_with(|| compare_normalized(&left_note.path, &right_note.path))
             .then_with(|| left_block.ordinal.cmp(&right_block.ordinal))
         },
@@ -581,13 +623,21 @@ impl LinkSyntax {
         if cursor < target.start || cursor > target.end {
             return None;
         }
-        let replacement_end = self.inner_end;
+        let replacement_end = if self.close.is_some() {
+            target.end
+        } else {
+            cursor
+        };
         Some(LinkCompletionField {
             context: CompletionContext::WikilinkNote,
             query: query_from_component(raw, target, cursor),
-            replacement: (self.inner_start, replacement_end),
+            replacement: (target.start, replacement_end),
             target: LinkCompletionTarget::Note,
-            suffix_close: self.close.is_none(),
+            has_authored_alias: self.alias.is_some(),
+            has_authored_subpath: self.heading.is_some()
+                || self.block.is_some(),
+            suffix_close: self.close.is_none()
+                && !continues_link_component(raw, cursor),
             existing_close_end: self.close.map(|(_, end)| end),
         })
     }
@@ -604,13 +654,20 @@ impl LinkSyntax {
         if cursor < component.start || cursor > component.end {
             return None;
         }
+        let replacement_end = if self.close.is_some() {
+            component.end
+        } else {
+            cursor
+        };
         Some(LinkCompletionField {
             context,
             query: query_from_component(raw, component, cursor),
-            replacement: (replacement_start, component.end),
+            replacement: (replacement_start, replacement_end),
             target,
+            has_authored_alias: self.alias.is_some(),
+            has_authored_subpath: false,
             suffix_close: self.close.is_none()
-                && component.end == self.inner_end,
+                && !continues_link_component(raw, cursor),
             existing_close_end: self.close.map(|(_, end)| end),
         })
     }
@@ -649,6 +706,12 @@ fn query_from_component(
 ) -> String {
     let end = cursor.clamp(component.start, component.end);
     raw[component.start..end].to_string()
+}
+
+fn continues_link_component(raw: &str, cursor: usize) -> bool {
+    raw.as_bytes()
+        .get(cursor)
+        .is_some_and(|byte| matches!(*byte, b'#' | b'|'))
 }
 
 fn scan_links(raw: &str, code_ranges: &[(usize, usize)]) -> Vec<LinkSyntax> {
@@ -1105,12 +1168,15 @@ impl NoteEntry {
                     aliases: Vec::new(),
                     headings: Vec::new(),
                     blocks: Vec::new(),
+                    inbound: 0,
+                    outbound_targets: Vec::new(),
                 };
             }
         };
         let aliases =
             aliases_from_frontmatter(&contents, &relative_path, warnings);
         let (headings, blocks) = scan_note_body(&contents);
+        let outbound_targets = outbound_link_targets(&contents);
 
         Self {
             path: relative_path,
@@ -1120,6 +1186,8 @@ impl NoteEntry {
             aliases,
             headings,
             blocks,
+            inbound: 0,
+            outbound_targets,
         }
     }
 
@@ -1136,6 +1204,63 @@ impl NoteEntry {
         );
         best_match(query, items)
     }
+}
+
+fn outbound_link_targets(contents: &str) -> Vec<String> {
+    let code = code_ranges(contents);
+    scan_links(contents, &code)
+        .into_iter()
+        .filter(|link| link.close.is_some())
+        .filter_map(|link| link.target)
+        .filter(|target| target.start < target.end)
+        .map(|target| contents[target.start..target.end].to_string())
+        .collect()
+}
+
+fn count_inbound_links(notes: &mut [NoteEntry]) {
+    let mut inbound_sources = (0..notes.len())
+        .map(|_| BTreeSet::new())
+        .collect::<Vec<_>>();
+    for (source_index, source) in notes.iter().enumerate() {
+        for target in &source.outbound_targets {
+            let Some(target_index) = resolve_inbound_target(notes, target)
+            else {
+                continue;
+            };
+            if target_index != source_index {
+                inbound_sources[target_index].insert(source_index);
+            }
+        }
+    }
+    for (note, sources) in notes.iter_mut().zip(inbound_sources) {
+        note.inbound = sources.len();
+    }
+}
+
+fn resolve_inbound_target(notes: &[NoteEntry], target: &str) -> Option<usize> {
+    let normalized = normalize_target(target);
+    if normalized.is_empty() {
+        return None;
+    }
+    if let Some(index) = notes.iter().position(|note| {
+        equals_normalized(&note.insert_target, &normalized)
+            || equals_normalized(&note.path, target)
+    }) {
+        return Some(index);
+    }
+    if normalized.contains('/') {
+        return None;
+    }
+    let mut stems = notes
+        .iter()
+        .enumerate()
+        .filter(|(_, note)| equals_normalized(&note.stem, &normalized));
+    let first = stems.next()?.0;
+    stems.next().is_none().then_some(first)
+}
+
+fn path_depth(path: &str) -> usize {
+    path.matches('/').count()
 }
 
 fn aliases_from_frontmatter(
@@ -1895,6 +2020,139 @@ mod tests {
     }
 
     #[test]
+    fn inbound_counts_distinct_linking_notes_and_ignores_self_code_and_open_links(
+    ) {
+        let temp = TempDir::new("bob-cli-links-inbound");
+        write_file(&temp.path().join("Target.md"), "[[Target]]\n");
+        write_file(
+            &temp.path().join("source-a.md"),
+            "[[Target]] [[Target#Heading]] `[[Target]]` [[Target",
+        );
+        write_file(&temp.path().join("source-b.md"), "[[target]]\n");
+        let index = NoteIndex::read(temp.path()).expect("index");
+        let target = index
+            .notes
+            .iter()
+            .find(|note| note.path == "Target.md")
+            .expect("target note");
+        assert_eq!(target.inbound, 2);
+    }
+
+    #[test]
+    fn shared_wikilink_completion_vectors_match() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/wikilink_complete/vectors.json"
+        ))
+        .expect("wikilink completion vectors");
+        assert_eq!(vectors["version"], 1);
+        assert_eq!(
+            vectors["source"],
+            "tests/fixtures/wikilink_complete/vectors.json"
+        );
+        let index = vector_note_index(&vectors["rank"]["notes"]);
+
+        for case in vectors["fields"].as_array().expect("field vectors") {
+            let before = case["before"].as_str().expect("before");
+            let after = case["after"].as_str().expect("after");
+            let raw = format!("{before}{after}");
+            let cursor = before.len();
+            let current_note = case["current_note"]
+                .as_str()
+                .unwrap_or("Current.md")
+                .to_string();
+            let actual = completion_field_at(&raw, cursor, current_note);
+            if case["expect"].is_null() {
+                assert!(actual.is_none(), "{}", case["name"]);
+                continue;
+            }
+            let field = actual.unwrap_or_else(|| {
+                panic!("{}: expected a field", case["name"])
+            });
+            let expected = &case["expect"];
+            assert_eq!(
+                serde_json::to_value(field.context).expect("context JSON"),
+                expected["context"],
+                "{}",
+                case["name"]
+            );
+            let (scope, target) = vector_scope(&field.target);
+            assert_eq!(scope, expected["scope"], "{}", case["name"]);
+            if let Some(target) = target {
+                assert_eq!(target, expected["target"], "{}", case["name"]);
+            } else {
+                assert!(expected.get("target").is_none());
+            }
+            assert_eq!(field.query, expected["query"], "{}", case["name"]);
+            assert_eq!(
+                &raw[field.replacement.0..field.replacement.1],
+                expected["replaced"].as_str().expect("replaced"),
+                "{}",
+                case["name"]
+            );
+
+            if !expected["accept"].is_null() {
+                let candidates = vector_candidates(&field, &index);
+                let candidate = candidates.first().unwrap_or_else(|| {
+                    panic!("{}: no candidate", case["name"])
+                });
+                let accept = &expected["accept"];
+                assert_eq!(
+                    candidate.replacement, accept["insert"],
+                    "{}",
+                    case["name"]
+                );
+                let mut result = String::new();
+                result.push_str(&raw[..field.replacement.0]);
+                result.push_str(&candidate.replacement);
+                result.push_str(&raw[field.replacement.1..]);
+                result.insert(candidate.cursor_after, '▏');
+                assert_eq!(result, accept["result"], "{}", case["name"]);
+            }
+        }
+
+        for case in vectors["rank"]["cases"].as_array().expect("rank vectors") {
+            let before = case["before"].as_str().expect("before");
+            let after = case["after"].as_str().expect("after");
+            let raw = format!("{before}{after}");
+            let current_note = case["current_note"]
+                .as_str()
+                .unwrap_or("Current.md")
+                .to_string();
+            let field = completion_field_at(&raw, before.len(), current_note)
+                .unwrap_or_else(|| {
+                    panic!("{}: expected a field", case["name"])
+                });
+            let actual = vector_candidates(&field, &index)
+                .into_iter()
+                .map(|candidate| candidate.replacement)
+                .collect::<Vec<_>>();
+            let expected = case["expected"]
+                .as_array()
+                .expect("expected inserts")
+                .iter()
+                .map(|value| value.as_str().expect("insert").to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{}", case["name"]);
+        }
+
+        for case in vectors["tiers"].as_array().expect("tier vectors") {
+            let temp = TempDir::new("bob-cli-links-vector-tiers");
+            for sibling in case["pdf_siblings"].as_array().into_iter().flatten()
+            {
+                let sibling = sibling.as_str().expect("PDF sibling");
+                write_file(&temp.path().join(sibling), "pdf");
+            }
+            let tier_context = TierContext::for_vault(temp.path());
+            let tier = path_tier(
+                temp.path(),
+                Path::new(case["path"].as_str().expect("tier path")),
+                &tier_context,
+            );
+            assert_eq!(tier_name(tier), case["expect"], "{}", case["path"]);
+        }
+    }
+
+    #[test]
     fn matching_note_inserts_keep_living_ahead_of_archive_twins() {
         let temp = TempDir::new("bob-cli-links-record-inserts");
         write_file(&temp.path().join("done/cash.md"), "# Archive cash\n");
@@ -1960,6 +2218,135 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, contents).unwrap();
+    }
+
+    fn vector_note_index(notes: &serde_json::Value) -> NoteIndex {
+        let temp = TempDir::new("bob-cli-links-vector-index");
+        let tier_context = TierContext::for_vault(temp.path());
+        let entries = notes
+            .as_array()
+            .expect("vector notes")
+            .iter()
+            .map(|value| {
+                let path =
+                    value["path"].as_str().expect("note path").to_string();
+                let relative = Path::new(&path);
+                let stem = relative
+                    .file_stem()
+                    .and_then(OsStr::to_str)
+                    .expect("note stem")
+                    .to_string();
+                let insert_target =
+                    path.strip_suffix(".md").unwrap_or(&path).to_string();
+                let headings = value["headings"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(ordinal, heading)| HeadingEntry {
+                        title: heading["title"]
+                            .as_str()
+                            .expect("heading title")
+                            .to_string(),
+                        level: heading["level"].as_u64().unwrap_or(1) as usize,
+                        ordinal,
+                    })
+                    .collect();
+                let blocks = value["blocks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(ordinal, block)| BlockEntry {
+                        block_id: block.as_str().expect("block ID").to_string(),
+                        preview: None,
+                        ordinal,
+                    })
+                    .collect();
+                NoteEntry {
+                    path: path.clone(),
+                    tier: path_tier(temp.path(), relative, &tier_context),
+                    insert_target,
+                    stem,
+                    aliases: value["aliases"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|alias| alias.as_str().expect("alias").to_string())
+                        .collect(),
+                    headings,
+                    blocks,
+                    inbound: value["inbound"].as_u64().unwrap_or(0) as usize,
+                    outbound_targets: Vec::new(),
+                }
+            })
+            .collect();
+        NoteIndex::from_entries_for_test(entries)
+    }
+
+    fn vector_scope(
+        target: &LinkCompletionTarget,
+    ) -> (&'static str, Option<&str>) {
+        match target {
+            LinkCompletionTarget::Note => ("note", None),
+            LinkCompletionTarget::Heading(LinkSearchScope::Target(path))
+            | LinkCompletionTarget::Block(LinkSearchScope::Target(path)) => {
+                ("target", Some(path))
+            }
+            LinkCompletionTarget::Heading(LinkSearchScope::Current(path))
+            | LinkCompletionTarget::Block(LinkSearchScope::Current(path)) => {
+                ("current", Some(path))
+            }
+            LinkCompletionTarget::Heading(LinkSearchScope::Vault)
+            | LinkCompletionTarget::Block(LinkSearchScope::Vault) => {
+                ("vault", None)
+            }
+        }
+    }
+
+    fn vector_candidates(
+        field: &LinkCompletionField,
+        index: &NoteIndex,
+    ) -> Vec<VectorCandidate> {
+        match field.context {
+            CompletionContext::WikilinkNote => note_candidates(field, index)
+                .into_iter()
+                .map(|candidate| VectorCandidate {
+                    replacement: candidate.replacement,
+                    cursor_after: candidate.cursor_after,
+                })
+                .collect(),
+            CompletionContext::WikilinkHeading => {
+                heading_candidates(field, index)
+                    .into_iter()
+                    .map(|candidate| VectorCandidate {
+                        replacement: candidate.replacement,
+                        cursor_after: candidate.cursor_after,
+                    })
+                    .collect()
+            }
+            CompletionContext::WikilinkBlock => block_candidates(field, index)
+                .into_iter()
+                .map(|candidate| VectorCandidate {
+                    replacement: candidate.replacement,
+                    cursor_after: candidate.cursor_after,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    struct VectorCandidate {
+        replacement: String,
+        cursor_after: usize,
+    }
+
+    fn tier_name(tier: NoteTier) -> &'static str {
+        match tier {
+            NoteTier::Living => "living",
+            NoteTier::Archive => "archive",
+            NoteTier::Hidden => "hidden",
+        }
     }
 
     struct TempDir {
