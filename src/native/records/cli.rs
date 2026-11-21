@@ -29,6 +29,7 @@ use super::{
 };
 use crate::native::{
     albums::{
+        grouping::{group_value, GroupingRecord},
         index::IndexState,
         parse_album_declaration,
         registry::{AlbumEntry, DiscoveryHealth, RecordTypeSource},
@@ -662,6 +663,7 @@ fn execute_new(matches: &ArgMatches) -> i32 {
         &kind,
         &[(plan.path.clone(), markdown.clone())],
         Some(&plan.path),
+        None,
     ) {
         Ok(album) => album,
         Err(message) => {
@@ -862,27 +864,28 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             );
         }
     };
-    let plan = match super::plan::plan_update(super::plan::PlanUpdateRequest {
-        target: &target,
-        original: &original,
-        fields: &fields,
-        notes: &notes,
-        today,
-    }) {
-        Ok(plan) => plan,
-        Err(error) => {
-            return report_error(
-                "bob records update",
-                output_format,
-                &error.to_string(),
-                2,
-            );
-        }
-    };
+    let mut plan =
+        match super::plan::plan_update(super::plan::PlanUpdateRequest {
+            target: &target,
+            original: &original,
+            fields: &fields,
+            notes: &notes,
+            today,
+        }) {
+            Ok(plan) => plan,
+            Err(error) => {
+                return report_error(
+                    "bob records update",
+                    output_format,
+                    &error.to_string(),
+                    2,
+                );
+            }
+        };
     if !plan.missing.is_empty() || !plan.invalid.is_empty() {
         return report_update_incomplete(&config, &plan, output_format);
     }
-    let Some(markdown) = plan.markdown.as_deref() else {
+    let Some(planned_markdown) = plan.markdown.clone() else {
         return report_update_incomplete(&config, &plan, output_format);
     };
     // Plan the album before the no-op early return so a no-op record
@@ -891,8 +894,9 @@ fn execute_update(matches: &ArgMatches) -> i32 {
         &vault,
         &mut catalog,
         &kind,
-        &[(plan.path.clone(), markdown.to_owned())],
+        &[(plan.path.clone(), planned_markdown.clone())],
         None,
+        Some(&original),
     ) {
         Ok(album) => album,
         Err(message) => {
@@ -904,27 +908,29 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             );
         }
     };
-    let edited_album = album.as_ref().filter(|album| album.edit.is_some());
+    let markdown =
+        final_record_postimage(&plan.path, &planned_markdown, album.as_ref());
+    set_update_plan_markdown(&mut plan, markdown.clone());
     if matches.get_flag("dry-run") {
         print_update_dry_run(
             &config,
             &plan,
-            markdown,
+            &markdown,
             Some(&kind),
-            edited_album,
+            album.as_ref(),
             output_format,
         );
         return 0;
     }
-    // A current index contributes no write, even for a notes-only record
-    // update; the album read guard still applies below.
-    if markdown == original && edited_album.is_none() {
+    if markdown == original
+        && !planned_album_has_writes(album.as_ref(), &plan.path)
+    {
         print_update_success(
             &config,
             &plan,
             &notes,
             Some(&kind),
-            None,
+            album.as_ref(),
             output_format,
         );
         return 0;
@@ -935,10 +941,10 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             target: absolute.clone(),
             target_existed: true,
             original_target: original.clone(),
-            updated_target: markdown.to_owned(),
+            updated_target: markdown.clone(),
         });
     }
-    if let Some(album) = edited_album
+    if let Some(album) = album.as_ref()
         && let Some(edit) = &album.edit
     {
         staged.push(StagedTextFile {
@@ -947,6 +953,20 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             original_target: edit.before.clone(),
             updated_target: edit.after.clone(),
         });
+    }
+    if let Some(album) = album.as_ref() {
+        staged.extend(
+            album
+                .walk_edits
+                .iter()
+                .filter(|edit| edit.path != plan.path)
+                .map(|edit| StagedTextFile {
+                    target: vault.join(&edit.path),
+                    target_existed: true,
+                    original_target: edit.before.clone(),
+                    updated_target: edit.after.clone(),
+                }),
+        );
     }
     // Guard the album on every write, and the untouched record on an
     // album-only repair, so a concurrent edit refuses instead of
@@ -971,7 +991,7 @@ fn execute_update(matches: &ArgMatches) -> i32 {
         &plan,
         &notes,
         Some(&kind),
-        edited_album,
+        album.as_ref(),
         output_format,
     );
     if matches.get_flag("open")
@@ -1209,22 +1229,23 @@ fn execute_update_envelope(
                 .into();
             }
         };
-    let plan = match super::plan::plan_update(super::plan::PlanUpdateRequest {
-        target: &target,
-        original: &original,
-        fields: &inputs,
-        notes: &[],
-        today,
-    }) {
-        Ok(plan) => plan,
-        Err(error) => {
-            return failed_at_target(
-                apply_envelope_error(&error),
-                (&fingerprint_before, &fingerprint_before),
-            )
-            .into();
-        }
-    };
+    let mut plan =
+        match super::plan::plan_update(super::plan::PlanUpdateRequest {
+            target: &target,
+            original: &original,
+            fields: &inputs,
+            notes: &[],
+            today,
+        }) {
+            Ok(plan) => plan,
+            Err(error) => {
+                return failed_at_target(
+                    apply_envelope_error(&error),
+                    (&fingerprint_before, &fingerprint_before),
+                )
+                .into();
+            }
+        };
     if !plan.missing.is_empty() {
         let first = plan.missing.first().cloned().unwrap_or_default();
         let message = if plan.missing.len() == 1 {
@@ -1274,7 +1295,7 @@ fn execute_update_envelope(
         }
         return refuse_with_plan(error, &plan).into();
     }
-    let Some(markdown) = plan.markdown.as_deref() else {
+    let Some(planned_markdown) = plan.markdown.clone() else {
         return failed_at_target(
             EnvelopeError::runtime(
                 "write_failed",
@@ -1284,16 +1305,15 @@ fn execute_update_envelope(
         )
         .into();
     };
-    let (fingerprint_after, _) =
-        super::show::current_record_fingerprint(context, kind, markdown);
     // Plan the album before the no-op early return so a no-op record update
     // still repairs a stale index. Index planning never writes.
     let album = match plan_album_write_for_record(
         vault,
         &mut catalog,
         kind,
-        &[(plan.path.clone(), markdown.to_owned())],
+        &[(plan.path.clone(), planned_markdown.clone())],
         None,
+        Some(&original),
     ) {
         Ok(album) => album,
         Err(message) => {
@@ -1304,7 +1324,11 @@ fn execute_update_envelope(
             .into();
         }
     };
-    let edited_album = album.as_ref().filter(|album| album.edit.is_some());
+    let markdown =
+        final_record_postimage(&plan.path, &planned_markdown, album.as_ref());
+    set_update_plan_markdown(&mut plan, markdown.clone());
+    let (fingerprint_after, _) =
+        super::show::current_record_fingerprint(context, kind, &markdown);
     if dry_run {
         return emit_envelope_success(
             matches,
@@ -1314,13 +1338,13 @@ fn execute_update_envelope(
             &envelope,
             &fingerprint_before,
             &fingerprint_after,
-            edited_album,
+            album.as_ref(),
             true,
         );
     }
-    // A current index contributes no write; the album read guard still
-    // applies below.
-    if markdown == original && edited_album.is_none() {
+    if markdown == original
+        && !planned_album_has_writes(album.as_ref(), &plan.path)
+    {
         return emit_envelope_success(
             matches,
             format,
@@ -1329,7 +1353,7 @@ fn execute_update_envelope(
             &envelope,
             &fingerprint_before,
             &fingerprint_after,
-            None,
+            album.as_ref(),
             false,
         );
     }
@@ -1339,10 +1363,10 @@ fn execute_update_envelope(
             target: absolute.clone(),
             target_existed: true,
             original_target: original.clone(),
-            updated_target: markdown.to_owned(),
+            updated_target: markdown.clone(),
         });
     }
-    if let Some(album) = edited_album
+    if let Some(album) = album.as_ref()
         && let Some(edit) = &album.edit
     {
         staged.push(StagedTextFile {
@@ -1351,6 +1375,20 @@ fn execute_update_envelope(
             original_target: edit.before.clone(),
             updated_target: edit.after.clone(),
         });
+    }
+    if let Some(album) = album.as_ref() {
+        staged.extend(
+            album
+                .walk_edits
+                .iter()
+                .filter(|edit| edit.path != plan.path)
+                .map(|edit| StagedTextFile {
+                    target: vault.join(&edit.path),
+                    target_existed: true,
+                    original_target: edit.before.clone(),
+                    updated_target: edit.after.clone(),
+                }),
+        );
     }
     // Guard the album on every write, and the untouched record on an
     // album-only repair, so a concurrent edit refuses instead of
@@ -1377,7 +1415,7 @@ fn execute_update_envelope(
         &envelope,
         &fingerprint_before,
         &fingerprint_after,
-        edited_album,
+        album.as_ref(),
         false,
     )
 }
@@ -1776,6 +1814,7 @@ fn emit_envelope_success(
         "stem": plan.stem,
         "path": plan.path.display().to_string(),
         "changed": plan.changed,
+        "markdown": plan.markdown,
         "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
         "changes": changes,
         "fingerprint_before": fingerprint_before,
@@ -1793,6 +1832,7 @@ fn emit_envelope_success(
     });
     if let Some(album) = album {
         merge_album_index(&mut payload, album);
+        merge_walk_output(&mut payload, album);
     }
     merge_kind_metadata(&mut payload, kind);
     println!("{payload}");
@@ -2044,6 +2084,7 @@ fn print_update_dry_run(
         }
         if let Some(album) = album {
             merge_album_index(&mut payload, album);
+            merge_walk_output(&mut payload, album);
         }
         println!("{payload}");
         return;
@@ -2053,6 +2094,10 @@ fn print_update_dry_run(
         && let Some(edit) = &album.edit
     {
         print_album_dry_run(album, &edit.after);
+    }
+    if let Some(album) = album {
+        print_walk_files_human(album);
+        print_walk_warnings_human(album);
     }
 }
 
@@ -2077,6 +2122,7 @@ fn print_update_success(
             "stem": plan.stem,
             "path": plan.path.display().to_string(),
             "changed": plan.changed,
+            "markdown": plan.markdown,
             "notes": notes.len(),
             "properties": plan.properties.iter().map(update_property_json).collect::<Vec<_>>(),
             "warnings": plan.warnings.iter().map(|warning| json!({
@@ -2090,6 +2136,7 @@ fn print_update_success(
         }
         if let Some(album) = album {
             merge_album_index(&mut payload, album);
+            merge_walk_output(&mut payload, album);
         }
         println!("{payload}");
     } else {
@@ -2142,6 +2189,10 @@ fn print_update_success(
                 Styler::detect().dim("index"),
                 album.relative.display(),
             );
+        }
+        if let Some(album) = album {
+            print_walk_files_human(album);
+            print_walk_warnings_human(album);
         }
     }
     for warning in &plan.warnings {
@@ -2570,9 +2621,14 @@ struct PlannedAlbumWrite {
     before: String,
     edit: Option<PlannedAlbumEdit>,
     state: IndexState,
+    walk_enabled: bool,
     walk_edits: Vec<crate::native::host_catalog::FileEdit>,
     walk_files: Vec<PlannedWalkFile>,
     walk_warnings: Vec<WalkWarning>,
+    folder_directory: String,
+    folder_present: bool,
+    folder_membership: Vec<PathBuf>,
+    member_frontmatter: Vec<(PathBuf, Option<String>)>,
 }
 
 struct PlannedWalkFile {
@@ -2596,6 +2652,7 @@ fn plan_album_write_for_record(
     kind: &ResolvedRecordKind,
     overlays: &[(PathBuf, String)],
     created_path: Option<&Path>,
+    target_preimage: Option<&str>,
 ) -> Result<Option<PlannedAlbumWrite>, String> {
     let RecordTypeSource::Album { path } = &kind.sourced.source;
     let record_type = kind.record_type();
@@ -2640,7 +2697,10 @@ fn plan_album_write_for_record(
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .into_iter()
         .collect();
-    let walk = created_path.map(|_| {
+    let update_moves_group = created_path.is_none()
+        && target_preimage.is_some()
+        && walk_membership_changed(&declaration, folder, overlays);
+    let walk = (created_path.is_some() || update_moves_group).then(|| {
         album_write::plan_album_walk_radius(
             &declaration,
             folder,
@@ -2648,6 +2708,11 @@ fn plan_album_write_for_record(
             created.clone(),
             |relative| fs::read_to_string(vault.join(relative)).ok(),
         )
+    });
+    let update_target = target_preimage.and_then(|_| {
+        overlays
+            .first()
+            .map(|(path, _)| path.to_string_lossy().replace('\\', "/"))
     });
     let (walk_edits, walk_files, walk_warnings) = match walk {
         Some(walk) => {
@@ -2659,10 +2724,21 @@ fn plan_album_write_for_record(
                         &edit.path.to_string_lossy().replace('\\', "/"),
                     )
                 })
-                .map(|edit| PlannedWalkFile {
-                    path: edit.path.to_string_lossy().replace('\\', "/"),
-                    before: edit.before.clone(),
-                    after: edit.after.clone(),
+                .map(|edit| {
+                    let path = edit.path.to_string_lossy().replace('\\', "/");
+                    let before =
+                        if update_target.as_deref() == Some(path.as_str()) {
+                            target_preimage
+                                .expect("update target has its disk preimage")
+                                .to_owned()
+                        } else {
+                            edit.before.clone()
+                        };
+                    PlannedWalkFile {
+                        path,
+                        before,
+                        after: edit.after.clone(),
+                    }
                 })
                 .collect();
             files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -2670,6 +2746,14 @@ fn plan_album_write_for_record(
         }
         None => (Vec::new(), Vec::new(), Vec::new()),
     };
+    let folder_directory = folder.directory().to_owned();
+    let folder_present = folder.present();
+    let folder_membership = folder.membership();
+    let member_frontmatter = folder
+        .notes()
+        .iter()
+        .map(|note| (note.relative_path.clone(), note.frontmatter.clone()))
+        .collect();
     Ok(Some(PlannedAlbumWrite {
         relative: album_relative,
         before,
@@ -2678,10 +2762,83 @@ fn plan_album_write_for_record(
             after: edit.after,
         }),
         state: planned.state,
+        walk_enabled: declaration.walk_by.is_some(),
         walk_edits,
         walk_files,
         walk_warnings,
+        folder_directory,
+        folder_present,
+        folder_membership,
+        member_frontmatter,
     }))
+}
+
+/// Compare the target's indexed preimage with its staged postimage using
+/// the same choice validation that assigns walk groups. Invalid values all
+/// share the trailing needs group, so edits between two invalid spellings
+/// do not trigger line repairs.
+fn walk_membership_changed(
+    declaration: &AlbumDeclaration,
+    folder: &super::catalog::FolderIndex,
+    overlays: &[(PathBuf, String)],
+) -> bool {
+    let Some(field) = album_walk::walk_field(declaration) else {
+        return false;
+    };
+    let Some((target_path, _)) = overlays.first() else {
+        return false;
+    };
+    let Some(before) = folder
+        .notes()
+        .iter()
+        .find(|note| &note.relative_path == target_path)
+    else {
+        return false;
+    };
+    let after_members = album_write::overlay_folder_members(folder, overlays);
+    let Some(after) = after_members
+        .iter()
+        .find(|note| &note.relative_path == target_path)
+    else {
+        return false;
+    };
+    group_value(field, &GroupingRecord::from_indexed(before))
+        != group_value(field, &GroupingRecord::from_indexed(after))
+}
+
+fn final_record_postimage(
+    target: &Path,
+    markdown: &str,
+    album: Option<&PlannedAlbumWrite>,
+) -> String {
+    album
+        .and_then(|album| {
+            album.walk_edits.iter().find(|edit| edit.path == target)
+        })
+        .map(|edit| edit.after.clone())
+        .unwrap_or_else(|| markdown.to_owned())
+}
+
+fn set_update_plan_markdown(
+    plan: &mut super::plan::RecordUpdatePlan,
+    markdown: String,
+) {
+    plan.body = Some(
+        super::super::highlights_ref::split_frontmatter(&markdown)
+            .map(|(_, body)| body)
+            .unwrap_or_default(),
+    );
+    plan.markdown = Some(markdown);
+}
+
+fn planned_album_has_writes(
+    album: Option<&PlannedAlbumWrite>,
+    target: &Path,
+) -> bool {
+    album.is_some_and(|album| {
+        album.edit.is_some()
+            || album.walk_edits.iter().any(|edit| edit.path != target)
+    })
 }
 
 /// Guard every read input the album plan consumed. The guarded writer
@@ -2694,6 +2851,15 @@ fn album_read_dependencies(
     let mut deps = ReadDependencies::default();
     if let Some(album) = album {
         deps.insert(album.relative.clone(), Some(album.before.clone()));
+        if album.folder_present {
+            deps.insert_directory_membership(
+                PathBuf::from(&album.folder_directory),
+                Some(album.folder_membership.clone()),
+            );
+        }
+        for (path, frontmatter) in &album.member_frontmatter {
+            deps.insert_frontmatter(path.clone(), frontmatter.clone());
+        }
     }
     for (relative, expected) in extra {
         deps.insert(relative.clone(), Some(expected.clone()));
@@ -2735,6 +2901,30 @@ fn merge_album_index(payload: &mut Value, album: &PlannedAlbumWrite) {
     {
         object.insert("album_index".to_owned(), album_index_json(album));
     }
+}
+
+/// Add the record-walk portion of an update result without replacing its
+/// existing field-validation warnings.
+fn merge_walk_output(payload: &mut Value, album: &PlannedAlbumWrite) {
+    // Keep the legacy update payload for flat albums. Grouped albums expose
+    // the additive walk result even when a valid edit leaves every line alone.
+    if !album.walk_enabled {
+        return;
+    }
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "walk_files".to_owned(),
+        json!(planned_walk_files_json(album)),
+    );
+    let mut warnings = object
+        .get("warnings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    warnings.extend(planned_walk_warnings_json(album));
+    object.insert("warnings".to_owned(), Value::Array(warnings));
 }
 
 fn album_identity(entry: &AlbumEntry) -> AlbumRecordIdentity {

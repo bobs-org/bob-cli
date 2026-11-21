@@ -918,6 +918,40 @@ fn album_fixture() -> RecordsFixture {
     }
 }
 
+fn grouped_update_fixture() -> RecordsFixture {
+    let fixture = album_fixture();
+    let album_path = fixture.vault.join("eat.md");
+    let album = fs::read_to_string(&album_path).expect("album");
+    let grouped = album.replace(
+        "summary: Places to eat.\n",
+        "summary: Places to eat.\nwalk_by: status\n",
+    );
+    assert!(
+        grouped.contains("walk_by: status"),
+        "grouped album: {grouped}"
+    );
+    write_file(&album_path, &grouped);
+
+    for (stem, title, status) in [
+        ("zulu", "Zulu", "to_try"),
+        ("alpha", "Alpha", "liked"),
+        ("beta", "Beta", "liked"),
+        ("gamma", "Gamma", "liked"),
+    ] {
+        write_file(
+            &fixture.vault.join(format!("eat/{stem}.md")),
+            &grouped_record(title, status),
+        );
+    }
+    fixture
+}
+
+fn grouped_record(title: &str, status: &str) -> String {
+    format!(
+        "---\nparent: \"[[eat]]\"\ntype: \"[[record]]\"\ntitle: {title:?}\nstatus: {status}\ncategory: Ramen\nlocation: Clark\n---\n\n# {title}\n"
+    )
+}
+
 fn album_record(
     parent: &str,
     type_link: &str,
@@ -1595,6 +1629,58 @@ fn records_new_and_capture_create_identical_record_bytes() {
 }
 
 #[test]
+fn grouped_records_new_and_capture_share_record_and_neighbour_postimages() {
+    let records = grouped_update_fixture();
+    let records_output = record_writes_new(
+        &records,
+        &[
+            "new",
+            "restaurant",
+            "Aardvark",
+            "-s",
+            "status=to_try",
+            "-s",
+            "category=New",
+            "-s",
+            "location=Clark",
+            "-d",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&records_output);
+    let records_json = json(&records_output);
+
+    let capture = grouped_update_fixture();
+    let capture_output = capture_command(&capture)
+        .args([
+            "capture",
+            "--dry-run",
+            "-f",
+            "json",
+            "--",
+            "Aardvark @eat/\n- status:: to_try\n- category:: New\n- location:: Clark",
+        ])
+        .output()
+        .expect("grouped capture dry-run");
+    assert_success(&capture_output);
+    let capture_json_value = json(&capture_output);
+    assert_eq!(
+        records_json["markdown"],
+        capture_json_value["note_files"][0]["markdown"]
+    );
+    assert_eq!(
+        records_json["walk_files"], capture_json_value["walk_files"],
+        "both create paths stage the same grouped neighbour postimages"
+    );
+    assert!(
+        !records.vault.join("eat/aardvark.md").exists()
+            && !capture.vault.join("eat/aardvark.md").exists(),
+        "both dry runs leave the new record absent"
+    );
+}
+
+#[test]
 fn record_writes_touch_only_two_neighbours_in_a_large_unbackfilled_album() {
     let fixture = album_fixture();
     let mut before = BTreeMap::new();
@@ -1676,6 +1762,182 @@ fn record_writes_update_regroups_the_index() {
     let liked = album.find("Liked").expect("liked group");
     let row = album.find("Ninja Sushi").expect("row");
     assert!(liked < row, "row regrouped under Liked: {album}");
+}
+
+#[test]
+fn record_writes_grouped_update_plans_and_commits_at_most_five_lines() {
+    let fixture = grouped_update_fixture();
+    let target_path = fixture.vault.join("eat/beta.md");
+    let target_before = fs::read_to_string(&target_path).expect("target");
+    let dry = record_writes_new(
+        &fixture,
+        &[
+            "update",
+            "restaurant",
+            "beta",
+            "-s",
+            "status=to_try",
+            "-d",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&dry);
+    let planned = json(&dry);
+    let planned_files = planned["walk_files"].as_array().expect("walk files");
+    assert!(!planned_files.is_empty(), "group move changes walk lines");
+    assert!(
+        planned_files.len() <= 5,
+        "five-line bound: {planned_files:?}"
+    );
+    let paths: Vec<_> = planned_files
+        .iter()
+        .map(|file| file["path"].as_str().unwrap().to_owned())
+        .collect();
+    let mut sorted = paths.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(paths, sorted, "walk_files are sorted and unique");
+    let target = planned_files
+        .iter()
+        .find(|file| file["path"] == "eat/beta.md")
+        .expect("target line is part of the walk plan");
+    assert_eq!(target["before"], target_before);
+    assert_eq!(target["after"], planned["markdown"]);
+    for file in planned_files {
+        assert_eq!(
+            fs::read_to_string(
+                fixture.vault.join(file["path"].as_str().unwrap())
+            )
+            .unwrap(),
+            file["before"].as_str().unwrap(),
+            "dry run leaves {} untouched",
+            file["path"]
+        );
+    }
+
+    let committed = record_writes_new(
+        &fixture,
+        &[
+            "update",
+            "restaurant",
+            "beta",
+            "-s",
+            "status=to_try",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&committed);
+    let written = json(&committed);
+    assert_eq!(written["walk_files"], planned["walk_files"]);
+    assert_eq!(written["markdown"], planned["markdown"]);
+    for file in written["walk_files"].as_array().unwrap() {
+        assert_eq!(
+            fs::read_to_string(
+                fixture.vault.join(file["path"].as_str().unwrap())
+            )
+            .unwrap(),
+            file["after"].as_str().unwrap(),
+            "committed postimage for {}",
+            file["path"]
+        );
+    }
+}
+
+#[test]
+fn record_update_envelope_moves_group_in_one_bounded_walk_write() {
+    let fixture = grouped_update_fixture();
+    let target_path = fixture.vault.join("eat/beta.md");
+    let target_before = fs::read_to_string(&target_path).expect("target");
+    let fingerprint = show_fingerprint(&fixture, "beta");
+    let envelope = envelope_doc(
+        &fingerprint,
+        r#"{"op":"field.set","field":"status","value":"to_try"}"#,
+    );
+    let dry =
+        envelope_run_for(&fixture, "beta", &envelope, &["-d", "-f", "json"]);
+    assert_success(&dry);
+    let planned = envelope_json(&dry);
+    assert_eq!(planned["dry_run"], true);
+    let planned_files = planned["walk_files"].as_array().expect("walk files");
+    assert!(!planned_files.is_empty(), "group move changes walk lines");
+    assert!(
+        planned_files.len() <= 5,
+        "five-line bound: {planned_files:?}"
+    );
+    let paths: Vec<_> = planned_files
+        .iter()
+        .map(|file| file["path"].as_str().unwrap().to_owned())
+        .collect();
+    let mut sorted = paths.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(paths, sorted, "walk_files are sorted and unique");
+    let target = planned_files
+        .iter()
+        .find(|file| file["path"] == "eat/beta.md")
+        .expect("target line is part of the walk plan");
+    assert_eq!(target["before"], target_before);
+    assert_eq!(target["after"], planned["markdown"]);
+    for file in planned_files {
+        assert_eq!(
+            fs::read_to_string(
+                fixture.vault.join(file["path"].as_str().unwrap())
+            )
+            .unwrap(),
+            file["before"].as_str().unwrap(),
+            "dry run leaves {} untouched",
+            file["path"]
+        );
+    }
+
+    let committed =
+        envelope_run_for(&fixture, "beta", &envelope, &["-f", "json"]);
+    assert_success(&committed);
+    let written = envelope_json(&committed);
+    assert_eq!(written["walk_files"], planned["walk_files"]);
+    assert_eq!(written["markdown"], planned["markdown"]);
+    for file in written["walk_files"].as_array().unwrap() {
+        assert_eq!(
+            fs::read_to_string(
+                fixture.vault.join(file["path"].as_str().unwrap())
+            )
+            .unwrap(),
+            file["after"].as_str().unwrap(),
+            "committed postimage for {}",
+            file["path"]
+        );
+    }
+}
+
+#[test]
+fn record_updates_without_a_group_move_leave_stale_walk_lines_alone() {
+    for args in [
+        &["update", "restaurant", "alpha", "-n", "Review note"][..],
+        &["update", "restaurant", "alpha", "-s", "category=New"][..],
+        &["update", "restaurant", "alpha", "-s", "status=liked"][..],
+    ] {
+        let fixture = grouped_update_fixture();
+        let path = fixture.vault.join("eat/alpha.md");
+        let original = fs::read_to_string(&path).expect("alpha");
+        let stale =
+            original.replace("\n# Alpha\n", "\n[[eat|↑ Wrong]]\n\n# Alpha\n");
+        assert_ne!(stale, original, "test installs a stale walk line");
+        write_file(&path, &stale);
+
+        let mut json_args = args.to_vec();
+        json_args.extend(["-f", "json"]);
+        let output = record_writes_new(&fixture, &json_args);
+        assert_success(&output);
+        let payload = json(&output);
+        assert!(payload["walk_files"].as_array().unwrap().is_empty());
+        let updated = fs::read_to_string(path).expect("updated alpha");
+        assert!(
+            updated.contains("[[eat|↑ Wrong]]"),
+            "unrelated or same-group edit does not repair the stale line: {updated}"
+        );
+    }
 }
 
 #[test]
@@ -2791,10 +3053,18 @@ fn envelope_run(
     envelope: &str,
     extra: &[&str],
 ) -> std::process::Output {
+    envelope_run_for(fixture, "ninja_sushi", envelope, extra)
+}
+
+fn envelope_run_for(
+    fixture: &RecordsFixture,
+    stem: &str,
+    envelope: &str,
+    extra: &[&str],
+) -> std::process::Output {
     let path = write_envelope(&fixture.vault, "envelope.json", envelope);
     let path_text = path.to_string_lossy().into_owned();
-    let mut args =
-        vec!["update", "restaurant", "ninja_sushi", "-i", &path_text];
+    let mut args = vec!["update", "restaurant", stem, "-i", &path_text];
     args.extend(extra);
     update_with_envelope(fixture, &args)
 }
