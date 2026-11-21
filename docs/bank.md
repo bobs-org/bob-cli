@@ -360,8 +360,9 @@ bob writes a row once. After that, bob makes only two edits to a row:
 row it matched. A match changes only the trailing bank ID: checkbox,
 wording, fields, links, notes, existing non-bank IDs, and child bullets
 stay byte-identical. The Category card never writes rows itself: the
-category it files is Bryan's edit in his editor, applied through the same
-single editor transaction as the tick. Bryan's edits always win.
+category it files and the note it saves are Bryan's edits in his editor,
+each applied through a single editor transaction (the category with the
+tick, the note on its own). Bryan's edits always win.
 
 ## Import
 

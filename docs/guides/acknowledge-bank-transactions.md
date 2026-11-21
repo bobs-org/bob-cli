@@ -64,7 +64,7 @@ In the month note, `]b` jumps to the oldest waiting row (`[b` takes the
 newest), and each `]b` steps to the next one. Ctrl+Enter on a waiting row
 opens the Category card.
 Bob's suggestion is highlighted: ↵ (or a second Ctrl+Enter) accepts it, a
-letter picks another category, Space files the row with no category, and
+letter picks another category, `-` files the row with no category, and
 Esc cancels. If none of the tiles fit, `+` (or unshifted `=`) opens a New
 category stage: type a Label, optionally a Group and Key, and Enter to add
 it and file this row. Esc closes the stage without adding. Each filing
@@ -74,9 +74,19 @@ cursor there. After the last row, a notice reports the session (rows, time,
 and accepted / picked / no-category counts) and names any other months that
 still hold waiting rows.
 
+To remember why you bought something, press Space on the card. A note
+line opens under the payee: type the reason and press Enter. The note
+lands in the row's `— note` tail as its own undo step, and the card stays
+on the same row, still waiting, so the next key files it. Space on a row
+with a note edits it, and an empty Enter removes it. Esc backs out without
+writing. A note with links or fields stays a hand edit on the row. The
+end-of-walk notice also counts notes.
+
 Ctrl+Enter on a ticked row only unticks it: no card, no jump.
 **Bank: set category** opens the same card on any row later without
-touching its checkbox, so a correction never disturbs the tick.
+touching its checkbox, so a correction never disturbs the tick; there `-`
+(or Delete) removes the category. **Bank: note this row** opens only the
+note line.
 
 Row basics: `$` is required, `+` is money in, `⚑` or `!!` flags a row to
 look into, and `—` or `--` starts a note. `[cat:: cash]` is an ATM; an
@@ -168,7 +178,7 @@ gap, or shows a Δ.
 batch (exit 2) and writes nothing. Possible twins are listed; delete one,
 bob never merges. An ignored `.bob/bank/<host>.jsonl` is refused until
 `!/.bob/bank/*.jsonl` is on the vault `.gitignore` allowlist. If the card
-opens restricted (Space and Esc only), update the plugins and retry:
+opens restricted (Enter, Space, and Esc only), update the plugins and retry:
 Ctrl+Enter keeps its plain tick in the meantime.
 
 ## Related
