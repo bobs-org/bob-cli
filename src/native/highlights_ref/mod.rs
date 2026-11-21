@@ -73,6 +73,10 @@ pub(crate) mod pdf_links;
 mod pdf_meta;
 mod pdf_target;
 pub(crate) mod pdf_write_policy;
+// The episode metadata library; the episode dossier builder and the
+// create/ingest podcast routes that call it land in later phases.
+#[cfg_attr(not(test), allow(dead_code))]
+mod podcast;
 mod projection;
 mod publish;
 mod reading_execute;

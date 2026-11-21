@@ -110,7 +110,51 @@ pub(super) fn fetch_url(
     max_time_secs: u64,
     progress: Option<&dyn Fn(&str)>,
 ) -> std::result::Result<FetchResult, FetchError> {
-    fetch_with_curl(url, dest, max_time_secs, &curl_program(), progress)
+    fetch_with_curl(
+        url,
+        dest,
+        max_time_secs,
+        PDF_MAX_BYTES,
+        &curl_program(),
+        progress,
+    )
+}
+
+/// [`fetch_url`] with a caller-chosen size cap instead of the 95 MiB PDF
+/// cap: curl aborts a download whose size it learns is over `max_bytes`,
+/// and a body that still lands over the cap is refused afterwards, so no
+/// caller ever reads more than `max_bytes`.
+// The podcast episode metadata ladder consumes this; the episode route
+// that calls the ladder lands in a later phase.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn fetch_url_capped(
+    url: &str,
+    dest: &Path,
+    max_time_secs: u64,
+    max_bytes: u64,
+    progress: Option<&dyn Fn(&str)>,
+) -> std::result::Result<FetchResult, FetchError> {
+    fetch_with_curl(
+        url,
+        dest,
+        max_time_secs,
+        max_bytes,
+        &curl_program(),
+        progress,
+    )
+}
+
+/// A byte cap as people say it: `95 MiB`, `512 KiB`, or `100 bytes`.
+fn format_byte_cap(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else if bytes >= KIB && bytes.is_multiple_of(KIB) {
+        format!("{} KiB", bytes / KIB)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 /// The `curl` program: `BOB_HIGHLIGHTS_CURL` when set and non-empty,
@@ -126,6 +170,7 @@ fn fetch_with_curl(
     url: &str,
     dest: &Path,
     max_time_secs: u64,
+    max_bytes: u64,
     curl: &str,
     progress: Option<&dyn Fn(&str)>,
 ) -> std::result::Result<FetchResult, FetchError> {
@@ -140,15 +185,16 @@ fn fetch_with_curl(
     for _ in 0..=MAX_REDIRECTS {
         let pin = resolve_host_for_pin(&current)?;
         let (status, content_type, redirect_url) =
-            curl_one_hop(curl, &current, dest, max_time_secs, &pin)?;
+            curl_one_hop(curl, &current, dest, max_time_secs, max_bytes, &pin)?;
         let redirect = redirect_url.trim().to_string();
         if !(300..400).contains(&status) || redirect.is_empty() {
             let bytes = fs::metadata(dest)
                 .map(|metadata| metadata.len())
                 .unwrap_or(0);
-            if bytes > PDF_MAX_BYTES {
+            if bytes > max_bytes {
                 return Err(FetchError::new(format!(
-                    "download larger than 95 MiB ({} bytes): {current}",
+                    "download larger than {} ({} bytes): {current}",
+                    format_byte_cap(max_bytes),
                     bytes,
                 )));
             }
@@ -259,6 +305,7 @@ fn curl_one_hop(
     url: &str,
     dest: &Path,
     max_time_secs: u64,
+    max_bytes: u64,
     pin: &ResolvePin,
 ) -> std::result::Result<(u16, String, String), FetchError> {
     let mut command = Command::new(curl);
@@ -276,7 +323,7 @@ fn curl_one_hop(
         .arg("--max-time")
         .arg(max_time_secs.to_string())
         .arg("--max-filesize")
-        .arg("95M")
+        .arg(max_bytes.to_string())
         .arg("-o")
         .arg(dest)
         .arg("-w")
@@ -305,7 +352,7 @@ fn curl_one_hop(
     if !output.status.success() {
         let code = output.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(map_curl_exit(code, url, &stderr));
+        return Err(map_curl_exit(code, url, &stderr, max_bytes));
     }
     parse_curl_trailer(&String::from_utf8_lossy(&output.stdout), url)
 }
@@ -339,13 +386,21 @@ fn parse_curl_trailer(
 }
 
 /// Map a failed `curl` exit code to its message.
-fn map_curl_exit(code: i32, url: &str, stderr: &str) -> FetchError {
+fn map_curl_exit(
+    code: i32,
+    url: &str,
+    stderr: &str,
+    max_bytes: u64,
+) -> FetchError {
     match code {
         6 => FetchError::new(format!("cannot resolve host: {url}")),
         7 => FetchError::new(format!("connection failed: {url}")),
         28 => FetchError::new(format!("timed out fetching {url}")),
         35 | 60 => FetchError::new(format!("TLS failure fetching {url}")),
-        63 => FetchError::new(format!("download larger than 95 MiB: {url}")),
+        63 => FetchError::new(format!(
+            "download larger than {}: {url}",
+            format_byte_cap(max_bytes)
+        )),
         _ if stderr.is_empty() => {
             FetchError::new(format!("curl failed (exit {code}) for {url}"))
         }
@@ -508,6 +563,79 @@ esac
         );
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn capped_fetch_refuses_bodies_over_its_cap() {
+        let dir = test_dir("capped");
+        let fake = write_fake_curl(&dir);
+        let argv_log = dir.join("argv.log");
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("FAKE_CURL_ROOT", Some(dir.as_os_str())),
+            (ENV_CURL_OVERRIDE, Some(fake.as_os_str())),
+            (
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("*=203.0.113.1")),
+            ),
+            ("FAKE_CURL_ARGV_LOG", Some(argv_log.as_os_str())),
+        ]);
+
+        // Under the cap the body is returned, and curl gets the cap.
+        let dest = dir.join("under.out");
+        let fetched = fetch_url_capped(
+            "https://example.com/paper.pdf",
+            &dest,
+            30,
+            1024,
+            None,
+        )
+        .expect("body under the cap");
+        assert_eq!(fetched.bytes, b"%PDF-1.4 fake body\n".len() as u64);
+        let logged = fs::read_to_string(&argv_log).expect("read argv log");
+        let argv: Vec<&str> = logged.lines().collect();
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["--max-filesize", "1024"]),
+            "curl must get the cap:\n{logged}"
+        );
+
+        // A body that lands over the cap is refused afterwards.
+        let error = fetch_url_capped(
+            "https://example.com/paper.pdf",
+            &dir.join("over.out"),
+            30,
+            16,
+            None,
+        )
+        .expect_err("body over the cap");
+        assert_eq!(
+            error.message,
+            "download larger than 16 bytes (19 bytes): https://example.com/paper.pdf"
+        );
+
+        // curl's own refusal names the cap.
+        let error = fetch_url_capped(
+            "https://example.com/exit-63",
+            &dir.join("exit-63.out"),
+            30,
+            5 * 1024 * 1024,
+            None,
+        )
+        .expect_err("exit 63");
+        assert_eq!(
+            error.message,
+            "download larger than 5 MiB: https://example.com/exit-63"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn byte_caps_read_as_people_say_them() {
+        assert_eq!(format_byte_cap(PDF_MAX_BYTES), "95 MiB");
+        assert_eq!(format_byte_cap(5 * 1024 * 1024), "5 MiB");
+        assert_eq!(format_byte_cap(512 * 1024), "512 KiB");
+        assert_eq!(format_byte_cap(100), "100 bytes");
     }
 
     #[test]
