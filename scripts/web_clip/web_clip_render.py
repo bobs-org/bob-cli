@@ -7,6 +7,9 @@ supplied by the adapter's ``launcher``.
 
 ``render(article_json_path, out_pdf, launcher)`` returns
 ``{"pdf_bytes", "images", "warnings", "source_html", "code_anchors"}``.
+A Bob-built ``article.json`` whose ``kind`` is ``podcast_episode`` prints
+as an episode dossier instead of an article; that branch needs the
+adapter's ``sanitize`` callable for the publisher's show-notes HTML.
 
 ``render_collection(parts, collection, workdir, out_pdf, launcher)``
 typesets ordered article.json parts into one PDF: an opening page with
@@ -63,6 +66,11 @@ class RenderError(Exception):
 
 class BrowserLaunchError(RenderError):
     """A renderer browser could not launch; compose maps this to ``browser``."""
+
+
+class PayloadError(RenderError):
+    """A Bob-built ``article.json`` is malformed; ``render`` maps this to
+    ``invalid_request``."""
 
 
 # ---------------------------------------------------------------------------
@@ -703,9 +711,9 @@ def source_images(markup: str) -> str:
     return _IMG_TAG_RE.sub(_replace, markup)
 
 
-def _source_document(title: str, body: str) -> str:
+def _source_document(title: str, body: str, lang: str = "en") -> str:
     """Wrap semantic source content without print CSS or Bob-only markup."""
-    return ("<!doctype html>\n<html lang=\"en\">\n<head>"
+    return (f"<!doctype html>\n<html lang=\"{html.escape(lang)}\">\n<head>"
             "<meta charset=\"utf-8\">"
             f"<title>{html.escape(title)}</title></head>\n<body>\n"
             f"{body}\n</body>\n</html>\n")
@@ -941,6 +949,454 @@ def build_collection_html(part_json_paths: list[str], collection: dict,
     with open(source_path, "w", encoding="utf-8") as handle:
         handle.write(assemble_collection_source(loaded, collection))
     return page, images, warnings
+
+
+# ---------------------------------------------------------------------------
+# Podcast episode dossier (Bob-built article.json, adapter ``render`` op).
+# ---------------------------------------------------------------------------
+
+PODCAST_EPISODE_KIND = "podcast_episode"
+# More than this many chapters flow into two columns.
+CHAPTER_SINGLE_COLUMN_MAX = 8
+_EPISODE_ID_PREFIX = "ep-"
+_LANG_TAG_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$")
+_COVER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_EMPTY_ANCHOR_RE = re.compile(r"<a\b[^>]*>\s*</a>", re.IGNORECASE)
+# Inline icons keep the pills independent of host emoji/symbol fonts; they
+# carry no text, so the PDF text layer reads "Listen on Spotify".
+_PLAY_ICON = (
+    '<svg class="episode-pill-icon" viewBox="0 0 10 10" aria-hidden="true">'
+    '<path d="M2.5 1.5 L8.5 5 L2.5 8.5 Z" fill="currentColor"/></svg>')
+_CLOCK_ICON = (
+    '<svg class="episode-pill-icon" viewBox="0 0 10 10" aria-hidden="true">'
+    '<circle cx="5" cy="5.6" r="3.6" fill="none" stroke="currentColor" '
+    'stroke-width="1"/><path d="M5 3.6 V5.8 L6.4 6.6" fill="none" '
+    'stroke="currentColor" stroke-width="1" stroke-linecap="round"/>'
+    '<path d="M4 0.9 H6" stroke="currentColor" stroke-width="1" '
+    'stroke-linecap="round"/></svg>')
+
+
+def is_podcast_episode(article: dict) -> bool:
+    """Whether ``article`` is a Bob-built podcast episode payload."""
+    return article.get("kind") == PODCAST_EPISODE_KIND
+
+
+def _is_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _optional_str(container: dict, key: str, where: str) -> None:
+    value = container.get(key)
+    if value is not None and not isinstance(value, str):
+        raise PayloadError(f"{where}{key} must be a string or null")
+
+
+def validate_episode(article: dict) -> None:
+    """Check the ``podcast_episode`` payload contract; raise ``PayloadError``."""
+    title = article.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise PayloadError("title must be a non-empty string")
+    source_url = article.get("source_url")
+    if (not isinstance(source_url, str)
+            or not source_url.startswith(("https://", "http://"))):
+        raise PayloadError("source_url must be an http(s) URL")
+    if not isinstance(article.get("captured"), str):
+        raise PayloadError("captured must be a YYYY-MM-DD string")
+    for key in ("published", "language"):
+        _optional_str(article, key, "")
+    episode = article.get("episode")
+    if not isinstance(episode, dict):
+        raise PayloadError("episode must be an object")
+    for key in ("show", "publisher", "sponsors_html"):
+        _optional_str(episode, key, "episode.")
+    listen_url = episode.get("listen_url")
+    if listen_url is not None and (
+            not isinstance(listen_url, str)
+            or not listen_url.startswith(("https://", "http://"))):
+        raise PayloadError("episode.listen_url must be an http(s) URL or null")
+    for key in ("duration_ms", "shared_at_secs"):
+        value = episode.get(key)
+        if value is not None and not _is_count(value):
+            raise PayloadError(
+                f"episode.{key} must be a non-negative integer or null")
+    cover = episode.get("cover")
+    if cover is not None and (
+            not isinstance(cover, str) or not cover.startswith("assets/")
+            or not _COVER_NAME_RE.match(cover[len("assets/"):])):
+        raise PayloadError(
+            "episode.cover must be an assets/<file> path or null")
+    if not isinstance(episode.get("chapter_links", False), bool):
+        raise PayloadError("episode.chapter_links must be a boolean")
+    blocks = episode.get("blocks", [])
+    if not isinstance(blocks, list):
+        raise PayloadError("episode.blocks must be an array")
+    for index, block in enumerate(blocks):
+        where = f"episode.blocks[{index}]"
+        if not isinstance(block, dict):
+            raise PayloadError(f"{where} must be an object")
+        kind = block.get("type")
+        if kind == "notes":
+            if not isinstance(block.get("html"), str):
+                raise PayloadError(f"{where}.html must be a string")
+        elif kind == "chapters":
+            chapters = block.get("chapters")
+            if not isinstance(chapters, list) or not chapters:
+                raise PayloadError(
+                    f"{where}.chapters must be a non-empty array")
+            for number, chapter in enumerate(chapters):
+                spot = f"{where}.chapters[{number}]"
+                if not isinstance(chapter, dict):
+                    raise PayloadError(f"{spot} must be an object")
+                if not _is_count(chapter.get("start_secs")):
+                    raise PayloadError(
+                        f"{spot}.start_secs must be a non-negative integer")
+                chapter_title = chapter.get("title")
+                if not isinstance(chapter_title, str) or not chapter_title.strip():
+                    raise PayloadError(
+                        f"{spot}.title must be a non-empty string")
+        else:
+            raise PayloadError(f"{where}.type must be notes or chapters")
+    provenance = episode.get("provenance", [])
+    if not isinstance(provenance, list):
+        raise PayloadError("episode.provenance must be an array")
+    for index, entry in enumerate(provenance):
+        if (not isinstance(entry, dict)
+                or not isinstance(entry.get("label"), str)
+                or not isinstance(entry.get("source"), str)):
+            raise PayloadError(
+                f"episode.provenance[{index}] needs string label and source")
+    transcript = episode.get("transcript")
+    if transcript is not None and not isinstance(transcript, dict):
+        raise PayloadError("episode.transcript must be an object or null")
+
+
+def format_episode_duration(duration_ms: int | None) -> str | None:
+    """``1 h 26 min``, ``48 min``, or ``45 s``; ``None`` when unknown."""
+    if duration_ms is None:
+        return None
+    total = max(0, int(duration_ms)) // 1000
+    if total < 60:
+        return f"{total} s"
+    minutes = total // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+
+
+def format_timestamp(secs: int) -> str:
+    """``m:ss`` under an hour, otherwise ``h:mm:ss``."""
+    hours, rest = divmod(max(0, int(secs)), 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def episode_time_url(listen_url: str, secs: int) -> str:
+    """Deep link that starts playback at ``secs``."""
+    base = listen_url.split("#", 1)[0]
+    separator = "&" if "?" in base else "?"
+    return f"{base}{separator}t={int(secs)}"
+
+
+def episode_language(article: dict) -> str:
+    """The ``<html lang>`` value: a plausible BCP 47 tag, else ``en``."""
+    raw = article.get("language")
+    if isinstance(raw, str) and _LANG_TAG_RE.match(raw.strip()):
+        return raw.strip()
+    return "en"
+
+
+def _episode_listen_url(article: dict) -> str:
+    episode = article.get("episode") or {}
+    return episode.get("listen_url") or article.get("source_url") or ""
+
+
+def _episode_publisher(episode: dict) -> str | None:
+    """The publisher line, omitted when it only repeats the show name."""
+    publisher = (episode.get("publisher") or "").strip()
+    if not publisher:
+        return None
+    if _squash(publisher) == _squash(episode.get("show") or ""):
+        return None
+    return publisher
+
+
+def _shared_at(episode: dict) -> int | None:
+    """The shared moment, only when it lies inside the episode."""
+    shared = episode.get("shared_at_secs")
+    duration_ms = episode.get("duration_ms")
+    if shared is None or duration_ms is None or shared <= 0:
+        return None
+    return shared if shared * 1000 < duration_ms else None
+
+
+def _episode_meta(article: dict) -> str:
+    episode = article.get("episode") or {}
+    bits = ["Podcast episode"]
+    published = format_long_date(article.get("published"))
+    if published:
+        bits.append(published)
+    duration = format_episode_duration(episode.get("duration_ms"))
+    if duration:
+        bits.append(duration)
+    return " · ".join(bits)
+
+
+def clean_episode_html(markup: str, sanitize, base_url: str) -> str:
+    """Sanitize one publisher fragment with the adapter allowlist.
+
+    The op is offline and the cover is the dossier's only image, so every
+    ``<img>`` goes. Ids are namespaced away from Bob's own anchors, and
+    headings start at h3 under the "Show notes" h2.
+    """
+    cleaned = sanitize(markup or "")
+    cleaned = _IMG_TAG_RE.sub("", cleaned)
+    # Publishers paste links whose text was only invisible U+2060 marks;
+    # once those are stripped the empty anchors would only add blank
+    # entries to `bob ref links`.
+    cleaned = _EMPTY_ANCHOR_RE.sub("", cleaned)
+    cleaned = resolve_relative_hrefs(cleaned, base_url)
+    cleaned = namespace_ids(cleaned, _EPISODE_ID_PREFIX)
+    return shift_headings(cleaned, target_level=3)
+
+
+def _prepare_episode_cover(cover: str | None, assets_dir: str,
+                           render_assets_dir: str, warnings: list[str],
+                           manifest: dict) -> str | None:
+    """Normalize the cover into ``render/assets/``; ``None`` when unusable."""
+    if not cover:
+        return None
+    manifest["total"] += 1
+    name = cover[len("assets/"):]
+    try:
+        with open(os.path.join(assets_dir, name), "rb") as handle:
+            data = handle.read()
+    except OSError:
+        manifest["failed"] += 1
+        warnings.append(f"dropped missing cover art: {name}")
+        return None
+    try:
+        result = _normalize_raster(data)
+    except Exception as exc:  # noqa: BLE001 - print without the cover
+        manifest["failed"] += 1
+        warnings.append(f"dropped undecodable cover art {name}: {exc}")
+        return None
+    if result is None:
+        manifest["skipped_small"] += 1
+        warnings.append(f"dropped cover art {name}: smaller than "
+                        f"{IMAGE_SMALL_EDGE} px")
+        return None
+    jpeg, _dims = result
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    out_name = f"{stem}.jpg"
+    with open(os.path.join(render_assets_dir, out_name), "wb") as handle:
+        handle.write(jpeg)
+    manifest["kept"] += 1
+    return f"assets/{out_name}"
+
+
+def prepare_episode(article: dict, sanitize, assets_dir: str,
+                    render_assets_dir: str,
+                    warnings: list[str]) -> tuple[dict, dict]:
+    """Sanitize notes and sponsors and normalize the cover for printing."""
+    episode = dict(article.get("episode") or {})
+    base_url = link_base_url(article)
+    blocks: list[dict] = []
+    for block in episode.get("blocks") or []:
+        if block.get("type") == "notes":
+            blocks.append({"type": "notes",
+                           "html": clean_episode_html(
+                               block.get("html") or "", sanitize, base_url)})
+        else:
+            blocks.append(block)
+    episode["blocks"] = blocks
+    sponsors = episode.get("sponsors_html")
+    episode["sponsors_html"] = (
+        clean_episode_html(sponsors, sanitize, base_url) if sponsors else None)
+    manifest = {"total": 0, "kept": 0, "skipped_small": 0, "failed": 0}
+    episode["cover"] = _prepare_episode_cover(
+        episode.get("cover"), assets_dir, render_assets_dir, warnings,
+        manifest)
+    return dict(article, episode=episode), manifest
+
+
+def _chapter_list(chapters: list[dict], listen_url: str,
+                  chapter_links: bool) -> str:
+    classes = ["episode-chapters"]
+    if len(chapters) > CHAPTER_SINGLE_COLUMN_MAX:
+        classes.append("episode-chapters-columns")
+    if any(int(chapter["start_secs"]) >= 3600 for chapter in chapters):
+        classes.append("episode-chapters-hours")
+    rows = [f'<ol class="{" ".join(classes)}">']
+    for chapter in chapters:
+        secs = int(chapter["start_secs"])
+        label = html.escape(format_timestamp(secs))
+        if chapter_links and listen_url:
+            href = html.escape(episode_time_url(listen_url, secs), quote=True)
+            label = f'<a href="{href}">{label}</a>'
+        rows.append(
+            f'<li><span class="chapter-time">{label}</span>'
+            f'<span class="chapter-title">'
+            f'{html.escape(chapter["title"].strip())}</span></li>')
+    rows.append("</ol>")
+    return "".join(rows)
+
+
+def assemble_episode(article: dict) -> str:
+    """Build the episode dossier page from a prepared episode article."""
+    episode = article.get("episode") or {}
+    title = article.get("title") or "Untitled"
+    lang = episode_language(article)
+    listen_url = _episode_listen_url(article)
+    source_url = article.get("source_url") or ""
+    captured = format_long_date(article.get("captured"))
+
+    heading: list[str] = []
+    show = (episode.get("show") or "").strip()
+    if show:
+        heading.append(f'<p class="episode-kicker">{html.escape(show)}</p>')
+    heading.append(
+        f'<h1 class="masthead-title episode-title">{html.escape(title)}</h1>')
+    publisher = _episode_publisher(episode)
+    if publisher:
+        heading.append(
+            f'<p class="episode-publisher">{html.escape(publisher)}</p>')
+    heading.append(
+        f'<p class="episode-meta">{html.escape(_episode_meta(article))}</p>')
+    pills: list[str] = []
+    if listen_url:
+        pills.append(
+            f'<a class="episode-pill" href="{html.escape(listen_url, quote=True)}">'
+            f"{_PLAY_ICON}<span>Listen on Spotify</span></a>")
+        shared = _shared_at(episode)
+        if shared is not None:
+            href = html.escape(episode_time_url(listen_url, shared), quote=True)
+            pills.append(
+                f'<a class="episode-pill episode-pill-shared" href="{href}">'
+                f"{_CLOCK_ICON}<span>Shared at "
+                f"{html.escape(format_timestamp(shared))}</span></a>")
+    if pills:
+        heading.append(f'<p class="episode-pills">{"".join(pills)}</p>')
+
+    cover = episode.get("cover")
+    card_class = "episode-card" if cover else "episode-card episode-card-bare"
+    card = [f'<div class="{card_class}">']
+    if cover:
+        card.append(
+            '<div class="episode-cover">'
+            f'<img src="{html.escape(cover, quote=True)}" '
+            'alt="Episode cover art"></div>')
+    card.append(f'<div class="episode-heading">{"".join(heading)}</div>')
+    card.append("</div>")
+    provenance = [f'<span><a href="{html.escape(source_url, quote=True)}">'
+                  f"{html.escape(source_url)}</a></span>"]
+    if captured:
+        provenance.append(f"<span>Captured {html.escape(captured)}</span>")
+    masthead = ('<header class="masthead episode-masthead">'
+                + "".join(card)
+                + '<p class="masthead-provenance">'
+                + " · ".join(provenance) + "</p></header>")
+
+    body: list[str] = []
+    blocks = episode.get("blocks") or []
+    if blocks:
+        body.append('<h2 class="episode-label episode-notes-label">'
+                    "Show notes</h2>")
+    for block in blocks:
+        if block.get("type") == "chapters":
+            body.append('<h3 class="episode-label">Chapters</h3>')
+            body.append(_chapter_list(
+                block.get("chapters") or [], listen_url,
+                bool(episode.get("chapter_links"))))
+        else:
+            body.append(block.get("html") or "")
+    sponsors = episode.get("sponsors_html")
+    if sponsors:
+        body.append('<aside class="episode-sponsors">'
+                    '<p class="episode-label">Sponsors</p>'
+                    f"{sponsors}</aside>")
+    footer: list[str] = []
+    for entry in episode.get("provenance") or []:
+        footer.append(f"{html.escape(entry['label'])}: "
+                      f"{html.escape(entry['source'])}")
+    if listen_url:
+        footer.append(f'<a href="{html.escape(listen_url, quote=True)}">'
+                      "Content from Spotify</a>")
+    if captured:
+        footer.append(f"Captured {html.escape(captured)}")
+    if footer:
+        body.append(f'<footer class="episode-footer"><p>'
+                    f'{" · ".join(footer)}</p></footer>')
+
+    footer_title = css_escape_string(short_footer_title(title))
+    return f"""<!DOCTYPE html>
+<html lang="{html.escape(lang, quote=True)}">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{html.escape(CSP)}">
+<title>{html.escape(title)}</title>
+<link rel="stylesheet" href="/template/reader.css">
+<style>
+@page {{
+  @bottom-left {{
+    content: "{footer_title}";
+  }}
+}}
+@page :first {{
+  @bottom-left {{
+    content: none;
+  }}
+}}
+</style>
+</head>
+<body class="episode">
+{masthead}
+<div class="article-body episode-body">
+{"".join(body)}
+</div>
+</body>
+</html>
+"""
+
+
+def assemble_episode_source(article: dict) -> str:
+    """Build the semantic source view (the Markdown store's input)."""
+    episode = article.get("episode") or {}
+    title = article.get("title") or "Untitled"
+    source_url = article.get("source_url") or ""
+    captured = format_long_date(article.get("captured"))
+    parts = [f"<h1>{html.escape(title)}</h1>"]
+    byline = [bit for bit in ((episode.get("show") or "").strip(),
+                              _episode_publisher(episode)) if bit]
+    if byline:
+        parts.append(f"<p>{html.escape(' · '.join(byline))}</p>")
+    parts.append(f"<p>{html.escape(_episode_meta(article))}</p>")
+    provenance = [f'<a href="{html.escape(source_url, quote=True)}">'
+                  f"{html.escape(source_url)}</a>"]
+    if captured:
+        provenance.append(f"Captured {html.escape(captured)}")
+    parts.append("<p>" + " · ".join(provenance) + "</p>")
+    blocks = episode.get("blocks") or []
+    if blocks:
+        parts.append("<h2>Show notes</h2>")
+    for block in blocks:
+        if block.get("type") == "chapters":
+            # Plain times, not Spotify deep links, so `bob ref links`
+            # lists the publisher's own links.
+            parts.append("<h3>Chapters</h3>")
+            parts.append("<ul>" + "".join(
+                f"<li>{html.escape(format_timestamp(chapter['start_secs']))} "
+                f"{html.escape(chapter['title'].strip())}</li>"
+                for chapter in block.get("chapters") or []) + "</ul>")
+        else:
+            parts.append(block.get("html") or "")
+    sponsors = episode.get("sponsors_html")
+    if sponsors:
+        parts.append("<h2>Sponsors</h2>")
+        parts.append(sponsors)
+    return _source_document(title, "\n".join(parts), episode_language(article))
 
 
 # ---------------------------------------------------------------------------
@@ -1286,28 +1742,52 @@ def print_pdf(render_dir: str, out_pdf: str, launcher,
 # ---------------------------------------------------------------------------
 
 def render(article_json_path: str, out_pdf: str, launcher,
-           tables: dict | None = None) -> dict:
-    """Normalize, assemble, and print; return pdf/images/warnings."""
+           tables: dict | None = None, *, sanitize=None,
+           workdir: str | None = None) -> dict:
+    """Normalize, assemble, and print; return pdf/images/warnings.
+
+    Assets resolve against the ``article.json`` directory; ``render/``
+    goes under ``workdir`` (default: that same directory). A
+    ``podcast_episode`` payload prints as an episode dossier and needs the
+    adapter's ``sanitize`` callable.
+    """
     import json
 
     with open(article_json_path, encoding="utf-8") as handle:
         article = json.load(handle)
-    workdir = os.path.dirname(os.path.abspath(article_json_path))
-    assets_dir = os.path.join(workdir, "assets")
-    render_dir = os.path.join(workdir, "render")
+    if not isinstance(article, dict):
+        raise PayloadError("article.json must contain an object")
+    article_dir = os.path.dirname(os.path.abspath(article_json_path))
+    assets_dir = os.path.join(article_dir, "assets")
+    render_dir = os.path.join(workdir or article_dir, "render")
     render_assets_dir = os.path.join(render_dir, "assets")
-    os.makedirs(render_assets_dir, exist_ok=True)
 
+    episode = is_podcast_episode(article)
+    if episode:
+        if sanitize is None:
+            raise RenderError(
+                "podcast episodes need the adapter's HTML sanitizer")
+        validate_episode(article)
+    os.makedirs(render_assets_dir, exist_ok=True)
     warnings: list[str] = []
-    markup, images = normalize_images(article.get("html") or "",
-                                     assets_dir, render_assets_dir, warnings)
-    article = dict(article, html=markup)
+    if episode:
+        article, images = prepare_episode(
+            article, sanitize, assets_dir, render_assets_dir, warnings)
+        page = assemble_episode(article)
+        source = assemble_episode_source(article)
+    else:
+        markup, images = normalize_images(article.get("html") or "",
+                                         assets_dir, render_assets_dir,
+                                         warnings)
+        article = dict(article, html=markup)
+        page = assemble(article)
+        source = assemble_source(article)
     page_path = os.path.join(render_dir, "article.html")
     with open(page_path, "w", encoding="utf-8") as handle:
-        handle.write(assemble(article))
+        handle.write(page)
     source_path = os.path.abspath(os.path.join(render_dir, "source.html"))
     with open(source_path, "w", encoding="utf-8") as handle:
-        handle.write(assemble_source(article))
+        handle.write(source)
 
     code_blocks, table_report = print_pdf(
         render_dir, out_pdf, launcher, tables)

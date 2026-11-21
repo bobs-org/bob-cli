@@ -190,6 +190,18 @@ impl ClipAdapterClient {
         into_success(value, &stderr_text, "compose")
     }
 
+    /// Print one Bob-built article.json offline (no network, no
+    /// extraction, no fidelity verdict). The episode route uses it for the
+    /// podcast dossier.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn render(
+        &self,
+        request: &RenderRequest,
+    ) -> AdapterResult<RenderSuccess> {
+        let (value, stderr_text) = self.run_request(request)?;
+        into_success(value, &stderr_text, "render")
+    }
+
     /// Render unique Mermaid sources in one adapter call.
     pub(super) fn diagrams(
         &self,
@@ -497,6 +509,40 @@ impl ComposeRequest {
     }
 }
 
+/// One `render` request: print a Bob-built article.json (such as a
+/// `podcast_episode` dossier payload) without network or extraction.
+/// Assets resolve against the article.json directory; the adapter writes
+/// `render/` under `workdir`.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct RenderRequest {
+    pub(super) protocol: u32,
+    pub(super) op: &'static str,
+    pub(super) article_json: String,
+    pub(super) workdir: String,
+    pub(super) out_pdf: String,
+    pub(super) tables: Option<TablesSettings>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RenderRequest {
+    pub(super) fn new(
+        article_json: String,
+        workdir: String,
+        out_pdf: String,
+        tables: TablesSettings,
+    ) -> Self {
+        Self {
+            protocol: ADAPTER_PROTOCOL_VERSION,
+            op: "render",
+            article_json,
+            workdir,
+            out_pdf,
+            tables: Some(tables),
+        }
+    }
+}
+
 /// A successful `capture` response.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
@@ -620,7 +666,12 @@ pub(super) struct DiagramsSuccess {
     pub(super) warnings: Vec<String>,
 }
 
-/// A successful `compose` response.
+/// A successful `render` response: the same printed-PDF report as
+/// `compose` (PDF bytes, source view, code anchors, tables, images).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) type RenderSuccess = ComposeSuccess;
+
+/// A successful `compose` (or `render`) response.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub(super) struct ComposeSuccess {
@@ -1006,6 +1057,93 @@ mod tests {
         assert!(value.source_html.is_none());
         assert!(value.code_anchors.is_none());
         assert!(value.tables.is_none());
+    }
+
+    fn sample_render() -> RenderRequest {
+        RenderRequest::new(
+            "/abs/episode/article.json".into(),
+            "/abs/episode".into(),
+            "/abs/episode/episode.pdf".into(),
+            TablesSettings {
+                layout: "auto".into(),
+                prose_words: 12,
+            },
+        )
+    }
+
+    const RENDER_REQUEST_JSON: &str = r#"{"protocol":1,"op":"render","article_json":"/abs/episode/article.json","workdir":"/abs/episode","out_pdf":"/abs/episode/episode.pdf","tables":{"layout":"auto","prose_words":12}}"#;
+
+    /// A `/bin/sh` adapter that saves its request and prints `response`.
+    fn shell_adapter(
+        dir: &std::path::Path,
+        response: &str,
+    ) -> (ClipAdapterClient, PathBuf) {
+        let saved = dir.join("request.json");
+        let script = dir.join("adapter.sh");
+        std::fs::write(
+            &script,
+            format!("cat > \"$1\"\ncat <<'EOF'\n{response}\nEOF\n"),
+        )
+        .expect("write fake adapter");
+        let client = ClipAdapterClient::new(
+            PathBuf::from("/bin/sh"),
+            vec![script.into_os_string(), saved.clone().into_os_string()],
+            Duration::from_secs(30),
+        );
+        (client, saved)
+    }
+
+    #[test]
+    fn render_request_json_is_byte_identical() {
+        let json = serde_json::to_string(&sample_render())
+            .expect("serialize render request");
+        assert_eq!(json, RENDER_REQUEST_JSON);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn render_sends_one_request_and_reads_the_print_report() {
+        let temp = tempfile::tempdir().expect("create adapter dir");
+        let (client, saved) = shell_adapter(
+            temp.path(),
+            r#"{"protocol":1,"ok":true,"op":"render","pdf_bytes":100211,"source_html":"/abs/episode/render/source.html","code_anchors":"/abs/episode/render/code-anchors.json","tables":{"version":1},"images":{"total":1,"kept":1,"skipped_small":0,"failed":0},"warnings":[]}"#,
+        );
+        let success = client.render(&sample_render()).expect("render succeeds");
+        assert_eq!(
+            std::fs::read_to_string(saved).expect("read saved request"),
+            RENDER_REQUEST_JSON
+        );
+        assert_eq!(success.op.as_deref(), Some("render"));
+        assert_eq!(success.pdf_bytes, Some(100211));
+        assert_eq!(
+            success.source_html.as_deref(),
+            Some("/abs/episode/render/source.html")
+        );
+        assert_eq!(
+            success.code_anchors.as_deref(),
+            Some("/abs/episode/render/code-anchors.json")
+        );
+        assert_eq!(success.images.total, 1);
+        assert_eq!(success.images.kept, 1);
+        assert!(success.tables.is_some());
+        assert!(success.warnings.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn render_payload_errors_stay_typed() {
+        let temp = tempfile::tempdir().expect("create adapter dir");
+        let (client, _saved) = shell_adapter(
+            temp.path(),
+            r#"{"protocol":1,"ok":false,"op":"render","error":{"kind":"invalid_request","message":"article_json: episode.blocks must be an array"}}"#,
+        );
+        let failure = client
+            .render(&sample_render())
+            .expect_err("payload error surfaces");
+        assert_eq!(
+            failure.message,
+            "invalid_request: article_json: episode.blocks must be an array"
+        );
     }
 
     #[test]

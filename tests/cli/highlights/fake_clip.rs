@@ -2,9 +2,9 @@
 //!
 //! The fake adapter saves each request to `request.json` and `request-N.json`,
 //! copies a tiny fixture PDF to the requested `out_pdf`, and prints a canned
-//! response. Capture N reads `response-N.json` when present. Compose copies
-//! the fixture PDF and prints a compose response. No test touches the
-//! network or a real browser.
+//! response. Capture N reads `response-N.json` when present. Compose and
+//! render copy the fixture PDF and print `compose.json` / `render.json`
+//! (or a canned default). No test touches the network or a real browser.
 
 use crate::support::*;
 use std::fs;
@@ -50,6 +50,14 @@ case "$request" in
     fi
     if [ -f "$ROOT/compose.json" ]; then cat "$ROOT/compose.json"; else printf '%s' '{COMPOSE}'; fi
     ;;
+  *'"op":"render"'*)
+    out_pdf=$(printf '%s' "$request" | sed -n 's/.*"out_pdf":"\([^"]*\)".*/\1/p')
+    if [ -n "$out_pdf" ] && [ -f "$ROOT/fixture.pdf" ]; then
+      mkdir -p "$(dirname "$out_pdf")"
+      cp "$ROOT/fixture.pdf" "$out_pdf"
+    fi
+    if [ -f "$ROOT/render.json" ]; then cat "$ROOT/render.json"; else printf '%s' '{RENDER}'; fi
+    ;;
   *)
     out_pdf=$(printf '%s' "$request" | sed -n 's/.*"out_pdf":"\([^"]*\)".*/\1/p')
     if [ -n "$out_pdf" ] && [ -f "$ROOT/fixture.pdf" ]; then
@@ -71,6 +79,7 @@ esac
             diagrams = shell_single_quote(path_str(&diagrams.path)),
             PING = default_ping(),
             COMPOSE = default_compose(),
+            RENDER = default_render(),
         );
         write_executable(&path, &script);
         // The fixture must carry no annotations: the adapter's render is a
@@ -113,6 +122,17 @@ esac
     pub(crate) fn compose_called(&self) -> bool {
         (1..=self.request_count())
             .any(|n| self.request_n(n).contains(r#""op":"compose""#))
+    }
+
+    pub(crate) fn render_called(&self) -> bool {
+        (1..=self.request_count())
+            .any(|n| self.request_n(n).contains(r#""op":"render""#))
+    }
+
+    /// Replace the canned `render` response.
+    pub(crate) fn respond_render(&self, body: &str) {
+        fs::write(self.root.join("render.json"), body)
+            .expect("write fake render response");
     }
 
     pub(crate) fn called(&self) -> bool {
@@ -360,6 +380,10 @@ pub(crate) fn default_compose() -> &'static str {
     r#"{"protocol":1,"ok":true,"op":"compose","pdf_bytes":2400,"images":{"total":4,"kept":4,"skipped_small":0,"failed":0},"warnings":[]}"#
 }
 
+pub(crate) fn default_render() -> &'static str {
+    r#"{"protocol":1,"ok":true,"op":"render","pdf_bytes":2400,"images":{"total":1,"kept":1,"skipped_small":0,"failed":0},"warnings":[]}"#
+}
+
 pub(crate) fn failure_response(
     kind: &str,
     message: &str,
@@ -368,4 +392,49 @@ pub(crate) fn failure_response(
     format!(
         r#"{{"protocol":1,"ok":false,"op":"capture","error":{{"kind":"{kind}","message":"{message}","hint":"{hint}"}}}}"#
     )
+}
+
+/// Pipe one request into the fake adapter and return its stdout.
+fn run_fake(fake: &FakeClip, request: &str) -> String {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new(&fake.path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn fake clip adapter");
+    child
+        .stdin
+        .take()
+        .expect("fake adapter stdin")
+        .write_all(request.as_bytes())
+        .expect("write fake adapter request");
+    let output = child.wait_with_output().expect("wait for fake adapter");
+    assert!(output.status.success(), "fake adapter exits 0");
+    String::from_utf8(output.stdout).expect("fake adapter stdout is UTF-8")
+}
+
+#[test]
+fn fake_adapter_answers_render_like_compose() {
+    let temp = TempDir::new("bob-fake-clip-render");
+    let fake = FakeClip::new(&temp, "adapter");
+    let out_pdf = temp.path().join("episode").join("episode.pdf");
+    let request = format!(
+        r#"{{"protocol":1,"op":"render","article_json":"{work}/article.json","workdir":"{work}","out_pdf":"{pdf}","tables":{{"layout":"auto","prose_words":12}}}}"#,
+        work = path_str(temp.path()),
+        pdf = path_str(&out_pdf),
+    );
+
+    assert_eq!(run_fake(&fake, &request), default_render());
+    assert!(fake.render_called());
+    assert!(!fake.compose_called());
+    assert_eq!(fake.request(), request);
+    assert_eq!(
+        fs::read(&out_pdf).expect("render copies the fixture PDF"),
+        fs::read(fake.root.join("fixture.pdf")).expect("read fixture PDF")
+    );
+
+    let canned = r#"{"protocol":1,"ok":false,"op":"render","error":{"kind":"invalid_request","message":"article_json: episode must be an object"}}"#;
+    fake.respond_render(canned);
+    assert_eq!(run_fake(&fake, &request), canned);
+    assert_eq!(fake.request_count(), 2);
 }

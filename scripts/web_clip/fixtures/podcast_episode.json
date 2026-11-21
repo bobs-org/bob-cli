@@ -1,0 +1,104 @@
+{
+  "kind": "podcast_episode",
+  "title": "Software factories and code reviews with Harjot Gill",
+  "source_url": "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC",
+  "captured": "2026-11-21",
+  "published": "2026-11-18",
+  "language": "en",
+  "episode": {
+    "show": "The Pragmatic Engineer",
+    "publisher": "Gergely Orosz",
+    "duration_ms": 5197032,
+    "cover": "assets/cover.jpg",
+    "listen_url": "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC",
+    "shared_at_secs": 1235,
+    "chapter_links": true,
+    "blocks": [
+      {
+        "type": "notes",
+        "html": "<p>In this conversation, we step into the world of an AI-pilled CEO to explore how their startup works. This episode might as well be a way of succeeding that contradicts the growing convention that AI spending costs are too high and must be clamped down on. </p><p><a href=\"https://x.com/harjotsgill\" rel=\"nofollow\">Harjot Gill</a> is founder and CEO of<a href=\"https://www.coderabbit.ai\" rel=\"nofollow\"> CodeRabbit</a>, an AI code review business, and he shipped over 5,000 pull requests last month, spending on AI at a monthly run rate of $250,000(!) It’s certainly not a conventional approach and Harjot gets into detail about the thinking and reasoning behind it.</p><p>In this episode of The Pragmatic Engineer Podcast, we talk about his background in building software and founding infra startups for the last 30 years, and how things changed into the era of building software factories at CodeRabbit. We talk about why he believes human code review is dead, and how his team maintains quality while shipping at unprecedented speed.</p><p>We also get into the rising costs of AI development, why Harjot is convinced that tech startups need more funding than ever, and how AI is changing recruitment and the skills for success.</p>"
+      },
+      {
+        "type": "chapters",
+        "chapters": [
+          {
+            "start_secs": 0,
+            "title": "Intro"
+          },
+          {
+            "start_secs": 197,
+            "title": "How Harjot shipped over 5,000 pull requests in a month"
+          },
+          {
+            "start_secs": 526,
+            "title": "Harjot’s path into tech and his first startups"
+          },
+          {
+            "start_secs": 745,
+            "title": "Early conviction around AI and founding CodeRabbit"
+          },
+          {
+            "start_secs": 880,
+            "title": "Switching to AI coding"
+          },
+          {
+            "start_secs": 1235,
+            "title": "Software factories explained"
+          },
+          {
+            "start_secs": 1537,
+            "title": "What’s replacing human code review"
+          },
+          {
+            "start_secs": 2324,
+            "title": "Technical debt and deslopping tests"
+          },
+          {
+            "start_secs": 2765,
+            "title": "Evals"
+          },
+          {
+            "start_secs": 3025,
+            "title": "Formal methods"
+          },
+          {
+            "start_secs": 3125,
+            "title": "AI cost at CodeRabbit"
+          },
+          {
+            "start_secs": 3297,
+            "title": "Startup funding in 2026 and the value of AI spend"
+          },
+          {
+            "start_secs": 4100,
+            "title": "Hiring"
+          },
+          {
+            "start_secs": 4383,
+            "title": "Work pace, sleep, and burnout"
+          },
+          {
+            "start_secs": 4915,
+            "title": "Skills for the AI era"
+          },
+          {
+            "start_secs": 5070,
+            "title": "Book recommendation"
+          }
+        ]
+      },
+      {
+        "type": "notes",
+        "html": "<p>The Pragmatic Engineer deepdives relevant for this episode:</p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/openai-software-factory\" rel=\"nofollow\">Inside OpenAI’s agentic software factory</a></p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/what-is-happening-with-code-reviews\" rel=\"nofollow\">What is happening with code reviews?</a></p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/whats-the-roi-of-software-engineers\" rel=\"nofollow\">What’s the ROI of software engineers’ spending on AI?</a></p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/why-ramp-built-inspect\" rel=\"nofollow\">Why Ramp built its own in-house coding agent, Inspect</a></p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/ai-sre\" rel=\"nofollow\">AI SRE: what is it, how could it change on-call – and does it work?</a></p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/context-engineering-with-dex-horthy\" rel=\"nofollow\">Context engineering with Dex Horthy</a></p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/formal-methods-with-hillel-wayne\" rel=\"nofollow\">Formal methods with Hillel Wayne</a> </p><p>• <a href=\"https://newsletter.pragmaticengineer.com/p/building-codex-with-tibo-sottiaux\" rel=\"nofollow\">Building Codex with Tibo Sottiaux</a></p><hr><p>Production and marketing by <a href=\"https://penname.co/\" rel=\"nofollow\"></a><a href=\"https://newsletter.pragmaticengineer.com/p/engineers-leading-projects\" rel=\"nofollow\">https://penname.co/</a>. For inquiries about sponsoring the podcast, email podcast&#64;pragmaticengineer.com.</p><p>Get full access to The Pragmatic Engineer at <a href=\"https://newsletter.pragmaticengineer.com/subscribe?utm_medium&#61;podcast&amp;utm_campaign&#61;CTA_4\" rel=\"nofollow\">newsletter.pragmaticengineer.com/subscribe</a></p>"
+      }
+    ],
+    "sponsors_html": "<p>• <a href=\"https://turbopuffer.com/pragmatic\" rel=\"nofollow\">turbopuffer</a> – a vector and full-text search engine built on object storage. It’s fast, cheap, and extremely scalable.</p><p>• Entire – The Git forge for agent-human collaboration. Built for the scale and throughput of agentic coding.</p><p>• <a href=\"https://workos.com/\" rel=\"nofollow\">WorkOS</a> – everything you need to make your app enterprise-ready.</p>",
+    "provenance": [
+      {
+        "label": "Episode details and show notes",
+        "source": "Spotify's public episode page"
+      }
+    ],
+    "transcript": null
+  }
+}

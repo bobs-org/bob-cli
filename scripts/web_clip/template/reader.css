@@ -458,3 +458,203 @@ ol.contents > li > a {
   color: #2b4c7e;
   margin: 0 0 0.8em;
 }
+
+/* -- Podcast episode dossier (adapter `render` op) ------------------------ */
+
+.episode-card {
+  display: grid;
+  grid-template-columns: 1.35in 1fr;
+  column-gap: 0.22in;
+  align-items: start;
+  margin: 0 0 1.1em;
+  break-inside: avoid;
+}
+
+.episode-card-bare {
+  grid-template-columns: 1fr;
+}
+
+/* The cover prints as published: no crop, recolor, or overlay. */
+.episode-cover {
+  width: 1.35in;
+  height: 1.35in;
+  box-sizing: border-box;
+  border: 0.5pt solid #d0d7de;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.episode-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.episode-kicker {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 7.5pt;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #2b4c7e;
+  margin: 0.1em 0 0.55em;
+}
+
+.episode-title {
+  margin: 0 0 0.3em;
+}
+
+.episode-publisher {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 9.5pt;
+  color: #1f2328;
+  margin: 0 0 0.25em;
+}
+
+.episode-meta {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 9pt;
+  color: #57606a;
+  margin: 0 0 0.8em;
+}
+
+.episode-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+  margin: 0;
+}
+
+/* Bob's palette, never Spotify green. */
+.episode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 8pt;
+  font-weight: 500;
+  line-height: 1;
+  color: #2b4c7e;
+  background: #f3f6fa;
+  border: 0.5pt solid #b6c3d6;
+  border-radius: 999px;
+  padding: 0.42em 0.9em 0.42em 0.75em;
+  text-decoration: none;
+}
+
+.episode-pill-icon {
+  width: 0.85em;
+  height: 0.85em;
+  flex: none;
+}
+
+/* The body column is 34em of 10.75pt text. These blocks set a smaller
+ * font, so pin the same 365.5pt column instead of their own 34em. */
+.article-body.episode-body > .episode-label,
+.article-body.episode-body > ol.episode-chapters,
+.article-body.episode-body > .episode-sponsors,
+.article-body.episode-body > .episode-footer {
+  max-width: 365.5pt;
+}
+
+/* Small caps, not uppercase, so bookmarks and copied text read
+ * "Show notes" rather than "SHOW NOTES". */
+.article-body .episode-label {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 12pt;
+  font-weight: 600;
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.08em;
+  color: #2b4c7e;
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+}
+
+.article-body .episode-notes-label {
+  margin-top: 0;
+}
+
+ol.episode-chapters {
+  --chapter-time-width: 2.3em;
+  list-style: none;
+  padding: 0;
+  margin-top: 0;
+  margin-bottom: 1.2em;
+  font-size: 10pt;
+  line-height: 1.4;
+}
+
+ol.episode-chapters.episode-chapters-hours {
+  --chapter-time-width: 3.5em;
+}
+
+ol.episode-chapters.episode-chapters-columns {
+  columns: 2;
+  column-gap: 1.6em;
+}
+
+ol.episode-chapters > li {
+  display: grid;
+  grid-template-columns: var(--chapter-time-width) 1fr;
+  column-gap: 0.65em;
+  margin: 0 0 0.32em;
+  break-inside: avoid;
+}
+
+.chapter-time {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 8.5pt;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: #57606a;
+  padding-top: 0.12em;
+}
+
+.article-body .chapter-time a {
+  color: #2b4c7e;
+  border-bottom: none;
+}
+
+.episode-sponsors {
+  box-sizing: border-box;
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 9pt;
+  line-height: 1.45;
+  color: #57606a;
+  background: #f6f8fa;
+  border: 0.5pt solid #e1e4e8;
+  border-radius: 4pt;
+  padding: 0.75em 1em;
+  margin-top: 1.6em;
+  margin-bottom: 1.2em;
+  break-inside: avoid;
+}
+
+.article-body .episode-sponsors .episode-label {
+  margin-top: 0;
+  margin-bottom: 0.4em;
+}
+
+.episode-sponsors p {
+  margin: 0 0 0.3em;
+}
+
+.episode-sponsors p:last-child {
+  margin-bottom: 0;
+}
+
+.episode-footer {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 7.5pt;
+  color: #57606a;
+  border-top: 0.5pt solid #d0d7de;
+  padding-top: 0.6em;
+  margin-top: 2em;
+}
+
+.episode-footer p {
+  margin: 0;
+}

@@ -252,6 +252,26 @@ asset names are prefixed per part; relative article links keep their original
 base URL. Rust stamps and installs the result only after all captures and
 composition succeed.
 
+For a page Bob builds itself, Rust writes the `article.json` and its
+`assets/` and sends one `render` request with absolute `article_json`,
+`workdir`, and `out_pdf` paths plus the optional `tables` policy. `render`
+only prints. It uses no network, no Defuddle, and no fidelity verdict. Assets
+resolve next to `article.json`, and `render/` goes under `workdir`. Its
+response matches `compose`: PDF bytes, source view, code anchors, table
+report, image report, and warnings. A malformed payload fails as
+`invalid_request`.
+
+A payload whose `kind` is `podcast_episode` prints as an episode dossier.
+Page 1 is a card: the cover (never cropped), the show, the title once, the
+publisher (omitted when it repeats the show), the absolute date and duration,
+a Listen on Spotify pill, and a Shared at pill when the shared moment falls
+inside the episode. A "Show notes" bookmark follows. Chapters print where the
+publisher put them, linking each time to that moment when the payload allows
+it. Sponsors print in a quiet card after the notes, and a footer names every
+source. Publisher HTML passes the capture sanitizer with images removed.
+`<html lang>` follows the episode language. The source view lists chapters as
+plain text, so `bob ref links` shows only the publisher's own links.
+
 ## Verified (2026-10-01)
 
 Live gate for `https://openai.com/index/open-source-codex-orchestration-symphony/`,

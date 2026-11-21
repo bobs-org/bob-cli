@@ -21,6 +21,9 @@ Ops:
   PDF (opening page, linked contents, a fresh page and bookmark per part).
 - ``diagrams``: render up to 200 Mermaid sources in one offline Chrome page
   as fitted vector PDFs with per-diagram error isolation.
+- ``render``: print one Bob-built ``article.json`` offline (no network,
+  no Defuddle, no fidelity verdict). A ``podcast_episode`` payload prints
+  as an episode dossier: cover card, chapters, show notes, and sponsors.
 
 Siblings loaded at runtime (same directory, on ``sys.path``):
 
@@ -2396,6 +2399,94 @@ def op_compose(request: dict) -> dict:
     }
 
 
+RENDER_HINT = "run bob ref doctor to check the web clip adapter and its browser"
+
+
+def _render_request(request: dict) -> tuple[str, dict, str, str, dict]:
+    """Validate a ``render`` request; return its paths, article, and tables."""
+    tables = _table_settings(request)
+    paths: dict[str, str] = {}
+    for key in ("article_json", "workdir", "out_pdf"):
+        value = request.get(key)
+        if not isinstance(value, str) or not os.path.isabs(value):
+            raise AdapterFail(
+                "invalid_request", f"render request needs an absolute {key}")
+        paths[key] = value
+    article_json = paths["article_json"]
+    if not os.path.isfile(article_json):
+        raise AdapterFail(
+            "invalid_request", f"article_json is missing: {article_json}")
+    try:
+        with open(article_json, encoding="utf-8") as handle:
+            article = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise AdapterFail(
+            "invalid_request",
+            f"article_json is unreadable or malformed: {exc}") from exc
+    if not isinstance(article, dict):
+        raise AdapterFail(
+            "invalid_request", "article_json must contain an object")
+    if WEB_CLIP_DIR not in sys.path:
+        sys.path.insert(0, WEB_CLIP_DIR)
+    import web_clip_render
+    if web_clip_render.is_podcast_episode(article):
+        try:
+            web_clip_render.validate_episode(article)
+        except web_clip_render.PayloadError as exc:
+            raise AdapterFail(
+                "invalid_request", f"article_json: {exc}") from exc
+    return article_json, article, paths["workdir"], paths["out_pdf"], tables
+
+
+def op_render(request: dict) -> dict:
+    """Print one Bob-built article.json offline (no network, no Defuddle).
+
+    Rust writes the payload (a ``podcast_episode`` dossier, or an ordinary
+    article) and its ``assets/``; this op only typesets and prints it, so
+    there is no fidelity verdict.
+    """
+    article_json, _article, workdir, out_pdf, tables = _render_request(request)
+    os.makedirs(workdir, mode=0o700, exist_ok=True)
+    os.environ["TMPDIR"] = workdir
+
+    browser_info = discover_browser()
+    if browser_info is None:
+        raise AdapterFail("browser", "no usable browser found", BROWSER_HINT)
+
+    import web_clip_render
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as pw:
+            rendered = web_clip_render.render(
+                article_json, out_pdf, _RendererLauncher(pw, browser_info),
+                tables, sanitize=sanitize_html, workdir=workdir)
+    except web_clip_render.PayloadError as exc:
+        raise AdapterFail(
+            "invalid_request", f"article_json: {exc}") from exc
+    except web_clip_render.BrowserLaunchError as exc:
+        raise AdapterFail("browser", str(exc), BROWSER_HINT) from exc
+    except web_clip_render.RenderError as exc:
+        raise AdapterFail("render", str(exc), RENDER_HINT) from exc
+
+    pdf_bytes = rendered["pdf_bytes"]
+    if pdf_bytes > PDF_MAX_BYTES:
+        raise AdapterFail(
+            "render", "the printed PDF is larger than 95 MiB",
+            "vault sync refuses files of 95 MiB or more")
+    return {
+        "protocol": PROTOCOL_VERSION,
+        "ok": True,
+        "op": "render",
+        "pdf_bytes": pdf_bytes,
+        "source_html": rendered["source_html"],
+        "code_anchors": rendered["code_anchors"],
+        "tables": rendered["tables"],
+        "images": rendered.get("images") or {},
+        "warnings": rendered.get("warnings") or [],
+    }
+
+
 def op_diagrams(request: dict) -> dict:
     """Render a bounded diagram batch in one offline Chrome page."""
     if WEB_CLIP_DIR not in sys.path:
@@ -2450,6 +2541,7 @@ OPS = {
     "capture": op_capture,
     "compose": op_compose,
     "diagrams": op_diagrams,
+    "render": op_render,
 }
 
 
@@ -3023,6 +3115,338 @@ def _diagram_browser_test_failures(browser_info: dict) -> list[str]:
                         check("SVG foreignObject label prints", False)
             else:
                 check("SVG malicious PDF is one page", False)
+    return failures
+
+
+def _episode_fixture(fixtures_dir: str) -> dict:
+    """The podcast-episode payload built from a real episode's notes."""
+    with open(os.path.join(fixtures_dir, "podcast_episode.json"),
+              encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _write_test_cover(path: str, size: int = 300) -> None:
+    from PIL import Image
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    Image.new("RGB", (size, size), (43, 76, 126)).save(path, "JPEG")
+
+
+def _episode_render_failures(fixtures_dir: str) -> list[str]:
+    """Pure podcast-episode dossier checks: no browser, no network."""
+    import copy
+    import tempfile
+
+    if WEB_CLIP_DIR not in sys.path:
+        sys.path.insert(0, WEB_CLIP_DIR)
+    import web_clip_render as render
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool) -> None:
+        if not condition:
+            failures.append(f"episode: {label}")
+
+    payload = _episode_fixture(fixtures_dir)
+    title = payload["title"]
+
+    def build(mutate=None, cover_size: int | None = 300
+              ) -> tuple[str, str, dict, list[str]]:
+        """Return (page, source view, image manifest, warnings)."""
+        article = copy.deepcopy(payload)
+        if mutate is not None:
+            mutate(article)
+        render.validate_episode(article)
+        warnings: list[str] = []
+        with tempfile.TemporaryDirectory(prefix="bob-episode-") as root:
+            assets = os.path.join(root, "assets")
+            render_assets = os.path.join(root, "render", "assets")
+            os.makedirs(render_assets)
+            if cover_size is not None:
+                _write_test_cover(os.path.join(assets, "cover.jpg"),
+                                  cover_size)
+            prepared, images = render.prepare_episode(
+                article, sanitize_html, assets, render_assets, warnings)
+        return (render.assemble_episode(prepared),
+                render.assemble_episode_source(prepared), images, warnings)
+
+    def body_of(page: str) -> str:
+        return page.split("<body", 1)[1]
+
+    page, source, images, warnings = build()
+    body = body_of(page)
+    check("title appears once in the page body",
+          body.count(title) == 1)
+    check("title appears once in the source view", source.count(title) == 2
+          and source.count(f"<h1>{title}</h1>") == 1)
+    check("kicker names the show",
+          '<p class="episode-kicker">The Pragmatic Engineer</p>' in body)
+    check("meta line has the absolute date and duration, no word count",
+          "Podcast episode · November 18, 2026 · 1 h 26 min" in body
+          and " words" not in body)
+    check("cover is the dossier's only image",
+          body.count("<img") == 1 and 'src="assets/cover.jpg"' in body
+          and images == {"total": 1, "kept": 1, "skipped_small": 0,
+                         "failed": 0} and warnings == [])
+    check("listen pill links the episode",
+          'href="https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC">'
+          in body and "Listen on Spotify" in body)
+    check("16 chapters flow into two columns with hour-wide times",
+          body.count('<span class="chapter-time">') == 16
+          and "episode-chapters-columns" in body
+          and "episode-chapters-hours" in body
+          and ">1:24:30</a>" in body)
+    check("chapter deep links appear when chapter_links is set",
+          'href="https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC'
+          '?t=197">3:17</a>' in body)
+    no_links = body_of(build(lambda a: a["episode"].update(
+        chapter_links=False))[0])
+    check("chapter deep links vanish without chapter_links",
+          "?t=197" not in no_links
+          and '<span class="chapter-time">3:17</span>' in no_links)
+    check("publisher shows when it differs from the show",
+          '<p class="episode-publisher">Gergely Orosz</p>' in body)
+    same = body_of(build(lambda a: a["episode"].update(
+        publisher=" the pragmatic  ENGINEER "))[0])
+    check("publisher omitted when it equals the show",
+          "episode-publisher" not in same)
+    check("show notes heading precedes the notes",
+          '<h2 class="episode-label episode-notes-label">Show notes</h2>'
+          in body)
+    aside = body.find('<aside class="episode-sponsors">')
+    check("sponsor aside comes after the notes and before the footer",
+          0 < body.rfind("Get full access") < aside
+          < body.find('<footer class="episode-footer">'))
+    check("sponsors left the notes",
+          body.count(">turbopuffer</a>") == 1
+          and aside < body.find(">turbopuffer</a>"))
+    check("provenance footer lists sources and Content from Spotify",
+          "Episode details and show notes: Spotify&#x27;s public episode "
+          "page" in body
+          and ">Content from Spotify</a> · Captured November 21, 2026"
+          in body)
+    check("lang attribute is set from the payload",
+          page.startswith('<!DOCTYPE html>\n<html lang="en">'))
+    german = build(lambda a: a.update(language="de"))
+    check("lang attribute follows the episode language",
+          '<html lang="de">' in german[0] and '<html lang="de">' in german[1])
+    bogus = build(lambda a: a.update(language="not a tag!"))[0]
+    check("a malformed language falls back to en",
+          '<html lang="en">' in bogus)
+
+    def hostile(article: dict) -> None:
+        article["episode"]["blocks"][0]["html"] = (
+            '<p onclick="steal()">Hello<img src="https://evil.example/x.png"'
+            ' onerror="boom()"><script>alert(1)</script>'
+            "<style>p{color:red}</style> world</p>"
+            '<a href="javascript:alert(2)">bad</a>')
+        article["episode"]["sponsors_html"] = (
+            '<p onmouseover="z()">Sponsor<img src="assets/x.png"></p>')
+
+    hostile_page, hostile_source, _images, _warnings = build(hostile)
+    hostile_body = body_of(hostile_page)
+    for needle in ("<script", "<style", "onclick", "onerror", "onmouseover",
+                   "evil.example", "javascript:", "assets/x.png"):
+        check(f"publisher HTML loses {needle!r}",
+              needle not in hostile_body and needle not in hostile_source)
+    check("hostile notes keep their text",
+          "Hello" in hostile_body and "world" in hostile_body
+          and "Sponsor" in hostile_body
+          and hostile_body.count("<img") == 1)
+    check("empty publisher anchors are dropped",
+          'href="https://penname.co/"></a>' not in page
+          and 'href="https://penname.co/"></a>' not in source)
+
+    duration_secs = payload["episode"]["duration_ms"] // 1000
+    for shared, shown in ((1235, True), (0, False), (None, False),
+                          (duration_secs, True), (duration_secs + 1, False)):
+        shared_body = body_of(build(lambda a, s=shared: a["episode"].update(
+            shared_at_secs=s))[0])
+        check(f"shared-at pill for {shared!r} is "
+              f"{'shown' if shown else 'hidden'}",
+              ("episode-pill-shared" in shared_body) == shown)
+    check("shared-at pill links the shared moment",
+          '?t=1235"' in body and "Shared at 20:35" in body)
+    unknown = body_of(build(lambda a: a["episode"].update(
+        duration_ms=None))[0])
+    check("shared-at pill needs a known duration",
+          "episode-pill-shared" not in unknown
+          and "Podcast episode · November 18, 2026</p>" in unknown)
+
+    bare_body = body_of(build(cover_size=None)[0])
+    check("a missing cover prints a bare card",
+          "<img" not in bare_body and "episode-card-bare" in bare_body)
+    _page, _source, small_images, small_warnings = build(cover_size=32)
+    check("a tiny cover is skipped with a warning",
+          small_images["skipped_small"] == 1 and len(small_warnings) == 1)
+
+    few = body_of(build(lambda a: a["episode"]["blocks"][1].update(
+        chapters=[{"start_secs": 0, "title": "Intro"},
+                  {"start_secs": 197, "title": "Next"}]))[0])
+    check("eight or fewer short chapters stay in one column",
+          "episode-chapters-columns" not in few
+          and "episode-chapters-hours" not in few)
+
+    check("source view lists chapters as plain text",
+          "<li>3:17 How Harjot shipped over 5,000 pull requests in a month"
+          "</li>" in source and "?t=" not in source)
+    check("source view has meta, provenance, and sponsors",
+          "<p>The Pragmatic Engineer · Gergely Orosz</p>" in source
+          and "<p>Podcast episode · November 18, 2026 · 1 h 26 min</p>"
+          in source
+          and "<h2>Show notes</h2>" in source
+          and source.find("<h2>Sponsors</h2>")
+          > source.find("Get full access"))
+
+    check("duration formats",
+          render.format_episode_duration(5197032) == "1 h 26 min"
+          and render.format_episode_duration(48 * 60_000 + 59_000)
+          == "48 min"
+          and render.format_episode_duration(45_000) == "45 s"
+          and render.format_episode_duration(3_600_000) == "1 h"
+          and render.format_episode_duration(None) is None)
+    check("timestamp formats",
+          render.format_timestamp(0) == "0:00"
+          and render.format_timestamp(197) == "3:17"
+          and render.format_timestamp(3599) == "59:59"
+          and render.format_timestamp(3600) == "1:00:00"
+          and render.format_timestamp(5070) == "1:24:30")
+    check("date format",
+          render.format_long_date(payload["published"])
+          == "November 18, 2026")
+
+    def rejects(label: str, mutate) -> None:
+        article = copy.deepcopy(payload)
+        mutate(article)
+        try:
+            render.validate_episode(article)
+            check(f"payload rejects {label}", False)
+        except render.PayloadError:
+            pass
+
+    rejects("a missing title", lambda a: a.update(title="  "))
+    rejects("a non-http source_url",
+            lambda a: a.update(source_url="spotify:episode:x"))
+    rejects("a missing episode object", lambda a: a.pop("episode"))
+    rejects("an unknown block type", lambda a: a["episode"]["blocks"]
+            .append({"type": "video", "html": ""}))
+    rejects("a negative chapter start", lambda a: a["episode"]["blocks"][1]
+            ["chapters"][0].update(start_secs=-1))
+    rejects("an empty chapter title", lambda a: a["episode"]["blocks"][1]
+            ["chapters"][0].update(title=""))
+    rejects("a boolean duration",
+            lambda a: a["episode"].update(duration_ms=True))
+    rejects("a cover outside assets/",
+            lambda a: a["episode"].update(cover="../cover.jpg"))
+    rejects("a nested cover path",
+            lambda a: a["episode"].update(cover="assets/x/cover.jpg"))
+    rejects("a malformed provenance entry",
+            lambda a: a["episode"].update(provenance=[{"label": "x"}]))
+    rejects("a non-boolean chapter_links",
+            lambda a: a["episode"].update(chapter_links="yes"))
+
+    with tempfile.TemporaryDirectory(prefix="bob-episode-req-") as root:
+        good = os.path.join(root, "article.json")
+        with open(good, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        bad_payload = copy.deepcopy(payload)
+        bad_payload["episode"]["blocks"] = "notes"
+        bad = os.path.join(root, "bad.json")
+        with open(bad, "w", encoding="utf-8") as handle:
+            json.dump(bad_payload, handle)
+        broken = os.path.join(root, "broken.json")
+        with open(broken, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        base = {"protocol": 1, "op": "render", "workdir": root,
+                "out_pdf": os.path.join(root, "out.pdf")}
+        for label, extra in (
+                ("a relative article_json", {"article_json": "article.json"}),
+                ("a missing article_json",
+                 {"article_json": os.path.join(root, "nope.json")}),
+                ("malformed JSON", {"article_json": broken}),
+                ("a malformed episode payload", {"article_json": bad}),
+                ("a relative out_pdf",
+                 {"article_json": good, "out_pdf": "out.pdf"}),
+                ("a bad tables setting",
+                 {"article_json": good, "tables": {"layout": "wide"}})):
+            try:
+                _render_request(dict(base, **extra))
+                check(f"render request rejects {label}", False)
+            except AdapterFail as exc:
+                check(f"render request rejects {label} as invalid_request",
+                      exc.kind == "invalid_request")
+        try:
+            accepted = _render_request(dict(base, article_json=good))
+            check("render request accepts the fixture payload",
+                  accepted[0] == good and accepted[3] == base["out_pdf"])
+        except AdapterFail as exc:
+            check(f"render request accepts the fixture payload ({exc})",
+                  False)
+        try:
+            render.render(good, os.path.join(root, "out.pdf"), None)
+            check("episode render without a sanitizer fails", False)
+        except render.PayloadError:
+            check("episode render without a sanitizer is not a payload "
+                  "error", False)
+        except render.RenderError:
+            pass
+    check("render op is dispatched", OPS.get("render") is op_render)
+    return failures
+
+
+def _episode_browser_failures(fixtures_dir: str) -> list[str]:
+    """Print the fixture dossier through the real ``render`` op."""
+    import tempfile
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool) -> None:
+        if not condition:
+            failures.append(f"episode render op: {label}")
+
+    with tempfile.TemporaryDirectory(prefix="bob-episode-op-") as root:
+        article_dir = os.path.join(root, "article")
+        workdir = os.path.join(root, "work")
+        os.makedirs(article_dir)
+        article_json = os.path.join(article_dir, "article.json")
+        with open(article_json, "w", encoding="utf-8") as handle:
+            json.dump(_episode_fixture(fixtures_dir), handle)
+        _write_test_cover(os.path.join(article_dir, "assets", "cover.jpg"))
+        out_pdf = os.path.join(root, "episode.pdf")
+        try:
+            response = op_render({
+                "protocol": 1, "op": "render", "article_json": article_json,
+                "workdir": workdir, "out_pdf": out_pdf,
+                "tables": {"layout": "auto", "prose_words": 12}})
+        except AdapterFail as exc:
+            check(f"render succeeds ({exc.kind}: {exc.message})", False)
+            return failures
+        check("ok response", response.get("ok") is True
+              and response.get("op") == "render")
+        check("pdf written with the reported size",
+              os.path.isfile(out_pdf)
+              and os.path.getsize(out_pdf) == response.get("pdf_bytes"))
+        with open(out_pdf, "rb") as handle:
+            pdf = handle.read()
+        check("pdf is a PDF with bookmarks",
+              pdf.startswith(b"%PDF") and b"/Outlines" in pdf)
+        check("cover is the only image",
+              response.get("images") == {"total": 1, "kept": 1,
+                                         "skipped_small": 0, "failed": 0})
+        source_html = response.get("source_html") or ""
+        check("render dir goes under workdir",
+              source_html.startswith(workdir + os.sep)
+              and os.path.isfile(response.get("code_anchors") or ""))
+        try:
+            with open(source_html, encoding="utf-8") as handle:
+                source = handle.read()
+        except OSError:
+            source = ""
+        check("source view written",
+              "<h2>Sponsors</h2>" in source and "<li>0:00 Intro</li>" in source)
+        check("table report present",
+              (response.get("tables") or {}).get("version") == 1)
+        check("no warnings", response.get("warnings") == [])
     return failures
 
 
@@ -3722,6 +4146,10 @@ def self_test() -> int:
           and any("dropped image" in warning for warning in private_warnings)
           and os.listdir(private_dir) == [])
 
+    # -- Podcast episode dossier: payload, assembly, and source view ---------
+    for failure in _episode_render_failures(fixtures_dir):
+        check(failure, False)
+
     # -- Redirect/websocket guards and positional img parsing ---------------
     _set_resolve_override({"public.example": ["8.8.8.8"],
                            "private.example": ["10.0.0.5"]})
@@ -4150,6 +4578,8 @@ def self_test() -> int:
 
         for diagram_failure in _diagram_browser_test_failures(browser):
             check(diagram_failure, False)
+        for episode_failure in _episode_browser_failures(fixtures_dir):
+            check(episode_failure, False)
 
         hook = _fixture_hook_factory(fixtures_dir)
 
