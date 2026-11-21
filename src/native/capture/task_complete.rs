@@ -1582,6 +1582,7 @@ pub(super) fn apply_successor_net_post_pass(
             record.offers.retain(|offer| surviving.contains(&offer.key));
         }
     }
+    settle_idless_offer_ordinals(items, planner, bob_dir, &tasks_settings);
     // A group with no surviving selectable row is silent, folds included.
     super::keep_moving_net::prune_empty_folds(items);
     // Relation groups with no surviving row are silent too; the
@@ -2007,30 +2008,49 @@ fn successor_task_lookup(
 /// Resolve a successor row in final staged text. Unlike the status lookup,
 /// this always uses cleaned-description identity for ID-less rows because
 /// pre-write line numbers may have shifted by the time a jump lands.
+/// A duplicated `^id` is missing, never the first copy.
 pub(super) fn successor_task_line_after_write(
     row: &TaskCompleteUnblockedJson,
     text: &str,
     bob_dir: &Path,
 ) -> Option<usize> {
+    let settings = note_tasks::read_settings(bob_dir);
+    if !row.block_id.is_empty() {
+        return line_for_block_id(text, Some(row.block_id.as_str()), &settings);
+    }
     let tasks_settings =
         crate::native::task_status_hooks::read_tasks_settings(bob_dir);
     let tasks =
         crate::native::task_status_hooks::parse_tasks(text, &tasks_settings);
-    if !row.block_id.is_empty() {
-        return tasks
-            .iter()
-            .find(|task| {
-                task.block_id.as_deref() == Some(row.block_id.as_str())
-            })
-            .map(|task| task.line_index + 1);
-    }
     successor_idless_task_lookup(row, &tasks, bob_dir)
         .map(|task| task.line_index + 1)
 }
 
+/// 1-based ordinal of the ID-less task at `line` among ID-less tasks with
+/// the same cleaned description. None when that line is not such a task.
+pub(super) fn idless_same_description_ordinal(
+    tasks: &[crate::native::task_status_hooks::TaskLine],
+    line: usize,
+    expected: &str,
+    global_filter: &str,
+) -> Option<usize> {
+    let same = |task: &crate::native::task_status_hooks::TaskLine| {
+        task.block_id.is_none()
+            && note_tasks::clean_description(
+                &task.description,
+                global_filter,
+                None,
+            ) == expected
+    };
+    let target = tasks.iter().position(|task| task.line_index + 1 == line)?;
+    same(&tasks[target])
+        .then(|| 1 + tasks[..target].iter().filter(|task| same(task)).count())
+}
+
 /// Resolve an ID-less offer by cleaned description and its settled ordinal
 /// among ID-less duplicates. Both status checks and post-write jump landing
-/// use this identity rule.
+/// use this identity rule. The key ordinal is never a fallback: it counts
+/// only offered rows before picks mint IDs.
 fn successor_idless_task_lookup(
     row: &TaskCompleteUnblockedJson,
     tasks: &[crate::native::task_status_hooks::TaskLine],
@@ -2042,12 +2062,15 @@ fn successor_idless_task_lookup(
     let ordinal = row
         .offer
         .as_ref()
-        .map(|offer| {
-            offer
-                .settled_ordinal
-                .unwrap_or_else(|| offer_key_duplicate_ordinal(&offer.key))
-        })
-        .unwrap_or(1);
+        .and_then(|offer| offer.settled_ordinal)
+        .or_else(|| {
+            idless_same_description_ordinal(
+                tasks,
+                row.line,
+                &expected,
+                &settings.global_filter,
+            )
+        })?;
     tasks
         .iter()
         .filter(|task| {
@@ -2058,17 +2081,51 @@ fn successor_idless_task_lookup(
                     None,
                 ) == expected
         })
-        .nth(ordinal.saturating_sub(1))
+        .nth(ordinal.checked_sub(1)?)
         .cloned()
 }
 
-fn offer_key_duplicate_ordinal(key: &str) -> usize {
-    key.rsplit('~')
-        .next()
-        .and_then(|suffix| suffix.parse::<usize>().ok())
-        .filter(|_| key.contains('~'))
-        .unwrap_or(1)
-        .max(1)
+/// Count each surviving ID-less offer among equal-description ID-less
+/// tasks in the final staged note. Picks that minted an ID have left
+/// that set; unrelated twins that were never offers still count.
+fn settle_idless_offer_ordinals(
+    items: &mut [PlannedCaptureItem],
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) {
+    let settings = note_tasks::read_settings(bob_dir);
+    for item in items {
+        super::output::for_each_offer_row_mut(&mut item.result, |row| {
+            let Some(offer) = row.offer.as_mut() else {
+                return;
+            };
+            if offer.selected || !row.block_id.is_empty() {
+                return;
+            }
+            let absolute = bob_dir.join(&row.note_path);
+            let Ok(Some(contents)) = planner.current_contents(&absolute) else {
+                return;
+            };
+            let tasks = crate::native::task_status_hooks::parse_tasks(
+                &contents,
+                tasks_settings,
+            );
+            let expected = note_tasks::clean_description(
+                &row.text,
+                &settings.global_filter,
+                None,
+            );
+            if let Some(ordinal) = idless_same_description_ordinal(
+                &tasks,
+                row.line,
+                &expected,
+                &settings.global_filter,
+            ) {
+                offer.settled_ordinal = Some(ordinal);
+            }
+        });
+    }
 }
 
 fn project_has_open_work(

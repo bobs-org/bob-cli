@@ -119,3 +119,109 @@ fn staged_text(
         .map(|file| file.updated_target.clone())
         .or_else(|| std::fs::read_to_string(target).ok())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn row(
+        line: usize,
+        text: &str,
+        block_id: &str,
+        settled_ordinal: Option<usize>,
+        key: &str,
+    ) -> TaskCompleteUnblockedJson {
+        TaskCompleteUnblockedJson {
+            note_path: "deps.md".to_string(),
+            block_id: block_id.to_string(),
+            line,
+            text: text.to_string(),
+            previous_status_symbol: '?',
+            previous_status_name: "Blocked".to_string(),
+            status_symbol: ' ',
+            status_name: "Ready".to_string(),
+            inbox: false,
+            unblocked_by: Vec::new(),
+            link: None,
+            not_linked: Some("not_selected".to_string()),
+            trigger: "recovery",
+            hide_removed: false,
+            offer: Some(TaskCompleteOfferJson {
+                key: key.to_string(),
+                n: 1,
+                group: "hand_off",
+                selected: false,
+                verdict: None,
+                verdict_message: None,
+                verdict_ticklers: Vec::new(),
+                block_id_needed: false,
+                project: None,
+                destination: TaskCompleteOfferDestinationJson {
+                    day_file: "today.md".to_string(),
+                    entry_name: "work".to_string(),
+                    entry_role: "slot",
+                    fallback: false,
+                },
+                after: None,
+                moved_from: None,
+                merged_from: None,
+                note: None,
+                close: None,
+                order_key: (0, (0, 0), 0, PathBuf::from("deps.md"), 0),
+                settled_ordinal,
+            }),
+            relation: None,
+        }
+    }
+
+    fn line_after(
+        row: &TaskCompleteUnblockedJson,
+        text: &str,
+    ) -> Option<usize> {
+        let vault = tempfile::tempdir().expect("vault");
+        successor_task_line_after_write(row, text, vault.path())
+    }
+
+    #[test]
+    fn idless_twin_above_does_not_steal_the_landing() {
+        let text = concat!(
+            "- [ ] #task Beta\n",
+            "- [ ] #task Beta [dependsOn:: bar]\n",
+        );
+        let found = line_after(&row(2, "Beta", "", None, "deps.md@beta"), text);
+        assert_eq!(found, Some(2));
+    }
+
+    #[test]
+    fn settled_ordinal_skips_a_twin_that_minted_an_id() {
+        let text = concat!(
+            "- [ ] #task Beta ^minted\n",
+            "- [ ] #task Beta [dependsOn:: bar]\n",
+            "- [ ] #task Beta [dependsOn:: bar]\n",
+        );
+        let found =
+            line_after(&row(2, "Beta", "", Some(1), "deps.md@beta~2"), text);
+        assert_eq!(found, Some(2));
+    }
+
+    #[test]
+    fn duplicate_block_id_fails_closed() {
+        let text =
+            concat!("- [ ] #task Alpha ^dup\n", "- [ ] #task Beta ^dup\n",);
+        let found =
+            line_after(&row(2, "Beta", "dup", None, "deps.md#^dup"), text);
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn js14_unsettled_identity_fails_closed() {
+        let text = "- [ ] #task Beta [dependsOn:: bar]\n";
+        let out_of_range =
+            line_after(&row(1, "Beta", "", Some(3), "deps.md@beta"), text);
+        assert_eq!(out_of_range, None);
+        let line_mismatch =
+            line_after(&row(9, "Beta", "", None, "deps.md@beta"), text);
+        assert_eq!(line_mismatch, None);
+    }
+}

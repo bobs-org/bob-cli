@@ -319,7 +319,7 @@ fn first_added_child_line(
     Some(block.line + offset)
 }
 
-fn line_for_block_id(
+pub(super) fn line_for_block_id(
     text: &str,
     block_id: Option<&str>,
     settings: &note_tasks::NoteTaskSettings,

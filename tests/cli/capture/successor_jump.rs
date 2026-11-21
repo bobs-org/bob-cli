@@ -1,5 +1,5 @@
 //! Capture-side successor jump selection and final-text landing contract
-//! (`docs/task-dependencies.md` §12.24, JS1–JS10).
+//! (`docs/task-dependencies.md` §12.24, JS1–JS15).
 
 use crate::support::*;
 use std::{fs, path::Path, process::Output};
@@ -148,7 +148,13 @@ fn remove_dry_run(value: &mut serde_json::Value) {
 // returned as the navigation target.
 #[test]
 fn jump_left_lands_on_final_recovery_line() {
-    let (_temp, vault, day) = one_offer_vault("bob-cli-jump-left");
+    let (_temp, vault, day) = vault(
+        "bob-cli-jump-left",
+        concat!(
+            "- [?] #task Alpha [fresh:: 2026-10-01] [dependsOn:: bar] [id:: alpha]\n",
+            "- [?] #task Beta [fresh:: 2026-10-01] [dependsOn:: bar] [id:: beta]\n",
+        ),
+    );
     let human = capture_output(
         &vault,
         &day,
@@ -175,8 +181,13 @@ fn jump_left_lands_on_final_recovery_line() {
     assert_eq!(json["jump"]["label"], "Beta");
     assert_eq!(json["jump"]["landing"]["relative_path"], "deps.md");
     let (_, _, physical) = landing_line(&json, &vault);
+    assert!(physical.starts_with("- [ ]"), "{physical}");
     assert!(physical.contains("Beta"), "{physical}");
     assert!(physical.contains("[id:: beta]"), "{physical}");
+    assert!(
+        physical.contains("[unblocked:: 2026-10-05]"),
+        "recovered landing should carry the unblocked stamp: {physical}"
+    );
     assert_eq!(json["pull_in"]["jump"]["supported"], true);
 }
 
@@ -341,7 +352,7 @@ fn jump_does_not_satisfy_required_pull_in_choice() {
 }
 
 // JS9: an ID-less note-pull row uses cleaned description plus its settled
-// duplicate ordinal after freshness edits move or rewrite the line.
+// duplicate ordinal after freshness edits rewrite the line next to a twin.
 #[test]
 fn jump_idless_note_pull_lands_by_cleaned_description() {
     let (_temp, vault, day) =
@@ -352,6 +363,7 @@ fn jump_idless_note_pull_lands_by_cleaned_description() {
             "---\n",
             "type: [[area]]\n",
             "---\n## Tasks\n",
+            "- [x] #task Write docs [type:: BUILD]\n",
             "- [ ] #task Write docs [type:: BUILD] [fresh:: 2026-10-01]\n",
         ),
     );
@@ -368,7 +380,9 @@ fn jump_idless_note_pull_lands_by_cleaned_description() {
         capture_json(&vault, &day, &["-p", "none", "-j", &key], "@work", false);
     assert_eq!(json["jump"]["key"], key);
     assert_eq!(json["jump"]["outcome"], "left");
-    let (_, _, physical) = landing_line(&json, &vault);
+    let (line, _, physical) = landing_line(&json, &vault);
+    assert_eq!(line, 6, "{json}");
+    assert!(physical.starts_with("- [ ]"), "{physical}");
     assert!(physical.contains("Write docs"), "{physical}");
     assert!(
         physical.contains("[fresh::"),
@@ -382,4 +396,81 @@ fn previews_advertise_jump_capability() {
     let (_temp, vault, day) = one_offer_vault("bob-cli-jump-capability");
     let json = capture_json(&vault, &day, &[], "!sase:bar", true);
     assert_eq!(json["pull_in"]["jump"]["supported"], true);
+}
+
+// JS11: an unrelated ID-less twin above the offered dependent must not
+// steal the landing.
+#[test]
+fn jump_idless_unrelated_twin_above_lands_on_dependent() {
+    let (_temp, vault, day) = vault(
+        "bob-cli-jump-idless-twin",
+        concat!("- [ ] #task Beta\n", "- [?] #task Beta [dependsOn:: bar]\n",),
+    );
+    let json = capture_json(
+        &vault,
+        &day,
+        &["-p", "none", "-j", "1"],
+        "!sase:bar",
+        false,
+    );
+    assert_eq!(json["jump"]["outcome"], "left");
+    let (line, _, physical) = landing_line(&json, &vault);
+    assert_eq!(line, 2, "{json}");
+    assert!(physical.contains("[dependsOn:: bar]"), "{physical}");
+}
+
+// JS12: three ID-less same-description dependents; picking the first
+// mints an ID, and jumping to the second lands on that remaining row.
+#[test]
+fn jump_three_idless_dependents_lands_on_second() {
+    let (_temp, vault, day) = vault(
+        "bob-cli-jump-three-idless",
+        concat!(
+            "- [?] #task Beta [dependsOn:: bar]\n",
+            "- [?] #task Beta [dependsOn:: bar]\n",
+            "- [?] #task Beta [dependsOn:: bar]\n",
+        ),
+    );
+    let json =
+        capture_json(&vault, &day, &["-p", "1", "-j", "2"], "!sase:bar", false);
+    assert_eq!(json["jump"]["outcome"], "left");
+    let (line, _, physical) = landing_line(&json, &vault);
+    assert_eq!(line, 2, "{json}");
+    assert!(physical.contains("Beta"), "{physical}");
+    assert!(
+        !physical.contains('^'),
+        "second dependent should stay ID-less: {physical}"
+    );
+}
+
+// JS13: two ID-less same-description dependents; picking the first and
+// jumping to the second finds the remaining row instead of reporting lost.
+#[test]
+fn jump_two_idless_dependents_finds_the_second() {
+    let (_temp, vault, day) = vault(
+        "bob-cli-jump-two-idless",
+        concat!(
+            "- [?] #task Beta [dependsOn:: bar]\n",
+            "- [?] #task Beta [dependsOn:: bar]\n",
+        ),
+    );
+    let json =
+        capture_json(&vault, &day, &["-p", "1", "-j", "2"], "!sase:bar", false);
+    assert_eq!(json["jump"]["outcome"], "left");
+    let (line, _, physical) = landing_line(&json, &vault);
+    assert_eq!(line, 2, "{json}");
+    assert!(physical.contains("Beta"), "{physical}");
+}
+
+// JS15: `-j 9` while offers exist is a write-free stale refusal.
+#[test]
+fn jump_out_of_range_while_offers_exist_refuses_write_free() {
+    let (_temp, vault, day) = one_offer_vault("bob-cli-jump-stale-with-offers");
+    let before = vault_bytes(&vault);
+    let (output, json) =
+        capture_json_error(&vault, &day, &["-j", "9"], "!sase:bar");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(json["code"], "offer_jump_stale");
+    assert_eq!(json["offers"].as_array().expect("offers").len(), 2);
+    assert_eq!(vault_bytes(&vault), before);
 }

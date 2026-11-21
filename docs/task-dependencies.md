@@ -2643,7 +2643,7 @@ Offer verdict flags are additive to `-p`:
 ```text
   -X, --cancel-offer <N|KEY>[=REASON]  Cancel one offer; REASON goes to its Cancel Log.
   -x, --complete-offer <PICKS>         Mark offer(s) Done; PICKS is a comma list.
-  -j, --jump-offer <N|KEY>              Focus this offer after the capture (any verdict); one offer
+  -j, --jump-offer <N|KEY>             Focus this offer after the capture (any verdict); one offer
 ```
 
 All three options accept the numbered offers or stable offer keys. `-x` and
@@ -3805,6 +3805,12 @@ surface that owns them and are marked UI-only in the fixture.
 
 `-j, --jump-offer <N|KEY>` pins one successor offer for navigation after
 the capture. The pin does not change the selected offers or their verdicts.
+Surfaces share these semantics: one pin per card, keyed by offer key, with
+Ctrl+J toggling the highlighted row, moving the pin to another pinnable
+row, or clearing it; only keyed selectable offer rows pin; the pin lives
+as long as the card's marks, drops on a fail-closed refresh that loses
+its key, and never arms the two-step Esc by itself.
+
 On a `]s` landing, a committed pin parks the walk at the closed row's
 neighbour instead of advancing; focusing the pinned task never stamps it.
 It can be combined with `-p`, `-x`, and `-X`; a verdict wins for the
@@ -3812,6 +3818,21 @@ reported outcome (`done` or `cancelled`), otherwise a selected row reports
 `pulled_in`, and an unselected row reports `left`. `-j` alone is not a
 pull-in choice, so `--require-pull-in-choice -j KEY` still refuses with
 `pull_in_choice_required` when offers exist.
+
+A staged pin fires on every commit key:
+
+| Staged | Enter / Return |
+| --- | --- |
+| nothing | pulls in the highlighted row |
+| marks and/or verdicts, no pin | applies them |
+| pin only | commits with no picks or closes, then jumps |
+| pin + marks/verdicts | applies them, then jumps |
+| Mac ⇧↩ | applies verdicts only, keeps the pin, and still jumps |
+| Esc that closes the card | discards everything, including the pin; no navigation |
+
+Exactly one landing per gesture. The pin replaces Mac Capture's open-notes
+landing, parks a `]s` walk, and replaces project promotion's landing on
+the new `^prj` line. Without a pin, today's behavior is unchanged.
 
 Every successful preview and real capture advertises
 `pull_in.jump: {"supported": true}`. When `-j` is supplied, the batch
@@ -3833,12 +3854,16 @@ adds this top-level object:
 
 `landing` is `null` when the committed row cannot be found again. That
 does not fail or replay the capture. Bob resolves the target from final
-staged text in this order: the task's routed move, its block ID (including
-an ID minted by pull-in), then its cleaned description and settled
-ordinal among ID-less tasks. The landing's `line`, `ref`, and `block_id`
-come from that final physical line; pre-write offer line numbers are not
-used. Dry-run and real-run JSON have the same jump object. Human output
-adds `↗ jump  “S”  dev.md:42`, or
+staged text in this order: the task's routed move, its unique block ID
+(including an ID minted by pull-in; a duplicated `^id` is missing), then
+its cleaned description and settled ordinal among ID-less same-description
+tasks (unrelated twins count; earlier twins that minted an ID this batch
+do not). The counted ordinal out of range, or the row's own line no
+longer matching that identity, yields `landing: null` rather than another
+task's line. The landing's `line`, `ref`, and `block_id` come from that
+final physical line; pre-write offer line numbers are not used. Dry-run
+and real-run JSON have the same jump object. Human output adds
+`↗ jump  “S”  dev.md:42`, or
 `↗ jump target “S” not found after writes` when `landing` is `null`.
 
 `offer_jump_stale` is a Usage refusal with exit 2. Its message starts
@@ -3847,7 +3872,7 @@ includes top-level `pull_in` and `offers`. It writes no vault files.
 
 | # | Situation | Outcome |
 | --- | --- | --- |
-| JS1 | `-p none -j 2` on a recovering dependent | No pick; `outcome: "left"`; landing follows the final open task line |
+| JS1 | `-p none -j 2` on a recovering dependent | No pick; `outcome: "left"`; landing is the recovered open line (`[ ]`, plus `[unblocked::]` when WRITE applies) |
 | JS2 | `-p 2 -j 2` | `pulled_in`; landing includes the minted block ID |
 | JS3 | `-x 2 -j 2` | `done`; landing is the final `[x]` line |
 | JS4 | `-X 1=why -X 2 -j 2`, with both offers in one note | `cancelled`; landing remains exact after the earlier Cancel Log shifts lines |
@@ -3855,8 +3880,13 @@ includes top-level `pull_in` and `offers`. It writes no vault files.
 | JS6 | `-j 9`, or `-j` with a stale key | `offer_jump_stale`, exit 2, current `offers`, and byte-identical vault |
 | JS7 | JS2 with `--dry-run` | Same `jump` object as the real run |
 | JS8 | `-j 2` without `-p` when a choice is required | `pull_in_choice_required`; jump is not a choice |
-| JS9 | `-j KEY` for an ID-less keep-moving or note-pull row | Landing uses cleaned description and settled ordinal |
+| JS9 | `-j KEY` for an ID-less note-pull or keep-moving row beside a same-description twin | Landing uses cleaned description and settled ordinal among remaining ID-less twins |
 | JS10 | Any preview with offers | `pull_in.jump.supported == true` |
+| JS11 | Unrelated ID-less twin above the offered dependent, `-p none -j 1` | Landing is the dependent's line, not the twin's |
+| JS12 | Three ID-less same-description dependents, `-p 1 -j 2` | Landing is the second dependent's post-write line |
+| JS13 | Two ID-less same-description dependents, `-p 1 -j 2` | Landing found (line 2), not null |
+| JS14 | Target identity cannot be settled | `landing: null`, exit 0, writes kept, lost receipt printed |
+| JS15 | `-j 9` while offers exist | `offer_jump_stale`, exit 2, vault byte-identical |
 
 ## 13. Project dependencies
 

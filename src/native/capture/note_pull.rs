@@ -900,23 +900,6 @@ pub(super) fn plan_note_pull_item(
             .unwrap_or_else(|| source_text.clone());
         let final_tasks =
             task_status_hooks::parse_tasks(&final_source, &tasks_settings);
-        // Map each final ID-less task's line to its ordinal among
-        // equal-description ID-less rows.
-        let mut final_ordinal_by_line: BTreeMap<usize, usize> = BTreeMap::new();
-        let mut seen_final: BTreeMap<String, usize> = BTreeMap::new();
-        for task in &final_tasks {
-            if task.block_id.is_some() {
-                continue;
-            }
-            let cleaned = clean_description(
-                &task.description,
-                &note_settings.global_filter,
-                None,
-            );
-            let count = seen_final.entry(cleaned).or_insert(0);
-            *count += 1;
-            final_ordinal_by_line.insert(task.line_index, *count);
-        }
         for offer in frozen.iter_mut() {
             if offer.block_id.is_some() {
                 offer.settled_ordinal = None;
@@ -931,7 +914,12 @@ pub(super) fn plan_note_pull_item(
             // line (this item edits in place, never inserts). Fall back
             // to the pre-pick ordinal when the line moved.
             if let Some(ordinal) =
-                final_ordinal_by_line.get(&offer.line_index).copied()
+                super::task_complete::idless_same_description_ordinal(
+                    &final_tasks,
+                    offer.line_index + 1,
+                    &offer.text,
+                    &note_settings.global_filter,
+                )
             {
                 offer.settled_ordinal = Some(ordinal);
             } else {
@@ -953,8 +941,8 @@ pub(super) fn plan_note_pull_item(
                     }
                 }
                 if count > 0 {
-                    // Clamp to surviving population; the net pass falls
-                    // back to key ordinal when this still misses.
+                    // Clamp to surviving population; jump landing fails
+                    // closed when this still misses.
                     offer.settled_ordinal = Some(count.min(
                         ordinal_seen.get(&offer.text).copied().unwrap_or(1),
                     ));

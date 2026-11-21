@@ -2975,6 +2975,8 @@ fn digest_ordinal_for(
     }
     let cleaned =
         note_tasks::clean_description(&rows[index].text, global_filter, None);
+    // Same ID-less same-description count as
+    // `idless_same_description_ordinal` on TaskLine snapshots.
     1 + rows[..index]
         .iter()
         .filter(|row| {

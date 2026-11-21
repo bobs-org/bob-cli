@@ -1544,11 +1544,12 @@ pub(super) struct TaskCompleteOfferJson {
     /// Crate-private draft order; never a JSON field.
     #[serde(skip)]
     pub(super) order_key: crate::native::task_complete::OfferOrderKey,
-    /// Crate-private identity of an ID-less project offer: its 1-based
-    /// position among the project's equal-description tasks that are still
-    /// ID-less once this capture's picks have minted their IDs. The public
-    /// `key` ordinal counts the pre-pick render and so cannot address the
-    /// shrunken ID-less population; never a JSON field.
+    /// Crate-private identity of an ID-less offer: its 1-based position
+    /// among the note's equal-description tasks that are still ID-less
+    /// once this capture's picks have minted their IDs. The public `key`
+    /// ordinal counts only offered pre-pick rows and so cannot address
+    /// unrelated twins or the shrunken ID-less population; never a JSON
+    /// field.
     #[serde(skip)]
     pub(super) settled_ordinal: Option<usize>,
 }
