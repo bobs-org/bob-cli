@@ -8217,7 +8217,7 @@ derived `outcome` (`pulled_in`, `done`, `cancelled`, or `left`), and a
 staged text by routed move, block ID, then cleaned description and settled
 ordinal for ID-less tasks. A missing target sets `landing: null` without
 failing the capture. Dry-run and real-run JSON have the same jump object;
-see [task-dependencies.md §12.24](task-dependencies.md#1224-js--jump-successor-contract-and-vectors).
+see [task-dependencies.md §12.24](task-dependencies.md#1224-js-jump-successor-contract-and-vectors).
 The batch-level
 `task_blocks` array gains roles `"completed"` (the root and each closed
 subtask), `"unblocked"` (each recovered or picked dependent), and

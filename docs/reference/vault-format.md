@@ -291,8 +291,7 @@ that live here. Optional scalar `offclock: true` or `offclock: false` sets the
 clock default for tasks whose root walk reaches this note. A nearer area or
 project value wins; `false` ends inheritance and a deeper `true` can turn it
 back on. Blank or absent values inherit. Other values are invalid, resolve
-on-clock, and are reported as `note_offclock_invalid`. On other note kinds the
-key is ignored and reported as `note_offclock_ignored`. An area or project
+on-clock, and are reported as `note_offclock_invalid`. An area or project
 note may instead declare an `offclock_types:` list of effective task types,
 in block-list form:
 
@@ -301,15 +300,13 @@ offclock_types:
   - MEET
 ```
 
-The nearest note on the walk that carries a non-empty `offclock_types:` list
-decides the clock, whatever its `offclock:` says (a dual-key note is reported
-as `note_offclock_shadowed`): the task is off-clock iff its effective type
-key is listed, and any other type — or no type at all — is on-clock. A scalar
+A non-empty list beats the same note's `offclock:` (reported as
+`note_offclock_shadowed`); the precedence rules below decide the clock. A scalar
 `offclock_types: MEET` is a one-item list. Absent, blank, `null`, `~`, `[]`,
 and all-blank lists inherit. Any other shape is invalid, resolves on-clock,
 and is reported as `note_offclock_invalid` naming `offclock_types`. On other
-note kinds the key is ignored and reported as `note_offclock_ignored`. Optional
-`project_name_aliases` lists extra capture/ref names for the stem.
+note kinds both keys are ignored and reported as `note_offclock_ignored`.
+Optional `project_name_aliases` lists extra capture/ref names for the stem.
 
 ### Task clock tags and note defaults
 
@@ -436,12 +433,11 @@ Title is the first H1 before the first bullet or `##` (wikilinks to display
 text, emphasis stripped), otherwise the first `aliases:` entry, otherwise
 the humanized stem. Owner is the nearest area or project on the parent
 chain; root is the owner's Root Parent. Counts are column-zero note bullets;
-`last_note` is the latest `[created::]` date. Areas and projects carry a
-generated `## Notebooks` catalog of the notebooks beneath them, and a
-generated `## Albums` catalog of the albums beneath them. Both catalogs
-use the shared host-catalog engine: bob owns the callout bytes; Bryan owns
-their position. See `docs/notebooks.md` for the notebook contract and
-`docs/records.md` for album catalog rows, sync, and section protection.
+`last_note` is the latest `[created::]` date. Areas and projects carry
+generated `## Notebooks` and `## Albums` catalogs of the notebooks and albums
+beneath them. Both use the shared host-catalog engine: bob owns the callout
+bytes; Bryan owns their position. `docs/records.md` owns album catalog rows,
+sync, and section protection.
 
 Contract: [Notebooks](../notebooks.md).
 
