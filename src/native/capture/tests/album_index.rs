@@ -324,6 +324,53 @@ fn album_replace_failure_rolls_back_the_staged_record() {
 }
 
 #[test]
+fn walk_neighbor_replace_failure_rolls_back_record_and_album() {
+    let (_temp, vault, config) = album_vault();
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_NOW", Some(OsStr::new("2026-10-07 13:40:00"))),
+        ("TZ", Some(OsStr::new("UTC0"))),
+    ]);
+    let request = record_request(
+        &vault,
+        false,
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+    );
+    let mut batch =
+        plan_capture_batch_with_config_path(&request, None, Some(&config))
+            .expect("album capture plans");
+    let neighbor = vault.join("eat/ninja_sushi.md");
+    assert!(
+        batch.text_files.iter().any(|file| file.target == neighbor),
+        "create stages the neighbour walk line"
+    );
+    let neighbor_before = std::fs::read_to_string(&neighbor).expect("neighbor");
+    let album_before =
+        std::fs::read_to_string(vault.join("eat.md")).expect("album");
+    RENAME_FAIL_TARGET
+        .with(|target| *target.borrow_mut() = Some(neighbor.clone()));
+    let error = commit_capture_batch(&mut batch, &vault)
+        .expect_err("neighbour replace fails");
+    RENAME_FAIL_TARGET.with(|target| *target.borrow_mut() = None);
+    assert!(error.message.contains("rolled back"), "{error:?}");
+    assert!(
+        !vault.join("eat/ramen_nagi.md").exists(),
+        "staged record is removed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&neighbor).expect("neighbor"),
+        neighbor_before,
+        "neighbour keeps its preimage"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("eat.md")).expect("album"),
+        album_before,
+        "album keeps its preimage"
+    );
+    no_capture_litter(&vault);
+    no_capture_litter(&vault.join("eat"));
+}
+
+#[test]
 fn album_edit_after_planning_refuses_and_writes_nothing() {
     let (_temp, vault, config) = album_vault();
     let _env = crate::native::env::TestEnvGuard::set(&[

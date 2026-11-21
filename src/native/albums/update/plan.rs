@@ -204,6 +204,7 @@ pub(crate) fn plan_update(
         index_by: entry.declaration.index_by.clone(),
         index_facets: entry.declaration.index_facets.clone(),
         walk_by: entry.declaration.walk_by.clone(),
+        walk_by_authored: entry.declaration.walk_by_authored,
     };
     let other_fields =
         registry

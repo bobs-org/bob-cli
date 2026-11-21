@@ -481,6 +481,9 @@ scoped `restore.spans` entries preserve original quoting, comments, or absent
 keys with exact current (`expected`) and prior bytes (or null for an absent
 key) under schema key paths below `record`. Restoration of an absent entry is
 checked against its server-resolved path, indentation, and expected absence.
+Walk-by restorations may also name the original top-level slot with optional
+`after`/`before` neighbor keys (a string or null); omitted locators insert at
+the frontmatter close, matching earlier envelopes.
 The final restored model agrees with the independently validated semantic
 inverse, including meaningful order. Paths resolve on the server; no offsets
 are trusted. Tampered or stale restoration cannot change noun, kind,

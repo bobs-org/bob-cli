@@ -107,6 +107,9 @@ pub(crate) struct IndexRefs {
     pub(crate) index_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
     pub(crate) walk_by: Option<String>,
+    /// Whether a top-level `walk_by` key is present, including invalid
+    /// authored values whose effective selection is `None`.
+    pub(crate) walk_by_authored: bool,
 }
 
 /// Another album's storage shape for cross-album clash checks.
@@ -157,6 +160,9 @@ pub(crate) struct OpOutcome {
     pub(crate) group_after: Option<String>,
     pub(crate) walk_before: Option<String>,
     pub(crate) walk_after: Option<String>,
+    /// Authored presence after the batch, distinct from the effective
+    /// selection so an explicit unset can remove an invalid key.
+    pub(crate) walk_authored_after: bool,
 }
 
 /// Apply ordered ops to the raw mapping, count complete-record impacts,
@@ -176,9 +182,17 @@ pub(crate) fn apply_ops(
     let mut derived_keys: Vec<Option<String>> =
         Vec::with_capacity(envelope_ops.len());
     let mut walk_current = inputs.index_refs.walk_by.clone();
+    let mut walk_authored = inputs.index_refs.walk_by_authored;
 
     for (index, op) in envelope_ops.iter().enumerate() {
-        let result = apply_one(op, index, &mut raw, inputs, &mut walk_current)?;
+        let result = apply_one(
+            op,
+            index,
+            &mut raw,
+            inputs,
+            &mut walk_current,
+            &mut walk_authored,
+        )?;
         derived_keys.push(result.derived_key.clone());
         per_op.push(result);
     }
@@ -224,6 +238,7 @@ pub(crate) fn apply_ops(
         group_after,
         walk_before,
         walk_after: walk_current,
+        walk_authored_after: walk_authored,
     })
 }
 
@@ -238,14 +253,19 @@ pub(crate) fn apply_one(
     raw: &mut Mapping,
     inputs: &ApplyInputs<'_>,
     walk_current: &mut Option<String>,
+    walk_authored: &mut bool,
 ) -> Result<OpResult, OpError> {
     match op {
         Op::AlbumSet { set, unset } => {
             apply_album_set(set, unset, index, raw, inputs)
         }
-        Op::WalkBySet { field } => {
-            apply_walk_by_set(field.clone(), index, raw, walk_current)
-        }
+        Op::WalkBySet { field } => apply_walk_by_set(
+            field.clone(),
+            index,
+            raw,
+            walk_current,
+            walk_authored,
+        ),
         Op::FieldAdd {
             label,
             kind,
@@ -508,11 +528,13 @@ fn apply_walk_by_set(
     index: usize,
     raw: &Mapping,
     walk_current: &mut Option<String>,
+    walk_authored: &mut bool,
 ) -> Result<OpResult, OpError> {
     match field.as_deref() {
         None => {
             let prior = walk_current.clone();
             *walk_current = None;
+            *walk_authored = false;
             let summary = match prior.as_deref() {
                 Some(previous) => format!("unset walk_by (was {previous:?})"),
                 None => "unset walk_by (already unset)".to_owned(),
@@ -540,6 +562,7 @@ fn apply_walk_by_set(
             validate_walk_selection(raw, candidate, index)?;
             let prior = walk_current.clone();
             *walk_current = Some(candidate.to_owned());
+            *walk_authored = true;
             let summary = format!("set walk_by to {candidate:?}");
             let inverse = vec![Op::WalkBySet { field: prior }];
             Ok(OpResult {
@@ -2778,6 +2801,7 @@ fields:
         index_by: None,
         index_facets: Vec::new(),
         walk_by: None,
+        walk_by_authored: false,
     };
 
     fn empty_folder() -> (TempVault, RecordCatalog) {
@@ -3232,6 +3256,7 @@ fields:
             index_by: Some("status".to_owned()),
             index_facets: vec!["location".to_owned()],
             walk_by: None,
+            walk_by_authored: false,
         };
         let inputs = ApplyInputs {
             before_raw: &raw,
@@ -3285,6 +3310,7 @@ fields:
             index_by: Some("extra".to_owned()),
             index_facets: Vec::new(),
             walk_by: None,
+            walk_by_authored: false,
         };
         let unused_inputs = ApplyInputs {
             before_raw: &unused_raw,

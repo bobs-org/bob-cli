@@ -103,6 +103,15 @@ pub(crate) struct RestoreSpan {
     pub(crate) expected: Option<String>,
     /// Exact prior entry bytes, or `None` when the key was absent.
     pub(crate) prior: Option<String>,
+    /// Neighbor above the restored top-level slot. `None` omits the
+    /// locator (legacy insert-at-close). `Some(None)` is JSON `null`
+    /// (start of frontmatter). `Some(Some(key))` names that neighbor.
+    /// Only valid for `walk_by`.
+    pub(crate) after: Option<Option<String>>,
+    /// Neighbor below the restored top-level slot. `None` omits the
+    /// locator. `Some(None)` is JSON `null` (frontmatter close).
+    /// `Some(Some(key))` names that neighbor. Only valid for `walk_by`.
+    pub(crate) before: Option<Option<String>>,
 }
 
 /// The ten v1 operations. Positions are zero-based; `None` means append
@@ -338,7 +347,9 @@ fn parse_restoration(
             )
         })?;
         for key in fields.keys() {
-            if !["key_path", "expected", "prior"].contains(&key.as_str()) {
+            if !["key_path", "expected", "prior", "after", "before"]
+                .contains(&key.as_str())
+            {
                 return Err(ProtocolError::op(
                     "envelope_unknown_key",
                     index,
@@ -381,13 +392,56 @@ fn parse_restoration(
                 "restore spans require expected and prior (use null for an absent key)",
             ));
         }
+        let after = parse_optional_locator(fields, "after", index)?;
+        let before = parse_optional_locator(fields, "before", index)?;
+        if (after.is_some() || before.is_some()) && key_path != "walk_by" {
+            return Err(ProtocolError::op_hint(
+                "envelope_wrong_type",
+                index,
+                "restore locators are only valid for walk_by",
+                "after and before name the original top-level slot of walk_by",
+            ));
+        }
         spans.push(RestoreSpan {
             key_path,
             expected,
             prior,
+            after,
+            before,
         });
     }
     Ok(Some(Restoration { spans }))
+}
+
+fn parse_optional_locator(
+    mapping: &serde_json::Map<String, JsonValue>,
+    key: &str,
+    index: usize,
+) -> Result<Option<Option<String>>, ProtocolError> {
+    match mapping.get(key) {
+        None => Ok(None),
+        Some(JsonValue::Null) => Ok(Some(None)),
+        Some(JsonValue::String(text)) => {
+            if text.is_empty()
+                || text.contains('.')
+                || text.contains([' ', '\t', '\n', '\r'])
+            {
+                return Err(ProtocolError::op(
+                    "envelope_wrong_type",
+                    index,
+                    format!(
+                        "restore span {key} must be a top-level key or null"
+                    ),
+                ));
+            }
+            Ok(Some(Some(text.clone())))
+        }
+        Some(_) => Err(ProtocolError::op(
+            "envelope_wrong_type",
+            index,
+            format!("restore span {key} must be a string or null"),
+        )),
+    }
 }
 
 fn parse_optional_raw_span(
@@ -1217,6 +1271,31 @@ mod tests {
         let span = &envelope.restorations[0].as_ref().unwrap().spans[0];
         assert_eq!(span.key_path, "record.fields.status.label");
         assert_eq!(span.expected.as_deref(), Some("      label: State\n"));
+        assert_eq!(span.after, None);
+        assert_eq!(span.before, None);
+
+        let walk_locator = parse_envelope(
+            r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"walk_by.set","field":null,"restore":{"spans":[{"key_path":"walk_by","expected":null,"prior":"walk_by: status\n","after":"summary","before":"record"}]}}]}"#,
+        )
+        .expect("walk_by locators parse");
+        let located = &walk_locator.restorations[0].as_ref().unwrap().spans[0];
+        assert_eq!(located.after, Some(Some("summary".to_owned())));
+        assert_eq!(located.before, Some(Some("record".to_owned())));
+
+        let start_slot = parse_envelope(
+            r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"walk_by.set","field":null,"restore":{"spans":[{"key_path":"walk_by","expected":null,"prior":"walk_by: status\n","after":null,"before":"type"}]}}]}"#,
+        )
+        .expect("null after locator parses");
+        assert_eq!(
+            start_slot.restorations[0].as_ref().unwrap().spans[0].after,
+            Some(None)
+        );
+
+        let nested_locator = parse_envelope(
+            r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"field.set","field":"status","set":{"label":"State"},"restore":{"spans":[{"key_path":"record.fields.status.label","expected":null,"prior":"x","after":"summary"}]}}]}"#,
+        )
+        .expect_err("locators on nested paths refuse");
+        assert_eq!(nested_locator.code, "envelope_wrong_type");
 
         let forged = parse_envelope(
             r#"{"schema_version":1,"expect":"sha256:x","ops":[{"op":"field.set","field":"status","set":{"label":"State"},"restore":{"spans":[{"key_path":"../summary","expected":null,"prior":"x"}]}}]}"#,

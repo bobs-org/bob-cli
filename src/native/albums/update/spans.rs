@@ -120,9 +120,13 @@ pub(crate) fn apply_schema_ops(
     // stays distinct because presence is part of the ordered mapping.
     // Plural lives inside the record mapping when authored; derived
     // display plurals do not affect byte identity. The top-level walk
-    // selection is part of semantic identity too.
+    // selection and authored presence are part of semantic identity too.
+    // Restorations still run their stale/whitelist checks, so a semantic
+    // no-op with restore metadata falls through rather than skipping.
     if mappings_equal_ordered(&initial_raw, &outcome.after_raw)
         && inputs.index_refs.walk_by == outcome.walk_after
+        && inputs.index_refs.walk_by_authored == outcome.walk_authored_after
+        && restorations.iter().all(Option::is_none)
     {
         return Ok(SchemaSpanEdit {
             contents: markdown.to_owned(),
@@ -134,14 +138,21 @@ pub(crate) fn apply_schema_ops(
     let mut current_text = markdown.to_owned();
     let mut current_raw = initial_raw;
     let mut walk_current = inputs.index_refs.walk_by.clone();
+    let mut walk_authored = inputs.index_refs.walk_by_authored;
     let mut steps = Vec::with_capacity(ops_to_apply.len());
     for (index, op) in ops_to_apply.iter().enumerate() {
         let before_text = current_text.clone();
         let mut next_raw = current_raw.clone();
         let mut next_walk = walk_current.clone();
-        let result =
-            ops::apply_one(op, index, &mut next_raw, inputs, &mut next_walk)
-                .map_err(op_error)?;
+        let result = ops::apply_one(
+            op,
+            index,
+            &mut next_raw,
+            inputs,
+            &mut next_walk,
+            &mut walk_authored,
+        )
+        .map_err(op_error)?;
         if matches!(op, Op::WalkBySet { .. }) {
             current_text = patch_walk_by(
                 &current_text,
@@ -149,6 +160,15 @@ pub(crate) fn apply_schema_ops(
                 op,
                 restorations[index].as_ref(),
             )?;
+            let emitted = emitted_walk_selection(&current_text, inputs.stem)?;
+            if emitted != next_walk {
+                return Err(error(
+                    "span_semantic_mismatch",
+                    "restored walk_by does not match the validated selection",
+                    None,
+                    Some("walk_by".to_owned()),
+                ));
+            }
         } else {
             current_text = patch_record_mapping(
                 &current_text,
@@ -197,6 +217,15 @@ pub(crate) fn apply_schema_ops(
             ),
             None,
             Some("record".to_owned()),
+        ));
+    }
+    let parsed_walk = emitted_walk_selection(&current_text, inputs.stem)?;
+    if parsed_walk != outcome.walk_after {
+        return Err(error(
+            "span_semantic_mismatch",
+            "edited YAML does not preserve the validated walk_by selection",
+            None,
+            Some("walk_by".to_owned()),
         ));
     }
 
@@ -509,8 +538,9 @@ fn validate_flow_map_keys(
 
 /// Patch only the top-level `walk_by` key, never the nested
 /// `record.walk_by`. Existing entry bytes move as their original slice;
-/// only the scalar value is replaced, and absent keys are inserted at the
-/// end of the frontmatter. Restoration may only name `walk_by`.
+/// only the scalar value is replaced. Absent keys insert at the original
+/// slot when restore locators are present, otherwise at the frontmatter
+/// close. Restoration may only name `walk_by`.
 fn patch_walk_by(
     markdown: &str,
     desired: Option<&str>,
@@ -521,6 +551,16 @@ fn patch_walk_by(
     if let Some(restoration) = restoration {
         validate_restoration_for_op(op, restoration)?;
         for span in &restoration.spans {
+            if (span.after.is_some() || span.before.is_some())
+                && span.key_path != "walk_by"
+            {
+                return Err(error(
+                    "schema_restore_invalid",
+                    "restore locators are only valid for walk_by",
+                    None,
+                    Some(span.key_path.clone()),
+                ));
+            }
             let actual = exact_span(markdown, &span.key_path)?;
             if actual != span.expected {
                 return Err(error(
@@ -546,8 +586,13 @@ fn patch_walk_by(
             }
         }
     }
-    if let Some(prior) = overrides.get("walk_by") {
-        return apply_walk_by_prior(markdown, prior);
+    if let Some(span) = restoration.and_then(|restoration| {
+        restoration
+            .spans
+            .iter()
+            .find(|span| span.key_path == "walk_by" && span.prior.is_some())
+    }) {
+        return apply_walk_by_prior(markdown, span);
     }
     // When the restoration explicitly expects absence (`expected: null`)
     // with no prior, the caller already validated the current span is
@@ -633,8 +678,16 @@ fn parse_top_level_scalar(lines: &[Line], entry: &Entry) -> Option<String> {
 
 fn apply_walk_by_prior(
     markdown: &str,
-    prior: &str,
+    span: &RestoreSpan,
 ) -> Result<String, SpanError> {
+    let prior = span.prior.as_deref().ok_or_else(|| {
+        error(
+            "schema_restore_invalid",
+            "restore entry is empty",
+            None,
+            Some("walk_by".to_owned()),
+        )
+    })?;
     if prior.trim().is_empty() {
         return Err(error(
             "schema_restore_invalid",
@@ -705,12 +758,100 @@ fn apply_walk_by_prior(
             let rendered =
                 validate_absent_restore(prior, "walk_by", 0, "walk_by")?;
             let mut lines = doc.lines.clone();
-            // Insert restored entry at the end of the frontmatter, matching
-            // the forward-insertion position.
-            let close = doc.close;
-            lines.splice(close..close, rendered);
+            let insert_at = insertion_index(&entries, doc.close, span)?;
+            lines.splice(insert_at..insert_at, rendered);
             Ok(join_lines(&lines))
         }
+    }
+}
+
+/// Independent parse of the emitted album's effective `walk_by` selection.
+/// BOM is stripped at this layer so discovery's exact-`---` rule stays
+/// unchanged while span edits of BOM documents still bind to the
+/// validated post-state.
+fn emitted_walk_selection(
+    markdown: &str,
+    stem: &str,
+) -> Result<Option<String>, SpanError> {
+    let stripped = markdown.trim_start_matches('\u{feff}');
+    let relative = format!("{stem}.md");
+    Ok(crate::native::albums::parse_album_declaration(
+        Path::new(&relative),
+        stripped,
+    )
+    .and_then(|declaration| declaration.walk_by))
+}
+
+/// Line index at which to insert a restored absent `walk_by` entry.
+/// Omitted locators keep the legacy insert-at-close behavior.
+fn insertion_index(
+    entries: &[Entry],
+    close: usize,
+    span: &RestoreSpan,
+) -> Result<usize, SpanError> {
+    if span.after.is_none() && span.before.is_none() {
+        return Ok(close);
+    }
+    let after_idx: Option<isize> = match &span.after {
+        None => None,
+        Some(None) => Some(-1),
+        Some(Some(key)) => Some(
+            entries
+                .iter()
+                .position(|entry| &entry.key == key)
+                .ok_or_else(|| {
+                    error(
+                        "schema_restore_stale",
+                        format!(
+                            "restore after neighbor {key:?} is not a current top-level key"
+                        ),
+                        None,
+                        Some("walk_by".to_owned()),
+                    )
+                })? as isize,
+        ),
+    };
+    let before_idx: Option<isize> = match &span.before {
+        None => None,
+        Some(None) => Some(entries.len() as isize),
+        Some(Some(key)) => Some(
+            entries
+                .iter()
+                .position(|entry| &entry.key == key)
+                .ok_or_else(|| {
+                    error(
+                        "schema_restore_stale",
+                        format!(
+                            "restore before neighbor {key:?} is not a current top-level key"
+                        ),
+                        None,
+                        Some("walk_by".to_owned()),
+                    )
+                })? as isize,
+        ),
+    };
+    let slot = match (after_idx, before_idx) {
+        (Some(after), Some(before)) => {
+            if after + 1 != before {
+                return Err(error(
+                    "schema_restore_stale",
+                    "restore locators are not adjacent top-level neighbors",
+                    None,
+                    Some("walk_by".to_owned()),
+                ));
+            }
+            after + 1
+        }
+        (Some(after), None) => after + 1,
+        (None, Some(before)) => before,
+        (None, None) => return Ok(close),
+    };
+    if slot <= 0 {
+        Ok(1)
+    } else if slot as usize >= entries.len() {
+        Ok(close)
+    } else {
+        Ok(entries[slot as usize].start)
     }
 }
 
@@ -1370,10 +1511,22 @@ fn build_inverse_ops(steps: &[Step]) -> Vec<RestoredOp> {
                         exact_span(&step.after_text, &key_path).ok().flatten();
                     let prior =
                         exact_span(&step.before_text, &key_path).ok().flatten();
-                    (expected != prior).then_some(RestoreSpan {
-                        key_path,
-                        expected,
-                        prior,
+                    (expected != prior).then_some({
+                        let (after, before) = if key_path == "walk_by"
+                            && prior.is_some()
+                            && expected.is_none()
+                        {
+                            walk_by_neighbors(&step.before_text)
+                        } else {
+                            (None, None)
+                        };
+                        RestoreSpan {
+                            key_path,
+                            expected,
+                            prior,
+                            after,
+                            before,
+                        }
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1384,6 +1537,32 @@ fn build_inverse_ops(steps: &[Step]) -> Vec<RestoredOp> {
         }
     }
     result
+}
+
+fn walk_by_neighbors(
+    markdown: &str,
+) -> (Option<Option<String>>, Option<Option<String>>) {
+    let Ok(doc) = document(markdown) else {
+        return (None, None);
+    };
+    let Ok(entries) = block_entries(&doc.lines, 1, doc.close, 0) else {
+        return (None, None);
+    };
+    let Some(index) = entries.iter().position(|entry| entry.key == "walk_by")
+    else {
+        return (None, None);
+    };
+    let after = if index == 0 {
+        Some(None)
+    } else {
+        Some(Some(entries[index - 1].key.clone()))
+    };
+    let before = if index + 1 == entries.len() {
+        Some(None)
+    } else {
+        Some(Some(entries[index + 1].key.clone()))
+    };
+    (after, before)
 }
 
 fn inverse_paths(op: &Op, earlier: &[Op]) -> Vec<String> {
@@ -1455,7 +1634,7 @@ mod tests {
     use crate::native::{
         albums::update::{
             ops::{ApplyInputs, IndexRefs, OtherAlbumField},
-            protocol::Op,
+            protocol::{Op, Restoration, RestoreSpan},
         },
         records::{catalog::RecordCatalog, schema::parse_album_record_schema},
     };
@@ -1484,7 +1663,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("folder root");
         let mut catalog = RecordCatalog::new(temp.path());
         let folder = catalog.folder("eat");
-        let index_refs = IndexRefs::default();
+        let index_refs = refs_from(markdown);
         let other_fields: Vec<OtherAlbumField> = Vec::new();
         let inputs = ApplyInputs {
             before_raw: &raw,
@@ -1540,7 +1719,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut catalog = RecordCatalog::new(temp.path());
         let folder = catalog.folder("eat");
-        let refs = IndexRefs::default();
+        let refs = refs_from(&edit.contents);
         let others: Vec<OtherAlbumField> = Vec::new();
         let inputs = ApplyInputs {
             before_raw: &parsed,
@@ -1577,6 +1756,78 @@ mod tests {
         .record_type
         .unwrap();
         assert_eq!(&restored_type, before_type);
+    }
+
+    fn refs_from(markdown: &str) -> IndexRefs {
+        crate::native::albums::parse_album_declaration(
+            Path::new("eat.md"),
+            markdown.trim_start_matches('\u{feff}'),
+        )
+        .map(|declaration| IndexRefs {
+            index_by: declaration.index_by,
+            index_facets: declaration.index_facets,
+            walk_by: declaration.walk_by,
+            walk_by_authored: declaration.walk_by_authored,
+        })
+        .unwrap_or_default()
+    }
+
+    fn apply_restored(
+        markdown: &str,
+        operations: &[Op],
+        restorations: &[Option<Restoration>],
+    ) -> Result<SchemaSpanEdit, SpanError> {
+        let (_, raw) =
+            parse_record_mapping(markdown).expect("source schema parses");
+        let parsed = parse_album_record_schema(
+            Some(&YamlValue::Mapping(raw.clone())),
+            Path::new("eat.md"),
+            "eat",
+            None,
+            &HashMap::new(),
+            1,
+        );
+        let record_type = parsed.record_type.expect("fixture schema is valid");
+        let temp = tempfile::tempdir().expect("folder root");
+        let mut catalog = RecordCatalog::new(temp.path());
+        let folder = catalog.folder("eat");
+        let index_refs = refs_from(markdown);
+        let other_fields: Vec<OtherAlbumField> = Vec::new();
+        let inputs = ApplyInputs {
+            before_raw: &raw,
+            before_type: &record_type,
+            before_plural: None,
+            stem: "eat",
+            folder,
+            index_refs: &index_refs,
+            other_fields: &other_fields,
+            today: NaiveDate::from_ymd_opt(2026, 11, 12).unwrap(),
+        };
+        let outcome =
+            ops::apply_ops(operations, &inputs).expect("ops validate");
+        apply_schema_ops(markdown, operations, restorations, &outcome, &inputs)
+    }
+
+    fn album_with_walk(walk_line: &str) -> String {
+        format!(
+            concat!(
+                "---\n",
+                "type: [[album]]\n",
+                "parent: \"[[body]]\"\n",
+                "summary: Places.\n",
+                "{walk}",
+                "record:\n",
+                "  noun: restaurant\n",
+                "  label: Restaurant\n",
+                "  fields:\n",
+                "    status:\n",
+                "      values:\n",
+                "        to_try: To try\n",
+                "        liked: Liked\n",
+                "---\n",
+            ),
+            walk = walk_line,
+        )
     }
 
     #[test]
@@ -1842,5 +2093,157 @@ mod tests {
         );
         assert!(tampered_result.is_err(), "tampered restoration must refuse");
         assert_eq!(tampered_result.unwrap_err().code, "schema_restore_invalid");
+    }
+
+    #[test]
+    fn quoted_commented_walk_by_roundtrips_in_place() {
+        let original = album_with_walk("walk_by: \"status\" # authored\n");
+        let (edit, raw, ty) = apply(
+            &original,
+            &[Op::WalkBySet {
+                field: Some("status".to_owned()),
+            }],
+        );
+        assert!(!edit.changed, "quoted equivalent is a semantic no-op");
+        assert_eq!(edit.contents, original);
+        inverse_roundtrip(&original, &edit, &raw, &ty);
+    }
+
+    #[test]
+    fn explicit_unset_removes_an_invalid_authored_key() {
+        let original = album_with_walk("walk_by: missing\n");
+        let (edit, raw, ty) =
+            apply(&original, &[Op::WalkBySet { field: None }]);
+        assert!(edit.changed);
+        assert!(
+            !edit.contents.contains("walk_by"),
+            "invalid authored key is removed: {}",
+            edit.contents
+        );
+        inverse_roundtrip(&original, &edit, &raw, &ty);
+        let locator = edit.inverse_ops[0]
+            .restore
+            .as_ref()
+            .expect("unset inverse restores bytes")
+            .spans[0]
+            .clone();
+        assert_eq!(locator.after, Some(Some("summary".to_owned())));
+        assert_eq!(locator.before, Some(Some("record".to_owned())));
+    }
+
+    #[test]
+    fn unset_inverse_restores_walk_by_between_neighbors() {
+        let original = album_with_walk("walk_by: status\n");
+        let (edit, raw, ty) =
+            apply(&original, &[Op::WalkBySet { field: None }]);
+        assert!(!edit.contents.contains("walk_by"), "{}", edit.contents);
+        inverse_roundtrip(&original, &edit, &raw, &ty);
+        assert!(
+            original.contains("summary: Places.\nwalk_by: status\nrecord:"),
+            "{original}"
+        );
+    }
+
+    #[test]
+    fn walk_by_set_then_unset_is_byte_identical() {
+        let original = album_with_walk("");
+        let (set, raw, ty) = apply(
+            &original,
+            &[Op::WalkBySet {
+                field: Some("status".to_owned()),
+            }],
+        );
+        assert!(set.contents.contains("walk_by: status"));
+        inverse_roundtrip(&original, &set, &raw, &ty);
+        let (unset, _, _) =
+            apply(&set.contents, &[Op::WalkBySet { field: None }]);
+        assert_eq!(unset.contents, original);
+    }
+
+    #[test]
+    fn mismatching_walk_restore_refuses_without_writing() {
+        let original = album_with_walk("");
+        let restorations = vec![Some(Restoration {
+            spans: vec![RestoreSpan {
+                key_path: "walk_by".to_owned(),
+                expected: None,
+                prior: Some("walk_by: bogus\n".to_owned()),
+                after: None,
+                before: None,
+            }],
+        })];
+        let error = apply_restored(
+            &original,
+            &[Op::WalkBySet {
+                field: Some("status".to_owned()),
+            }],
+            &restorations,
+        )
+        .expect_err("malformed restore must refuse");
+        assert_eq!(error.code, "span_semantic_mismatch");
+    }
+
+    #[test]
+    fn stale_walk_restore_on_semantic_noop_still_validates() {
+        let original = album_with_walk("");
+        let restorations = vec![Some(Restoration {
+            spans: vec![RestoreSpan {
+                key_path: "walk_by".to_owned(),
+                expected: Some("walk_by: bogus\n".to_owned()),
+                prior: None,
+                after: None,
+                before: None,
+            }],
+        })];
+        let error = apply_restored(
+            &original,
+            &[Op::WalkBySet { field: None }],
+            &restorations,
+        )
+        .expect_err("stale expected on no-op must refuse");
+        assert_eq!(error.code, "schema_restore_stale");
+    }
+
+    #[test]
+    fn invalid_walk_locator_refuses() {
+        let original = album_with_walk("");
+        let restorations = vec![Some(Restoration {
+            spans: vec![RestoreSpan {
+                key_path: "walk_by".to_owned(),
+                expected: None,
+                prior: Some("walk_by: status\n".to_owned()),
+                after: Some(Some("missing_neighbor".to_owned())),
+                before: Some(Some("record".to_owned())),
+            }],
+        })];
+        let error = apply_restored(
+            &original,
+            &[Op::WalkBySet {
+                field: Some("status".to_owned()),
+            }],
+            &restorations,
+        )
+        .expect_err("unknown locator neighbor must refuse");
+        assert_eq!(error.code, "schema_restore_stale");
+    }
+
+    #[test]
+    fn crlf_commented_walk_by_unset_inverse_is_byte_identical() {
+        let original = concat!(
+            "\u{feff}---\r\n",
+            "type: [[album]]\r\n",
+            "summary: Places.\r\n",
+            "walk_by: \"status\" # authored\r\n",
+            "record:\r\n",
+            "  noun: restaurant\r\n",
+            "  fields:\r\n",
+            "    status:\r\n",
+            "      values:\r\n",
+            "        to_try: To try\r\n",
+            "---\r\n",
+        );
+        let (edit, raw, ty) = apply(original, &[Op::WalkBySet { field: None }]);
+        assert!(!edit.contents.contains("walk_by"), "{}", edit.contents);
+        inverse_roundtrip(original, &edit, &raw, &ty);
     }
 }

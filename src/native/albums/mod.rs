@@ -89,6 +89,9 @@ pub(crate) struct AlbumDeclaration {
     /// Effective walk grouping field: a declared non-list choices key, or
     /// `None` when the key is absent or invalid.
     pub(crate) walk_by: Option<String>,
+    /// Whether a top-level `walk_by` key is present, including invalid
+    /// authored values whose effective selection is `None`.
+    pub(crate) walk_by_authored: bool,
     pub(crate) index_facets: Vec<String>,
     /// Physical 1-based line of the `record:` key, when present.
     pub(crate) record_line: Option<usize>,
@@ -140,7 +143,12 @@ pub(crate) fn parse_album_declaration(
     let emoji = top_level_string(&frontmatter, "emoji");
     let created = top_level_string(&frontmatter, "created");
     let index_by = top_level_string(&frontmatter, "index_by");
-    let walk_by_raw = top_level_string(&frontmatter, "walk_by");
+    let (walk_by_key, walk_by_line) = frontmatter_walk_by(&frontmatter);
+    let walk_by_authored = !matches!(walk_by_key, FrontmatterWalkBy::Absent);
+    let walk_by_raw = match &walk_by_key {
+        FrontmatterWalkBy::Valid(name) => Some(name.clone()),
+        FrontmatterWalkBy::Absent | FrontmatterWalkBy::Invalid => None,
+    };
     let summary = decode_summary(&frontmatter);
     let (title_key, title_line) = frontmatter_title(&frontmatter);
     let title = match &title_key {
@@ -253,14 +261,12 @@ pub(crate) fn parse_album_declaration(
             "index_by must be a non-empty field name".to_owned(),
         ));
     }
-    if frontmatter_top_level_value(&frontmatter, "walk_by").is_some()
-        && walk_by_raw.is_none()
-    {
+    if matches!(walk_by_key, FrontmatterWalkBy::Invalid) {
         findings.push(finding(
             "album_walk_by_invalid",
             AlbumIssueSeverity::Warning,
             &path,
-            line_by_path.get("walk_by").copied(),
+            walk_by_line.or_else(|| line_by_path.get("walk_by").copied()),
             Some("walk_by".to_owned()),
             "walk_by must be a non-empty field name".to_owned(),
         ));
@@ -373,6 +379,7 @@ pub(crate) fn parse_album_declaration(
         created,
         index_by,
         walk_by,
+        walk_by_authored,
         index_facets,
         record_line: record_section_line,
         schema_field_lines,
@@ -460,6 +467,57 @@ fn frontmatter_title(
             }
         }
         _ => FrontmatterTitle::Invalid,
+    };
+    (state, Some(start + 2))
+}
+
+/// The album's frontmatter `walk_by` key, decoded from its own span only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FrontmatterWalkBy {
+    Absent,
+    Valid(String),
+    Invalid,
+}
+
+/// Decode the top-level `walk_by` entry from its own span: the first
+/// column-0 `walk_by:` line plus any indented or blank continuation
+/// lines up to the next column-0 non-blank line, parsed as a one-key
+/// mapping. Quoted, escaped, and commented spellings share one
+/// effective selection. Keep this repair local to `walk_by`.
+fn frontmatter_walk_by(
+    frontmatter: &Frontmatter<'_>,
+) -> (FrontmatterWalkBy, Option<usize>) {
+    let Some(start) = frontmatter.lines.iter().position(|line| {
+        line.strip_prefix("walk_by")
+            .is_some_and(|rest| rest.starts_with(':'))
+    }) else {
+        return (FrontmatterWalkBy::Absent, None);
+    };
+    let mut end = start + 1;
+    while end < frontmatter.lines.len() {
+        let line = frontmatter.lines[end];
+        if !line.starts_with([' ', '\t']) && !line.trim().is_empty() {
+            break;
+        }
+        end += 1;
+    }
+    let yaml = frontmatter.lines[start..end].join("\n");
+    let value = match serde_yaml::from_str::<Value>(&yaml) {
+        Ok(Value::Mapping(mapping)) => {
+            mapping_get(&mapping, "walk_by").cloned()
+        }
+        _ => None,
+    };
+    let state = match value {
+        Some(Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() || trimmed.contains(['\n', '\r']) {
+                FrontmatterWalkBy::Invalid
+            } else {
+                FrontmatterWalkBy::Valid(trimmed.to_owned())
+            }
+        }
+        _ => FrontmatterWalkBy::Invalid,
     };
     (state, Some(start + 2))
 }
@@ -1039,6 +1097,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(valid.walk_by.as_deref(), Some("section"));
+        assert!(valid.walk_by_authored);
         assert_eq!(valid.index_by.as_deref(), Some("status"));
         assert!(valid.findings.is_empty());
 
@@ -1048,6 +1107,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unknown.walk_by, None);
+        assert!(unknown.walk_by_authored);
         let finding = unknown
             .findings
             .iter()
@@ -1098,6 +1158,47 @@ mod tests {
         assert_eq!(finding.severity, AlbumIssueSeverity::Warning);
         assert_eq!(finding.key_path.as_deref(), Some("walk_by"));
         assert_eq!(finding.message, "walk_by must be a non-empty field name");
+        assert!(malformed.walk_by_authored);
+
+        let absent = parse_album_declaration(
+            Path::new("sample.md"),
+            "---\ntype: [[album]]\nrecord: {noun: sample, fields: {status: {values: {open: Open}}}}\n---\n",
+        )
+        .unwrap();
+        assert_eq!(absent.walk_by, None);
+        assert!(!absent.walk_by_authored);
+    }
+
+    #[test]
+    fn walk_by_quoted_commented_and_escaped_share_effective_selection() {
+        let schema = "summary: Sample\nrecord:\n  noun: sample\n  fields:\n    status: {values: {open: Open}}\n    section: {values: {intro: Intro}}\n";
+        for line in [
+            "walk_by: status",
+            "walk_by: \"status\"",
+            "walk_by: 'status'",
+            "walk_by: \"status\" # authored",
+            "walk_by: status # authored",
+        ] {
+            let declaration = parse_album_declaration(
+                Path::new("sample.md"),
+                &format!("---\ntype: [[album]]\n{line}\n{schema}---\n"),
+            )
+            .unwrap();
+            assert_eq!(
+                declaration.walk_by.as_deref(),
+                Some("status"),
+                "line {line:?}"
+            );
+            assert!(declaration.walk_by_authored, "line {line:?}");
+            assert!(
+                !declaration
+                    .findings
+                    .iter()
+                    .any(|finding| finding.code.starts_with("album_walk")),
+                "line {line:?}: {:?}",
+                declaration.findings
+            );
+        }
     }
 
     #[test]

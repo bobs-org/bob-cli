@@ -1904,3 +1904,138 @@ fn walk_by_restore_whitelist_rejects_unrelated_and_stale_spans() {
     );
     assert_eq!(head(&vault), before_head, "stale restore writes nothing");
 }
+
+#[test]
+fn walk_by_quoted_comment_matches_plain_selection_fingerprint() {
+    let temp = TempDir::new("album-update-walk-quoted");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":"status"}"#);
+    let set = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "set.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(set.status.code(), Some(0), "{}", format_output(&set));
+    let after = json(&set)["after_fingerprint"].as_str().unwrap().to_owned();
+    let quoted = fs::read_to_string(vault.join("eat.md"))
+        .unwrap()
+        .replace("walk_by: status", "walk_by: \"status\" # authored");
+    fs::write(vault.join("eat.md"), quoted).unwrap();
+    let listed = run(&vault, &temp, &["list", "-f", "json"]);
+    assert_eq!(listed.status.code(), Some(0), "{}", format_output(&listed));
+    assert_eq!(
+        json(&listed)["albums"][0]["schema_fingerprint"]
+            .as_str()
+            .unwrap(),
+        after,
+        "quoted commented walk_by shares the effective fingerprint"
+    );
+    assert_eq!(
+        json(&listed)["albums"][0]["walk_by"].as_str(),
+        Some("status")
+    );
+}
+
+#[test]
+fn walk_by_explicit_unset_removes_invalid_authored_key() {
+    let temp = TempDir::new("album-update-walk-invalid-unset");
+    let vault = walk_fixture(&temp);
+    let original = fs::read_to_string(vault.join("eat.md")).unwrap();
+    let invalid = original.replace(
+        "summary: Places to eat.\n",
+        "summary: Places to eat.\nwalk_by: missing\n",
+    );
+    fs::write(vault.join("eat.md"), &invalid).unwrap();
+    let expect = fingerprint(&vault, &temp);
+    assert_eq!(expect, fingerprint(&vault, &temp));
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":null}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "unset.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["changed"], true);
+    let after = fs::read_to_string(vault.join("eat.md")).unwrap();
+    assert!(!after.contains("walk_by"), "{after}");
+    let inverse = payload["inverse_ops"].clone();
+    let undo_body = serde_json::json!({
+        "schema_version": 1,
+        "expect": payload["after_fingerprint"],
+        "ops": inverse,
+    })
+    .to_string();
+    let undo = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "undo.json", &undo_body)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(undo.status.code(), Some(0), "{}", format_output(&undo));
+    assert_eq!(
+        fs::read_to_string(vault.join("eat.md")).unwrap(),
+        invalid,
+        "unset inverse restores the original authored slot"
+    );
+}
+
+#[test]
+fn walk_by_mismatching_restore_writes_nothing() {
+    let temp = TempDir::new("album-update-walk-mismatch-restore");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+    let before_head = head(&vault);
+    let malicious = format!(
+        "{{\"schema_version\":1,\"expect\":\"{expect}\",\"ops\":[{{\"op\":\"walk_by.set\",\"field\":\"status\",\"restore\":{{\"spans\":[{{\"key_path\":\"walk_by\",\"expected\":null,\"prior\":\"walk_by: bogus\\n\"}}]}}}}]}}"
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "mismatch.json", &malicious)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        format_output(&output).contains("span_semantic_mismatch")
+            || format_output(&output).contains("walk_by"),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        head(&vault),
+        before_head,
+        "mismatching restore writes nothing"
+    );
+}

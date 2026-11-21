@@ -35,6 +35,9 @@
 //!   "record.fields.status.label","expected":"...","prior":"..."}]}`.
 //!   `expected` and `prior` are exact schema-entry bytes or `null` for an
 //!   absent key; paths are resolved under `record` and no offsets are trusted.
+//!   Walk-by restorations may also name the original top-level slot with
+//!   optional `after`/`before` neighbor keys (string or `null`); omitted
+//!   locators insert at the frontmatter close so earlier envelopes stay valid.
 //!
 //! Interfaces handed to schema-spans:
 //! - `protocol::parse_envelope(&str) -> Result<Envelope, ProtocolError>`
@@ -44,7 +47,7 @@
 //! - `ops::OpOutcome { after_raw, after_type, after_plural, per_op,
 //!   derived_keys, consequence, inverse_ops, group_before/after,
 //!   walk_before/after }`
-//! - `ops::IndexRefs { index_by, index_facets, walk_by }` and
+//! - `ops::IndexRefs { index_by, index_facets, walk_by, walk_by_authored }` and
 //!   `ops::OtherAlbumField { path, key, storage, list }` for the
 //!   planner's registry overlay checks.
 

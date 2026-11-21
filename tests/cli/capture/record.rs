@@ -2402,3 +2402,96 @@ fn capture_update_inserts_notes_above_source() {
         "Notes inserted above Source: {markdown}"
     );
 }
+
+#[test]
+fn mixed_capture_create_then_group_update_uses_final_overlay() {
+    let (_temp, vault, config) = complete_fixture();
+    let album = fs::read_to_string(vault.join("eat.md")).expect("album");
+    write_file(
+        &vault.join("eat.md"),
+        &album.replace(
+            "summary: Places to eat.\n",
+            "summary: Places to eat.\nwalk_by: status\n",
+        ),
+    );
+    write_ninja(&vault);
+    let draft = concat!(
+        "Ramen Nagi @eat/\n- status:: liked\n- category:: Ramen\n- location:: Clark",
+        "\n\n",
+        "Moved into liked @eat/ninja_sushi\n- status:: liked",
+    );
+    let dry = capture(&vault, &config, &["--dry-run", "-f", "json", draft])
+        .output()
+        .expect("mixed dry-run");
+    assert_success(&dry);
+    let dry_json = json_output(&dry);
+    let files = dry_json["note_files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{dry_json}");
+    assert_eq!(files[0]["action"], "create");
+    assert_eq!(files[1]["action"], "update");
+    let created = files[0]["markdown"].as_str().unwrap();
+    assert!(
+        created.contains("[[eat/ninja_sushi|"),
+        "created walk sees the updated neighbour: {created}"
+    );
+    let walk_files = dry_json
+        .get("walk_files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        walk_files
+            .iter()
+            .any(|file| file["path"] == "eat/ninja_sushi.md"),
+        "create stages the pre-existing neighbour: {walk_files:?}"
+    );
+
+    let committed = capture(&vault, &config, &["-f", "json", draft])
+        .output()
+        .expect("mixed commit");
+    assert_success(&committed);
+    let committed_json = json_output(&committed);
+    assert_eq!(
+        committed_json["note_files"][0]["markdown"],
+        dry_json["note_files"][0]["markdown"]
+    );
+    assert_eq!(committed_json["walk_files"], dry_json["walk_files"]);
+    let ramen = fs::read_to_string(vault.join("eat/ramen_nagi.md")).unwrap();
+    assert_eq!(
+        ramen,
+        dry_json["note_files"][0]["markdown"].as_str().unwrap()
+    );
+    let ninja = fs::read_to_string(vault.join("eat/ninja_sushi.md")).unwrap();
+    assert!(ninja.contains("status: liked"), "{ninja}");
+    assert_eq!(
+        ninja,
+        committed_json["note_files"][1]["markdown"]
+            .as_str()
+            .unwrap()
+    );
+
+    let synced = bob_command()
+        .env("BOB_NOW", NOW)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("NO_COLOR", "1")
+        .env("BOB_DIR", &vault)
+        .args(["albums", "sync", "-d", "-f", "json"])
+        .output()
+        .expect("albums sync dry-run");
+    assert_success(&synced);
+    let sync_json = json_output(&synced);
+    assert_eq!(sync_json["ok"], true, "{sync_json}");
+    assert_eq!(
+        sync_json["counts"]["walk_lines"], 0,
+        "walk lines stay current: {sync_json}"
+    );
+    assert_eq!(
+        sync_json["albums"][0]["walk"]["state"], "current",
+        "{sync_json}"
+    );
+    let changed = sync_json["changed"].as_array().unwrap();
+    assert!(
+        changed.iter().all(|path| path.as_str() == Some("body.md")),
+        "record and walk bytes stay put: {sync_json}"
+    );
+}

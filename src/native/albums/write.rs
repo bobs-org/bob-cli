@@ -369,6 +369,100 @@ mod tests {
     }
 
     #[test]
+    fn grouped_walk_install_refuses_on_album_drift_and_rolls_back_neighbors() {
+        let temp = vault();
+        let root = temp.path();
+        let neighbor = concat!(
+            "---\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[restaurant]]\"\n",
+            "title: \"Pho House\"\n",
+            "status: liked\n",
+            "category: Pho\n",
+            "---\n\n",
+            "# Pho House\n",
+        );
+        std::fs::write(root.join("eat/pho_house.md"), neighbor)
+            .expect("neighbor");
+        let album_before = std::fs::read_to_string(root.join("eat.md"))
+            .expect("album")
+            .replace(
+                "summary: Places to eat.\n",
+                "summary: Places to eat.\nwalk_by: status\n",
+            );
+        std::fs::write(root.join("eat.md"), &album_before)
+            .expect("grouped album");
+        let neighbor_before =
+            std::fs::read_to_string(root.join("eat/pho_house.md"))
+                .expect("pho");
+        let record_after = NINJA.replace("status: liked", "status: to_try");
+        let neighbor_after = neighbor_before.replace(
+            "# Pho House\n",
+            "[[eat/ninja_sushi|‹ Ninja Sushi]]\n\n# Pho House\n",
+        );
+        let mut catalog = RecordCatalog::new(root);
+        let folder = catalog.folder("eat");
+        let planned = plan_album_write(
+            &declaration(&album_before),
+            &album_before,
+            folder,
+            &[
+                (relative("eat/ninja_sushi.md"), record_after.clone()),
+                (relative("eat/pho_house.md"), neighbor_after.clone()),
+            ],
+        );
+        let edit = planned.edit.expect("index plans an edit");
+        let staged = vec![
+            StagedTextFile {
+                target: root.join("eat/ninja_sushi.md"),
+                target_existed: true,
+                original_target: NINJA.to_owned(),
+                updated_target: record_after,
+            },
+            StagedTextFile {
+                target: root.join("eat/pho_house.md"),
+                target_existed: true,
+                original_target: neighbor_before.clone(),
+                updated_target: neighbor_after,
+            },
+            StagedTextFile {
+                target: root.join("eat.md"),
+                target_existed: true,
+                original_target: edit.before.clone(),
+                updated_target: edit.after,
+            },
+        ];
+        let mut deps = ReadDependencies::default();
+        deps.insert(relative("eat.md"), Some(album_before.clone()));
+        std::fs::write(
+            root.join("eat.md"),
+            format!("{album_before}<!-- drift -->\n"),
+        )
+        .expect("drift");
+        let error = write_staged_files_guarded(&staged, || deps.validate(root))
+            .expect_err("drift refuses");
+        assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+        assert_eq!(
+            std::fs::read_to_string(root.join("eat/ninja_sushi.md"))
+                .expect("record"),
+            NINJA,
+            "target rolls back"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("eat/pho_house.md"))
+                .expect("neighbor"),
+            neighbor_before,
+            "neighbor rolls back"
+        );
+        assert!(
+            std::fs::read_to_string(root.join("eat.md"))
+                .expect("album")
+                .contains("drift"),
+            "foreign album bytes survive"
+        );
+    }
+
+    #[test]
     fn damaged_folder_and_unreadable_member_are_damaged() {
         let temp = vault();
         let root = temp.path();

@@ -100,10 +100,9 @@ Record items add `record_note` summaries; incomplete drafts include `draft`,
 `walk_files[]` for pre-existing neighbours whose walk line changes; each entry
 contains the original and final Markdown. The created record's `markdown` is the
 exact committed text, including its walk line, while `body` remains authored
-content. Record creates and updates that change the selected `walk_by` value
-report changed pre-existing records in `walk_files[]` (`path`, `before`,
-`after`). Damaged neighbours appear as `record_walk_damaged` warnings and are
-not rewritten. Dry-run and commit share those bytes.
+content. Capture record updates do not add `walk_files[]`. Damaged neighbours
+appear as `record_walk_damaged` warnings and are not rewritten. Dry-run and
+commit share those bytes.
 
 ```bash
 bob capture -f json --dry-run -- "$(printf '%s\n' 'Went back, still great @eat/ninja_sushi' '- status:: liked')"

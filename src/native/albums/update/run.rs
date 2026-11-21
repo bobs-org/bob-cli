@@ -21,7 +21,9 @@ use similar::TextDiff;
 use super::{
     ops::{OpError, OpResult},
     plan::{plan_update, UpdatePlan, UpdatePlanError},
-    protocol::{parse_envelope, Envelope, Op, ProtocolError, Restoration},
+    protocol::{
+        parse_envelope, Envelope, Op, ProtocolError, Restoration, RestoreSpan,
+    },
     spans::RestoredOp,
 };
 use crate::native::{
@@ -950,28 +952,45 @@ fn op_to_json(op: &Op) -> Value {
 fn restored_op_to_json(op: &RestoredOp) -> Value {
     let mut payload = op_to_json(&op.op);
     if let Some(restoration) = &op.restore {
-        payload["restore"] = json!({
-            "spans": restoration.spans.iter().map(|span| {
-                json!({
-                    "key_path": span.key_path,
-                    "expected": span.expected.clone().map(Value::String).unwrap_or(Value::Null),
-                    "prior": span.prior.clone().map(Value::String).unwrap_or(Value::Null),
-                })
-            }).collect::<Vec<_>>(),
-        });
+        payload["restore"] = restoration_to_json(restoration);
     }
     payload
 }
 
+fn restore_span_to_json(span: &RestoreSpan) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert("key_path".to_owned(), Value::String(span.key_path.clone()));
+    object.insert(
+        "expected".to_owned(),
+        span.expected
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    object.insert(
+        "prior".to_owned(),
+        span.prior.clone().map(Value::String).unwrap_or(Value::Null),
+    );
+    if let Some(value) = locator_json(&span.after) {
+        object.insert("after".to_owned(), value);
+    }
+    if let Some(value) = locator_json(&span.before) {
+        object.insert("before".to_owned(), value);
+    }
+    Value::Object(object)
+}
+
+fn locator_json(value: &Option<Option<String>>) -> Option<Value> {
+    match value {
+        None => None,
+        Some(None) => Some(Value::Null),
+        Some(Some(key)) => Some(Value::String(key.clone())),
+    }
+}
+
 fn restoration_to_json(restoration: &Restoration) -> Value {
     json!({
-        "spans": restoration.spans.iter().map(|span| {
-            json!({
-                "key_path": span.key_path,
-                "expected": span.expected.clone().map(Value::String).unwrap_or(Value::Null),
-                "prior": span.prior.clone().map(Value::String).unwrap_or(Value::Null),
-            })
-        }).collect::<Vec<_>>(),
+        "spans": restoration.spans.iter().map(restore_span_to_json).collect::<Vec<_>>(),
     })
 }
 
