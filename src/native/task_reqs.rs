@@ -737,6 +737,16 @@ pub(crate) fn note_req_forest(
     forest_for_note(contents, settings)
 }
 
+/// The hash run drawn in place of a req's checkbox: `⌗⌗` at depth 1, one
+/// more hash per level, capped at four so it fills the four cells of `[ ] `.
+pub(crate) fn req_run(depth: usize) -> &'static str {
+    match depth {
+        0 | 1 => "⌗⌗",
+        2 => "⌗⌗⌗",
+        _ => "⌗⌗⌗⌗",
+    }
+}
+
 /// 1-based sibling-ordinal path (`2.1.3`) for a req node.
 pub(crate) fn req_path(node: &ReqNode) -> String {
     node.path

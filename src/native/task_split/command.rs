@@ -18,6 +18,7 @@ use crate::native::{
     style::Styler,
     task_command_shell::{self, TaskCommandShell},
     task_move::VaultSnapshot,
+    task_reqs,
     task_status_hooks_write::{
         apply_plan, capture_required, planned_write, ApplyOutcome,
         ApplySession, InputKind, InputSnapshot, ReasonCode, WritePlan,
@@ -651,9 +652,29 @@ fn print_report(report: &Report) {
     if !report.candidates.is_empty() {
         println!("{}", styler.bold("Split candidates"));
         for candidate in &report.candidates {
-            let title = match &candidate.drawer {
-                Some(drawer) => format!("{drawer} › {}", candidate.title),
-                None => candidate.title.clone(),
+            let title = match (&candidate.req, &candidate.drawer) {
+                (Some(req), _) => {
+                    let state = if req.carriable {
+                        String::new()
+                    } else {
+                        let label = match (req.state, req.mark) {
+                            ("excluded", _) => "excluded",
+                            (_, "legacy-met") => "checked",
+                            (_, mark) => mark,
+                        };
+                        format!(" {}", styler.dim(&format!("· {label}")))
+                    };
+                    format!(
+                        "{}{} {}{state}",
+                        "  ".repeat(req.depth.saturating_sub(1)),
+                        styler.cyan(task_reqs::req_run(req.depth)),
+                        candidate.title
+                    )
+                }
+                (None, Some(drawer)) => {
+                    format!("{drawer} › {}", candidate.title)
+                }
+                (None, None) => candidate.title.clone(),
             };
             let children = if candidate.child_lines > 0 {
                 format!(" (+{})", candidate.child_lines)

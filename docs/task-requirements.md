@@ -382,16 +382,50 @@ and Mac implement the same described behavior.)
 
 ## 6. Carry: a req becomes its own task
 
-Carry reuses Task Split. Any Pending req at any depth can be carried. The
-new task is `- [ ] #task <text> [created:: today] ^<id>` placed after the
-owner's block; a trailing `^anchor` is reused as the ID. The branch travels
-whole: descendant reqs become the new task's reqs with rebased depth, and
-the req's direct notes become the new task's notes under the NOTES rule. The
-req line becomes the stub `- [>] [[#^id|Alias]]` at the same position, and
-the new task gets a `🪢 LINKED FROM: [[Owner]]` back-link. Nothing is
-inherited and no dependency is added. Selecting an ancestor and one of its
-descendants together is refused (`split_overlap`). (Shipped in the
-`req-split` phase; see [Split bullets out into tasks](task-split.md).)
+Carry reuses [Task Split](task-split.md) (`src/native/task_split/`); the
+requirement side lives in `task_split/carry.rs`.
+
+- **What can be carried.** Any open req at any depth: `[ ]` or a flagged
+  mark, Pending under an open owner. The owner may already be closed (the
+  post-close card carries under a done task, as it drops there).
+- **What is refused.** Dropped, carried, and hand-ticked `[x]` reqs get
+  `split_not_splittable` with copy for that state (`Dropped — restore it
+  first`, `Carried — open the linked task`, `Checked box — split an
+  unchecked note instead`). An Excluded req gets `split_req_excluded`: `Its
+  parent requirement was dropped — restore it first` (or `… was carried
+  into its own task — it goes with it`).
+- **The new task.** It is `- [ ] #task <text> [created:: today] ^<id>`. A
+  trailing `^anchor` is reused as the ID. It goes **after the owner's
+  block**, at the owner's indentation; a daily-note owner uses Task Split's
+  daily-note rules (its `[root::]` note's `## Tasks`, else the inbox).
+- **The branch travels whole.** Descendant reqs become the new task's reqs,
+  and re-indentation rebases their depth. The block is laid out through
+  `task_block_layout`: the back-link in the managed-link zone, and, when
+  the branch brought descendant reqs, the req's direct notes filed into
+  `NOTES` (created only when a note lands in it). A leaf req's notes stay
+  loose notes of the new task.
+- **The stub.** The req line becomes `- [>] [[#^id|Alias]]`, or the
+  cross-note form, at the same position. The alias follows Task Split's
+  rules.
+- **The back-link.** The new task gets
+  `🪢 LINKED FROM: [[Owner]] (💬 mentions)`, naming the real owner.
+- **No inheritance and no dependency.** Nothing is inherited. Carry never
+  adds a dependency to the old owner; `&` / Ctrl+Shift+B says that
+  explicitly when wanted.
+- **Overlaps.** Selecting an ancestor and one of its descendants together
+  is refused (`split_overlap`). Carry the ancestor; the descendant travels
+  with it.
+- **Library entry.** `carry_req(snapshot, owner, row_key | line_digest)`
+  carries one req named by its close-card row key (only the
+  `/req/<path>~<8-hex>` suffix is matched) or by a line and its digest. It
+  returns the created task's path, line, and block ID, the whole split
+  plan, and a **move map** from old descendant lines (the owner's note,
+  before) to new ones (the new task's note, after), which the close card's
+  jump landing uses. A stale key or digest refuses as `split_stale_ref`, a
+  line that is no req as `not_a_req`.
+
+The SP32–SP50 cases in `tests/fixtures/task_split/vectors.json` pin carry
+byte for byte (see [Task Split](task-split.md) §6).
 
 ## 7. The close card
 
@@ -439,6 +473,9 @@ writes. (Shipped in the `drawer-rename`, `task-tidy`, and
 - **RW** (`tests/fixtures/task_reqs/writes.json`): drop, restore, toggle,
   insert, the first-req scoop, the `with_first_note` NOTES birth, CRLF notes,
   and every refusal code (§3.3).
+- **SP32–SP50** (`tests/fixtures/task_split/vectors.json`): carry — `[>]`
+  stubs, whole-branch moves with rebased depth, the NOTES rule on the new
+  task, move maps, daily-note owners, and the carry refusals (§6).
 - **RV** (`tests/fixtures/req_close/vectors.json`): close-card row building,
   verdict bytes, overlaps, staleness, jump landings, and copy strings.
   (Added in `close-engine`.)

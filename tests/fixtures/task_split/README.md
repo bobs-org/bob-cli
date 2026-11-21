@@ -1,13 +1,16 @@
 # Task-split vectors
 
 `vectors.json` is the single source of truth for split-bullet planners in
-bob-cli and bob-plugins (`docs/task-split.md` §6). Its cases are `SP1`–`SP31`,
+bob-cli and bob-plugins (`docs/task-split.md` §6). Its cases are `SP1`–`SP51`,
 covering cursor, count, clamped count, line-range, non-contiguous `nth`, and
 `match` selection; anchor reuse; silent owner mint; alias flattening (`|`,
 `]]`, `#`, links, emphasis); 80-character truncation; ALL-CAPS drawers;
 tab- and space-indented notes; daily-note routing to a root note and to the
 inbox; section bullets routed to `## Tasks` (created when missing); disabled
-mentions; and every refusal code in §5.1.
+mentions; every refusal code in §5.1; and requirement carry
+(`docs/task-requirements.md` §6): `[>]` stubs, whole-branch moves with
+rebased depth, the NOTES rule, move maps, the innermost-candidate rule, and
+the `split_req_excluded` and `split_overlap` refusals.
 
 bob-plugins copies this file byte-for-byte. A behavior change edits
 bob-cli first; never hand-edit the copy.
@@ -30,11 +33,16 @@ collapse whitespace, truncate at 80 characters on a word boundary with `…`).
 | `SP10` | silent owner mint reported as `owner_minted_id` |
 | `SP20`–`SP21`, `SP30` | cross-note placements reported as `root_note`, `inbox`, or `tasks_section` |
 | `SP31` | punctuated `WHAT IS SASE?` drawer entry splits inside its drawer |
+| `SP32`–`SP39`, `SP44`–`SP48`, `SP50` | carried requirements: `[>]` stub bytes, the new block's layout, `req_depth`, and the `moves` map (1-based `from` in the owner's note before, `to` in the task's note after) |
+| `SP40`–`SP43`, `SP49` | requirement refusals `split_not_splittable` (dropped, carried), `split_req_excluded`, and `split_overlap` |
+| `SP51` | a split with children lands directly below the owner's block when more follows |
 
 ## Selection kinds
 
 `cursor {line}`, `count {line, count}`, `lines {from, to}`, `nth {picks}`,
-`match {texts}`, and `section {title}`. `nth` picks are 1-based ordinals
+`match {texts}`, and `section {title}`. Requirement candidates nest, so
+`cursor` and `lines` pick the innermost candidate holding each line, and
+`count` walks siblings under one structural parent. `nth` picks are 1-based ordinals
 among the owner's splittable bullets as listed; the planner always writes
 new tasks in document order. `match` texts are literal substrings; the
 vectors pin the unique-match path, and the CLI owns the ambiguous and

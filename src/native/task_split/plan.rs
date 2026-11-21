@@ -9,7 +9,12 @@ use std::{
 use regex::Regex;
 use serde::Serialize;
 
+use super::carry::{
+    carried_block, overlap_refusal, req_refusal, LineMove, ReqCandidate,
+    SplitCandidateReq,
+};
 use crate::native::{
+    capture::list_item_body,
     capture_block_ids::mint_block_id,
     collect_done::{
         block_ids_in_markdown, repair_links_in_note_with,
@@ -30,7 +35,7 @@ use crate::native::{
         },
         VaultSnapshot,
     },
-    task_relations,
+    task_relations, task_reqs,
     vault_links::NoteIndex,
 };
 
@@ -45,13 +50,25 @@ static BLOCK_ID_BEFORE_INLINE_FIELDS_RE: LazyLock<Regex> =
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum SplitSelection {
-    Cursor { line: usize },
-    Count { line: usize, count: usize },
-    Lines { from: usize, to: usize },
+    Cursor {
+        line: usize,
+    },
+    Count {
+        line: usize,
+        count: usize,
+    },
+    Lines {
+        from: usize,
+        to: usize,
+    },
     Nth(Vec<usize>),
     Match(Vec<String>),
-    Section { title: String },
+    Section {
+        title: String,
+    },
     BulletRef(String),
+    /// A close-card requirement row key (`<owner key>/req/<path>~<8-hex>`).
+    ReqKey(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +104,13 @@ pub(crate) struct SplitTask {
     pub(crate) title: String,
     pub(crate) anchor_reused: bool,
     pub(crate) child_lines: usize,
+    /// The carried requirement's depth under its owner; `None` for a note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) req_depth: Option<usize>,
+    /// For a carried requirement, every moved descendant line: its 1-based
+    /// line in the owner's note before the write, and in `path` after it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) moves: Vec<LineMove>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -126,6 +150,8 @@ pub(crate) struct SplitCandidate {
     pub(crate) title: String,
     pub(crate) drawer: Option<String>,
     pub(crate) child_lines: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) req: Option<SplitCandidateReq>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +175,11 @@ struct Candidate {
     title: String,
     child_lines: Vec<String>,
     drawer_title: Option<String>,
+    /// The structural parent line: the owner task, a drawer title, or the
+    /// parent req. Count mode walks siblings under one parent.
+    parent: Option<usize>,
+    /// Set when the line is a task requirement (any depth).
+    req: Option<ReqCandidate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +284,9 @@ pub(crate) fn plan_task_split(
     }
     let mut generated_blocks = Vec::new();
     let mut planned_tasks = Vec::new();
+    // Per planned task: the carried req's head line and its in-block moves.
+    let mut planned_moves: Vec<Option<(usize, Vec<(usize, usize)>)>> =
+        Vec::new();
     let mut stubs = Vec::new();
     for candidate_index in &selected {
         let candidate = &candidates[*candidate_index];
@@ -281,7 +315,10 @@ pub(crate) fn plan_task_split(
         );
         let original_line = transformed_source[candidate.line].clone();
         let (_, ending) = split_ending(&original_line);
-        let stub = format!("{}- {link}{ending}", candidate.indent);
+        // A carried requirement keeps its place as a `[>]` stub; any other
+        // bullet keeps today's plain stub.
+        let marker = if candidate.req.is_some() { "[>] " } else { "" };
+        let stub = format!("{}- {marker}{link}{ending}", candidate.indent);
         transformed_source[candidate.line] = stub.clone();
         for row in candidate.line + 1..=candidate.end {
             transformed_source[row].clear();
@@ -306,30 +343,49 @@ pub(crate) fn plan_task_split(
             &candidate.indent,
             &base_indent,
         );
-        if settings.linked_from_lines
+        let back_link = (settings.linked_from_lines
             && settings.linked_from_mentions
-            && mention_id.is_some()
-            && owner.kind == OwnerKind::Task
-        {
-            let parent_target = if destination_path == request.owner_path {
-                format!("#^{}", mention_id.unwrap())
-            } else {
-                format!(
-                    "{}#^{}",
-                    note_target(&request.owner_path),
-                    mention_id.unwrap()
-                )
-            };
-            let mention = task_relations::format::format_linked_from_line(
-                &child_indent,
-                &[(
-                    format!("[[{parent_target}]]"),
-                    Some(task_relations::MENTION_LABEL.to_string()),
-                )],
-            );
-            children.push(format!("{mention}\n"));
-        }
+            && owner.kind == OwnerKind::Task)
+            .then_some(mention_id)
+            .flatten()
+            .map(|mention_id| {
+                let parent_target = if destination_path == request.owner_path {
+                    format!("#^{mention_id}")
+                } else {
+                    format!(
+                        "{}#^{mention_id}",
+                        note_target(&request.owner_path)
+                    )
+                };
+                format!("[[{parent_target}]]")
+            });
         let child_count = candidate.child_lines.len();
+        let payload = if candidate.req.is_some() {
+            // The branch becomes a canonical task block: the back-link in
+            // the managed zone and the req's notes filed by the NOTES rule.
+            let unit = nesting_unit(&source_lines, candidate);
+            let block = carried_block(
+                &task_line,
+                &children,
+                back_link.as_deref(),
+                &format!("{base_indent}{unit}"),
+                task_settings,
+            );
+            planned_moves.push(Some((candidate.line, block.moves)));
+            block.lines.concat()
+        } else {
+            if let Some(link) = back_link {
+                let mention = task_relations::format::format_linked_from_line(
+                    &child_indent,
+                    &[(link, Some(task_relations::MENTION_LABEL.to_string()))],
+                );
+                children.push(format!("{mention}\n"));
+            }
+            planned_moves.push(None);
+            let mut payload = task_line;
+            payload.push_str(&children.concat());
+            payload
+        };
         planned_tasks.push(SplitTask {
             path: slash_path(&destination_path),
             line: 0,
@@ -337,9 +393,9 @@ pub(crate) fn plan_task_split(
             title,
             anchor_reused: anchor.is_some(),
             child_lines: child_count,
+            req_depth: candidate.req.as_ref().map(|req| req.depth),
+            moves: Vec::new(),
         });
-        let mut payload = task_line;
-        payload.push_str(&children.concat());
         generated_blocks.push(payload);
     }
 
@@ -446,9 +502,15 @@ pub(crate) fn plan_task_split(
 
     let (postimages, repaired_files, dest_final) = if destination_is_source {
         if owner.kind == OwnerKind::Task {
+            // The moved branches' rows were cleared out of the owner's
+            // block, so its last line moved up by that many rows.
+            let removed: usize = selected
+                .iter()
+                .map(|index| candidates[*index].end - candidates[*index].line)
+                .sum();
             insert_after_block(
                 &mut source_after,
-                owner.end,
+                owner.end.saturating_sub(removed),
                 &repaired_generated,
             );
         } else {
@@ -553,24 +615,23 @@ pub(crate) fn plan_task_split(
         (postimages, repaired_files, dest_final)
     };
 
-    for task in &mut planned_tasks {
+    for (task, moves) in planned_tasks.iter_mut().zip(&planned_moves) {
         task.line = locate_line(&dest_final, &task.block_id).unwrap_or(0) + 1;
+        // Link repair rewrites text inside lines and never adds or removes
+        // one, so block offsets still land on the final bytes.
+        if let Some((head, moves)) = moves {
+            task.moves = moves
+                .iter()
+                .filter(|(old, _)| *old > 0)
+                .map(|(old, new)| LineMove {
+                    from: head + old + 1,
+                    to: task.line + new,
+                })
+                .collect();
+        }
     }
     let first = planned_tasks.first().expect("selected is nonempty");
-    let display_titles = planned_tasks
-        .iter()
-        .map(|task| format!("◯ {}", short_notice_title(&task.title)))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let notice = format!(
-        "✂ Split {} {} into tasks · {display_titles}",
-        planned_tasks.len(),
-        if planned_tasks.len() == 1 {
-            "note"
-        } else {
-            "notes"
-        }
-    );
+    let notice = split_notice(&planned_tasks);
     let cursor_line =
         locate_line(&dest_final, &first.block_id).unwrap_or(0) + 1;
     let clamped = match request.selection {
@@ -627,6 +688,7 @@ pub(crate) fn list_task_split_candidates(
         title: item.title.clone(),
         drawer: item.drawer_title.clone(),
         child_lines: item.child_lines.len(),
+        req: item.req.as_ref().map(SplitCandidateReq::from),
     })
     .collect())
 }
@@ -673,6 +735,12 @@ fn resolve_owner(
             let settings = settings.clone();
             let scan = note_tasks::scan(source, &settings);
             let line = request.owner_line.saturating_sub(1);
+            // A requirement line names its root owner: the real task its
+            // req chain hangs off.
+            let line = task_reqs::note_req_forest(source, &settings)
+                .iter()
+                .find(|node| node.line_index == line)
+                .map_or(line, |node| node.owner_line);
             let Some(task) = scan.task_at(line) else {
                 let text = lines.get(line).map(|raw| raw.trim()).unwrap_or("");
                 if text.starts_with("- [") && text.contains("#task") {
@@ -750,6 +818,16 @@ fn collect_candidates(
         .collect::<Vec<_>>();
     let mut result = Vec::new();
     if kind == OwnerKind::Task {
+        let reqs: Vec<task_reqs::ReqNode> =
+            task_reqs::note_req_forest(source, settings)
+                .into_iter()
+                .filter(|node| {
+                    node.owner_line == owner_line
+                        && node.line_index <= owner_end
+                })
+                .collect();
+        let req_lines: BTreeSet<usize> =
+            reqs.iter().map(|node| node.line_index).collect();
         let owner_indent = indent(content[owner_line]);
         let mut drawer_lines = BTreeSet::new();
         for index in
@@ -789,7 +867,7 @@ fn collect_candidates(
                 continue;
             };
             let i = indent(content[index]);
-            if i.len() <= owner_indent.len() {
+            if i.len() <= owner_indent.len() || req_lines.contains(&index) {
                 continue;
             }
             let direct = parent_list_line(&content, index, owner_line);
@@ -842,8 +920,36 @@ fn collect_candidates(
                 title,
                 child_lines,
                 drawer_title: parent_drawer,
+                parent: direct,
+                req: None,
             });
         }
+        // Requirements at any depth, each with its whole branch.
+        for node in &reqs {
+            let index = node.line_index;
+            let Some(body) = list_item_body(content[index]) else {
+                continue;
+            };
+            let end = list_subtree_end(&content, index, owner_end);
+            let child_lines = if end > index {
+                lines[index + 1..=end.min(lines.len().saturating_sub(1))]
+                    .to_vec()
+            } else {
+                Vec::new()
+            };
+            result.push(Candidate {
+                line: index,
+                end,
+                indent: indent(content[index]).to_string(),
+                raw_body: body.to_string(),
+                title: node.text.clone(),
+                child_lines,
+                drawer_title: None,
+                parent: Some(node.parent.unwrap_or(owner_line)),
+                req: Some(ReqCandidate::from_node(node)),
+            });
+        }
+        result.sort_by_key(|candidate| candidate.line);
     } else {
         for index in
             owner_line + 1..=owner_end.min(content.len().saturating_sub(1))
@@ -871,6 +977,8 @@ fn collect_candidates(
                 title,
                 child_lines,
                 drawer_title: None,
+                parent: Some(owner_line),
+                req: None,
             });
         }
     }
@@ -885,10 +993,17 @@ fn select_candidates(
     owner: &SelectedOwner,
 ) -> Result<Vec<usize>, SplitError> {
     let lines = split_lines(source);
+    // Requirement candidates nest, so a line maps to the innermost
+    // candidate whose branch holds it: the one that starts last.
     let line_to_candidate = |line: usize| {
-        candidates.iter().position(|candidate| {
-            line >= candidate.line && line <= candidate.end
-        })
+        candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| {
+                line >= candidate.line && line <= candidate.end
+            })
+            .max_by_key(|(_, candidate)| candidate.line)
+            .map(|(index, _)| index)
     };
     match selection {
         SplitSelection::Cursor { line } => {
@@ -947,6 +1062,7 @@ fn select_candidates(
                 .filter(|(_, item)| {
                     item.indent == candidate.indent
                         && item.drawer_title == candidate.drawer_title
+                        && item.parent == candidate.parent
                         && item.line >= candidate.line
                 })
                 .map(|(index, _)| index)
@@ -955,15 +1071,13 @@ fn select_candidates(
             validate_candidates(candidates, siblings)
         }
         SplitSelection::Lines { from, to } => {
-            let mut selected = candidates
-                .iter()
-                .enumerate()
-                .filter_map(|(index, candidate)| {
-                    ((candidate.line + 1) <= *to
-                        && (candidate.end + 1) >= *from)
-                        .then_some(index)
-                })
-                .collect::<Vec<_>>();
+            // Every touched line selects its innermost candidate, so a
+            // selection inside a nested req's branch never selects the
+            // ancestor too.
+            let touched: BTreeSet<usize> = (from.saturating_sub(1)..*to)
+                .filter_map(line_to_candidate)
+                .collect();
+            let mut selected = touched.into_iter().collect::<Vec<_>>();
             selected.sort_by_key(|index| candidates[*index].line);
             validate_candidates(candidates, selected)
         }
@@ -1038,6 +1152,19 @@ fn select_candidates(
             };
             validate_candidates(candidates, vec![index])
         }
+        SplitSelection::ReqKey(key) => {
+            let Some(index) = candidates.iter().position(|candidate| {
+                candidate.req.as_ref().is_some_and(|req| {
+                    key.ends_with(&req.row_key_suffix(&candidate.title))
+                })
+            }) else {
+                return Err(error(
+                    "split_stale_ref",
+                    "stale requirement reference; list candidates and try again",
+                ));
+            };
+            validate_candidates(candidates, vec![index])
+        }
     }
 }
 
@@ -1047,6 +1174,21 @@ fn validate_candidates(
 ) -> Result<Vec<usize>, SplitError> {
     for index in &selected {
         let item = &candidates[*index];
+        if let Some(req) = &item.req {
+            if let Some(refused) = req_refusal(req) {
+                return Err(refused);
+            }
+            if item.title.trim().is_empty() {
+                return Err(error(
+                    "split_not_splittable",
+                    "Bullet has no text to split",
+                ));
+            }
+            if is_stub(&item.title) {
+                return Err(error("split_stub", "Stub only links a task — split a note with its own text instead"));
+            }
+            continue;
+        }
         let (title, checked) = parse_bullet(&item.raw_body);
         if item.raw_body.contains("#task") {
             return Err(error("split_already_task", "Already a task — split one of its notes or drawer entries instead"));
@@ -1065,6 +1207,29 @@ fn validate_candidates(
         }
         if is_stub(title) {
             return Err(error("split_stub", "Stub only links a task — split a note with its own text instead"));
+        }
+    }
+    // A req travels with its whole branch: selecting it together with one
+    // of its ancestors is an overlap.
+    for index in &selected {
+        let item = &candidates[*index];
+        let mut parent = item.req.as_ref().and_then(|req| req.parent_req);
+        while let Some(line) = parent {
+            let Some(ancestor) =
+                candidates.iter().position(|other| other.line == line)
+            else {
+                break;
+            };
+            if selected.contains(&ancestor) {
+                return Err(overlap_refusal(
+                    &candidates[ancestor].title,
+                    &item.title,
+                ));
+            }
+            parent = candidates[ancestor]
+                .req
+                .as_ref()
+                .and_then(|req| req.parent_req);
         }
     }
     Ok(selected)
@@ -1223,6 +1388,42 @@ fn rebase_children(
             format!("{dest_indent}{rel}{suffix}")
         })
         .collect()
+}
+
+/// One indentation unit of the source: a carried req's own indent beyond
+/// its structural parent's, else a tab. A new task with no children takes
+/// its back-link at this unit.
+fn nesting_unit(lines: &[String], candidate: &Candidate) -> String {
+    candidate
+        .parent
+        .and_then(|parent| lines.get(parent))
+        .map(|parent| indent(strip_ending(parent)))
+        .and_then(|parent| candidate.indent.strip_prefix(parent))
+        .filter(|unit| !unit.is_empty())
+        .unwrap_or("\t")
+        .to_string()
+}
+
+/// `✂ Split N note(s) into tasks · ◯ A · ◯ B`, naming requirements when
+/// every pick is one and bullets when notes and requirements mix.
+fn split_notice(tasks: &[SplitTask]) -> String {
+    let reqs = tasks.iter().filter(|task| task.req_depth.is_some()).count();
+    let noun = match (reqs, tasks.len()) {
+        (0, 1) => "note",
+        (0, _) => "notes",
+        (1, 1) => "requirement",
+        (reqs, total) if reqs == total => "requirements",
+        _ => "bullets",
+    };
+    let display_titles = tasks
+        .iter()
+        .map(|task| format!("◯ {}", short_notice_title(&task.title)))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!(
+        "✂ Split {} {noun} into tasks · {display_titles}",
+        tasks.len()
+    )
 }
 
 fn parse_bullet(body: &str) -> (&str, bool) {

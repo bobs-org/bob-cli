@@ -68,20 +68,23 @@ fn split_conformance_vectors_match_byte_for_byte() {
                         "{id} file {path}"
                     );
                 }
-                let tasks = plan
-                    .tasks
-                    .iter()
-                    .map(|task| {
-                        json!({
-                            "path": task.path,
-                            "block_id": task.block_id,
-                            "title": task.title,
-                            "anchor_reused": task.anchor_reused,
-                            "child_lines": task.child_lines,
-                        })
-                    })
-                    .collect::<Vec<_>>();
+                let tasks =
+                    plan.tasks.iter().map(vector_task).collect::<Vec<_>>();
                 assert_eq!(json!(tasks), case["expect"]["tasks"], "{id} tasks");
+                if let Some(stubs) = case["expect"].get("stubs") {
+                    let actual = plan
+                        .stubs
+                        .iter()
+                        .map(|stub| {
+                            json!({
+                                "path": stub.path,
+                                "line": stub.line,
+                                "text": stub.text,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(&json!(actual), stubs, "{id} stubs");
+                }
                 assert_eq!(
                     plan.notice,
                     case["expect"]["notice"].as_str().unwrap(),
@@ -142,6 +145,29 @@ fn split_conformance_vectors_match_byte_for_byte() {
             }
         }
     }
+}
+
+/// A planned task as the vectors pin it. Carried requirements add their
+/// depth and move map; plain splits keep the original five fields.
+fn vector_task(task: &super::plan::SplitTask) -> Value {
+    let mut value = json!({
+        "path": task.path,
+        "block_id": task.block_id,
+        "title": task.title,
+        "anchor_reused": task.anchor_reused,
+        "child_lines": task.child_lines,
+    });
+    if let Some(depth) = task.req_depth {
+        value["req_depth"] = json!(depth);
+        value["moves"] = json!(task
+            .moves
+            .iter()
+            .map(
+                |line_move| json!({"from": line_move.from, "to": line_move.to})
+            )
+            .collect::<Vec<_>>());
+    }
+    value
 }
 
 fn settings() -> SplitSettings {
@@ -443,4 +469,186 @@ fn parse_selection(value: &Value) -> SplitSelection {
         },
         other => panic!("unknown vector selection kind: {other}"),
     }
+}
+
+fn carry(
+    contents: &str,
+    target: super::carry::ReqRef<'_>,
+) -> Result<super::carry::CarryOutcome, super::plan::SplitError> {
+    let snapshot = VaultSnapshot::from_notes([(
+        PathBuf::from("db.md"),
+        contents.to_string(),
+    )]);
+    super::carry::carry_req(
+        &snapshot,
+        &PathBuf::from("db.md"),
+        1,
+        target,
+        "2026-11-21",
+        &settings(),
+        &task_settings(),
+    )
+}
+
+const CARRY_OWNER: &str =
+    "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export
+\t- [ ] Handles supported inputs
+\t\t- [ ] Handles Windows files
+\t\t\t- [ ] Preserves CRLF
+\t\t\t- Fixture: windows.csv
+\t\t- [ ] Handles Windows files
+\t- [ ] Benchmarks within 5% of v1
+- [ ] #task Write the parser [created:: 2026-10-19] ^parser
+";
+
+#[test]
+fn carry_req_by_row_key_moves_the_branch_and_maps_descendants() {
+    // Two reqs share the label "Handles Windows files"; the row key's path
+    // picks the first branch, never the duplicate leaf.
+    let key = crate::native::task_reqs::req_row_key(
+        "db.md#^export",
+        &[1, 1],
+        "Handles Windows files",
+    );
+    let outcome = carry(CARRY_OWNER, super::carry::ReqRef::RowKey(&key))
+        .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(outcome.path, "db.md");
+    assert_eq!(outcome.block_id, "handles-windows");
+    assert_eq!(
+        outcome.plan.postimages[&PathBuf::from("db.md")],
+        "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export
+\t- [ ] Handles supported inputs
+\t\t- [>] [[#^handles-windows|Handles Windows files]]
+\t\t- [ ] Handles Windows files
+\t- [ ] Benchmarks within 5% of v1
+- [ ] #task Handles Windows files [created:: 2026-11-21] ^handles-windows
+\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)
+\t- [ ] Preserves CRLF
+\t- NOTES
+\t\t- Fixture: windows.csv
+- [ ] #task Write the parser [created:: 2026-10-19] ^parser
+"
+    );
+    assert_eq!(outcome.line, 6);
+    let moves: Vec<(usize, usize)> = outcome
+        .moves
+        .iter()
+        .map(|line_move| (line_move.from, line_move.to))
+        .collect();
+    assert_eq!(moves, vec![(4, 8), (5, 10)]);
+}
+
+#[test]
+fn carry_req_by_line_digest_and_its_refusals() {
+    let digest = |line: usize| {
+        note_tasks::line_digest(CARRY_OWNER.lines().nth(line - 1).unwrap())
+    };
+    let leaf = digest(6);
+    let outcome = carry(
+        CARRY_OWNER,
+        super::carry::ReqRef::LineDigest {
+            line: 6,
+            digest: &leaf,
+        },
+    )
+    .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    // The leaf sits after the first branch; its task lands below the
+    // owner's whole block.
+    assert_eq!(outcome.line, 8);
+    assert!(outcome.moves.is_empty());
+    assert_eq!(
+        outcome.plan.stubs[0].text,
+        "- [>] [[#^handles-windows|Handles Windows files]]"
+    );
+
+    let stale = carry(
+        CARRY_OWNER,
+        super::carry::ReqRef::LineDigest {
+            line: 6,
+            digest: "00000000",
+        },
+    )
+    .unwrap_err();
+    assert_eq!(stale.code, "split_stale_ref");
+
+    let stale_key = carry(
+        CARRY_OWNER,
+        super::carry::ReqRef::RowKey("db.md#^export/req/1.3~00000000"),
+    )
+    .unwrap_err();
+    assert_eq!(stale_key.code, "split_stale_ref");
+
+    let note = "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export
+  - Morgan reported the original issue.
+";
+    let note_digest = note_tasks::line_digest(note.lines().nth(1).unwrap());
+    let refused = carry(
+        note,
+        super::carry::ReqRef::LineDigest {
+            line: 2,
+            digest: &note_digest,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, "not_a_req");
+}
+
+#[test]
+fn req_candidates_list_every_depth_with_their_state() {
+    let snapshot = VaultSnapshot::from_notes([(
+        PathBuf::from("db.md"),
+        "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export
+  - [ ] Handles supported inputs
+    - [-] Handles Windows files
+      - [ ] Preserves CRLF
+  - Morgan reported the original issue.
+"
+        .to_string(),
+    )]);
+    let candidates = super::plan::list_task_split_candidates(
+        &snapshot,
+        &SplitRequest {
+            owner_path: PathBuf::from("db.md"),
+            // A req line names its root owner.
+            owner_line: 3,
+            selection: SplitSelection::Cursor { line: 0 },
+        },
+        &task_settings(),
+    )
+    .unwrap();
+    let rows: Vec<Value> = candidates
+        .iter()
+        .map(|candidate| {
+            json!([
+                candidate.ordinal,
+                candidate.line,
+                candidate.title,
+                candidate.req.as_ref().map(|req| json!([
+                    req.depth,
+                    req.mark,
+                    req.state,
+                    req.carriable
+                ])),
+            ])
+        })
+        .collect();
+    assert_eq!(
+        json!(rows),
+        json!([
+            [
+                1,
+                2,
+                "Handles supported inputs",
+                [1, "open", "pending", true]
+            ],
+            [
+                2,
+                3,
+                "Handles Windows files",
+                [2, "dropped", "dropped", false]
+            ],
+            [3, 4, "Preserves CRLF", [3, "open", "excluded", false]],
+            [4, 5, "Morgan reported the original issue.", null],
+        ])
+    );
 }

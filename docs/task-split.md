@@ -18,13 +18,27 @@ A splittable bullet is one of:
 
 - a **first-level authored note** of a task;
 - a **drawer entry**, meaning a first-level bullet inside a drawer;
+- a **[task requirement](task-requirements.md)** at any depth, together with
+  its whole branch (carry, §6 there);
 - a **section bullet**, meaning a column-0 bullet under an eligible H2 with
   no owning task.
 
 It must be a plain bullet with non-empty text once its `^anchor` is removed.
-An unchecked `- [ ] text` without `#task` is also splittable, and it becomes
-an open task. Carrying a [task requirement](task-requirements.md) into its
-own task follows the same engine (§6 there).
+An unchecked `- [ ] text` without `#task` directly under a task is a
+requirement; an unchecked checkbox anywhere else a note may sit (a drawer
+entry, for example) splits like any note and becomes an open task.
+
+A requirement is a candidate whatever its state, so a cursor on it never
+falls through to an ancestor, but only an **open** requirement (`[ ]` or a
+flagged mark such as `[?]`) that no dropped or carried ancestor excludes can
+be carried. Its owner may already be closed: the post-close card carries
+under a done task, exactly as it drops there. Requirement candidates nest,
+so a line belongs to the **innermost** candidate whose branch holds it: a
+cursor on a requirement's note carries that requirement, and a line
+selection selects the innermost candidate of every line it touches. Count
+mode walks siblings under the same structural parent only. A requirement
+line given as the owner names its root owner, the real task its chain hangs
+off.
 
 These are never splittable, and each gets a teaching notice or code:
 
@@ -35,7 +49,11 @@ These are never splittable, and each gets a teaching notice or code:
 | a drawer title | it opens the picker instead |
 | any managed line (Depends-On, BLOCKS, LINKS, LINKED FROM, any log) | `split_managed_line` |
 | a Pomodoro line | `split_managed_line` |
-| a checked checkbox | `split_not_splittable` |
+| a checked checkbox, including a hand-ticked `[x]` requirement | `split_not_splittable` |
+| a dropped `[-]` requirement | `split_not_splittable` |
+| a carried `[>]` requirement stub | `split_not_splittable` |
+| a requirement under a dropped or carried ancestor | `split_req_excluded` |
+| a requirement selected together with one of its ancestors | `split_overlap` |
 
 ## 2. What it writes
 
@@ -63,6 +81,28 @@ These are never splittable, and each gets a teaching notice or code:
   A split drawer entry is replaced inside its drawer, so the drawer is never
   emptied.
 
+  A carried requirement keeps its place as a **`[>]` stub** instead:
+  `- [>] [[#^id|Alias]]` (or the cross-note form) at the same position and
+  indentation, with the same alias rules. Its owner keeps the requirement as
+  Carried, and the stub's link shows the new task's lane in place.
+
+- **A carried branch.** The requirement's whole subtree travels. Its
+  descendant requirements become the new task's requirements, and
+  re-indentation rebases their depth (depth is computed, never stored).
+  The new block is laid out through `task_block_layout`
+  ([Task requirements](task-requirements.md) §3): the back-link sits in the
+  managed-link zone (after a kept Cancel Log), and when the branch brought
+  descendant requirements, the requirement's direct notes file into `NOTES`,
+  created only when a note lands in it. A leaf requirement's notes stay
+  loose notes of the new task. Authored order survives inside each zone.
+  Nothing is inherited and no dependency is added to the old owner;
+  `&` / Ctrl+Shift+B says that explicitly when wanted.
+- **The move map.** Each carried requirement reports every moved
+  descendant line: its 1-based line in the owner's note before the write
+  and its 1-based line in the new task's note after it. The close card's
+  jump landing follows a pinned row through it when an ancestor's carry
+  moved that row.
+
 - **The mention.** Each new task gets
   `- 🪢 **LINKED FROM:** [[P]] (💬 mentions)` at `relation_insert_slot`, in
   the same write. If P lacks an `^id`, one is minted silently on P's line in
@@ -71,8 +111,8 @@ These are never splittable, and each gets a teaching notice or code:
   either way.
   - A section bullet has no owning task, so it yields no mention.
 - **Placement.**
-  - New tasks go directly after P's block, at P's indentation, in bullet
-    order. That is one note and one transaction.
+  - New tasks go directly after P's whole block (whatever follows it), at
+    P's indentation, in bullet order. That is one note and one transaction.
   - When P lives in a **daily note** (an Event Task or `^gtd`), new tasks go
     to the `## Tasks` intake of P's `[root::]` note, or else the default
     inbox, because daily notes hold no ordinary tasks. That is a cross-note
@@ -130,9 +170,17 @@ text.
   `dry_run`, `warnings`, `repaired_files[]`, `git`, `applied_paths[]`,
   `deferred_paths[]`, `recovery_directory`, and
   `error{stage, code, message, hint}`.
+  - **`candidates[]`**: `{ordinal, line, title, drawer, child_lines}`, plus
+    `req{depth, mark, state, carriable}` on a requirement row. `mark` is the
+    raw checkbox (`open`, `dropped`, `carried`, `legacy-met`, `unknown`),
+    `state` the derived state from
+    [Task requirements](task-requirements.md) §2, and `carriable` is false
+    when selecting the row refuses.
   - **`splits[]`**:
     - `owner{path, line, block_id, minted_id}`;
-    - `tasks[{path, line, block_id, title, anchor_reused, child_lines}]`;
+    - `tasks[{path, line, block_id, title, anchor_reused, child_lines}]`,
+      plus `req_depth` on a carried requirement and, when descendant lines
+      moved, `moves[{from, to}]`;
     - `stubs[{path, line, text}]`;
     - `placement{kind: below_owner|tasks_section|root_note|inbox, path}`.
 - **Human output.** Coloured with the capture styler. A dry run says
@@ -142,6 +190,16 @@ text.
 ✂ Split 2 notes into tasks · db.md
   ◯ Ping Alice about the cutover window   ^ping-alice-about · db.md:7
   ◯ Write the rollback runbook (+1)       ^write-rollback · db.md:9
+```
+
+The candidate list draws a requirement with its hash run (`⌗⌗` at depth
+1, one more per level, capped at four), indented by depth, and marks a row
+that refuses (`· dropped`, `· carried`, `· checked`, `· excluded`):
+
+```text
+1  ⌗⌗ Handles supported inputs (+3)
+2    ⌗⌗⌗ Handles Windows files · dropped (+1)
+3  Morgan reported the original issue.
 ```
 
 ## 4. Obsidian gestures (summary)
@@ -176,8 +234,14 @@ fields, and clients render them.
 
 | Key | Text |
 | --- | --- |
-| split notice | `✂ Split N note(s) into tasks · ◯ A… · ◯ B…` |
+| split notice | `✂ Split N note(s) into tasks · ◯ A… · ◯ B…`; `requirement(s)` when every pick is a requirement, `bullets` when notes and requirements mix |
 | split_managed_line | `Managed line — Bob writes it; split a note or drawer entry instead` |
+| split_not_splittable (dropped) | `Dropped — restore it first` |
+| split_not_splittable (carried) | `Carried — open the linked task` |
+| split_not_splittable (checked) | `Checked box — split an unchecked note instead` |
+| split_req_excluded (dropped ancestor) | `Its parent requirement was dropped — restore it first` |
+| split_req_excluded (carried ancestor) | `Its parent requirement was carried into its own task — it goes with it` |
+| split_overlap | `“{ancestor}” already takes this branch — carry it alone and “{descendant}” goes with it` |
 
 Glyphs: ↪ move, ⤵ merge, ✂ split, ⊘ cancelled, ⛓ dependency, ◌ removed
 link, ↻ repair, and ⚠ warning.
@@ -188,6 +252,8 @@ link, ↻ repair, and ⚠ warning.
 Each case carries `{id, title, input, expect}` where `input` holds
 `{files, owner, selection, today, settings}` and `expect` holds either
 `{ok: true, files, tasks, cursor, notice}` or `{ok: false, code, message}`.
+A carried requirement's task adds `req_depth` and `moves`, and cases from
+SP32 on also pin `stubs` and `placement`.
 bob-plugins copies the file byte-for-byte; bob-cli is authoritative.
 
 | ID | Covers |
@@ -223,3 +289,23 @@ bob-plugins copies the file byte-for-byte; bob-cli is authoritative.
 | SP29 | Checked checkbox refused as `split_not_splittable` |
 | SP30 | Section-bullet selection kind routes without an owner mention |
 | SP31 | Punctuated `WHAT IS SASE?` drawer entry splits inside its drawer |
+| SP32 | A depth-1 requirement carries into its own task behind a `[>]` stub |
+| SP33 | A leaf requirement's notes stay loose under the back-link |
+| SP34 | The whole branch travels below P's block and its notes file under `NOTES` |
+| SP35 | A depth-2 requirement carries with its own branch and leaves its siblings |
+| SP36 | A depth-3 tab-indented requirement rebases to the new task |
+| SP37 | A cursor on a requirement's note carries the innermost requirement |
+| SP38 | A requirement's trailing `^anchor` becomes the task ID |
+| SP39 | A daily-note owner carries into its `[root::]` note with a cross-note stub |
+| SP40 | A dropped requirement is refused as `split_not_splittable` |
+| SP41 | A carried `[>]` stub is refused as `split_not_splittable` |
+| SP42 | A requirement under a dropped ancestor is refused as `split_req_excluded` |
+| SP43 | An ancestor and its descendant picked together are refused as `split_overlap` |
+| SP44 | Count walks requirement siblings under one parent only |
+| SP45 | A note and a requirement split together keep their own stubs |
+| SP46 | A flagged `[?]` requirement carries with its clean text |
+| SP47 | A requirement under a done owner still carries |
+| SP48 | A line selection inside a nested branch selects only the innermost requirement |
+| SP49 | A line selection across a requirement and its descendant is an overlap |
+| SP50 | A requirement's kept Cancel Log stays the new task's first child |
+| SP51 | A note with children lands directly below P's block when more follows |

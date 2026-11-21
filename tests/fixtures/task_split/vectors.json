@@ -1338,6 +1338,1097 @@
         },
         "notice": "✂ Split 1 note into tasks · ◯ Try logical replication"
       }
+    },
+    {
+      "id": "SP32",
+      "title": "depth-1 req carries into its own task behind a [>] stub",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n  - [ ] Docs cover every flag\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n  - [>] [[#^docs-cover-every|Docs cover every flag]]\n- [ ] #task Docs cover every flag [created:: 2026-11-03] ^docs-cover-every\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "docs-cover-every",
+            "title": "Docs cover every flag",
+            "anchor_reused": false,
+            "child_lines": 0,
+            "req_depth": 1,
+            "moves": []
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [>] [[#^docs-cover-every|Docs cover every flag]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Docs cover every flag",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP33",
+      "title": "a leaf req's notes stay loose under the back-link",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles Windows files\n    - Fixture: windows.csv\n    - Ask Morgan for a sample\n  - NOTES\n    - Morgan reported the original issue.\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^handles-windows|Handles Windows files]]\n  - NOTES\n    - Morgan reported the original issue.\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - Fixture: windows.csv\n  - Ask Morgan for a sample\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "handles-windows",
+            "title": "Handles Windows files",
+            "anchor_reused": false,
+            "child_lines": 2,
+            "req_depth": 1,
+            "moves": [
+              {
+                "from": 3,
+                "to": 7
+              },
+              {
+                "from": 4,
+                "to": 8
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 2,
+            "text": "- [>] [[#^handles-windows|Handles Windows files]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Handles Windows files",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP34",
+      "title": "the whole branch travels and its notes file under NOTES",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - ⛓️ **DEPENDS ON:** [[#^parser]]\n  - [ ] Handles supported inputs\n    - Fixture: inputs.zip\n    - [ ] Handles Windows files\n      - [ ] Preserves CRLF\n      - Fixture: windows.csv\n    - [ ] Handles empty input\n  - [ ] Benchmarks within 5% of v1\n- [ ] #task Write the parser [created:: 2026-10-19] ^parser\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - ⛓️ **DEPENDS ON:** [[#^parser]]\n  - [>] [[#^handles-supported|Handles supported inputs]]\n  - [ ] Benchmarks within 5% of v1\n- [ ] #task Handles supported inputs [created:: 2026-11-03] ^handles-supported\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - [ ] Handles Windows files\n    - [ ] Preserves CRLF\n    - Fixture: windows.csv\n  - [ ] Handles empty input\n  - NOTES\n    - Fixture: inputs.zip\n- [ ] #task Write the parser [created:: 2026-10-19] ^parser\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "handles-supported",
+            "title": "Handles supported inputs",
+            "anchor_reused": false,
+            "child_lines": 5,
+            "req_depth": 1,
+            "moves": [
+              {
+                "from": 4,
+                "to": 12
+              },
+              {
+                "from": 5,
+                "to": 7
+              },
+              {
+                "from": 6,
+                "to": 8
+              },
+              {
+                "from": 7,
+                "to": 9
+              },
+              {
+                "from": 8,
+                "to": 10
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [>] [[#^handles-supported|Handles supported inputs]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Handles supported inputs",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP35",
+      "title": "a depth-2 req carries with its own branch and leaves its siblings",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [ ] Handles Windows files\n      - [ ] Preserves CRLF\n      - Fixture: windows.csv\n    - [ ] Handles empty input\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [>] [[#^handles-windows|Handles Windows files]]\n    - [ ] Handles empty input\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - [ ] Preserves CRLF\n  - NOTES\n    - Fixture: windows.csv\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "handles-windows",
+            "title": "Handles Windows files",
+            "anchor_reused": false,
+            "child_lines": 2,
+            "req_depth": 2,
+            "moves": [
+              {
+                "from": 4,
+                "to": 7
+              },
+              {
+                "from": 5,
+                "to": 9
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [>] [[#^handles-windows|Handles Windows files]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Handles Windows files",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP36",
+      "title": "a depth-3 tab-indented req rebases to the new task",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t\t\t- Check the BOM too\n\t\t- [ ] Handles empty input\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 4
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [>] [[#^preserves-crlf|Preserves CRLF]]\n\t\t- [ ] Handles empty input\n- [ ] #task Preserves CRLF [created:: 2026-11-03] ^preserves-crlf\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n\t- Check the BOM too\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "preserves-crlf",
+            "title": "Preserves CRLF",
+            "anchor_reused": false,
+            "child_lines": 1,
+            "req_depth": 3,
+            "moves": [
+              {
+                "from": 5,
+                "to": 8
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 4,
+            "text": "- [>] [[#^preserves-crlf|Preserves CRLF]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 6
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Preserves CRLF",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP37",
+      "title": "cursor on a req's note carries the innermost req",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [ ] Handles Windows files\n      - Fixture: windows.csv\n    - [ ] Handles empty input\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 4
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [>] [[#^handles-windows|Handles Windows files]]\n    - [ ] Handles empty input\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - Fixture: windows.csv\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "handles-windows",
+            "title": "Handles Windows files",
+            "anchor_reused": false,
+            "child_lines": 1,
+            "req_depth": 2,
+            "moves": [
+              {
+                "from": 4,
+                "to": 7
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [>] [[#^handles-windows|Handles Windows files]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Handles Windows files",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP38",
+      "title": "a req's trailing anchor becomes the task ID",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n  - [ ] Docs cover every flag ^export-docs\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n  - [>] [[#^export-docs|Docs cover every flag]]\n- [ ] #task Docs cover every flag [created:: 2026-11-03] ^export-docs\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "export-docs",
+            "title": "Docs cover every flag",
+            "anchor_reused": true,
+            "child_lines": 0,
+            "req_depth": 1,
+            "moves": []
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [>] [[#^export-docs|Docs cover every flag]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Docs cover every flag",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP39",
+      "title": "a daily-note owner carries into its root note",
+      "input": {
+        "files": {
+          "2026/20261103.md": "- [ ] #task Deploy the release [created:: 2026-11-03] ^deploy [root:: projects/launch]\n  - [ ] Backups are current\n    - [ ] Restore drill passes\n    - Check the S3 bucket\n",
+          "projects/launch.md": "# Launch\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "2026/20261103.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "2026/20261103.md": "- [ ] #task Deploy the release [created:: 2026-11-03] ^deploy [root:: projects/launch]\n  - [>] [[projects/launch#^backups-are-current|Backups are current]]\n",
+          "projects/launch.md": "# Launch\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n- [ ] #task Backups are current [created:: 2026-11-03] ^backups-are-current\n  - 🪢 **LINKED FROM:** [[2026/20261103#^deploy]] (💬 mentions)\n  - [ ] Restore drill passes\n  - NOTES\n    - Check the S3 bucket\n"
+        },
+        "tasks": [
+          {
+            "path": "projects/launch.md",
+            "block_id": "backups-are-current",
+            "title": "Backups are current",
+            "anchor_reused": false,
+            "child_lines": 2,
+            "req_depth": 1,
+            "moves": [
+              {
+                "from": 3,
+                "to": 7
+              },
+              {
+                "from": 4,
+                "to": 9
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "2026/20261103.md",
+            "line": 2,
+            "text": "- [>] [[projects/launch#^backups-are-current|Backups are current]]"
+          }
+        ],
+        "cursor": {
+          "path": "projects/launch.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Backups are current",
+        "placement": {
+          "kind": "root_note",
+          "path": "projects/launch.md"
+        }
+      }
+    },
+    {
+      "id": "SP40",
+      "title": "a dropped req is refused",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [-] Benchmarks within 5% of v1\n    - ❌ **CANCEL LOG**\n      - *2026-11-01* — v1 is gone\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_not_splittable",
+        "message": "Dropped — restore it first"
+      }
+    },
+    {
+      "id": "SP41",
+      "title": "a carried stub is refused",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^export-docs|Docs cover every flag]]\n- [ ] #task Docs cover every flag [created:: 2026-11-01] ^export-docs\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_not_splittable",
+        "message": "Carried — open the linked task"
+      }
+    },
+    {
+      "id": "SP42",
+      "title": "a req under a dropped ancestor is refused as excluded",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [-] Handles supported inputs\n    - [ ] Handles Windows files\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_req_excluded",
+        "message": "Its parent requirement was dropped — restore it first"
+      }
+    },
+    {
+      "id": "SP43",
+      "title": "an ancestor and its descendant together are refused as an overlap",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [ ] Handles Windows files\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "nth",
+          "picks": [
+            1,
+            2
+          ]
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_overlap",
+        "message": "“Handles supported inputs” already takes this branch — carry it alone and “Handles Windows files” goes with it"
+      }
+    },
+    {
+      "id": "SP44",
+      "title": "count walks req siblings under one parent only",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [ ] Handles Windows files\n    - [ ] Handles empty input\n  - [ ] Benchmarks within 5% of v1\n    - [ ] Runs on the CI box\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "count": 5,
+          "kind": "count",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [>] [[#^handles-windows|Handles Windows files]]\n    - [>] [[#^handles-empty-input|Handles empty input]]\n  - [ ] Benchmarks within 5% of v1\n    - [ ] Runs on the CI box\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n- [ ] #task Handles empty input [created:: 2026-11-03] ^handles-empty-input\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "handles-windows",
+            "title": "Handles Windows files",
+            "anchor_reused": false,
+            "child_lines": 0,
+            "req_depth": 2,
+            "moves": []
+          },
+          {
+            "path": "db.md",
+            "block_id": "handles-empty-input",
+            "title": "Handles empty input",
+            "anchor_reused": false,
+            "child_lines": 0,
+            "req_depth": 2,
+            "moves": []
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [>] [[#^handles-windows|Handles Windows files]]"
+          },
+          {
+            "path": "db.md",
+            "line": 4,
+            "text": "- [>] [[#^handles-empty-input|Handles empty input]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 7
+        },
+        "notice": "✂ Split 2 requirements into tasks · ◯ Handles Windows files · ◯ Handles empty input",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP45",
+      "title": "a note and a req split together keep their own stubs",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Docs cover every flag\n  - NOTES\n    - Ping Morgan about the release\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "nth",
+          "picks": [
+            1,
+            2
+          ]
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^docs-cover-every|Docs cover every flag]]\n  - NOTES\n    - [[#^ping-morgan-about|Ping Morgan about the release]]\n- [ ] #task Docs cover every flag [created:: 2026-11-03] ^docs-cover-every\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n- [ ] #task Ping Morgan about the release [created:: 2026-11-03] ^ping-morgan-about\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "docs-cover-every",
+            "title": "Docs cover every flag",
+            "anchor_reused": false,
+            "child_lines": 0,
+            "req_depth": 1,
+            "moves": []
+          },
+          {
+            "path": "db.md",
+            "block_id": "ping-morgan-about",
+            "title": "Ping Morgan about the release",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 2,
+            "text": "- [>] [[#^docs-cover-every|Docs cover every flag]]"
+          },
+          {
+            "path": "db.md",
+            "line": 4,
+            "text": "- [[#^ping-morgan-about|Ping Morgan about the release]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 2 bullets into tasks · ◯ Docs cover every flag · ◯ Ping Morgan about the release",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP46",
+      "title": "a flagged req carries with its clean text",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [?] Confirm the CSV dialect\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^confirm-csv-dialect|Confirm the CSV dialect]]\n- [ ] #task Confirm the CSV dialect [created:: 2026-11-03] ^confirm-csv-dialect\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "confirm-csv-dialect",
+            "title": "Confirm the CSV dialect",
+            "anchor_reused": false,
+            "child_lines": 0,
+            "req_depth": 1,
+            "moves": []
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 2,
+            "text": "- [>] [[#^confirm-csv-dialect|Confirm the CSV dialect]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Confirm the CSV dialect",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP47",
+      "title": "a req under a done owner still carries",
+      "input": {
+        "files": {
+          "db.md": "- [x] #task Ship the exporter [created:: 2026-10-20] ^export [completion:: 2026-11-03]\n  - [ ] Docs cover every flag\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [x] #task Ship the exporter [created:: 2026-10-20] ^export [completion:: 2026-11-03]\n  - [>] [[#^docs-cover-every|Docs cover every flag]]\n- [ ] #task Docs cover every flag [created:: 2026-11-03] ^docs-cover-every\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "docs-cover-every",
+            "title": "Docs cover every flag",
+            "anchor_reused": false,
+            "child_lines": 0,
+            "req_depth": 1,
+            "moves": []
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 2,
+            "text": "- [>] [[#^docs-cover-every|Docs cover every flag]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Docs cover every flag",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP48",
+      "title": "a line selection inside a nested branch selects only the innermost req",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [ ] Handles Windows files\n      - Fixture: windows.csv\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "from": 3,
+          "kind": "lines",
+          "to": 4
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [>] [[#^handles-windows|Handles Windows files]]\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - Fixture: windows.csv\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "handles-windows",
+            "title": "Handles Windows files",
+            "anchor_reused": false,
+            "child_lines": 1,
+            "req_depth": 2,
+            "moves": [
+              {
+                "from": 4,
+                "to": 6
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [>] [[#^handles-windows|Handles Windows files]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Handles Windows files",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP49",
+      "title": "a line selection across a req and its descendant is an overlap",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [ ] Handles Windows files\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "from": 2,
+          "kind": "lines",
+          "to": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_overlap",
+        "message": "“Handles supported inputs” already takes this branch — carry it alone and “Handles Windows files” goes with it"
+      }
+    },
+    {
+      "id": "SP50",
+      "title": "a req's restored Cancel Log stays the new task's first child",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Benchmarks within 5% of v1\n    - ❌ **CANCEL LOG**\n      - *2026-11-01* — v1 is gone\n    - Use the staging box\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^benchmarks-within-5|Benchmarks within 5% of v1]]\n- [ ] #task Benchmarks within 5% of v1 [created:: 2026-11-03] ^benchmarks-within-5\n  - ❌ **CANCEL LOG**\n    - *2026-11-01* — v1 is gone\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - Use the staging box\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "benchmarks-within-5",
+            "title": "Benchmarks within 5% of v1",
+            "anchor_reused": false,
+            "child_lines": 3,
+            "req_depth": 1,
+            "moves": [
+              {
+                "from": 3,
+                "to": 4
+              },
+              {
+                "from": 4,
+                "to": 5
+              },
+              {
+                "from": 5,
+                "to": 7
+              }
+            ]
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 2,
+            "text": "- [>] [[#^benchmarks-within-5|Benchmarks within 5% of v1]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 requirement into tasks · ◯ Benchmarks within 5% of v1",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
+    },
+    {
+      "id": "SP51",
+      "title": "a note with children lands directly below its owner when more follows",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Write the rollback runbook\n    - include pg_dump timing\n  - Ping Alice about the cutover window\n- [ ] #task Rotate the replica certs [created:: 2026-10-21] ^rotate\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^write-rollback|Write the rollback runbook]]\n  - Ping Alice about the cutover window\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Rotate the replica certs [created:: 2026-10-21] ^rotate\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "write-rollback",
+            "title": "Write the rollback runbook",
+            "anchor_reused": false,
+            "child_lines": 1
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 2,
+            "text": "- [[#^write-rollback|Write the rollback runbook]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Write the rollback runbook",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
+      }
     }
   ]
 }
