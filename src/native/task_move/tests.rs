@@ -610,6 +610,36 @@ fn refuses_non_canonical_id_fields() {
 }
 
 #[test]
+fn moving_a_task_carries_reqs_and_repairs_same_note_stub_links() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Stay ^stay
+- [ ] #task Move ^m
+  - [ ] a requirement ^req
+    - note of the req
+  - [>] [[#^stay|Carried]]
+",
+    );
+    let dest = area("\n## Tasks\n");
+    let result = plan(
+        &[("src.md", &source), ("dest.md", &dest)],
+        "src",
+        "dest",
+        vec![block("m")],
+    );
+    let dest_post = post(&result, "dest.md");
+    assert!(dest_post.contains("- [ ] #task Move ^m"));
+    assert!(dest_post.contains("- [ ] a requirement ^req"));
+    assert!(dest_post.contains("note of the req"));
+    assert!(dest_post.contains("[[src#^stay|Carried]]"));
+    let source_post = post(&result, "src.md");
+    assert!(source_post.contains("- [ ] #task Stay ^stay"));
+    assert!(!source_post.contains("- [ ] #task Move"));
+}
+
+#[test]
 fn repairs_every_required_link_form_across_note_kinds() {
     let source = area(
         "

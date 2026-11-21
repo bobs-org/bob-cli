@@ -214,7 +214,7 @@ fn normal_pull_writes_verifies_commits_and_archives() {
     let pos1 = target.find("Hardware store").unwrap();
     let pos2 = target.find("Call dentist about crown").unwrap();
     assert!(pos1 < pos2, "oldest first:\n{target}");
-    let expected = "---\nkey: value\n---\n- intro bullet one\n- The tasks below are pulled in by the `bob gkeep` command.\n## Tasks\n\n- [ ] #task Hardware store [created::2026-09-26]\n\t- [ ] wood screws\n\t- [x] sandpaper\n- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-1 \"Open in Google Keep\") [created::2026-09-27]\n\t- They close at 5 on Fridays\n";
+    let expected = "---\nkey: value\n---\n- intro bullet one\n- The tasks below are pulled in by the `bob gkeep` command.\n## Tasks\n\n- [ ] #task Hardware store [created::2026-09-26]\n\t- \\[ ] wood screws\n\t- \\[x] sandpaper\n- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-1 \"Open in Google Keep\") [created::2026-09-27]\n\t- They close at 5 on Fridays\n";
     assert_eq!(target, expected, "byte-exact target:\n{target}");
 
     // Vault import history carries verified receipts with no intended text.

@@ -526,6 +526,17 @@ mod tests {
             let rendered = render_bullets(&parsed, 64, None);
             let bullets = rendered.materialize(child_indent, child_indent);
             assert!(bullets.iter().all(|line| !line.contains('\n')));
+            assert!(
+                bullets.iter().any(|line| line.contains("\\[ ]")),
+                "bullet-start checkbox must be escaped: {bullets:?}"
+            );
+            assert!(
+                bullets.iter().all(|line| {
+                    let body = line.trim_start();
+                    !(body.starts_with("- [ ]") || body.starts_with("- [x]"))
+                }),
+                "live checkbox survived in copied bullets: {bullets:?}"
+            );
             let note = format!(
                     "## Events\n- [ ] #task **0900-1000** Standup ^event\n{}\n\n## Pomodoros\n- [ ] (09:00) — Focus\n",
                     bullets.join("\n")

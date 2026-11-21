@@ -991,6 +991,35 @@ mod tests {
     }
 
     #[test]
+    fn requirement_without_task_filter_is_not_a_dataview_task() {
+        let settings = settings(TaskFormat::Dataview);
+        let statuses = StatusRegistry::new(&settings.status_settings);
+        let now = NaiveDate::from_ymd_opt(2026, 7, 10)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let from = |line: &str, path: &str| {
+            Task::from_line(
+                line,
+                TaskFile::new(path.to_string()),
+                1,
+                None,
+                &settings,
+                &statuses,
+                now,
+            )
+        };
+        assert!(
+            from("- [ ] req without filter", "Folder/Note.md").is_none(),
+            "a checkbox without #task must not enter the Tasks index"
+        );
+        assert!(
+            from("- [ ] #task Real", "Folder/Note.md").is_some(),
+            "a real #task line still parses"
+        );
+    }
+
+    #[test]
     fn task_line_parser_matches_tasks_markers_and_spacing() {
         for line in [
             "- [ ]task",

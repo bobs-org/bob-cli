@@ -644,6 +644,7 @@ impl<'a> AgendaNotes<'a> {
             &depths,
             range,
             global_filter,
+            &self.settings.global_filter,
             filter_cleared,
         );
         let mut truncated = 0;
@@ -712,6 +713,7 @@ impl<'a> AgendaNotes<'a> {
                 line_text[index],
                 depth,
                 fenced.contains(&index),
+                &self.settings.global_filter,
                 &self.settings.global_filter,
                 false,
             ) {
@@ -1528,9 +1530,14 @@ fn entry_notes_for(
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(note) =
-            build_one_line(line, depth, false, global_filter, false)
-        {
+        if let Some(note) = build_one_line(
+            line,
+            depth,
+            false,
+            global_filter,
+            global_filter,
+            false,
+        ) {
             lines.push(note);
         }
     }
@@ -1561,6 +1568,7 @@ fn build_lines(
     depths: &[usize],
     range: Range<usize>,
     global_filter: &str,
+    task_filter: &str,
     filter_cleared: bool,
 ) -> Vec<AgendaLine> {
     let mut lines = Vec::new();
@@ -1584,6 +1592,7 @@ fn build_lines(
             depth,
             fenced.contains(&index),
             global_filter,
+            task_filter,
             filter_cleared,
         ) {
             lines.push(built);
@@ -1605,6 +1614,7 @@ fn build_one_line(
     depth: usize,
     in_fence: bool,
     global_filter: &str,
+    task_filter: &str,
     filter_cleared: bool,
 ) -> Option<AgendaLine> {
     if line.trim().is_empty() {
@@ -1633,6 +1643,17 @@ fn build_one_line(
     }
     if let Some(body) = list_item_body(line) {
         if let Some((symbol, after)) = checkbox_parts(body) {
+            let is_task = task_filter.is_empty()
+                || after.split_whitespace().any(|token| token == task_filter);
+            if !is_task {
+                return Some(AgendaLine {
+                    text: body.to_string(),
+                    depth,
+                    kind: AgendaLineKind::Bullet,
+                    status_symbol: None,
+                    log: None,
+                });
+            }
             let block_id = trailing_block_id_in_line(line);
             let mut text = note_tasks::clean_description(
                 after,
@@ -2174,7 +2195,7 @@ mod tests {
             &vault.join("tasks.md"),
             concat!(
                 "- [ ] #task Titled [created:: 2026-10-01] ^titled\n",
-                "  - [x] sub done ^sub\n",
+                "  - [x] #task sub done ^sub\n",
                 "  - plain bullet\n",
                 "    continuation text\n",
                 "  ```md\n",
@@ -2215,6 +2236,46 @@ mod tests {
             .find(|line| line.text == "sub done")
             .expect("sub task");
         assert_eq!(sub.status_symbol, Some('x'));
+    }
+
+    #[test]
+    fn embedded_requirement_is_an_agenda_bullet() {
+        let temp = TempDir::new("bob-cli-agenda-req-bullet");
+        let vault = temp.path().to_path_buf();
+        write_settings(&vault);
+        write_file(
+            &vault.join("tasks.md"),
+            concat!(
+                "- [ ] #task Owner ^owner\n",
+                "  - [ ] open req\n",
+                "    - [ ] nested req\n",
+                "  - [ ] #task Nested ^nested\n",
+            ),
+        );
+        let day = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — FIX\n",
+            "\t- ![[tasks#^owner]]\n",
+        );
+        let (_, entries) = agenda_for(&vault, day);
+        let item = &entries[0].items[0];
+        let texts: Vec<(&str, AgendaLineKind, Option<char>)> = item
+            .lines
+            .iter()
+            .map(|line| (line.text.as_str(), line.kind, line.status_symbol))
+            .collect();
+        assert!(
+            texts.contains(&("[ ] open req", AgendaLineKind::Bullet, None)),
+            "open req must stay a bullet: {texts:?}"
+        );
+        assert!(
+            texts.contains(&("[ ] nested req", AgendaLineKind::Bullet, None)),
+            "nested req must stay a bullet: {texts:?}"
+        );
+        assert!(
+            texts.contains(&("Nested", AgendaLineKind::Task, Some(' '))),
+            "nested #task must stay a task: {texts:?}"
+        );
     }
 
     #[test]

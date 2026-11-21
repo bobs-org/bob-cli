@@ -25,9 +25,32 @@ pub(crate) fn escape_task_text(text: &str) -> String {
 }
 
 /// Escape free text for a child bullet: the task-line escaping plus the
-/// leading-marker rule, since a child starts a fresh list item.
+/// leading-marker and bullet-start checkbox rules, since a child starts a
+/// fresh list item.
 pub(crate) fn escape_child_text(text: &str) -> String {
-    escape_leading_marker(&escape_task_text(text))
+    escape_leading_marker(&escape_bullet_start_checkbox(&escape_task_text(
+        text,
+    )))
+}
+
+/// Escape a body that would start a checkbox list item (`[c]` or `[c] …`)
+/// so pasted text never becomes a requirement. Renders the same words.
+pub(crate) fn escape_bullet_start_checkbox(text: &str) -> String {
+    let Some(after_open) = text.strip_prefix('[') else {
+        return text.to_string();
+    };
+    let mut chars = after_open.chars();
+    let Some(mark) = chars.next() else {
+        return text.to_string();
+    };
+    let Some(after_close) = chars.as_str().strip_prefix(']') else {
+        return text.to_string();
+    };
+    if after_close.is_empty() || after_close.starts_with(char::is_whitespace) {
+        format!("\\[{mark}]{after_close}")
+    } else {
+        text.to_string()
+    }
 }
 
 /// Escape mid-line prose so it stays inert data.
@@ -385,6 +408,19 @@ mod tests {
         assert_eq!(escape_note_text("~~~"), "\\~~~");
         assert_eq!(escape_note_text("1. ordered"), "1\\. ordered");
         assert_eq!(escape_note_text("2) second"), "2\\) second");
+    }
+
+    #[test]
+    fn child_text_escapes_a_bullet_start_checkbox() {
+        assert_eq!(escape_bullet_start_checkbox("[ ] item"), "\\[ ] item");
+        assert_eq!(escape_bullet_start_checkbox("[x]"), "\\[x]");
+        assert_eq!(escape_bullet_start_checkbox("[X] done"), "\\[X] done");
+        assert_eq!(escape_bullet_start_checkbox("[ab] no"), "[ab] no");
+        assert_eq!(escape_child_text("[ ] buy milk"), "\\[ ] buy milk");
+        assert_eq!(escape_child_text("[x] done"), "\\[x] done");
+        assert_eq!(escape_child_text("see [ ] later"), "see [ ] later");
+        assert_eq!(escape_note_text("[ ] item"), "\\[ ] item");
+        assert_eq!(escape_note_inline("[ ] item"), "\\[ ] item");
     }
 
     #[test]

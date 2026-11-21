@@ -263,7 +263,7 @@ pub(super) fn note_counts(note: &KeepNote) -> NoteCounts {
     }
 }
 
-/// List items as `(indented, "- [ ] body")` in Keep display order.
+/// List items as `(indented, "\\[ ] body")` in Keep display order.
 /// Empty items are skipped; `indented` items render one level deeper.
 fn list_children(note: &KeepNote) -> Vec<(bool, String)> {
     note.content
@@ -275,8 +275,8 @@ fn list_children(note: &KeepNote) -> Vec<(bool, String)> {
                 return None;
             }
             let checkbox = if item.checked { "[x]" } else { "[ ]" };
-            let body = escape_child_text(&normalized);
-            Some((item.indented, format!("{checkbox} {body}")))
+            let body = escape_child_text(&format!("{checkbox} {normalized}"));
+            Some((item.indented, body))
         })
         .collect()
 }
@@ -588,9 +588,9 @@ mod tests {
         assert_eq!(
             block.markdown,
             "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-             \t- [ ] wood screws\n\
-             \t\t- [ ] #8 × 1¼″\n\
-             \t- [x] sandpaper",
+             \t- \\[ ] wood screws\n\
+             \t\t- \\[ ] #8 × 1¼″\n\
+             \t- \\[x] sandpaper",
         );
         assert!(!block.markdown.contains("%%gkeep:"));
     }
@@ -610,8 +610,8 @@ mod tests {
         assert_eq!(
             block.markdown,
             "- [ ] #task peanut butter [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-             \t- [ ] peanut butter\n\
-             \t- [x] jam",
+             \t- \\[ ] peanut butter\n\
+             \t- \\[x] jam",
         );
         assert!(!block.markdown.contains("%%gkeep:"));
         assert_eq!(display_title(&note), "peanut butter");
@@ -713,6 +713,8 @@ mod tests {
         assert_eq!(escape_child_text("~~~"), "\\~~~");
         assert_eq!(escape_child_text("^abc"), "\\^abc");
         assert_eq!(escape_child_text("\u{a0}^abc"), "\u{a0}\\^abc");
+        assert_eq!(escape_child_text("[ ] item"), "\\[ ] item");
+        assert_eq!(escape_child_text("[x] done"), "\\[x] done");
         assert_eq!(
             task_text_escape::escape_task_text("a ::: b"),
             "a \\:\\:\\: b"
@@ -756,7 +758,7 @@ mod tests {
         assert_eq!(
             block.markdown,
             "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-             \t- [ ] wood screws\n\
+             \t- \\[ ] wood screws\n\
              \t- 📎 1 image stays in Google Keep\n\
              \t\t- RECEIPT\n\
              \t\t- TOTAL 12.99",
@@ -883,6 +885,8 @@ mod tests {
 
     #[test]
     fn escape_child_text_covers_both_tables() {
+        assert_eq!(escape_child_text("[ ] item"), "\\[ ] item");
+        assert_eq!(escape_child_text("[x] done"), "\\[x] done");
         assert_eq!(escape_child_text("#task list"), "\\#task list");
         assert_eq!(escape_child_text("> quoted"), "\\> quoted");
         assert_eq!(escape_child_text("2) second"), "\\2) second");

@@ -349,7 +349,8 @@ fn task_line_body(line: &str) -> Option<&str> {
     let mut chars = after_open.chars();
     let status = chars.next()?;
     let after_status = &after_open[status.len_utf8()..];
-    after_status.strip_prefix("] ")
+    let body = after_status.strip_prefix("] ")?;
+    collect_done::has_task_tag(line).then_some(body)
 }
 
 fn git_head_blob(
@@ -523,6 +524,13 @@ old alpha\nold beta\nold gamma\nold delta\nold epsilon\n";
         assert!(identity
             .evidence(Some("2026-06-11T13:07-04:00"), "other.md")
             .contains("1 task block ID shared with other.md"));
+    }
+
+    #[test]
+    fn requirement_anchors_are_not_task_block_ids() {
+        let ids =
+            task_block_ids("- [ ] #task Owner ^owner\n\t- [ ] req ^req\n");
+        assert_eq!(ids, BTreeSet::from(["owner".to_string()]));
     }
 
     #[test]

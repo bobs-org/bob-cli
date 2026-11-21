@@ -355,6 +355,18 @@
         "consequence": "✓ Completes “Root” · Ready → Done · unblocks “New waiting”",
         "unblocks": 1
       }
+    },
+    {
+      "id": "SV25",
+      "kind": "done",
+      "path": "Tasks.md",
+      "key": "Tasks.md#^owner",
+      "line": 0,
+      "today": "2026-11-05",
+      "source": "- [ ] #task Owner ^owner\n  - [ ] Open req\n    - [ ] Nested req\n",
+      "expected": {
+        "source": "- [x] #task Owner  [completion:: 2026-11-05] ^owner\n  - [ ] Open req\n    - [ ] Nested req\n"
+      }
     }
   ]
 }

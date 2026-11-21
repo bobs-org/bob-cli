@@ -1378,6 +1378,35 @@ mod tests {
     }
 
     #[test]
+    fn checkbox_fragments_never_survive_as_requirements() {
+        for fragment in [
+            "- [ ] open task",
+            "- [x] closed task",
+            "* [ ] star task",
+            "1. [ ] ordered task",
+        ] {
+            let single = inert_single_line(fragment);
+            assert!(
+                single.contains("\\["),
+                "checkbox opener survived in {single:?} from {fragment:?}"
+            );
+            assert!(
+                !single.contains("- [ ]") && !single.contains("- [x]"),
+                "live checkbox survived in {single:?} from {fragment:?}"
+            );
+            let blocks = render_blocks(&prose_blocks(fragment));
+            assert!(
+                blocks.contains("\\["),
+                "checkbox opener survived in blocks from {fragment:?}:\n{blocks}"
+            );
+            assert!(
+                !blocks.contains("- [ ]") && !blocks.contains("- [x]"),
+                "live checkbox survived in blocks from {fragment:?}:\n{blocks}"
+            );
+        }
+    }
+
+    #[test]
     fn helpers_neutralize_hostile_fragments() {
         for fragment in hostile_fragments() {
             let single = inert_single_line(fragment);

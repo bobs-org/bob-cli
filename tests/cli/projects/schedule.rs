@@ -16,7 +16,7 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     let temp = TempDir::new("bob-cli-projects-scheduled-properties");
     let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     let project = vault.join("Future.md");
-    let original = "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-06-01] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed #hide\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+    let original = "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-06-01] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] #task Completed #hide\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
     write_file(&project, original);
     commit_all(&vault, "fixture");
 
@@ -66,7 +66,7 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
         "unexpected sync output:\n{}",
         format_output(&applied)
     );
-    let hoisted = "---\r\ntype: [[project]]\r\nstatus: wip\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-07-11] #hide ^prj\r\n  - [/] #task Nested work [scheduled:: 2026-07-11] ^nested\r\n1. [x] Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+    let hoisted = "---\r\ntype: [[project]]\r\nstatus: wip\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-07-11] #hide ^prj\r\n  - [/] #task Nested work [scheduled:: 2026-07-11] ^nested\r\n1. [x] #task Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
     assert_eq!(fs::read_to_string(&project).unwrap(), hoisted);
 
     let due = bob_command()

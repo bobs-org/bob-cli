@@ -462,9 +462,11 @@ fn parse_event_task_line(line: &str) -> Option<ParsedEventTask<'_>> {
     }
     body = body.get(close + 1..)?;
     body = body.trim_start_matches([' ', '\t']);
-    if let Some(rest) = body.strip_prefix("#task") {
-        body = rest.trim_start_matches([' ', '\t']);
+    let rest = body.strip_prefix("#task")?;
+    if !rest.is_empty() && !rest.starts_with([' ', '\t']) {
+        return None;
     }
+    body = rest.trim_start_matches([' ', '\t']);
     let (span, after) = parse_bold_span(body)?;
     Some(ParsedEventTask {
         status,
@@ -1164,12 +1166,15 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_event_span("- [ ] **2330-0030** Hand-written"),
+            parse_event_span("- [ ] #task **2330-0030** Overnight"),
             Some(EventSpan {
                 start_min: hhmm("2330"),
                 end_min: hhmm("0030"),
                 crosses_midnight: true,
             })
+        );
+        assert!(
+            parse_event_span("- [ ] **2330-0030** Hand-written req").is_none()
         );
         assert!(parse_event_span("- **0800-0830** Missing checkbox").is_none());
         assert!(parse_event_span("- [ ] #task **2460-2500** invalid").is_none());
@@ -1215,7 +1220,7 @@ mod tests {
         .expect("shared vectors JSON");
         for case in vectors["classify"].as_array().expect("classify cases") {
             let event = parse_event_span(&format!(
-                "- [ ] **{}** event",
+                "- [ ] #task **{}** event",
                 case["span"].as_str().expect("span")
             ))
             .expect("valid event span");

@@ -1541,6 +1541,12 @@ mod tests {
         assert!(tasky
             .fallback_note("https://example.com/post", "mac_inbox", false)
             .contains("\\#task list"),);
+        // A bullet-start checkbox is escaped, so pasted text never becomes
+        // a requirement.
+        let checkbox = ingest_error("[ ] follow up".to_string(), None);
+        assert!(checkbox
+            .fallback_note("https://example.com/post", "mac_inbox", false)
+            .contains("\\[ ] follow up"),);
     }
 
     #[test]

@@ -167,7 +167,7 @@ fn recursively_closes_embedded_tasks_and_retires_closed_ledger_embeds() {
         "a.md",
         "- [ ] #task Parent [completion:: 2026-01-01] ^a\n\t- ![[b#^b]]\n",
     );
-    vault.insert("b.md", "- [/] Child without task tag ^b\n");
+    vault.insert("b.md", "- [/] #task Nested child ^b\n");
     let day = concat!(
         "## Pomodoros\n",
         "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
@@ -184,7 +184,7 @@ fn recursively_closes_embedded_tasks_and_retires_closed_ledger_embeds() {
         plan.changed_files
             .get(Path::new("b.md"))
             .map(String::as_str),
-        Some("- [x] Child without task tag ^b\n")
+        Some("- [x] #task Nested child  [completion:: 2026-09-28] ^b\n")
     );
     assert!(plan.summary.ledger.contents.contains("\t- ~~[[a#^a]]~~"));
     assert_eq!(plan.summary.tasks[0].role, CloseTaskRole::Embedded);

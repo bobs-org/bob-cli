@@ -428,7 +428,7 @@ fn fixture_rust_vectors_match_engine() {
     let settings = test_settings();
     let today = date();
 
-    for id in ["SV1", "SV5", "SV6", "SV7", "SV18"] {
+    for id in ["SV1", "SV5", "SV6", "SV7", "SV18", "SV25"] {
         let case = fixture_case(&vectors, id);
         assert_eq!(case["kind"], "done");
         let path = PathBuf::from(case["path"].as_str().expect("path"));

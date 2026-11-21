@@ -323,10 +323,13 @@ as a `code` in `bob capture` errors:
 | `req_depth`  | beyond `MAX_REQ_DEPTH`                           | `Requirements nest at most 16 deep — carry this branch into its own task` |
 
 Notebook routes still refuse checkboxes, and `@route` task lists still strip
-`[ ]`. Text copied from outside writers (gcal, gkeep, gmail, highlights,
-refs) escapes a bullet-start checkbox as `\[`, so pasted text never becomes
-a requirement. (Shipped in the `capture-reqs` and `reader-hardening`
-phases.)
+`[ ]`. (Shipped in the `capture-reqs` phase.)
+
+**Pasted text never becomes a requirement.** Text copied from outside
+writers (gcal descriptions and private notes, gkeep, gmail, highlights, ref
+tasks) escapes a bullet-start checkbox as `\[` (`- \[ ] item`). It renders
+the same words and is never a checkbox. (Shipped in the `reader-hardening`
+phase.)
 
 The typing rewrite `expand_req_marker` works on `--cursor` typing at an
 eligible bullet start: typing the space in `- [` rewrites the marker to

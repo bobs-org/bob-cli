@@ -93,7 +93,11 @@ pub(super) fn parse_task_line(
         return None;
     }
     let body = after_checkbox.trim_start();
-    if !body.contains(&settings.global_filter) {
+    if !settings.global_filter.is_empty()
+        && !body
+            .split_whitespace()
+            .any(|token| token == settings.global_filter)
+    {
         return None;
     }
     let block_id = trailing_block_id(body);

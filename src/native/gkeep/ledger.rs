@@ -428,7 +428,7 @@ impl VaultTask {
 }
 
 static CHECKBOX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*-\s*\[([^\]])\]").expect("valid checkbox regex")
+    Regex::new(r"^\s*-\s*\\?\[([^\]])\]").expect("valid checkbox regex")
 });
 
 /// Test convenience wrapper: read tasks without import history.

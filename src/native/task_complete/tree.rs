@@ -671,12 +671,13 @@ impl<'a, V: CloseVault> TreeWork<'a, V> {
             self.record_left_open(key, &current, LeftOpenReason::Recurring);
             return Ok(false);
         }
+        if !task_has_global_filter(&line, &self.settings) {
+            return Ok(false);
+        }
         let Some(mut updated) = set_task_line_status(&line, 'x') else {
             return Ok(false);
         };
-        if task_has_global_filter(&line, &self.settings) {
-            updated = add_or_replace_completion_field(&updated, &self.date);
-        }
+        updated = add_or_replace_completion_field(&updated, &self.date);
         let Some(next) = replace_line(&contents, current.line_index, &updated)
         else {
             return Ok(false);

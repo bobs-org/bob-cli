@@ -1341,10 +1341,15 @@ pub(super) fn parse_task_line(line: &str) -> Option<ParsedTaskLine<'_>> {
         return None;
     }
 
+    let text = after_close_bracket.trim_start();
+    if !contains_task_tag(text) {
+        return None;
+    }
+
     Some(ParsedTaskLine {
         mark,
         status: TaskStatus::from_mark(mark),
-        text: after_close_bracket.trim_start(),
+        text,
     })
 }
 

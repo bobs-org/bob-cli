@@ -303,6 +303,27 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
 }
 
 #[test]
+fn scheduled_project_does_not_stamp_or_unhide_a_requirement() {
+    let contents = "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n\
+- [ ] #task Ship ^prj\n\
+\t- [ ] #hide keep this req\n";
+    let project = parse_clean_project("Alpha.md", contents);
+    let today = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
+    let plan = plan_project_sync_at(&project, false, today);
+    assert!(plan.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::ReconcileTaskSchedules { .. }
+    )));
+    let updated = apply_changes(contents, &plan.changes);
+    let req_line = updated
+        .lines()
+        .find(|line| line.contains("keep this req"))
+        .expect("req line");
+    assert!(req_line.contains("#hide"), "{req_line}");
+    assert!(!req_line.contains("[scheduled::]"), "{req_line}");
+}
+
+#[test]
 fn due_scheduled_projects_follow_the_normal_surfacing_rule() {
     // The `sase_sites` shape: past date, hidden `^prj`, only closed
     // tasks → the `^prj` surfaces.
@@ -441,7 +462,7 @@ fn scheduled_tasks_keep_subproject_ledger_planning() {
 
 #[test]
 fn task_schedule_edits_cover_contract_and_preserve_markdown() {
-    let contents = "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: stale] ^prj\r\n  1. [ ] Nested missing #hide ^nested\r\n> - [*] Equal (scheduled:: 2026-07-11) #hide\r\n- [/] Later [scheduled:: 2026-07-12] #hideaway #hide\r\n- [?] Earlier [scheduled:: 2026-07-10] #hide #hide\r\n- [x] Done #hide\r\n- [X] Done upper #hide\r\n- [-] Canceled #hidden #hide\r\n- [!] Custom #hide\r\n- [ ] Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+    let contents = "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: stale] ^prj\r\n  1. [ ] #task Nested missing #hide ^nested\r\n> - [*] #task Equal (scheduled:: 2026-07-11) #hide\r\n- [/] #task Later [scheduled:: 2026-07-12] #hideaway #hide\r\n- [?] #task Earlier [scheduled:: 2026-07-10] #hide #hide\r\n- [x] #task Done #hide\r\n- [X] #task Done upper #hide\r\n- [-] #task Canceled #hidden #hide\r\n- [!] #task Custom #hide\r\n- [ ] #task Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n- [ ] Nested req #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
     let future = apply_changes(
         contents,
         &[
@@ -462,7 +483,7 @@ fn task_schedule_edits_cover_contract_and_preserve_markdown() {
     );
     assert_eq!(
         future,
-        "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-07-11] #hide ^prj\r\n  1. [ ] Nested missing [scheduled:: 2026-07-11] ^nested\r\n> - [*] Equal (scheduled:: 2026-07-11)\r\n- [/] Later [scheduled:: 2026-07-12] #hideaway\r\n- [?] Earlier [scheduled:: 2026-07-11]\r\n- [x] Done\r\n- [X] Done upper\r\n- [-] Canceled #hidden\r\n- [!] Custom\r\n- [ ] Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
+        "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-07-11] #hide ^prj\r\n  1. [ ] #task Nested missing [scheduled:: 2026-07-11] ^nested\r\n> - [*] #task Equal (scheduled:: 2026-07-11)\r\n- [/] #task Later [scheduled:: 2026-07-12] #hideaway\r\n- [?] #task Earlier [scheduled:: 2026-07-11]\r\n- [x] #task Done\r\n- [X] #task Done upper\r\n- [-] #task Canceled #hidden\r\n- [!] #task Custom\r\n- [ ] #task Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n- [ ] Nested req #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
     );
 
     assert_eq!(

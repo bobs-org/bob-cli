@@ -1336,6 +1336,23 @@ fn prj_anchor_line_stays_while_sibling_moves() {
 }
 
 #[test]
+fn archives_closed_owner_with_open_reqs() {
+    let contents = "\
+- [x] parent #task
+  - [ ] open req
+  - [>] [[#^carried|Carried]]
+";
+    let transform = transform_markdown(contents);
+    assert_eq!(transform.task_count, 1);
+    assert!(transform.holds.is_empty(), "{:?}", transform.holds);
+    assert!(transform.archive_append.contains("- [x] parent #task"));
+    assert!(transform.archive_append.contains("- [ ] open req"));
+    assert!(transform
+        .archive_append
+        .contains("[>] [[#^carried|Carried]]"));
+}
+
+#[test]
 fn holds_closed_root_with_open_task_descendant() {
     let contents = "\
 - [x] parent #task

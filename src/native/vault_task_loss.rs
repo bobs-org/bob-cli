@@ -512,6 +512,9 @@ fn checkbox(line: &str) -> Option<(char, &str)> {
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
+    if !collect_done::has_task_tag(line) {
+        return None;
+    }
     Some((status, rest.trim_start()))
 }
 
@@ -709,6 +712,15 @@ mod tests {
         assert!(lines[..4].iter().all(|line| line.open));
         assert!(!lines[4].open);
         assert_eq!(lines[0].line, 1);
+    }
+
+    #[test]
+    fn ignores_anchored_requirement_lines() {
+        let lines = task_lines(
+            "- [ ] #task Owner ^owner\n\t- [ ] req with anchor ^req\n",
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].id, "owner");
     }
 
     #[test]

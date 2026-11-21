@@ -203,6 +203,37 @@ fn unknown_status_descendant_is_left_open() {
 }
 
 #[test]
+fn embedded_tree_close_leaves_an_anchored_req_unchecked() {
+    let mut vault = MemoryVault::new();
+    vault.insert(
+        "owner.md",
+        concat!("- [ ] #task Owner ^owner\n", "  - ![[other#^req-anchor]]\n",),
+    );
+    vault.insert(
+        "other.md",
+        concat!(
+            "- [ ] #task Other ^other\n",
+            "  - [ ] anchored req ^req-anchor\n",
+        ),
+    );
+    let root = vault.absolute("owner.md");
+    let outcome =
+        complete_task_tree(&vault, &root, "owner", DATE, RootPolicy::Explicit)
+            .expect("tree closes");
+    assert!(outcome.root.is_some());
+    assert!(outcome.closed_subtasks.is_empty());
+    let owner = outcome.changed_files.get(&root).expect("owner closed");
+    assert!(
+        owner.contains("- [x] #task Owner  [completion:: 2026-10-05] ^owner")
+    );
+    let other_path = vault.absolute("other.md");
+    if let Some(other) = outcome.changed_files.get(&other_path) {
+        assert!(other.contains("- [ ] anchored req ^req-anchor"));
+        assert!(!other.contains("- [x] anchored req"));
+    }
+}
+
+#[test]
 fn canceled_descendant_is_neither_closed_nor_reported() {
     let mut vault = MemoryVault::new();
     vault.insert(

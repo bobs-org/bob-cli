@@ -299,3 +299,152 @@ fn check_vector_case(case: &serde_json::Value, settings: &NoteTaskSettings) {
         assert_eq!(keys.len(), forest.len(), "{id} distinct row keys");
     }
 }
+
+fn strip_req_heads(contents: &str, settings: &NoteTaskSettings) -> String {
+    contents
+        .split_inclusive('\n')
+        .enumerate()
+        .filter(|(index, _)| !is_req_line(contents, *index, settings))
+        .map(|(_, line)| line)
+        .collect()
+}
+
+fn note_task_idents(
+    contents: &str,
+    settings: &NoteTaskSettings,
+) -> Vec<(Option<String>, String, char)> {
+    note_tasks::scan(contents, settings)
+        .tasks()
+        .iter()
+        .map(|task| {
+            (
+                task.block_id.clone(),
+                task.description.clone(),
+                task.status_symbol,
+            )
+        })
+        .collect()
+}
+
+fn hook_task_idents(
+    contents: &str,
+    settings: &NoteTaskSettings,
+) -> Vec<(Option<String>, String, char)> {
+    crate::native::task_status_hooks::parse_tasks(contents, settings)
+        .into_iter()
+        .map(|task| (task.block_id, task.description, task.status))
+        .collect()
+}
+
+const INVARIANCE_NOTE: &str = "\
+## Tasks
+- [ ] #task Owner one ^one
+	- [ ] depth 1 req
+		- [ ] depth 2 req
+			- [ ] depth 3 req
+		- a note of the depth-2 req
+	- [ ] #task Nested subtask ^nested
+		- [ ] nested's own req
+	- plain owner note
+- [*] #task Next lane ^next
+	- [ ] next req
+- [/] #task Pending lane ^pending
+	- [ ] pending req
+- [ ] #task Ready lane ^ready
+	- [ ] ready req
+		- [ ] ready nested req
+";
+
+const TASKS_PLUGIN_SETTINGS: &str = r##"{
+  "globalFilter": "#task",
+  "taskFormat": "dataview",
+  "statusSettings": {
+    "coreStatuses": [
+      {"symbol":" ","name":"Todo","type":"TODO"},
+      {"symbol":"x","name":"Done","type":"DONE"}
+    ],
+    "customStatuses": [
+      {"symbol":"*","name":"Next","type":"TODO"},
+      {"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},
+      {"symbol":"-","name":"Cancelled","type":"CANCELLED"}
+    ]
+  }
+}"##;
+
+#[test]
+fn reqs_are_invisible_to_task_readers() {
+    let settings = settings();
+    let stripped = strip_req_heads(INVARIANCE_NOTE, &settings);
+    assert!(
+        stripped.contains("#task Owner one"),
+        "owners stay: {stripped}"
+    );
+    assert!(
+        stripped.contains("#task Nested subtask"),
+        "nested tasks stay: {stripped}"
+    );
+    assert!(
+        !stripped.contains("depth 1 req")
+            && !stripped.contains("nested's own req")
+            && !stripped.contains("ready nested req"),
+        "req heads must be gone: {stripped}"
+    );
+    assert_eq!(
+        note_task_idents(INVARIANCE_NOTE, &settings),
+        note_task_idents(&stripped, &settings),
+        "note_tasks scan identities"
+    );
+    assert_eq!(
+        hook_task_idents(INVARIANCE_NOTE, &settings),
+        hook_task_idents(&stripped, &settings),
+        "task_status_hooks parse identities"
+    );
+
+    let with_reqs = tempfile::tempdir().expect("vault with reqs");
+    let without_reqs = tempfile::tempdir().expect("vault without reqs");
+    for (dir, body) in [
+        (with_reqs.path(), INVARIANCE_NOTE),
+        (without_reqs.path(), stripped.as_str()),
+    ] {
+        let settings_path =
+            dir.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+        std::fs::create_dir_all(settings_path.parent().expect("parent"))
+            .expect("create tasks plugin dir");
+        std::fs::write(&settings_path, TASKS_PLUGIN_SETTINGS)
+            .expect("write tasks settings");
+        std::fs::write(dir.join("tasks.md"), body).expect("write note");
+    }
+    let now = chrono::NaiveDate::from_ymd_opt(2026, 11, 21)
+        .expect("date")
+        .and_hms_opt(12, 0, 0)
+        .expect("noon");
+    for query in [
+        crate::native::dataview::OPEN_QUERY,
+        crate::native::dataview::READY_QUERY,
+        crate::native::dataview::NEXT_QUERY,
+        crate::native::dataview::PENDING_QUERY,
+    ] {
+        let with = crate::native::dataview::query_matching_descriptions(
+            with_reqs.path(),
+            query,
+            now,
+        )
+        .expect("query vault with reqs");
+        let without = crate::native::dataview::query_matching_descriptions(
+            without_reqs.path(),
+            query,
+            now,
+        )
+        .expect("query vault without reqs");
+        assert_eq!(with, without, "dataview query identities for {query}");
+        assert!(
+            !with.iter().any(|description| {
+                description.contains("depth 1 req")
+                    || description.contains("next req")
+                    || description.contains("pending req")
+                    || description.contains("ready req")
+            }),
+            "a req description leaked into {query}: {with:?}"
+        );
+    }
+}

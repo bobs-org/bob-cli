@@ -159,6 +159,26 @@ fn project_sync_plan_hoists_frontmatter_scheduled_onto_prj() {
 }
 
 #[test]
+fn multiple_scheduled_fields_still_warn_on_real_task_lines() {
+    let project = parse_clean_project(
+        "Alpha.md",
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n\
+- [ ] #task Ship ^prj\n\
+- [ ] #task Double [scheduled:: 2026-07-01] [scheduled:: 2026-07-02]\n",
+    );
+    let plan = plan_project_sync_at(
+        &project,
+        false,
+        NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+    );
+    assert!(plan.warnings.iter().any(|event| matches!(
+        event,
+        SyncEvent::Warning { message, .. }
+            if message == "task has multiple scheduled fields"
+    )));
+}
+
+#[test]
 fn project_sync_plan_does_not_hoist_without_open_prj() {
     let project = parse_clean_project(
         "Missing.md",
