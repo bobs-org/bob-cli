@@ -24,6 +24,7 @@ use crate::native::records::{
 use crate::native::{
     host_catalog::FileEdit, notebooks::snapshot::VaultSnapshot,
 };
+use sha2::{Digest, Sha256};
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -555,7 +556,11 @@ pub(crate) fn project_album_from_folder(
             .then_with(|| left.message.cmp(&right.message))
     });
     let schema_fingerprint = record_type.map(|record_type| {
-        schema_fingerprint(record_type, declaration.plural.as_deref())
+        schema_fingerprint(
+            record_type,
+            declaration.plural.as_deref(),
+            declaration.walk_by.as_deref(),
+        )
     });
     let singular = declaration
         .plural
@@ -600,17 +605,32 @@ pub(crate) fn project_album_from_folder(
 }
 
 /// Shared report and writer fingerprint calculation. A missing plural uses
-/// the same empty-string argument as the schema's semantic hash.
+/// the same empty-string argument as the schema's semantic hash. The
+/// effective `walk_by` selection binds into the fingerprint: `None` keeps
+/// the hash byte-identical to the schema-only hash, while `Some(field)`
+/// derives an opaque hash from that base plus the field key with an
+/// unambiguous, domain-separated encoding.
 pub(crate) fn schema_fingerprint(
     record_type: &RecordType,
     plural: Option<&str>,
+    walk_by: Option<&str>,
 ) -> String {
-    album_schema_fingerprint(
+    let base = album_schema_fingerprint(
         &record_type.id,
         &record_type.label,
         plural.unwrap_or(""),
         record_type,
-    )
+    );
+    let Some(selected) = walk_by else {
+        return base;
+    };
+    let bytes = serde_json::to_vec(&serde_json::json!([
+        "bob-album-walk-by-v1",
+        base,
+        selected,
+    ]))
+    .expect("walk fingerprint model is serializable");
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
 pub(crate) fn resolved_plural(declaration: &AlbumDeclaration) -> String {

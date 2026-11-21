@@ -298,7 +298,7 @@ fn load_complete(
 }
 
 fn report_of_plan(dry_run: bool, plan: &UpdatePlan) -> UpdateReport {
-    let changes = plan
+    let mut changes: Vec<ChangedFile> = plan
         .edit
         .as_ref()
         .map(|edit| ChangedFile {
@@ -308,6 +308,17 @@ fn report_of_plan(dry_run: bool, plan: &UpdatePlan) -> UpdateReport {
         })
         .into_iter()
         .collect();
+    let mut walk_changes: Vec<ChangedFile> = plan
+        .walk_edits
+        .iter()
+        .map(|edit| ChangedFile {
+            path: slash(&edit.path),
+            before: edit.before.clone(),
+            after: edit.after.clone(),
+        })
+        .collect();
+    walk_changes.sort_by(|left, right| left.path.cmp(&right.path));
+    changes.extend(walk_changes);
     UpdateReport {
         dry_run,
         stem: plan.stem.clone(),
@@ -398,6 +409,10 @@ fn short_op(op: &Op, result: Option<&OpResult>) -> String {
     let _ = result;
     match op {
         Op::AlbumSet { .. } => "album.set".to_owned(),
+        Op::WalkBySet { field } => match field {
+            Some(value) => format!("walk_by.set {value}"),
+            None => "walk_by.set unset".to_owned(),
+        },
         Op::FieldAdd { label, .. } => format!("field.add {label}"),
         Op::FieldSet { field, .. } => format!("field.set {field}"),
         Op::FieldMove { field, .. } => format!("field.move {field}"),
@@ -437,13 +452,15 @@ fn staged_subject(stem: &str, ops: &[Op], per_op: &[OpResult]) -> String {
 }
 
 /// Re-read the vault and report anything the install did not leave exact:
-/// the edited schema parses, its fingerprint matches, and the regenerated
-/// index is current. A mismatch rolls the transaction back.
+/// the edited schema parses, its fingerprint matches, the regenerated
+/// index is current, and the walk has no further safe changes. Damaged
+/// walk lines are preserved: only remaining Missing/Stale edits fail.
 fn verify_installed(
     vault: &Path,
     relative: &Path,
     expected_after: &str,
     expected_fingerprint: &str,
+    expect_walk_current: bool,
 ) -> Result<(), String> {
     let actual = fs::read_to_string(vault.join(relative)).map_err(|error| {
         format!("could not re-read {}: {error}", slash(relative))
@@ -482,8 +499,11 @@ fn verify_installed(
             slash(relative)
         ));
     };
-    let fingerprint =
-        schema_fingerprint(record_type, entry.declaration.plural.as_deref());
+    let fingerprint = schema_fingerprint(
+        record_type,
+        entry.declaration.plural.as_deref(),
+        entry.declaration.walk_by.as_deref(),
+    );
     if fingerprint != *expected_fingerprint {
         return Err(format!(
             "{} fingerprint changed after the write (expected {expected_fingerprint}, found {fingerprint})",
@@ -504,6 +524,28 @@ fn verify_installed(
             "{} index is not current after the write",
             slash(relative)
         ));
+    }
+    // When the transaction replanned the walk, the install must leave no
+    // further safe changes. Damaged lines have no planned edits, so they
+    // are preserved while Missing/Stale leftovers still fail. Unrelated
+    // edits never repair stale walks, so they skip this check and leave
+    // pre-existing stale lines for a later walk-aware operation.
+    if expect_walk_current {
+        use crate::native::albums::walk::{self, WalkScope};
+        let walk = walk::plan_album_walk(
+            &entry.declaration,
+            folder,
+            &[],
+            |relative| fs::read_to_string(vault.join(relative)).ok(),
+            WalkScope::All,
+        );
+        if !walk.edits.is_empty() {
+            return Err(format!(
+                "{} walk is not current after the write ({} stale lines remain)",
+                slash(relative),
+                walk.edits.len()
+            ));
+        }
     }
     Ok(())
 }
@@ -566,7 +608,7 @@ pub(crate) fn run_standalone(
                         &ops_for_subject,
                         &plan.op_outcome.per_op,
                     );
-                    let files = plan
+                    let mut files: Vec<StagedTextFile> = plan
                         .edit
                         .as_ref()
                         .map(|edit| StagedTextFile {
@@ -576,7 +618,42 @@ pub(crate) fn run_standalone(
                             updated_target: edit.after.clone(),
                         })
                         .into_iter()
-                        .collect::<Vec<_>>();
+                        .collect();
+                    let mut walk_files: Vec<StagedTextFile> = plan
+                        .walk_edits
+                        .iter()
+                        .map(|edit| StagedTextFile {
+                            target: vault.join(&edit.path),
+                            target_existed: true,
+                            original_target: edit.before.clone(),
+                            updated_target: edit.after.clone(),
+                        })
+                        .collect();
+                    walk_files
+                        .sort_by(|left, right| left.target.cmp(&right.target));
+                    files.extend(walk_files);
+                    let mut changes: Vec<ChangedFile> = plan
+                        .edit
+                        .as_ref()
+                        .map(|edit| ChangedFile {
+                            path: slash(&plan.path),
+                            before: edit.before.clone(),
+                            after: edit.after.clone(),
+                        })
+                        .into_iter()
+                        .collect();
+                    let mut walk_changes: Vec<ChangedFile> = plan
+                        .walk_edits
+                        .iter()
+                        .map(|edit| ChangedFile {
+                            path: slash(&edit.path),
+                            before: edit.before.clone(),
+                            after: edit.after.clone(),
+                        })
+                        .collect();
+                    walk_changes
+                        .sort_by(|left, right| left.path.cmp(&right.path));
+                    changes.extend(walk_changes);
                     let context = ApplyContext {
                         stem: plan.stem.clone(),
                         path: plan.path.clone(),
@@ -588,16 +665,7 @@ pub(crate) fn run_standalone(
                         per_op: plan.op_outcome.per_op.clone(),
                         derived_keys: plan.op_outcome.derived_keys.clone(),
                         inverse_ops: plan.schema_edit.inverse_ops.clone(),
-                        changes: plan
-                            .edit
-                            .as_ref()
-                            .map(|edit| ChangedFile {
-                                path: slash(&plan.path),
-                                before: edit.before.clone(),
-                                after: edit.after.clone(),
-                            })
-                            .into_iter()
-                            .collect(),
+                        changes,
                         changed: plan.changed,
                     };
                     if !plan.changed {
@@ -641,6 +709,7 @@ pub(crate) fn run_standalone(
                     let after_fingerprint = plan.after_fingerprint.clone();
                     let relative = plan.path.clone();
                     let vault_path = vault.to_path_buf();
+                    let expect_walk_current = plan.walk_replanned;
                     Ok(PlannedTxn {
                         subject,
                         files,
@@ -652,6 +721,7 @@ pub(crate) fn run_standalone(
                                 &relative,
                                 &after,
                                 &after_fingerprint,
+                                expect_walk_current,
                             )
                         }),
                         context,
@@ -736,6 +806,10 @@ fn report_of_txn(
 fn op_to_json(op: &Op) -> Value {
     let name = op.name();
     match op {
+        Op::WalkBySet { field } => match field {
+            Some(value) => json!({"op": name, "field": value}),
+            None => json!({"op": name, "field": Value::Null}),
+        },
         Op::AlbumSet { set, unset } => {
             let mut payload = json!({"op": name});
             if !set.is_empty() {

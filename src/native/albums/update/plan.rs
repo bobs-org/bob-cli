@@ -23,12 +23,16 @@ use crate::native::{
         index::IndexState,
         registry::{confine_vault_file, AlbumRegistry, DiscoveryHealth},
         report::{self, schema_fingerprint},
+        walk::{self, WalkScope},
         write::{folder_complete, plan_album_write},
         AlbumFinding, AlbumIssueSeverity,
     },
     host_catalog::{FileEdit, ReadDependencies},
     notebooks::snapshot::VaultSnapshot,
-    records::catalog::{FolderIndex, RecordCatalog},
+    records::{
+        catalog::{FolderIndex, RecordCatalog},
+        schema::RecordType,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +69,8 @@ pub(crate) struct UpdatePlan {
     pub(crate) op_outcome: OpOutcome,
     pub(crate) schema_edit: SchemaSpanEdit,
     pub(crate) edit: Option<FileEdit>,
+    pub(crate) walk_edits: Vec<FileEdit>,
+    pub(crate) walk_replanned: bool,
     pub(crate) deps: ReadDependencies,
     pub(crate) index_state: &'static str,
 }
@@ -175,8 +181,11 @@ pub(crate) fn plan_update(
             ),
         ));
     }
-    let before_fingerprint =
-        schema_fingerprint(before_type, entry.declaration.plural.as_deref());
+    let before_fingerprint = schema_fingerprint(
+        before_type,
+        entry.declaration.plural.as_deref(),
+        entry.declaration.walk_by.as_deref(),
+    );
     if envelope.expect != before_fingerprint {
         return Err(plan_error(
             "stale_schema",
@@ -194,6 +203,7 @@ pub(crate) fn plan_update(
     let index_refs = IndexRefs {
         index_by: entry.declaration.index_by.clone(),
         index_facets: entry.declaration.index_facets.clone(),
+        walk_by: entry.declaration.walk_by.clone(),
     };
     let other_fields =
         registry
@@ -243,6 +253,8 @@ pub(crate) fn plan_update(
     if !schema_edit.changed {
         // Semantic no-ops return before inspecting or repairing the current
         // index. In particular, an empty op list cannot become a sync path.
+        // Walk lines are part of semantic identity, so an unchanged schema
+        // edit implies no walk replanning either.
         return Ok(UpdatePlan {
             stem,
             path: relative,
@@ -254,6 +266,8 @@ pub(crate) fn plan_update(
             op_outcome,
             schema_edit,
             edit: None,
+            walk_edits: Vec::new(),
+            walk_replanned: false,
             deps,
             index_state: report::project_album_from_folder(
                 entry, folder, vault,
@@ -300,8 +314,11 @@ pub(crate) fn plan_update(
                 None,
             )
         })?;
-    let after_fingerprint =
-        schema_fingerprint(after_type, proposed.declaration.plural.as_deref());
+    let after_fingerprint = schema_fingerprint(
+        after_type,
+        proposed.declaration.plural.as_deref(),
+        proposed.declaration.walk_by.as_deref(),
+    );
     let index = plan_album_write(
         &proposed.declaration,
         &schema_edit.contents,
@@ -330,8 +347,31 @@ pub(crate) fn plan_update(
         .as_ref()
         .map(|edit| edit.after.clone())
         .unwrap_or_else(|| schema_edit.contents.clone());
-    let changed = after != before;
-    let edit = changed.then(|| FileEdit {
+    // Changing walk_by or the selected field's choice order replans the
+    // album's walk with full scope inside the same transaction. Unrelated
+    // schema edits must not become an indiscriminate walk repair.
+    let needs_replan = walk_needs_replan(
+        &entry.declaration,
+        &proposed.declaration,
+        before_type,
+        after_type,
+        &op_outcome,
+    );
+    let walk_edits = if needs_replan {
+        let walk_plan = walk::plan_album_walk(
+            &proposed.declaration,
+            folder,
+            &[],
+            |relative| fs::read_to_string(vault.join(relative)).ok(),
+            WalkScope::All,
+        );
+        walk_plan.edits
+    } else {
+        Vec::new()
+    };
+    let album_changed = after != before;
+    let changed = album_changed || !walk_edits.is_empty();
+    let edit = album_changed.then(|| FileEdit {
         path: relative.clone(),
         before: before.clone(),
         after: after.clone(),
@@ -351,9 +391,62 @@ pub(crate) fn plan_update(
         op_outcome,
         schema_edit,
         edit,
+        walk_edits,
+        walk_replanned: needs_replan,
         deps,
         index_state: index.state.as_str(),
     })
+}
+
+/// Whether the album walk must be replanned with full scope: the effective
+/// `walk_by` changed, the selected field's choice order changed, or the
+/// rendered album title changed. Display-label edits and unrelated schema
+/// operations return false so they never become an indiscriminate repair.
+fn walk_needs_replan(
+    before_decl: &crate::native::albums::AlbumDeclaration,
+    proposed_decl: &crate::native::albums::AlbumDeclaration,
+    before_type: &RecordType,
+    after_type: &RecordType,
+    outcome: &OpOutcome,
+) -> bool {
+    if outcome.walk_before != outcome.walk_after {
+        return true;
+    }
+    if before_decl.title != proposed_decl.title {
+        return true;
+    }
+    let Some(selected) = outcome.walk_after.as_deref() else {
+        return false;
+    };
+    let before_choices =
+        before_type
+            .field(selected)
+            .and_then(|field| match &field.kind {
+                crate::native::records::schema::FieldKind::Choices(choices) => {
+                    Some(
+                        choices
+                            .iter()
+                            .map(|choice| &choice.value)
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => None,
+            });
+    let after_choices =
+        after_type
+            .field(selected)
+            .and_then(|field| match &field.kind {
+                crate::native::records::schema::FieldKind::Choices(choices) => {
+                    Some(
+                        choices
+                            .iter()
+                            .map(|choice| &choice.value)
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => None,
+            });
+    before_choices != after_choices
 }
 
 #[allow(clippy::result_large_err)] // Propagate the planner's structured refusal.
@@ -518,6 +611,7 @@ mod tests {
         let expect = schema_fingerprint(
             record_type,
             registry.albums[0].declaration.plural.as_deref(),
+            registry.albums[0].declaration.walk_by.as_deref(),
         );
         let request = format!(
             r#"{{"schema_version":1,"expect":"{expect}","ops":[{{"op":"choice.set","field":"status","value":"ready","set":{{"label":"Available"}}}}]}}"#
@@ -555,6 +649,7 @@ mod tests {
         let expect = schema_fingerprint(
             record_type,
             registry.albums[0].declaration.plural.as_deref(),
+            registry.albums[0].declaration.walk_by.as_deref(),
         );
         let request =
             format!(r#"{{"schema_version":1,"expect":"{expect}","ops":[]}}"#);
@@ -582,7 +677,7 @@ mod tests {
         let registry = AlbumRegistry::from_snapshot(&vault, &snapshot);
         let record_type =
             registry.albums[0].declaration.record_type.as_ref().unwrap();
-        let expect = schema_fingerprint(record_type, None);
+        let expect = schema_fingerprint(record_type, None, None);
         let request =
             format!(r#"{{"schema_version":1,"expect":"{expect}","ops":[]}}"#);
         let envelope =

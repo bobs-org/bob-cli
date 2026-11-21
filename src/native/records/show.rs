@@ -711,12 +711,13 @@ fn album_schema_fingerprint(
     record_type: &RecordType,
 ) -> String {
     let RecordTypeSource::Album { path } = &kind.sourced.source;
-    let plural = context
+    let entry = context
         .album_claims()
         .iter()
-        .find(|entry| entry.declaration.path == *path)
-        .and_then(|entry| entry.declaration.plural.as_deref());
-    schema_fingerprint(record_type, plural)
+        .find(|entry| entry.declaration.path == *path);
+    let plural = entry.and_then(|entry| entry.declaration.plural.as_deref());
+    let walk_by = entry.and_then(|entry| entry.declaration.walk_by.as_deref());
+    schema_fingerprint(record_type, plural, walk_by)
 }
 
 fn yaml_string(mapping: &serde_yaml::Mapping, key: &str) -> Option<String> {

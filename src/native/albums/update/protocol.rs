@@ -105,14 +105,19 @@ pub(crate) struct RestoreSpan {
     pub(crate) prior: Option<String>,
 }
 
-/// The nine v1 operations. Positions are zero-based; `None` means append
+/// The ten v1 operations. Positions are zero-based; `None` means append
 /// for adds. `restore_key` / `restore_value` / `restore_values` are Undo-only
 /// restoration metadata: they create absent keys, never rename existing keys.
+/// `walk_by.set` carries `field: string|null`; `None` unsets the top-level
+/// `walk_by` key.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
     AlbumSet {
         set: HashMap<String, JsonValue>,
         unset: Vec<String>,
+    },
+    WalkBySet {
+        field: Option<String>,
     },
     FieldAdd {
         label: String,
@@ -163,6 +168,7 @@ impl Op {
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::AlbumSet { .. } => "album.set",
+            Self::WalkBySet { .. } => "walk_by.set",
             Self::FieldAdd { .. } => "field.add",
             Self::FieldSet { .. } => "field.set",
             Self::FieldMove { .. } => "field.move",
@@ -356,7 +362,7 @@ fn parse_restoration(
                 "envelope_wrong_type",
                 index,
                 format!("unsupported restore key_path {key_path:?}"),
-                "restore paths must name an album schema entry under record",
+                "restore paths must name walk_by or an album schema entry under record",
             ));
         }
         if !paths.insert(key_path.clone()) {
@@ -402,6 +408,9 @@ fn parse_optional_raw_span(
 }
 
 fn valid_restore_key_path(path: &str) -> bool {
+    if path == "walk_by" {
+        return true;
+    }
     let parts = path.split('.').collect::<Vec<_>>();
     match parts.as_slice() {
         ["record", key] => {
@@ -450,6 +459,7 @@ fn parse_op(raw: &JsonValue, index: usize) -> Result<Op, ProtocolError> {
     })?;
     match op_name {
         "album.set" => parse_album_set(mapping, index),
+        "walk_by.set" => parse_walk_by_set(mapping, index),
         "field.add" => parse_field_add(mapping, index),
         "field.set" => parse_field_set(mapping, index),
         "field.move" => parse_field_move(mapping, index),
@@ -462,7 +472,7 @@ fn parse_op(raw: &JsonValue, index: usize) -> Result<Op, ProtocolError> {
             "envelope_unknown_op",
             index,
             format!("unknown op {op_name:?}"),
-            "expected one of album.set, field.add, field.set, field.move, field.remove, choice.add, choice.set, choice.move, choice.remove",
+            "expected one of album.set, walk_by.set, field.add, field.set, field.move, field.remove, choice.add, choice.set, choice.move, choice.remove",
         )),
     }
 }
@@ -668,6 +678,31 @@ fn parse_album_set(
         ));
     }
     Ok(Op::AlbumSet { set, unset })
+}
+
+fn parse_walk_by_set(
+    mapping: &serde_json::Map<String, JsonValue>,
+    index: usize,
+) -> Result<Op, ProtocolError> {
+    reject_unknown_op_keys(mapping, &["op", "field"], index)?;
+    let raw = mapping.get("field").ok_or_else(|| {
+        ProtocolError::op(
+            "envelope_missing_key",
+            index,
+            "walk_by.set requires field (a field name or null to unset)",
+        )
+    })?;
+    match raw {
+        JsonValue::Null => Ok(Op::WalkBySet { field: None }),
+        JsonValue::String(text) => Ok(Op::WalkBySet {
+            field: Some(text.clone()),
+        }),
+        _ => Err(ProtocolError::op(
+            "envelope_wrong_type",
+            index,
+            "field must be a string or null",
+        )),
+    }
 }
 
 fn parse_field_add(

@@ -80,6 +80,8 @@ struct Step {
 /// Apply the already-validated ordered operations to schema spans. The
 /// operation planner validates the batch atomically first; this function
 /// repeats its pure per-op state transitions only to preserve source bytes.
+/// Top-level `walk_by` edits never touch the nested `record:` mapping and
+/// never rewrite unrelated YAML.
 pub(crate) fn apply_schema_ops(
     markdown: &str,
     ops_to_apply: &[Op],
@@ -117,8 +119,11 @@ pub(crate) fn apply_schema_ops(
     // state rather than emitted bytes. Explicit absent-versus-false/unset
     // stays distinct because presence is part of the ordered mapping.
     // Plural lives inside the record mapping when authored; derived
-    // display plurals do not affect byte identity.
-    if mappings_equal_ordered(&initial_raw, &outcome.after_raw) {
+    // display plurals do not affect byte identity. The top-level walk
+    // selection is part of semantic identity too.
+    if mappings_equal_ordered(&initial_raw, &outcome.after_raw)
+        && inputs.index_refs.walk_by == outcome.walk_after
+    {
         return Ok(SchemaSpanEdit {
             contents: markdown.to_owned(),
             changed: false,
@@ -128,21 +133,34 @@ pub(crate) fn apply_schema_ops(
 
     let mut current_text = markdown.to_owned();
     let mut current_raw = initial_raw;
+    let mut walk_current = inputs.index_refs.walk_by.clone();
     let mut steps = Vec::with_capacity(ops_to_apply.len());
     for (index, op) in ops_to_apply.iter().enumerate() {
         let before_text = current_text.clone();
         let mut next_raw = current_raw.clone();
-        let result = ops::apply_one(op, index, &mut next_raw, inputs)
-            .map_err(op_error)?;
-        current_text = patch_record_mapping(
-            &current_text,
-            &current_raw,
-            &next_raw,
-            op,
-            restorations[index].as_ref(),
-        )?;
+        let mut next_walk = walk_current.clone();
+        let result =
+            ops::apply_one(op, index, &mut next_raw, inputs, &mut next_walk)
+                .map_err(op_error)?;
+        if matches!(op, Op::WalkBySet { .. }) {
+            current_text = patch_walk_by(
+                &current_text,
+                next_walk.as_deref(),
+                op,
+                restorations[index].as_ref(),
+            )?;
+        } else {
+            current_text = patch_record_mapping(
+                &current_text,
+                &current_raw,
+                &next_raw,
+                op,
+                restorations[index].as_ref(),
+            )?;
+        }
         let (_, parsed_raw) = parse_record_mapping(&current_text)?;
         current_raw = parsed_raw;
+        walk_current = next_walk;
         steps.push(Step {
             before_text,
             after_text: current_text.clone(),
@@ -487,6 +505,213 @@ fn validate_flow_map_keys(
             Some(path.to_owned()),
         )
     })
+}
+
+/// Patch only the top-level `walk_by` key, never the nested
+/// `record.walk_by`. Existing entry bytes move as their original slice;
+/// only the scalar value is replaced, and absent keys are inserted at the
+/// end of the frontmatter. Restoration may only name `walk_by`.
+fn patch_walk_by(
+    markdown: &str,
+    desired: Option<&str>,
+    op: &Op,
+    restoration: Option<&Restoration>,
+) -> Result<String, SpanError> {
+    let mut overrides: HashMap<String, String> = HashMap::new();
+    if let Some(restoration) = restoration {
+        validate_restoration_for_op(op, restoration)?;
+        for span in &restoration.spans {
+            let actual = exact_span(markdown, &span.key_path)?;
+            if actual != span.expected {
+                return Err(error(
+                    "schema_restore_stale",
+                    format!(
+                        "restore span {} no longer matches its expected bytes",
+                        span.key_path
+                    ),
+                    None,
+                    Some(span.key_path.clone()),
+                ));
+            }
+            if let Some(prior) = &span.prior {
+                if has_yaml_feature(&split_lines(prior)) {
+                    return Err(error(
+                        "schema_restore_invalid",
+                        "restore span contains an anchor, alias, or tag",
+                        None,
+                        Some(span.key_path.clone()),
+                    ));
+                }
+                overrides.insert(span.key_path.clone(), prior.clone());
+            }
+        }
+    }
+    if let Some(prior) = overrides.get("walk_by") {
+        return apply_walk_by_prior(markdown, prior);
+    }
+    // When the restoration explicitly expects absence (`expected: null`)
+    // with no prior, the caller already validated the current span is
+    // absent; fall through to the desired-state patch which must also be
+    // absent for a valid undo.
+    let mut doc = document(markdown)?;
+    let entries = block_entries(&doc.lines, 1, doc.close, 0)?;
+    let existing = entries.iter().find(|entry| entry.key == "walk_by");
+    match (existing, desired) {
+        (None, None) => Ok(markdown.to_owned()),
+        (Some(entry), None) => {
+            // Remove the whole entry span; unrelated lines stay byte-identical.
+            let mut lines = doc.lines.clone();
+            lines.drain(entry.start..=entry.end);
+            // Recompute the closing delimiter after removal.
+            doc.close = lines
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find_map(|(index, line)| (line.text == "---").then_some(index))
+                .ok_or_else(|| {
+                    error(
+                        "span_internal",
+                        "closing delimiter disappeared",
+                        None,
+                        None,
+                    )
+                })?;
+            doc.lines = lines;
+            Ok(join_lines(&doc.lines))
+        }
+        (None, Some(value)) => {
+            let rendered = render_entry(
+                "walk_by",
+                &YamlValue::String(value.to_owned()),
+                0,
+                &doc.newline,
+            );
+            let close = doc.close;
+            let rendered_len = rendered.len();
+            let mut lines = doc.lines.clone();
+            lines.splice(close..close, rendered);
+            let _ = rendered_len;
+            Ok(join_lines(&lines))
+        }
+        (Some(entry), Some(value)) => {
+            let current_inline = line_value(&doc.lines, entry)?.0;
+            // Compare decoded scalar text to avoid rewriting identical values
+            // with different quoting; the caller treats semantic no-ops
+            // before reaching here, but per-op idempotence still holds.
+            let current_value = parse_top_level_scalar(&doc.lines, entry);
+            if current_value.as_deref() == Some(value) && overrides.is_empty() {
+                // Preserve original quoting/comments when the value is
+                // already correct.
+                return Ok(markdown.to_owned());
+            }
+            let _ = current_inline;
+            let new_value = YamlValue::String(value.to_owned());
+            let patched = replace_entry_value(
+                &doc.lines,
+                entry,
+                &new_value,
+                &doc.newline,
+            );
+            let mut lines = doc.lines.clone();
+            lines.splice(entry.start..=entry.end, patched);
+            Ok(join_lines(&lines))
+        }
+    }
+}
+
+fn parse_top_level_scalar(lines: &[Line], entry: &Entry) -> Option<String> {
+    let (inline, _) = line_value(lines, entry).ok()?;
+    if inline.is_empty() {
+        return None;
+    }
+    match serde_yaml::from_str::<YamlValue>(&inline) {
+        Ok(YamlValue::String(text)) => Some(text),
+        Ok(YamlValue::Null) => None,
+        _ => None,
+    }
+}
+
+fn apply_walk_by_prior(
+    markdown: &str,
+    prior: &str,
+) -> Result<String, SpanError> {
+    if prior.trim().is_empty() {
+        return Err(error(
+            "schema_restore_invalid",
+            "restore entry is empty",
+            None,
+            Some("walk_by".to_owned()),
+        ));
+    }
+    if has_yaml_feature(&split_lines(prior)) {
+        return Err(error(
+            "schema_restore_invalid",
+            "restore span contains an anchor, alias, or tag",
+            None,
+            Some("walk_by".to_owned()),
+        ));
+    }
+    let fragment = split_lines(prior);
+    let first = fragment
+        .iter()
+        .position(|line| !blank_or_comment(&line.text))
+        .ok_or_else(|| {
+            error(
+                "schema_restore_invalid",
+                "restore entry is empty",
+                None,
+                Some("walk_by".to_owned()),
+            )
+        })?;
+    let indent = indentation(&fragment[first].text);
+    let (key, _) =
+        parse_key(&fragment[first].text, indent).ok_or_else(|| {
+            error(
+                "schema_restore_invalid",
+                "restore bytes do not begin with a YAML key",
+                None,
+                Some("walk_by".to_owned()),
+            )
+        })?;
+    if key != "walk_by" || indent != 0 {
+        return Err(error(
+            "schema_restore_invalid",
+            "restore bytes do not match the resolved schema key and indentation",
+            None,
+            Some("walk_by".to_owned()),
+        ));
+    }
+    let top = block_entries(&fragment, first, fragment.len(), indent)?;
+    if top.len() != 1 {
+        return Err(error(
+            "schema_restore_invalid",
+            "restore bytes must contain exactly one schema entry",
+            None,
+            Some("walk_by".to_owned()),
+        ));
+    }
+    // Validate through the generic fragment checker for consistent errors.
+    let doc = document(markdown)?;
+    let entries = block_entries(&doc.lines, 1, doc.close, 0)?;
+    let existing = entries.iter().find(|entry| entry.key == "walk_by");
+    match existing {
+        Some(entry) => {
+            let patched = validate_restore_fragment(prior, entry, "walk_by")?;
+            let mut lines = doc.lines.clone();
+            lines.splice(entry.start..=entry.end, patched);
+            Ok(join_lines(&lines))
+        }
+        None => {
+            let rendered =
+                validate_absent_restore(prior, "walk_by", 0, "walk_by")?;
+            let mut lines = doc.lines.clone();
+            // Insert restored entry at the end of the frontmatter, matching
+            // the forward-insertion position.
+            let close = doc.close;
+            lines.splice(close..close, rendered);
+            Ok(join_lines(&lines))
+        }
+    }
 }
 
 fn patch_record_mapping(
@@ -1061,6 +1286,10 @@ fn validate_restoration_for_op(
     restoration: &Restoration,
 ) -> Result<(), SpanError> {
     let allowed = match op {
+        Op::WalkBySet { .. } => restoration
+            .spans
+            .iter()
+            .all(|span| span.key_path == "walk_by"),
         Op::AlbumSet { set, unset } => {
             let keys = set
                 .keys()
@@ -1159,6 +1388,7 @@ fn build_inverse_ops(steps: &[Step]) -> Vec<RestoredOp> {
 
 fn inverse_paths(op: &Op, earlier: &[Op]) -> Vec<String> {
     match op {
+        Op::WalkBySet { .. } => vec!["walk_by".to_owned()],
         Op::AlbumSet { set, unset } => {
             let mut keys =
                 set.keys().chain(unset.iter()).cloned().collect::<Vec<_>>();

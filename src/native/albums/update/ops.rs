@@ -101,11 +101,12 @@ impl std::fmt::Display for OpError {
 
 impl std::error::Error for OpError {}
 
-/// Album index references that guard field removals.
+/// Album index and walk references that guard field removals.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct IndexRefs {
     pub(crate) index_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
+    pub(crate) walk_by: Option<String>,
 }
 
 /// Another album's storage shape for cross-album clash checks.
@@ -154,11 +155,15 @@ pub(crate) struct OpOutcome {
     pub(crate) inverse_ops: Vec<Op>,
     pub(crate) group_before: Option<String>,
     pub(crate) group_after: Option<String>,
+    pub(crate) walk_before: Option<String>,
+    pub(crate) walk_after: Option<String>,
 }
 
 /// Apply ordered ops to the raw mapping, count complete-record impacts,
 /// validate the final candidate with the shared validator, and derive
-/// semantic inverses in reverse order.
+/// semantic inverses in reverse order. The evolving `walk_by` selection is
+/// tracked across the batch so unsetting before a field removal may proceed
+/// while removing the selected field refuses.
 pub(crate) fn apply_ops(
     envelope_ops: &[Op],
     inputs: &ApplyInputs<'_>,
@@ -170,9 +175,10 @@ pub(crate) fn apply_ops(
     let mut per_op = Vec::with_capacity(envelope_ops.len());
     let mut derived_keys: Vec<Option<String>> =
         Vec::with_capacity(envelope_ops.len());
+    let mut walk_current = inputs.index_refs.walk_by.clone();
 
     for (index, op) in envelope_ops.iter().enumerate() {
-        let result = apply_one(op, index, &mut raw, inputs)?;
+        let result = apply_one(op, index, &mut raw, inputs, &mut walk_current)?;
         derived_keys.push(result.derived_key.clone());
         per_op.push(result);
     }
@@ -194,6 +200,18 @@ pub(crate) fn apply_ops(
         inverse_ops.extend(result.inverse.iter().cloned());
     }
 
+    let walk_before = inputs.index_refs.walk_by.clone();
+    // The final selection must still be valid against the final schema:
+    // a batch that ends with an invalid selection refuses even when an
+    // intermediate step was valid.
+    if let Some(selected) = walk_current.as_deref() {
+        validate_walk_selection(
+            &raw,
+            selected,
+            envelope_ops.len().saturating_sub(1),
+        )?;
+    }
+
     Ok(OpOutcome {
         after_raw: raw,
         after_type,
@@ -204,21 +222,29 @@ pub(crate) fn apply_ops(
         inverse_ops,
         group_before,
         group_after,
+        walk_before,
+        walk_after: walk_current,
     })
 }
 
 /// Apply one already-parsed operation to an ordered raw schema mapping.
 /// The command planner uses this only while composing byte spans; the
 /// envelope is still validated atomically by [`apply_ops`] afterwards.
+/// `walk_current` tracks the evolving top-level `walk_by` selection across
+/// the batch; `WalkBySet` validates against the current `raw`.
 pub(crate) fn apply_one(
     op: &Op,
     index: usize,
     raw: &mut Mapping,
     inputs: &ApplyInputs<'_>,
+    walk_current: &mut Option<String>,
 ) -> Result<OpResult, OpError> {
     match op {
         Op::AlbumSet { set, unset } => {
             apply_album_set(set, unset, index, raw, inputs)
+        }
+        Op::WalkBySet { field } => {
+            apply_walk_by_set(field.clone(), index, raw, walk_current)
         }
         Op::FieldAdd {
             label,
@@ -249,7 +275,7 @@ pub(crate) fn apply_one(
             apply_field_move(field, *position, index, raw)
         }
         Op::FieldRemove { field } => {
-            apply_field_remove(field, index, raw, inputs)
+            apply_field_remove(field, index, raw, inputs, walk_current)
         }
         Op::ChoiceAdd {
             field,
@@ -475,6 +501,89 @@ fn describe_album_set(
     } else {
         format!("album {}", parts.join(", "))
     }
+}
+
+fn apply_walk_by_set(
+    field: Option<String>,
+    index: usize,
+    raw: &Mapping,
+    walk_current: &mut Option<String>,
+) -> Result<OpResult, OpError> {
+    match field.as_deref() {
+        None => {
+            let prior = walk_current.clone();
+            *walk_current = None;
+            let summary = match prior.as_deref() {
+                Some(previous) => format!("unset walk_by (was {previous:?})"),
+                None => "unset walk_by (already unset)".to_owned(),
+            };
+            let inverse = vec![Op::WalkBySet { field: prior }];
+            Ok(OpResult {
+                op_index: index,
+                op_name: "walk_by.set",
+                summary,
+                derived_key: None,
+                filled: None,
+                count: None,
+                newly_invalid: 0,
+                inverse,
+            })
+        }
+        Some(candidate) => {
+            if candidate.trim().is_empty() {
+                return Err(OpError::invalid(
+                    "album_walk_by_invalid",
+                    index,
+                    "walk_by must be a non-empty field name",
+                ));
+            }
+            validate_walk_selection(raw, candidate, index)?;
+            let prior = walk_current.clone();
+            *walk_current = Some(candidate.to_owned());
+            let summary = format!("set walk_by to {candidate:?}");
+            let inverse = vec![Op::WalkBySet { field: prior }];
+            Ok(OpResult {
+                op_index: index,
+                op_name: "walk_by.set",
+                summary,
+                derived_key: None,
+                filled: None,
+                count: None,
+                newly_invalid: 0,
+                inverse,
+            })
+        }
+    }
+}
+
+fn validate_walk_selection(
+    raw: &Mapping,
+    candidate: &str,
+    index: usize,
+) -> Result<(), OpError> {
+    let Some(field_map) = field_mapping(raw, candidate) else {
+        let mut error = OpError::invalid(
+            "album_walk_field_unknown",
+            index,
+            format!("walk_by names undeclared field {candidate:?}"),
+        );
+        error.key_path = Some("walk_by".to_owned());
+        error.field = Some(candidate.to_owned());
+        return Err(error);
+    };
+    let kind = field_kind_name(&field_map);
+    let list = mapping_bool(&field_map, "list").unwrap_or(false);
+    if kind != "choices" || list {
+        let mut error = OpError::invalid(
+            "album_walk_by_not_choices",
+            index,
+            "walk_by must name a single-value choices field".to_owned(),
+        );
+        error.key_path = Some("walk_by".to_owned());
+        error.field = Some(candidate.to_owned());
+        return Err(error);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,6 +1297,7 @@ fn apply_field_remove(
     index: usize,
     raw: &mut Mapping,
     inputs: &ApplyInputs<'_>,
+    walk_current: &Option<String>,
 ) -> Result<OpResult, OpError> {
     let field_map = field_mapping(raw, field).ok_or_else(|| {
         let mut error = OpError::invalid(
@@ -1227,6 +1337,19 @@ fn apply_field_remove(
             MIGRATION_HINT,
         );
         error.field = Some(field.to_owned());
+        return Err(error);
+    }
+    if walk_current.as_deref() == Some(field) {
+        let mut error = OpError::refusal(
+            "walk_reference",
+            index,
+            format!(
+                "field {field:?} is named by walk_by; remove the walk reference in YAML first"
+            ),
+            MIGRATION_HINT,
+        );
+        error.field = Some(field.to_owned());
+        error.key_path = Some("walk_by".to_owned());
         return Err(error);
     }
     if !folder_complete(inputs.folder) {
@@ -2654,6 +2777,7 @@ fields:
     static EMPTY_REFS: IndexRefs = IndexRefs {
         index_by: None,
         index_facets: Vec::new(),
+        walk_by: None,
     };
 
     fn empty_folder() -> (TempVault, RecordCatalog) {
@@ -3107,6 +3231,7 @@ fields:
         let refs = IndexRefs {
             index_by: Some("status".to_owned()),
             index_facets: vec!["location".to_owned()],
+            walk_by: None,
         };
         let inputs = ApplyInputs {
             before_raw: &raw,
@@ -3159,6 +3284,7 @@ fields:
         let indexed = IndexRefs {
             index_by: Some("extra".to_owned()),
             index_facets: Vec::new(),
+            walk_by: None,
         };
         let unused_inputs = ApplyInputs {
             before_raw: &unused_raw,

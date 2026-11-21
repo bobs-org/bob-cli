@@ -1129,3 +1129,778 @@ fn catalog_excludes_the_json_input_update_command() {
         .iter()
         .any(|entry| entry["path"] == serde_json::json!(["albums", "update"])));
 }
+
+// ---------------------------------------------------------------------------
+// walk_by.set: reversible grouped walk configuration
+// ---------------------------------------------------------------------------
+
+fn walk_fixture(temp: &TempDir) -> PathBuf {
+    let (vault, _remote, _peer) = init_vault_sync_pair(temp);
+    write(&vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+    write(&vault, "eat.md", ALBUM);
+    fs::create_dir_all(vault.join("eat")).expect("record folder");
+    write(&vault, "eat/aaa.md", "---\nstatus: to_try\n---\n\n# AAA\n");
+    write(&vault, "eat/mmm.md", "---\nstatus: liked\n---\n\n# MMM\n");
+    write(&vault, "eat/zzz.md", "---\nstatus: to_try\n---\n\n# ZZZ\n");
+    write(&vault, "eat.base", "filters: {}\n");
+    commit_all(&vault, "walk_by fixture");
+    let synced = run(&vault, temp, &["sync", "-f", "json"]);
+    assert_eq!(synced.status.code(), Some(0), "{}", format_output(&synced));
+    vault
+}
+
+fn list_json(vault: &Path, temp: &TempDir) -> Value {
+    let output = run(vault, temp, &["list", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    json(&output)
+}
+
+fn walk_by_of(payload: &Value) -> Option<String> {
+    payload["albums"][0]["walk_by"].as_str().map(str::to_owned)
+}
+
+#[test]
+fn walk_by_set_and_unset_rewrites_grouped_walk_lines() {
+    let temp = TempDir::new("album-update-walk-set");
+    let vault = walk_fixture(&temp);
+    let before_fp = fingerprint(&vault, &temp);
+    assert_eq!(
+        list_json(&vault, &temp)["albums"][0]["walk_by"],
+        Value::Null
+    );
+
+    // Set walk_by to status: one scoped commit with album + walk lines.
+    let body = envelope(&before_fp, r#"{"op":"walk_by.set","field":"status"}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "set.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["changed"], true);
+    let after_fp = payload["after_fingerprint"].as_str().unwrap().to_owned();
+    assert_ne!(after_fp, before_fp, "grouping binds into the fingerprint");
+    let album_text = fs::read_to_string(vault.join("eat.md")).unwrap();
+    assert!(album_text.contains("walk_by: status"), "{album_text}");
+    // Grouped order: to_try (AAA, ZZZ) then liked (MMM).
+    let listed = list_json(&vault, &temp);
+    assert_eq!(walk_by_of(&listed), Some("status".to_owned()));
+    assert_eq!(
+        listed["albums"][0]["walk"]["order"],
+        serde_json::json!(["aaa", "zzz", "mmm"]),
+        "group-major title order"
+    );
+    assert_eq!(listed["albums"][0]["walk"]["state"], "current");
+    assert_eq!(
+        listed["albums"][0]["walk"]["groups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    // Exactly one scoped commit contains the album and all affected records.
+    let files = stdout(&git_in(
+        &vault,
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+    ));
+    let mut names: Vec<&str> = files.lines().collect();
+    names.sort();
+    assert!(names.contains(&"eat.md"), "album commits: {names:?}");
+    assert!(
+        names.contains(&"eat/aaa.md"),
+        "walk lines commit: {names:?}"
+    );
+    assert!(
+        !names.contains(&"body.md"),
+        "unrelated files excluded: {names:?}"
+    );
+    assert!(
+        !names.contains(&"eat.base"),
+        "unrelated files excluded: {names:?}"
+    );
+
+    // Unset returns to flat title order and identical fingerprint base.
+    let body = envelope(&after_fp, r#"{"op":"walk_by.set","field":null}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "unset.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["changed"], true);
+    let album_text = fs::read_to_string(vault.join("eat.md")).unwrap();
+    assert!(!album_text.contains("walk_by"), "{album_text}");
+    let listed = list_json(&vault, &temp);
+    assert_eq!(listed["albums"][0]["walk_by"], Value::Null);
+    assert_eq!(
+        listed["albums"][0]["walk"]["order"],
+        serde_json::json!(["aaa", "mmm", "zzz"]),
+        "flat title order returns"
+    );
+    assert_eq!(
+        payload["after_fingerprint"].as_str().unwrap(),
+        before_fp,
+        "unset restores the byte-identical schema hash"
+    );
+}
+
+#[test]
+fn walk_by_set_noop_and_invalid_selections_refuse() {
+    let temp = TempDir::new("album-update-walk-invalid");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+
+    // Setting the same unset value twice: second is a semantic no-op.
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":null}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "noop.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert_eq!(json(&output)["changed"], false);
+
+    // Unknown field.
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":"missing"}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "bad1.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stdout(&output).contains("walk_by names undeclared field"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Non-choices field: add a text field, then select it.
+    let body = envelope(
+        &expect,
+        r#"{"op":"field.add","label":"Note","kind":"text"}"#,
+    );
+    let added = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "add.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", format_output(&added));
+    let after = json(&added)["after_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let body = envelope(&after, r#"{"op":"walk_by.set","field":"note"}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "bad2.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stdout(&output)
+            .contains("walk_by must name a single-value choices field"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Empty field name.
+    let body = envelope(&after, r#"{"op":"walk_by.set","field":"  "}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "bad3.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stdout(&output).contains("walk_by must be a non-empty field name"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Wrong type.
+    let body = envelope(&after, r#"{"op":"walk_by.set","field":42}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "bad4.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+
+    // Missing key.
+    let body = format!("{{\"schema_version\":1,\"expect\":\"{after}\",\"ops\":[{{\"op\":\"walk_by.set\"}}]}}");
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "bad5.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+
+    // Unknown op key.
+    let body =
+        envelope(&after, r#"{"op":"walk_by.set","field":"status","extra":1}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "bad6.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+}
+
+#[test]
+fn walk_by_guards_field_removal_and_allows_unset_then_remove() {
+    let temp = TempDir::new("album-update-walk-guard");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+    // Add an unused choices field and select it for the walk.
+    let body = envelope(
+        &expect,
+        r#"{"op":"field.add","label":"Section","kind":"choices","choices":[{"label":"Intro"}]}"#,
+    );
+    let added = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "add.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", format_output(&added));
+    let after_add = json(&added)["after_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let body =
+        envelope(&after_add, r#"{"op":"walk_by.set","field":"section"}"#);
+    let set = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "set.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(set.status.code(), Some(0), "{}", format_output(&set));
+    let after_set =
+        json(&set)["after_fingerprint"].as_str().unwrap().to_owned();
+
+    // Removing the selected field refuses, even though it is unused.
+    let body =
+        envelope(&after_set, r#"{"op":"field.remove","field":"section"}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "rm.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stdout(&output).contains("named by walk_by"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Unsetting before removing proceeds when the field is unused.
+    let body = envelope(
+        &after_set,
+        r#"{"op":"walk_by.set","field":null},{"op":"field.remove","field":"section"}"#,
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "unset_rm.json", &body)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let album_text = fs::read_to_string(vault.join("eat.md")).unwrap();
+    assert!(!album_text.contains("walk_by"), "{album_text}");
+    assert!(!album_text.contains("section"), "{album_text}");
+}
+
+#[test]
+fn walk_by_choice_reorder_replans_but_label_edits_do_not() {
+    let temp = TempDir::new("album-update-walk-reorder");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write(&vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+    write(
+        &vault,
+        "eat.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Places to eat.\nrecord:\n  noun: restaurant\n  label: Restaurant\n  fields:\n    status:\n      values:\n        to_try: To try\n        liked: Liked\n        archived: Archived\n---\n\n# Eat\n\n## Records\n\n> [!records] 0 restaurants\n>\n> No restaurants yet\n",
+    );
+    fs::create_dir_all(vault.join("eat")).expect("record folder");
+    write(&vault, "eat/aaa.md", "---\nstatus: to_try\n---\n\n# AAA\n");
+    write(&vault, "eat/mmm.md", "---\nstatus: liked\n---\n\n# MMM\n");
+    write(
+        &vault,
+        "eat/zzz.md",
+        "---\nstatus: archived\n---\n\n# ZZZ\n",
+    );
+    write(&vault, "eat.base", "filters: {}\n");
+    commit_all(&vault, "walk_by three-group fixture");
+    let synced = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(synced.status.code(), Some(0), "{}", format_output(&synced));
+    let expect = fingerprint(&vault, &temp);
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":"status"}"#);
+    let set = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "set.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(set.status.code(), Some(0), "{}", format_output(&set));
+    let after_set =
+        json(&set)["after_fingerprint"].as_str().unwrap().to_owned();
+    let order_before =
+        list_json(&vault, &temp)["albums"][0]["walk"]["order"].clone();
+    assert_eq!(order_before, serde_json::json!(["aaa", "mmm", "zzz"]));
+
+    // Reordering the selected choices regroups the walk: moving the middle
+    // choice last changes every walk line (not a pure ring rotation).
+    let body = envelope(
+        &after_set,
+        r#"{"op":"choice.move","field":"status","value":"liked","position":2}"#,
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "move.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["changed"], true);
+    let order_after =
+        list_json(&vault, &temp)["albums"][0]["walk"]["order"].clone();
+    assert_ne!(order_after, order_before, "choice order regroups the walk");
+    assert_eq!(order_after, serde_json::json!(["aaa", "zzz", "mmm"]));
+    let files = stdout(&git_in(
+        &vault,
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+    ));
+    assert!(
+        files.contains("eat/"),
+        "choice reorder commits walk lines: {files}"
+    );
+
+    // A display-label change keeps the same choice values, so no walk repair.
+    let after_move = payload["after_fingerprint"].as_str().unwrap().to_owned();
+    let before_records: Vec<String> = ["aaa", "mmm", "zzz"]
+        .iter()
+        .map(|stem| {
+            fs::read_to_string(vault.join(format!("eat/{stem}.md"))).unwrap()
+        })
+        .collect();
+    let body = envelope(
+        &after_move,
+        r#"{"op":"choice.set","field":"status","value":"liked","set":{"label":"Loved"}}"#,
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "label.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let files = stdout(&git_in(
+        &vault,
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+    ));
+    assert_eq!(
+        files.trim(),
+        "eat.md",
+        "label edit commits only the album: {files}"
+    );
+    for (stem, before) in
+        ["aaa", "mmm", "zzz"].iter().zip(before_records.iter())
+    {
+        assert_eq!(
+            &fs::read_to_string(vault.join(format!("eat/{stem}.md"))).unwrap(),
+            before,
+            "label edit leaves {stem} walk lines alone"
+        );
+    }
+}
+
+#[test]
+fn walk_by_unrelated_edits_do_not_repair_stale_walk() {
+    let temp = TempDir::new("album-update-walk-stale");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":"status"}"#);
+    let set = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "set.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(set.status.code(), Some(0), "{}", format_output(&set));
+    let after_set =
+        json(&set)["after_fingerprint"].as_str().unwrap().to_owned();
+
+    // Break one walk line by hand and commit the damage.
+    let stale = fs::read_to_string(vault.join("eat/aaa.md")).unwrap();
+    let broken = stale.replacen("[[eat|", "[[eat| STALE ", 1);
+    assert_ne!(broken, stale, "fixture walk line must exist");
+    write(&vault, "eat/aaa.md", &broken);
+    commit_all(&vault, "break one walk line");
+
+    // An unrelated schema edit must not repair the stale walk line.
+    let body = envelope(
+        &after_set,
+        r#"{"op":"album.set","set":{"label":"Eateries"}}"#,
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "unrelated.json", &body)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert_eq!(
+        fs::read_to_string(vault.join("eat/aaa.md")).unwrap(),
+        broken,
+        "unrelated edits never repair walk lines"
+    );
+    let files = stdout(&git_in(
+        &vault,
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+    ));
+    assert_eq!(files.trim(), "eat.md", "only the album commits: {files}");
+}
+
+#[test]
+fn walk_by_inverse_round_trips_and_multi_op_batches_are_atomic() {
+    let temp = TempDir::new("album-update-walk-inverse");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+    let original = fs::read_to_string(vault.join("eat.md")).unwrap();
+
+    // Set then invert through the reported inverse ops.
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":"status"}"#);
+    let set = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "set.json", &body).to_str().unwrap(),
+        ],
+    );
+    assert_eq!(set.status.code(), Some(0), "{}", format_output(&set));
+    let payload = json(&set);
+    let after_set = payload["after_fingerprint"].as_str().unwrap().to_owned();
+    assert!(!payload["inverse_ops"].as_array().unwrap().is_empty());
+    let inverse = payload["inverse_ops"].clone();
+    let undo_body = serde_json::json!({
+        "schema_version": 1,
+        "expect": after_set,
+        "ops": inverse,
+    })
+    .to_string();
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "undo.json", &undo_body)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert_eq!(fs::read_to_string(vault.join("eat.md")).unwrap(), original);
+
+    // A batch that ends with a refused removal writes nothing.
+    let expect_now = fingerprint(&vault, &temp);
+    let body = envelope(
+        &expect_now,
+        r#"{"op":"walk_by.set","field":"status"},{"op":"field.remove","field":"status"}"#,
+    );
+    let before_head = head(&vault);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "atomic.json", &body)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(head(&vault), before_head, "failed batches write nothing");
+}
+
+#[test]
+fn walk_by_stale_fingerprint_and_dry_run_purity() {
+    let temp = TempDir::new("album-update-walk-stale-fp");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+    let body = envelope(&expect, r#"{"op":"walk_by.set","field":"status"}"#);
+    let path = write_envelope(&temp, "set.json", &body);
+
+    // Dry run previews album + walk diffs but writes nothing.
+    let before_bytes: Vec<Vec<u8>> =
+        ["eat.md", "eat/aaa.md", "eat/mmm.md", "eat/zzz.md"]
+            .iter()
+            .map(|name| fs::read(vault.join(name)).unwrap())
+            .collect();
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-d",
+            "-f",
+            "json",
+            "-i",
+            path.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["changed"], true);
+    assert!(
+        payload["changes"].as_array().unwrap().len() >= 2,
+        "dry run lists walk lines: {}",
+        payload["changes"]
+    );
+    for (name, before) in ["eat.md", "eat/aaa.md", "eat/mmm.md", "eat/zzz.md"]
+        .iter()
+        .zip(before_bytes.iter())
+    {
+        assert_eq!(
+            &fs::read(vault.join(name)).unwrap(),
+            before,
+            "dry run writes nothing to {name}"
+        );
+    }
+
+    // A real apply followed by a stale-expect retry refuses.
+    let applied = run(
+        &vault,
+        &temp,
+        &["update", "eat", "-f", "json", "-i", path.to_str().unwrap()],
+    );
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "{}",
+        format_output(&applied)
+    );
+    let stale = run(
+        &vault,
+        &temp,
+        &["update", "eat", "-f", "json", "-i", path.to_str().unwrap()],
+    );
+    assert_eq!(stale.status.code(), Some(2), "{}", format_output(&stale));
+    assert!(
+        stdout(&stale).contains("stale_schema")
+            || format_output(&stale).contains("stale"),
+        "{}",
+        format_output(&stale)
+    );
+}
+
+#[test]
+fn walk_by_restore_whitelist_rejects_unrelated_and_stale_spans() {
+    let temp = TempDir::new("album-update-walk-restore");
+    let vault = walk_fixture(&temp);
+    let expect = fingerprint(&vault, &temp);
+    let before_head = head(&vault);
+
+    // Malicious restore: walk_by.set must not restore nested record keys.
+    let malicious = format!(
+        "{{\"schema_version\":1,\"expect\":\"{expect}\",\"ops\":[{{\"op\":\"walk_by.set\",\"field\":\"status\",\"restore\":{{\"spans\":[{{\"key_path\":\"record.label\",\"expected\":null,\"prior\":\"walk_by: status\"}}]}}}}]}}"
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "malicious.json", &malicious)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        format_output(&output).contains("schema_restore_invalid"),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        head(&vault),
+        before_head,
+        "malicious restore writes nothing"
+    );
+
+    // Stale restore: expected bytes do not match the current walk_by span.
+    let stale_restore = format!(
+        "{{\"schema_version\":1,\"expect\":\"{expect}\",\"ops\":[{{\"op\":\"walk_by.set\",\"field\":\"status\",\"restore\":{{\"spans\":[{{\"key_path\":\"walk_by\",\"expected\":\"walk_by: bogus\",\"prior\":\"walk_by: status\"}}]}}}}]}}"
+    );
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "stale_restore.json", &stale_restore)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        format_output(&output).contains("schema_restore_stale")
+            || format_output(&output).contains("schema_restore_invalid"),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(head(&vault), before_head, "stale restore writes nothing");
+}

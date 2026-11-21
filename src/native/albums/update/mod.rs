@@ -10,6 +10,7 @@
 //! - `{"schema_version":1,"expect":"sha256:…","ops":[]}` is a valid
 //!   no-op envelope; `-i -` reads stdin and omitted `-i` means the same.
 //! - `{"op":"album.set","set":{"label":"Eateries"},"unset":["plural"]}`
+//! - `{"op":"walk_by.set","field":"section"}` (`"field":null` unsets)
 //! - `{"op":"field.add","label":"Status","kind":"choices","position":0,
 //!    "choices":[{"label":"To try"},{"label":"Liked","emoji":"💚"}]}`
 //! - `{"op":"field.set","field":"status",
@@ -41,8 +42,9 @@
 //! - `ops::ApplyInputs { before_raw, before_type, before_plural, stem,
 //!   folder, index_refs, other_fields, today }`
 //! - `ops::OpOutcome { after_raw, after_type, after_plural, per_op,
-//!   derived_keys, consequence, inverse_ops, group_before/after }`
-//! - `ops::IndexRefs { index_by, index_facets }` and
+//!   derived_keys, consequence, inverse_ops, group_before/after,
+//!   walk_before/after }`
+//! - `ops::IndexRefs { index_by, index_facets, walk_by }` and
 //!   `ops::OtherAlbumField { path, key, storage, list }` for the
 //!   planner's registry overlay checks.
 
