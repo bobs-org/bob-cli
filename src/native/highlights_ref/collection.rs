@@ -793,6 +793,15 @@ fn validate_targets(
     let mut urls = Vec::with_capacity(targets.len());
     for (index, target) in targets.iter().enumerate() {
         let raw = target.to_string_lossy();
+        // Like arXiv papers, Spotify links never join a merged reading
+        // packet; every spelling (URI and short link included) refuses
+        // before any fetch.
+        if super::spotify::SpotifyLink::parse(&raw).is_some() {
+            return Err(CommandError::new(
+                super::spotify::collection_refusal(raw.trim()).render(),
+            )
+            .with_exit_code(2));
+        }
         if !super::target::looks_like_url(&raw) {
             return Err(usage_error(
                 format!(

@@ -3,7 +3,10 @@
 //! Missing keys take the defaults. A configured `exclude_hosts` list
 //! replaces the defaults; an empty list excludes nothing.
 
-use crate::native::config::{self, ConfigError};
+use crate::native::{
+    config::{self, ConfigError},
+    highlights_ref::spotify::SpotifyLink,
+};
 
 use super::UrlIntent;
 
@@ -76,8 +79,10 @@ impl UrlRoutingPolicy {
     }
 
     /// Whether `intent` is admitted for `entry`: the entry toggle is
-    /// on and the host matches no exclusion (each entry matches the
-    /// host and every subdomain).
+    /// on, the host matches no exclusion (each entry matches the host
+    /// and every subdomain), and a Spotify link names an episode or is a
+    /// short link (shows, music, and other Spotify paths stay ordinary
+    /// items, exactly like excluded hosts).
     pub(crate) fn admits(
         &self,
         intent: &UrlIntent,
@@ -88,6 +93,11 @@ impl UrlRoutingPolicy {
             RoutingEntry::Gkeep => self.gkeep,
         };
         if !enabled {
+            return false;
+        }
+        if SpotifyLink::parse(&intent.cleaned)
+            .is_some_and(|link| !link.is_routable())
+        {
             return false;
         }
         !self.is_excluded(&intent.host)
@@ -164,6 +174,32 @@ mod tests {
         assert!(policy.is_excluded("www.youtube.com"));
         assert!(!policy.is_excluded("notyoutube.com"));
         assert!(!policy.is_excluded("example.com"));
+    }
+
+    #[test]
+    fn spotify_admits_episodes_and_short_links_only() {
+        let policy = UrlRoutingPolicy::default();
+        let id = "4UgVFWty2I8hGAgSvT7pjC";
+        for raw in [
+            format!("https://open.spotify.com/episode/{id}?si=x"),
+            "https://spotify.link/AbCdEf123".to_string(),
+        ] {
+            let intent = super::super::classify_token(&raw).expect("classify");
+            assert!(policy.admits(&intent, RoutingEntry::Capture), "{raw}");
+            assert!(policy.admits(&intent, RoutingEntry::Gkeep), "{raw}");
+        }
+        for raw in [
+            format!("https://open.spotify.com/show/{id}"),
+            format!("https://open.spotify.com/track/{id}"),
+            format!("https://open.spotify.com/audiobook/{id}"),
+            "https://open.spotify.com/user/someone".to_string(),
+            "https://open.spotify.com/search/podcasts".to_string(),
+            format!("https://open.spotify.com/episode/{}", &id[..21]),
+        ] {
+            let intent = super::super::classify_token(&raw).expect("classify");
+            assert!(!policy.admits(&intent, RoutingEntry::Capture), "{raw}");
+            assert!(!policy.admits(&intent, RoutingEntry::Gkeep), "{raw}");
+        }
     }
 
     #[test]

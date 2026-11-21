@@ -1,14 +1,16 @@
 //! Stored identity keys and query classification.
 //!
-//! URL keys reuse the `highlights_ref` cleaning (already arXiv-aware) and add
-//! `arxiv:<id>` / `doi:<doi>` keys plus opaque `raw:` keys for values that
-//! fail validation. Query classification follows the plan order: url, arxiv,
-//! doi, path, name, title.
+//! URL keys reuse the `highlights_ref` cleaning (already arXiv- and
+//! Spotify-aware) and add `arxiv:<id>` / `doi:<doi>` keys plus opaque `raw:`
+//! keys for values that fail validation. A `spotify:<kind>:<id>` URI is a
+//! URL spelling of its canonical `https://open.spotify.com/<kind>/<id>`.
+//! Query classification follows the plan order: url, arxiv, doi, path,
+//! name, title.
 use regex::Regex;
 use std::sync::OnceLock;
 
 use crate::native::highlights_ref::{
-    percent_decode, validate_and_clean, ArxivPaper,
+    percent_decode, spotify, validate_and_clean, ArxivPaper,
 };
 
 /// Stored identity for one row's `source_url` + `url` values.
@@ -29,6 +31,8 @@ pub(crate) fn stored_identity(urls: &[String]) -> StoredIdentity {
         if value.is_empty() {
             continue;
         }
+        let spotify_uri = spotify_uri_url(value);
+        let value = spotify_uri.as_deref().unwrap_or(value);
         match validate_and_clean(value) {
             Ok(cleaned) => {
                 push_unique(&mut identity.keys, cleaned.dedupe_key);
@@ -99,7 +103,10 @@ pub(crate) enum QueryKind {
 pub(crate) fn classify_query(raw: &str) -> QueryKind {
     let query = raw.trim();
     let lower = query.to_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") {
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || spotify_uri_url(query).is_some()
+    {
         return QueryKind::Url;
     }
     if parse_arxiv_query(query).is_some() {
@@ -127,6 +134,8 @@ pub(crate) fn classify_query(raw: &str) -> QueryKind {
 /// `raw:` key instead. This is the query side of [`stored_identity`].
 pub(crate) fn url_query_keys(raw: &str) -> Vec<String> {
     let mut keys = Vec::new();
+    let spotify_uri = spotify_uri_url(raw);
+    let raw = spotify_uri.as_deref().unwrap_or(raw);
     match validate_and_clean(raw) {
         Ok(cleaned) => {
             keys.push(cleaned.dedupe_key);
@@ -140,6 +149,17 @@ pub(crate) fn url_query_keys(raw: &str) -> Vec<String> {
         Err(_) => keys.push(raw_identity_key(raw)),
     }
     keys
+}
+
+/// The canonical `https://open.spotify.com/<kind>/<id>` for a
+/// `spotify:<kind>:<id>` URI naming an entity of a known kind; `None` for
+/// web links (which validation already canonicalizes) and everything else.
+fn spotify_uri_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    trimmed
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("spotify:"))?;
+    spotify::canonical_entity_url(trimmed)
 }
 
 /// The stored-side keys for one lowercased DOI: the `doi:<doi>` key plus

@@ -633,6 +633,9 @@ fn query_classification_table() {
     for (query, kind) in [
         ("https://example.com/x", QueryKind::Url),
         ("HTTP://example.com/x", QueryKind::Url),
+        ("spotify:episode:4UgVFWty2I8hGAgSvT7pjC", QueryKind::Url),
+        ("Spotify:Show:4UgVFWty2I8hGAgSvT7pjC", QueryKind::Url),
+        ("spotify:episode:short", QueryKind::Name),
         ("1706.03762", QueryKind::Arxiv),
         ("arxiv:1706.03762", QueryKind::Arxiv),
         ("1706.03762v2", QueryKind::Arxiv),
@@ -757,6 +760,42 @@ fn medium_twins_share_one_identity_key() {
             "query {query} must look up the shared key"
         );
     }
+}
+
+#[test]
+fn spotify_spellings_share_one_identity_key() {
+    // A legacy share-token source and every query spelling of the same
+    // episode (clean link, intl/embed prefixes, `spotify:` URI) meet on
+    // the canonical key; a different episode does not.
+    let stored = stored_identity(&[
+        "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC?si=wMZ6dnubS8ib7JhCQ-6vLQ&sci=spotify%3Acard-config%3A2A4FnHWC7nYa7BcALmtBOK"
+            .to_string(),
+    ]);
+    assert_eq!(
+        stored.keys,
+        vec!["https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC"]
+    );
+    for query in [
+        "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC",
+        "https://open.spotify.com/intl-de/embed/episode/4UgVFWty2I8hGAgSvT7pjC?t=30",
+        "spotify:episode:4UgVFWty2I8hGAgSvT7pjC",
+        "SPOTIFY:EPISODE:4UgVFWty2I8hGAgSvT7pjC",
+    ] {
+        let keys = url_query_keys(query);
+        assert!(
+            keys.iter().any(|key| stored.keys.contains(key)),
+            "query {query} must look up the canonical key: {keys:?}"
+        );
+    }
+    let other = url_query_keys("spotify:episode:5ygCxO9NxH38Ns7ghTBDDm");
+    assert!(!other.iter().any(|key| stored.keys.contains(key)));
+    // A stored URI spelling earns the same canonical key.
+    let stored_uri =
+        stored_identity(
+            &["spotify:episode:4UgVFWty2I8hGAgSvT7pjC".to_string()],
+        );
+    assert_eq!(stored_uri.keys, stored.keys);
+    assert!(stored_uri.opaque.is_empty());
 }
 
 #[test]

@@ -104,6 +104,7 @@ mod sidecar;
 mod sidecar_render;
 pub(crate) mod source_store;
 mod sources;
+pub(crate) mod spotify;
 mod stamp;
 mod sync;
 // Shared prose-table records and improved-grid pass for pandoc PDF renders.

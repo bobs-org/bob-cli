@@ -1512,7 +1512,8 @@ Anything more — an extra word, `#tag`, `s:`, `$<N>`, `%c`, an operator, a chil
 line, task/destination flags beyond `-r`
 (`-s -t -S -c`, `--task-ref`), or a second `@route` — keeps the item a task.
 `-R` also keeps it a task. Hosts without a dot (`http://go/x`, `localhost`),
-IP literals, and excluded hosts (see the
+IP literals, excluded hosts, and Spotify links that are not one episode
+(shows, music, audiobooks; see the
 [URL routing policy](ref.md#url-routing)) stay tasks too. An unresolvable
 route fails the item with near-miss hints and the whole batch rolls back; it
 never silently creates a new note. A pasted blank-line-free block in which
@@ -7889,7 +7890,8 @@ move-choice refusal codes.
 A reference item (`kind: "ref"`) uses `placement: "queued"` or
 `"unchanged"`, leaves `task_line` empty, and carries the additive `ref`
 object: `url`, `cleaned_url`, `dedupe_key`, `display`, `route_hint`
-(`"article"`, `"pdf"`, or `"arxiv"`), `library` (`verdict` plus the known
+(`"article"`, `"pdf"`, `"arxiv"`, or `"podcast"` for a Spotify episode or
+short link), `library` (`verdict` plus the known
 `path`, `title`, `reading_state`, or `message`), `job` (`id` and `state`,
 only on a real run that queued), and `fallback` (`relative_target` and the
 exact `task_line` the failed clip writes, only when queued). A dry run's

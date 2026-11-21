@@ -932,6 +932,48 @@ mod tests {
     }
 
     #[test]
+    fn spotify_episodes_become_refs_and_other_spotify_links_stay_tasks() {
+        let (ledger, journal, _) = empty_plan();
+        let routed = routed_opts();
+        let policy = routed.routing.as_ref().expect("policy");
+        let id = "4UgVFWty2I8hGAgSvT7pjC";
+        let episode = url_note(
+            "episode",
+            "",
+            &format!("https://open.spotify.com/episode/{id}?si=abc&sci=x&t=30"),
+        );
+        let plan = classify(
+            std::slice::from_ref(&episode),
+            &ledger,
+            &journal,
+            &routed,
+        );
+        assert_eq!(states(&plan), vec![("episode", "new", "create_ref")]);
+        let intent = plan.notes[0].ref_intent.as_ref().expect("intent");
+        let canonical = format!("https://open.spotify.com/episode/{id}");
+        assert_eq!(intent.cleaned, canonical);
+        assert_eq!(intent.dedupe_key, canonical);
+        assert_eq!(intent.route_hint.as_str(), "podcast");
+        let short = url_note("short", "", "https://spotify.link/AbCdEf123");
+        assert!(url_only_intent(&short, policy).is_some(), "short link");
+        for (name, url) in [
+            ("show", format!("https://open.spotify.com/show/{id}")),
+            ("track", format!("https://open.spotify.com/track/{id}")),
+            ("search", "https://open.spotify.com/search/x".to_string()),
+        ] {
+            let built = url_note(name, "", &url);
+            assert!(url_only_intent(&built, policy).is_none(), "{name}");
+            let plan = classify(
+                std::slice::from_ref(&built),
+                &ledger,
+                &journal,
+                &routed,
+            );
+            assert_eq!(states(&plan), vec![(name, "new", "write")], "{name}");
+        }
+    }
+
+    #[test]
     fn url_only_page_title_matching_link_title_becomes_create_ref() {
         let (ledger, journal, _) = empty_plan();
         let routed = routed_opts();

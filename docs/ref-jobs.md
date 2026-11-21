@@ -98,6 +98,12 @@ directory):
 }
 ```
 
+`route_hint` (`article`, `pdf`, `arxiv`, or `podcast` for a Spotify episode
+or short link) is only a hint; the worker picks the real route when it
+clips. A Spotify short link is resolved before dedupe; one
+that names a show, music, or anything but an episode fails permanently as
+`unsupported_content` with the `bob ref create` refusal and hint.
+
 `parent` is the resolved parent route capture staged for the job
 (`schema_version` stays 1; jobs written by an older `bob` omit it and
 the worker uses the source's inbox instead: `capture` →

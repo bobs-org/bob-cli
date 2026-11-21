@@ -441,6 +441,63 @@ fn capture_excluded_and_corporate_hosts_stay_tasks() {
 }
 
 #[test]
+fn capture_spotify_episode_queues_a_podcast_ref_and_shows_stay_tasks() {
+    let temp = TempDir::new("bob-cli-capture-ref-spotify");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let canonical = "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC";
+    let shared =
+        "https://open.spotify.com/intl-de/episode/4UgVFWty2I8hGAgSvT7pjC?si=wMZ6dnubS8ib7JhCQ-6vLQ&t=95";
+
+    let output = capture(&temp, &vault, &["-d", "-f", "json", shared])
+        .output()
+        .expect("run episode capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["kind"], "ref", "{json}");
+    let reference = &json["ref"];
+    assert_eq!(reference["url"], shared);
+    assert_eq!(reference["cleaned_url"], canonical);
+    assert_eq!(reference["dedupe_key"], canonical);
+    assert_eq!(
+        reference["display"],
+        "open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC"
+    );
+    assert_eq!(reference["route_hint"], "podcast");
+
+    // Shows, music, and non-entity Spotify paths stay ordinary items.
+    for url in [
+        "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL",
+        "https://open.spotify.com/track/4UgVFWty2I8hGAgSvT7pjC",
+        "https://open.spotify.com/search/podcasts",
+    ] {
+        let output = capture(&temp, &vault, &["-d", "-f", "json", url])
+            .output()
+            .expect("run non-episode capture");
+        assert_success(&output);
+        let json = parse_json(&output);
+        assert_eq!(json["kind"], "task", "url {url}:\n{json}");
+    }
+
+    // A legacy ref recorded with share tokens is the same episode.
+    write_file(
+        &vault.join("ref/blogs/4ugvfwty2i8hgagsvt7pjc.md"),
+        "---\ntitle: Software factories\nstatus: ready\nsource_url: \"https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC?si=wMZ6dnubS8ib7JhCQ-6vLQ&sci=spotify%3Acard-config%3A2A4FnHWC7nYa7BcALmtBOK\"\nsource_pdf: lib/blogs/4ugvfwty2i8hgagsvt7pjc.pdf\n---\n\n- [ ] ^ref\n",
+    );
+    let output = capture(&temp, &vault, &["-d", "-f", "json", canonical])
+        .output()
+        .expect("run known-episode capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["placement"], "unchanged", "{json}");
+    assert_eq!(json["ref"]["library"]["verdict"], "in_library");
+    assert_eq!(
+        json["relative_target"],
+        "ref/blogs/4ugvfwty2i8hgagsvt7pjc.md"
+    );
+}
+
+#[test]
 fn capture_config_off_and_invalid_config_keep_tasks() {
     let temp = TempDir::new("bob-cli-capture-ref-config");
     let vault = temp.path().join("vault");

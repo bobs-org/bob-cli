@@ -146,7 +146,8 @@ cat ~/Downloads/walled.html | bob ref create https://example.com/walled/ -H - -P
 ```
 
 Subresources still load live on a best-effort basis; the challenge retry
-is skipped.
+is skipped. Spotify links refuse `-H` (exit 2, `hint: drop -H`): bob reads
+episodes from Spotify's public episode metadata, never from a saved page.
 
 ## Environment variables
 

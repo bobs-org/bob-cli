@@ -193,7 +193,8 @@ become placeholders. The fallback does not require rsvg-convert.
 placeholder guard still runs.
 
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
-retries, the `--html` escape hatch, and environment variables. `bob ref clip`
+retries, the `--html` escape hatch (never for Spotify links), and environment
+variables. `bob ref clip`
 is a hidden compatibility alias for `create` with the same targets and options.
 
 ## Several URLs
@@ -214,8 +215,8 @@ bob ref create URL1 URL2 -T "Tokio Internals" -P sase
 
 Options can appear before or after the URLs. One target still uses the existing
 single-target route. Several targets must all be live HTTP(S) web articles:
-local files, arXiv papers, PDFs, and `-H/--html` replay are not supported in a
-collection. A collection accepts at most 20 URLs. Duplicate URLs and any
+local files, arXiv papers, Spotify links, PDFs, and `-H/--html` replay are not
+supported in a collection. A collection accepts at most 20 URLs. Duplicate URLs and any
 pre-existing PDF-backed or queued reference that overlaps one of the parts make
 the whole command fail. Legacy notes without a Highlights PDF produce a warning
 and do not block capture. Captures are staged privately; a failed part leaves
@@ -254,7 +255,8 @@ misleading names.
 Examples: `tokio-internals-part-1` and `tokio-internals-part-2` derive
 `tokio_internals`; `/raft-part-1` and `/raft-part-2` derive `raft`; and
 `/core/configuration` plus `/core/usage` require an explicit name because
-`core` is too generic. A Spotify set whose slugs share no meaningful start also
+`core` is too generic. A Spotify Engineering blog set
+(`engineering.atspotify.com`) whose slugs share no meaningful start also
 requires `-N` or `-T`. If every URL has a part/page number and their numeric
 order goes backwards, bob warns but keeps the supplied argument order.
 
@@ -704,11 +706,53 @@ network failure, or a parse failure prints a `warning:` and falls back to
 PDF Info metadata. Authors display as `A`, `A and B`, `A, B, and C`, or
 `A et al.`.
 
+## Spotify
+
+A Spotify link is recognized without any fetch: `open.spotify.com` or
+`play.spotify.com` with an optional `/intl-<lang>[-<REGION>]` and an
+optional `/embed` or `/embed-podcast` before `/<kind>/<id>`, or a
+`spotify:<kind>:<id>` URI. Ids are exactly 22 letters and digits, and
+their case is kept. A short link on `spotify.link`, `spotify.app.link`, or
+`spoti.fi` is resolved first by following its redirects (every hop is
+validated like any fetch); one that does not end on an `open.spotify.com`
+entity fails with `could not resolve Spotify short link <url> to an
+open.spotify.com link` and `hint: open it in Spotify and share the
+open.spotify.com link instead`. Other `*.spotify.com` hosts and lookalikes
+are ordinary URLs.
+
+Only one episode is a reference. Everything else refuses with exit 2
+before any capture work:
+
+| Input | `error:` | `hint:` |
+| --- | --- | --- |
+| show | `Spotify show links are not references: <url>` | `capture one episode (⋯ → Share → Copy link); follow the show as a record in your podcasts album (docs/records.md)` |
+| track, album, playlist, artist | `Spotify music links are not references: <url>` | `bob files Spotify podcast episodes only` |
+| audiobook, chapter | `Spotify audiobooks are not references: <url>` | `bob files Spotify podcast episodes only` |
+| user page, unknown kind, or any other path | `not a Spotify episode link: <url>` | `share the episode link (open.spotify.com/episode/…)` |
+| `-L` with any Spotify link | `--listen does not apply to Spotify episodes: the episode is already audio` | `drop -L; pass --audio FILE to bind audio you already have` |
+| `-H` with any Spotify link | `--html does not apply to Spotify links: bob reads episodes from Spotify's public episode metadata` | `drop -H` |
+| a Spotify link among several URLs | `Spotify episodes are captured one at a time: <url>` | `run bob ref create once per episode` |
+
+A `spotify:episode:<id>` TARGET is captured as its canonical
+`https://open.spotify.com/episode/<id>` URL. `?t=<seconds>` on a shared link
+records the shared moment and is never part of identity. An episode is
+captured through the web-article route for now; its recorded `source_url`
+is the canonical URL. Capture jobs and Keep pulls (`ingest_url`) resolve a
+short link before dedupe and fail anything but an episode as a permanent
+`unsupported_content` error with the same message and hint.
+
 ## Dedupe
 
 Every URL dedupes before any fetch on its syntactic key. arXiv spellings
 (abs/html/pdf, with or without version) share
-`https://arxiv.org/abs/<id>`; everything else uses the web-article key. Ref notes
+`https://arxiv.org/abs/<id>`. Every spelling of one Spotify entity (the
+`intl-*` and `embed` prefixes, the `play.spotify.com` host, a `spotify:`
+URI, or a resolved short link, with any `si`, `sci`, `t`, or other query
+and fragment dropped) shares `https://open.spotify.com/<kind>/<id>` as its
+recorded URL and key. Recorded sources are re-keyed when they are read, so
+an older ref whose `source_url` still carries `si`/`sci` share tokens
+matches a clean link with no migration. Everything else uses the
+web-article key. Ref notes
 record `source_url` and legacy `url:`, and queued intake markers record
 both, so existing paper refs take part instead of duplicating. A
 duplicate refuses before any fetch, before a missing `-P` error, and

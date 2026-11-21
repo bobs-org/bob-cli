@@ -5,6 +5,8 @@
 //! parameters removed. The dedupe key normalizes further (lowercased
 //! scheme/host, no `www.`, no default port, no trailing slash, sorted
 //! query) so the same article reached through two spellings dedupes.
+//! A Spotify entity link records and dedupes as its canonical
+//! `https://open.spotify.com/<kind>/<id>` (see `spotify.rs`).
 
 use std::borrow::Cow;
 
@@ -61,6 +63,16 @@ pub(crate) fn validate_and_clean(raw: &str) -> Result<WebUrl> {
         CommandError::new(format!("URL has no host: {raw:?}"))
     })?;
     reject_private_host(host)?;
+    // Every spelling of one Spotify entity (intl/embed prefixes, the
+    // play host, share tokens, `?t=`) records and dedupes as
+    // `https://open.spotify.com/<kind>/<id>`.
+    if let Some(canonical) = super::spotify::canonical_entity_url(raw) {
+        return Ok(WebUrl {
+            dedupe_key: canonical.clone(),
+            cleaned: canonical,
+            host: "open.spotify.com".to_string(),
+        });
+    }
     let mut cleaned = url.clone();
     cleaned.set_fragment(None);
     strip_tracking_params(&mut cleaned);
@@ -75,12 +87,18 @@ pub(crate) fn validate_and_clean(raw: &str) -> Result<WebUrl> {
 
 /// Compute the dedupe key for an already-validated URL. Any spelling of
 /// an arXiv paper (abs, html, or pdf, with or without a version) maps to
-/// `https://arxiv.org/abs/<id>`; everything else uses the lowercase
-/// scheme and host (no leading `www.`, no default port), path without a
-/// trailing slash, and remaining query parameters sorted.
+/// `https://arxiv.org/abs/<id>`, and any spelling of a Spotify entity to
+/// `https://open.spotify.com/<kind>/<id>` (case-preserved id, no query);
+/// everything else uses the lowercase scheme and host (no leading
+/// `www.`, no default port), path without a trailing slash, and
+/// remaining query parameters sorted.
 pub(crate) fn dedupe_key_for(url: &url::Url) -> String {
     if let Some(paper) = super::arxiv::ArxivPaper::parse(url.as_str()) {
         return paper.dedupe_key();
+    }
+    if let Some(canonical) = super::spotify::canonical_entity_url(url.as_str())
+    {
+        return canonical;
     }
     let host = normalize_host(url.host_str().unwrap_or_default());
     let mut key = String::new();
@@ -911,6 +929,61 @@ mod tests {
             key("https://arxiv.org/html/2608.04278v1/"),
             "https://arxiv.org/abs/2608.04278"
         );
+    }
+
+    /// The exact `source_url` values the two legacy Spotify refs store.
+    const LEGACY_SPOTIFY_SOURCES: &[(&str, &str)] = &[
+        (
+            "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC?si=wMZ6dnubS8ib7JhCQ-6vLQ&sci=spotify%3Acard-config%3A2A4FnHWC7nYa7BcALmtBOK",
+            "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC",
+        ),
+        (
+            "https://open.spotify.com/episode/5ygCxO9NxH38Ns7ghTBDDm?si=sScJhryRRjmCDovgXj04Dg",
+            "https://open.spotify.com/episode/5ygCxO9NxH38Ns7ghTBDDm",
+        ),
+    ];
+
+    #[test]
+    fn spotify_spellings_share_one_canonical_identity() {
+        for (stored, canonical) in LEGACY_SPOTIFY_SOURCES {
+            let legacy = validate_and_clean(stored).expect("legacy source");
+            assert_eq!(legacy.cleaned, *canonical);
+            assert_eq!(legacy.dedupe_key, *canonical);
+            assert_eq!(legacy.host, "open.spotify.com");
+            let parsed = url::Url::parse(stored).expect("parse legacy");
+            assert_eq!(dedupe_key_for(&parsed), *canonical);
+            // A clean share of the same episode dedupes with the record.
+            let clean = validate_and_clean(canonical).expect("clean link");
+            assert_eq!(clean.dedupe_key, legacy.dedupe_key);
+        }
+        let id = "4UgVFWty2I8hGAgSvT7pjC";
+        for spelling in [
+            format!("https://open.spotify.com/intl-de/episode/{id}?t=95"),
+            format!("https://open.spotify.com/embed/episode/{id}/"),
+            format!("http://play.spotify.com/episode/{id}#frag"),
+        ] {
+            let cleaned = validate_and_clean(&spelling).expect("spelling");
+            assert_eq!(
+                cleaned.dedupe_key,
+                format!("https://open.spotify.com/episode/{id}"),
+                "{spelling}"
+            );
+        }
+        // Two different episodes stay distinct, and ids keep their case.
+        assert_ne!(
+            validate_and_clean(LEGACY_SPOTIFY_SOURCES[0].0)
+                .expect("first")
+                .dedupe_key,
+            validate_and_clean(LEGACY_SPOTIFY_SOURCES[1].0)
+                .expect("second")
+                .dedupe_key,
+        );
+        // Lookalike hosts keep the generic identity.
+        let lookalike = validate_and_clean(&format!(
+            "https://open.spotify.com.evil.example/episode/{id}?si=x"
+        ))
+        .expect("lookalike");
+        assert!(lookalike.cleaned.contains("si=x"));
     }
 
     #[test]

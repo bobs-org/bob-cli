@@ -1310,6 +1310,14 @@ optional single `<…>` wrapper, uses `http`/`https`, passes
 contains at least one `.` with non-empty labels. Corporate short links
 (`http://go/x`), `localhost`, and IP literals stay tasks.
 
+Spotify links are admitted only as one episode: an `open.spotify.com`
+episode link (any `intl-*` or `embed` spelling, share tokens dropped) or a
+`spotify.link`, `spotify.app.link`, or `spoti.fi` short link, which the
+worker resolves. Both carry route hint `podcast`, and an episode's cleaned
+URL and dedupe key are `https://open.spotify.com/episode/<id>`. Shows,
+music, audiobooks, user pages, and other Spotify paths stay ordinary items,
+exactly like excluded hosts.
+
 Policy lives under `highlights.url_routing` in `~/.config/bob/config.yml`
 (`BOB_CONFIG_FILE` overrides the file; `XDG_CONFIG_HOME` overrides its base):
 

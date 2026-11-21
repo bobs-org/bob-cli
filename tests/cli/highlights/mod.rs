@@ -24,6 +24,7 @@ mod scan_hooks;
 mod scan_intake;
 mod scan_integration;
 mod scan_interleave;
+mod spotify;
 mod stale_save;
 mod store_gaps;
 mod sync;

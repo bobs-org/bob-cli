@@ -620,8 +620,11 @@ pub(crate) fn ingest_url(
         Err(error) => return Err(ingest_error(error.to_string(), None)),
     };
     let config = Config::for_vault(request.bob_dir);
-    let (url, arxiv) = super::target::resolve_url_syntactic(request.url)
-        .map_err(command_error)?;
+    let spotify_url = spotify_ingest_url(request)?;
+    let (url, arxiv) = super::target::resolve_url_syntactic(
+        spotify_url.as_deref().unwrap_or(request.url),
+    )
+    .map_err(command_error)?;
     let dedupe_key = match &arxiv {
         Some(paper) => paper.dedupe_key(),
         None => url.dedupe_key.clone(),
@@ -715,6 +718,52 @@ pub(crate) fn ingest_url(
         }
     };
     apply_intake(request, &config, outcome, keep_reason)
+}
+
+/// The URL a Spotify request ingests, resolved before both dedupe
+/// probes: a short link becomes the final URL it redirects to, and
+/// `None` keeps `request.url`. A link that names anything but one episode
+/// fails as a typed, permanent `unsupported_content` error carrying the
+/// create refusal's message and hint; a short-link fetch failure keeps
+/// its classified (often retryable) kind.
+fn spotify_ingest_url(
+    request: &IngestRequest,
+) -> Result<Option<String>, IngestError> {
+    use super::spotify::{resolve_short_link, ShortLinkError, SpotifyLink};
+    let unsupported = |refusal: super::spotify::SpotifyRefusal| IngestError {
+        kind: IngestErrorKind::UnsupportedContent,
+        message: refusal.message,
+        hint: Some(refusal.hint.to_string()),
+        retryable_override: Some(false),
+    };
+    let Some(link) = SpotifyLink::parse(request.url) else {
+        return Ok(None);
+    };
+    if let Some(refusal) = link.refusal(request.url.trim()) {
+        return Err(unsupported(refusal));
+    }
+    let SpotifyLink::Short { url } = &link else {
+        return Ok(None);
+    };
+    let scratch = super::workdir::ScratchDir::create("ingest-spotify-link")
+        .map_err(command_error)?;
+    match resolve_short_link(url, scratch.path(), None) {
+        Ok(resolved) => {
+            let named = resolved
+                .link
+                .canonical_url()
+                .unwrap_or_else(|| resolved.final_url.clone());
+            match resolved.link.refusal(&named) {
+                Some(refusal) => Err(unsupported(refusal)),
+                None => Ok(Some(resolved.final_url)),
+            }
+        }
+        Err(ShortLinkError::NotEntity(refusal)) => Err(unsupported(refusal)),
+        Err(ShortLinkError::Fetch(error)) => Err(ingest_error(
+            error.message().to_string(),
+            error.hint().map(str::to_string),
+        )),
+    }
 }
 
 /// Map a refusing dedupe hit to its typed outcome.
@@ -1637,6 +1686,83 @@ mod tests {
         let error = ingest_url(&bad).expect_err("invalid URL must fail");
         assert_eq!(error.kind, IngestErrorKind::InvalidUrl);
         assert!(!error.retryable());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spotify_links_resolve_dedupe_and_refuse_before_the_lock() {
+        use super::super::spotify::tests::{
+            short_link_test_dir, write_short_link_curl,
+        };
+        let root = short_link_test_dir("ingest");
+        let fake = write_short_link_curl(&root);
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            (
+                super::super::fetch::ENV_CURL_OVERRIDE,
+                Some(fake.as_os_str()),
+            ),
+            (
+                super::super::fetch::ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("*=203.0.113.1")),
+            ),
+        ]);
+        let vault = root.join("vault");
+        let note_dir = vault.join("ref/blogs");
+        fs::create_dir_all(&note_dir).expect("create ref dir");
+        // The legacy share-token record is the same episode.
+        fs::write(
+            note_dir.join("4ugvfwty2i8hgagsvt7pjc.md"),
+            "---\ntitle: Episode\nsource_url: \"https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC?si=wMZ6dnubS8ib7JhCQ-6vLQ&sci=spotify%3Acard-config%3A2A4FnHWC7nYa7BcALmtBOK\"\nsource_pdf: lib/blogs/4ugvfwty2i8hgagsvt7pjc.pdf\n---\n",
+        )
+        .expect("write legacy ref note");
+        let request = |url: &'static str| IngestRequest {
+            bob_dir: &vault,
+            url,
+            parent: "mac_inbox",
+            listen: false,
+            producer: "bob ref jobs run",
+            progress: None,
+        };
+        for url in [
+            "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC",
+            // A short link resolves before both dedupe probes.
+            "https://spotify.link/episode",
+        ] {
+            match ingest_url(&request(url)).expect("library hit") {
+                IngestOutcome::AlreadyInLibrary { note } => {
+                    assert!(
+                        note.ends_with("4ugvfwty2i8hgagsvt7pjc.md"),
+                        "{note}"
+                    );
+                }
+                other => {
+                    panic!("{url}: expected AlreadyInLibrary, got {other:?}")
+                }
+            }
+        }
+        for (url, message, hint) in [
+            (
+                "https://spotify.link/show",
+                "Spotify show links are not references: https://open.spotify.com/show/4UgVFWty2I8hGAgSvT7pjC",
+                "capture one episode (⋯ → Share → Copy link); follow the show as a record in your podcasts album (docs/records.md)",
+            ),
+            (
+                "https://open.spotify.com/track/4UgVFWty2I8hGAgSvT7pjC",
+                "Spotify music links are not references: https://open.spotify.com/track/4UgVFWty2I8hGAgSvT7pjC",
+                "bob files Spotify podcast episodes only",
+            ),
+            (
+                "https://spotify.link/home",
+                "could not resolve Spotify short link https://spotify.link/home to an open.spotify.com link",
+                "open it in Spotify and share the open.spotify.com link instead",
+            ),
+        ] {
+            let error = ingest_url(&request(url)).expect_err("refused");
+            assert_eq!(error.kind, IngestErrorKind::UnsupportedContent, "{url}");
+            assert!(!error.retryable(), "{url}");
+            assert_eq!(error.message, message, "{url}");
+            assert_eq!(error.hint.as_deref(), Some(hint), "{url}");
+        }
         fs::remove_dir_all(&root).ok();
     }
 }

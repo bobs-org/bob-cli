@@ -243,7 +243,8 @@ A filed clip already has a ref note; a queued clip joins `bob ref list`
 after `bob ref scan`. Lists, notes
 with attachments, shared notes (even with `-S`), multi-link (beyond one
 trailing route) or link-plus-prose notes, corporate short links, IP
-literals, and `highlights.url_routing.exclude_hosts` entries stay tasks.
+literals, `highlights.url_routing.exclude_hosts` entries, and Spotify links
+that are not one episode (shows, music, audiobooks) stay tasks.
 duplicate markers, attached `path@`, and leading routes stay
 ordinary notes. Non-reference percent markers retain clipboard semantics in
 capture; URL `%1` explicitly requests that path.

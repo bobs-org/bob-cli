@@ -7,7 +7,7 @@
 //! non-empty labels.
 
 use crate::native::highlights_ref::{
-    dedupe_key_for, validate_and_clean, ArxivPaper,
+    dedupe_key_for, spotify::SpotifyLink, validate_and_clean, ArxivPaper,
 };
 
 /// How the URL would likely be clipped. Only a hint; the real route is
@@ -17,6 +17,9 @@ pub(crate) enum RouteHint {
     Arxiv,
     Pdf,
     Article,
+    /// A Spotify episode link, or a Spotify short link the worker
+    /// resolves.
+    Podcast,
 }
 
 impl RouteHint {
@@ -25,6 +28,7 @@ impl RouteHint {
             RouteHint::Arxiv => "arxiv",
             RouteHint::Pdf => "pdf",
             RouteHint::Article => "article",
+            RouteHint::Podcast => "podcast",
         }
     }
 }
@@ -80,6 +84,10 @@ pub(crate) fn classify_token(token: &str) -> Option<UrlIntent> {
     };
     let route_hint = if ArxivPaper::parse(&cleaned.cleaned).is_some() {
         RouteHint::Arxiv
+    } else if SpotifyLink::parse(&cleaned.cleaned)
+        .is_some_and(|link| link.is_routable())
+    {
+        RouteHint::Podcast
     } else if parsed.path().to_lowercase().ends_with(".pdf") {
         RouteHint::Pdf
     } else {
@@ -260,6 +268,32 @@ mod tests {
         let pdf = classify_token("https://example.com/paper.PDF")
             .expect("pdf classifies");
         assert_eq!(pdf.route_hint, RouteHint::Pdf);
+
+        // Spotify episodes and short links hint `podcast` with the
+        // canonical identity; other Spotify links keep `article`.
+        let episode = classify_token(
+            "https://open.spotify.com/intl-de/episode/4UgVFWty2I8hGAgSvT7pjC?si=x&t=12",
+        )
+        .expect("episode classifies");
+        assert_eq!(episode.route_hint, RouteHint::Podcast);
+        assert_eq!(episode.route_hint.as_str(), "podcast");
+        assert_eq!(
+            episode.cleaned,
+            "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC"
+        );
+        assert_eq!(episode.dedupe_key, episode.cleaned);
+        assert_eq!(
+            episode.display,
+            "open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC"
+        );
+        let short = classify_token("https://spotify.link/AbCdEf123")
+            .expect("short link classifies");
+        assert_eq!(short.route_hint, RouteHint::Podcast);
+        let show = classify_token(
+            "https://open.spotify.com/show/4UgVFWty2I8hGAgSvT7pjC",
+        )
+        .expect("show classifies");
+        assert_eq!(show.route_hint, RouteHint::Article);
 
         // Rejected: corporate short links, localhost, IP literals.
         for raw in [
