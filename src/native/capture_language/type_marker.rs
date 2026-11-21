@@ -541,17 +541,8 @@ fn parse_candidate(
 }
 
 fn authored_body(line: &str) -> (usize, &str) {
-    if let Some((body_start, body)) =
-        super::draft::strip_bullet_marker_at(line, 0)
-    {
-        return (body_start, body);
-    }
-    if let Some((body_start, body)) =
-        super::draft::strip_bullet_marker_at(line, 2)
-    {
-        return (body_start, body);
-    }
-    (0, line)
+    super::draft::strip_authored_bullet(line, super::draft::TWO_LEVEL_CAP)
+        .map_or((0, line), |(_, body_start, body)| (body_start, body))
 }
 
 fn whitespace_tokens(line: &str) -> Vec<(usize, usize)> {
@@ -873,11 +864,12 @@ pub(crate) fn marker_only_child_lines(
     let mut skips = Vec::new();
     for line in item.lines.iter().skip(1) {
         let raw = line.raw;
-        let (body_start, body) =
-            super::draft::strip_bullet_marker_at(raw.text, 0)
-                .or_else(|| super::draft::strip_bullet_marker_at(raw.text, 2))
-                .map(|(start, body)| (raw.start + start, body))
-                .unwrap_or((raw.start, raw.text));
+        let (body_start, body) = super::draft::strip_authored_bullet(
+            raw.text,
+            super::draft::TWO_LEVEL_CAP,
+        )
+        .map(|(_, start, body)| (raw.start + start, body))
+        .unwrap_or((raw.start, raw.text));
         let leading = body.len() - body.trim_start().len();
         let trailing = body.len() - body.trim_end().len();
         if leading + trailing >= body.len() {

@@ -670,16 +670,16 @@ pub(super) fn parent_task_selector_tokens<'a>(
             line
         } else {
             let AuthoredLineClass::Item(authored) =
-                classify_authored_line(line)
+                classify_authored_line_capped(line, TWO_LEVEL_CAP)
             else {
                 continue;
             };
-            if authored.depth == AuthoredDepth::Nested
+            if authored.depth.is_nested()
                 && !item.lines[1..line_index].iter().any(|previous| {
                     matches!(
-                        classify_authored_line(previous.raw),
+                        classify_authored_line_capped(previous.raw, TWO_LEVEL_CAP),
                         AuthoredLineClass::Item(found)
-                            if found.depth == AuthoredDepth::First
+                            if found.depth.is_first()
                     )
                 })
             {

@@ -538,17 +538,8 @@ pub(crate) fn resolve(
 }
 
 fn authored_body(line: &str) -> (usize, &str) {
-    if let Some((body_start, body)) =
-        super::draft::strip_bullet_marker_at(line, 0)
-    {
-        return (body_start, body);
-    }
-    if let Some((body_start, body)) =
-        super::draft::strip_bullet_marker_at(line, 2)
-    {
-        return (body_start, body);
-    }
-    (0, line)
+    super::draft::strip_authored_bullet(line, super::draft::TWO_LEVEL_CAP)
+        .map_or((0, line), |(_, body_start, body)| (body_start, body))
 }
 
 fn whitespace_tokens(line: &str) -> Vec<(usize, usize)> {

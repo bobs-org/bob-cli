@@ -1,7 +1,8 @@
 //! First-level `#` drawer shortcuts: lexer, execution, and capture-parse.
 
 use super::super::drawer_bullet::{
-    scan_first_level_line, scan_leading, DrawerBulletHit,
+    authored_level_groups, first_level_groups, scan_first_level_line,
+    scan_leading, DrawerBulletHit,
 };
 use super::super::type_marker::{completion_at_raw, scan_line};
 use super::*;
@@ -300,7 +301,7 @@ fn execution_files_a_shortcut_under_a_new_task() {
     assert_eq!(parsed.sub_bullets[0].body, "FUTURE WORK");
     assert!(parsed.sub_bullets[0].drawer.is_some());
     assert_eq!(parsed.sub_bullets[1].body, "try replication");
-    assert_eq!(parsed.sub_bullets[1].depth, AuthoredDepth::Nested);
+    assert_eq!(parsed.sub_bullets[1].depth, AuthoredDepth::NESTED);
 }
 
 // ---------------------------------------------------------------------------
@@ -485,4 +486,45 @@ fn bullet_query_decodes_a_partial_and_a_closed_literal() {
     assert_eq!(query(closed, closed.len()), "FUTURE WORK");
     // A mid-token cursor queries only the text before it.
     assert_eq!(query("Ship it\n- #future", 13), "fu");
+}
+
+fn leveled(body: &str, level: u8) -> AuthoredSubBullet {
+    AuthoredSubBullet {
+        body: body.to_string(),
+        depth: AuthoredDepth::from_level(level).expect("valid level"),
+        task_id: None,
+        move_task: None,
+        move_choice: None,
+        drawer: None,
+    }
+}
+
+#[test]
+fn first_level_groups_keep_today_shape_for_two_levels() {
+    let bullets = [
+        leveled("a", 1),
+        leveled("b", 2),
+        leveled("c", 2),
+        leveled("d", 1),
+    ];
+    assert_eq!(first_level_groups(&bullets), vec![(0, 3), (3, 4)]);
+}
+
+#[test]
+fn first_level_groups_carry_every_deeper_bullet_with_its_head() {
+    let bullets = [
+        leveled("a", 1),
+        leveled("b", 2),
+        leveled("c", 3),
+        leveled("d", 4),
+        leveled("e", 2),
+        leveled("f", 1),
+        leveled("g", 1),
+        leveled("h", 2),
+    ];
+    assert_eq!(first_level_groups(&bullets), vec![(0, 5), (5, 6), (6, 8)]);
+    assert_eq!(
+        authored_level_groups(&bullets, AuthoredDepth::NESTED),
+        vec![(1, 4), (4, 5), (7, 8)]
+    );
 }

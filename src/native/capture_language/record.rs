@@ -16,7 +16,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::draft::{classify_authored_line, AuthoredLineClass};
+use super::draft::{
+    classify_authored_line_capped, AuthoredLineClass, TWO_LEVEL_CAP,
+};
 use super::editor_model::{
     Diagnostic, EditorMode, Need, Severity, Span, SpanKind,
 };
@@ -809,22 +811,23 @@ pub(crate) fn classify_record_item(
         if line.raw.text.trim().is_empty() {
             continue;
         }
-        let authored = match classify_authored_line(line.raw) {
-            AuthoredLineClass::EmptyOrPlaceholder => continue,
-            AuthoredLineClass::Invalid => {
-                return Some(RecordClaim::refused(
-                    RECORD_SHAPE_CODE,
-                    format!(
+        let authored =
+            match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
+                AuthoredLineClass::EmptyOrPlaceholder => continue,
+                AuthoredLineClass::Invalid => {
+                    return Some(RecordClaim::refused(
+                        RECORD_SHAPE_CODE,
+                        format!(
                         "record in `{}/` takes first-level `-` bullets below \
                          the title; this line is not one",
                         route.dir,
                     ),
-                    Some((line.raw.start, line.raw.end)),
-                ));
-            }
-            AuthoredLineClass::Item(authored) => authored,
-        };
-        if authored.depth == AuthoredDepth::Nested && !has_first_level_owner {
+                        Some((line.raw.start, line.raw.end)),
+                    ));
+                }
+                AuthoredLineClass::Item(authored) => authored,
+            };
+        if authored.depth == AuthoredDepth::NESTED && !has_first_level_owner {
             return Some(RecordClaim::refused(
                 RECORD_SHAPE_CODE,
                 format!(
@@ -837,7 +840,7 @@ pub(crate) fn classify_record_item(
         }
         let body = authored.body;
         let body_start = authored.body_start;
-        if authored.depth == AuthoredDepth::First {
+        if authored.depth == AuthoredDepth::FIRST {
             has_first_level_owner = true;
             if let Some(input) = parse_record_field(body, body_start) {
                 field_value_ranges.push(input.value_range);
@@ -1086,10 +1089,12 @@ pub(crate) fn in_record_field_value(
     if line_index == 0 {
         return false;
     }
-    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+    let AuthoredLineClass::Item(authored) =
+        classify_authored_line_capped(line, TWO_LEVEL_CAP)
+    else {
         return false;
     };
-    if authored.depth != AuthoredDepth::First {
+    if authored.depth != AuthoredDepth::FIRST {
         return false;
     }
     let Some(field) = parse_record_field(authored.body, authored.body_start)
@@ -1338,11 +1343,11 @@ pub(crate) fn mask_field_values_for_template(
         }
         for line in item.lines.iter().skip(1) {
             let AuthoredLineClass::Item(authored) =
-                classify_authored_line(line.raw)
+                classify_authored_line_capped(line.raw, TWO_LEVEL_CAP)
             else {
                 continue;
             };
-            if authored.depth != AuthoredDepth::First {
+            if authored.depth != AuthoredDepth::FIRST {
                 continue;
             }
             let Some(field) =

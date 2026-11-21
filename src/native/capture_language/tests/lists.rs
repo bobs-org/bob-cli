@@ -120,7 +120,7 @@ fn execution_list_nested_children_shift_up_one_level() {
     let children = &draft.items[0].parsed.sub_bullets;
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].body, "nested child");
-    assert_eq!(children[0].depth, AuthoredDepth::First);
+    assert_eq!(children[0].depth, AuthoredDepth::FIRST);
 }
 
 #[test]
@@ -281,7 +281,7 @@ fn editor_task_list_reports_items_modes_and_spans() {
 fn editor_list_nested_children_shift_up_one_level() {
     let parse = editor("@dev\n- Owner\n  - nested child");
     assert_eq!(parse.sub_bullets.len(), 1);
-    assert_eq!(parse.sub_bullets[0].depth, AuthoredDepth::First);
+    assert_eq!(parse.sub_bullets[0].depth, AuthoredDepth::FIRST);
 }
 
 #[test]

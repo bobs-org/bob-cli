@@ -120,9 +120,7 @@ pub(crate) fn is_multi_note_sub_bullet(
     if section.is_some() {
         return false;
     }
-    sub_bullets
-        .iter()
-        .any(|item| item.depth == AuthoredDepth::First)
+    sub_bullets.iter().any(|item| item.depth.is_first())
 }
 
 pub(crate) fn is_under_task_mode(mode: EditorMode) -> bool {
@@ -206,7 +204,7 @@ pub(crate) fn item_has_first_level_line(item: &CaptureItem<'_>) -> bool {
         matches!(
             super::draft::classify_authored_line(line.raw),
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == AuthoredDepth::First
+                if authored.depth.is_first()
         )
     })
 }
@@ -370,23 +368,33 @@ pub(crate) fn code_for_message(message: &str) -> Option<&'static str> {
     }
 }
 
-/// First-level groups: each first-level bullet plus the nested bullets
-/// that follow it, as `[start, end)` index ranges into `sub_bullets`.
+/// First-level groups: each first-level bullet plus every following
+/// bullet below the first level, as `[start, end)` index ranges into
+/// `sub_bullets`.
 pub(crate) fn first_level_groups(
     sub_bullets: &[AuthoredSubBullet],
+) -> Vec<(usize, usize)> {
+    authored_level_groups(sub_bullets, AuthoredDepth::FIRST)
+}
+
+/// Groups at `level`: each bullet at exactly `level` plus every following
+/// bullet deeper than it, as `[start, end)` index ranges into
+/// `sub_bullets`. A shallower bullet, or a deeper one before the first
+/// bullet at `level`, starts no group.
+pub(crate) fn authored_level_groups(
+    sub_bullets: &[AuthoredSubBullet],
+    level: AuthoredDepth,
 ) -> Vec<(usize, usize)> {
     let mut groups = Vec::new();
     let mut index = 0usize;
     while index < sub_bullets.len() {
-        if sub_bullets[index].depth != AuthoredDepth::First {
+        if sub_bullets[index].depth != level {
             index += 1;
             continue;
         }
         let start = index;
         index += 1;
-        while index < sub_bullets.len()
-            && sub_bullets[index].depth == AuthoredDepth::Nested
-        {
+        while index < sub_bullets.len() && sub_bullets[index].depth > level {
             index += 1;
         }
         groups.push((start, index));

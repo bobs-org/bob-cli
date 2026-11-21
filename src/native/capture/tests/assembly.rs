@@ -1133,3 +1133,73 @@ fn pomodoro_note_preserves_crlf_under_a_completed_entry() {
         )
     );
 }
+
+fn leveled_sub_bullet(body: &str, level: u8) -> AuthoredSubBullet {
+    AuthoredSubBullet {
+        body: body.to_string(),
+        depth: crate::native::capture_language::AuthoredDepth::from_level(
+            level,
+        )
+        .expect("valid level"),
+        task_id: None,
+        move_task: None,
+        move_choice: None,
+        drawer: None,
+    }
+}
+
+#[test]
+fn renders_new_task_sub_bullets_at_every_authored_level() {
+    let bullets = [
+        leveled_sub_bullet("note", 1),
+        leveled_sub_bullet("nested", 2),
+        leveled_sub_bullet("[ ] deeper", 3),
+        leveled_sub_bullet("deepest", 4),
+        leveled_sub_bullet("next note", 1),
+    ];
+    assert_eq!(
+        render_authored_sub_bullets(&bullets, "\t"),
+        vec![
+            "\t- note",
+            "\t\t- nested",
+            "\t\t\t- [ ] deeper",
+            "\t\t\t\t- deepest",
+            "\t- next note",
+        ]
+    );
+}
+
+#[test]
+fn renders_nested_sub_bullets_relative_to_their_group_head() {
+    let nested = [
+        leveled_sub_bullet("nested", 2),
+        leveled_sub_bullet("deeper", 3),
+        leveled_sub_bullet("   ", 3),
+        leveled_sub_bullet("deepest", 4),
+        leveled_sub_bullet("sibling", 2),
+    ];
+    let head = crate::native::capture_language::AuthoredDepth::FIRST;
+    // Two levels render exactly one indent unit, as before.
+    assert_eq!(
+        render_nested_sub_bullets(head, &nested[..1], "\t"),
+        vec!["\t- nested"]
+    );
+    assert_eq!(
+        render_nested_sub_bullets(head, &nested, "    "),
+        vec![
+            "    - nested",
+            "        - deeper",
+            "            - deepest",
+            "    - sibling",
+        ]
+    );
+    // A level-2 note head renders its own subtree one unit in.
+    assert_eq!(
+        render_nested_sub_bullets(
+            crate::native::capture_language::AuthoredDepth::NESTED,
+            &nested[1..4],
+            "\t",
+        ),
+        vec!["\t- deeper", "\t\t- deepest"]
+    );
+}

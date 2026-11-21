@@ -2430,11 +2430,12 @@ pub(crate) fn completion_field_at_with(
     let scan_line = if leading {
         line
     } else {
-        let AuthoredLineClass::Item(authored) = classify_authored_line(line)
+        let AuthoredLineClass::Item(authored) =
+            classify_authored_line_capped(line, TWO_LEVEL_CAP)
         else {
             return None;
         };
-        if authored.depth == AuthoredDepth::Nested
+        if authored.depth.is_nested()
             && !has_previous_first_level_authored_item(&item.lines, line_index)
         {
             return None;
@@ -2612,10 +2613,12 @@ fn project_task_move_completion_field_at(
     if !has_sealed_project_note_marker(&parsed) {
         return None;
     }
-    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+    let AuthoredLineClass::Item(authored) =
+        classify_authored_line_capped(line, TWO_LEVEL_CAP)
+    else {
         return None;
     };
-    if authored.depth != AuthoredDepth::First {
+    if !authored.depth.is_first() {
         return None;
     }
     let hit = super::move_bullet::scan_move_bullet(
@@ -2707,7 +2710,9 @@ pub(crate) fn project_task_move_detail(
     if !has_sealed_project_note_marker(&parsed) {
         return None;
     }
-    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+    let AuthoredLineClass::Item(authored) =
+        classify_authored_line_capped(line, TWO_LEVEL_CAP)
+    else {
         return None;
     };
     let hit = super::move_bullet::scan_move_bullet(
@@ -2763,11 +2768,11 @@ pub(crate) fn project_task_move_detail(
             }
             for child in candidate_item.lines.iter().skip(1) {
                 let AuthoredLineClass::Item(authored) =
-                    classify_authored_line(child.raw)
+                    classify_authored_line_capped(child.raw, TWO_LEVEL_CAP)
                 else {
                     continue;
                 };
-                if authored.depth != AuthoredDepth::First {
+                if !authored.depth.is_first() {
                     continue;
                 }
                 let Some(super::move_bullet::MoveBulletHit::Complete {
@@ -2907,12 +2912,12 @@ fn project_task_owner_index(
     for (index, line) in
         item.lines.iter().enumerate().take(line_index + 1).skip(1)
     {
-        match classify_authored_line(line.raw) {
+        match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Invalid => return None,
             AuthoredLineClass::Item(authored) => match authored.depth {
-                AuthoredDepth::First => owner = Some(index),
-                AuthoredDepth::Nested if owner.is_some() => {}
+                AuthoredDepth::FIRST => owner = Some(index),
+                AuthoredDepth::NESTED if owner.is_some() => {}
                 _ => return None,
             },
         }
@@ -2931,15 +2936,16 @@ fn task_bullet_line<'a>(
     if item.list.is_some() && line_index == 0 {
         return Some(raw);
     }
-    let AuthoredLineClass::Item(authored) = classify_authored_line(raw) else {
+    let AuthoredLineClass::Item(authored) =
+        classify_authored_line_capped(raw, TWO_LEVEL_CAP)
+    else {
         return None;
     };
-    matches!(authored.depth, AuthoredDepth::First | AuthoredDepth::Nested)
-        .then_some(RawLine {
-            text: authored.body,
-            start: authored.body_start,
-            end: raw.end,
-        })
+    Some(RawLine {
+        text: authored.body,
+        start: authored.body_start,
+        end: raw.end,
+    })
 }
 
 /// Clean task text and all accepted task-ID tokens from one authored line.
@@ -3101,7 +3107,7 @@ pub(crate) fn project_task_block_id_detail(
         let mut pass = ProjectTaskPass::new();
         for (index, child) in item.lines.iter().enumerate().skip(1) {
             let AuthoredLineClass::Item(authored) =
-                classify_authored_line(child.raw)
+                classify_authored_line_capped(child.raw, TWO_LEVEL_CAP)
             else {
                 continue;
             };
@@ -3202,11 +3208,11 @@ pub(super) fn has_previous_first_level_authored_item(
 ) -> bool {
     lines[1..current_line_index].iter().any(|line| {
         let AuthoredLineClass::Item(authored) =
-            classify_authored_line(line.raw)
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP)
         else {
             return false;
         };
-        if authored.depth != AuthoredDepth::First {
+        if !authored.depth.is_first() {
             return false;
         }
         let normalized = normalize_task_text(authored.body);
@@ -3796,11 +3802,12 @@ pub(crate) fn notebook_section_bullet_completion_at(
         if line_index == 0 {
             return None;
         }
-        let AuthoredLineClass::Item(authored) = classify_authored_line(line)
+        let AuthoredLineClass::Item(authored) =
+            classify_authored_line_capped(line, TWO_LEVEL_CAP)
         else {
             return None;
         };
-        if authored.depth != AuthoredDepth::First {
+        if !authored.depth.is_first() {
             return None;
         }
         (authored.body, authored.body_start)
@@ -3828,9 +3835,9 @@ pub(crate) fn notebook_section_bullet_completion_at(
     };
     let next_is_nested = item.lines.get(line_index + 1).is_some_and(|next| {
         matches!(
-            classify_authored_line(next.raw),
+            classify_authored_line_capped(next.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::Item(next_line)
-                if next_line.depth == AuthoredDepth::Nested
+                if next_line.depth == AuthoredDepth::NESTED
         )
     });
     Some(SectionBulletCompletion {
@@ -3918,10 +3925,12 @@ fn drawer_bullet_probe(
     if line_index == 0 {
         return None;
     }
-    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+    let AuthoredLineClass::Item(authored) =
+        classify_authored_line_capped(line, TWO_LEVEL_CAP)
+    else {
         return None;
     };
-    if authored.depth != AuthoredDepth::First {
+    if !authored.depth.is_first() {
         return None;
     }
     let hit = scan_leading(authored.body, authored.body_start)?;
@@ -3953,9 +3962,9 @@ fn drawer_bullet_probe(
     };
     let next_is_nested = item.lines.get(line_index + 1).is_some_and(|next| {
         matches!(
-            classify_authored_line(next.raw),
+            classify_authored_line_capped(next.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::Item(next_line)
-                if next_line.depth == AuthoredDepth::Nested
+                if next_line.depth == AuthoredDepth::NESTED
         )
     });
     Some(Some(DrawerBulletCompletion {

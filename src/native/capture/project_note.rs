@@ -3310,15 +3310,15 @@ mod tests {
 
     fn example_bullets() -> Vec<AuthoredSubBullet> {
         vec![
-            bullet("Draft the memo", AuthoredDepth::First),
-            bullet("Collect paperwork", AuthoredDepth::First),
+            bullet("Draft the memo", AuthoredDepth::FIRST),
+            bullet("Collect paperwork", AuthoredDepth::FIRST),
             named_bullet(
                 "Call the bank",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "call-bank",
                 true,
             ),
-            bullet("Private reminder #hide", AuthoredDepth::First),
+            bullet("Private reminder #hide", AuthoredDepth::FIRST),
         ]
     }
 
@@ -3444,10 +3444,10 @@ mod tests {
         harness.request.selection =
             SuccessorSelection::Keys(BTreeSet::from([key.clone()]));
         let bullets = vec![
-            bullet("Draft the memo", AuthoredDepth::First),
+            bullet("Draft the memo", AuthoredDepth::FIRST),
             named_bullet(
                 "Keep this id",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "draft-the-memo",
                 false,
             ),
@@ -3487,7 +3487,7 @@ mod tests {
         let planned = plan_offer(
             &mut harness,
             offer_parsed(
-                vec![bullet("Draft the memo", AuthoredDepth::First)],
+                vec![bullet("Draft the memo", AuthoredDepth::FIRST)],
                 None,
             ),
         )
@@ -3521,7 +3521,7 @@ mod tests {
         let mut harness = harness();
         let planned = plan_offer(
             &mut harness,
-            create_parsed(vec![bullet("Draft the memo", AuthoredDepth::First)]),
+            create_parsed(vec![bullet("Draft the memo", AuthoredDepth::FIRST)]),
         )
         .expect("plan create");
         let note = planned.result.project_note.as_ref().expect("project note");

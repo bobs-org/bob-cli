@@ -292,9 +292,7 @@ fn group_list_blocks<'a>(
     for line in lines.iter().skip(1).copied() {
         match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
-            AuthoredLineClass::Item(authored)
-                if authored.depth == AuthoredDepth::First =>
-            {
+            AuthoredLineClass::Item(authored) if authored.depth.is_first() => {
                 if let Some(block) = current.take() {
                     bullets.push(block);
                 }
@@ -932,38 +930,53 @@ pub(crate) enum AuthoredLineClass<'a> {
     Invalid,
 }
 
-/// Classify one physical continuation line. A real item is either a
-/// column-zero `-`/`*`/`+` bullet or the same bullet prefixed by exactly two
-/// ASCII spaces. Whitespace-only rows are batch separators before strict
-/// item parsing reaches this classifier; when classified directly, they and
-/// marker-only placeholder rows are harmless. Every other nonempty shape is
-/// invalid.
+/// The authored-level cap for every reader that sees only a first-level
+/// bullet and one nested level: the notebook, record, close-log, section,
+/// and Pomodoro hosts, every first-level-only rule, and the task-host
+/// lexical helpers (selectors, type markers, directives, dependencies,
+/// target runs, and child-line completion) that must agree with a parser
+/// refusing deeper lines.
+pub(crate) const TWO_LEVEL_CAP: u8 = 2;
+
+/// Classify one physical continuation line at any authored level. A real
+/// item is a `-`/`*`/`+` bullet behind exactly `2·(L−1)` ASCII spaces,
+/// which is level `L`, up to [`AuthoredDepth::MAX_LEVEL`]. Whitespace-only
+/// rows are batch separators before strict item parsing reaches this
+/// classifier; when classified directly, they and marker-only placeholder
+/// rows within the first two levels are harmless. Every other nonempty
+/// shape, including odd indentation, tabs, mixed prefixes, and a deeper
+/// marker-only row, is invalid.
 pub(crate) fn classify_authored_line<'a>(
     line: RawLine<'a>,
+) -> AuthoredLineClass<'a> {
+    classify_authored_line_capped(line, AuthoredDepth::MAX_LEVEL)
+}
+
+/// [`classify_authored_line`] with every level above `max_level`
+/// classified `Invalid`. With [`TWO_LEVEL_CAP`] it accepts exactly a
+/// column-zero bullet and the same bullet behind two spaces.
+pub(crate) fn classify_authored_line_capped<'a>(
+    line: RawLine<'a>,
+    max_level: u8,
 ) -> AuthoredLineClass<'a> {
     if line.text.trim().is_empty() {
         return AuthoredLineClass::EmptyOrPlaceholder;
     }
 
-    if let Some((body_offset, body)) = strip_bullet_marker_at(line.text, 0) {
+    if let Some((depth, body_offset, body)) =
+        strip_authored_bullet(line.text, max_level)
+    {
         if body.trim().is_empty() {
-            return AuthoredLineClass::EmptyOrPlaceholder;
+            return if depth.level() <= TWO_LEVEL_CAP {
+                AuthoredLineClass::EmptyOrPlaceholder
+            } else {
+                AuthoredLineClass::Invalid
+            };
         }
         return AuthoredLineClass::Item(AuthoredLine {
             body,
             body_start: line.start + body_offset,
-            depth: AuthoredDepth::First,
-        });
-    }
-
-    if let Some((body_offset, body)) = strip_bullet_marker_at(line.text, 2) {
-        if body.trim().is_empty() {
-            return AuthoredLineClass::EmptyOrPlaceholder;
-        }
-        return AuthoredLineClass::Item(AuthoredLine {
-            body,
-            body_start: line.start + body_offset,
-            depth: AuthoredDepth::Nested,
+            depth,
         });
     }
 
@@ -974,18 +987,37 @@ pub(crate) fn classify_authored_line<'a>(
     AuthoredLineClass::Invalid
 }
 
-/// Recognize a list marker at a fixed byte prefix and return the raw body
-/// after the contiguous separator run. `prefix_len == 2` accepts exactly two
-/// leading spaces; one, three, a tab, or deeper indentation all fail.
+/// Recognize a bullet behind an even run of ASCII spaces at a level no
+/// deeper than `max_level` (nor [`AuthoredDepth::MAX_LEVEL`]) and return
+/// its depth plus the raw body after the separator run, as
+/// [`strip_bullet_marker_at`] does at that prefix.
+pub(crate) fn strip_authored_bullet(
+    line_text: &str,
+    max_level: u8,
+) -> Option<(AuthoredDepth, usize, &str)> {
+    let spaces = line_text.bytes().take_while(|byte| *byte == b' ').count();
+    if spaces % 2 != 0 {
+        return None;
+    }
+    let level = u8::try_from(spaces / 2 + 1).ok()?;
+    if level > max_level {
+        return None;
+    }
+    let depth = AuthoredDepth::from_level(level)?;
+    let (body_offset, body) = strip_bullet_marker_at(line_text, spaces)?;
+    Some((depth, body_offset, body))
+}
+
+/// Recognize a list marker at a fixed byte prefix of ASCII spaces and
+/// return the raw body after the contiguous separator run. `prefix_len ==
+/// 2` accepts exactly two leading spaces; one, three, a tab, or deeper
+/// indentation all fail.
 pub(super) fn strip_bullet_marker_at(
     line_text: &str,
     prefix_len: usize,
 ) -> Option<(usize, &str)> {
     let prefix = line_text.as_bytes().get(..prefix_len)?;
-    if prefix_len == 2 && prefix != b"  " {
-        return None;
-    }
-    if prefix_len == 0 && line_text.as_bytes().first() == Some(&b' ') {
+    if !prefix.iter().all(|byte| *byte == b' ') {
         return None;
     }
 

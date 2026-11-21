@@ -4761,6 +4761,32 @@ pub(super) fn resolve_new_task_drawer_bullets(
     Ok(out)
 }
 
+/// Render a group's nested bullets beneath its head at `head` depth: each
+/// bullet carries one `indent_unit` per level below the head, so a deeper
+/// authored subtree keeps its shape. Empty bodies render nothing.
+pub(super) fn render_nested_sub_bullets(
+    head: capture_language::AuthoredDepth,
+    nested: &[AuthoredSubBullet],
+    indent_unit: &str,
+) -> Vec<String> {
+    nested
+        .iter()
+        .filter_map(|child| {
+            let text = child.body.trim();
+            if text.is_empty() {
+                return None;
+            }
+            let units = child.depth.level().saturating_sub(head.level());
+            Some(format!(
+                "{}- {text}",
+                indent_unit.repeat(usize::from(units))
+            ))
+        })
+        .collect()
+}
+
+/// Render a new task's authored bullets beneath its task line: each bullet
+/// carries one `indent_unit` per authored level.
 pub(super) fn render_authored_sub_bullets(
     sub_bullets: &[AuthoredSubBullet],
     indent_unit: &str,
@@ -5132,7 +5158,7 @@ fn is_multi_note_capture(
     parsed
         .sub_bullets
         .iter()
-        .any(|bullet| bullet.depth == capture_language::AuthoredDepth::First)
+        .any(|bullet| bullet.depth.is_first())
 }
 
 /// Whether this parsed item is the clipboard-notes form: a note-less
@@ -5271,18 +5297,10 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                 continue;
             }
             let mut capture_block = format!("- {text}");
-            let mut sub_json: Vec<String> = Vec::new();
-            for child in nested {
-                if child.depth != capture_language::AuthoredDepth::Nested {
-                    continue;
-                }
-                let child_text = child.body.trim().to_string();
-                if child_text.is_empty() {
-                    continue;
-                }
-                capture_block
-                    .push_str(&format!("\n{child_indent}- {child_text}"));
-                sub_json.push(format!("{child_indent}- {child_text}"));
+            let sub_json =
+                render_nested_sub_bullets(header.depth, nested, &child_indent);
+            for line in &sub_json {
+                capture_block.push_str(&format!("\n{line}"));
             }
             let task_line = format!("- {text}");
             let plan = plan_sub_bullet_capture(
@@ -5336,16 +5354,27 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                         "empty_drawer_bullet",
                     ));
                 }
-                for child in nested {
-                    if child.depth != capture_language::AuthoredDepth::Nested {
-                        continue;
-                    }
+                for (note_start, note_end) in
+                    capture_language::authored_level_groups(
+                        nested,
+                        capture_language::AuthoredDepth::NESTED,
+                    )
+                {
+                    let child = &nested[note_start];
                     let child_text = child.body.trim().to_string();
                     if child_text.is_empty() {
                         continue;
                     }
-                    let capture_block = format!("- {child_text}");
-                    let task_line = capture_block.clone();
+                    let note_sub_bullets = render_nested_sub_bullets(
+                        child.depth,
+                        &nested[note_start + 1..note_end],
+                        &child_indent,
+                    );
+                    let task_line = format!("- {child_text}");
+                    let mut capture_block = task_line.clone();
+                    for line in &note_sub_bullets {
+                        capture_block.push_str(&format!("\n{line}"));
+                    }
                     let plan = plan_sub_bullet_capture(
                         planner,
                         &request.bob_dir,
@@ -5379,7 +5408,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                     notes.push(crate::native::capture::SubBulletNoteJson {
                         text: child_text.clone(),
                         task_line,
-                        sub_bullets: Vec::new(),
+                        sub_bullets: note_sub_bullets,
                         drawer,
                     });
                 }
@@ -5454,18 +5483,13 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                     }
                 }
                 let mut capture_block = format!("- {header_text}");
-                let mut sub_json: Vec<String> = Vec::new();
-                for child in nested {
-                    if child.depth != capture_language::AuthoredDepth::Nested {
-                        continue;
-                    }
-                    let child_text = child.body.trim().to_string();
-                    if child_text.is_empty() {
-                        continue;
-                    }
-                    capture_block
-                        .push_str(&format!("\n{child_indent}- {child_text}"));
-                    sub_json.push(format!("{child_indent}- {child_text}"));
+                let sub_json = render_nested_sub_bullets(
+                    header.depth,
+                    nested,
+                    &child_indent,
+                );
+                for line in &sub_json {
+                    capture_block.push_str(&format!("\n{line}"));
                 }
                 let task_line = format!("- {header_text}");
                 let plan = plan_sub_bullet_capture(

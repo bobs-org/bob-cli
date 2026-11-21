@@ -229,9 +229,9 @@ pub(crate) fn bullet_sigil_may_need_notebook_policy(
     }
     let line = item.lines[line_index].raw;
     matches!(
-        classify_authored_line(line),
+        classify_authored_line_capped(line, TWO_LEVEL_CAP),
         AuthoredLineClass::Item(authored)
-            if authored.depth == AuthoredDepth::First
+            if authored.depth.is_first()
     )
 }
 
@@ -679,10 +679,12 @@ fn expand_dot_block_id_alias(
     if !super::completion::has_sealed_project_note_marker(&parsed) {
         return None;
     }
-    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+    let AuthoredLineClass::Item(authored) =
+        classify_authored_line_capped(line, TWO_LEVEL_CAP)
+    else {
         return None;
     };
-    if authored.depth != AuthoredDepth::First {
+    if !authored.depth.is_first() {
         return None;
     }
     match super::move_bullet::scan_move_bullet(
@@ -2548,7 +2550,7 @@ fn candidate_selects_plain_marker(
             let (line_text, line_base, line_end) = if leading {
                 (line.raw.text, line.raw.start, line.raw.end)
             } else {
-                match classify_authored_line(line.raw) {
+                match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
                     AuthoredLineClass::Item(authored) => {
                         (authored.body, authored.body_start, line.raw.end)
                     }
@@ -3180,7 +3182,8 @@ pub(super) fn deletion_line_context<'a>(
                 content_end: physical.end,
             };
         }
-        return match classify_authored_line(item_line.raw) {
+        return match classify_authored_line_capped(item_line.raw, TWO_LEVEL_CAP)
+        {
             AuthoredLineClass::Item(authored) => DeletionLineContext {
                 physical,
                 content_start: authored.body_start,

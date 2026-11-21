@@ -508,7 +508,7 @@ impl ProjectTaskPass {
                         message: reserved_project_task_id_error(&id),
                     };
                 }
-                if depth != AuthoredDepth::First {
+                if depth != AuthoredDepth::FIRST {
                     return ChildTaskOutcome::Error {
                         code: "misplaced_project_task_id",
                         message: misplaced_nested_task_id_error(token),

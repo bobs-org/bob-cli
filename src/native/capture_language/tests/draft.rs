@@ -66,14 +66,14 @@ fn split_capture_draft_reports_ranges_and_ignores_separator_runs() {
 #[test]
 fn authored_line_classifier_accepts_first_level_and_nested_items() {
     for (raw, body, depth, body_start) in [
-        ("- body", "body", AuthoredDepth::First, 2),
-        ("* body", "body", AuthoredDepth::First, 2),
-        ("+ body", "body", AuthoredDepth::First, 2),
-        ("-\tbody", "body", AuthoredDepth::First, 2),
-        ("-   body", "body", AuthoredDepth::First, 4),
-        ("  - nested", "nested", AuthoredDepth::Nested, 4),
-        ("  * nested", "nested", AuthoredDepth::Nested, 4),
-        ("  +\tnested", "nested", AuthoredDepth::Nested, 4),
+        ("- body", "body", AuthoredDepth::FIRST, 2),
+        ("* body", "body", AuthoredDepth::FIRST, 2),
+        ("+ body", "body", AuthoredDepth::FIRST, 2),
+        ("-\tbody", "body", AuthoredDepth::FIRST, 2),
+        ("-   body", "body", AuthoredDepth::FIRST, 4),
+        ("  - nested", "nested", AuthoredDepth::NESTED, 4),
+        ("  * nested", "nested", AuthoredDepth::NESTED, 4),
+        ("  +\tnested", "nested", AuthoredDepth::NESTED, 4),
     ] {
         let line = RawLine {
             text: raw,
@@ -124,6 +124,187 @@ fn authored_line_classifier_rejects_every_other_shape() {
             classify_authored_line(line),
             AuthoredLineClass::Invalid,
             "{raw:?}"
+        );
+    }
+}
+
+fn raw_line(text: &str) -> RawLine<'_> {
+    RawLine {
+        text,
+        start: 0,
+        end: text.len(),
+    }
+}
+
+fn depth(level: u8) -> AuthoredDepth {
+    AuthoredDepth::from_level(level).expect("valid level")
+}
+
+#[test]
+fn authored_line_classifier_reads_every_even_level() {
+    for (raw, body, level, body_start) in [
+        ("- first", "first", 1, 2),
+        ("  - second", "second", 2, 4),
+        ("    - third", "third", 3, 6),
+        ("    *\tthird", "third", 3, 6),
+        ("      + fourth", "fourth", 4, 8),
+        ("      -   fourth", "fourth", 4, 10),
+    ] {
+        let AuthoredLineClass::Item(item) =
+            classify_authored_line(raw_line(raw))
+        else {
+            panic!("expected item for {raw:?}");
+        };
+        assert_eq!(item.body, body, "{raw:?}");
+        assert_eq!(item.depth, depth(level), "{raw:?}");
+        assert_eq!(item.depth.level(), level, "{raw:?}");
+        assert_eq!(item.body_start, body_start, "{raw:?}");
+    }
+}
+
+#[test]
+fn authored_line_classifier_rejects_odd_tabbed_and_mixed_prefixes() {
+    for raw in [
+        "   - odd three",
+        "     - odd five",
+        "\t- tab",
+        "\t\t- tabs",
+        "  \t- spaces then tab",
+        "\t  - tab then spaces",
+        "    \t- four spaces then tab",
+        "    -body",
+        // A marker-only row deeper than two levels is not a placeholder.
+        "    - ",
+        "    -",
+        "      - ",
+    ] {
+        assert_eq!(
+            classify_authored_line(raw_line(raw)),
+            AuthoredLineClass::Invalid,
+            "{raw:?}"
+        );
+    }
+}
+
+#[test]
+fn capped_authored_line_classifier_refuses_levels_past_the_cap() {
+    // The two-level cap is exactly the original two-level classifier.
+    for (raw, expected) in [
+        ("- first", Some(1)),
+        ("  - second", Some(2)),
+        ("    - third", None),
+        ("      - fourth", None),
+    ] {
+        let class = classify_authored_line_capped(raw_line(raw), TWO_LEVEL_CAP);
+        match expected {
+            Some(level) => {
+                let AuthoredLineClass::Item(item) = class else {
+                    panic!("expected item for {raw:?}: {class:?}");
+                };
+                assert_eq!(item.depth, depth(level), "{raw:?}");
+            }
+            None => {
+                assert_eq!(class, AuthoredLineClass::Invalid, "{raw:?}");
+            }
+        }
+    }
+    for raw in ["", "   ", "- ", "-", " -", "  -", "  - "] {
+        assert_eq!(
+            classify_authored_line_capped(raw_line(raw), TWO_LEVEL_CAP),
+            AuthoredLineClass::EmptyOrPlaceholder,
+            "{raw:?}"
+        );
+    }
+    let AuthoredLineClass::Item(third) =
+        classify_authored_line_capped(raw_line("    - third"), 3)
+    else {
+        panic!("level 3 fits a cap of 3");
+    };
+    assert_eq!(third.depth, depth(3));
+    assert_eq!(
+        classify_authored_line_capped(raw_line("      - fourth"), 3),
+        AuthoredLineClass::Invalid
+    );
+}
+
+#[test]
+fn authored_line_classifier_bounds_levels_at_the_sanity_limit() {
+    let deepest = format!(
+        "{}- deepest",
+        "  ".repeat(usize::from(AuthoredDepth::MAX_LEVEL) - 1)
+    );
+    let AuthoredLineClass::Item(item) =
+        classify_authored_line(raw_line(&deepest))
+    else {
+        panic!("level {} is admitted", AuthoredDepth::MAX_LEVEL);
+    };
+    assert_eq!(item.depth.level(), AuthoredDepth::MAX_LEVEL);
+    assert_eq!(item.body, "deepest");
+
+    let too_deep = format!(
+        "{}- too deep",
+        "  ".repeat(usize::from(AuthoredDepth::MAX_LEVEL))
+    );
+    assert_eq!(
+        classify_authored_line(raw_line(&too_deep)),
+        AuthoredLineClass::Invalid
+    );
+    // A prefix past any `u8` level stays invalid instead of wrapping.
+    let huge = format!("{}- huge", " ".repeat(600));
+    assert_eq!(
+        classify_authored_line(raw_line(&huge)),
+        AuthoredLineClass::Invalid
+    );
+}
+
+#[test]
+fn authored_depth_levels_and_predicates() {
+    assert_eq!(AuthoredDepth::FIRST.level(), 1);
+    assert_eq!(AuthoredDepth::NESTED.level(), 2);
+    assert_eq!(AuthoredDepth::from_level(1), Some(AuthoredDepth::FIRST));
+    assert_eq!(AuthoredDepth::from_level(2), Some(AuthoredDepth::NESTED));
+    assert_eq!(AuthoredDepth::from_level(0), None);
+    assert_eq!(
+        AuthoredDepth::from_level(AuthoredDepth::MAX_LEVEL + 1),
+        None
+    );
+    assert!(AuthoredDepth::FIRST.is_first());
+    assert!(!AuthoredDepth::FIRST.is_nested());
+    assert!(AuthoredDepth::NESTED.is_nested());
+    assert!(depth(3).is_nested());
+    assert!(!depth(3).is_first());
+    assert_eq!(depth(3).indent_units(), 3);
+    assert_eq!(depth(3).shallower(), AuthoredDepth::NESTED);
+    assert_eq!(AuthoredDepth::NESTED.shallower(), AuthoredDepth::FIRST);
+    assert_eq!(AuthoredDepth::FIRST.shallower(), AuthoredDepth::FIRST);
+    assert!(AuthoredDepth::FIRST < AuthoredDepth::NESTED);
+    assert!(AuthoredDepth::NESTED < depth(3));
+}
+
+#[test]
+fn task_host_parsers_keep_refusing_lines_past_two_levels() {
+    // Every task-host parser still refuses a third level with today's
+    // code and range, whatever the line holds.
+    for raw in [
+        "Task\n- note\n  - nested\n    - deep",
+        "Task\n- [ ] req\n  - [ ] sub\n    - [ ] subsub",
+        "@work+abc\n- note\n  - nested\n    - deep",
+        "@work\n- task one\n  - note\n    - deep",
+    ] {
+        let error = execute(raw).expect_err("third level refuses");
+        assert!(
+            error.contains("must be a column-zero bullet or a two-space"),
+            "{raw:?}: {error}"
+        );
+        let parsed = editor(raw);
+        let deep_start = raw.rfind("    - ").expect("deep line");
+        assert!(
+            parsed.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "invalid_child_line"
+                    && diagnostic.range == Some((deep_start, raw.len()))
+            }),
+            "{raw:?}: {:?}",
+            parsed.diagnostics
         );
     }
 }

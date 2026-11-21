@@ -920,7 +920,7 @@ pub(super) fn select_target_run_for_item(
         matches!(parent_route, Some(CaptureKind::ProjectNote { .. }));
     let child_seals_note = child_lines.iter().any(|line| {
         matches!(
-            classify_authored_line(line.raw),
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::Item(authored)
                 if child_line_seals_project_note(authored.body)
         )
@@ -928,11 +928,12 @@ pub(super) fn select_target_run_for_item(
     let parent_takes_ids = parent_is_project_note || child_seals_note;
 
     for line in child_lines {
-        let authored = match classify_authored_line(line.raw) {
-            AuthoredLineClass::EmptyOrPlaceholder
-            | AuthoredLineClass::Invalid => continue,
-            AuthoredLineClass::Item(authored) => authored,
-        };
+        let authored =
+            match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
+                AuthoredLineClass::EmptyOrPlaceholder
+                | AuthoredLineClass::Invalid => continue,
+                AuthoredLineClass::Item(authored) => authored,
+            };
         let child_line = RawLine {
             text: authored.body,
             start: authored.body_start,
@@ -1032,7 +1033,7 @@ pub(super) fn find_editor_target_run(
         matches!(parent_route, Some(CaptureKind::ProjectNote { .. }));
     let child_seals_note = child_lines.iter().any(|line| {
         matches!(
-            classify_authored_line(line.raw),
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::Item(authored)
                 if child_line_seals_project_note(authored.body)
         )
@@ -1040,11 +1041,12 @@ pub(super) fn find_editor_target_run(
     let parent_takes_ids = parent_is_project_note || child_seals_note;
 
     for line in child_lines {
-        let authored = match classify_authored_line(line.raw) {
-            AuthoredLineClass::EmptyOrPlaceholder
-            | AuthoredLineClass::Invalid => continue,
-            AuthoredLineClass::Item(authored) => authored,
-        };
+        let authored =
+            match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
+                AuthoredLineClass::EmptyOrPlaceholder
+                | AuthoredLineClass::Invalid => continue,
+                AuthoredLineClass::Item(authored) => authored,
+            };
         let child_line = RawLine {
             text: authored.body,
             start: authored.body_start,
@@ -1202,7 +1204,7 @@ fn list_header_marker_from_item(
     for line in children {
         if let AuthoredLineClass::Item(authored) =
             classify_authored_line(line.raw)
-            && authored.depth == AuthoredDepth::First
+            && authored.depth.is_first()
         {
             return Some(list_header_marker_error(
                 first.text,
@@ -1262,7 +1264,7 @@ fn parse_list_bullet_item<'a>(
         let line = &item.lines[0];
         return Err(match classify_authored_line(line.raw) {
             AuthoredLineClass::Item(authored)
-                if authored.depth == AuthoredDepth::Nested =>
+                if authored.depth == AuthoredDepth::NESTED =>
             {
                 coded(
                     "orphaned_nested_bullet",
@@ -1446,13 +1448,17 @@ fn parse_list_bullet_item<'a>(
         let line_number = line.line_number;
         let authored = match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
-            AuthoredLineClass::Invalid => {
+            AuthoredLineClass::Item(authored)
+                if authored.depth.level() <= TWO_LEVEL_CAP =>
+            {
+                authored
+            }
+            AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
                 return Err(coded(
                     "invalid_child_line",
                     invalid_child_line_error(line_number),
                 ));
             }
-            AuthoredLineClass::Item(authored) => authored,
         };
         let child_line = RawLine {
             text: authored.body,
@@ -1572,12 +1578,9 @@ fn parse_list_bullet_item<'a>(
         // The bullet line is this item's text line, so its nested lines sit
         // one level higher than their lexical depth: exactly as `<text>
         // @route` plus those lines as direct children would parse (the
-        // equivalence invariant). A deeper line cannot exist here; four
-        // spaces classify `Invalid` and refuse above.
-        let depth = match authored.depth {
-            AuthoredDepth::Nested => AuthoredDepth::First,
-            AuthoredDepth::First => AuthoredDepth::First,
-        };
+        // equivalence invariant). A line deeper than two levels refuses
+        // above.
+        let depth = authored.depth.shallower();
         sub_bullets.push(AuthoredSubBullet {
             body,
             depth,
@@ -1778,7 +1781,7 @@ fn list_header_marker_from_resolved(
         .parsed
         .sub_bullets
         .iter()
-        .any(|sub| sub.depth == AuthoredDepth::First)
+        .any(|sub| sub.depth.is_first())
     {
         return None;
     }
@@ -1837,7 +1840,7 @@ fn list_header_marker_from_resolved(
         .parsed
         .sub_bullets
         .iter()
-        .find(|sub| sub.depth == AuthoredDepth::First)
+        .find(|sub| sub.depth.is_first())
         .map(|sub| sub.body.trim())?;
     Some(list_header_marker_error(first, &stray, bullet))
 }
@@ -1860,7 +1863,7 @@ fn is_bare_at_list_attempt(item: &CaptureItem<'_>) -> bool {
         matches!(
             super::draft::classify_authored_line(line.raw),
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == super::model::AuthoredDepth::First
+                if authored.depth.is_first()
         )
     })
 }
@@ -2078,7 +2081,7 @@ fn interpret_execution_move(
         MoveBulletHit::Choice { span } => {
             if sub_bullets
                 .get(index + 1)
-                .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+                .is_some_and(|next| next.depth.is_nested())
             {
                 return Err(super::move_bullet::move_choice_nested_error());
             }
@@ -2103,7 +2106,7 @@ fn interpret_execution_move(
         } => {
             if sub_bullets
                 .get(index + 1)
-                .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+                .is_some_and(|next| next.depth.is_nested())
             {
                 let basename =
                     crate::native::capture_project_note::project_note_basename(
@@ -2478,7 +2481,7 @@ fn parse_capture_item_masked<'a>(
     // there routes the whole item, so every sibling takes the ID rule.
     let child_seals_note = child_lines.iter().any(|line| {
         matches!(
-            classify_authored_line(line.raw),
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::Item(authored)
                 if child_line_seals_project_note(authored.body)
         )
@@ -2497,12 +2500,16 @@ fn parse_capture_item_masked<'a>(
         let line_number = line.line_number;
         let authored = match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
-            AuthoredLineClass::Invalid => {
+            AuthoredLineClass::Item(authored)
+                if authored.depth.level() <= TWO_LEVEL_CAP =>
+            {
+                authored
+            }
+            AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
                 return Err(invalid_child_line_error(line_number));
             }
-            AuthoredLineClass::Item(authored) => authored,
         };
-        if authored.depth == AuthoredDepth::Nested && !has_first_level_owner {
+        if authored.depth.is_nested() && !has_first_level_owner {
             return Err(orphaned_nested_bullet_error(line_number));
         }
         let child_line = RawLine {
@@ -2566,8 +2573,7 @@ fn parse_capture_item_masked<'a>(
         // Move bullets claim the line from its raw shape before the
         // trailing-ID rule runs; the project-note post-pass interprets
         // the hit and the line never reaches the new-task path.
-        let move_hit = (parent_takes_ids
-            && authored.depth == AuthoredDepth::First)
+        let move_hit = (parent_takes_ids && authored.depth.is_first())
             .then(|| {
                 super::move_bullet::scan_move_bullet(
                     authored.body,
@@ -2576,7 +2582,9 @@ fn parse_capture_item_masked<'a>(
                 )
             })
             .flatten();
-        let drawer_hit = (authored.depth == AuthoredDepth::First)
+        let drawer_hit = authored
+            .depth
+            .is_first()
             .then(|| super::drawer_bullet::scan_leading(authored.body, 0))
             .flatten();
         if let Some(hit) = drawer_hit.as_ref() {
@@ -2653,7 +2661,7 @@ fn parse_capture_item_masked<'a>(
         sub_bullet_lines.push(line_number);
         sub_bullet_stripped.push(child_stripped);
         sub_bullet_moves.push(move_hit);
-        if authored.depth == AuthoredDepth::First {
+        if authored.depth.is_first() {
             has_first_level_owner = true;
         }
     }
@@ -2912,9 +2920,7 @@ fn parse_capture_item_masked<'a>(
     // parent text, and `&`/`*`/`~` keep the target as owner.
     let is_multi_note_candidate = matches!(kind, CaptureKind::SubBullet { .. })
         && parent_body_is_empty
-        && sub_bullets
-            .iter()
-            .any(|bullet| bullet.depth == AuthoredDepth::First);
+        && sub_bullets.iter().any(|bullet| bullet.depth.is_first());
     if has_dependencies
         && parent_body_is_empty
         && (has_creation_modifiers || !sub_bullets.is_empty())
@@ -2986,7 +2992,7 @@ fn parse_capture_item_masked<'a>(
         let mut owner_body: Option<String> = None;
         for index in 0..sub_bullets.len() {
             let line_number = sub_bullet_lines[index];
-            if sub_bullets[index].depth == AuthoredDepth::First {
+            if sub_bullets[index].depth.is_first() {
                 let (_, body) = split_leading_checkbox(
                     sub_bullets[index].body.trim_start(),
                 );
@@ -5417,7 +5423,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             );
             let has_bullet_child = item.lines[1..].iter().any(|line| {
                 !matches!(
-                    classify_authored_line(line.raw),
+                    classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
                     AuthoredLineClass::EmptyOrPlaceholder
                 )
             });
@@ -5780,7 +5786,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             );
             let has_bullet_child = item.lines[1..].iter().any(|line| {
                 !matches!(
-                    classify_authored_line(line.raw),
+                    classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
                     AuthoredLineClass::EmptyOrPlaceholder
                 )
             });

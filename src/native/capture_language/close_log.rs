@@ -440,11 +440,11 @@ pub(crate) fn close_first_bullet_is_unnumbered(
     child_lines: &[ItemLine<'_>],
 ) -> bool {
     for line in child_lines {
-        match classify_authored_line(line.raw) {
+        match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Invalid => return false,
             AuthoredLineClass::Item(authored) => {
-                if authored.depth != AuthoredDepth::First {
+                if authored.depth != AuthoredDepth::FIRST {
                     return false;
                 }
                 let tokens = body_tokens(authored.body, authored.body_start);
@@ -977,17 +977,18 @@ pub(crate) fn lex_close_log_bullets_with_all(
     let mut numbered_list: Option<bool> = None;
 
     for line in child_lines {
-        let authored = match classify_authored_line(line.raw) {
-            AuthoredLineClass::EmptyOrPlaceholder => continue,
-            AuthoredLineClass::Invalid => {
-                return Err(CloseLogError {
-                    message: invalid_child_line_error(line.line_number),
-                    range: (line.raw.start, line.raw.end),
-                });
-            }
-            AuthoredLineClass::Item(authored) => authored,
-        };
-        if authored.depth == AuthoredDepth::Nested && !seen_first_level {
+        let authored =
+            match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
+                AuthoredLineClass::EmptyOrPlaceholder => continue,
+                AuthoredLineClass::Invalid => {
+                    return Err(CloseLogError {
+                        message: invalid_child_line_error(line.line_number),
+                        range: (line.raw.start, line.raw.end),
+                    });
+                }
+                AuthoredLineClass::Item(authored) => authored,
+            };
+        if authored.depth == AuthoredDepth::NESTED && !seen_first_level {
             return Err(CloseLogError {
                 message: orphaned_nested_bullet_error(line.line_number),
                 range: (line.raw.start, line.raw.end),
@@ -999,7 +1000,7 @@ pub(crate) fn lex_close_log_bullets_with_all(
         if tokens.is_empty() {
             continue;
         }
-        if authored.depth == AuthoredDepth::Nested {
+        if authored.depth == AuthoredDepth::NESTED {
             let text = check_bullet_text(&tokens)?;
             let detail_range = (
                 tokens

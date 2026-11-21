@@ -904,22 +904,50 @@ pub(crate) enum ParsedDependencyTargetKind {
     ExistingTask,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AuthoredDepth {
-    First,
-    Nested,
-}
+/// An authored bullet's level: 1 for a column-zero bullet, 2 for a bullet
+/// behind two spaces, and one more level per further two spaces. The
+/// classifier only builds levels in `1..=MAX_LEVEL`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct AuthoredDepth(u8);
 
 impl AuthoredDepth {
-    pub(crate) fn level(self) -> u8 {
-        match self {
-            Self::First => 1,
-            Self::Nested => 2,
-        }
+    /// A column-zero bullet.
+    pub(crate) const FIRST: Self = Self(1);
+    /// A bullet behind exactly two spaces.
+    pub(crate) const NESTED: Self = Self(2);
+    /// The sanity bound on authored levels; deeper bullets classify
+    /// `Invalid`.
+    pub(crate) const MAX_LEVEL: u8 = 64;
+
+    /// The depth at `level`, or `None` outside `1..=MAX_LEVEL`.
+    pub(crate) fn from_level(level: u8) -> Option<Self> {
+        (1..=Self::MAX_LEVEL)
+            .contains(&level)
+            .then_some(Self(level))
     }
 
+    pub(crate) fn level(self) -> u8 {
+        self.0
+    }
+
+    /// How many indent units a rendered bullet at this depth carries.
     pub(crate) fn indent_units(self) -> usize {
         usize::from(self.level())
+    }
+
+    pub(crate) fn is_first(self) -> bool {
+        self.0 == 1
+    }
+
+    /// Any level below the first: two-space bullets and deeper.
+    pub(crate) fn is_nested(self) -> bool {
+        self.0 >= 2
+    }
+
+    /// One level shallower, never above the first level. A `@route` list
+    /// bullet is the item's text line, so its nested lines move up a level.
+    pub(crate) fn shallower(self) -> Self {
+        Self(self.0.saturating_sub(1).max(1))
     }
 }
 

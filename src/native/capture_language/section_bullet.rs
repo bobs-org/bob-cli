@@ -9,9 +9,9 @@
 //! followed by whitespace or end of line. `#` plus a digit, `##`, and `#-`
 //! stay prose, and `\#` keeps a literal `#`.
 
-use super::draft::classify_authored_line;
 #[cfg(test)]
 use super::draft::strip_bullet_marker_at;
+use super::draft::{classify_authored_line_capped, TWO_LEVEL_CAP};
 use super::editor_model::{Diagnostic, Need, Severity};
 use super::line::normalize_task_text;
 use super::model::{AuthoredDepth, AuthoredSubBullet, CaptureItem};
@@ -250,14 +250,14 @@ pub(crate) fn plan_from_sub_bullets(
     let mut index = 0;
     while index < sub_bullets.len() {
         let bullet = &sub_bullets[index];
-        if bullet.depth != AuthoredDepth::First {
+        if bullet.depth != AuthoredDepth::FIRST {
             index += 1;
             continue;
         }
         let nested_start = index + 1;
         index += 1;
         while index < sub_bullets.len()
-            && sub_bullets[index].depth == AuthoredDepth::Nested
+            && sub_bullets[index].depth == AuthoredDepth::NESTED
         {
             index += 1;
         }
@@ -393,7 +393,7 @@ fn plan_create_lines(
     let mut index = 1;
     while index < item.lines.len() {
         let line = item.lines[index];
-        match classify_authored_line(line.raw) {
+        match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
             super::draft::AuthoredLineClass::EmptyOrPlaceholder => {
                 index += 1;
             }
@@ -420,15 +420,15 @@ fn plan_create_lines(
                 ));
             }
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == AuthoredDepth::First =>
+                if authored.depth == AuthoredDepth::FIRST =>
             {
                 let hit = scan_leading(authored.body, authored.body_start);
                 let nested_follows =
                     item.lines.get(index + 1).is_some_and(|next| {
                         matches!(
-                            classify_authored_line(next.raw),
+                            classify_authored_line_capped(next.raw, TWO_LEVEL_CAP),
                             super::draft::AuthoredLineClass::Item(child)
-                                if child.depth == AuthoredDepth::Nested
+                                if child.depth == AuthoredDepth::NESTED
                         )
                     });
                 let section_group =
@@ -520,12 +520,12 @@ fn collect_nested_lines(
     let mut index = start;
     while index < item.lines.len() {
         let line = item.lines[index];
-        match classify_authored_line(line.raw) {
+        match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
             super::draft::AuthoredLineClass::EmptyOrPlaceholder => {
                 index += 1;
             }
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == AuthoredDepth::Nested =>
+                if authored.depth == AuthoredDepth::NESTED =>
             {
                 notes.push(note_from_body(
                     authored.body,
@@ -536,7 +536,7 @@ fn collect_nested_lines(
                 index += 1;
             }
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == AuthoredDepth::First =>
+                if authored.depth == AuthoredDepth::FIRST =>
             {
                 break;
             }

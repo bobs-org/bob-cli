@@ -1381,13 +1381,16 @@ fn notebook_sub_bullets(
     let list = item.list.is_some();
     let mut sub_bullets = Vec::new();
     for line in item.lines.iter().skip(1) {
-        match super::draft::classify_authored_line(line.raw) {
+        match super::draft::classify_authored_line_capped(
+            line.raw,
+            super::draft::TWO_LEVEL_CAP,
+        ) {
             super::draft::AuthoredLineClass::EmptyOrPlaceholder => continue,
             super::draft::AuthoredLineClass::Item(authored) => {
                 sub_bullets.push(AuthoredSubBullet {
                     body: authored.body.trim().to_string(),
                     depth: if list {
-                        super::model::AuthoredDepth::First
+                        super::model::AuthoredDepth::FIRST
                     } else {
                         authored.depth
                     },
@@ -2667,11 +2670,14 @@ fn created_notebook_route(item: &CaptureItem<'_>) -> String {
 fn first_empty_section_authored(item: &CaptureItem<'_>) -> String {
     for line in item.lines.iter().skip(1) {
         let super::draft::AuthoredLineClass::Item(authored) =
-            super::draft::classify_authored_line(line.raw)
+            super::draft::classify_authored_line_capped(
+                line.raw,
+                super::draft::TWO_LEVEL_CAP,
+            )
         else {
             continue;
         };
-        if authored.depth != super::model::AuthoredDepth::First {
+        if authored.depth != super::model::AuthoredDepth::FIRST {
             continue;
         }
         if let Some(SectionBulletHit::Complete {
@@ -2692,7 +2698,10 @@ fn refuse_notebook_create_children(
     token_range: (usize, usize),
 ) -> Result<(), CaptureItemParseError> {
     for line in item.lines.iter().skip(1) {
-        match super::draft::classify_authored_line(line.raw) {
+        match super::draft::classify_authored_line_capped(
+            line.raw,
+            super::draft::TWO_LEVEL_CAP,
+        ) {
             super::draft::AuthoredLineClass::EmptyOrPlaceholder => continue,
             super::draft::AuthoredLineClass::Invalid => {
                 if super::section_bullet::looks_like_deeper_bullet(
@@ -2706,7 +2715,7 @@ fn refuse_notebook_create_children(
                 ));
             }
             super::draft::AuthoredLineClass::Item(authored) => {
-                if authored.depth == super::model::AuthoredDepth::First {
+                if authored.depth == super::model::AuthoredDepth::FIRST {
                     if let Some(hit) = super::move_bullet::scan_move_bullet(
                         authored.body,
                         authored.body_start,
@@ -2997,11 +3006,14 @@ fn notebook_create_editor_view(
 fn first_complete_section_selector(item: &CaptureItem<'_>) -> Option<String> {
     for line in item.lines.iter().skip(1) {
         let super::draft::AuthoredLineClass::Item(authored) =
-            super::draft::classify_authored_line(line.raw)
+            super::draft::classify_authored_line_capped(
+                line.raw,
+                super::draft::TWO_LEVEL_CAP,
+            )
         else {
             continue;
         };
-        if authored.depth != super::model::AuthoredDepth::First {
+        if authored.depth != super::model::AuthoredDepth::FIRST {
             continue;
         }
         if let Some(SectionBulletHit::Complete {
@@ -3026,11 +3038,14 @@ fn push_create_body_section_spans(
     };
     for line in item.lines.iter().skip(1) {
         let super::draft::AuthoredLineClass::Item(authored) =
-            super::draft::classify_authored_line(line.raw)
+            super::draft::classify_authored_line_capped(
+                line.raw,
+                super::draft::TWO_LEVEL_CAP,
+            )
         else {
             continue;
         };
-        if authored.depth != super::model::AuthoredDepth::First {
+        if authored.depth != super::model::AuthoredDepth::FIRST {
             continue;
         }
         if let Some(SectionBulletHit::Complete {
@@ -3150,9 +3165,9 @@ fn fanout_notebook_plus<'a>(
     }
     let first_level = item.lines.iter().skip(1).any(|line| {
         matches!(
-            super::draft::classify_authored_line(line.raw),
+            super::draft::classify_authored_line_capped(line.raw, super::draft::TWO_LEVEL_CAP),
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == super::model::AuthoredDepth::First
+                if authored.depth == super::model::AuthoredDepth::FIRST
         )
     });
     if !first_level {
@@ -3166,9 +3181,12 @@ fn fanout_notebook_plus<'a>(
         let Some(first) = block.first() else {
             return Ok(());
         };
-        let authored = match super::draft::classify_authored_line(first.raw) {
+        let authored = match super::draft::classify_authored_line_capped(
+            first.raw,
+            super::draft::TWO_LEVEL_CAP,
+        ) {
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == super::model::AuthoredDepth::First =>
+                if authored.depth == super::model::AuthoredDepth::FIRST =>
             {
                 authored
             }
@@ -3233,10 +3251,13 @@ fn fanout_notebook_plus<'a>(
         Ok(())
     };
     for line in item.lines.iter().skip(1).copied() {
-        match super::draft::classify_authored_line(line.raw) {
+        match super::draft::classify_authored_line_capped(
+            line.raw,
+            super::draft::TWO_LEVEL_CAP,
+        ) {
             super::draft::AuthoredLineClass::EmptyOrPlaceholder => continue,
             super::draft::AuthoredLineClass::Item(authored)
-                if authored.depth == super::model::AuthoredDepth::First =>
+                if authored.depth == super::model::AuthoredDepth::FIRST =>
             {
                 if !current.is_empty() {
                     flush(&current, &mut outcomes)?;

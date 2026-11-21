@@ -13,7 +13,9 @@
 //! and leaves the visible `&...` in task text. `&` inside `[[wikilinks]]`
 //! and `` `code` `` spans is never a modifier.
 
-use super::draft::{classify_authored_line, AuthoredLineClass};
+use super::draft::{
+    classify_authored_line_capped, AuthoredLineClass, TWO_LEVEL_CAP,
+};
 use super::editor_model::{DependencyEntry, RelationEntry, Span, SpanKind};
 use super::editor_parse::tokenize_line_with_spans;
 use super::markers::{
@@ -1511,7 +1513,7 @@ pub(crate) fn scan_item_dependencies(
     found.absorb(&parent_deps);
     for child in children {
         let AuthoredLineClass::Item(authored) =
-            classify_authored_line(child.raw)
+            classify_authored_line_capped(child.raw, TWO_LEVEL_CAP)
         else {
             continue;
         };

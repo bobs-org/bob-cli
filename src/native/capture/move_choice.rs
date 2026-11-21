@@ -1684,7 +1684,7 @@ fn mint_and_splice(
         let (final_id, is_minted) = finals.remove(&row_idx).expect("final");
         synthetics.push(crate::native::capture_language::AuthoredSubBullet {
             body: String::new(),
-            depth: crate::native::capture_language::AuthoredDepth::First,
+            depth: crate::native::capture_language::AuthoredDepth::FIRST,
             task_id: None,
             move_task: Some(crate::native::capture_language::MoveBullet {
                 sigil,

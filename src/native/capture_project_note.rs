@@ -30,9 +30,7 @@ use chrono::{
 use chrono_tz::Tz;
 
 use super::capture_dependency_tasks::has_hide_tag;
-use super::capture_language::{
-    split_leading_checkbox, AuthoredDepth, AuthoredSubBullet,
-};
+use super::capture_language::{split_leading_checkbox, AuthoredSubBullet};
 use super::note_tasks::TaskStatusType;
 use super::projects::edits::normalize_prj_is_blocked_tag;
 
@@ -302,6 +300,14 @@ fn contains_task_tag(body: &str) -> bool {
     false
 }
 
+/// One authored bullet rendered beneath a line at `base_level`: a tab per
+/// level below it, so `\t- note` sits under a task row and a deeper
+/// subtree keeps its shape.
+fn nested_line(bullet: &AuthoredSubBullet, base_level: u8) -> String {
+    let tabs = bullet.depth.level().saturating_sub(base_level);
+    format!("{}- {}", "\t".repeat(usize::from(tabs)), bullet.body.trim())
+}
+
 /// Render one authored task line: preserve an authored checkbox status
 /// (defaulting to open), add `#task` unless present, append
 /// `[created::DATE]` unless the body already carries one, and finally append
@@ -374,7 +380,7 @@ pub(crate) fn render_project_note(
 
     let mut groups: Vec<FirstGroup<'_>> = Vec::new();
     for (index, bullet) in input.sub_bullets.iter().enumerate() {
-        if bullet.depth == AuthoredDepth::First || groups.is_empty() {
+        if bullet.depth.is_first() || groups.is_empty() {
             groups.push(FirstGroup {
                 owner: bullet,
                 owner_index: index,
@@ -421,10 +427,14 @@ pub(crate) fn render_project_note(
         {
             let title = format_project_section_title(owner_body);
             let normalized = normalize_project_section_title(&title);
+            // Section entries sit at the section's left edge; anything
+            // deeper keeps its authored shape beneath its entry.
             let note_lines: Vec<String> = group
                 .nested
                 .iter()
-                .map(|nested| format!("- {}", nested.body.trim()))
+                .map(|nested| {
+                    nested_line(nested, group.owner.depth.level() + 1)
+                })
                 .collect();
             match section_index.get(&normalized) {
                 Some(&index) => {
@@ -486,7 +496,8 @@ pub(crate) fn render_project_note(
             tasks_block.push(task_line);
             task_entries += 1;
             for nested in &group.nested {
-                tasks_block.push(format!("\t- {}", nested.body.trim()));
+                tasks_block
+                    .push(nested_line(nested, group.owner.depth.level()));
             }
         }
     }
@@ -618,7 +629,7 @@ fn assign_rendered_task_lines(contents: &str, tasks: &mut [RenderedTask]) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::capture_language::ProjectTaskId;
+    use super::super::capture_language::{AuthoredDepth, ProjectTaskId};
     use super::*;
     use chrono::NaiveDate;
 
@@ -891,9 +902,9 @@ mod tests {
     #[test]
     fn authored_tasks_render_with_created_stamps_and_tab_children() {
         let sub_bullets = vec![
-            bullet("Call Morgan Stanley", AuthoredDepth::First),
-            bullet("Confirm the account number", AuthoredDepth::Nested),
-            bullet("Book the flight", AuthoredDepth::First),
+            bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
+            bullet("Confirm the account number", AuthoredDepth::NESTED),
+            bullet("Book the flight", AuthoredDepth::FIRST),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert!(rendered.contents.contains(
@@ -905,12 +916,56 @@ mod tests {
         assert!(!rendered.contents.contains(PLACEHOLDER_TASK_BODY));
     }
 
+    fn deep(level: u8) -> AuthoredDepth {
+        AuthoredDepth::from_level(level).expect("valid level")
+    }
+
+    #[test]
+    fn deeper_bullets_under_a_task_row_keep_their_levels() {
+        let sub_bullets = vec![
+            bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
+            bullet("[ ] Confirm the account number", AuthoredDepth::NESTED),
+            bullet("[ ] Find the statement", deep(3)),
+            bullet("It is in the blue folder", deep(4)),
+            bullet("Ask about fees", AuthoredDepth::NESTED),
+            bullet("Book the flight", AuthoredDepth::FIRST),
+        ];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        assert!(rendered.contents.contains(
+            "- [ ] #task Call Morgan Stanley [created::2026-09-20]\n\
+             \t- [ ] Confirm the account number\n\
+             \t\t- [ ] Find the statement\n\
+             \t\t\t- It is in the blue folder\n\
+             \t- Ask about fees\n\
+             - [ ] #task Book the flight [created::2026-09-20]\n"
+        ));
+        assert_eq!(rendered.task_count, 2);
+    }
+
+    #[test]
+    fn deeper_bullets_under_a_section_entry_keep_their_levels() {
+        let sub_bullets = vec![
+            bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
+            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("Consider the Roth option", AuthoredDepth::NESTED),
+            bullet("Ask about the limits", deep(3)),
+            bullet("Revisit the severance terms", AuthoredDepth::NESTED),
+        ];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        assert!(rendered.contents.contains(
+            "- Consider the Roth option\n\
+             \t- Ask about the limits\n\
+             - Revisit the severance terms\n"
+        ));
+        assert_eq!(rendered.sections, vec!["Future Work".to_string()]);
+    }
+
     #[test]
     fn all_caps_section_with_children_becomes_a_header() {
         let sub_bullets = vec![
-            bullet("Call Morgan Stanley", AuthoredDepth::First),
-            bullet("FUTURE WORK", AuthoredDepth::First),
-            bullet("Consider the Roth option", AuthoredDepth::Nested),
+            bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
+            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("Consider the Roth option", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert!(rendered.contents.contains("\n## Future Work\n\n"));
@@ -929,10 +984,10 @@ mod tests {
     #[test]
     fn equal_section_titles_merge_in_source_order() {
         let sub_bullets = vec![
-            bullet("FUTURE WORK", AuthoredDepth::First),
-            bullet("First note", AuthoredDepth::Nested),
-            bullet("FUTURE  WORK", AuthoredDepth::First),
-            bullet("Second note", AuthoredDepth::Nested),
+            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("First note", AuthoredDepth::NESTED),
+            bullet("FUTURE  WORK", AuthoredDepth::FIRST),
+            bullet("Second note", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert_eq!(rendered.contents.matches("## Future Work").count(), 1);
@@ -949,7 +1004,7 @@ mod tests {
 
     #[test]
     fn bare_all_caps_bullet_without_children_stays_a_task() {
-        let sub_bullets = vec![bullet("FUTURE WORK", AuthoredDepth::First)];
+        let sub_bullets = vec![bullet("FUTURE WORK", AuthoredDepth::FIRST)];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert!(!rendered.contents.contains("## Future Work"));
         assert!(rendered
@@ -961,9 +1016,9 @@ mod tests {
     #[test]
     fn tasks_section_merges_into_the_generated_header() {
         let sub_bullets = vec![
-            bullet("Call Morgan Stanley", AuthoredDepth::First),
-            bullet("TASKS", AuthoredDepth::First),
-            bullet("Carried reference note", AuthoredDepth::Nested),
+            bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
+            bullet("TASKS", AuthoredDepth::FIRST),
+            bullet("Carried reference note", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert_eq!(rendered.contents.matches("## Tasks").count(), 1);
@@ -990,8 +1045,8 @@ mod tests {
     #[test]
     fn managed_log_shaped_bullets_are_not_special_cased() {
         let sub_bullets = vec![
-            bullet("🗓️ **SCHEDULE LOG**", AuthoredDepth::First),
-            bullet("Some entry", AuthoredDepth::Nested),
+            bullet("🗓️ **SCHEDULE LOG**", AuthoredDepth::FIRST),
+            bullet("Some entry", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert_eq!(rendered.contents.matches("## ").count(), 1);
@@ -1007,25 +1062,25 @@ mod tests {
         let sub_bullets = vec![
             named_bullet(
                 "Draft the resignation memo",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "draft-memo",
                 true,
             ),
-            bullet("keep it short", AuthoredDepth::Nested),
+            bullet("keep it short", AuthoredDepth::NESTED),
             named_bullet(
                 "Call Morgan Stanley about the 401k",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "call-ms",
                 true,
             ),
             named_bullet(
                 "Collect the equity paperwork",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "equity-docs",
                 false,
             ),
-            bullet("FUTURE WORK", AuthoredDepth::First),
-            bullet("Revisit the severance terms", AuthoredDepth::Nested),
+            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("Revisit the severance terms", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert_eq!(
@@ -1075,8 +1130,8 @@ mod tests {
     fn named_all_caps_bullet_with_children_stays_a_task() {
         pin_utc();
         let sub_bullets = vec![
-            named_bullet("FUTURE WORK", AuthoredDepth::First, "future-1", true),
-            bullet("Revisit the terms", AuthoredDepth::Nested),
+            named_bullet("FUTURE WORK", AuthoredDepth::FIRST, "future-1", true),
+            bullet("Revisit the terms", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert!(!rendered.contents.contains("## Future Work"));
@@ -1092,8 +1147,8 @@ mod tests {
     fn scheduled_project_renders_linked_tasks_as_blocked() {
         pin_utc();
         let sub_bullets = vec![
-            named_bullet("Draft the memo", AuthoredDepth::First, "draft", true),
-            named_bullet("File the memo", AuthoredDepth::First, "file", false),
+            named_bullet("Draft the memo", AuthoredDepth::FIRST, "draft", true),
+            named_bullet("File the memo", AuthoredDepth::FIRST, "file", false),
         ];
         let mut input = base_input(&sub_bullets);
         input.scheduled = Some("2026-09-22");
@@ -1114,8 +1169,8 @@ mod tests {
     fn configured_cancelled_status_stays_closed_in_project_note() {
         pin_utc();
         let sub_bullets = vec![
-            bullet("[>] Cancelled work", AuthoredDepth::First),
-            bullet("[ ] Open work", AuthoredDepth::First),
+            bullet("[>] Cancelled work", AuthoredDepth::FIRST),
+            bullet("[ ] Open work", AuthoredDepth::FIRST),
         ];
         let mut input = base_input(&sub_bullets);
         input.scheduled = Some("2026-09-22");
@@ -1132,7 +1187,7 @@ mod tests {
     fn unconfigured_status_stays_authored_in_scheduled_project_note() {
         pin_utc();
         let sub_bullets =
-            vec![bullet("[!] Unknown status", AuthoredDepth::First)];
+            vec![bullet("[!] Unknown status", AuthoredDepth::FIRST)];
         let mut input = base_input(&sub_bullets);
         input.scheduled = Some("2026-09-22");
         let rendered = render_project_note(&input);
@@ -1148,13 +1203,13 @@ mod tests {
         let sub_bullets = vec![
             named_bullet(
                 "[/] Draft the memo",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "draft",
                 false,
             ),
             named_bullet(
                 "Collect the paperwork",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "paperwork",
                 false,
             ),
@@ -1173,7 +1228,7 @@ mod tests {
         pin_utc();
         let sub_bullets = vec![named_bullet(
             "Draft the memo [created::2026-09-18]",
-            AuthoredDepth::First,
+            AuthoredDepth::FIRST,
             "draft",
             true,
         )];
@@ -1200,13 +1255,13 @@ mod tests {
         assert!(empty.contents.contains("^prj"));
 
         let sub_bullets = vec![
-            bullet("Draft the memo", AuthoredDepth::First),
-            bullet("Private reminder #hide", AuthoredDepth::First),
-            bullet("[x] Closed work", AuthoredDepth::First),
-            bullet("[>] Cancelled work", AuthoredDepth::First),
+            bullet("Draft the memo", AuthoredDepth::FIRST),
+            bullet("Private reminder #hide", AuthoredDepth::FIRST),
+            bullet("[x] Closed work", AuthoredDepth::FIRST),
+            bullet("[>] Cancelled work", AuthoredDepth::FIRST),
             named_bullet(
                 "Call the bank",
-                AuthoredDepth::First,
+                AuthoredDepth::FIRST,
                 "call-bank",
                 true,
             ),
@@ -1244,11 +1299,11 @@ mod tests {
     fn task_rows_keep_source_identity_when_tasks_section_merges_after() {
         pin_utc();
         let sub_bullets = vec![
-            bullet("Draft the memo", AuthoredDepth::First),
-            bullet("TASKS", AuthoredDepth::First),
-            bullet("merged note", AuthoredDepth::Nested),
-            bullet("Collect paperwork", AuthoredDepth::First),
-            bullet("Collect paperwork", AuthoredDepth::First),
+            bullet("Draft the memo", AuthoredDepth::FIRST),
+            bullet("TASKS", AuthoredDepth::FIRST),
+            bullet("merged note", AuthoredDepth::NESTED),
+            bullet("Collect paperwork", AuthoredDepth::FIRST),
+            bullet("Collect paperwork", AuthoredDepth::FIRST),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         let texts: Vec<&str> = rendered

@@ -3282,7 +3282,7 @@ fn attach_list_header_marker_diagnostic(
     let Some(first) = parsed
         .sub_bullets
         .iter()
-        .find(|bullet| bullet.depth == AuthoredDepth::First)
+        .find(|bullet| bullet.depth.is_first())
     else {
         return;
     };
@@ -3486,7 +3486,7 @@ fn attach_type_marker_metadata(
             let has_first_level_notes = parsed
                 .sub_bullets
                 .iter()
-                .any(|bullet| bullet.depth == AuthoredDepth::First);
+                .any(|bullet| bullet.depth.is_first());
             let relationship_sub_bullet = parsed.mode == EditorMode::SubBullet
                 && parsed.body.trim().is_empty()
                 && (parsed.sub_bullets.is_empty()
@@ -3579,9 +3579,8 @@ fn attach_drawer_bullet_metadata(
     };
     use crate::native::capture_drawers::reserved_selector_error;
 
-    let has_first_level = sub_bullets
-        .iter()
-        .any(|bullet| bullet.depth == AuthoredDepth::First);
+    let has_first_level =
+        sub_bullets.iter().any(|bullet| bullet.depth.is_first());
     let is_glued = glued_section.is_some_and(|section| !section.is_empty());
     // A note-less `@route+id` item with first-level bullets files each
     // bullet as its own note, so the existing target is an under-task
@@ -3605,7 +3604,7 @@ fn attach_drawer_bullet_metadata(
     let mut authored_lines: Vec<(AuthoredDepth, &str, usize)> = Vec::new();
     for line in item.lines.iter().skip(1) {
         let AuthoredLineClass::Item(authored) =
-            classify_authored_line(line.raw)
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP)
         else {
             continue;
         };
@@ -3618,14 +3617,14 @@ fn attach_drawer_bullet_metadata(
 
     let mut index = 0usize;
     while index < authored_lines.len() {
-        if authored_lines[index].0 != AuthoredDepth::First {
+        if !authored_lines[index].0.is_first() {
             index += 1;
             continue;
         }
         let start = index;
         index += 1;
         while index < authored_lines.len()
-            && authored_lines[index].0 == AuthoredDepth::Nested
+            && authored_lines[index].0.is_nested()
         {
             index += 1;
         }
@@ -4092,7 +4091,7 @@ pub(super) fn parse_editor_list_item<'a>(
         let line = &item.lines[0];
         let (code, message) = match classify_authored_line(line.raw) {
             AuthoredLineClass::Item(authored)
-                if authored.depth == AuthoredDepth::Nested =>
+                if authored.depth == AuthoredDepth::NESTED =>
             {
                 (
                     "orphaned_nested_bullet",
@@ -4321,7 +4320,12 @@ pub(super) fn parse_editor_list_item<'a>(
         let line_number = line.line_number;
         let authored = match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
-            AuthoredLineClass::Invalid => {
+            AuthoredLineClass::Item(authored)
+                if authored.depth.level() <= TWO_LEVEL_CAP =>
+            {
+                authored
+            }
+            AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
                 return error_item(
                     spans.clone(),
                     needs.clone(),
@@ -4330,7 +4334,6 @@ pub(super) fn parse_editor_list_item<'a>(
                     Some((line.raw.start, line.raw.end)),
                 );
             }
-            AuthoredLineClass::Item(authored) => authored,
         };
         let child_line = RawLine {
             text: authored.body,
@@ -4457,10 +4460,7 @@ pub(super) fn parse_editor_list_item<'a>(
         // The bullet line is this item's text line, so its nested lines sit
         // one level higher than their lexical depth, mirroring the execution
         // parser and the equivalence invariant.
-        let depth = match authored.depth {
-            AuthoredDepth::Nested => AuthoredDepth::First,
-            AuthoredDepth::First => AuthoredDepth::First,
-        };
+        let depth = authored.depth.shallower();
         sub_bullets.push(AuthoredSubBullet {
             body: child_parse.body,
             depth,
@@ -4593,7 +4593,7 @@ fn interpret_editor_move(
         MoveBulletHit::Choice { span } => {
             if sub_bullets
                 .get(index + 1)
-                .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+                .is_some_and(|next| next.depth.is_nested())
             {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
@@ -4673,7 +4673,7 @@ fn interpret_editor_move(
             if let Some(new_id) = new_id
                 && sub_bullets
                     .get(index + 1)
-                    .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+                    .is_some_and(|next| next.depth.is_nested())
             {
                 let basename =
                     crate::native::capture_project_note::project_note_basename(
@@ -4946,7 +4946,7 @@ pub(super) fn parse_editor_item_inner<'a>(
         EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
     ) || item.lines.iter().skip(1).any(|line| {
         matches!(
-            classify_authored_line(line.raw),
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::Item(authored)
                 if child_line_seals_project_note(authored.body)
         )
@@ -4962,7 +4962,12 @@ pub(super) fn parse_editor_item_inner<'a>(
         let raw = line.raw;
         let authored = match classify_authored_line(raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
-            AuthoredLineClass::Invalid => {
+            AuthoredLineClass::Item(authored)
+                if authored.depth.level() <= TWO_LEVEL_CAP =>
+            {
+                authored
+            }
+            AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     code: "invalid_child_line",
@@ -4972,9 +4977,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                 });
                 continue;
             }
-            AuthoredLineClass::Item(authored) => authored,
         };
-        if authored.depth == AuthoredDepth::Nested && !has_first_level_owner {
+        if authored.depth.is_nested() && !has_first_level_owner {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 code: "orphaned_nested_bullet",
@@ -5042,7 +5046,9 @@ pub(super) fn parse_editor_item_inner<'a>(
             }
         }
 
-        let drawer_hit = (authored.depth == AuthoredDepth::First)
+        let drawer_hit = authored
+            .depth
+            .is_first()
             .then(|| {
                 super::drawer_bullet::scan_leading(
                     authored.body,
@@ -5053,8 +5059,7 @@ pub(super) fn parse_editor_item_inner<'a>(
         // Move bullets claim the line from its raw shape before the
         // trailing-ID rule runs; the project-note post-pass interprets
         // the hit and the line never reaches the new-task path.
-        let move_hit = (parent_takes_ids
-            && authored.depth == AuthoredDepth::First)
+        let move_hit = (parent_takes_ids && authored.depth.is_first())
             .then(|| {
                 super::move_bullet::scan_move_bullet(
                     authored.body,
@@ -5120,7 +5125,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             Some(super::drawer_bullet::DrawerBulletHit::Incomplete { .. })
                 | Some(super::drawer_bullet::DrawerBulletHit::Invalid { .. })
         ) {
-            if authored.depth == AuthoredDepth::First {
+            if authored.depth.is_first() {
                 has_first_level_owner = true;
             }
         } else {
@@ -5169,7 +5174,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     move_choice: None,
                     drawer,
                 });
-                if authored.depth == AuthoredDepth::First {
+                if authored.depth.is_first() {
                     has_first_level_owner = true;
                 }
             }
@@ -5217,10 +5222,9 @@ pub(super) fn parse_editor_item_inner<'a>(
         // text, unless first-level bullets already supply the notes: each
         // one becomes its own note inside the drawer. Clipboard notes
         // supply the notes the same way.
-        let has_first_level_note = sub_bullets
-            .iter()
-            .any(|bullet| bullet.depth == AuthoredDepth::First)
-            || seen.clip;
+        let has_first_level_note =
+            sub_bullets.iter().any(|bullet| bullet.depth.is_first())
+                || seen.clip;
         if has_first_level_note {
             needs.retain(|need| *need != Need::DrawerText);
         } else {
@@ -6204,9 +6208,7 @@ pub(super) fn parse_editor_item_inner<'a>(
         let multi_note_form = !seen.schedule
             && !seen.priority
             && !seen.clip
-            && sub_bullets
-                .iter()
-                .any(|bullet| bullet.depth == AuthoredDepth::First);
+            && sub_bullets.iter().any(|bullet| bullet.depth.is_first());
         if matches!(
             dependency_target.as_ref().map(|target| &target.kind),
             Some(DependencyTargetKind::ExistingTask)
@@ -6241,7 +6243,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             } else {
                 let child_range = item.lines.iter().skip(1).find_map(|line| {
                     matches!(
-                        classify_authored_line(line.raw),
+                        classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
                         AuthoredLineClass::Item(_)
                     )
                     .then_some((line.raw.start, line.raw.end))

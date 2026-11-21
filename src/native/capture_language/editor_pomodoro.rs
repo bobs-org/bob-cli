@@ -2965,7 +2965,7 @@ pub(super) fn parse_editor_close_item<'a>(
     );
     let has_bullet_child = item.lines[1..].iter().any(|line| {
         !matches!(
-            classify_authored_line(line.raw),
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::EmptyOrPlaceholder
         )
     });
@@ -3811,7 +3811,7 @@ fn parse_editor_past_item<'a>(
     );
     let has_bullet_child = item.lines[1..].iter().any(|line| {
         !matches!(
-            classify_authored_line(line.raw),
+            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
             AuthoredLineClass::EmptyOrPlaceholder
         )
     });
