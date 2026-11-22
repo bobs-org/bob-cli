@@ -1,6 +1,6 @@
 //! Podcast episode references: browserless Spotify episode metadata
-//! ([`metadata`]), show-notes segmentation ([`notes`]), and cover art
-//! ([`cover`]).
+//! ([`metadata`]), show-notes segmentation ([`notes`]), cover art
+//! ([`cover`]), and the publisher feed match ([`feed`]).
 //!
 //! This is a library: the episode dossier builder (`dossier.rs`) and the
 //! create and ingest routes that call it land in later phases. Every
@@ -10,6 +10,7 @@
 //! yields nothing and never panics.
 
 pub(crate) mod cover;
+pub(crate) mod feed;
 pub(crate) mod metadata;
 pub(crate) mod notes;
 
@@ -33,7 +34,8 @@ pub(crate) fn clean_line(text: &str) -> Option<String> {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    //! A fake `curl` that serves canned Spotify responses by URL shape.
+    //! A fake `curl` that serves canned Spotify responses by URL shape,
+    //! and any other response by its exact URL.
 
     use std::{
         fs,
@@ -42,7 +44,9 @@ pub(crate) mod test_support {
 
     use crate::native::env::TestEnvGuard;
 
-    /// One canned surface: `page`, `embed`, `oembed`, or `cover`.
+    /// One canned surface: `page`, `embed`, `oembed`, `itunes`, or
+    /// `cover` (any other URL), unless [`Self::serve_url`] claimed the
+    /// exact URL.
     pub(crate) struct FakeSpotify {
         pub(crate) root: tempfile::TempDir,
         _guard: TestEnvGuard,
@@ -91,6 +95,17 @@ pub(crate) mod test_support {
                 .expect("write fake body");
         }
 
+        /// Serve `body` for exactly `url`, ahead of every URL shape.
+        pub(crate) fn serve_url(
+            &self,
+            url: &str,
+            status: u16,
+            content_type: &str,
+            body: &[u8],
+        ) {
+            self.serve(&url_surface(url), status, content_type, body);
+        }
+
         /// Make `surface` fail the way curl exits with `code`.
         pub(crate) fn fail(&self, surface: &str, code: i32) {
             fs::write(
@@ -117,11 +132,29 @@ pub(crate) mod test_support {
         }
     }
 
+    /// The surface name the fake curl uses for an exact URL: `url-`
+    /// plus every byte that is not ASCII alphanumeric turned into `_`
+    /// (the script's `tr -c 'A-Za-z0-9' '_'`).
+    pub(crate) fn url_surface(url: &str) -> String {
+        let key: String = url
+            .bytes()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() {
+                    byte as char
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        format!("url-{key}")
+    }
+
     fn write_fake_curl(dir: &Path) -> PathBuf {
         let path = dir.join("fake-curl.sh");
         let script = r#"#!/bin/sh
-# Fake curl for podcast tests: picks a surface by URL shape, logs the
-# URL, and serves $ROOT/<surface>.{status,type,body} (404 when unset).
+# Fake curl for podcast tests: picks the exact-URL surface when one is
+# set, else a surface by URL shape, logs the URL, and serves
+# $ROOT/<surface>.{status,type,body} (404 when unset).
 ROOT="$FAKE_CURL_ROOT"
 dest=""
 url=""
@@ -132,12 +165,18 @@ for arg in "$@"; do
   url="$arg"
 done
 printf '%s\n' "$url" >> "$ROOT/requests.log"
-case "$url" in
-  *"/oembed?"*) surface=oembed ;;
-  *"/embed/episode/"*) surface=embed ;;
-  *"open.spotify.com/episode/"*) surface=page ;;
-  *) surface=cover ;;
-esac
+key="url-$(printf '%s' "$url" | tr -c 'A-Za-z0-9' '_')"
+if [ -f "$ROOT/$key.status" ] || [ -f "$ROOT/$key.exit" ]; then
+  surface="$key"
+else
+  case "$url" in
+    *"/oembed?"*) surface=oembed ;;
+    *"/embed/episode/"*) surface=embed ;;
+    *"open.spotify.com/episode/"*) surface=page ;;
+    *"itunes.apple.com/search?"*) surface=itunes ;;
+    *) surface=cover ;;
+  esac
+fi
 if [ -f "$ROOT/$surface.exit" ]; then
   printf 'curl: fake failure\n' >&2
   exit "$(cat "$ROOT/$surface.exit")"

@@ -1,0 +1,13 @@
+{
+  "resultCount": 1,
+  "results": [
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 1769051199,
+      "artistName": "Gergely Orosz",
+      "collectionName": "The Pragmatic Engineer",
+      "feedUrl": "https://api.substack.com/feed/podcast/458709.rss"
+    }
+  ]
+}

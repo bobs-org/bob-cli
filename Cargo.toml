@@ -64,6 +64,7 @@ memchr = "2.8"
 lopdf = { version = "0.40.0", default-features = false }
 pulldown-cmark = "0.13"
 regex = "1.12"
+roxmltree = "0.21.2"
 rquickjs = "0.12.1"
 scraper = "0.29"
 serde = { version = "1.0.228", features = ["derive"] }

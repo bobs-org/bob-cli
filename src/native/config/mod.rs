@@ -154,6 +154,18 @@ pub(crate) const DEFAULT_TABLE_LAYOUT: &str = "auto";
 /// Default `highlights.table_prose_words`: the auto prose threshold.
 pub(crate) const DEFAULT_TABLE_PROSE_WORDS: u32 = 12;
 
+/// `highlights.podcasts.enrich`: whether a podcast episode capture looks
+/// up the show's public publisher feed (iTunes Search, then the RSS feed)
+/// for show notes, chapters, and a transcript.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum PodcastEnrich {
+    /// Look the feed up and attach only a proven match (the default).
+    #[default]
+    Auto,
+    /// Make no iTunes or feed request at all.
+    Off,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HighlightsConfig {
     pre_scan_hook: Option<String>,
@@ -168,6 +180,7 @@ pub(crate) struct HighlightsConfig {
     table_layout: String,
     table_prose_words: u32,
     annotation_task_relation: Option<String>,
+    podcast_enrich: PodcastEnrich,
 }
 
 impl Default for HighlightsConfig {
@@ -185,6 +198,7 @@ impl Default for HighlightsConfig {
             table_layout: DEFAULT_TABLE_LAYOUT.to_string(),
             table_prose_words: DEFAULT_TABLE_PROSE_WORDS,
             annotation_task_relation: None,
+            podcast_enrich: PodcastEnrich::Auto,
         }
     }
 }
@@ -333,6 +347,13 @@ impl HighlightsConfig {
     /// label is used, never in `parse_highlights_config`.
     pub(crate) fn annotation_task_relation(&self) -> Option<&str> {
         self.annotation_task_relation.as_deref()
+    }
+
+    /// `highlights.podcasts.enrich` (default `auto`).
+    // The episode dossier builder reads this; it lands in a later phase.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn podcast_enrich(&self) -> PodcastEnrich {
+        self.podcast_enrich
     }
 }
 
@@ -561,6 +582,14 @@ struct RawHighlights {
     url_routing: Option<RawUrlRouting>,
     #[serde(default)]
     annotation_task_relation: Option<String>,
+    #[serde(default)]
+    podcasts: Option<RawPodcasts>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPodcasts {
+    #[serde(default)]
+    enrich: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -772,6 +801,36 @@ fn parse_table_prose_words(
     }
 }
 
+/// Parse `highlights.podcasts.enrich` (`auto | off`, default `auto`).
+/// Matching is trimmed and ASCII case-insensitive; anything else is
+/// `ConfigError::Invalid`, naming the key, the config path, and the
+/// allowed values.
+fn parse_podcast_enrich(
+    raw: Option<&serde_yaml::Value>,
+    path: &Path,
+) -> Result<PodcastEnrich, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(PodcastEnrich::Auto);
+    };
+    let folded = match raw {
+        serde_yaml::Value::String(text) => text.trim().to_ascii_lowercase(),
+        _ => String::new(),
+    };
+    match folded.as_str() {
+        "auto" => Ok(PodcastEnrich::Auto),
+        "off" => Ok(PodcastEnrich::Off),
+        _ => {
+            let shown = serde_yaml::to_string(raw)
+                .map(|text| text.trim().to_string())
+                .unwrap_or_default();
+            Err(ConfigError::Invalid(format!(
+                "highlights.podcasts.enrich in {} must be one of auto, off (got '{shown}')",
+                path.display()
+            )))
+        }
+    }
+}
+
 pub(crate) fn parse_highlights_config(
     text: &str,
     path: &Path,
@@ -852,6 +911,14 @@ pub(crate) fn parse_highlights_config(
         .and_then(|highlights| highlights.annotation_task_relation.as_ref())
         .map(|label| label.trim().to_string())
         .filter(|label| !label.is_empty());
+    let podcast_enrich = parse_podcast_enrich(
+        config
+            .highlights
+            .as_ref()
+            .and_then(|highlights| highlights.podcasts.as_ref())
+            .and_then(|podcasts| podcasts.enrich.as_ref()),
+        path,
+    )?;
 
     Ok(HighlightsConfig {
         pre_scan_hook,
@@ -873,6 +940,7 @@ pub(crate) fn parse_highlights_config(
         table_layout,
         table_prose_words,
         annotation_task_relation,
+        podcast_enrich,
     })
 }
 
@@ -1135,6 +1203,57 @@ highlights:
         assert!(enabled.coordinate_pdf_writes());
         assert!(!disabled.coordinate_pdf_writes());
         assert!(!absent.coordinate_pdf_writes());
+    }
+
+    #[test]
+    fn parses_highlights_podcasts_enrich() {
+        let path = Path::new("/config.yml");
+        let parse = |text: &str| parse_highlights_config(text, path);
+
+        assert_eq!(
+            parse("highlights:\n  podcasts:\n    enrich: auto\n")
+                .expect("auto")
+                .podcast_enrich(),
+            PodcastEnrich::Auto
+        );
+        assert_eq!(
+            parse("highlights:\n  podcasts:\n    enrich: ' OFF '\n")
+                .expect("off")
+                .podcast_enrich(),
+            PodcastEnrich::Off
+        );
+        // Absent key, absent block, and no highlights at all are auto.
+        for text in [
+            "highlights:\n  podcasts: {}\n",
+            "highlights:\n  table_layout: auto\n",
+            "timezone: America/New_York\n",
+        ] {
+            assert_eq!(
+                parse(text).expect("default").podcast_enrich(),
+                PodcastEnrich::Auto,
+                "{text}"
+            );
+        }
+        assert_eq!(
+            HighlightsConfig::default().podcast_enrich(),
+            PodcastEnrich::Auto
+        );
+
+        for (text, shown) in [
+            (
+                "highlights:\n  podcasts:\n    enrich: sometimes\n",
+                "sometimes",
+            ),
+            ("highlights:\n  podcasts:\n    enrich: false\n", "false"),
+        ] {
+            let error = parse(text).expect_err("unknown mode is invalid");
+            assert_eq!(
+                error.message(),
+                format!(
+                    "highlights.podcasts.enrich in /config.yml must be one of auto, off (got '{shown}')"
+                )
+            );
+        }
     }
 
     #[test]

@@ -17,6 +17,7 @@ use std::{
     net::{IpAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
+    time::{Duration, Instant},
 };
 
 use super::{
@@ -115,6 +116,7 @@ pub(super) fn fetch_url(
         dest,
         max_time_secs,
         PDF_MAX_BYTES,
+        None,
         &curl_program(),
         progress,
     )
@@ -139,9 +141,44 @@ pub(super) fn fetch_url_capped(
         dest,
         max_time_secs,
         max_bytes,
+        None,
         &curl_program(),
         progress,
     )
+}
+
+/// [`fetch_url_capped`] under a shared `deadline`: each hop's curl time
+/// is the smaller of `max_time_secs` and the time left, and a hop that
+/// would start with less than a second left is refused, so a chain of
+/// requests (a feed lookup, then a transcript) stays inside one budget.
+/// Use [`deadline_spent`] to tell a spent budget from other failures.
+// The publisher feed lookup consumes this; the dossier builder that
+// calls the lookup lands in a later phase.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn fetch_url_before(
+    url: &str,
+    dest: &Path,
+    max_time_secs: u64,
+    max_bytes: u64,
+    deadline: Instant,
+    progress: Option<&dyn Fn(&str)>,
+) -> std::result::Result<FetchResult, FetchError> {
+    fetch_with_curl(
+        url,
+        dest,
+        max_time_secs,
+        max_bytes,
+        Some(deadline),
+        &curl_program(),
+        progress,
+    )
+}
+
+/// Whether less than a second is left before `deadline`: the point at
+/// which [`fetch_url_before`] refuses to start another hop.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn deadline_spent(deadline: Instant) -> bool {
+    deadline.saturating_duration_since(Instant::now()) < Duration::from_secs(1)
 }
 
 /// A byte cap as people say it: `95 MiB`, `512 KiB`, or `100 bytes`.
@@ -171,6 +208,7 @@ fn fetch_with_curl(
     dest: &Path,
     max_time_secs: u64,
     max_bytes: u64,
+    deadline: Option<Instant>,
     curl: &str,
     progress: Option<&dyn Fn(&str)>,
 ) -> std::result::Result<FetchResult, FetchError> {
@@ -183,9 +221,20 @@ fn fetch_with_curl(
     }
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
+        let hop_secs = match deadline {
+            Some(deadline) if deadline_spent(deadline) => {
+                return Err(FetchError::new(format!(
+                    "time budget spent before fetching {current}"
+                )));
+            }
+            Some(deadline) => max_time_secs.min(
+                deadline.saturating_duration_since(Instant::now()).as_secs(),
+            ),
+            None => max_time_secs,
+        };
         let pin = resolve_host_for_pin(&current)?;
         let (status, content_type, redirect_url) =
-            curl_one_hop(curl, &current, dest, max_time_secs, max_bytes, &pin)?;
+            curl_one_hop(curl, &current, dest, hop_secs, max_bytes, &pin)?;
         let redirect = redirect_url.trim().to_string();
         if !(300..400).contains(&status) || redirect.is_empty() {
             let bytes = fs::metadata(dest)
@@ -626,6 +675,65 @@ esac
             error.message,
             "download larger than 5 MiB: https://example.com/exit-63"
         );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deadline_fetch_caps_hops_and_refuses_a_spent_budget() {
+        let dir = test_dir("deadline");
+        let fake = write_fake_curl(&dir);
+        let argv_log = dir.join("argv.log");
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("FAKE_CURL_ROOT", Some(dir.as_os_str())),
+            (ENV_CURL_OVERRIDE, Some(fake.as_os_str())),
+            (
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("*=203.0.113.1")),
+            ),
+            ("FAKE_CURL_ARGV_LOG", Some(argv_log.as_os_str())),
+        ]);
+
+        // A hop never gets more curl time than the budget has left.
+        let deadline = Instant::now() + Duration::from_secs(12);
+        assert!(!deadline_spent(deadline));
+        fetch_url_before(
+            "https://example.com/paper.pdf",
+            &dir.join("within.out"),
+            30,
+            1024,
+            deadline,
+            None,
+        )
+        .expect("fetch within the budget");
+        let logged = fs::read_to_string(&argv_log).expect("read argv log");
+        let max_time = logged
+            .lines()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find(|pair| pair[0] == "--max-time")
+            .map(|pair| pair[1].parse::<u64>().expect("seconds"))
+            .expect("--max-time");
+        assert!((10..=12).contains(&max_time), "{logged}");
+
+        // A spent budget refuses before curl runs.
+        fs::remove_file(&argv_log).expect("reset argv log");
+        let spent = Instant::now();
+        assert!(deadline_spent(spent));
+        let error = fetch_url_before(
+            "https://example.com/paper.pdf",
+            &dir.join("spent.out"),
+            30,
+            1024,
+            spent,
+            None,
+        )
+        .expect_err("spent budget");
+        assert_eq!(
+            error.message,
+            "time budget spent before fetching https://example.com/paper.pdf"
+        );
+        assert!(!argv_log.exists(), "curl must not run");
 
         fs::remove_dir_all(&dir).ok();
     }

@@ -1,0 +1,11 @@
+{
+  "version": "1.2.0",
+  "chapters": [
+    { "startTime": 0, "title": "Intro" },
+    { "startTime": 168.7, "title": "What a software factory is" },
+    { "startTime": 600, "title": "Hidden sponsor marker", "toc": false },
+    { "startTime": 1235, "title": "Code review⁠ at agent speed", "img": "https://example.com/c.jpg" },
+    { "startTime": 3000 },
+    { "startTime": 5070, "endTime": 5197, "title": "Book recommendation" }
+  ]
+}
