@@ -1067,7 +1067,7 @@ pub(crate) struct CaptureItemResult {
     pub(super) requirements: Vec<RequirementWriteJson>,
 }
 
-/// One owner's requirements written by a new-task or project-note capture.
+/// One owner's requirements written by a capture item.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RequirementWriteJson {
     pub(super) owner: String,
@@ -1082,17 +1082,33 @@ impl RequirementWriteJson {
         block: &crate::native::task_block_layout::CanonicalReqBlock,
         dry_run: bool,
     ) -> Self {
+        Self::from_insert(
+            block.owner.clone(),
+            block.added,
+            block.notes_filed,
+            block.notes_created,
+            dry_run,
+        )
+    }
+
+    pub(super) fn from_insert(
+        owner: String,
+        added: usize,
+        notes_filed: usize,
+        notes_created: bool,
+        dry_run: bool,
+    ) -> Self {
         Self {
-            owner: block.owner.clone(),
-            added: block.added,
-            notes_filed: block.notes_filed,
-            notes_created: block.notes_created,
             summary: requirement_write_summary(
-                &block.owner,
-                block.added,
-                block.notes_filed,
+                &owner,
+                added,
+                notes_filed,
                 dry_run,
             ),
+            owner,
+            added,
+            notes_filed,
+            notes_created,
         }
     }
 }

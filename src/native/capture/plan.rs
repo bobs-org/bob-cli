@@ -3860,16 +3860,54 @@ pub(super) fn plan_capture_item(
             } else {
                 sub_bullet_target
             };
-            plan_sub_bullet_capture(
-                planner,
-                &request.bob_dir,
-                &target,
-                route,
-                effective_target,
-                section.as_ref(),
-                &capture_block,
-                warnings,
-            )?
+            if capture_language::req_bullets::ReqHost::from_kind(
+                &parsed.kind,
+                &parsed.body,
+            ) == capture_language::req_bullets::ReqHost::SameLineReq
+            {
+                if parsed.scheduled_offset.is_some()
+                    || parsed.priority_level.is_some()
+                {
+                    return Err(CaptureError::usage(
+                        "A task requirement cannot carry a schedule or priority marker",
+                    ));
+                }
+                let indent = child_indent
+                    .as_deref()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        child_indent_unit(planner, &target)
+                            .unwrap_or_else(|_| "\t".to_string())
+                    });
+                let block = render_same_line_req_block(
+                    &parsed.body,
+                    &parsed.sub_bullets,
+                    &indent,
+                );
+                let (plan, report) = plan_insert_reqs_capture(
+                    planner,
+                    &request.bob_dir,
+                    &target,
+                    route,
+                    effective_target,
+                    section.as_ref(),
+                    &[block],
+                    request.dry_run,
+                )?;
+                requirement_writes.push(report);
+                plan
+            } else {
+                plan_sub_bullet_capture(
+                    planner,
+                    &request.bob_dir,
+                    &target,
+                    route,
+                    effective_target,
+                    section.as_ref(),
+                    &capture_block,
+                    warnings,
+                )?
+            }
         }
         CaptureKind::Pomodoro {
             block_id,
@@ -4823,6 +4861,59 @@ pub(super) fn render_nested_sub_bullets(
         .collect()
 }
 
+/// Render each admitted top-level requirement and its complete authored
+/// subtree as a relative block for `insert_reqs`.
+fn render_existing_req_groups(
+    sub_bullets: &[AuthoredSubBullet],
+    indent_unit: &str,
+) -> Vec<String> {
+    capture_language::drawer_bullet_groups(sub_bullets)
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let group = &sub_bullets[start..end];
+            let root = group.first()?;
+            root.req?;
+            Some(render_req_subtree(group, root.depth.level(), indent_unit))
+        })
+        .collect()
+}
+
+/// Render an admitted same-line requirement plus every authored child.
+fn render_same_line_req_block(
+    item_body: &str,
+    sub_bullets: &[AuthoredSubBullet],
+    indent_unit: &str,
+) -> String {
+    let mut lines = vec![format!("- {}", item_body.trim())];
+    for bullet in sub_bullets {
+        let units = usize::from(bullet.depth.level());
+        lines.push(format!(
+            "{}- {}",
+            indent_unit.repeat(units),
+            bullet.body.trim()
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Render a requirement group's bullets with indentation relative to its
+/// depth-1 root. Requirement and note children retain their authored order.
+fn render_req_subtree(
+    group: &[AuthoredSubBullet],
+    root_depth: u8,
+    indent_unit: &str,
+) -> String {
+    group
+        .iter()
+        .map(|bullet| {
+            let units =
+                usize::from(bullet.depth.level().saturating_sub(root_depth));
+            format!("{}- {}", indent_unit.repeat(units), bullet.body.trim())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Render a new task's authored bullets beneath its task line: each bullet
 /// carries one `indent_unit` per authored level.
 pub(super) fn render_authored_sub_bullets(
@@ -5321,12 +5412,39 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let mut first_parent_status_name: Option<String> = None;
     let mut first_block_id: Option<String> = None;
     let mut first_placement: Option<Placement> = None;
+    let mut requirement_writes = Vec::new();
+    let req_blocks =
+        render_existing_req_groups(&parsed.sub_bullets, &child_indent);
+    if !req_blocks.is_empty() {
+        let (plan, report) = plan_insert_reqs_capture(
+            planner,
+            &request.bob_dir,
+            &target,
+            &route,
+            &effective_target,
+            glued_section.as_ref(),
+            &req_blocks,
+            request.dry_run,
+        )?;
+        if let Some(details) = plan.sub_bullet.as_ref() {
+            first_parent_line = Some(details.parent_line);
+            first_parent_text = Some(details.parent_text.clone());
+            first_parent_status_symbol = Some(details.parent_status_symbol);
+            first_parent_status_name = Some(details.parent_status_name.clone());
+            first_block_id = details.block_id.clone();
+            first_placement = Some(plan.placement);
+        }
+        requirement_writes.push(report);
+    }
     // Plan notes in draft order against staged content, so one refusal
     // rolls the whole draft back.
     if let Some(glued) = glued_section.clone() {
         for (start, end) in groups {
             let header = &parsed.sub_bullets[start];
             let nested = &parsed.sub_bullets[start + 1..end];
+            if header.req.is_some() {
+                continue;
+            }
             // In a glued drawer item every first-level bullet is already
             // inside the drawer: ALL-CAPS stays plain and a drawer
             // shortcut was already refused as `drawer_bullet_position`.
@@ -5384,6 +5502,9 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         for (start, end) in groups {
             let header = &parsed.sub_bullets[start];
             let nested = &parsed.sub_bullets[start + 1..end];
+            if header.req.is_some() {
+                continue;
+            }
             if let Some(selector) = header.drawer.clone() {
                 // Drawer bullets file each nested bullet as its own note.
                 if nested.is_empty() {
@@ -5561,7 +5682,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             }
         }
     }
-    if notes.is_empty() {
+    if notes.is_empty() && requirement_writes.is_empty() {
         return Err(CaptureError::io(
             "multi-note capture invariant failed: no notes planned",
         ));
@@ -5813,7 +5934,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             note_pull: None,
             record_note: None,
             notebook: None,
-            requirements: Vec::new(),
+            requirements: requirement_writes,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),

@@ -1,5 +1,6 @@
 //! Pomodoro link capture planning, including link-with-start.
 use super::*;
+use crate::native::task_reqs;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_capture_with_pomodoro_link(
@@ -294,6 +295,14 @@ pub(super) fn plan_pomodoro_link_capture(
             line_index,
             excerpt,
         } => {
+            if let Some(owner) =
+                task_reqs::req_anchor_owner(&contents, block_id, &settings)
+            {
+                return Err(CaptureError::usage_code(
+                    task_reqs::req_link_message(&owner),
+                    "req_link",
+                ));
+            }
             return Err(CaptureError::io(format!(
                 "^{block_id} in {route}.md is not a task (line {}: {excerpt})",
                 line_index + 1
@@ -305,6 +314,14 @@ pub(super) fn plan_pomodoro_link_capture(
             )));
         }
         BlockIdLookup::Missing => {
+            if let Some(owner) =
+                task_reqs::req_anchor_owner(&contents, block_id, &settings)
+            {
+                return Err(CaptureError::usage_code(
+                    task_reqs::req_link_message(&owner),
+                    "req_link",
+                ));
+            }
             let choices = format!(
                 "run 'bob capture-tasks -r {route}' to list task block IDs"
             );

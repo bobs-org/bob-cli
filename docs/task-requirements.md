@@ -244,6 +244,13 @@ writes req completion.
   opening with `- [ ] text`) at the end of the reqs zone and runs the
   first-req scoop when the task had no req before.
 
+Capture uses `insert_reqs` for existing-task requirements. A note-less
+`@route+id` can mix requirement groups with notes: all requirement groups
+are inserted in one write before its notes are planned, so the first-req
+scoop sees only loose notes already on the task. The same-line form
+`@route+id [ ] text` inserts that requirement and its authored children as
+one block. Later notes in the same draft use the task's `NOTES` drawer.
+
 | Code              | Refused when                                                              |
 | ----------------- | ------------------------------------------------------------------------- |
 | `req_stale`       | The line no longer holds the expected text.                               |
@@ -418,9 +425,11 @@ refusals shipped with capture grammar 29 (see
 [Requirement bullets](capture.md#requirement-bullets)). New-task, list,
 Pomodoro-created, and project-note-row writes place admitted requirements in
 the reqs zone with the NOTES rule (`notes_drawer_birth = with_first_note`).
-Existing-task writes (`@route+id`, the same-line `[ ]` form), the first-req
-scoop on a target that already exists, and the `req_link` refusal land in
-the rest of the `capture-reqs` phase.
+Existing-task writes (`@route+id` requirement groups and the same-line
+`[ ]` form) also use the reqs zone, with one first-req scoop on an existing
+target. Capture previews the scoop and reports the number of requirements
+added. A Task Link whose anchor names a requirement refuses with `req_link`;
+link the owning task or carry the requirement into a task.
 
 **Pasted text never becomes a requirement.** Text copied from outside
 writers (gcal descriptions and private notes, gkeep, gmail, highlights, ref

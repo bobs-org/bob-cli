@@ -1118,8 +1118,12 @@ task, Pomodoro-created task, or project-note row land in the reqs zone with
 their subtrees, checkbox kept. Loose notes of that owner file into `NOTES`
 (created only when a note lands). JSON `sub_bullets` stay the authored child
 lines; the written block is canonical. A block with no requirements stays as
-authored. Existing-task writes (`@route+id` and the same-line `[ ]` form)
-still write at authored depth until that capture-reqs phase lands.
+authored. On an existing task, note-less `@route+id` inserts every
+first-level requirement group at the end of the reqs zone before planning its
+notes. Its first requirement scoops only pre-existing loose notes; later
+notes from the same draft file into `NOTES`. The same-line `@route+id [ ]
+text` form inserts the item and its authored children as one requirement
+block. Both forms preview the scoop and report the requirements added.
 
 In an editor, typing the space in an eligible dash-bullet start `- [` expands
 it to `- [ ] ` through `bob capture-rewrite`; the shared resolver decides
@@ -7980,14 +7984,18 @@ capture with no authored children. A project-note capture always omits
 `## Tasks` and `##` sections, and the `project_note` summary below replaces
 it. Human output prints those lines directly
 beneath `task_line`, before any clipboard children and schedule log.
-A new-task, list-task, Pomodoro-created, or project-note item that wrote
-requirements adds `requirements`: one object per owner, `{owner, added,
+A capture item that wrote requirements adds `requirements`: one object per
+owner, `{owner, added,
 notes_filed, notes_created, summary}`, omitted when empty. `owner` is the
 task description; `added` is the requirement count in the written forest;
 `notes_filed` / `notes_created` describe the `NOTES` filing; `summary` is
 the human line (`⌗⌗ added {k} requirement(s) to “{S}”`, plus
 ` · filed {n} note(s) under NOTES` when notes moved; dry runs use `adds` /
 `files`). Human output prints each `summary` after the authored children.
+
+A Task Link whose block ID resolves only to a requirement anchor refuses
+with `req_link` and names the owning task. Link the task itself, or carry the
+requirement into a task first.
 
 A note-less `@route+id` (or `@route+id#drawer`) item files each first-level
 bullet as its own note. Its item JSON keeps `kind: "sub_bullet"` with

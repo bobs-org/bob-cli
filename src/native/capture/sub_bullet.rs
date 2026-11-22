@@ -1,5 +1,6 @@
 //! Sub-bullet/note placement and managed-log parsing.
 use super::*;
+use crate::native::task_reqs;
 
 pub(super) fn plan_pomodoro_note_capture(
     planner: &mut CaptureBatchPlanner,
@@ -51,52 +52,7 @@ pub(super) fn plan_sub_bullet_capture(
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
-    let parent = match sub_bullet_target {
-        SubBulletTarget::BlockId(block_id) => {
-            match scan.by_block_id(block_id) {
-                BlockIdLookup::Found(task) => task,
-                BlockIdLookup::NotATask {
-                    line_index,
-                    excerpt,
-                } => {
-                    return Err(CaptureError::io(format!(
-                    "^{block_id} in {route}.md is not a task (line {}: {excerpt})",
-                    line_index + 1
-                )));
-                }
-                BlockIdLookup::Duplicate(count) => {
-                    return Err(CaptureError::io(format!(
-                    "block ID ^{block_id} appears {count} times in {route}.md; make it unique before capturing"
-                )));
-                }
-                BlockIdLookup::Missing => {
-                    let choices = format!("run 'bob capture-tasks -r {route}' to list task block IDs");
-                    let message = match scan.suggest_block_id(block_id) {
-                    Some(suggestion) => format!(
-                        "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}? ({choices})"
-                    ),
-                    None => format!("no task with block ID ^{block_id} in {route}.md ({choices})"),
-                };
-                    return Err(CaptureError::io(message));
-                }
-            }
-        }
-        SubBulletTarget::Ref { line, digest } => {
-            match scan.by_ref(*line, digest) {
-                RefLookup::Found(task) => task,
-                RefLookup::Stale => {
-                    return Err(CaptureError::io(format!(
-                    "the selected task is no longer in {route}.md; rerun the task picker"
-                )));
-                }
-                RefLookup::Ambiguous => {
-                    return Err(CaptureError::io(format!(
-                    "the selected task matches more than one line in {route}.md; rerun the task picker"
-                )));
-                }
-            }
-        }
-    };
+    let parent = resolve_sub_bullet_parent(&scan, route, sub_bullet_target)?;
 
     let (contents, insertion_offset, indentation, drawer) =
         if let Some(selector) = section_selector {
@@ -232,6 +188,134 @@ pub(super) fn plan_sub_bullet_capture(
         pomodoro_link: None,
         pomodoro_refs: Vec::new(),
     })
+}
+
+/// Insert requirement blocks under an existing task and report the
+/// first-requirement scoop. Capture calls this before planning any notes in
+/// the same draft, so only notes that existed before this item are scooped.
+pub(super) fn plan_insert_reqs_capture(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    target: &Path,
+    route: &str,
+    sub_bullet_target: &SubBulletTarget,
+    section_selector: Option<&DrawerSelector>,
+    blocks: &[String],
+    dry_run: bool,
+) -> Result<(CaptureWritePlan, RequirementWriteJson), CaptureError> {
+    if section_selector.is_some() {
+        return Err(CaptureError::usage_code(
+            task_reqs::copy::REQ_IN_DRAWER,
+            "req_in_drawer",
+        ));
+    }
+
+    let contents = planner.read_existing(target)?;
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let parent = resolve_sub_bullet_parent(&scan, route, sub_bullet_target)?;
+    let parent_preimage = line_spans(&contents)
+        .get(parent.line_index)
+        .map(|line| line.text)
+        .ok_or_else(|| {
+            CaptureError::io(
+                "sub-bullet capture invariant failed: parent line is missing",
+            )
+        })?;
+    let write = task_block_layout::insert_reqs(
+        &contents,
+        task_block_layout::ReqTarget {
+            line_index: parent.line_index,
+            preimage: parent_preimage,
+        },
+        blocks,
+        &settings,
+    )
+    .map_err(|refusal| {
+        CaptureError::usage_code(refusal.message, refusal.code)
+    })?;
+
+    let placement = if write.first_line >= line_spans(&contents).len() {
+        Placement::Appended
+    } else {
+        Placement::Inserted
+    };
+    let details = SubBulletCaptureDetails {
+        block_id: parent.block_id.clone(),
+        parent_line: parent.line_index + 1,
+        parent_text: parent.description.clone(),
+        drawer: None,
+        parent_status_symbol: parent.status_symbol,
+        parent_status_name: parent.status_name.clone(),
+    };
+    let report = RequirementWriteJson::from_insert(
+        parent.description.clone(),
+        blocks.len(),
+        write.scooped,
+        write.notes_created,
+        dry_run,
+    );
+    planner.stage(target, write.updated)?;
+
+    Ok((
+        CaptureWritePlan {
+            placement,
+            pomodoro: None,
+            sub_bullet: Some(details),
+            pomodoro_note: None,
+            toggle: None,
+            pomodoro_link: None,
+            pomodoro_refs: Vec::new(),
+        },
+        report,
+    ))
+}
+
+fn resolve_sub_bullet_parent<'a>(
+    scan: &'a note_tasks::NoteTaskScan,
+    route: &str,
+    sub_bullet_target: &SubBulletTarget,
+) -> Result<&'a note_tasks::NoteTask, CaptureError> {
+    match sub_bullet_target {
+        SubBulletTarget::BlockId(block_id) => match scan.by_block_id(block_id) {
+            BlockIdLookup::Found(task) => Ok(task),
+            BlockIdLookup::NotATask {
+                line_index,
+                excerpt,
+            } => Err(CaptureError::io(format!(
+                "^{block_id} in {route}.md is not a task (line {}: {excerpt})",
+                line_index + 1
+            ))),
+            BlockIdLookup::Duplicate(count) => Err(CaptureError::io(
+                format!(
+                    "block ID ^{block_id} appears {count} times in {route}.md; make it unique before capturing"
+                ),
+            )),
+            BlockIdLookup::Missing => {
+                let choices = format!(
+                    "run 'bob capture-tasks -r {route}' to list task block IDs"
+                );
+                let message = match scan.suggest_block_id(block_id) {
+                    Some(suggestion) => format!(
+                        "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}? ({choices})"
+                    ),
+                    None => format!(
+                        "no task with block ID ^{block_id} in {route}.md ({choices})"
+                    ),
+                };
+                Err(CaptureError::io(message))
+            }
+        },
+        SubBulletTarget::Ref { line, digest } => match scan.by_ref(*line, digest) {
+            RefLookup::Found(task) => Ok(task),
+            RefLookup::Stale => Err(CaptureError::io(format!(
+                "the selected task is no longer in {route}.md; rerun the task picker"
+            ))),
+            RefLookup::Ambiguous => Err(CaptureError::io(format!(
+                "the selected task matches more than one line in {route}.md; rerun the task picker"
+            ))),
+        },
+    }
 }
 
 /// Capture into a project note's `##` section for a `^prj` parent: the

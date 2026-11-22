@@ -1,6 +1,7 @@
 //! Pomodoro close planning, summaries, and link/task close items.
 use super::*;
 use crate::native::task_complete as engine;
+use crate::native::task_reqs;
 
 pub(super) struct SnapshotCloseVault {
     pub(super) bob_dir: PathBuf,
@@ -2846,6 +2847,14 @@ pub(super) fn plan_pomodoro_close_link_item(
             line_index,
             excerpt,
         } => {
+            if let Some(owner) =
+                task_reqs::req_anchor_owner(&contents, block_id, &settings)
+            {
+                return Err(CaptureError::usage_code(
+                    task_reqs::req_link_message(&owner),
+                    "req_link",
+                ));
+            }
             return Err(CaptureError::io(format!(
                 "^{block_id} in {route}.md is not a task (line {}: {excerpt})",
                 line_index + 1
@@ -2857,6 +2866,14 @@ pub(super) fn plan_pomodoro_close_link_item(
             )));
         }
         BlockIdLookup::Missing => {
+            if let Some(owner) =
+                task_reqs::req_anchor_owner(&contents, block_id, &settings)
+            {
+                return Err(CaptureError::usage_code(
+                    task_reqs::req_link_message(&owner),
+                    "req_link",
+                ));
+            }
             let choices = format!(
                 "run 'bob capture-tasks -r {route}' to list task block IDs"
             );

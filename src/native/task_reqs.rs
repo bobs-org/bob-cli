@@ -58,6 +58,31 @@ pub(crate) mod copy {
         "Requirements start open — they're met when the task closes";
     /// `req_depth`: a requirement deeper than [`super::MAX_REQ_DEPTH`].
     pub(crate) const REQ_DEPTH: &str = "Requirements nest at most 16 deep — carry this branch into its own task";
+
+    /// `req_link`: a Task Link points at a requirement rather than a task.
+    pub(crate) const REQ_LINK: &str =
+        "Requirements aren't planned — link “{owner}”, or Ctrl+Shift+T makes it a task";
+}
+
+/// Owner description for an anchor that resolves to a requirement line.
+/// Task Link writers use this to give a targeted refusal instead of the
+/// generic missing-task copy. Other block-ID lookups keep their own rules.
+pub(crate) fn req_anchor_owner(
+    contents: &str,
+    anchor: &str,
+    settings: &NoteTaskSettings,
+) -> Option<String> {
+    let node = note_req_forest(contents, settings)
+        .into_iter()
+        .find(|node| node.anchor.as_deref() == Some(anchor))?;
+    let scan = note_tasks::scan(contents, settings);
+    scan.task_at(node.owner_line)
+        .map(|task| task.description.clone())
+}
+
+/// Teaching copy for a Task Link that names a requirement anchor.
+pub(crate) fn req_link_message(owner: &str) -> String {
+    copy::REQ_LINK.replace("{owner}", owner)
 }
 
 /// The raw checkbox mark on a req line.
