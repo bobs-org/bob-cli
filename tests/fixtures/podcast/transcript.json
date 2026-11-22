@@ -1,0 +1,365 @@
+{
+  "version": "1.0.0",
+  "segments": [
+    {
+      "speaker": "spk_1",
+      "startTime": 0.171,
+      "endTime": 3.262,
+      "body": "What does it look like when a startup CEO merges 5,000 pull requests"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 3.312,
+      "endTime": 7.003,
+      "body": "in a single month thanks to going all-in on AI agents and software factories?"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 7.053,
+      "endTime": 11.22,
+      "body": "This CEO is Harjit Gill, heading up CodeRabbit, the AI code review startup."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 11.394,
+      "endTime": 14.505,
+      "body": "Harjit had been writing code for 30 years, is on his third startup,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 14.555,
+      "endTime": 16.833,
+      "body": "and never shipped as much as he does now."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 16.895,
+      "endTime": 20.062,
+      "body": "Today we cover why Harjit says human code review is dead,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 20.236,
+      "endTime": 22.958,
+      "body": "but AI code reviews are more important than ever."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 23.216,
+      "endTime": 25.528,
+      "body": "The concept of driving license for engineers,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 25.578,
+      "endTime": 29.532,
+      "body": "how devs at his company lose their right to ship to prod if they ship too many bugs,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 29.582,
+      "endTime": 32.845,
+      "body": "his spicy take that $8 million seed rounds are no longer enough to build"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 32.865,
+      "endTime": 36.198,
+      "body": "a software startup and me pushing back on it, and many more."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 36.448,
+      "endTime": 38.149,
+      "body": "If you want an unfiltered look on how"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 38.169,
+      "endTime": 42.653,
+      "body": "a truly AI-pilled founder slash software engineer operates who is extremely hands-on"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 42.693,
+      "endTime": 44.526,
+      "body": "with AI, this episode is for you."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 45.086,
+      "endTime": 47.838,
+      "body": "And while I am nowhere near as AI piled as hard yet,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 47.888,
+      "endTime": 50.55,
+      "body": "I found it educational to understand his thinking and his views"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 50.59,
+      "endTime": 54.937,
+      "body": "on the dev tools industry where competition feels more intense than ever before."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 54.987,
+      "endTime": 58.518,
+      "body": "This episode is presented by TurboBuffer and I want to show you the new and improved"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 58.568,
+      "endTime": 62.399,
+      "body": "The Pragmatic Engineer search at pragmaticengineer.com slash search that I built"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 62.449,
+      "endTime": 65.08,
+      "body": "on top of it. I was frustrated with Substack search,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 65.13,
+      "endTime": 68.891,
+      "body": "how their search was keyword only and I couldn't do a search like the article"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 68.911,
+      "endTime": 71.721,
+      "body": "where me and Ken Beck made a fun of a big consultancy."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 71.771,
+      "endTime": 75.432,
+      "body": "I'm obviously looking for the piece about McKinsey but Substack cannot find it"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 75.472,
+      "endTime": 76.528,
+      "body": "for the life of it."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 76.652,
+      "endTime": 79.152,
+      "body": "So I decided to build a search that I needed."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 79.609,
+      "endTime": 82.7,
+      "body": "I did the whole thing from idea to deployment in three hours with Codex"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 82.75,
+      "endTime": 85.528,
+      "body": "and TurboBuffer with TPUF doing the heavy lifting."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 85.931,
+      "endTime": 88.264,
+      "body": "I dumped all my articles into TurboBuffer."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 88.412,
+      "endTime": 91.803,
+      "body": "It handles creating embeddings and getting full text search working."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 91.853,
+      "endTime": 94.584,
+      "body": "The result is a much better search than what Substack has."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 94.634,
+      "endTime": 97.905,
+      "body": "Check it out for yourself at pragmaticengineer.com slash search."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 97.955,
+      "endTime": 99.106,
+      "body": "But let's think bigger."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 99.156,
+      "endTime": 102.537,
+      "body": "What would it take for Substack to give every single publication this kind"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 102.577,
+      "endTime": 104.987,
+      "body": "of advanced search? With most other search systems,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 105.037,
+      "endTime": 107.74,
+      "body": "you will need to create a bunch of shards and It will be expensive to operate"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 107.78,
+      "endTime": 108.831,
+      "body": "the search indexes."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 108.881,
+      "endTime": 112.27,
+      "body": "But with TurboBuffer, each publication is simply a namespace."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 112.326,
+      "endTime": 115.902,
+      "body": "Idle namespaces live in object storage which has no compute cost."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 115.952,
+      "endTime": 120.785,
+      "body": "Active ones are pulled into NVMe and memory caching tiers so they are served very fast."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 121.7,
+      "endTime": 124.467,
+      "body": "TurboBuffer can scale to hundreds of millions of namespaces"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 124.467,
+      "endTime": 128.229,
+      "body": "and why multi -tenant AI products at companies like Ramp, Harvey,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 128.229,
+      "endTime": 129.912,
+      "body": "and Notion are built on top of it."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 129.912,
+      "endTime": 132.95,
+      "body": "With TurboPoffer you really do get the best of all worlds."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 132.95,
+      "endTime": 136.244,
+      "body": "Ridiculous scale, low latency, and cheap operating costs."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 136.244,
+      "endTime": 140.03,
+      "body": "Whether you're building a side project like I did or a platform with millions"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 140.03,
+      "endTime": 143.699,
+      "body": "of accounts check it out at turbopuffer .com slash pragmatic."
+    },
+    {
+      "speaker": "spk_0",
+      "startTime": 143.699,
+      "endTime": 146.643,
+      "body": "Harjit welcome to the podcast. Hey thanks for having me here."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 146.643,
+      "endTime": 148.225,
+      "body": "It's great to have you here."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 148.245,
+      "endTime": 151.449,
+      "body": "This is your pull requests per month."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 151.83,
+      "endTime": 155.775,
+      "body": "The last month, it was more than 5,000 pull requests."
+    },
+    {
+      "speaker": "spk_0",
+      "startTime": 156.095,
+      "endTime": 157.095,
+      "body": "That's right. How?"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 157.817,
+      "endTime": 158.817,
+      "body": "How?"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 159.179,
+      "endTime": 160.179,
+      "body": "How?"
+    },
+    {
+      "speaker": "spk_0",
+      "startTime": 161.612,
+      "endTime": 165.294,
+      "body": "At this point, like, it's like really machines are building machines, like, I mean,"
+    },
+    {
+      "speaker": "spk_0",
+      "startTime": 165.334,
+      "endTime": 168.185,
+      "body": "just good at keeping the agents busy at this time, I would say."
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 168.235,
+      "endTime": 169.926,
+      "body": "What are these protocols doing?"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 169.976,
+      "endTime": 171.256,
+      "body": "When are you building it?"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 171.276,
+      "endTime": 175.098,
+      "body": "Because, you know, like, you will have a lot of responsibility"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 175.118,
+      "endTime": 178.629,
+      "body": "and time spent just running the company, I guess, coordinating people,"
+    },
+    {
+      "speaker": "spk_1",
+      "startTime": 178.679,
+      "endTime": 180.904,
+      "body": "pulled into fires, the usual stuff, right?"
+    }
+  ]
+}

@@ -1,0 +1,241 @@
+WEBVTT
+
+1
+00:00:00.171 --> 00:00:03.262
+<v SPEAKER_01>What does it look like when a startup CEO merges 5,000 pull requests
+
+2
+00:00:03.312 --> 00:00:07.003
+<v SPEAKER_01>in a single month thanks to going all-in on AI agents and software factories?
+
+3
+00:00:07.053 --> 00:00:11.220
+<v SPEAKER_01>This CEO is Harjit Gill, heading up CodeRabbit, the AI code review startup.
+
+4
+00:00:11.394 --> 00:00:14.505
+<v SPEAKER_01>Harjit had been writing code for 30 years, is on his third startup,
+
+5
+00:00:14.555 --> 00:00:16.833
+<v SPEAKER_01>and never shipped as much as he does now.
+
+6
+00:00:16.895 --> 00:00:20.062
+<v SPEAKER_01>Today we cover why Harjit says human code review is dead,
+
+7
+00:00:20.236 --> 00:00:22.958
+<v SPEAKER_01>but AI code reviews are more important than ever.
+
+8
+00:00:23.216 --> 00:00:25.528
+<v SPEAKER_01>The concept of driving license for engineers,
+
+9
+00:00:25.578 --> 00:00:29.532
+<v SPEAKER_01>how devs at his company lose their right to ship to prod if they ship too many bugs,
+
+10
+00:00:29.582 --> 00:00:32.845
+<v SPEAKER_01>his spicy take that $8 million seed rounds are no longer enough to build
+
+11
+00:00:32.865 --> 00:00:36.198
+<v SPEAKER_01>a software startup and me pushing back on it, and many more.
+
+12
+00:00:36.448 --> 00:00:38.149
+<v SPEAKER_01>If you want an unfiltered look on how
+
+13
+00:00:38.169 --> 00:00:42.653
+<v SPEAKER_01>a truly AI-pilled founder slash software engineer operates who is extremely hands-on
+
+14
+00:00:42.693 --> 00:00:44.526
+<v SPEAKER_01>with AI, this episode is for you.
+
+15
+00:00:45.086 --> 00:00:47.838
+<v SPEAKER_01>And while I am nowhere near as AI piled as hard yet,
+
+16
+00:00:47.888 --> 00:00:50.550
+<v SPEAKER_01>I found it educational to understand his thinking and his views
+
+17
+00:00:50.590 --> 00:00:54.937
+<v SPEAKER_01>on the dev tools industry where competition feels more intense than ever before.
+
+18
+00:00:54.987 --> 00:00:58.518
+<v SPEAKER_01>This episode is presented by TurboBuffer and I want to show you the new and improved
+
+19
+00:00:58.568 --> 00:01:02.399
+<v SPEAKER_01>The Pragmatic Engineer search at pragmaticengineer.com slash search that I built
+
+20
+00:01:02.449 --> 00:01:05.080
+<v SPEAKER_01>on top of it. I was frustrated with Substack search,
+
+21
+00:01:05.130 --> 00:01:08.891
+<v SPEAKER_01>how their search was keyword only and I couldn't do a search like the article
+
+22
+00:01:08.911 --> 00:01:11.721
+<v SPEAKER_01>where me and Ken Beck made a fun of a big consultancy.
+
+23
+00:01:11.771 --> 00:01:15.432
+<v SPEAKER_01>I'm obviously looking for the piece about McKinsey but Substack cannot find it
+
+24
+00:01:15.472 --> 00:01:16.528
+<v SPEAKER_01>for the life of it.
+
+25
+00:01:16.652 --> 00:01:19.152
+<v SPEAKER_01>So I decided to build a search that I needed.
+
+26
+00:01:19.609 --> 00:01:22.700
+<v SPEAKER_01>I did the whole thing from idea to deployment in three hours with Codex
+
+27
+00:01:22.750 --> 00:01:25.528
+<v SPEAKER_01>and TurboBuffer with TPUF doing the heavy lifting.
+
+28
+00:01:25.931 --> 00:01:28.264
+<v SPEAKER_01>I dumped all my articles into TurboBuffer.
+
+29
+00:01:28.412 --> 00:01:31.803
+<v SPEAKER_01>It handles creating embeddings and getting full text search working.
+
+30
+00:01:31.853 --> 00:01:34.584
+<v SPEAKER_01> The  result  is  a  much  better  search  than  what Substack  has.
+
+31
+00:01:34.634 --> 00:01:37.905
+<v SPEAKER_01>Check it out for yourself at pragmaticengineer.com slash search.
+
+32
+00:01:37.955 --> 00:01:39.106
+<v SPEAKER_01>But let's think bigger.
+
+33
+00:01:39.156 --> 00:01:42.537
+<v SPEAKER_01>What would it take for Substack to give every single publication this kind
+
+34
+00:01:42.577 --> 00:01:44.987
+<v SPEAKER_01>of advanced search? With most other search systems,
+
+35
+00:01:45.037 --> 00:01:47.740
+<v SPEAKER_01> you will need to create a bunch of shards and It will be expensive to operate
+
+36
+00:01:47.780 --> 00:01:48.831
+<v SPEAKER_01>the search indexes.
+
+37
+00:01:48.881 --> 00:01:52.270
+<v SPEAKER_01>But with TurboBuffer, each publication is simply a namespace.
+
+38
+00:01:52.326 --> 00:01:55.902
+<v SPEAKER_01>Idle namespaces live in object storage which has no compute cost.
+
+39
+00:01:55.952 --> 00:02:00.785
+<v SPEAKER_01>Active ones are pulled into NVMe and memory caching tiers so they are served very fast.
+
+40
+00:02:01.700 --> 00:02:04.467
+<v SPEAKER_01>TurboBuffer can scale to hundreds of millions of namespaces
+
+41
+00:02:04.467 --> 00:02:08.229
+<v SPEAKER_01>and why multi -tenant AI products at companies like Ramp, Harvey,
+
+42
+00:02:08.229 --> 00:02:09.912
+<v SPEAKER_01>and Notion are built on top of it.
+
+43
+00:02:09.912 --> 00:02:12.950
+<v SPEAKER_01>With TurboPoffer you really do get the best of all worlds.
+
+44
+00:02:12.950 --> 00:02:16.244
+<v SPEAKER_01>Ridiculous scale, low latency, and cheap operating costs.
+
+45
+00:02:16.244 --> 00:02:20.030
+<v SPEAKER_01>Whether you're building a side project like I did or a platform with millions
+
+46
+00:02:20.030 --> 00:02:23.699
+<v SPEAKER_01>of accounts check it out at turbopuffer .com slash pragmatic.
+
+47
+00:02:23.699 --> 00:02:26.643
+<v SPEAKER_00>Harjit welcome to the podcast. Hey thanks for having me here.
+
+48
+00:02:26.643 --> 00:02:28.225
+<v SPEAKER_01>It's great to have you here.
+
+49
+00:02:28.245 --> 00:02:31.449
+<v SPEAKER_01>This is your pull requests per month.
+
+50
+00:02:31.830 --> 00:02:35.775
+<v SPEAKER_01>The last month, it was more than 5,000 pull requests.
+
+51
+00:02:36.095 --> 00:02:37.095
+<v SPEAKER_00>That's right. How?
+
+52
+00:02:37.817 --> 00:02:38.817
+<v SPEAKER_01>How?
+
+53
+00:02:39.179 --> 00:02:40.179
+<v SPEAKER_01>How?
+
+54
+00:02:41.612 --> 00:02:45.294
+<v SPEAKER_00>At this point, like, it's like really machines are building machines, like, I mean,
+
+55
+00:02:45.334 --> 00:02:48.185
+<v SPEAKER_00>just good at keeping the agents busy at this time, I would say.
+
+56
+00:02:48.235 --> 00:02:49.926
+<v SPEAKER_01>What are these protocols doing?
+
+57
+00:02:49.976 --> 00:02:51.256
+<v SPEAKER_01>When are you building it?
+
+58
+00:02:51.276 --> 00:02:55.098
+<v SPEAKER_01>Because, you know, like, you will have a lot of responsibility
+
+59
+00:02:55.118 --> 00:02:58.629
+<v SPEAKER_01>and time spent just running the company, I guess, coordinating people,
+
+60
+00:02:58.679 --> 00:03:00.904
+<v SPEAKER_01>pulled into fires, the usual stuff, right?

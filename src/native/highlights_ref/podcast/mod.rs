@@ -1,6 +1,7 @@
 //! Podcast episode references: browserless Spotify episode metadata
 //! ([`metadata`]), show-notes segmentation ([`notes`]), cover art
-//! ([`cover`]), and the publisher feed match ([`feed`]).
+//! ([`cover`]), the publisher feed match ([`feed`]), and publisher
+//! transcript parsing ([`transcript`]).
 //!
 //! This is a library: the episode dossier builder (`dossier.rs`) and the
 //! create and ingest routes that call it land in later phases. Every
@@ -13,6 +14,7 @@ pub(crate) mod cover;
 pub(crate) mod feed;
 pub(crate) mod metadata;
 pub(crate) mod notes;
+pub(crate) mod transcript;
 
 /// Remove the invisible characters Spotify descriptions carry (U+2060
 /// word joiner, U+200B zero-width space, U+FEFF byte-order mark).

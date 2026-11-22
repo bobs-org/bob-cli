@@ -2088,7 +2088,7 @@ fn published_line(derived: &DerivedMeta) -> Option<String> {
     }
 }
 
-fn format_count(value: u64) -> String {
+pub(super) fn format_count(value: u64) -> String {
     let digits = value.to_string();
     let mut grouped = String::new();
     for (index, ch) in digits.chars().rev().enumerate() {

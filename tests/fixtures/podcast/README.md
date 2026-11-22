@@ -20,3 +20,16 @@
 - `chapters.json`: a synthetic Podcasting 2.0 chapters file with a fractional
   start, a `"toc": false` chapter, an untitled chapter, and a U+2060 in a
   title.
+- `pragmatic_engineer_transcript.vtt`: the first 60 cues (0:00–3:00) of the
+  `podcast:transcript` VTT that the first item of `feed_pragmatic_engineer.rss`
+  offers, captured 2026-11-21 and kept byte-for-byte. It is diarized:
+  `<v SPEAKER_01>` (the host, speaking first) and `<v SPEAKER_00>`. The full
+  file has 1,750 cues; its last starts at 1:26:35. `podcast/transcript.rs`
+  tests parse it.
+- `transcript.srt`, `transcript.json`, `transcript.html`, `transcript.txt`:
+  synthetic re-encodings of that VTT's text, one per other transcript
+  format. The SRT holds the first 45 cues with CRLF line endings and no
+  speakers. The JSON holds every cue as a Podcasting 2.0 segment with
+  diarized `spk_0`/`spk_1` speakers. The HTML holds one `<cite>`/`<time>`/
+  `<p>` group per speaker turn, with the speakers named. The text holds
+  one blank-line paragraph per speaker turn, with no times or speakers.
