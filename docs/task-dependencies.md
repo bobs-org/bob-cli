@@ -1863,7 +1863,7 @@ plan 10/10 links
 | 0. `[id::]` gate | Before any lookup, check the **staged** post-close lines of C for an `[id::]` field. | Zero extra I/O for about 96% of closes, in Rust and JS. It also speeds up today's Ctrl+Enter recovery. |
 | 1. Lazy context | `DependencyContext` builds `discover` only for items that need the dependency pool. `!` resolves notes from a walk-only index. | `hello` / `x` previews go from about 270 ms to about 40 ms on apollo. |
 | 2. Prefiltered parallel snapshot | One batch-scoped dependents snapshot. Byte reads run in parallel, and a prefilter keeps only notes containing `dependsOn` or `id::`. Staged files always overlay disk. Shared by every `!` and close item in the batch, never cloned per item. | About 30 ms per batch, paid only when the gate passes. |
-| 3. Obsidian Tasks cache | When Tasks reports Warm, build a reverse index `id → dependents` from `getTasks()`. Open editor buffers override the cache. Read only the candidate notes and today's daily note. A cold cache falls back to the full scan. | The notice lands about 50 ms after the keypress. |
+| 3. Obsidian Tasks cache | When Tasks reports Warm, build a reverse index `id → dependents` from `getTasks()`. Open editor buffers override the cache. Read only the candidate notes and today's daily note. A cold cache falls back to the full scan. Tasks under dot-directories and the always-excluded names (`_conflicts`, `_generated`, `_templates`, …) are dropped, matching `vault_note_paths`; the cold scan applies the same filter. | The notice lands about 50 ms after the keypress. |
 | 4. Project offers | Enumerate residents from N's already-staged text plus the dependents snapshot the gate already allows. No extra vault walk for descendant notes. | The `^bar` → `sase_foo` case costs one staged-note read. |
 | 5. Relation sources | Only when successor labels, `plan.link_unblocked`, an event, and a target block ID pass their gates, scan the shared batch path set once, prefilter LINKS and target block links, and overlay staged files. | One source snapshot shared with the dependents byte pass when both run; no LINKED FROM or persistent cache. |
 | No daemon, no persistent cache | A validated cache needs a stat walk (32–55 ms) that costs as much as layer 2. | Respects the thin-client rule: no Swift-side dependency or placement logic. |
@@ -2476,6 +2476,7 @@ selection unless a row names another.
 | SO30 | picked row became Blocked or was linked meanwhile | refused per row; never satisfied by linking its prerequisites |
 | SO31 | `#ref` and inbox residents of an unblocked project | offered (SO1 includes them) |
 | SO32 | 20-way fan-out | all 20 reachable; grouping and a filter; nothing pre-checked |
+| SO33 | a vault-sync conflict copy under `_conflicts/` repeats a dependent (or an open twin of the prerequisite) of the closed task | offered once, from the live note; the copy is never offered, recovered, linked, minted, or written, and its twin never keeps the prerequisite open |
 
 ### 12.13 Obsidian picker API
 
