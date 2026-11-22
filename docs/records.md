@@ -160,6 +160,14 @@ unreadable or incomplete source is never treated as an empty folder. In
 `bob nightly`, album sync runs directly after `notebooks` and before
 `records`; a failed maintenance step does not prevent that final publish.
 
+JSON uses schema version 1. `albums[]` repeats the list/check entry shape;
+`catalogs[]` repeats the owner-catalog report. `counts.damaged` counts unsafe
+or invalid indexes, and `counts.walk_lines` counts rewritten walk lines.
+`findings[]` flattens album and catalog issues, while `changes[]` includes
+path, `kind` (`index`, `catalog`, `walk`), and dry-run diff. `commit`,
+`sync`, `warnings[]`, and `io_errors[]` report transaction state; `ok` is
+false on damage or runtime failure.
+
 ### Tidying album titles
 
 `bob albums tidy [STEM]` moves each root album's title into a bob-owned
@@ -250,14 +258,6 @@ or guard failure. The human output names both kinds of removal per note and
 lists kept H1s with their reasons. `bob nightly` runs the lock-free tidy core
 after `albums` and before the final `vault-sync`; a failure never stops that
 final publish.
-
-JSON uses schema version 1. `albums[]` repeats the list/check entry shape;
-`catalogs[]` repeats the owner-catalog report. `counts.damaged` counts unsafe
-or invalid indexes, and `counts.walk_lines` counts rewritten walk lines.
-`findings[]` flattens album and catalog issues, while `changes[]` includes
-path, `kind` (`index`, `catalog`, `walk`), and dry-run diff. `commit`,
-`sync`, `warnings[]`, and `io_errors[]` report transaction state; `ok` is
-false on damage or runtime failure.
 
 Human `list` groups albums by root with root hues, record and group counts,
 freshness (`today` / `Nd` / `Nw`, using `BOB_NOW` when set), and `!N` / `~N`
