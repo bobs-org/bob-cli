@@ -12,8 +12,10 @@ pending-descendant counts. The `choices` family (RV12–RV19) pins final
 verdict conflicts, requirement-first card numbering, mark-all exclusion,
 interactive folds, ancestor overlap, navigation-only pins, multi-owner
 choices, stale replay after duplicate-label reordering, and duplicate
-owner refusal. Later close-engine phases append write-byte and jump
-families to the same file without renumbering these cases.
+owner refusal. The `writes` family (RV20–RV28) pins atomic carry/drop bytes, receipts,
+created-task identities, and descendant moves without adding another commit
+path. Later close-engine phases append jump families to the same file
+without renumbering these cases.
 
 ## Shape
 
@@ -28,6 +30,10 @@ families to the same file without renumbering these cases.
   `base_case` points at a `rows` case; selector inputs contain the full
   opaque keys that case produced. `source_lines_after` models an edit
   between preview and submit.
+- `writes` cases add `input` (`base_case` or inline `notes` plus `requests`,
+  `today`, and `date`) and freeze the atomic write plan. `expect` carries
+  exact `postimages` bytes, per-row `outcomes` (verdict, receipt, carried
+  task identity, and descendant `moves`), and aggregated `met` receipts.
 - `notes[]`: `path`, `source_lines` (joined with `\n` plus a trailing
   newline), and `closing[]` (`block_id` or 1-based `line`) in the
   explicit close order for that note. Recurring owners are omitted

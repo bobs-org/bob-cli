@@ -1715,6 +1715,414 @@
       "expect": {
         "error_code": "req_close_stale"
       }
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 3,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 3 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "handles-empty-input",
+              "line": 6,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Handles empty input” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [ ] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV20",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "depth-1 carry exact bytes"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 3,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 3 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "preserves-crlf",
+              "line": 6,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Preserves CRLF” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [>] [[#^preserves-crlf|Preserves CRLF]]\n\t\t- [ ] Handles empty input\n- [ ] #task Preserves CRLF [created:: 2026-11-22] ^preserves-crlf\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV21",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "nested leaf carry exact bytes"
+    },
+    {
+      "expect": {
+        "met": [],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "handles-supported",
+              "line": 3,
+              "path": "Tasks.md"
+            },
+            "moves": [
+              {
+                "from": 3,
+                "to": 5
+              },
+              {
+                "from": 4,
+                "to": 6
+              },
+              {
+                "from": 5,
+                "to": 7
+              }
+            ],
+            "receipt": "→ “Handles supported inputs” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [>] [[#^handles-supported|Handles supported inputs]]\n- [ ] #task Handles supported inputs [created:: 2026-11-22] ^handles-supported\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n\t- [ ] Handles Windows files\n\t\t- [ ] Preserves CRLF\n\t- [ ] Handles empty input\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV22",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "branch carry covers descendants"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 2,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 2 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "preserves-crlf",
+              "line": 8,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Preserves CRLF” is its own task now",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          },
+          {
+            "carried": null,
+            "moves": [],
+            "receipt": "⊘ Dropped “Handles empty input” · “out of scope”",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [>] [[#^preserves-crlf|Preserves CRLF]]\n\t\t- [-] Handles empty input\n\t\t\t- ❌ **CANCEL LOG**\n\t\t\t\t- *2026-11-22* — out of scope\n- [ ] #task Preserves CRLF [created:: 2026-11-22] ^preserves-crlf\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV23",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          },
+          {
+            "reason": "out of scope",
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "disjoint mixed carry and drop"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 1,
+            "owner_key": "Tasks.md#^research@8bd5f0dfff8f509fa29bfe2d5b6129e8a7066be3ddba72aeadddb33a85f0a4ea",
+            "receipt": "✓ 1 requirements met with “Research the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "draft-plan",
+              "line": 4,
+              "path": "Tasks.md"
+            },
+            "moves": [
+              {
+                "from": 3,
+                "to": 6
+              }
+            ],
+            "receipt": "→ “Draft the plan” is its own task now",
+            "row_key": "Tasks.md#^research@8bd5f0dfff8f509fa29bfe2d5b6129e8a7066be3ddba72aeadddb33a85f0a4ea/req/1~7540eee6",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Research the exporter ^research\n\t- [>] [[#^draft-plan|Draft the plan]]\n\t- [ ] Benchmarks\n- [ ] #task Draft the plan [created:: 2026-11-22] ^draft-plan\n\t- 🪢 **LINKED FROM:** [[#^research]] (💬 mentions)\n\t- shared note\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV24",
+      "input": {
+        "date": "2026-11-22",
+        "notes": [
+          {
+            "closing": [
+              {
+                "block_id": "research"
+              }
+            ],
+            "path": "Tasks.md",
+            "source_lines": [
+              "- [ ] #task Research the exporter ^research",
+              "\t- [ ] Draft the plan",
+              "\t\t- shared note",
+              "\t- [ ] Benchmarks"
+            ]
+          }
+        ],
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^research@8bd5f0dfff8f509fa29bfe2d5b6129e8a7066be3ddba72aeadddb33a85f0a4ea/req/1~7540eee6",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "carry keeps attached notes with the new task"
+    },
+    {
+      "expect": {
+        "met": [],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "handles",
+              "line": 3,
+              "path": "Tasks.md"
+            },
+            "moves": [],
+            "receipt": "→ “Handles input” is its own task now",
+            "row_key": "Tasks.md#^export@3e7448180630b2a4e292b2f5bf6b828d47b882711b59a09e69bd4fe0dd1a072b/req/1~df718f5a",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [>] [[#^handles|Handles input]]\n- [ ] #task Handles input [created:: 2026-11-22] ^handles\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV25",
+      "input": {
+        "date": "2026-11-22",
+        "notes": [
+          {
+            "closing": [
+              {
+                "block_id": "export"
+              }
+            ],
+            "path": "Tasks.md",
+            "source_lines": [
+              "- [ ] #task Ship the exporter ^export",
+              "\t- [ ] Handles input ^handles"
+            ]
+          }
+        ],
+        "requests": [
+          {
+            "reason": null,
+            "selector": "Tasks.md#^export@3e7448180630b2a4e292b2f5bf6b828d47b882711b59a09e69bd4fe0dd1a072b/req/1~df718f5a",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "carry reuses the existing anchor"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 4,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 4 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [],
+        "postimages": {}
+      },
+      "family": "writes",
+      "id": "RV26",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [],
+        "today": "2026-11-22"
+      },
+      "title": "no-op met writes no bytes"
+    },
+    {
+      "expect": {
+        "met": [
+          {
+            "count": 3,
+            "owner_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "receipt": "✓ 3 requirements met with “Ship the exporter”"
+          }
+        ],
+        "outcomes": [
+          {
+            "carried": null,
+            "moves": [],
+            "receipt": "⊘ Dropped “Handles empty input” · “duplicate effort”",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "postimages": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [-] Handles empty input\n\t\t\t- ❌ **CANCEL LOG**\n\t\t\t\t- *2026-11-22* — duplicate effort\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV27",
+      "input": {
+        "base_case": "RV1",
+        "date": "2026-11-22",
+        "requests": [
+          {
+            "reason": "duplicate effort",
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "drop with cancel log reason"
+    },
+    {
+      "expect": {
+        "met": [],
+        "outcomes": [
+          {
+            "carried": {
+              "block_id": "carry-req",
+              "line": 2,
+              "path": "inbox.md"
+            },
+            "moves": [],
+            "receipt": "→ “Carry this req” is its own task now",
+            "row_key": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "verdict": "carry"
+          }
+        ],
+        "postimages": {
+          "2026/2026-11-22.md": "- [ ] #task Daily owner ^daily\n\t- [>] [[inbox#^carry-req|Carry this req]]\n",
+          "inbox.md": "## Tasks\n- [ ] #task Carry this req [created:: 2026-11-22] ^carry-req\n\t- 🪢 **LINKED FROM:** [[2026/2026-11-22#^daily]] (💬 mentions)\n"
+        }
+      },
+      "family": "writes",
+      "id": "RV28",
+      "input": {
+        "date": "2026-11-22",
+        "notes": [
+          {
+            "closing": [
+              {
+                "block_id": "daily"
+              }
+            ],
+            "path": "2026/2026-11-22.md",
+            "source_lines": [
+              "- [ ] #task Daily owner ^daily",
+              "\t- [ ] Carry this req"
+            ]
+          }
+        ],
+        "requests": [
+          {
+            "reason": null,
+            "selector": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "verdict": "carry"
+          }
+        ],
+        "today": "2026-11-22"
+      },
+      "title": "daily-owner carry routes to the inbox note"
     }
   ]
 }

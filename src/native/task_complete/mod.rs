@@ -19,6 +19,11 @@ pub(crate) mod relation_successors;
 pub(crate) mod req_close;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_verdicts;
+// Atomic carry/drop planning reuses the split and writer primitives;
+// the capture adapter (bob-cli-on.8.1.3) and the pull-in/jump phase
+// (bob-cli-on.8.1.4) consume this module.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod req_writes;
 pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;
