@@ -1219,6 +1219,72 @@ esac
     (path, root, log)
 }
 
+const SPOTIFY_ID: &str = "4UgVFWty2I8hGAgSvT7pjC";
+const SPOTIFY_CANONICAL: &str =
+    "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC";
+const SPOTIFY_STEM: &str =
+    "software_factories_and_code_reviews_with_harjot_gill";
+const SPOTIFY_TITLE: &str =
+    "Software factories and code reviews with Harjot Gill";
+
+/// Fake curl serving the trimmed Spotify episode fixtures by URL shape.
+fn write_spotify_curl(dir: &Path) -> (PathBuf, PathBuf) {
+    let root = dir.join("spotify");
+    fs::create_dir_all(&root).expect("spotify root");
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/spotify");
+    fs::copy(fixtures.join("episode_page.html"), root.join("page.body"))
+        .expect("copy page");
+    fs::write(root.join("page.status"), "200").expect("page status");
+    fs::write(root.join("page.type"), "text/html").expect("page type");
+    fs::copy(fixtures.join("episode_embed.html"), root.join("embed.body"))
+        .expect("copy embed");
+    fs::write(root.join("embed.status"), "200").expect("embed status");
+    fs::write(root.join("embed.type"), "text/html").expect("embed type");
+    fs::copy(
+        fixtures.join("episode_oembed.json"),
+        root.join("oembed.body"),
+    )
+    .expect("copy oembed");
+    fs::write(root.join("oembed.status"), "200").expect("oembed status");
+    fs::write(root.join("oembed.type"), "application/json")
+        .expect("oembed type");
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F'];
+    jpeg.extend_from_slice(&[0; 24]);
+    fs::write(root.join("cover.body"), jpeg).expect("cover body");
+    fs::write(root.join("cover.status"), "200").expect("cover status");
+    fs::write(root.join("cover.type"), "image/jpeg").expect("cover type");
+    let path = dir.join("fake-spotify-curl.sh");
+    write_executable(
+        &path,
+        r#"#!/bin/sh
+ROOT="$FAKE_CURL_ROOT"
+dest=""
+url=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then dest="$arg"; fi
+  prev="$arg"
+  url="$arg"
+done
+printf '%s\n' "$url" >> "$ROOT/requests.log"
+case "$url" in
+  *"/oembed?"*) surface=oembed ;;
+  *"/embed/episode/"*) surface=embed ;;
+  *"open.spotify.com/episode/"*) surface=page ;;
+  *) surface=cover ;;
+esac
+status=404
+type="text/html"
+if [ -f "$ROOT/$surface.status" ]; then status="$(cat "$ROOT/$surface.status")"; fi
+if [ -f "$ROOT/$surface.type" ]; then type="$(cat "$ROOT/$surface.type")"; fi
+if [ -f "$ROOT/$surface.body" ]; then cp "$ROOT/$surface.body" "$dest"; else : > "$dest"; fi
+printf '%s\n%s\n\n' "$status" "$type"
+"#,
+    );
+    (path, root)
+}
+
 /// Fake `BOB_WEB_CLIP_ADAPTER`: answers ping, copies the fixture PDF
 /// to `out_pdf`, then prints the canned capture `response`.
 fn write_clip_adapter(dir: &Path, response: &str) -> (PathBuf, PathBuf) {
@@ -1238,6 +1304,13 @@ fn write_clip_adapter(dir: &Path, response: &str) -> (PathBuf, PathBuf) {
              case \"$request\" in\n\
              *'\"op\":\"ping\"'*)\n\
              printf '%s' '{{\"protocol\":1,\"ok\":true,\"op\":\"ping\",\"python\":\"3.12.3\"}}'\n\
+             ;;\n\
+             *'\"op\":\"render\"'*)\n\
+             out_pdf=$(printf '%s' \"$request\" | sed -n 's/.*\"out_pdf\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+             if [ -n \"$out_pdf\" ] && [ -f \"$ROOT/fixture.pdf\" ]; then mkdir -p \"$(dirname \"$out_pdf\")\"; cp \"$ROOT/fixture.pdf\" \"$out_pdf\"; fi\n\
+             article_json=$(printf '%s' \"$request\" | sed -n 's/.*\"article_json\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+             if [ -n \"$article_json\" ] && [ -f \"$article_json\" ]; then cp \"$article_json\" \"$ROOT/render-article.json\"; fi\n\
+             if [ -f \"$ROOT/render.json\" ]; then cat \"$ROOT/render.json\"; else printf '%s' '{{\"protocol\":1,\"ok\":true,\"op\":\"render\",\"pdf_bytes\":2400,\"images\":{{\"total\":1,\"kept\":1,\"skipped_small\":0,\"failed\":0}},\"warnings\":[]}}'; fi\n\
              ;;\n\
              *)\n\
              out_pdf=$(printf '%s' \"$request\" | sed -n 's/.*\"out_pdf\":\"\\([^\"]*\\)\".*/\\1/p')\n\
@@ -1570,6 +1643,94 @@ fn article_pull_saves_the_source_store_with_unchanged_json() {
         serde_json::from_str(&stdout(&links)).expect("links JSON");
     assert_eq!(value["status"], "available", "{value}");
     assert_eq!(value["links"][0]["url"], "https://example.com/docs");
+}
+
+#[test]
+fn url_only_spotify_share_note_files_a_podcasts_reference() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-spotify");
+    env.init_synced_origin();
+    let (curl, root) = write_spotify_curl(state.path());
+    let (clip, clip_root) = write_clip_adapter(
+        state.path(),
+        r#"{"protocol":1,"ok":true,"op":"capture"}"#,
+    );
+    let render = state.path().join("render");
+    fs::create_dir_all(&render).expect("render dir");
+    let source = render.join("source.html");
+    fs::write(
+        &source,
+        format!(
+            "<!DOCTYPE html><html><body><article><h1>{SPOTIFY_TITLE}</h1>\
+             <p>The Pragmatic Engineer</p></article></body></html>"
+        ),
+    )
+    .expect("write source view");
+    let response = serde_json::json!({
+        "protocol": 1,
+        "ok": true,
+        "op": "render",
+        "pdf_bytes": 2400,
+        "source_html": source.to_string_lossy(),
+        "images": {"total": 1, "kept": 1, "skipped_small": 0, "failed": 0},
+        "warnings": [],
+    });
+    fs::write(
+        clip_root.join("render.json"),
+        serde_json::to_string(&response).expect("render JSON"),
+    )
+    .expect("write render response");
+    let share = format!("{SPOTIFY_CANONICAL}?si=x&t=1235 %l");
+    let n1 = note("").id("note-1").text(&share).build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let extra = vec![
+        ("BOB_HIGHLIGHTS_CURL", curl.to_str().expect("curl path")),
+        ("FAKE_CURL_ROOT", root.to_str().expect("curl root")),
+        ("BOB_WEB_CLIP_ADAPTER", clip.to_str().expect("clip path")),
+    ];
+    let out = run_pull(&env, &fake, &state, &["-f", "json"], &extra);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let body = stdout(&out);
+    let doc: serde_json::Value =
+        serde_json::from_str(&body).expect("stdout is exactly one JSON doc");
+    let clip_json = &doc["notes"][0]["clip"];
+    let hint = format!(
+        "Spotify episodes are already audio · %l ignored · to bind your own audio run: bob ref create {SPOTIFY_CANONICAL} --audio FILE"
+    );
+    assert_eq!(clip_json["outcome"], "created", "{doc}");
+    assert_eq!(clip_json["intake"], "ingested", "{doc}");
+    assert_eq!(clip_json["route"], "podcast", "{doc}");
+    assert_eq!(
+        clip_json["note"],
+        format!("ref/podcasts/{SPOTIFY_STEM}.md"),
+        "{doc}"
+    );
+    assert_eq!(clip_json["listen"], true, "{doc}");
+    assert_eq!(clip_json["listen_hint"], hint, "{doc}");
+    assert_eq!(clip_json["url"], SPOTIFY_CANONICAL, "{doc}");
+    assert_eq!(
+        clip_json["display"],
+        format!("open.spotify.com/episode/{SPOTIFY_ID}"),
+        "{doc}"
+    );
+
+    let note_text = fs::read_to_string(
+        env.vault().join(format!("ref/podcasts/{SPOTIFY_STEM}.md")),
+    )
+    .expect("read filed podcast note");
+    assert!(
+        note_text.contains(&format!("source_url: \"{SPOTIFY_CANONICAL}\""))
+            && note_text.contains(&format!("id: {SPOTIFY_STEM}")),
+        "{note_text}"
+    );
+    let payload: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(clip_root.join("render-article.json"))
+            .expect("read rendered article.json"),
+    )
+    .expect("parse article.json");
+    assert_eq!(payload["kind"], "podcast_episode", "{payload}");
+    assert_eq!(payload["source_url"], SPOTIFY_CANONICAL, "{payload}");
+    assert_eq!(payload["episode"]["shared_at_secs"], 1235, "{payload}");
 }
 
 #[test]

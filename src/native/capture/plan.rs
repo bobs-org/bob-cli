@@ -1821,6 +1821,11 @@ fn plan_ref_item(
         task_line: fallback_task_line.clone(),
     });
     let listen = intent.listen;
+    let podcast =
+        intent.route_hint == crate::native::url_routing::RouteHint::Podcast;
+    // Spotify episodes are already audio: the job is planned without
+    // listen so a queued `%l` still files, and `listen_hint` names the
+    // bind-your-own-audio command.
     let staged = queued.then(|| ref_jobs::NewJob {
         source: "capture".to_string(),
         bob_dir: request.bob_dir.clone(),
@@ -1829,7 +1834,7 @@ fn plan_ref_item(
         dedupe_key: intent.dedupe_key.clone(),
         display: intent.display.clone(),
         route_hint: intent.route_hint.as_str().to_string(),
-        listen,
+        listen: listen && !podcast,
         parent: Some(parent_route.clone()),
         fallback: ref_jobs::JobFallback {
             relative_target: fallback_target,
@@ -1838,9 +1843,16 @@ fn plan_ref_item(
     });
     // Unlike an explicit `ref create -L`, the shorthand never adds audio
     // to existing captures: a marked but unchanged item queues nothing
-    // and carries the explicit retry command instead.
-    let listen_hint = (!queued && listen)
-        .then(|| listen_hint_for_unchanged(&intent.cleaned, &parent_route));
+    // and carries the explicit retry command instead. `%l` on a Spotify
+    // episode is ignored on both queued and unchanged items.
+    let listen_hint = if listen && podcast {
+        Some(crate::native::highlights_ref::spotify::SpotifyEpisode::listen_ignored_hint(
+            &intent.cleaned,
+        ))
+    } else {
+        (!queued && listen)
+            .then(|| listen_hint_for_unchanged(&intent.cleaned, &parent_route))
+    };
     let planned = PlannedCaptureItem {
         result: CaptureItemResult {
             note_pull: None,

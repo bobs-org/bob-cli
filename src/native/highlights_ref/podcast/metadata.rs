@@ -236,8 +236,6 @@ impl EpisodeError {
     }
 
     /// Whether retrying later can help: 429, 5xx, and transport failures.
-    // URL ingest classifies its typed job errors with this.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn retryable(&self) -> bool {
         match self {
             Self::HttpStatus { status, .. } => is_transient_status(*status),
@@ -247,7 +245,6 @@ impl EpisodeError {
     }
 
     /// The HTTP status behind the failure, when there is one.
-    // URL ingest classifies its typed job errors with this.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn status(&self) -> Option<u16> {
         match self {

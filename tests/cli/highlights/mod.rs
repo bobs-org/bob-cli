@@ -26,6 +26,7 @@ mod scan_intake;
 mod scan_integration;
 mod scan_interleave;
 mod spotify;
+pub(crate) mod spotify_fake;
 mod stale_save;
 mod store_gaps;
 mod sync;

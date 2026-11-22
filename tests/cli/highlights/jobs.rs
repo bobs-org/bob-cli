@@ -6,6 +6,7 @@
 //! call. The kick stays off except in the kick's own unit tests.
 
 use super::fake_clip::*;
+use super::spotify_fake::{FakeSpotify, CANONICAL, ID, STEM, TITLE};
 use crate::support::*;
 use std::fs;
 
@@ -100,6 +101,69 @@ fn seed_pending_with_parent(
     fs::write(&path, serde_json::to_vec_pretty(&job).expect("encode job"))
         .expect("seed pending job");
     path
+}
+
+/// Seed a Spotify episode job whose original URL still carries `?t=`.
+fn seed_pending_spotify(
+    temp: &TempDir,
+    vault: &std::path::Path,
+    id: &str,
+    original: &str,
+) -> std::path::PathBuf {
+    let pending = state_dir(temp).join("bob-cli/ref/jobs/pending");
+    fs::create_dir_all(&pending).expect("create pending dir");
+    let path = pending.join(format!("{id}.json"));
+    let job = serde_json::json!({
+        "schema_version": 1,
+        "id": id,
+        "created_at": FIXED_CREATED_AT,
+        "source": "capture",
+        "bob_dir": vault,
+        "url": original,
+        "cleaned_url": CANONICAL,
+        "dedupe_key": CANONICAL,
+        "display": format!("open.spotify.com/episode/{ID}"),
+        "route_hint": "podcast",
+        "listen": true,
+        "parent": "mac_inbox",
+        "attempts": 0,
+        "fallback": {
+            "relative_target": "mac_inbox.md",
+            "task_line": format!(
+                "- [ ] #task {original} [created::2026-10-07]"
+            ),
+        },
+    });
+    fs::write(&path, serde_json::to_vec_pretty(&job).expect("encode job"))
+        .expect("seed pending Spotify job");
+    path
+}
+
+fn stage_episode_source_view(temp: &TempDir, adapter: &FakeClip) {
+    let render = temp.path().join("render");
+    fs::create_dir_all(&render).expect("create render dir");
+    let source = render.join("source.html");
+    fs::write(
+        &source,
+        format!(
+            "<!DOCTYPE html><html><body><article><h1>{TITLE}</h1>\
+             <p>The Pragmatic Engineer</p><h2>Show notes</h2>\
+             <p>Read the <a href=\"https://newsletter.pragmaticengineer.com/\">deepdives</a>.</p>\
+             <ul><li>3:17 How Harjot shipped</li></ul>\
+             <h2>Sponsors</h2><p>turbopuffer</p></article></body></html>"
+        ),
+    )
+    .expect("write source view");
+    let response = serde_json::json!({
+        "protocol": 1,
+        "ok": true,
+        "op": "render",
+        "pdf_bytes": 2400,
+        "source_html": source.to_string_lossy(),
+        "images": {"total": 1, "kept": 1, "skipped_small": 0, "failed": 0},
+        "warnings": [],
+    });
+    adapter.respond_render(&serde_json::to_string(&response).expect("JSON"));
 }
 
 fn seed_running(
@@ -1073,6 +1137,82 @@ fn ref_jobs_run_saves_the_source_store_for_a_filed_article() {
         serde_json::from_str(&stdout(&links)).expect("links JSON");
     assert_eq!(value["status"], "available", "{value}");
     assert_eq!(value["links"][0]["url"], LINK_URI, "{value}");
+}
+
+#[test]
+fn ref_jobs_run_files_a_spotify_episode_through_the_dossier() {
+    let temp = TempDir::new("bob-cli-ref-jobs-spotify");
+    let vault = seed_jobs_git_vault(&temp);
+    let spotify = FakeSpotify::new(&temp);
+    let adapter = FakeClip::new(&temp, "fake");
+    stage_episode_source_view(&temp, &adapter);
+    let original = format!("{CANONICAL}?t=1235");
+    seed_pending_spotify(&temp, &vault, "20261007T143012-ep0001", &original);
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &adapter.path)
+        .env("BOB_HIGHLIGHTS_CURL", &spotify.curl)
+        .env("FAKE_CURL_ROOT", &spotify.root)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "1")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .output()
+        .expect("run bob ref jobs run for a Spotify episode");
+    assert_success(&output);
+    let report = stdout(&output);
+    let display = format!("open.spotify.com/episode/{ID}");
+    assert!(
+        report.contains(&format!("✓ filed {display} → ref/podcasts/{STEM}.md"))
+            && report.contains("ok 1 filed"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("companion audio") && !report.contains("listen"),
+        "ingest ignores %l on a Spotify episode:\n{report}"
+    );
+
+    let note =
+        fs::read_to_string(vault.join(format!("ref/podcasts/{STEM}.md")))
+            .expect("read filed podcast note");
+    assert!(
+        note.contains(&format!("source_url: \"{CANONICAL}\""))
+            && note.contains(&format!("id: {STEM}")),
+        "{note}"
+    );
+    assert!(
+        vault.join(format!("lib/podcasts/{STEM}.pdf")).is_file(),
+        "the dossier PDF lands in the library"
+    );
+    if std::process::Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        assert!(
+            note.lines().any(|line| line
+                .starts_with("source_markdown: .bob/ref-sources/podcasts/")),
+            "the source store pointer rides intake:\n{note}"
+        );
+    }
+
+    let payload = adapter.rendered_article();
+    assert_eq!(payload["kind"], "podcast_episode", "{payload}");
+    assert_eq!(payload["source_url"], CANONICAL, "{payload}");
+    assert_eq!(payload["episode"]["shared_at_secs"], 1235, "{payload}");
+    assert_eq!(payload["episode"]["listen_url"], CANONICAL, "{payload}");
+
+    let done = done_contents(&temp);
+    assert!(
+        done.contains("\"intake\":\"ingested\"")
+            && done.contains(&format!("ref/podcasts/{STEM}.md")),
+        "{done}"
+    );
 }
 
 #[test]

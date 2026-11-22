@@ -4060,12 +4060,10 @@ pub(super) fn print_human_ref_item_success(
             }
         }
     };
-    if reference.listen {
-        if queued {
-            detail.push_str(" · companion audio requested");
-        } else if let Some(hint) = reference.listen_hint.as_deref() {
-            detail.push_str(&format!(" · {hint}"));
-        }
+    if let Some(hint) = reference.listen_hint.as_deref() {
+        detail.push_str(&format!(" · {hint}"));
+    } else if reference.listen && queued {
+        detail.push_str(" · companion audio requested");
     }
     println!("  {}", styler.dim(&detail));
 }

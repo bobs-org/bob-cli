@@ -3,16 +3,17 @@
 //! The background paths that clip a link — the capture worker and
 //! `bob gkeep pull` — call [`ingest_url`]. It composes the same building
 //! blocks as create (`resolve_url_syntactic`, `fetch_and_route`, `sources`
-//! dedupe, `pdf_target` planning/stamp/install, `ClipAdapterClient`) with
-//! create's fixed reading-queue defaults (blogs/papers, status ready,
-//! no force; companion audio only when `%l` asks) plus the caller's
+//! dedupe, `pdf_target` planning/stamp/install, `ClipAdapterClient`, the
+//! podcast dossier builder) with create's fixed reading-queue defaults
+//! (blogs/papers/podcasts, status ready, no force; companion audio only
+//! when `%l` asks, and never for Spotify episodes) plus the caller's
 //! resolved parent route, holds the machine-wide ingest lock serializing
 //! the capture worker and Keep pull, and installs with fsync. Web articles
-//! also save create's write-once source store and hand its pointer to
-//! intake. `bob ref create` keeps its own printing routes and never calls
-//! [`ingest_url`]. Ingest writes nothing to stdout and prints nothing to
-//! stderr itself; short status lines and warnings go through
-//! [`IngestRequest::progress`] only.
+//! and Spotify episodes also save create's write-once source store and
+//! hand its pointer to intake. `bob ref create` keeps its own printing
+//! routes and never calls [`ingest_url`]. Ingest writes nothing to stdout
+//! and prints nothing to stderr itself; short status lines and warnings
+//! go through [`IngestRequest::progress`] only.
 
 use std::{
     fs,
@@ -38,13 +39,18 @@ use super::stamp::{
 const INGEST_STATUS: &str = "ready";
 const INGEST_ARTICLE_REF_TYPE: &str = "blogs";
 const INGEST_PDF_REF_TYPE: &str = "papers";
+const INGEST_PODCAST_REF_TYPE: &str = "podcasts";
 
 /// One URL ingest request.
 pub(crate) struct IngestRequest<'a> {
     /// Effective vault root; never from Clap.
     pub(crate) bob_dir: &'a Path,
-    /// [`WebUrl::cleaned`] for the link.
+    /// [`WebUrl::cleaned`] for the link (identity and fetch).
     pub(crate) url: &'a str,
+    /// The URL as captured: the job's `url`, or Keep's `intent.original`.
+    /// A Spotify episode's `?t=` becomes the dossier's Shared-at pill;
+    /// identity still uses the canonical cleaned URL.
+    pub(crate) original: &'a str,
     /// Resolved parent route stamped into the marker (e.g. `mac_inbox`).
     pub(crate) parent: &'a str,
     /// Whether `%l` requested companion audio.
@@ -61,6 +67,19 @@ pub(crate) enum IngestRoute {
     Article,
     Pdf,
     Arxiv,
+    Podcast,
+}
+
+impl IngestRoute {
+    /// The JSON spelling: `article`, `pdf`, `arxiv`, or `podcast`.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Article => "article",
+            Self::Pdf => "pdf",
+            Self::Arxiv => "arxiv",
+            Self::Podcast => "podcast",
+        }
+    }
 }
 
 /// Intake result attached to a newly clipped PDF.
@@ -612,7 +631,8 @@ fn lock_ingest_at(
 /// parent route. When `request.listen` is true, companion audio is
 /// narrated with the configured listen command using the same cleaned
 /// URL, resolved title, unstamped PDF, and scratch audio placeholder
-/// meanings as CLI create.
+/// meanings as CLI create. Spotify episodes ignore `listen` so a job
+/// queued with `%l` before this route still files.
 pub(crate) fn ingest_url(
     request: &IngestRequest,
 ) -> Result<IngestOutcome, IngestError> {
@@ -627,9 +647,11 @@ pub(crate) fn ingest_url(
         spotify_url.as_deref().unwrap_or(request.url),
     )
     .map_err(command_error)?;
-    let dedupe_key = match &arxiv {
-        Some(paper) => paper.dedupe_key(),
-        None => url.dedupe_key.clone(),
+    let episode = spotify_episode_for_ingest(request, spotify_url.as_deref());
+    let dedupe_key = match (&episode, &arxiv) {
+        (Some(episode), _) => episode.dedupe_key(),
+        (None, Some(paper)) => paper.dedupe_key(),
+        (None, None) => url.dedupe_key.clone(),
     };
     // Pre-lock dedupe so already-known links never take the lock.
     // Existing references stay fast unchanged outcomes even when marked:
@@ -662,16 +684,27 @@ pub(crate) fn ingest_url(
     }
     // For a new marked import, resolve/validate the listen command
     // before fetch/render, while retaining the ingest lock and its
-    // under-lock dedupe recheck.
-    let listen_command = if request.listen {
+    // under-lock dedupe recheck. Spotify episodes skip this: `%l` is a
+    // hint, not narration.
+    let listen_command = if request.listen && episode.is_none() {
         Some(require_listen_command()?)
     } else {
         None
     };
 
-    // Only the web-article route saves a source store; its verified
-    // pointer rides intake the way create's does.
-    let (outcome, source_pointer) = if let Some(paper) = arxiv {
+    // Web articles and Spotify episodes save a source store; its
+    // verified pointer rides intake the way create's does.
+    let (outcome, source_pointer) = if let Some(episode) = episode {
+        ingest_podcast_route(
+            &config,
+            episode,
+            &url,
+            &recorded,
+            superseded_legacy,
+            request.parent,
+            request.progress,
+        )?
+    } else if let Some(paper) = arxiv {
         let outcome = ingest_arxiv_route(
             &config,
             &paper,
@@ -778,6 +811,209 @@ fn spotify_ingest_url(
             error.hint().map(str::to_string),
         )),
     }
+}
+
+/// The episode this ingest names, if it names one. `?t=` is taken from
+/// the original URL first (the job's `url` / Keep's `intent.original`),
+/// then from a resolved short link, then from the cleaned URL.
+fn spotify_episode_for_ingest(
+    request: &IngestRequest,
+    resolved: Option<&str>,
+) -> Option<super::spotify::SpotifyEpisode> {
+    use super::spotify::SpotifyLink;
+    let from =
+        |raw: &str| SpotifyLink::parse(raw).and_then(|link| link.episode());
+    from(request.original)
+        .or_else(|| resolved.and_then(from))
+        .or_else(|| from(request.url))
+}
+
+/// Map a dossier failure to a typed ingest error without going through
+/// the substring classifier: HTTP statuses, transport, missing title,
+/// and adapter render/browser failures keep the kinds the plan names.
+fn dossier_ingest_error(
+    error: super::podcast::dossier::DossierError,
+) -> IngestError {
+    use super::podcast::dossier::DossierError;
+    use super::podcast::metadata::EpisodeError;
+    match error {
+        DossierError::Episode(error) => match error {
+            EpisodeError::NotFound { .. } => IngestError {
+                kind: IngestErrorKind::HttpStatus,
+                message: error.message(),
+                hint: error.hint(),
+                retryable_override: Some(false),
+            },
+            EpisodeError::HttpStatus { .. } => IngestError {
+                kind: IngestErrorKind::HttpStatus,
+                message: error.message(),
+                hint: error.hint(),
+                retryable_override: Some(error.retryable()),
+            },
+            EpisodeError::Fetch {
+                error: ref fetch, ..
+            } => {
+                let kind = if fetch.message().starts_with("timed out") {
+                    IngestErrorKind::Timeout
+                } else {
+                    IngestErrorKind::Network
+                };
+                IngestError {
+                    kind,
+                    message: error.message(),
+                    hint: error.hint(),
+                    retryable_override: None,
+                }
+            }
+            EpisodeError::NoMetadata { .. } => IngestError {
+                kind: IngestErrorKind::Thin,
+                message: error.message(),
+                hint: error.hint(),
+                retryable_override: Some(false),
+            },
+        },
+        DossierError::Render { message, hint } => {
+            let kind = if message.starts_with("browser:") {
+                IngestErrorKind::Browser
+            } else {
+                IngestErrorKind::Render
+            };
+            IngestError {
+                kind,
+                message,
+                hint,
+                retryable_override: None,
+            }
+        }
+        DossierError::Io { message } => IngestError {
+            kind: IngestErrorKind::Internal,
+            message,
+            hint: None,
+            retryable_override: None,
+        },
+    }
+}
+
+/// File a Spotify episode through the shared dossier builder.
+#[allow(clippy::too_many_arguments)]
+fn ingest_podcast_route(
+    config: &Config,
+    episode: super::spotify::SpotifyEpisode,
+    url: &WebUrl,
+    recorded: &[super::sources::RecordedSource],
+    superseded_legacy: Option<String>,
+    parent: &str,
+    progress: Option<&dyn Fn(&str)>,
+) -> Result<(IngestOutcome, Option<String>), IngestError> {
+    use super::podcast::dossier::{self, EpisodeOverrides};
+    let (table_layout, table_prose_words) =
+        super::create::table_layout_settings().map_err(command_error)?;
+    let tables = super::clip_adapter::TablesSettings {
+        layout: table_layout,
+        prose_words: table_prose_words,
+    };
+    let clock = capture_clock();
+    let scratch =
+        super::workdir::ScratchDir::create("ingest").map_err(command_error)?;
+    if let Some(report) = progress {
+        report("capturing episode…");
+    }
+    let dossier = dossier::prepare(
+        &episode,
+        &EpisodeOverrides::default(),
+        &clock.date,
+        scratch.path(),
+        progress,
+        None,
+    )
+    .map_err(dossier_ingest_error)?;
+    for warning in &dossier.warnings {
+        if let Some(report) = progress {
+            report(&format!("warning: {warning}"));
+        }
+    }
+    let key = episode.dedupe_key();
+    let mut keys = vec![key.clone()];
+    if url.dedupe_key != key {
+        keys.push(url.dedupe_key.clone());
+    }
+    let identity = DefaultTargetIdentity::Url { keys, recorded };
+    let stem = dossier.stem();
+    let plan = plan_default_target(
+        config,
+        std::ffi::OsStr::new(&stem),
+        INGEST_PODCAST_REF_TYPE,
+        false,
+        &identity,
+    )
+    .map_err(command_error)?;
+    let final_stem = plan.stem.clone();
+    if let Some(outcome) =
+        outcome_for_refusing_hit(config, recorded, &key, Some(&plan.target))
+            .or_else(|| {
+                outcome_for_refusing_hit(
+                    config,
+                    recorded,
+                    &url.dedupe_key,
+                    Some(&plan.target),
+                )
+            })
+    {
+        return Ok((outcome, None));
+    }
+    let mut fields =
+        vec![("source_url", MarkerValue::String(dossier.canonical_url()))];
+    if let Some(author) = &dossier.author {
+        fields.push(("author", MarkerValue::String(author.clone())));
+    }
+    if let Some(published) = &dossier.published {
+        fields.push(("published", MarkerValue::String(published.clone())));
+    }
+    fields.push((
+        super::FIELD_CAPTURED,
+        MarkerValue::String(clock.stamp.clone()),
+    ));
+    let marker = compose_marker(
+        INGEST_STATUS,
+        parent,
+        &dossier.title,
+        Some(&final_stem),
+        &fields,
+    )
+    .map_err(command_error)?;
+    let rendered = dossier.render(tables).map_err(dossier_ingest_error)?;
+    for warning in &rendered.warnings {
+        if let Some(report) = progress {
+            report(&format!("warning: {warning}"));
+        }
+    }
+    let info = PdfInfo {
+        title: Some(dossier.title.clone()),
+        author: dossier.pdf_author(),
+    };
+    stamp_and_install(&rendered.pdf, &plan.target, &marker, &info)
+        .map_err(command_error)?;
+    let source_pointer = super::web_source::persist_article_store_quiet(
+        config,
+        &plan,
+        &rendered.pdf,
+        &plan.target,
+        rendered.source_html.as_deref(),
+        rendered.code_anchors.as_deref(),
+        dossier.canonical_url(),
+        progress,
+    );
+    let _ = scratch.path();
+    Ok((
+        clipped_created(
+            vault_relative_path_value(config, &plan.target),
+            INGEST_PODCAST_REF_TYPE.to_string(),
+            Some(dossier.title),
+            IngestRoute::Podcast,
+            superseded_legacy,
+        ),
+        source_pointer,
+    ))
 }
 
 /// Map a refusing dedupe hit to its typed outcome.
@@ -1700,6 +1936,7 @@ mod tests {
         let request = IngestRequest {
             bob_dir: &vault,
             url: "https://example.com/post",
+            original: "https://example.com/post",
             parent: "mac_inbox",
             listen: false,
             producer: "bob ref jobs run",
@@ -1715,6 +1952,7 @@ mod tests {
         let bad = IngestRequest {
             bob_dir: &vault,
             url: "not a url",
+            original: "not a url",
             parent: "mac_inbox",
             listen: false,
             producer: "bob ref jobs run",
@@ -1755,6 +1993,7 @@ mod tests {
         let request = |url: &'static str| IngestRequest {
             bob_dir: &vault,
             url,
+            original: url,
             parent: "mac_inbox",
             listen: false,
             producer: "bob ref jobs run",
@@ -1801,5 +2040,97 @@ mod tests {
             assert_eq!(error.hint.as_deref(), Some(hint), "{url}");
         }
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn dossier_failures_keep_typed_kinds() {
+        use super::super::fetch::FetchError;
+        use super::super::podcast::dossier::DossierError;
+        use super::super::podcast::metadata::EpisodeError;
+        let id = "abc".to_string();
+        let cases = [
+            (
+                DossierError::Episode(EpisodeError::NotFound { id: id.clone() }),
+                IngestErrorKind::HttpStatus,
+                false,
+            ),
+            (
+                DossierError::Episode(EpisodeError::HttpStatus {
+                    id: id.clone(),
+                    status: 429,
+                }),
+                IngestErrorKind::HttpStatus,
+                true,
+            ),
+            (
+                DossierError::Episode(EpisodeError::HttpStatus {
+                    id: id.clone(),
+                    status: 503,
+                }),
+                IngestErrorKind::HttpStatus,
+                true,
+            ),
+            (
+                DossierError::Episode(EpisodeError::HttpStatus {
+                    id: id.clone(),
+                    status: 400,
+                }),
+                IngestErrorKind::HttpStatus,
+                false,
+            ),
+            (
+                DossierError::Episode(EpisodeError::Fetch {
+                    id: id.clone(),
+                    error: FetchError::new(
+                        "timed out fetching https://open.spotify.com/episode/abc",
+                    ),
+                }),
+                IngestErrorKind::Timeout,
+                true,
+            ),
+            (
+                DossierError::Episode(EpisodeError::Fetch {
+                    id: id.clone(),
+                    error: FetchError::new("could not connect"),
+                }),
+                IngestErrorKind::Network,
+                true,
+            ),
+            (
+                DossierError::Episode(EpisodeError::NoMetadata {
+                    id: id.clone(),
+                }),
+                IngestErrorKind::Thin,
+                false,
+            ),
+            (
+                DossierError::Render {
+                    message: "browser: chrome crashed".into(),
+                    hint: None,
+                },
+                IngestErrorKind::Browser,
+                true,
+            ),
+            (
+                DossierError::Render {
+                    message: "render: empty PDF".into(),
+                    hint: None,
+                },
+                IngestErrorKind::Render,
+                false,
+            ),
+            (
+                DossierError::Io {
+                    message: "disk full".into(),
+                },
+                IngestErrorKind::Internal,
+                false,
+            ),
+        ];
+        for (error, kind, retryable) in cases {
+            let mapped = dossier_ingest_error(error.clone());
+            assert_eq!(mapped.kind, kind, "{error:?}");
+            assert_eq!(mapped.retryable(), retryable, "{error:?}");
+        }
     }
 }

@@ -239,6 +239,8 @@ that means the link was accepted for import. A marked clip shows `· Listen`
 with `· companion audio requested`,
 and an already-known marked link shows
 `no new listen job was queued · to attach audio run: bob ref create <URL> -P <parent> -L`.
+`%l` on a Spotify episode files the dossier without narration and reports
+`Spotify episodes are already audio · %l ignored · to bind your own audio run: bob ref create <url> --audio FILE`.
 A filed clip already has a ref note; a queued clip joins `bob ref list`
 after `bob ref scan`. Lists, notes
 with attachments, shared notes (even with `-S`), multi-link (beyond one
@@ -290,7 +292,9 @@ excludes URL-only notes. `list` marks notes a pull would clip with
 interactive pull will choose) plus `🎧 listen` when audio was requested;
 JSON `clip` carries the planned `parent` and `"listen": true` when marked.
 Pull JSON `clip` also carries the selected `parent`, `"listen": true`, and
-`"listen_hint"` for already-known marked links.
+`"listen_hint"` for already-known marked links (or the Spotify `%l`-ignored
+line for an episode). A created clip adds `"route"` (`article`, `pdf`,
+`arxiv`, or `podcast`).
 
 The Archive column assumes archiving is enabled; `-n, --no-archive` keeps
 every note in Keep, including successful reference imports. Successful

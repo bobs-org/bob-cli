@@ -1580,7 +1580,9 @@ bare `@` and prefixes such as `@sa` remain route completion, and completing a
 claimed `%l` never replaces it (a separate ` @sa` after `URL %l`
 still completes the parent). A marked item
 prints `queued … · Listen` with `· companion audio requested`; it needs a
-configured `highlights.listen_command`. Inline intake files the PDF and MP3
+configured `highlights.listen_command`. `%l` on a Spotify episode still
+prints `· Listen` and sets `listen_hint` to the already-audio line, and
+the job is planned without listen. Inline intake files the PDF and MP3
 together, and a queued capture is paired by `bob ref scan -i` or the local
 timer. Unlike an explicit `ref create -L`, the shorthand never
 adds audio to existing captures: a marked duplicate, pending job, or
@@ -1640,7 +1642,9 @@ label, kind, source, alias}` (including already-known URLs), the staged
 until the commit, so every dry run has `job: null`. Marked references add
 `ref.listen: true`; when the URL is already known, `ref.listen_hint` gives
 the explicit `bob ref create ... -P ... -L` command because this shorthand
-never attaches audio or upgrades an existing job.
+never attaches audio or upgrades an existing job. `%l` on a Spotify episode
+plans the job without listen and sets `ref.listen_hint` to
+`Spotify episodes are already audio · %l ignored · to bind your own audio run: bob ref create <url> --audio FILE`.
 `bob capture-parse` reports `ref_parent: {token, source}` on `ref` items
 outside `needs` (explicit token, inherited global route, or `mac_inbox`;
 source `explicit|global|default`), and a local route token keeps its ordinary

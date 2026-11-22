@@ -498,6 +498,54 @@ fn capture_spotify_episode_queues_a_podcast_ref_and_shows_stay_tasks() {
 }
 
 #[test]
+fn capture_spotify_percent_listen_is_a_hint_and_plans_without_listen() {
+    let temp = TempDir::new("bob-cli-capture-ref-spotify-listen");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let canonical = "https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC";
+    let hint = format!(
+        "Spotify episodes are already audio · %l ignored · to bind your own audio run: bob ref create {canonical} --audio FILE"
+    );
+    let draft = format!("{canonical} %l");
+
+    let output = capture(&temp, &vault, &["-d", "-f", "json", &draft])
+        .output()
+        .expect("dry-run episode percent-listen");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["kind"], "ref", "{json}");
+    assert_eq!(json["placement"], "queued", "{json}");
+    assert_eq!(json["ref"]["listen"], true, "{json}");
+    assert_eq!(json["ref"]["listen_hint"], hint, "{json}");
+    assert_eq!(json["ref"]["route_hint"], "podcast", "{json}");
+    assert!(json["ref"].get("job").is_none(), "{json}");
+    assert!(pending_files(&temp).is_empty(), "dry runs enqueue nothing");
+
+    let output = capture(&temp, &vault, &["-f", "json", &draft])
+        .env("BOB_REF_JOBS_KICK", "off")
+        .output()
+        .expect("submit episode percent-listen");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["kind"], "ref", "{json}");
+    assert_eq!(json["placement"], "queued", "{json}");
+    assert_eq!(json["ref"]["listen"], true, "{json}");
+    assert_eq!(json["ref"]["listen_hint"], hint, "{json}");
+    let jobs = pending_files(&temp);
+    assert_eq!(jobs.len(), 1, "{json}");
+    let job: serde_json::Value =
+        serde_json::from_slice(&fs::read(&jobs[0]).expect("read queued job"))
+            .expect("job JSON");
+    assert!(
+        job.get("listen").is_none() || job["listen"] == false,
+        "the job is planned without listen: {job}"
+    );
+    assert_eq!(job["url"], canonical, "{job}");
+    assert_eq!(job["cleaned_url"], canonical, "{job}");
+    assert_eq!(job["route_hint"], "podcast", "{job}");
+}
+
+#[test]
 fn capture_config_off_and_invalid_config_keep_tasks() {
     let temp = TempDir::new("bob-cli-capture-ref-config");
     let vault = temp.path().join("vault");

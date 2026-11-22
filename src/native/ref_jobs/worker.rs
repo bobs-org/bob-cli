@@ -286,6 +286,7 @@ impl<'a> WorkerPass<'a> {
         let request = IngestRequest {
             bob_dir: &job.bob_dir,
             url: &job.cleaned_url,
+            original: &job.url,
             parent: job.effective_parent(),
             listen: job.listen,
             producer: "bob ref jobs run",

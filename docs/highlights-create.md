@@ -940,13 +940,18 @@ fails with `no free default filename for <stem>; pass -N/--name or -o/--output`.
 non-printing URL ingest shared by the capture background worker and
 `bob gkeep pull`. It composes the same building blocks as create
 (`resolve_url_syntactic`, `fetch_and_route`, `sources` dedupe,
-`pdf_target` planning/stamp/install, `ClipAdapterClient`). It takes a
-vault root, a cleaned URL, and the resolved parent route, and returns
-`Created`, `AlreadyInLibrary`, or `AlreadyQueued`, or an `IngestError`
-with a snake-case `kind` and a `retryable()` flag. Fixed defaults:
-route-default ref type (`blogs` for articles, `papers` for PDFs and
-arXiv), status `ready`, no force, no title or name override. Companion
-audio is narrated only when the link carries `%l` (see Listen).
+`pdf_target` planning/stamp/install, `ClipAdapterClient`, the podcast
+dossier builder). It takes a vault root, a cleaned URL, the original
+captured URL (so a Spotify episode's `?t=` becomes the dossier's Shared-at
+pill), and the resolved parent route, and returns `Created`,
+`AlreadyInLibrary`, or `AlreadyQueued`, or an `IngestError` with a
+snake-case `kind` and a `retryable()` flag. Fixed defaults: route-default
+ref type (`blogs` for articles, `papers` for PDFs and arXiv, `podcasts`
+for Spotify episodes), status `ready`, no force, no title or name
+override. The created route is `article`, `pdf`, `arxiv`, or `podcast`.
+Companion audio is narrated only when the link carries `%l` (see Listen);
+Spotify episodes ignore `%l` so a job queued before this route still
+files.
 It holds
 the machine-wide
 `${XDG_STATE_HOME:-~/.local/state}/bob-cli/ref/ingest.lock` (fs2
@@ -955,10 +960,13 @@ capture worker and Keep pull — and reports
 `waiting for another clip…` once through its progress callback while it
 waits. `bob ref create` keeps its own printing routes and never calls
 `ingest_url`. Ingest uses the same default-target suffixing (`<stem>_2`,
-`<stem>_3`, …) with its URL identity and `force = false`. A web article
+`<stem>_3`, …) with its URL identity and `force = false`. A web article or Spotify episode
 saves the same write-once source store as create (see Saved Markdown) and
 carries its verified pointer through inline intake; a queued capture's note
-adopts the store by PDF digest at scan time. Ingest writes nothing to stdout
+adopts the store by PDF digest at scan time. Podcast ingest failures are
+typed directly: HTTP 404 is `http_status` and not retryable, 429 and 5xx
+are `http_status` and retryable, transport is `network` or `timeout`, a
+missing title is `thin`, and adapter failures are `render` or `browser`. Ingest writes nothing to stdout
 and prints nothing to stderr itself: it prints no `source_markdown:`,
 `code:`, or `links:` lines, and store warnings go through its progress
 callback.

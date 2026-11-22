@@ -31,7 +31,7 @@ use crate::native::highlights_ref::ingest::{
     ingest_url, CreatedIntake, IngestOutcome, IngestRequest,
 };
 use crate::native::url_routing::{
-    library_verdicts, LibraryVerdict, RefIntent, UrlRoutingPolicy,
+    library_verdicts, LibraryVerdict, RefIntent, RouteHint, UrlRoutingPolicy,
 };
 use crate::native::{
     capture, env as bob_env, note_tasks, ob,
@@ -55,6 +55,7 @@ enum ClipOutcome {
         pdf: String,
         note: Option<String>,
         intake: CreatedIntake,
+        route: String,
     },
     AlreadyInLibrary {
         note: String,
@@ -1448,8 +1449,9 @@ fn run_clip_pre_pass(
         let request = IngestRequest {
             bob_dir,
             url: &intent.cleaned,
+            original: &intent.original,
             parent: parent.as_str(),
-            listen: intent.listen,
+            listen: intent.listen && intent.route_hint != RouteHint::Podcast,
             producer: "bob gkeep pull",
             progress,
         };
@@ -1457,14 +1459,21 @@ fn run_clip_pre_pass(
         let parent_for_error = parent.clone();
         let outcome = match ingest_url(&request) {
             Ok(ingest) => match ingest {
-                IngestOutcome::Created { pdf, intake, .. } => {
+                IngestOutcome::Created {
+                    pdf, intake, route, ..
+                } => {
                     let note = match &intake {
                         CreatedIntake::Ingested { note, .. } => {
                             Some(note.clone())
                         }
                         CreatedIntake::Queued { .. } => None,
                     };
-                    ClipOutcome::Created { pdf, note, intake }
+                    ClipOutcome::Created {
+                        pdf,
+                        note,
+                        intake,
+                        route: route.as_str().to_string(),
+                    }
                 }
                 IngestOutcome::AlreadyInLibrary { note } => {
                     ClipOutcome::AlreadyInLibrary { note }
@@ -3076,7 +3085,16 @@ fn print_human_ref_row(
     } else {
         ""
     };
-    let no_listen_hint = if report.intent.listen {
+    let podcast_listen =
+        report.intent.listen && report.intent.route_hint == RouteHint::Podcast;
+    let no_listen_hint = if podcast_listen {
+        format!(
+            " · {}",
+            crate::native::highlights_ref::spotify::SpotifyEpisode::listen_ignored_hint(
+                &report.intent.cleaned,
+            )
+        )
+    } else if report.intent.listen {
         match &report.outcome {
             ClipOutcome::AlreadyInLibrary { .. }
             | ClipOutcome::AlreadyQueued { .. } => format!(
@@ -3089,9 +3107,13 @@ fn print_human_ref_row(
         String::new()
     };
     match &report.outcome {
-        ClipOutcome::Created { pdf, note, intake } => {
+        ClipOutcome::Created {
+            pdf, note, intake, ..
+        } => {
             let suffix = archive_suffix("archived");
-            let audio_suffix = if report.intent.listen {
+            let audio_suffix = if podcast_listen {
+                no_listen_hint.as_str()
+            } else if report.intent.listen {
                 " · companion audio requested"
             } else {
                 ""
@@ -3212,23 +3234,37 @@ fn clip_json(report: &ClipReport) -> serde_json::Value {
     });
     if report.intent.listen {
         value["listen"] = json!(true);
-        // Unchanged marked outcomes carry the explicit no-new-listen
-        // retry command, matching capture's `ref.listen_hint`.
-        match &report.outcome {
-            ClipOutcome::AlreadyInLibrary { .. }
-            | ClipOutcome::AlreadyQueued { .. } => {
-                value["listen_hint"] = json!(format!(
-                    "no new listen job was queued · to attach audio run: bob ref create {} -P {} -L",
-                    shell_quote_clip_url(&report.intent.cleaned),
-                    report.parent,
-                ));
+        if report.intent.route_hint == RouteHint::Podcast {
+            value["listen_hint"] = json!(
+                crate::native::highlights_ref::spotify::SpotifyEpisode::listen_ignored_hint(
+                    &report.intent.cleaned,
+                )
+            );
+        } else {
+            // Unchanged marked outcomes carry the explicit no-new-listen
+            // retry command, matching capture's `ref.listen_hint`.
+            match &report.outcome {
+                ClipOutcome::AlreadyInLibrary { .. }
+                | ClipOutcome::AlreadyQueued { .. } => {
+                    value["listen_hint"] = json!(format!(
+                        "no new listen job was queued · to attach audio run: bob ref create {} -P {} -L",
+                        shell_quote_clip_url(&report.intent.cleaned),
+                        report.parent,
+                    ));
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     match &report.outcome {
-        ClipOutcome::Created { pdf, note, intake } => {
+        ClipOutcome::Created {
+            pdf,
+            note,
+            intake,
+            route,
+        } => {
             value["pdf"] = json!(pdf);
+            value["route"] = json!(route);
             match intake {
                 CreatedIntake::Ingested { .. } => {
                     value["intake"] = json!("ingested");

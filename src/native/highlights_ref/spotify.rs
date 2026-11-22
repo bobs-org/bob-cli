@@ -214,6 +214,14 @@ impl SpotifyEpisode {
         self.canonical_url()
     }
 
+    /// Capture/Keep `%l` on an episode: the job is planned without
+    /// listen, and this line is the item's `listen_hint`.
+    pub(crate) fn listen_ignored_hint(url: &str) -> String {
+        format!(
+            "Spotify episodes are already audio · %l ignored · to bind your own audio run: bob ref create {url} --audio FILE"
+        )
+    }
+
     /// The canonical URL opened at `secs` seconds (`?t=<secs>`).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn at(&self, secs: u32) -> String {

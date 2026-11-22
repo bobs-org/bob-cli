@@ -9,7 +9,7 @@ pub(crate) mod policy;
 pub(crate) mod verdict;
 
 pub(crate) use intent::{
-    classify_token, is_url_list_line, RefIntent, UrlIntent,
+    classify_token, is_url_list_line, RefIntent, RouteHint, UrlIntent,
 };
 pub(crate) use policy::{
     normalize_exclude_host, RoutingEntry, UrlRoutingPolicy,
