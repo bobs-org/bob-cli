@@ -106,6 +106,9 @@ mod relations_mentions;
 mod relations_merge;
 mod relations_mirror;
 mod req_close;
+// Pull-in placement and requirement jumps; bob-cli-on.8.1.5 wires them.
+#[cfg_attr(not(test), allow(dead_code))]
+mod req_placement;
 pub(crate) mod sections;
 pub(crate) mod shell_guard;
 mod start_output;

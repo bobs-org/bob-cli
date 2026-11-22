@@ -18,6 +18,7 @@ mod relation_complete_vectors;
 mod relation_successor_tests;
 mod relation_successor_vectors;
 mod req_close_tests;
+mod req_placement_tests;
 mod req_verdict_tests;
 mod req_writes_tests;
 mod retirement_tests;

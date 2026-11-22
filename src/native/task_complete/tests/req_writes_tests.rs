@@ -77,7 +77,7 @@ fn resolve(
     resolve_verdicts(owners, &[], &requests, None).expect("verdicts resolve")
 }
 
-fn case<'a>(id: &str) -> serde_json::Value {
+fn case(id: &str) -> serde_json::Value {
     let all = vectors();
     all["cases"]
         .as_array()
@@ -753,4 +753,126 @@ fn writes_vectors_match_pinned_bytes() {
             );
         }
     }
+}
+
+#[test]
+fn writes_run_on_the_post_close_snapshot_under_a_done_owner() {
+    // The managed Done path stages the owner's close first; its open reqs
+    // then derive as Met, not Pending. The write pass must still carry and
+    // drop them, with bytes identical to the pre-close plan apart from the
+    // owner line itself.
+    let base = case("RV1");
+    let (owners, snapshot) = snapshot_for(&base);
+    let (_, groups) = collect_case(&base, &task_settings());
+    let selection = resolve(
+        &owners,
+        vec![
+            ReqVerdictRequest {
+                selector: row_key_for(&groups, "1.2"),
+                verdict: ReqVerdict::CarryPulled,
+                reason: None,
+            },
+            ReqVerdictRequest {
+                selector: row_key_for(&groups, "1.1.1"),
+                verdict: ReqVerdict::Drop,
+                reason: Some("covered".to_string()),
+            },
+        ],
+    );
+    let open_line = "- [ ] #task Ship the exporter ^export";
+    let done_line = "- [x] #task Ship the exporter ✅ 2026-11-22 ^export";
+    let mut closed = snapshot.clone();
+    let tasks = closed
+        .notes
+        .get_mut(&PathBuf::from("Tasks.md"))
+        .expect("Tasks.md");
+    *tasks = tasks.replace(open_line, done_line);
+    let pre = plan_req_writes(
+        &snapshot,
+        &owners,
+        &selection,
+        "2026-11-22",
+        date(),
+        &split_settings(),
+        &task_settings(),
+    )
+    .expect("pre-close plan");
+    let post = plan_req_writes(
+        &closed,
+        &owners,
+        &selection,
+        "2026-11-22",
+        date(),
+        &split_settings(),
+        &task_settings(),
+    )
+    .unwrap_or_else(|error| panic!("post-close plan: {error}"));
+    let path = PathBuf::from("Tasks.md");
+    assert_eq!(
+        post.postimages[&path],
+        pre.postimages[&path].replace(open_line, done_line)
+    );
+    assert_eq!(post.outcomes, pre.outcomes);
+    assert_eq!(post.met, pre.met);
+}
+
+#[test]
+fn writes_never_take_a_same_path_req_of_another_owner_in_the_note() {
+    // Two owners in one note share a req path and text. Each verdict must
+    // write under its own frozen owner.
+    let contents = concat!(
+        "- [ ] #task First owner ^first\n",
+        "\t- [ ] Same req\n",
+        "- [ ] #task Second owner ^second\n",
+        "\t- [ ] Same req\n",
+    );
+    let settings = task_settings();
+    let scan = note_tasks::scan(contents, &settings);
+    let owner = |id: &str| {
+        let note_tasks::BlockIdLookup::Found(task) = scan.by_block_id(id)
+        else {
+            panic!("missing {id}");
+        };
+        crate::native::task_complete::req_close::collect_owner(
+            contents,
+            Path::new("Tasks.md"),
+            task,
+            &settings,
+        )
+        .expect("owner")
+    };
+    let owners = vec![owner("first"), owner("second")];
+    let groups =
+        crate::native::task_complete::req_close::groups_from_owners(&owners);
+    let second_key = groups[1].rows[0].offer.key.clone();
+    let selection = resolve(
+        &owners,
+        vec![ReqVerdictRequest {
+            selector: second_key,
+            verdict: ReqVerdict::Drop,
+            reason: None,
+        }],
+    );
+    let plan = plan_req_writes(
+        &VaultSnapshot::from_notes([(
+            PathBuf::from("Tasks.md"),
+            contents.to_string(),
+        )]),
+        &owners,
+        &selection,
+        "2026-11-22",
+        date(),
+        &split_settings(),
+        &settings,
+    )
+    .expect("second owner's drop plans");
+    assert_eq!(
+        plan.postimages[&PathBuf::from("Tasks.md")],
+        concat!(
+            "- [ ] #task First owner ^first\n",
+            "\t- [ ] Same req\n",
+            "- [ ] #task Second owner ^second\n",
+            "\t- [-] Same req\n",
+        )
+    );
 }

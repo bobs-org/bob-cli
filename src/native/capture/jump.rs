@@ -100,7 +100,7 @@ fn minted_link_block_id(
     (!id.is_empty()).then(|| id.to_string())
 }
 
-fn staged_text(
+pub(super) fn staged_text(
     bob_dir: &Path,
     batch: &PlannedCaptureBatch,
     target: &Path,

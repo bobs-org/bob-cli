@@ -33,7 +33,7 @@ use crate::native::{
     note_tasks::{self, NoteTaskSettings},
     task_block_layout::{drop_req, ReqTarget},
     task_move::VaultSnapshot,
-    task_reqs::{self, EffectiveReqState},
+    task_reqs::{self, EffectiveReqState, ReqMark},
     task_split::{
         carry::{LineMove, ReqRef},
         plan::SplitSettings,
@@ -65,6 +65,11 @@ pub(crate) struct ReqWriteOutcome {
     /// Descendant line moves reported by the underlying carry, shifted to
     /// final postimage coordinates (see [`ReqWritePlan::moves_hint`]).
     pub(crate) moves: Vec<LineMove>,
+    /// 1-based line of this row in its owner's note at the moment its
+    /// write ran: the coordinate space of every `moves[].from`. Jump
+    /// resolution composes a pinned descendant through the carry's move
+    /// map from this head line.
+    pub(crate) source_line: usize,
 }
 
 /// Aggregated Met receipt for one owner. Explicit Met rows and untouched
@@ -208,6 +213,7 @@ pub(crate) fn plan_req_writes(
         let node = find_pending_node(
             current,
             task_settings,
+            frozen_owner,
             &resolved.row.key,
             &resolved.row.path,
             resolved.row.depth,
@@ -219,6 +225,7 @@ pub(crate) fn plan_req_writes(
         verify_owner_match(current, task_settings, frozen_owner, &node)
             .map_err(|_| ReqWriteError::stale(resolved.row.key.clone()))?;
         let owner_line = node.owner_line + 1;
+        let source_line = node.line_index + 1;
         let working_snapshot = VaultSnapshot {
             notes: working.clone(),
         };
@@ -256,6 +263,7 @@ pub(crate) fn plan_req_writes(
                 block_id: carry.block_id.clone(),
             }),
             moves: carry.moves.clone(),
+            source_line,
         });
         let outcome_index = outcomes.len() - 1;
         pending.push(PendingCarry {
@@ -278,6 +286,7 @@ pub(crate) fn plan_req_writes(
         let node = find_pending_node(
             current,
             task_settings,
+            frozen_owner,
             &resolved.row.key,
             &resolved.row.path,
             resolved.row.depth,
@@ -321,6 +330,7 @@ pub(crate) fn plan_req_writes(
             receipt,
             carried: None,
             moves: Vec::new(),
+            source_line: node.line_index + 1,
         });
     }
 
@@ -431,26 +441,49 @@ fn row_suffix(full_key: &str) -> &str {
         .map_or(full_key, |(_, rest)| rest)
 }
 
+/// The still-open req at the frozen row identity under the frozen owner.
+///
+/// The owner's own Done transition is tolerated: an open mark under a
+/// closed owner derives as Met rather than Pending, and the post-close
+/// card still writes it. Rows are scoped to the frozen owner before any
+/// other test, so a same-path, same-text req of another owner in the same
+/// note is never taken; two candidate owners refuse as stale.
 fn find_pending_node(
     contents: &str,
     settings: &NoteTaskSettings,
+    frozen_owner: &ReqCloseOwner,
     full_key: &str,
     path: &str,
     depth: usize,
     text: &str,
 ) -> Option<task_reqs::ReqNode> {
     let wanted = row_suffix(full_key);
-    task_reqs::note_req_forest(contents, settings)
+    let mut matches = task_reqs::note_req_forest(contents, settings)
         .into_iter()
-        .find(|node| {
-            node.state == EffectiveReqState::Pending
+        .filter(|node| {
+            still_open(node)
                 && node.text == text
                 && node.depth == depth
                 && task_reqs::req_path(node) == path
                 && row_suffix(&task_reqs::req_row_key(
                     "", &node.path, &node.text,
                 )) == wanted
-        })
+                && verify_owner_match(contents, settings, frozen_owner, node)
+                    .is_ok()
+        });
+    let node = matches.next()?;
+    matches.next().is_none().then_some(node)
+}
+
+/// An open or flagged mark that no dropped or carried ancestor excludes:
+/// Pending under an open owner, Met (derived) under the owner this
+/// gesture just closed.
+fn still_open(node: &task_reqs::ReqNode) -> bool {
+    matches!(node.mark, ReqMark::Open | ReqMark::Unknown(_))
+        && matches!(
+            node.state,
+            EffectiveReqState::Pending | EffectiveReqState::Met
+        )
 }
 
 fn verify_owner_match(

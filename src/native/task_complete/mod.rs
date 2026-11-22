@@ -24,6 +24,13 @@ pub(crate) mod req_verdicts;
 // (bob-cli-on.8.1.4) consume this module.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_writes;
+// Carried-task pull-in placement and pinned-requirement jump landings
+// (bob-cli-on.8.1.4); the capture integration phase (bob-cli-on.8.1.5)
+// wires them into every managed Done entry and drops these allowances.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod req_landing;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod req_placement;
 pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;

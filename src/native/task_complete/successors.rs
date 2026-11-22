@@ -293,7 +293,7 @@ pub(crate) struct ClosingContext {
 }
 
 /// The continuation a close left behind for successor links.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClosingContinuation {
     /// 1-based line of the continuation entry in the post-close text.
     pub line: usize,
@@ -409,6 +409,12 @@ pub(crate) struct SuccessorPlan {
     /// Kept on the planner result so integrated read-budget tests can
     /// verify cache and cheap-gate behavior without a disk reader.
     pub relation_target_reads: usize,
+    /// The shared closing target as materialized in `new_day_text`, when
+    /// a successor link landed there: its 1-based entry line and whether
+    /// the close or this insertion created it. A later placement over the
+    /// post-successor day text (carried requirement pull-ins) reuses this
+    /// entry instead of creating a second placeholder.
+    pub closing_continuation: Option<ClosingContinuation>,
 }
 
 /// Whether a vault-relative note is an inbox note, mirroring nav's
@@ -723,9 +729,54 @@ impl DayView {
         }
         None
     }
+
+    /// Slot anchor for a requirement owner that closed with this gesture:
+    /// the owner's own first live link, else the root's anchor when the
+    /// owner is not the root (`inherit`), else none. Same rule as
+    /// [`Self::anchor_for`], keyed by identity because an owner need not
+    /// carry a dependency ID.
+    pub(crate) fn anchor_for_owner(
+        &self,
+        completed: &[CompletedTask],
+        owner_path: &Path,
+        owner_block_id: &str,
+    ) -> Option<SlotAnchor> {
+        if !owner_block_id.is_empty()
+            && let Some((entry_index, _bullet_line, bullet_end, indent)) = self
+                .live
+                .get(&(owner_path.to_path_buf(), owner_block_id.to_string()))
+        {
+            return Some(SlotAnchor::at(*entry_index, *bullet_end, indent));
+        }
+        let owner_is_root = completed.iter().any(|task| {
+            task.is_root
+                && task.relative_path == owner_path
+                && task.block_id == owner_block_id
+        });
+        if owner_is_root {
+            return None;
+        }
+        let root = completed.iter().find(|task| task.is_root)?;
+        let (entry_index, _bullet_line, bullet_end, indent) = self
+            .live
+            .get(&(root.relative_path.clone(), root.block_id.clone()))?;
+        Some(SlotAnchor::at(*entry_index, *bullet_end, indent))
+    }
+
+    /// Short name of the entry at `entry_index` (`""` when unnamed).
+    pub(crate) fn entry_name(&self, entry_index: usize) -> String {
+        self.entries
+            .get(entry_index)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_default()
+    }
 }
 
 impl SlotAnchor {
+    pub(crate) fn entry_index(&self) -> usize {
+        self.entry_index
+    }
+
     fn at(entry_index: usize, bullet_end: usize, indent: &str) -> Self {
         Self {
             entry_index,
@@ -2269,7 +2320,7 @@ pub(crate) struct ResolvedClosingTarget {
 /// entry after the closed one, else a created placeholder directly
 /// below the closed entry (a MEET close may place its own continuation
 /// last, but case 3 never does). Successors count as carried.
-fn resolve_closing_target(
+pub(crate) fn resolve_closing_target(
     text: &str,
     day_relative: &Path,
     index: &NoteIndex,
@@ -2462,13 +2513,13 @@ fn relation_lane(status: char) -> u8 {
     }
 }
 
-struct ImplicitDest {
-    target: SuccessorTarget,
-    entry_name: String,
+pub(crate) struct ImplicitDest {
+    pub(crate) target: SuccessorTarget,
+    pub(crate) entry_name: String,
     entry_index: usize,
 }
 
-fn resolve_implicit_destination(
+pub(crate) fn resolve_implicit_destination(
     base_text: &str,
     day_relative: &Path,
     index: &NoteIndex,
@@ -2497,7 +2548,7 @@ fn resolve_implicit_destination(
     })
 }
 
-fn slot_target(anchor: &SlotAnchor) -> SuccessorTarget {
+pub(crate) fn slot_target(anchor: &SlotAnchor) -> SuccessorTarget {
     SuccessorTarget::Slot {
         entry_index: anchor.entry_index,
         bullet_end: anchor.bullet_end,
@@ -2990,10 +3041,8 @@ fn route_successor_offers(
     index: &NoteIndex,
     closing_target: Option<&ResolvedClosingTarget>,
 ) {
-    let day = DayView::parse(day_text, day_relative, index);
-    let scan = capture_pomodoros::scan(day_text);
-    let sources = type_routing.catalog.theme_sources();
-    let exempt = sources.exempt.iter().cloned().collect::<Vec<_>>();
+    let context =
+        TypeRouteContext::new(type_routing, day_text, day_relative, index);
     for verdict in verdicts {
         let Some(offer) = verdict.offer.as_mut() else {
             continue;
@@ -3006,70 +3055,188 @@ fn route_successor_offers(
         else {
             continue;
         };
-
         let default_target = closing_target
             .map(|resolved| resolved.target.clone())
             .unwrap_or_else(|| offer.target.clone());
         let default_name = closing_target
             .map(|resolved| resolved.name.clone())
-            .unwrap_or_else(|| successor_target_name(&default_target, &day));
-        offer.target = default_target.clone();
-        offer.destination.entry_name = default_name.clone();
+            .unwrap_or_else(|| {
+                successor_target_name(&default_target, &context.day)
+            });
+        context.route(
+            &suggestion,
+            default_target,
+            default_name,
+            TypeRouteSlot {
+                target: &mut offer.target,
+                destination: &mut offer.destination,
+                placement_refusal: &mut offer.placement_refusal,
+                placement_routed: &mut offer.placement_routed,
+            },
+        );
+    }
+}
+
+/// The day-text views D7 routing reads, built once per routing pass.
+struct TypeRouteContext {
+    day_text: String,
+    day: DayView,
+    scan: capture_pomodoros::PomodoroScan,
+    sources: config::themes::ThemeSources,
+    exempt: Vec<String>,
+}
+
+/// The mutable destination fields one D7 decision may rewrite.
+struct TypeRouteSlot<'a> {
+    target: &'a mut SuccessorTarget,
+    destination: &'a mut OfferDestination,
+    placement_refusal: &'a mut Option<&'static str>,
+    placement_routed: &'a mut bool,
+}
+
+impl TypeRouteContext {
+    fn new(
+        type_routing: &SuccessorTypeRouting,
+        day_text: &str,
+        day_relative: &Path,
+        index: &NoteIndex,
+    ) -> Self {
+        let sources = type_routing.catalog.theme_sources();
+        let exempt = sources.exempt.iter().cloned().collect::<Vec<_>>();
+        Self {
+            day_text: day_text.to_string(),
+            day: DayView::parse(day_text, day_relative, index),
+            scan: capture_pomodoros::scan(day_text),
+            sources,
+            exempt,
+        }
+    }
+
+    /// Route one successor whose task suggests `suggestion`: keep the
+    /// default destination when its entry agrees, else use the shared
+    /// typed-placement planner.
+    fn route(
+        &self,
+        suggestion: &pomodoro_themes::suggest::ThemeSuggestion,
+        default_target: SuccessorTarget,
+        default_name: String,
+        slot: TypeRouteSlot<'_>,
+    ) {
+        *slot.target = default_target.clone();
+        slot.destination.entry_name = default_name.clone();
         if routing::agrees(
             Some(&suggestion.theme.key),
             Some(&default_name),
-            &sources,
+            &self.sources,
         ) {
-            continue;
+            return;
         }
 
         let typed = TypedImplicit {
             type_key: &suggestion.theme.key,
             type_name: &suggestion.theme.name,
-            exempt: &exempt,
+            exempt: &self.exempt,
         };
-        match select_typed_implicit_entry(&scan, &typed) {
+        match select_typed_implicit_entry(&self.scan, &typed) {
             Ok(TypedImplicitOutcome::Entry(line)) => {
                 let Some((entry_index, entry_name, target)) =
-                    successor_entry_target(day_text, &day, line)
+                    successor_entry_target(&self.day_text, &self.day, line)
                 else {
-                    offer.placement_refusal = Some("no_destination");
-                    offer.placement_routed = true;
-                    continue;
+                    *slot.placement_refusal = Some("no_destination");
+                    *slot.placement_routed = true;
+                    return;
                 };
                 if successor_target_entry_index(&default_target)
                     == Some(entry_index)
                 {
-                    continue;
+                    return;
                 }
-                offer.target = target;
-                offer.destination.entry_name = entry_name;
-                offer.destination.entry_role = EntryRole::Typed;
-                offer.destination.fallback = false;
-                offer.placement_routed = true;
+                *slot.target = target;
+                slot.destination.entry_name = entry_name;
+                slot.destination.entry_role = EntryRole::Typed;
+                slot.destination.fallback = false;
+                *slot.placement_routed = true;
             }
             Ok(TypedImplicitOutcome::Create { name }) => {
-                offer.target = SuccessorTarget::Closing {
+                *slot.target = SuccessorTarget::Closing {
                     entry_index: None,
-                    insert_at: named_creation_insert_at(day_text),
+                    insert_at: named_creation_insert_at(&self.day_text),
                     created_name: Some(name.clone()),
                 };
-                offer.destination.entry_name = name;
-                offer.destination.entry_role = EntryRole::Created;
-                offer.destination.fallback = false;
-                offer.placement_routed = true;
+                slot.destination.entry_name = name;
+                slot.destination.entry_role = EntryRole::Created;
+                slot.destination.fallback = false;
+                *slot.placement_routed = true;
             }
             Err(_) => {
                 // Typed placement never refuses for budget reasons; any
                 // planning failure means no destination.
-                offer.placement_refusal = Some("no_destination");
-                offer.destination.entry_name = suggestion.theme.name;
-                offer.destination.entry_role = EntryRole::Created;
-                offer.destination.fallback = false;
-                offer.placement_routed = true;
+                *slot.placement_refusal = Some("no_destination");
+                slot.destination.entry_name = suggestion.theme.name.clone();
+                slot.destination.entry_role = EntryRole::Created;
+                slot.destination.fallback = false;
+                *slot.placement_routed = true;
             }
         }
     }
+}
+
+/// A destination after D7 type routing.
+#[derive(Debug, Clone)]
+pub(crate) struct RoutedDestination {
+    pub(crate) target: SuccessorTarget,
+    pub(crate) destination: OfferDestination,
+    /// `Some("no_destination")` when typed placement found nowhere.
+    pub(crate) refusal: Option<&'static str>,
+    /// True when D7 changed the default destination.
+    pub(crate) routed: bool,
+}
+
+/// Apply the ordinary successor D7 type routing to one created task's
+/// default destination (requirement carry plus pull-in). Loads the same
+/// narrow routing context as [`plan_successors`]; without a routing
+/// context or a type suggestion the default destination stands.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn route_created_successor(
+    bob_dir: &Path,
+    today: NaiveDate,
+    day_text: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
+    note_path: &Path,
+    task_line: &str,
+    target: SuccessorTarget,
+    destination: OfferDestination,
+) -> RoutedDestination {
+    let mut routed = RoutedDestination {
+        target,
+        destination,
+        refusal: None,
+        routed: false,
+    };
+    let Some(mut type_routing) = SuccessorTypeRouting::load(bob_dir, today)
+    else {
+        return routed;
+    };
+    let Some(suggestion) = type_routing.suggestion(note_path, task_line) else {
+        return routed;
+    };
+    let context =
+        TypeRouteContext::new(&type_routing, day_text, day_relative, index);
+    let default_target = routed.target.clone();
+    let default_name = routed.destination.entry_name.clone();
+    context.route(
+        &suggestion,
+        default_target,
+        default_name,
+        TypeRouteSlot {
+            target: &mut routed.target,
+            destination: &mut routed.destination,
+            placement_refusal: &mut routed.refusal,
+            placement_routed: &mut routed.routed,
+        },
+    );
+    routed
 }
 
 fn successor_target_entry_index(target: &SuccessorTarget) -> Option<usize> {
@@ -3366,6 +3533,9 @@ fn apply_verdicts(
     // Build placements and insert them into the day text before
     // retirement (for `!`) or as the final day text (for closes).
     let mut placements = Vec::new();
+    // Parallel to `placements`: whether this bullet went to the shared
+    // closing target (not a D7-routed or relation-specific destination).
+    let mut uses_closing_target: Vec<bool> = Vec::new();
     for position in &successor_positions {
         let verdict = &verdicts[*position];
         let file = &files[verdict.file];
@@ -3386,6 +3556,11 @@ fn apply_verdicts(
             input.index,
         );
         if let Some(offer) = verdict.offer.as_ref() {
+            uses_closing_target.push(
+                closing_target.is_some()
+                    && !offer.placement_routed
+                    && offer.group != OfferGroup::Relation,
+            );
             placements.push(SuccessorPlacement {
                 target: offer.target.clone(),
                 block_link,
@@ -3393,12 +3568,14 @@ fn apply_verdicts(
             continue;
         }
         if let Some(resolved) = closing_target.as_ref() {
+            uses_closing_target.push(true);
             placements.push(SuccessorPlacement {
                 target: resolved.target.clone(),
                 block_link,
             });
             continue;
         }
+        uses_closing_target.push(false);
         let anchor = verdict.anchor.as_ref().expect("successor has an anchor");
         placements.push(SuccessorPlacement {
             target: SuccessorTarget::Slot {
@@ -3674,6 +3851,16 @@ fn apply_verdicts(
             placed = post_placed;
         }
     }
+    plan.closing_continuation = closing_target.as_ref().and_then(|resolved| {
+        placed
+            .iter()
+            .zip(&uses_closing_target)
+            .find(|(placed, uses)| **uses && placed.entry_line > 0)
+            .map(|(placed, _)| ClosingContinuation {
+                line: placed.entry_line,
+                created: resolved.entry_created || placed.entry_created,
+            })
+    });
     for (relative, contents) in &edited {
         let original = files
             .iter()

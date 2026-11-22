@@ -2123,6 +2123,703 @@
         "today": "2026-11-22"
       },
       "title": "daily-owner carry routes to the inbox note"
+    },
+    {
+      "id": "RV29",
+      "family": "placement",
+      "title": "pulled carry links after the owner's slot as Next with no freshness stamp",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [ ] (**0920-0950**) — CAPTURE",
+            "  - [[Tasks#^export]]",
+            "- [ ] () — FIX",
+            "  - [[sase#^other]]"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md",
+          "sase.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n  - [[Tasks#^export]]\n  - [[Tasks#^handles-empty-input]]\n- [ ] () — FIX\n  - [[sase#^other]]\n",
+        "links": [
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV30",
+      "family": "placement",
+      "title": "nested owner inherits the root's slot",
+      "input": {
+        "base_case": "RV4",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [ ] (**0920-0950**) — SHIP",
+            "  - [[Tasks#^parent]]"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "parent",
+            "is_root": true
+          },
+          {
+            "path": "Tasks.md",
+            "block_id": "child",
+            "is_root": false
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — SHIP\n  - [[Tasks#^parent]]\n  - [[Tasks#^child-req]]\n",
+        "links": [
+          {
+            "block_id": "child-req",
+            "block_link": "[[Tasks#^child-req]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "SHIP",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Parent ^parent\n\t- [ ] Parent req\n\t- [ ] #task Child ^child\n\t\t- [>] [[#^child-req|Child req]]\n\t- [*] #task Child req [created:: 2026-11-22] ^child-req\n\t\t- 🪢 **LINKED FROM:** [[#^child]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV31",
+      "family": "placement",
+      "title": "pomodoro close places the carried link in a created continuation",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [x] (**0920-0950**) — FIX",
+            "  - ~~[[Tasks#^export]]~~"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": {
+          "continuation_name": "FIX",
+          "closed_line": 1,
+          "continuation": null
+        }
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [x] (**0920-0950**) — FIX\n  - ~~[[Tasks#^export]]~~\n- [ ] () — FIX\n\t- [[Tasks#^handles-empty-input]]\n",
+        "links": [
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": true,
+            "entry_line": 4,
+            "entry_name": "FIX",
+            "entry_role": "created",
+            "fallback": false,
+            "line": 5,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV32",
+      "family": "placement",
+      "title": "an unlinked owner falls back to the implicit destination",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [x] (**0850-0915**) — MAIL",
+            "- [ ] () — FIX"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [x] (**0850-0915**) — MAIL\n- [ ] () — FIX\n\t- [[Tasks#^handles-empty-input]]\n",
+        "links": [
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": false,
+            "entry_line": 3,
+            "entry_name": "FIX",
+            "entry_role": "implicit",
+            "fallback": true,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV33",
+      "family": "placement",
+      "title": "multiple pulled carries in one note link in card order",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          },
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [ ] (**0920-0950**) — CAPTURE",
+            "  - [[Tasks#^export]]",
+            "- [ ] () — FIX",
+            "  - [[sase#^other]]"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md",
+          "sase.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n  - [[Tasks#^export]]\n  - [[Tasks#^preserves-crlf]]\n  - [[Tasks#^handles-empty-input]]\n- [ ] () — FIX\n  - [[sase#^other]]\n",
+        "links": [
+          {
+            "block_id": "preserves-crlf",
+            "block_link": "[[Tasks#^preserves-crlf]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "status": "*"
+          },
+          {
+            "block_id": "handles-empty-input",
+            "block_link": "[[Tasks#^handles-empty-input]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 5,
+            "path": "Tasks.md",
+            "previous_status": " ",
+            "row_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "Tasks.md": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [>] [[#^preserves-crlf|Preserves CRLF]]\n\t\t- [>] [[#^handles-empty-input|Handles empty input]]\n- [*] #task Preserves CRLF [created:: 2026-11-22] ^preserves-crlf\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n- [*] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input\n\t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV34",
+      "family": "placement",
+      "title": "a daily owner's carried task links from the inbox",
+      "input": {
+        "notes": [
+          {
+            "path": "2026/2026-11-22.md",
+            "closing": [
+              {
+                "block_id": "daily"
+              }
+            ],
+            "source_lines": [
+              "## Pomodoros",
+              "- [ ] (**0920-0950**) — CAPTURE",
+              "\t- [[2026-11-22#^daily]]",
+              "## Tasks",
+              "- [ ] #task Daily owner ^daily",
+              "\t- [ ] Carry this req"
+            ]
+          }
+        ],
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "2026/2026-11-22.md",
+          "source_lines": null
+        },
+        "index": [
+          "2026/2026-11-22.md",
+          "inbox.md"
+        ],
+        "completed": [
+          {
+            "path": "2026/2026-11-22.md",
+            "block_id": "daily",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "day_after": "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n\t- [[2026-11-22#^daily]]\n\t- [[inbox#^carry-req]]\n## Tasks\n- [ ] #task Daily owner ^daily\n\t- [>] [[inbox#^carry-req|Carry this req]]\n",
+        "links": [
+          {
+            "block_id": "carry-req",
+            "block_link": "[[inbox#^carry-req]]",
+            "entry_created": false,
+            "entry_line": 2,
+            "entry_name": "CAPTURE",
+            "entry_role": "slot",
+            "fallback": false,
+            "line": 4,
+            "path": "inbox.md",
+            "previous_status": " ",
+            "row_key": "2026/2026-11-22.md#^daily@ca416784613778e1c9dfee5c3ce5e0d49d90899f2c3da4a3d69fa1fe9d11f910/req/1~755007bf",
+            "status": "*"
+          }
+        ],
+        "notes_after": {
+          "inbox.md": "## Tasks\n- [*] #task Carry this req [created:: 2026-11-22] ^carry-req\n\t- 🪢 **LINKED FROM:** [[2026/2026-11-22#^daily]] (💬 mentions)\n"
+        }
+      }
+    },
+    {
+      "id": "RV35",
+      "family": "placement",
+      "title": "a pulled carry with no open entry refuses the batch",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "day": {
+          "path": "20261122.md",
+          "source_lines": [
+            "## Pomodoros",
+            "- [x] (**0850-0915**) — MAIL"
+          ]
+        },
+        "index": [
+          "Tasks.md",
+          "20261122.md"
+        ],
+        "completed": [
+          {
+            "path": "Tasks.md",
+            "block_id": "export",
+            "is_root": true
+          }
+        ],
+        "closing": null
+      },
+      "expect": {
+        "refusal": "req_pull_in_no_destination"
+      }
+    },
+    {
+      "id": "RV36",
+      "family": "jump",
+      "title": "a carried row lands on its new task, not the stub",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+      },
+      "expect": {
+        "carried": {
+          "1.2": "handles-empty-input"
+        },
+        "landing": {
+          "block_id": "handles-empty-input",
+          "in_task": "handles-empty-input",
+          "kind": "carried_task",
+          "line": 6,
+          "outcome": "carry",
+          "path": "Tasks.md",
+          "text": "- [ ] #task Handles empty input [created:: 2026-11-22] ^handles-empty-input"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV37",
+      "family": "jump",
+      "title": "a pinned child moves with its carried ancestor",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "verdict": "carry_pulled",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "carried": {
+          "1": "handles-supported"
+        },
+        "landing": {
+          "block_id": null,
+          "in_task": "handles-supported",
+          "kind": "moved_with_ancestor",
+          "line": 6,
+          "outcome": "carry_pulled",
+          "path": "Tasks.md",
+          "text": "\t\t- [ ] Preserves CRLF"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV38",
+      "family": "jump",
+      "title": "a met row follows an earlier sibling branch carry",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "carry",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+      },
+      "expect": {
+        "carried": {
+          "1.1": "handles-windows"
+        },
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 4,
+          "outcome": "met",
+          "path": "Tasks.md",
+          "text": "\t\t- [ ] Handles empty input"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV39",
+      "family": "jump",
+      "title": "a met row follows a preceding drop's cancel log",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "drop",
+            "reason": "not needed"
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 7,
+          "outcome": "met",
+          "path": "Tasks.md",
+          "text": "\t\t- [ ] Handles empty input"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV40",
+      "family": "jump",
+      "title": "a row under a dropped ancestor stays in place as dropped",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "drop",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 4,
+          "outcome": "drop",
+          "path": "Tasks.md",
+          "text": "\t\t\t- [ ] Preserves CRLF"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV41",
+      "family": "jump",
+      "title": "same-labelled carried branches land by identity, not label",
+      "input": {
+        "base_case": "RV10",
+        "today": "2026-11-22",
+        "requests": [
+          {
+            "selector": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+            "verdict": "carry",
+            "reason": null
+          },
+          {
+            "selector": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2~2a98b1de",
+            "verdict": "carry",
+            "reason": null
+          }
+        ],
+        "jump": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2.1~ae369099"
+      },
+      "expect": {
+        "carried": {
+          "1": "same-2",
+          "2": "same"
+        },
+        "landing": {
+          "block_id": null,
+          "in_task": "same",
+          "kind": "moved_with_ancestor",
+          "line": 9,
+          "outcome": "carry",
+          "path": "Tasks.md",
+          "text": "\t- [ ] Right child"
+        },
+        "postimage_count": 1
+      }
+    },
+    {
+      "id": "RV42",
+      "family": "jump",
+      "title": "a jump pin alone writes nothing and lands on the requirement",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export",
+          "kind": "requirement",
+          "line": 4,
+          "outcome": "met",
+          "path": "Tasks.md",
+          "text": "\t\t\t- [ ] Preserves CRLF"
+        },
+        "postimage_count": 0
+      }
+    },
+    {
+      "id": "RV43",
+      "family": "jump",
+      "title": "an inbox route forwards the owner through its renamed block",
+      "input": {
+        "base_case": "RV1",
+        "today": "2026-11-22",
+        "requests": [],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+        "final_notes": {
+          "Tasks.md": [
+            "## Tasks"
+          ],
+          "Projects.md": [
+            "## Tasks",
+            "- [ ] #task Other exporter ^export",
+            "- [ ] #task Ship the exporter ^export-2",
+            "\t- [ ] Handles supported inputs",
+            "\t\t- [ ] Handles Windows files",
+            "\t\t\t- [ ] Preserves CRLF",
+            "\t\t- [ ] Handles empty input"
+          ]
+        },
+        "routes": [
+          {
+            "source": "Tasks.md",
+            "dest": "Projects.md",
+            "old_block_id": "export",
+            "new_block_id": "export-2"
+          }
+        ]
+      },
+      "expect": {
+        "carried": {},
+        "landing": {
+          "block_id": null,
+          "in_task": "export-2",
+          "kind": "requirement",
+          "line": 7,
+          "outcome": "met",
+          "path": "Projects.md",
+          "text": "\t\t- [ ] Handles empty input"
+        },
+        "postimage_count": 0
+      }
     }
   ]
 }

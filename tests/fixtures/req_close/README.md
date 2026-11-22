@@ -14,8 +14,15 @@ interactive folds, ancestor overlap, navigation-only pins, multi-owner
 choices, stale replay after duplicate-label reordering, and duplicate
 owner refusal. The `writes` family (RV20–RV28) pins atomic carry/drop bytes, receipts,
 created-task identities, and descendant moves without adding another commit
-path. Later close-engine phases append jump families to the same file
-without renumbering these cases.
+path. The `placement` family (RV29–RV35) pins where a `carry_pulled` task
+links (slot, `inherit`, closing continuation, implicit fallback, daily
+owner via the inbox), its Next status with no freshness stamp, card-order
+links for several carries, and the no-destination refusal. The `jump`
+family (RV36–RV43) pins final landings for a pinned row: the created task
+for a carried row, the move-mapped line for a row carried with its
+ancestor, the requirement's own line after sibling carries, drop logs, a
+dropped ancestor, and an inbox route that renamed the owner's block, plus
+identity (not label) landing between same-labelled carried branches.
 
 ## Shape
 
@@ -34,6 +41,24 @@ without renumbering these cases.
   `today`, and `date`) and freeze the atomic write plan. `expect` carries
   exact `postimages` bytes, per-row `outcomes` (verdict, receipt, carried
   task identity, and descendant `moves`), and aggregated `met` receipts.
+- `placement` cases add `input` with `base_case` or inline `notes`,
+  `requests`, the `day` file (`path` plus `source_lines`, or
+  `source_lines: null` when the day file is one of the notes and is read
+  after the writes), the note `index`, the gesture's `completed` set
+  (`path`, `block_id`, `is_root`), and an optional Pomodoro `closing`
+  context (`continuation_name`, 0-based `closed_line`, `continuation`).
+  `expect` carries exact `day_after` and `notes_after` bytes after the
+  writes and placement, one `links[]` row per linked task (status,
+  destination role and name, fallback, 1-based entry and bullet lines,
+  block link, entry creation), or a `refusal` code.
+- `jump` cases add `input.jump` (the pinned row's full key) and optional
+  `final_notes` (texts after a later route; `null` removes a note) plus
+  `routes[]` (`source`, `dest`, `old_block_id`, `new_block_id`). `expect`
+  carries the `landing` (`kind`: `carried_task`, `moved_with_ancestor`,
+  or `requirement`; the effective `outcome`; final `path` and 1-based
+  `line`; the created task's `block_id`; the landed line `text`; and the
+  enclosing task `in_task`), the write plan's `postimage_count`, and the
+  `carried` row-path → created block ID map, or a `refusal` code.
 - `notes[]`: `path`, `source_lines` (joined with `\n` plus a trailing
   newline), and `closing[]` (`block_id` or 1-based `line`) in the
   explicit close order for that note. Recurring owners are omitted
