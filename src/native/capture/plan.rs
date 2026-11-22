@@ -128,6 +128,18 @@ pub(super) struct PlannedCaptureItem {
     /// order. Empty when this item did not close an eligible owner.
     pub(super) req_owners:
         Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
+    /// Pomodoro-close continuation for pulled carries. `None` on `!`
+    /// and on items that did not close a Pomodoro.
+    pub(super) req_closing: Option<ReqClosingPlacement>,
+}
+
+/// Closing-target coordinates captured after ordinary successors, for
+/// the requirement pull-in post-pass. `day_text` is the staged day
+/// whose line numbers `closing` uses.
+#[derive(Debug, Clone)]
+pub(super) struct ReqClosingPlacement {
+    pub(super) closing: crate::native::task_complete::ClosingContext,
+    pub(super) day_text: String,
 }
 
 #[derive(Clone)]
@@ -2021,6 +2033,7 @@ fn plan_ref_item(
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     };
     Ok((planned, staged))
 }
@@ -2695,6 +2708,7 @@ pub(super) fn plan_capture_item(
                 .collect(),
             project_move_landings: Vec::new(),
             req_owners: Vec::new(),
+            req_closing: None,
         };
         if let Some((original, applied)) = marker_retype {
             let marker = parsed.type_marker.as_ref().ok_or_else(|| {
@@ -3752,6 +3766,7 @@ pub(super) fn plan_capture_item(
                 task_block_refs: vec![task_ref],
                 project_move_landings: Vec::new(),
                 req_owners: Vec::new(),
+                req_closing: None,
             });
         }
         // Clipboard notes are direct children with no wrapper bullet: the
@@ -4742,6 +4757,7 @@ pub(super) fn plan_capture_item(
         },
         project_move_landings: Vec::new(),
         req_owners: close_req_owners,
+        req_closing: None,
     };
 
     if let (Some(clause), Some(block_id)) =
@@ -6108,5 +6124,6 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         },
         project_move_landings: Vec::new(),
         req_owners: close_req_owners,
+        req_closing: None,
     })
 }

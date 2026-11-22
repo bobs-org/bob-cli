@@ -496,6 +496,7 @@ pub(super) fn plan_pomodoro_adjust_item(
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 
@@ -717,6 +718,7 @@ pub(super) fn plan_pomodoro_shift_item(
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 

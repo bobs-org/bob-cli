@@ -767,6 +767,7 @@ fn plan_notebook_note(
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 
@@ -910,6 +911,7 @@ fn plan_notebook_sub_note(
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 

@@ -477,20 +477,49 @@ pub(super) fn plan_req_post_pass(
             dependency_ctx,
         );
         let completed = completed_from_owners(&owners);
-        super::req_placement::plan_req_link_pass(
-            planner,
-            &request.bob_dir,
-            &super::req_placement::ReqLinkPassContext {
-                day_file,
-                day_relative: Path::new(day_relative),
-                today,
-                index: &index,
-                completed: &completed,
-                closing: None,
-            },
-            &owners,
-            &write_plan,
-        )?;
+        for item in items {
+            let item_pulled =
+                crate::native::task_complete::req_placement::pulled_tasks(
+                    &item.req_owners,
+                    &write_plan,
+                );
+            if item_pulled.is_empty() {
+                continue;
+            }
+            let forwarded;
+            let closing = match item.req_closing.as_ref() {
+                Some(placement) => {
+                    let current =
+                        planner.current_contents(day_file)?.unwrap_or_default();
+                    forwarded = super::req_placement::forward_closing_lines(
+                        &placement.closing,
+                        &placement.day_text,
+                        &current,
+                    )
+                    .ok_or_else(|| {
+                        super::req_placement::no_destination_error(
+                            item_pulled[0].row_key.clone(),
+                        )
+                    })?;
+                    Some(&forwarded)
+                }
+                None => None,
+            };
+            super::req_placement::plan_req_link_pass(
+                planner,
+                &request.bob_dir,
+                &super::req_placement::ReqLinkPassContext {
+                    day_file,
+                    day_relative: Path::new(day_relative),
+                    today,
+                    index: &index,
+                    completed: &completed,
+                    closing,
+                },
+                &item.req_owners,
+                &write_plan,
+            )?;
+        }
     }
     Ok((owners, write_plan, jump))
 }

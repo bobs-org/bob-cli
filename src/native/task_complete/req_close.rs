@@ -28,17 +28,20 @@ pub(crate) mod copy {
     /// Group caption under the title.
     pub(crate) const WHY: &str = "Met when it closes, unless you say otherwise";
     /// Inline drop-reason prompt.
+    #[cfg(test)]
     pub(crate) const DROP_PROMPT: &str = "Why drop it? (optional)";
     /// Per-row footer of the requirement group.
     pub(crate) const FOOTER: &str =
         "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump";
     /// Jump-pin hint on a requirement row.
+    #[cfg(test)]
     pub(crate) const JUMP_HINT: &str =
         "↗ jumps to the requirement — ⌃⇧T makes it a task";
     /// Human CLI hint under a requirement group.
     pub(crate) const HINT: &str =
         "-k N own task · -X N[=why] drop · -p N pull in";
     /// Teaching line shared with the contract page.
+    #[cfg(test)]
     pub(crate) const TEACHING: &str =
         "Part of this task's scope. Met when the task closes. Drop it or make it a task";
 
@@ -87,6 +90,7 @@ pub(crate) mod copy {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn nested_go_with_it(count: usize) -> String {
         format!("· {count} nested go with it")
     }
@@ -120,6 +124,7 @@ pub(crate) mod copy {
         line
     }
 
+    #[cfg(test)]
     pub(crate) fn summary(
         met: usize,
         dropped: usize,

@@ -1,4 +1,4 @@
-//! Requirement choice and common card-number vectors (RV12–RV19).
+//! Requirement choice and common card-number vectors (RV12–RV19, RV44).
 
 use super::super::req_verdicts::{
     resolve_verdicts, ReqCardNumbering, ReqCardRowKind, ReqChoiceState,
@@ -77,6 +77,9 @@ fn collect_choice_case(
         .as_str()
         .expect("base_case");
     let mut base = case(&all, base_id).clone();
+    if choice_case["input"]["notes"].is_array() {
+        base["notes"] = choice_case["input"]["notes"].clone();
+    }
     if let Some(lines) = choice_case["input"]["source_lines_after"].as_array() {
         base["notes"][0]["source_lines"] =
             serde_json::Value::Array(lines.clone());
@@ -96,10 +99,18 @@ fn choices_vectors_have_stable_ids_and_cover_every_verdict_pair() {
         .iter()
         .filter(|case| case["family"] == "choices")
         .collect();
-    assert_eq!(cases.len(), 8);
-    for (index, case) in cases.iter().enumerate() {
-        assert_eq!(case["id"], format!("RV{}", index + 12));
-    }
+    assert_eq!(cases.len(), 9);
+    let ids: Vec<&str> = cases
+        .iter()
+        .map(|case| case["id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "RV12", "RV13", "RV14", "RV15", "RV16", "RV17", "RV18", "RV19",
+            "RV44"
+        ]
+    );
 
     let vector = case(&all, "RV12");
     let (owners, _) = collect_choice_case(vector);
@@ -227,7 +238,7 @@ fn staged_fold_hides_without_discarding_and_restaging_met_unfolds() {
     let mut state = ReqChoiceState::default();
     state.stage(child.clone(), ReqVerdict::Carry);
     state.stage(ancestor.clone(), ReqVerdict::Drop);
-    let folded = state.fold(group);
+    let folded = state.fold(group, &owners[0]);
     let after_drop = &vector["expect"]["after_drop"];
     let visible: Vec<String> = folded
         .iter()
@@ -259,7 +270,7 @@ fn staged_fold_hides_without_discarding_and_restaging_met_unfolds() {
     );
 
     state.stage(ancestor, ReqVerdict::Met);
-    let unfolded = state.fold(group);
+    let unfolded = state.fold(group, &owners[0]);
     let after_met = &vector["expect"]["after_met"];
     let visible: Vec<String> = unfolded
         .iter()
@@ -383,5 +394,89 @@ fn duplicate_owner_identity_refuses_and_marks_stale() {
             .expect_err("one closing owner cannot occur twice")
             .code(),
         vector["expect"]["error_code"]
+    );
+}
+
+#[test]
+fn overlap_and_fold_walk_the_full_forest_across_a_hand_ticked_intermediate() {
+    let vector = case(&vectors(), "RV44").clone();
+    let (owners, groups) = collect_choice_case(&vector);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].rows.len(), 3);
+    let ancestor = row_key(
+        &groups,
+        vector["expect"]["ancestor_path"].as_str().expect("path"),
+    );
+    let descendant = row_key(
+        &groups,
+        vector["expect"]["descendant_path"].as_str().expect("path"),
+    );
+    for pair in vector["input"]["pairs"].as_array().expect("pairs") {
+        let error = resolve_verdicts(
+            &owners,
+            &[],
+            &[
+                ReqVerdictRequest {
+                    selector: pair["ancestor"]
+                        .as_str()
+                        .expect("selector")
+                        .to_string(),
+                    verdict: verdict(
+                        pair["ancestor_verdict"].as_str().expect("verdict"),
+                    ),
+                    reason: None,
+                },
+                ReqVerdictRequest {
+                    selector: pair["descendant"]
+                        .as_str()
+                        .expect("selector")
+                        .to_string(),
+                    verdict: verdict(
+                        pair["descendant_verdict"].as_str().expect("verdict"),
+                    ),
+                    reason: None,
+                },
+            ],
+            None,
+        )
+        .expect_err("a hand-ticked intermediate does not hide ancestry");
+        assert_eq!(error.code(), vector["expect"]["error_code"]);
+        match error {
+            ReqVerdictError::Overlap {
+                ancestor_key,
+                descendant_key,
+                ..
+            } => {
+                assert_eq!(ancestor_key, ancestor);
+                assert_eq!(descendant_key, descendant);
+            }
+            other => panic!("expected overlap, got {other:?}"),
+        }
+    }
+
+    let mut state = ReqChoiceState::default();
+    state.stage(ancestor.clone(), ReqVerdict::Drop);
+    let folded = state.fold(&groups[0], &owners[0]);
+    let hidden = folded
+        .iter()
+        .find(|row| row.key == descendant)
+        .expect("descendant row");
+    assert!(!hidden.visible);
+    assert_eq!(hidden.hidden_by.as_deref(), Some(ancestor.as_str()));
+    let visible_paths: Vec<String> = folded
+        .iter()
+        .filter(|row| row.visible)
+        .map(|row| {
+            groups[0]
+                .rows
+                .iter()
+                .find(|candidate| candidate.offer.key == row.key)
+                .map(|candidate| candidate.path.clone())
+                .expect("path")
+        })
+        .collect();
+    assert_eq!(
+        visible_paths,
+        strings(&vector["expect"]["after_drop"]["visible_paths"])
     );
 }

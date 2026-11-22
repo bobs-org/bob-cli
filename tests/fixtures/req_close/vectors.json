@@ -1717,6 +1717,53 @@
       }
     },
     {
+      "id": "RV44",
+      "family": "choices",
+      "title": "structural overlap and fold walk the full forest across a hand-ticked intermediate",
+      "input": {
+        "base_case": "RV1",
+        "notes": [
+          {
+            "path": "Tasks.md",
+            "source_lines": [
+              "- [ ] #task Ship parser [id:: ship] ^ship",
+              "\t- [ ] Edge cases",
+              "\t\t- [x] Empty input",
+              "\t\t\t- [ ] Zero bytes",
+              "\t- [ ] Handles unicode"
+            ],
+            "closing": [
+              {
+                "block_id": "ship"
+              }
+            ]
+          }
+        ],
+        "pairs": [
+          {
+            "ancestor": "1",
+            "ancestor_verdict": "drop",
+            "descendant": "2",
+            "descendant_verdict": "carry"
+          },
+          {
+            "ancestor": "1",
+            "ancestor_verdict": "carry",
+            "descendant": "2",
+            "descendant_verdict": "drop"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": "req_verdict_overlap",
+        "ancestor_path": "1",
+        "descendant_path": "1.1.1",
+        "after_drop": {
+          "visible_paths": ["1", "2"]
+        }
+      }
+    },
+    {
       "expect": {
         "met": [
           {

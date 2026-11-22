@@ -43,6 +43,7 @@ pub(crate) enum ReqLandingKind {
 }
 
 impl ReqLandingKind {
+    #[cfg(test)]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::CarriedTask => "carried_task",

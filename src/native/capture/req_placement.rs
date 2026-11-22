@@ -55,6 +55,33 @@ pub(super) struct ReqLinkPassContext<'a> {
     pub(super) closing: Option<&'a ClosingContext>,
 }
 
+/// Forward closing-context line numbers from `from_text` onto `to_text`
+/// via Myers Equal runs. Drops the continuation when its headline no
+/// longer maps. Returns `None` when `closed_line` itself no longer maps.
+pub(super) fn forward_closing_lines(
+    closing: &ClosingContext,
+    from_text: &str,
+    to_text: &str,
+) -> Option<ClosingContext> {
+    let from: Vec<&str> = from_text.lines().collect();
+    let to: Vec<&str> = to_text.lines().collect();
+    let (old_to_new, _) = super::block_diff::line_maps(&from, &to);
+    let closed_line = *old_to_new.get(&closing.closed_line)?;
+    let continuation = closing.continuation.as_ref().and_then(|cont| {
+        let old_index = cont.line.saturating_sub(1);
+        let new_index = *old_to_new.get(&old_index)?;
+        Some(crate::native::task_complete::ClosingContinuation {
+            line: new_index + 1,
+            created: cont.created,
+        })
+    });
+    Some(ClosingContext {
+        continuation_name: closing.continuation_name.clone(),
+        closed_line,
+        continuation,
+    })
+}
+
 /// Record carried tasks as created by this capture, then link every
 /// pulled carry at its owner's ordinary successor destination.
 pub(super) fn plan_req_link_pass(
@@ -211,6 +238,10 @@ fn placement_error(error: ReqPlacementError) -> CaptureError {
     CaptureError::usage_code(error.to_string(), error.code())
 }
 
+pub(super) fn no_destination_error(row_key: String) -> CaptureError {
+    placement_error(ReqPlacementError::NoDestination { row_key })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -226,6 +257,40 @@ mod tests {
             },
         },
     };
+
+    #[test]
+    fn forward_closing_lines_maps_equal_headlines_and_drops_unmapped_continuation(
+    ) {
+        let closing = ClosingContext {
+            continuation_name: "CAPTURE".to_string(),
+            closed_line: 1,
+            continuation: Some(
+                crate::native::task_complete::ClosingContinuation {
+                    line: 3,
+                    created: true,
+                },
+            ),
+        };
+        let from = "## Pomodoros\n- [x] CAPTURE\n- [ ] CAPTURE\n";
+        let inserted = "preface\n## Pomodoros\n- [x] CAPTURE\n- [ ] CAPTURE\n";
+        let forwarded =
+            forward_closing_lines(&closing, from, inserted).expect("mapped");
+        assert_eq!(forwarded.closed_line, 2);
+        assert_eq!(
+            forwarded.continuation.as_ref().map(|cont| cont.line),
+            Some(4)
+        );
+
+        let closed_gone = "totally different\n";
+        assert!(forward_closing_lines(&closing, from, closed_gone).is_none());
+
+        let continuation_gone = "## Pomodoros\n- [x] CAPTURE\n";
+        let forwarded =
+            forward_closing_lines(&closing, from, continuation_gone)
+                .expect("closed maps");
+        assert_eq!(forwarded.closed_line, 1);
+        assert!(forwarded.continuation.is_none());
+    }
 
     const TASKS: &str = concat!(
         "- [x] #task Ship the exporter ✅ 2026-11-22 ^export\n",

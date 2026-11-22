@@ -43,6 +43,40 @@ fn ship_vault(name: &str) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     (temp, vault, day_file)
 }
 
+fn nested_ticked_note() -> &'static str {
+    concat!(
+        "- [ ] #task Ship parser [id:: ship] ^ship\n",
+        "\t- [ ] Edge cases\n",
+        "\t\t- [x] Empty input\n",
+        "\t\t\t- [ ] Zero bytes\n",
+        "\t- [ ] Handles unicode\n",
+    )
+}
+
+fn nested_ticked_vault(
+    name: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (temp, vault, day_file) = vault(name);
+    write_file(&vault.join("sase.md"), nested_ticked_note());
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n- [ ] () — FIX\n  - [[sase#^ship]]\n",
+    );
+    (temp, vault, day_file)
+}
+
+fn close_ship_vault(
+    name: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (temp, vault, day_file) = vault(name);
+    write_file(&vault.join("sase.md"), ship_note());
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n  - [[sase#^ship]]\n- [ ] () — FIX\n",
+    );
+    (temp, vault, day_file)
+}
+
 fn mixed_vault(
     name: &str,
 ) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -310,8 +344,12 @@ fn pull_in_on_req_is_carry_pulled() {
     assert!(!sase.contains("[fresh::"), "{sase}");
     assert!(!sase.contains("[unblocked::"), "{sase}");
     let day = fs::read_to_string(&day_file).expect("day");
+    let block_id = pulled["carried"]["block_id"]
+        .as_str()
+        .expect("carried block_id");
+    assert_eq!(block_id, "handles-empty-input", "{pulled}");
     assert!(
-        day.contains("Handles empty input") || day.contains("[[sase#^"),
+        day.contains(&format!("[[sase#^{block_id}]]")),
         "carry-pulled links the new task:\n{day}"
     );
 }
@@ -354,6 +392,152 @@ fn carry_plus_pull_in_on_same_req_conflicts_write_free() {
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     assert_eq!(json["code"], "offer_verdict_conflict", "{json}");
     assert_eq!(vault_bytes(&vault), before, "conflict writes nothing");
+}
+
+#[test]
+fn overlap_across_hand_ticked_intermediate_refuses_both_orders() {
+    for (name, flags) in [
+        ("drop-then-carry", &["-X", "1", "-k", "2"][..]),
+        ("carry-then-drop", &["-k", "1", "-X", "2"][..]),
+    ] {
+        let (_temp, vault, day_file) =
+            nested_ticked_vault(&format!("bob-cli-req-close-overlap-{name}"));
+        let before = vault_bytes(&vault);
+        let (output, json) =
+            capture_json_failing(&vault, &day_file, flags, "!sase:ship");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{name}: {}",
+            format_output(&output)
+        );
+        assert_eq!(json["code"], "req_verdict_overlap", "{name}: {json}");
+        assert_eq!(
+            vault_bytes(&vault),
+            before,
+            "{name}: overlap writes nothing"
+        );
+    }
+}
+
+fn carried_block_id(json: &serde_json::Value, text: &str) -> String {
+    json["req_outcomes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["text"] == text && row["pulled"] == true)
+        .and_then(|row| row["carried"]["block_id"].as_str())
+        .unwrap_or_else(|| panic!("missing pulled {text}: {json}"))
+        .to_string()
+}
+
+fn open_entry_bodies(day: &str) -> Vec<String> {
+    let mut bodies = Vec::new();
+    let mut current: Option<String> = None;
+    for line in day.lines() {
+        if line.starts_with("- [") && line.contains("—") {
+            if let Some(body) = current.take() {
+                bodies.push(body);
+            }
+            if line.starts_with("- [ ]") {
+                current = Some(line.to_string());
+            }
+            continue;
+        }
+        if let Some(body) = current.as_mut() {
+            body.push('\n');
+            body.push_str(line);
+        }
+    }
+    if let Some(body) = current {
+        bodies.push(body);
+    }
+    bodies
+}
+
+#[test]
+fn pomodoro_close_pull_in_uses_the_closing_continuation() {
+    let (_temp, vault, day_file) = close_ship_vault("bob-cli-req-close-x-pull");
+    let json = capture_json(&vault, &day_file, &["-p", "1"], "x!");
+    assert_eq!(json["ok"], true, "{json}");
+    let block_id = carried_block_id(&json, "Handles empty input");
+    let sase = read_sase(&vault);
+    assert!(
+        sase.contains("- [*] #task Handles empty input")
+            || sase.contains("[*] #task Handles empty input"),
+        "{sase}"
+    );
+    assert!(!sase.contains("[fresh::"), "{sase}");
+    let day = fs::read_to_string(&day_file).expect("day");
+    let link = format!("[[sase#^{block_id}]]");
+    assert!(day.contains(&link), "missing carried link:\n{day}");
+    let open = open_entry_bodies(&day);
+    let continuation = open
+        .iter()
+        .find(|body| body.contains(&link))
+        .expect("link lives under an open continuation");
+    assert!(
+        continuation.contains("CAPTURE") || continuation.contains("—"),
+        "continuation:\n{continuation}\nfull day:\n{day}"
+    );
+    let capture_headlines = day
+        .lines()
+        .filter(|line| line.starts_with("- [") && line.contains("CAPTURE"))
+        .count();
+    assert!(
+        capture_headlines <= 2,
+        "no duplicate CAPTURE headline:\n{day}"
+    );
+}
+
+#[test]
+fn pomodoro_close_pulls_several_carries_into_one_continuation() {
+    let (_temp, vault, day_file) =
+        close_ship_vault("bob-cli-req-close-x-pull-both");
+    let json = capture_json(&vault, &day_file, &["-p", "1,2"], "x!");
+    let first = carried_block_id(&json, "Handles empty input");
+    let second = carried_block_id(&json, "Handles unicode");
+    let day = fs::read_to_string(&day_file).expect("day");
+    let first_link = format!("[[sase#^{first}]]");
+    let second_link = format!("[[sase#^{second}]]");
+    let open = open_entry_bodies(&day);
+    let shared = open
+        .iter()
+        .find(|body| body.contains(&first_link) && body.contains(&second_link));
+    assert!(
+        shared.is_some(),
+        "both carries share one continuation:\n{day}"
+    );
+    let capture_headlines = day
+        .lines()
+        .filter(|line| line.contains("CAPTURE"))
+        .filter(|line| line.starts_with("- ["))
+        .count();
+    assert!(
+        capture_headlines <= 2,
+        "no duplicate CAPTURE headline:\n{day}"
+    );
+}
+
+#[test]
+fn later_item_still_places_a_pomodoro_close_carry() {
+    let (_temp, vault, day_file) =
+        close_ship_vault("bob-cli-req-close-x-later-item");
+    let json =
+        capture_json(&vault, &day_file, &["-p", "1"], "x!\n\nFollow-up work");
+    assert_eq!(json["ok"], true, "{json}");
+    let block_id = carried_block_id(&json, "Handles empty input");
+    let day = fs::read_to_string(&day_file).expect("day");
+    let link = format!("[[sase#^{block_id}]]");
+    assert!(
+        day.contains(&link),
+        "later item still places the carry:\n{day}"
+    );
+    let open = open_entry_bodies(&day);
+    assert!(
+        open.iter().any(|body| body.contains(&link)),
+        "carry stays on an open continuation:\n{day}"
+    );
 }
 
 #[test]

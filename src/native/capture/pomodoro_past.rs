@@ -1869,5 +1869,6 @@ pub(super) fn record_one_member(
         task_block_refs,
         project_move_landings: Vec::new(),
         req_owners: successors.req_owners,
+        req_closing: successors.req_closing,
     })
 }

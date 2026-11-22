@@ -209,11 +209,13 @@ pub(crate) struct ReqCurrentCard {
 /// Portable, no-write staged UI state. A repeated verdict toggles the row
 /// back to its default Met state. Descendant choices remain staged while
 /// an ancestor hides them.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct ReqChoiceState {
     choices: BTreeMap<String, ReqVerdict>,
 }
 
+#[cfg(test)]
 impl ReqChoiceState {
     pub(crate) fn choice(&self, key: &str) -> ReqVerdict {
         self.choices.get(key).copied().unwrap_or(ReqVerdict::Met)
@@ -236,11 +238,17 @@ impl ReqChoiceState {
 
     /// Visible rows plus the folded child count shown on a structural
     /// verdict. Hidden child state is preserved in `self.choices`.
-    pub(crate) fn fold(&self, group: &ReqCloseGroup) -> Vec<ReqRowFold> {
-        let by_key: BTreeMap<&str, &ReqCloseRow> = group
-            .rows
+    /// Ancestry walks the owner's full forest so a hand-ticked
+    /// intermediate does not break fold.
+    pub(crate) fn fold(
+        &self,
+        group: &ReqCloseGroup,
+        owner: &ReqCloseOwner,
+    ) -> Vec<ReqRowFold> {
+        let by_key: BTreeMap<&str, Option<&str>> = owner
+            .nodes
             .iter()
-            .map(|row| (row.offer.key.as_str(), row))
+            .map(|node| (node.key.as_str(), node.parent_key.as_deref()))
             .collect();
         group
             .rows
@@ -257,9 +265,7 @@ impl ReqChoiceState {
                         hidden_by = Some(key.to_string());
                         break;
                     }
-                    ancestor = by_key
-                        .get(key)
-                        .and_then(|parent| parent.parent_key.as_deref());
+                    ancestor = by_key.get(key).copied().flatten();
                 }
                 let choice = self.choice(&row.offer.key);
                 ReqRowFold {
@@ -286,6 +292,7 @@ impl ReqChoiceState {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReqRowFold {
     pub(crate) key: String,
@@ -601,6 +608,14 @@ fn validate_non_overlapping(
             {
                 continue;
             }
+            let Some((owner, _)) = rows.get(descendant.row.key.as_str()) else {
+                continue;
+            };
+            let parents: BTreeMap<&str, Option<&str>> = owner
+                .nodes
+                .iter()
+                .map(|node| (node.key.as_str(), node.parent_key.as_deref()))
+                .collect();
             let mut parent = descendant.row.parent_key.as_deref();
             while let Some(parent_key) = parent {
                 if parent_key == ancestor.row.key {
@@ -610,9 +625,7 @@ fn validate_non_overlapping(
                         descendant_key: descendant.row.key.clone(),
                     });
                 }
-                parent = rows
-                    .get(parent_key)
-                    .and_then(|(_, row)| row.parent_key.as_deref());
+                parent = parents.get(parent_key).copied().flatten();
             }
         }
     }

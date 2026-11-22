@@ -2200,6 +2200,7 @@ pub(super) fn plan_project_note_item(
             },
         ),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 

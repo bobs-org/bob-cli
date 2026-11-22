@@ -3672,6 +3672,7 @@ pub(super) fn plan_dependency_only_item(
         task_block_refs,
         project_move_landings: Vec::new(),
         req_owners: close_req_owners,
+        req_closing: None,
     })
 }
 

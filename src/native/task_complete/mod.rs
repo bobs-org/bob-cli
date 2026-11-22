@@ -13,17 +13,10 @@ pub(crate) mod project_pull_in;
 #[cfg(test)]
 pub(crate) mod recovery;
 pub(crate) mod relation_successors;
-// Frozen copy, card-state, and jump helpers stay on the engine for
-// plugin and later-phase consumers; capture uses a subset.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_close;
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_landing;
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_placement;
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_verdicts;
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_writes;
 pub(crate) mod retirement;
 pub(crate) mod successors;

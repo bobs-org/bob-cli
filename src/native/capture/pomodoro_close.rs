@@ -675,6 +675,10 @@ pub(super) struct CloseSuccessorOutcome {
     /// successor pre-gates skip the dependents lookup.
     pub(super) req_owners:
         Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
+    /// Closing continuation for pulled requirement carries. Present
+    /// when this close collected owners, including the no-successor
+    /// early return.
+    pub(super) req_closing: Option<ReqClosingPlacement>,
 }
 
 /// 0-based line of the closed entry in the post-close day text: the
@@ -841,18 +845,22 @@ pub(super) fn plan_close_successors(
     task_block_refs: &mut Vec<TaskBlockRef>,
 ) -> Result<CloseSuccessorOutcome, CaptureError> {
     let req_owners = plan.req_owners.clone();
-    let empty = |check: &'static str| CloseSuccessorOutcome {
-        unblocked: Vec::new(),
-        keep_moving: Vec::new(),
-        relation_successors: Vec::new(),
-        relation_held: Vec::new(),
-        relation_check: None,
-        relation_groups: Vec::new(),
-        still_blocked: Vec::new(),
-        unblocked_check: check,
-        project_folds: Vec::new(),
-        keep_moving_folds: Vec::new(),
-        req_owners: req_owners.clone(),
+    let empty = |check: &'static str,
+                 req_closing: Option<ReqClosingPlacement>| {
+        CloseSuccessorOutcome {
+            unblocked: Vec::new(),
+            keep_moving: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
+            still_blocked: Vec::new(),
+            unblocked_check: check,
+            project_folds: Vec::new(),
+            keep_moving_folds: Vec::new(),
+            req_owners: req_owners.clone(),
+            req_closing,
+        }
     };
     let bob_dir = &request.bob_dir;
     let settings = note_tasks::read_settings(bob_dir);
@@ -985,7 +993,16 @@ pub(super) fn plan_close_successors(
         && !keep_moving_candidate
         && !relation_candidate
     {
-        return Ok(empty("checked"));
+        if req_owners.is_empty() {
+            return Ok(empty("checked", None));
+        }
+        let post_day = planner.current_contents(day_file)?;
+        let day_text = post_day.clone().unwrap_or_default();
+        let closing = closing_context_for(plan, &day_text);
+        return Ok(empty(
+            "checked",
+            Some(ReqClosingPlacement { closing, day_text }),
+        ));
     }
     // The snapshot proves prerequisites closed, so it is built only when a
     // candidate or `^prj` actually carries a `[dependsOn::]` (§12.15).
@@ -1033,29 +1050,11 @@ pub(super) fn plan_close_successors(
         Vec::new()
     };
     let post_day = planner.current_contents(day_file)?;
-    let running = &plan.summary.running;
-    // Two names, two jobs: the closed entry is found by the name the close
-    // wrote on it (narrowed, R6), while the continuation is named and
-    // reused by the shed name.
-    let ledger = &plan.summary.ledger;
-    let closed_name = ledger.closed_name.clone().unwrap_or_default();
-    let continuation_name =
-        ledger.continuation_name.clone().unwrap_or_default();
-    let closed_line = close_entry_line(
-        post_day.as_deref().unwrap_or_default(),
-        &closed_name,
-        running.line.saturating_sub(1),
-    );
-    let continuation = plan
-        .summary
-        .ledger
-        .next_pomodoro
-        .as_ref()
-        .filter(|next| next.created)
-        .map(|next| engine::ClosingContinuation {
-            line: next.line,
-            created: true,
-        });
+    let closing =
+        closing_context_for(plan, post_day.as_deref().unwrap_or_default());
+    let continuation_name = closing.continuation_name.clone();
+    let closed_line = closing.closed_line;
+    let continuation = closing.continuation.clone();
     if note_index.is_none() {
         note_index = Some(super::task_complete::staged_note_index(
             bob_dir,
@@ -1276,6 +1275,20 @@ pub(super) fn plan_close_successors(
             },
         );
     }
+    let adjusted =
+        crate::native::task_complete::req_placement::closing_after_successors(
+            &closing,
+            &successor_plan,
+        );
+    let day_text = successor_plan
+        .new_day_text
+        .clone()
+        .or_else(|| post_day.clone())
+        .unwrap_or_default();
+    let req_closing = (!req_owners.is_empty()).then_some(ReqClosingPlacement {
+        closing: adjusted,
+        day_text,
+    });
     Ok(CloseSuccessorOutcome {
         unblocked,
         keep_moving,
@@ -1288,7 +1301,36 @@ pub(super) fn plan_close_successors(
         project_folds: successor_plan.project_folds.clone(),
         keep_moving_folds: successor_plan.keep_moving_folds.clone(),
         req_owners,
+        req_closing,
     })
+}
+
+fn closing_context_for(
+    plan: &capture_pomodoro_close::PomodoroClosePlan,
+    post_day: &str,
+) -> engine::ClosingContext {
+    let ledger = &plan.summary.ledger;
+    let closed_name = ledger.closed_name.clone().unwrap_or_default();
+    let continuation_name =
+        ledger.continuation_name.clone().unwrap_or_default();
+    let closed_line = close_entry_line(
+        post_day,
+        &closed_name,
+        plan.summary.running.line.saturating_sub(1),
+    );
+    let continuation = ledger
+        .next_pomodoro
+        .as_ref()
+        .filter(|next| next.created)
+        .map(|next| engine::ClosingContinuation {
+            line: next.line,
+            created: true,
+        });
+    engine::ClosingContext {
+        continuation_name,
+        closed_line,
+        continuation,
+    }
 }
 
 /// BLOCKS-mirror rows for a close carrying new-task dependencies:
@@ -1523,6 +1565,7 @@ fn plan_reset_link_item(
         task_block_refs: task_block_ref.into_iter().collect(),
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 
@@ -1709,6 +1752,7 @@ fn plan_reset_task_item(
         },
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 
@@ -1831,6 +1875,7 @@ fn plan_reset_whole_item(
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 
@@ -2349,6 +2394,7 @@ pub(super) fn plan_pomodoro_close_item(
             task_block_refs,
             project_move_landings: Vec::new(),
             req_owners: successors.req_owners,
+            req_closing: successors.req_closing,
         });
     }
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
@@ -2539,6 +2585,7 @@ pub(super) fn plan_pomodoro_close_item(
         task_block_refs,
         project_move_landings: Vec::new(),
         req_owners: successors.req_owners,
+        req_closing: successors.req_closing,
     })
 }
 
@@ -3423,6 +3470,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         task_block_refs,
         project_move_landings: Vec::new(),
         req_owners: successors.req_owners,
+        req_closing: successors.req_closing,
     })
 }
 
@@ -3853,5 +3901,6 @@ pub(super) fn plan_pomodoro_close_task_item(
         },
         project_move_landings: Vec::new(),
         req_owners: successors.req_owners,
+        req_closing: successors.req_closing,
     })
 }

@@ -8,9 +8,10 @@ fixture together.
 
 The `rows` family (RV1–RV11) pins pre-close collection, snapshot-bound
 owner and row keys, canonical group copy, historical folds, and
-pending-descendant counts. The `choices` family (RV12–RV19) pins final
+pending-descendant counts. The `choices` family (RV12–RV19, RV44) pins final
 verdict conflicts, requirement-first card numbering, mark-all exclusion,
-interactive folds, ancestor overlap, navigation-only pins, multi-owner
+interactive folds, ancestor overlap (including across a hand-ticked
+intermediate), navigation-only pins, multi-owner
 choices, stale replay after duplicate-label reordering, and duplicate
 owner refusal. The `writes` family (RV20–RV28) pins atomic carry/drop bytes, receipts,
 created-task identities, and descendant moves without adding another commit

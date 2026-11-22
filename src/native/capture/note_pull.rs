@@ -466,6 +466,7 @@ pub(super) fn plan_note_pull_item(
                     task_block_refs: Vec::new(),
                     project_move_landings: Vec::new(),
                     req_owners: Vec::new(),
+                    req_closing: None,
                 });
             }
         }
@@ -734,6 +735,7 @@ pub(super) fn plan_note_pull_item(
             task_block_refs: Vec::new(),
             project_move_landings: Vec::new(),
             req_owners: Vec::new(),
+            req_closing: None,
         });
     }
     // Lane pull order (Pending → Next → Ready), then source line.
@@ -1218,6 +1220,7 @@ pub(super) fn plan_note_pull_item(
         task_block_refs,
         project_move_landings: Vec::new(),
         req_owners: Vec::new(),
+        req_closing: None,
     })
 }
 

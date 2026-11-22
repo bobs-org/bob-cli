@@ -161,6 +161,7 @@ pub(super) fn plan_task_complete_item(
         task_block_refs: outcome.task_block_refs.clone(),
         project_move_landings: Vec::new(),
         req_owners: outcome.req_owners,
+        req_closing: None,
     })
 }
 
