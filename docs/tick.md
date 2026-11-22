@@ -57,10 +57,10 @@ on any host and show the pin.
 ## Scheduling and gates
 
 With no step names, `bob tick` runs due steps. Due time is measured from the
-last start, rounded down to the minute; a failed or timed-out child still starts
-the next interval. Skipped steps, closed precondition gates, and Gmail's
-`vault_busy` result do not consume it. A backwards clock change is ignored
-with a warning.
+last start, rounded down to the minute; a failed, timed-out, or
+`inputs_changed` child still starts the next interval. Skipped steps, closed
+precondition gates, and `vault_busy` results do not consume it. A backwards
+clock change is ignored with a warning.
 
 Naming steps runs only those steps now, in catalog order, while keeping safety
 gates. `--all` runs every step that is not `off`, including manual steps. A
@@ -71,8 +71,9 @@ a saved follow-up retries it on the next scheduled pass.
 Calendar and task reconciliation wait until today's daily note exists, is
 rendered, and contains `## Pomodoros`. Calendar runs include yesterday on the
 first successful run of each local day. Automated Calendar runs also observe
-the one-hour cooldown shared with direct `bob gcal sync` runs. Gmail waits
-without consuming its interval when the vault is busy.
+the one-hour cooldown shared with direct `bob gcal sync` runs. A child that
+times out on the vault or scan lock reports `vault_busy` and waits without
+consuming its interval, as does Gmail when the vault is busy.
 
 Scheduled reference scans run when files in `lib/` or `xlib/` changed, a
 pre-scan hook is configured, or six hours have passed since a full scan.
@@ -83,17 +84,26 @@ on the next tick.
 
 Each step reports `ok`, `failed`, `waiting`, or `skipped`, with a reason and a
 short summary. Waiting covers unmet preconditions such as a missing daily
-note or a busy vault. Exit status is 0 when steps succeeded, waited, or were
-not due; 1 when a step failed; and 2 for usage/configuration errors or a
-writer-host mismatch. A step timeout fails that step and the later steps
-continue after its process group is stopped. A handled signal exits with
-`128 + signal number` (for example, 143 for `SIGTERM`).
+note, a busy vault, or notes edited mid-scan. Exit status is 0 when steps
+succeeded, waited, or were not due; 1 when a step failed; and 2 for
+usage/configuration errors or a writer-host mismatch. A step timeout fails
+that step and the later steps continue after its process group is stopped. A
+handled signal exits with `128 + signal number` (for example, 143 for
+`SIGTERM`).
+
+Contention waits escalate: when a step keeps reporting `vault_busy` or
+`inputs_changed` for 2 hours without a success, the next contention wait
+reports `failed` with reason `stalled` and a summary like
+`still waiting after 2h · vault busy · retrying next tick`. The stalled
+failure consumes the interval, so a stuck lock mails once per interval
+instead of every 5 minutes. Gate waits (`note_missing`,
+`note_unrendered`, `pomodoros_missing`) never escalate.
 
 Reasons are stable codes: `due`, `never_ran`, `follows_intake`, `follow_up`,
 `named`, and `all` explain a run; `not_due`, `manual`, `off`, and `unchanged`
-explain a skip; `note_missing`, `note_unrendered`, `pomodoros_missing`, and
-`vault_busy` explain a wait; `exit_nonzero`, `timeout`, `spawn_failed`, and
-`interrupted` explain a failure.
+explain a skip; `note_missing`, `note_unrendered`, `pomodoros_missing`,
+`vault_busy`, and `inputs_changed` explain a wait; `exit_nonzero`,
+`timeout`, `spawn_failed`, `interrupted`, and `stalled` explain a failure.
 
 Only one run proceeds at a time. A second non-interactive run prints
 `already running` with the step in flight and exits 0 without writing state

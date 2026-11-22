@@ -8,7 +8,7 @@ use super::{
     render,
     schedule::{self, Trigger},
     signals,
-    state::{State, StepState},
+    state::{is_contention_wait, State, StepState, CONTENTION_STALL_AFTER},
     Options,
 };
 use crate::native::{
@@ -392,7 +392,7 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
             row.duration_ms =
                 Some(child_began.elapsed().as_millis().min(u64::MAX as u128)
                     as u64);
-            let consumes_interval = match output {
+            let mut consumes_interval = match output {
                 Ok(output) => {
                     row.started_at = Some(at);
                     row.exit_code = output.status;
@@ -462,8 +462,39 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
                 }
             };
             let finished = now().map_err(|e| (2, e))?;
+            // Escalate persistent contention: a contention wait that arrives
+            // at least CONTENTION_STALL_AFTER after the first consecutive
+            // wait becomes a stalled failure so it alerts. Gate waits never
+            // escalate.
+            if row.outcome == Outcome::Waiting
+                && is_contention_wait(&row.reason)
+            {
+                let consecutive =
+                    matches!(prior.last_outcome, Some(Outcome::Waiting))
+                        && prior
+                            .last_reason
+                            .as_deref()
+                            .is_some_and(is_contention_wait);
+                let since = if consecutive {
+                    prior.waiting_since.unwrap_or(at)
+                } else {
+                    at
+                };
+                if finished.signed_duration_since(since)
+                    >= CONTENTION_STALL_AFTER
+                {
+                    let detail = row.detail.clone();
+                    row.outcome = Outcome::Failed;
+                    row.reason = "stalled".into();
+                    row.summary = format!("still waiting after 2h · {detail}");
+                    consumes_interval = true;
+                }
+            }
             record_result(&mut state, &row, finished, consumes_interval);
-            if row.started_at.is_some() && !step.intake {
+            if row.started_at.is_some()
+                && !step.intake
+                && row.outcome != Outcome::Waiting
+            {
                 state
                     .steps
                     .entry(step.name.into())
@@ -545,6 +576,19 @@ fn record_result(
 ) {
     let entry: &mut StepState =
         state.steps.entry(row.name.clone()).or_default();
+    // Track the first consecutive contention wait for stall escalation.
+    // Gate waits and every other outcome clear it, so they never escalate.
+    if row.outcome == Outcome::Waiting && is_contention_wait(&row.reason) {
+        let consecutive = matches!(entry.last_outcome, Some(Outcome::Waiting))
+            && entry.last_reason.as_deref().is_some_and(is_contention_wait);
+        if !consecutive {
+            entry.waiting_since = row.started_at.or(Some(finished));
+        } else if entry.waiting_since.is_none() {
+            entry.waiting_since = row.started_at.or(Some(finished));
+        }
+    } else {
+        entry.waiting_since = None;
+    }
     if consumes_interval {
         entry.last_started_at = row.started_at;
     }

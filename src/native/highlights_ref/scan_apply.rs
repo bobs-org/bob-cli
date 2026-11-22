@@ -341,7 +341,7 @@ fn lock_validate_intake_and_execute(
                 return Err(finish_locked_error(
                     config,
                     options,
-                    scan_inputs_changed_error(&reason),
+                    destination_asset_changed_error(&reason),
                     prepared.intake.clone(),
                     0,
                     locks,

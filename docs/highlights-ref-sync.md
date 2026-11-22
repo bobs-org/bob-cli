@@ -1217,7 +1217,8 @@ contract migration.
 | `intake_collision` | An intake destination already exists (`paths`: the colliding destinations). Discovered during unlocked planning this is a prelock failure and leaves the receipt untouched; discovered after the writer lock is held it writes the error receipt |
 | `output_collision` | Two PDFs map to one note or asset path (`paths`: the colliding targets) |
 | `dirty_targets` | A targeted `ref sync` refused a protected dirty write target, or an older bob version returned its scan-wide dirty-preflight error (`paths`: the dirty files). Current writing full scans report this reason in `held[]` and succeed when no genuine failures occur |
-| `scan_failed` | Every other hard failure |
+| `inputs_changed` | Vault notes changed while the scan was planning; the next scan retries. `bob tick` reports this as a `waiting` step |
+| `scan_failed` | Every other hard failure, including destination-asset changes that fail closed |
 
 ### Writer lock
 

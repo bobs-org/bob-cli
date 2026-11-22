@@ -221,6 +221,13 @@ pub(super) fn scan_inputs_changed_error(reason: &str) -> CommandError {
     CommandError::new(format!(
         "scan inputs changed during planning ({reason}); rerun bob ref scan"
     ))
+    .with_code("inputs_changed")
+}
+
+pub(super) fn destination_asset_changed_error(reason: &str) -> CommandError {
+    CommandError::new(format!(
+        "scan inputs changed during planning ({reason}); rerun bob ref scan"
+    ))
     .with_code("scan_failed")
 }
 
@@ -716,6 +723,11 @@ pub(super) fn prepare_from_inputs(
             &intake,
             &dest_roots,
         ) {
+            if is_destination_asset_stale(&reason) {
+                return Err(destination_asset_changed_error(&format!(
+                    "{reason} during planning"
+                )));
+            }
             return Err(scan_inputs_changed_error(&format!(
                 "{reason} during planning"
             )));
@@ -825,8 +837,9 @@ pub(super) fn prepare_full_scan(
 /// bytes changing during that pass fail closed without a retry: overwrite
 /// protection cannot restore dest from source, and a retry would treat the
 /// vandalized dest as the new baseline then collide at write. Persistent
-/// churn returns the existing generic `scan_failed` envelope with a rerun
-/// hint; it never spins and never parses the whole library while locked.
+/// churn returns the `inputs_changed` envelope with a rerun hint (destination
+/// assets stay `scan_failed`); it never spins and never parses the whole
+/// library while locked.
 pub(super) fn prepare_full_scan_with_retry(
     config: &Config,
     options: SyncOptions,
@@ -840,7 +853,7 @@ pub(super) fn is_destination_asset_stale(reason: &str) -> bool {
 }
 
 fn is_inputs_changed_during_planning(error: &CommandError) -> bool {
-    error.code == Some("scan_failed")
+    error.code == Some("inputs_changed")
         && error
             .message
             .contains("scan inputs changed during planning")
@@ -881,7 +894,7 @@ pub(super) fn prepare_full_scan_with_retry_date(
         PreparedValidation::Stale { reason }
             if is_destination_asset_stale(&reason) =>
         {
-            Err(scan_inputs_changed_error(&reason))
+            Err(destination_asset_changed_error(&reason))
         }
         PreparedValidation::Stale { .. } => {
             // Clear stale reservations before the single rebuild so a
@@ -892,6 +905,11 @@ pub(super) fn prepare_full_scan_with_retry_date(
             let rebuilt = prepare_full_scan(config, options, jobs, Some(date))?;
             match validate_prepared_scan(&rebuilt) {
                 PreparedValidation::Unchanged => Ok(rebuilt),
+                PreparedValidation::Stale { reason }
+                    if is_destination_asset_stale(&reason) =>
+                {
+                    Err(destination_asset_changed_error(&reason))
+                }
                 PreparedValidation::Stale { reason } => {
                     Err(scan_inputs_changed_error(&reason))
                 }
@@ -2231,8 +2249,9 @@ mod tests {
             reason.contains("destination asset changed"),
             "dest vandalism must be classified as a destination-asset change: {reason}"
         );
-        let error =
-            scan_inputs_changed_error(&format!("{reason} during planning"));
+        let error = destination_asset_changed_error(&format!(
+            "{reason} during planning"
+        ));
         assert_eq!(error.code, Some("scan_failed"));
         assert!(error.message.contains("scan inputs changed"));
         assert!(
@@ -2242,6 +2261,7 @@ mod tests {
         let source = scan_inputs_changed_error(
             "input changed: /tmp/text.markdown during planning",
         );
+        assert_eq!(source.code, Some("inputs_changed"));
         assert!(is_inputs_changed_during_planning(&source));
     }
 }

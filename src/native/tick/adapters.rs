@@ -57,6 +57,39 @@ fn child_code(value: &Value) -> Option<String> {
     None
 }
 
+/// Shared contention mapping every adapter's nonzero path consults before
+/// falling back to `Failed`: vault/scan lock timeouts report `vault_busy`
+/// without consuming the interval, and a refs `inputs_changed` reports a
+/// wait that consumes the refs interval (bounding CPU by one refs cadence).
+/// Interrupts and timeouts are never contention and still fail.
+fn contention_wait(output: &RawRunOutput) -> Option<Adapted> {
+    if output.interrupted || output.timed_out {
+        return None;
+    }
+    if output.status == Some(0) {
+        return None;
+    }
+    let value = stdout_value(output)?;
+    let code = child_code(&value)?;
+    match code.as_str() {
+        "lock_busy" | "scan_busy" => Some(Adapted {
+            outcome: Outcome::Waiting,
+            reason: "vault_busy".into(),
+            summary: "vault busy · retrying next tick".into(),
+            detail: "vault busy · retrying next tick".into(),
+            consumes_interval: false,
+        }),
+        "inputs_changed" => Some(Adapted {
+            outcome: Outcome::Waiting,
+            reason: "inputs_changed".into(),
+            summary: "notes changed during scan · retrying".into(),
+            detail: "notes changed during scan · retrying".into(),
+            consumes_interval: true,
+        }),
+        _ => None,
+    }
+}
+
 fn generic_ok(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted {
         return Adapted {
@@ -77,6 +110,9 @@ fn generic_ok(output: &RawRunOutput, reason: &str) -> Adapted {
         };
     }
     if output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
         let summary = format!(
             "exit {}",
             output
@@ -173,8 +209,10 @@ fn get_u64(value: &Value, path: &[&str]) -> usize {
 }
 
 pub(super) fn gcal(output: &RawRunOutput, reason: &str) -> Adapted {
-    // Nonzero is always failed, even when JSON carries waiting.
     if output.interrupted || output.timed_out || output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -318,6 +356,9 @@ pub(super) fn gmail(output: &RawRunOutput, reason: &str) -> Adapted {
         return generic_ok(output, reason);
     }
     if output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -380,6 +421,9 @@ pub(super) fn gmail(output: &RawRunOutput, reason: &str) -> Adapted {
 
 pub(super) fn gkeep(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted || output.timed_out || output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -423,6 +467,9 @@ pub(super) fn gkeep(output: &RawRunOutput, reason: &str) -> Adapted {
 
 pub(super) fn refs(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted || output.timed_out || output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -491,6 +538,9 @@ pub(super) fn refs(output: &RawRunOutput, reason: &str) -> Adapted {
 
 pub(super) fn projects(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted || output.timed_out || output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -538,6 +588,9 @@ pub(super) fn projects(output: &RawRunOutput, reason: &str) -> Adapted {
 
 pub(super) fn tasks(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted || output.timed_out || output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -601,5 +654,152 @@ pub(super) fn tasks(output: &RawRunOutput, reason: &str) -> Adapted {
         summary: counts(vec![(total, "status change", "status changes")]),
         detail: String::new(),
         consumes_interval: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::subprocess_runner::RawRunOutput;
+
+    fn failed_with(code: &str) -> RawRunOutput {
+        RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": code,
+                    "message": format!("child failed with {code}"),
+                },
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        }
+    }
+
+    fn failed_with_top_code(code: &str) -> RawRunOutput {
+        RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "code": code,
+                "message": format!("child failed with {code}"),
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        }
+    }
+
+    #[test]
+    fn lock_busy_maps_to_vault_busy_wait_without_consuming_interval() {
+        for code in ["lock_busy", "scan_busy"] {
+            for output in [failed_with(code), failed_with_top_code(code)] {
+                for adapted in [
+                    generic_ok(&output, "due"),
+                    gcal(&output, "due"),
+                    gmail(&output, "due"),
+                    gkeep(&output, "due"),
+                    refs(&output, "due"),
+                    projects(&output, "due"),
+                    tasks(&output, "due"),
+                ] {
+                    assert_eq!(adapted.outcome, Outcome::Waiting, "{code}");
+                    assert_eq!(adapted.reason, "vault_busy", "{code}");
+                    assert_eq!(
+                        adapted.summary, "vault busy · retrying next tick",
+                        "{code}"
+                    );
+                    assert!(!adapted.consumes_interval, "{code}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inputs_changed_maps_to_wait_that_consumes_interval() {
+        for output in [
+            failed_with("inputs_changed"),
+            failed_with_top_code("inputs_changed"),
+        ] {
+            for adapted in [
+                generic_ok(&output, "due"),
+                gcal(&output, "due"),
+                refs(&output, "due"),
+                projects(&output, "due"),
+                tasks(&output, "due"),
+                gmail(&output, "due"),
+                gkeep(&output, "due"),
+            ] {
+                assert_eq!(adapted.outcome, Outcome::Waiting);
+                assert_eq!(adapted.reason, "inputs_changed");
+                assert_eq!(
+                    adapted.summary,
+                    "notes changed during scan · retrying"
+                );
+                assert!(adapted.consumes_interval);
+            }
+        }
+    }
+
+    #[test]
+    fn interrupts_and_timeouts_still_fail() {
+        let interrupted = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "error": {"code": "lock_busy", "message": "busy"},
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: true,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        let timed_out = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "error": {"code": "inputs_changed", "message": "busy"},
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: true,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        for output in [&interrupted, &timed_out] {
+            for adapted in [
+                generic_ok(output, "due"),
+                gcal(output, "due"),
+                refs(output, "due"),
+                projects(output, "due"),
+            ] {
+                assert_eq!(adapted.outcome, Outcome::Failed);
+            }
+        }
+        assert_eq!(generic_ok(&interrupted, "due").reason, "interrupted");
+        assert_eq!(generic_ok(&timed_out, "due").reason, "timeout");
+    }
+
+    #[test]
+    fn other_codes_still_fail() {
+        let output = failed_with("sync_failed");
+        let adapted = generic_ok(&output, "due");
+        assert_eq!(adapted.outcome, Outcome::Failed);
+        assert_eq!(adapted.reason, "exit_nonzero");
     }
 }

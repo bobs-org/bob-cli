@@ -1028,6 +1028,13 @@ fn scan_error_parts(
                     .to_string(),
             ),
         ),
+        "inputs_changed" => (
+            error.message.clone(),
+            Some(
+                "notes changed while the scan was planning; the next scan retries"
+                    .to_string(),
+            ),
+        ),
         _ => (error.message.clone(), None),
     };
     (code, message, hint, paths)

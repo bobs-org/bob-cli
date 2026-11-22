@@ -58,8 +58,8 @@ pub(crate) struct CommandError {
     pub(super) exit_code: Option<i32>,
     /// Machine-readable `ref scan --format json` failure code
     /// (`lock_busy`, `scan_busy`, `hook_failed`, `intake_collision`,
-    /// `output_collision`, `dirty_targets`); `None` means `scan_failed`.
-    /// Human rendering ignores it.
+    /// `output_collision`, `dirty_targets`, `inputs_changed`);
+    /// `None` means `scan_failed`. Human rendering ignores it.
     pub(super) code: Option<&'static str>,
     /// Vault paths the failure site knows (colliding destinations,
     /// colliding targets, dirty files); human rendering ignores them.

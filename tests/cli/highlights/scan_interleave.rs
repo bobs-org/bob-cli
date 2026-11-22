@@ -308,7 +308,7 @@ fn assert_inputs_changed_or_imported(
     );
     let document = scan_json_stdout(output);
     if document.get("error").is_some() {
-        assert_eq!(document["error"]["code"], "scan_failed");
+        assert_eq!(document["error"]["code"], "inputs_changed");
         assert!(
             document["error"]["message"]
                 .as_str()
@@ -320,7 +320,7 @@ fn assert_inputs_changed_or_imported(
         assert_eq!(
             fs::read_to_string(note).expect("note after refusal"),
             before,
-            "scan_failed must not mutate the note"
+            "inputs_changed must not mutate the note"
         );
     } else {
         assert_eq!(output.status.code(), Some(0), "{}", format_output(output));
@@ -677,7 +677,7 @@ fn stale_inputs_after_prepare_replans_or_refuses() {
     if document.get("error").is_some() {
         assert_eq!(
             document["error"]["code"],
-            "scan_failed",
+            "inputs_changed",
             "{}",
             format_output(&output)
         );
@@ -740,7 +740,7 @@ fn repeated_churn_after_prepare_terminates() {
         format_output(&output)
     );
     let document = scan_json_stdout(&output);
-    assert_eq!(document["error"]["code"], "scan_failed");
+    assert_eq!(document["error"]["code"], "inputs_changed");
     assert!(
         document["error"]["message"]
             .as_str()
@@ -1317,7 +1317,7 @@ fn same_length_edits_before_evidence_replan() {
     );
     let document = scan_json_stdout(&output);
     if document.get("error").is_some() {
-        assert_eq!(document["error"]["code"], "scan_failed");
+        assert_eq!(document["error"]["code"], "inputs_changed");
         assert!(
             document["error"]["message"]
                 .as_str()
@@ -1477,7 +1477,7 @@ fn source_image_edit_before_evidence_copies_or_refuses() {
     );
     let document = scan_json_stdout(&output);
     if document.get("error").is_some() {
-        assert_eq!(document["error"]["code"], "scan_failed");
+        assert_eq!(document["error"]["code"], "inputs_changed");
         assert!(
             document["error"]["message"]
                 .as_str()
@@ -1583,7 +1583,7 @@ fn pdf_added_after_snapshot_replans_with_both_or_refuses() {
     );
     let document = scan_json_stdout(&output);
     if document.get("error").is_some() {
-        assert_eq!(document["error"]["code"], "scan_failed");
+        assert_eq!(document["error"]["code"], "inputs_changed");
         assert!(
             document["error"]["message"]
                 .as_str()

@@ -63,6 +63,9 @@ if custom:
     print(custom)
 else:
     print('{}')
+exit_code = os.environ.get('FAKE_EXIT_' + name.upper())
+if exit_code:
+    sys.exit(int(exit_code))
 "#).unwrap();
         fs::set_permissions(
             this.path("step.py"),
@@ -903,4 +906,264 @@ fn per_step_summaries_come_from_real_json_shapes() {
     let v: Value = serde_json::from_slice(&d.stdout).unwrap();
     assert_eq!(v["steps"][3]["gate"]["kind"], "refs_change");
     assert_eq!(v["steps"][3]["would_run"], true);
+}
+
+#[test]
+fn contention_waits_report_waiting_and_exit_zero() {
+    let lock_busy = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "lock_busy",
+            "message": "could not acquire the vault maintenance lock: busy",
+        },
+    })
+    .to_string();
+    let scan_busy = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "scan_busy",
+            "message": "another bob ref scan is still running",
+        },
+    })
+    .to_string();
+    let inputs_changed = serde_json::json!({
+        "ok": false,
+        "schema_version": 1,
+        "command": "ref scan",
+        "error": {
+            "code": "inputs_changed",
+            "message": "scan inputs changed during planning (input changed: 2026/20261118.md); rerun bob ref scan",
+        },
+    })
+    .to_string();
+    // Projects lock_busy waits without consuming the interval.
+    let f = Fixture::new();
+    f.json(T0, &["projects"]);
+    let before: Value = serde_json::from_slice(&f.saved("state")).unwrap();
+    let started_before = before["steps"]["projects"]["last_started_at"].clone();
+    let out = f
+        .command("2026-11-18T11:00:00Z")
+        .args(["projects", "-f", "json"])
+        .env("FAKE_JSON_PROJECTS", &lock_busy)
+        .env("FAKE_EXIT_PROJECTS", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["exit_code"], 0);
+    let projects = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "projects")
+        .unwrap();
+    assert_eq!(projects["outcome"], "waiting");
+    assert_eq!(projects["reason"], "vault_busy");
+    assert_eq!(projects["summary"], "vault busy · retrying next tick");
+    let after: Value = serde_json::from_slice(&f.saved("state")).unwrap();
+    assert_eq!(
+        after["steps"]["projects"]["last_started_at"], started_before,
+        "vault_busy must not restart the clock"
+    );
+    assert!(
+        after["steps"]["projects"]["waiting_since"].is_string(),
+        "first contention wait records waiting_since"
+    );
+    // Scan lock contention maps the same way, including via gcal's adapter.
+    let f2 = Fixture::new();
+    let out = f2
+        .command(T0)
+        .args(["gcal", "-f", "json"])
+        .env("FAKE_JSON_GCAL", &scan_busy)
+        .env("FAKE_EXIT_GCAL", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let gcal = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "gcal")
+        .unwrap();
+    assert_eq!(gcal["reason"], "vault_busy");
+    assert_eq!(gcal["outcome"], "waiting");
+    // Refs inputs_changed waits while consuming the refs interval.
+    let f3 = Fixture::new();
+    f3.json(T0, &["refs"]);
+    let out = f3
+        .command("2026-11-18T10:15:00Z")
+        .args(["refs", "-f", "json"])
+        .env("FAKE_JSON_REFS", &inputs_changed)
+        .env("FAKE_EXIT_REFS", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["exit_code"], 0);
+    let refs = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "refs")
+        .unwrap();
+    assert_eq!(refs["outcome"], "waiting");
+    assert_eq!(refs["reason"], "inputs_changed");
+    assert_eq!(refs["summary"], "notes changed during scan · retrying");
+    let after: Value = serde_json::from_slice(&f3.saved("state")).unwrap();
+    assert_eq!(
+        after["steps"]["refs"]["last_started_at"], refs["started_at"],
+        "inputs_changed consumes the refs interval"
+    );
+}
+
+#[test]
+fn persistent_contention_escalates_to_stalled() {
+    let lock_busy = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "lock_busy",
+            "message": "could not acquire the vault maintenance lock: busy",
+        },
+    })
+    .to_string();
+    let f = Fixture::new();
+    f.json(T0, &["projects"]);
+    // Seed a contention wait older than the 2h stall window.
+    let path = f.path("state/bob-cli/tick/state.json");
+    let mut state: Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state["steps"]["projects"]["last_outcome"] = Value::from("waiting");
+    state["steps"]["projects"]["last_reason"] = Value::from("vault_busy");
+    state["steps"]["projects"]["waiting_since"] =
+        Value::from("2026-11-18T08:00:00Z");
+    fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+    let out = f
+        .command("2026-11-18T11:00:00Z")
+        .args(["projects", "-f", "json"])
+        .env("FAKE_JSON_PROJECTS", &lock_busy)
+        .env("FAKE_EXIT_PROJECTS", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let projects = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "projects")
+        .unwrap();
+    assert_eq!(projects["outcome"], "failed");
+    assert_eq!(projects["reason"], "stalled");
+    assert!(
+        projects["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("still waiting after 2h · "),
+        "{}",
+        projects["summary"]
+    );
+    // A fresh wait below the window still waits.
+    let f2 = Fixture::new();
+    f2.json(T0, &["projects"]);
+    let out = f2
+        .command("2026-11-18T10:30:00Z")
+        .args(["projects", "-f", "json"])
+        .env("FAKE_JSON_PROJECTS", &lock_busy)
+        .env("FAKE_EXIT_PROJECTS", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let projects = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "projects")
+        .unwrap();
+    assert_eq!(projects["outcome"], "waiting");
+}
+
+#[test]
+fn waiting_derive_keeps_follow_up_pending() {
+    let lock_busy = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "lock_busy",
+            "message": "could not acquire the vault maintenance lock: busy",
+        },
+    })
+    .to_string();
+    let f = Fixture::new();
+    f.config("tick: {steps: {projects: 1d, tasks: 1d}}");
+    f.json(T0, &[]);
+    fs::create_dir_all(f.path("vault/lib")).unwrap();
+    fs::write(f.path("vault/lib/tick-15.pdf"), "%PDF-1.4 tick 15").unwrap();
+    let out = f
+        .command("2026-11-18T10:15:00Z")
+        .args(["-f", "json"])
+        .env("FAKE_JSON_PROJECTS", &lock_busy)
+        .env("FAKE_EXIT_PROJECTS", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let projects = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "projects")
+        .unwrap();
+    assert_eq!(projects["outcome"], "waiting");
+    let state: Value = serde_json::from_slice(&f.saved("state")).unwrap();
+    assert_eq!(
+        state["steps"]["projects"]["follow_up_pending"], true,
+        "a waiting derive step must keep its follow-up"
+    );
+    let r = f.json("2026-11-18T10:16:00Z", &[]);
+    assert!(
+        ran(&r).contains(&"projects"),
+        "follow-up must rerun projects even before its 1d interval"
+    );
+    assert_eq!(
+        r["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "projects")
+            .unwrap()["reason"],
+        "follow_up"
+    );
+}
+
+#[test]
+fn destination_asset_scan_failed_still_fails() {
+    let dest_failed = serde_json::json!({
+        "ok": false,
+        "schema_version": 1,
+        "command": "ref scan",
+        "error": {
+            "code": "scan_failed",
+            "message": "scan inputs changed during planning (destination asset changed: ref/chat/live.assets/fig.png); rerun bob ref scan",
+        },
+    })
+    .to_string();
+    let f = Fixture::new();
+    let out = f
+        .command(T0)
+        .args(["refs", "-f", "json"])
+        .env("FAKE_JSON_REFS", &dest_failed)
+        .env("FAKE_EXIT_REFS", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let refs = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "refs")
+        .unwrap();
+    assert_eq!(refs["outcome"], "failed");
+    assert_eq!(refs["reason"], "exit_nonzero");
 }
