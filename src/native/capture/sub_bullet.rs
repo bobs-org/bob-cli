@@ -250,7 +250,7 @@ pub(super) fn plan_insert_reqs_capture(
     };
     let report = RequirementWriteJson::from_insert(
         parent.description.clone(),
-        blocks.len(),
+        write.added,
         write.scooped,
         write.notes_created,
         dry_run,

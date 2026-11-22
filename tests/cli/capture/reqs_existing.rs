@@ -207,7 +207,7 @@ fn same_line_req_and_its_children_insert_as_one_block() {
         &[],
         "@work+ex [ ] Handles CRLF\n- [ ] Windows line endings\n  - Fixture: windows.csv",
     );
-    assert_requirement(&json, "Owner", 1, 1, true, false);
+    assert_requirement(&json, "Owner", 2, 1, true, false);
     assert_eq!(
         fs::read_to_string(&target).expect("read work note"),
         concat!(
@@ -217,6 +217,37 @@ fn same_line_req_and_its_children_insert_as_one_block() {
             "\t\t\t- Fixture: windows.csv\n",
             "\t- NOTES\n",
             "\t\t- existing loose note\n",
+        )
+    );
+}
+
+#[test]
+fn nested_requirements_count_at_every_depth_like_new_blocks() {
+    let temp = TempDir::new("bob-cli-capture-reqs-existing-count");
+    let vault = temp.path().join("vault");
+    let target = vault.join("work.md");
+    write_file(&target, "- [ ] #task Owner ^ex\n");
+    let draft = concat!(
+        "@work+ex\n",
+        "- [ ] Outer\n",
+        "  - [ ] Inner\n",
+        "    - [ ] Deepest\n",
+        "  - note of outer\n",
+        "- [ ] Second",
+    );
+    let json = capture_json(&vault, &["--dry-run"], draft);
+    assert_requirement(&json, "Owner", 4, 0, false, true);
+    let json = capture_json(&vault, &[], draft);
+    assert_requirement(&json, "Owner", 4, 0, false, false);
+    assert_eq!(
+        fs::read_to_string(&target).expect("read work note"),
+        concat!(
+            "- [ ] #task Owner ^ex\n",
+            "\t- [ ] Outer\n",
+            "\t\t- [ ] Inner\n",
+            "\t\t\t- [ ] Deepest\n",
+            "\t\t- note of outer\n",
+            "\t- [ ] Second\n",
         )
     );
 }

@@ -7987,7 +7987,8 @@ beneath `task_line`, before any clipboard children and schedule log.
 A capture item that wrote requirements adds `requirements`: one object per
 owner, `{owner, added,
 notes_filed, notes_created, summary}`, omitted when empty. `owner` is the
-task description; `added` is the requirement count in the written forest;
+task description; `added` counts the requirements this item wrote, nested
+ones included, on a new block and on an existing task alike;
 `notes_filed` / `notes_created` describe the `NOTES` filing; `summary` is
 the human line (`⌗⌗ added {k} requirement(s) to “{S}”`, plus
 ` · filed {n} note(s) under NOTES` when notes moved; dry runs use `adds` /

@@ -604,6 +604,9 @@ pub(crate) struct InsertWrite {
     pub(crate) first_line: usize,
     /// Lines the reqs occupy (head lines plus their nested lines).
     pub(crate) line_count: usize,
+    /// Requirements the write added at every depth: each block's head plus
+    /// the reqs nested under it.
+    pub(crate) added: usize,
     /// Loose notes the first-req scoop filed under `NOTES`.
     pub(crate) scooped: usize,
     /// `NOTES` was created by this write.
@@ -673,21 +676,30 @@ pub(crate) fn insert_reqs(
         notes_created = scoop.created;
         updated = scoop.updated;
     }
-    let deepest = task_reqs::note_req_forest(&updated, settings)
+    let forest = task_reqs::note_req_forest(&updated, settings);
+    let deepest = forest
         .iter()
         .any(|node| node.owner_line == task.line_index && node.depth_exceeded);
     if deepest {
         return Err(WriteRefusal::new("req_depth", task_reqs::copy::REQ_DEPTH));
     }
+    let owned_before = task_reqs::note_req_forest(contents, settings)
+        .iter()
+        .filter(|node| node.owner_line == task.line_index)
+        .count();
+    let owned_after = forest
+        .iter()
+        .filter(|node| node.owner_line == task.line_index)
+        .count();
+    let added = owned_after.saturating_sub(owned_before);
     let top_level: Vec<usize> = {
-        let mut heads: Vec<usize> =
-            task_reqs::note_req_forest(&updated, settings)
-                .iter()
-                .filter(|node| {
-                    node.owner_line == task.line_index && node.depth == 1
-                })
-                .map(|node| node.line_index)
-                .collect();
+        let mut heads: Vec<usize> = forest
+            .iter()
+            .filter(|node| {
+                node.owner_line == task.line_index && node.depth == 1
+            })
+            .map(|node| node.line_index)
+            .collect();
         heads.sort_unstable();
         heads
     };
@@ -700,6 +712,7 @@ pub(crate) fn insert_reqs(
         updated: restore_final_newline(contents, updated),
         first_line,
         line_count,
+        added,
         scooped,
         notes_created,
     })

@@ -444,8 +444,9 @@ typed immediately after an expansion is absorbed, and so is a space typed
 immediately after that `]`; absorption stops at the first other keystroke
 or caret move. Backspace with the caret right after a bullet-start `[ ] `
 removes the whole marker and leaves `- `. Paste, templates, and
-`bob capture` never rewrite. (Shipped in the `capture-reqs` phase; Obsidian
-and Mac implement the same described behavior.)
+`bob capture` never rewrite. (bob's rule shipped in the `capture-reqs`
+phase; the Obsidian typing assist lands with `obsidian-gestures` and the Mac
+with `mac-authoring`.)
 
 ## 6. Carry: a req becomes its own task
 
