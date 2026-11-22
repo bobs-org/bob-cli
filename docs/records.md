@@ -560,8 +560,13 @@ documents `[n` / `]n` and the missing-record guard.
   equals the canonical line), `stale` (one walk line, content differs,
   rewritten in place), `missing` (no walk line, inserted per placement), and
   `damaged` (reported, never written: `extra_text`, `duplicate_lines`, or
-  `no_frontmatter`). Deleting the offending line heals a damaged record on
-  the next sync.
+  `no_frontmatter`). A walk line may carry a foreign target immediately
+  before the album hub with a `‹` label prefix (for example,
+  `[[the_prompt_composer|‹ The Prompt Input Widget]]`), or immediately after
+  it with a `›` label suffix. An Obsidian rename or move therefore leaves
+  those neighbours `stale`; the next sync, including the plugin's automatic
+  rename sync, rewrites their lines in place. Deleting the offending line
+  heals a damaged record on the next sync.
 - **Owners and radius.** `bob albums sync` is the full repair owner. Capture
   creates and `bob records new` stage only the lines their batch changes (the
   new records plus neighbours whose canonical line differs). A record update

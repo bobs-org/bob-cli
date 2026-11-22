@@ -119,6 +119,7 @@ plugins:
           - periods.md
           - stats.md
           - task-dependencies.md
+          - task-requirements.md
           - task-relations.md
           - task-move.md
           - task-archive.md

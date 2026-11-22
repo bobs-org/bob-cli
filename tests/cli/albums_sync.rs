@@ -323,6 +323,89 @@ fn walk_sync_repairs_only_the_retitle_and_delete_radius() {
 }
 
 #[test]
+fn walk_sync_heals_an_obsidian_rename_rewrite() {
+    let temp = TempDir::new("album-sync-walk-obsidian-rename");
+    let vault = walk_fixture(
+        &temp,
+        &[("apple", "Apple"), ("lime", "Lime"), ("mango", "Mango")],
+    );
+    let initial = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(
+        initial.status.code(),
+        Some(0),
+        "{}",
+        format_output(&initial)
+    );
+
+    fs::rename(vault.join("eat/lime.md"), vault.join("eat/lemon.md"))
+        .expect("rename record as Obsidian does");
+    let renamed = fs::read_to_string(vault.join("eat/lemon.md")).unwrap();
+    write(
+        &vault,
+        "eat/lemon.md",
+        &renamed.replace("title: Lime", "title: Lemon"),
+    );
+    let mut neighbors = Vec::new();
+    for path in ["eat/apple.md", "eat/mango.md"] {
+        let before = fs::read_to_string(vault.join(path)).unwrap();
+        let rewritten = before.replace("[[eat/lime|", "[[lemon|");
+        assert_ne!(before, rewritten);
+        write(&vault, path, &rewritten);
+        neighbors.push((path, before));
+    }
+    commit_all(&vault, "Obsidian rename with shortest-path walk arms");
+    let lemon_before = fs::read(vault.join("eat/lemon.md")).unwrap();
+
+    let check = run(&vault, &temp, &["check", "-f", "json"]);
+    assert_eq!(check.status.code(), Some(0), "{}", format_output(&check));
+    let payload = json(&check);
+    let album = payload["albums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|album| album["stem"] == "eat")
+        .unwrap();
+    assert_eq!(album["walk"]["state"], "stale");
+    assert_eq!(album["walk"]["counts"]["stale"], 2);
+    assert_eq!(album["walk"]["counts"]["damaged"], 0);
+    assert!(!album["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "album_walk_damaged"));
+
+    let sync = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(sync.status.code(), Some(0), "{}", format_output(&sync));
+    let payload = json(&sync);
+    assert_eq!(payload["counts"]["walk_lines"], 2);
+    let walk_paths = payload["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["kind"] == "walk")
+        .map(|change| change["path"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(walk_paths, ["eat/apple.md", "eat/mango.md"]);
+    for (path, before) in neighbors {
+        assert_eq!(
+            fs::read_to_string(vault.join(path)).unwrap(),
+            before
+                .replace("eat/lime", "eat/lemon")
+                .replace("Lime", "Lemon"),
+            "only the renamed neighbor's path and label change in {path}"
+        );
+    }
+    assert_eq!(fs::read(vault.join("eat/lemon.md")).unwrap(), lemon_before);
+
+    let again = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(again.status.code(), Some(0), "{}", format_output(&again));
+    let payload = json(&again);
+    assert_eq!(changed_paths(&payload), Vec::<String>::new());
+    assert_eq!(payload["commit"], Value::Null);
+    assert_eq!(payload["counts"]["walk_lines"], 0);
+}
+
+#[test]
 fn walk_sync_leaves_a_damaged_line_and_warns() {
     let temp = TempDir::new("album-sync-walk-damaged");
     let vault = walk_fixture(&temp, &[("apple", "Apple"), ("mango", "Mango")]);

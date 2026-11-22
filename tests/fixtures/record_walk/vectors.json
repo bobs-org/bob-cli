@@ -91,6 +91,102 @@
   ],
   "recognition": [
     {
+      "name": "obsidian-shortest-path-next-arm-is-stale",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen ›]]\n",
+      "state": "stale",
+      "reason": null
+    },
+    {
+      "name": "obsidian-shortest-path-prev-arm-is-stale",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n",
+      "state": "stale",
+      "reason": null
+    },
+    {
+      "name": "moved-out-arm-is-stale",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[drinks/ramen|Ramen ›]]\n",
+      "state": "stale",
+      "reason": null
+    },
+    {
+      "name": "foreign-link-without-arrow-is-extra-text",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen]]\n",
+      "state": "damaged",
+      "reason": "extra_text"
+    },
+    {
+      "name": "foreign-arm-on-wrong-side-is-extra-text",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|‹ Ramen]]\n",
+      "state": "damaged",
+      "reason": "extra_text"
+    },
+    {
+      "name": "foreign-arm-not-adjacent-is-extra-text",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[pho|‹ Pho]] · [[eat/ramen|Ramen]] · [[eat|↑ Eat]]\n",
+      "state": "damaged",
+      "reason": "extra_text"
+    },
+    {
+      "name": "foreign-hub-like-link-is-extra-text",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|↑ Ramen]]\n",
+      "state": "damaged",
+      "reason": "extra_text"
+    },
+    {
+      "name": "foreign-ascii-arrow-is-extra-text",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen >]]\n",
+      "state": "damaged",
+      "reason": "extra_text"
+    },
+    {
+      "name": "foreign-arms-with-md-suffix-are-stale",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[pho.md|‹ Pho]] · [[eat|↑ Eat]] · [[ramen.md|Ramen ›]]\n",
+      "state": "stale",
+      "reason": null
+    },
+    {
+      "name": "duplicate-foreign-walks-stay-damaged",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen ›]]\n\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]\n",
+      "state": "damaged",
+      "reason": "duplicate_lines"
+    },
+    {
+      "name": "foreign-walk-without-frontmatter-stays-damaged",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen ›]]\n",
+      "state": "damaged",
+      "reason": "no_frontmatter"
+    },
+    {
+      "name": "fenced-foreign-walk-is-missing",
+      "album": "eat",
+      "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+      "markdown": "---\ntype: record\n---\n\n```md\n[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen ›]]\n```\n",
+      "state": "missing",
+      "reason": null
+    },
+    {
       "name": "canonical",
       "album": "eat",
       "canonical": "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",

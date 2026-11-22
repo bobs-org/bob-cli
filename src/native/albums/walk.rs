@@ -358,7 +358,8 @@ pub(crate) fn render_walk_line(
 }
 
 /// Recognize the walk state in one record and retain the physical line index
-/// for an in-place stale-line repair.
+/// for an in-place stale-line repair, including arms rewritten by an
+/// Obsidian rename or move.
 pub(crate) fn classify(
     markdown: &str,
     album_stem: &str,
@@ -425,7 +426,8 @@ pub(crate) fn classify(
 }
 
 /// Plan only the walk-line byte edit. Damage is always left for a person to
-/// resolve; a recognized moved line is rewritten where it currently sits.
+/// resolve; a recognized moved line or Obsidian-rewritten arm is repaired
+/// where the line currently sits.
 pub(crate) fn plan_line_edit(
     markdown: &str,
     album_stem: &str,
@@ -789,19 +791,26 @@ fn is_walk_line(line: &str, album_stem: &str) -> bool {
     let Some(links) = parse_link_run(line) else {
         return false;
     };
-    let mut roots = 0;
-    for link in &links {
-        let Some(root) = allowed_target(link.target, album_stem) else {
-            return false;
-        };
-        if root {
-            roots += 1;
-            if !link.label.starts_with('↑') {
-                return false;
-            }
-        }
+    let mut roots = links.iter().enumerate().filter(|(_, link)| {
+        allowed_target(link.target, album_stem) == Some(true)
+    });
+    let Some((hub, link)) = roots.next() else {
+        return false;
+    };
+    if roots.next().is_some() || !link.label.starts_with('↑') {
+        return false;
     }
-    roots == 1
+    links.iter().enumerate().all(|(index, link)| {
+        match allowed_target(link.target, album_stem) {
+            Some(_) => true,
+            None => is_foreign_arm(index, hub, link.label),
+        }
+    })
+}
+
+fn is_foreign_arm(index: usize, hub: usize, label: &str) -> bool {
+    (index + 1 == hub && label.starts_with('‹'))
+        || (index == hub + 1 && label.ends_with('›'))
 }
 
 fn has_nav_like_link(line: &str, album_stem: &str) -> bool {
@@ -1070,6 +1079,30 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_foreign_arms_only_beside_the_hub_with_arrows() {
+        for line in [
+            "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen ›]]",
+            "[[pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+            "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[drinks/ramen|Ramen ›]]",
+            "[[pho.md|‹ Pho]] · [[eat|↑ Eat]] · [[ramen.md|Ramen ›]]",
+        ] {
+            assert!(is_walk_line(line, "eat"), "{line}");
+        }
+        for line in [
+            "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen]]",
+            "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|‹ Ramen]]",
+            "[[pho|‹ Pho]] · [[eat/ramen|Ramen]] · [[eat|↑ Eat]]",
+            "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|↑ Ramen]]",
+            "[[pho|< Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]",
+            "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Ramen >]]",
+            "[[eat|↑ Eat]] · [[eat|↑ Eat]] · [[ramen|Ramen ›]]",
+            "[[pho|‹ Pho]] · [[eat|Eat]] · [[ramen|Ramen ›]]",
+        ] {
+            assert!(!is_walk_line(line, "eat"), "{line}");
+        }
+    }
+
+    #[test]
     fn trim_arrow_edges_before_markdown_escaping() {
         assert_eq!(
             sanitize_walk_label("‹  Ramen Ya ›", "ramen_ya"),
@@ -1244,6 +1277,20 @@ mod tests {
             classify(&after, "eat", canonical).state,
             WalkLineState::Current
         );
+        assert!(plan_line_edit(&after, "eat", canonical).is_none());
+    }
+
+    #[test]
+    fn obsidian_rewritten_walk_line_is_repaired_in_place_preserving_crlf() {
+        let stale = "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[ramen|Old Ramen ›]]";
+        let canonical =
+            "[[eat/pho|‹ Pho]] · [[eat|↑ Eat]] · [[eat/ramen|Ramen ›]]";
+        let markdown = format!(
+            "---\r\ntype: record\r\n---\r\n\r\n# Authored heading\r\n\r\n{stale}\r\n\r\n## Notes\r\n- Keep me.\r\n"
+        );
+        let after = plan_line_edit(&markdown, "eat", canonical)
+            .expect("Obsidian-rewritten line edit");
+        assert_eq!(after, markdown.replace(stale, canonical));
         assert!(plan_line_edit(&after, "eat", canonical).is_none());
     }
 
