@@ -1054,6 +1054,68 @@ stays a plain note, and a new project note keeps `TASKS` as a structural merge.
 On a new project note the shortcut becomes a `## Title Case` section through
 the existing writer.
 
+#### Requirement bullets {#requirement-bullets}
+
+A checkbox bullet (a body that starts with `[c]` followed by a space, a tab,
+or the end of the line) directly under a task or another requirement is a
+[task requirement](task-requirements.md). Requirement chains may nest past
+two levels; each deeper level adds two more spaces:
+
+```text
+Fix the export
+- [ ] Handles CRLF
+  - [ ] Windows line endings
+    - [ ] Mixed files
+      - seen in the March import
+- see the ticket
+```
+
+| Item and position | Checkbox bullet | Plain bullet |
+| --- | --- | --- |
+| New task (`Task`, `@route`, `@route^id`, `@route:id` with text, a task-list bullet) or note-less `@route+id`, first level | Requirement, depth 1 | Note, or a drawer header (`- #slug`, ALL-CAPS with nested bullets) |
+| Under a drawer header | `req_in_drawer` | Drawer note |
+| Under a requirement at depth `d` | Requirement, depth `d+1` | Note of that requirement |
+| Under a note | `req_parent` | Nested note |
+| `@route+id [ ] text` (same-line form, also with `--task`/`--task-ref`): the item line | Requirement, depth 1 (`req_state` when pre-checked) | — |
+| Same-line form, first level | Requirement, depth 2 | Note of the item's requirement |
+| `@route+id <note>`, first level | `req_parent` | Nested note |
+| `@route+id#drawer` or `--drawer`: any bullet, and a same-line `[ ] text` | `req_in_drawer` | Drawer note |
+| New project note, first level | `## Tasks` row (status kept) | Row, section, or move |
+| New project note, under a task row | Requirement, depth 1 of that row | Note of that row |
+| New project note, under a section | `req_in_drawer` | Section entry |
+
+Levels 1 and 2 keep their existing rules. A deeper bullet is admitted only
+when its parent is a requirement, or a note whose own parent is a
+requirement, so a requirement's note keeps one nested note level. Any other
+third-level bullet, and a jump of more than one level, stays
+`invalid_child_line`; under a task the message adds that deeper bullets nest
+only beneath a requirement (`- [ ] …`). A task-list bullet counts levels after
+the list shift, so its notes gain no extra nesting. Every other item
+(notebook routes and lists, `@route` note lists, `@route#section` and
+`--section` bullets, records, close logs, Pomodoro starts and closes,
+transfers, merge-ins, and templates) keeps its existing checkbox and level
+rules.
+
+Each checkbox is checked in order: its position (`req_in_drawer`, then
+`req_parent`), then `req_state` (any mark other than a space: requirements
+start open), then `req_depth` (deeper than 16). A refused bullet's subtree
+reports nothing further. `bob capture` refuses the first problem in draft
+order with that usage code; `bob capture-parse` reports every problem as an
+error diagnostic on the bullet's whole line. An empty `- [ ] ` with nothing
+nested is a harmless placeholder like a lone `- `: no diagnostic and no write
+(a note-less `@route+id` whose only bullets are placeholders reads like
+`@route+id` alone). An empty requirement with nested bullets is
+`empty_child_after_markers`. A deeper marker-only row (`    - `) under a
+task is a placeholder too.
+
+`bob capture-parse` marks each admitted requirement's checkbox with a
+`req_marker` span: the `[`, the mark, the `]`, and one following space or tab.
+The span never covers the bullet marker or the text, and its wire object adds
+`depth` (1 is a direct child of the task). Refused checkboxes get no span.
+`sub_bullet_depths` reports authored levels after any list shift and may
+exceed 2 beneath requirements. Admitted requirements are written in authored
+order at their authored depth, with their checkbox kept.
+
 Authored children render before clipboard children and the priority
 schedule log, so the full block order is: parent line, authored children,
 clipboard children, then the schedule log.
@@ -1240,7 +1302,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 28`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 29`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -7303,7 +7365,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 28. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
+`capture-parse` and `capture-complete` report grammar revision 29. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
 refuses an operator-only first-line body after an existing-task link start,
 teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
@@ -8733,7 +8795,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 28` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 29` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse consults local metadata but never
 executes the draft; a successful parse does not guarantee a successful
@@ -9133,9 +9195,10 @@ item-wide markers already removed -- in source order. These are semantic
 parse bodies for an editor's own preview, not rendered Markdown: they carry
 no target-selected indentation or `- ` marker, unlike `bob capture`'s own
 `sub_bullets` output field. When `sub_bullets` is present,
-`sub_bullet_depths` is an aligned optional array of `1` and `2` values, one
-per body, so version-tolerant clients can preserve hierarchy without a
-breaking schema change. Older clients may ignore the additive field; clients
+`sub_bullet_depths` is an aligned optional array of authored levels (`1`,
+`2`, and deeper beneath [requirement](#requirement-bullets) chains), one per
+body, so version-tolerant clients can preserve hierarchy without a breaking
+schema change. Older clients may ignore the additive field; clients
 talking to an older `bob` that omits it should treat every body as depth `1`.
 `sub_bullets` bodies exclude the ID token: `- Draft the memo :draft-memo`
 parses as body `Draft the memo`. A parallel `sub_bullet_task_ids` array,
@@ -10276,7 +10339,7 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 28`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 29`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

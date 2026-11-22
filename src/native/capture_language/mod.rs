@@ -38,6 +38,7 @@ mod pomodoro_literal;
 mod project_tasks;
 pub(crate) mod record;
 mod relations;
+pub(crate) mod req_bullets;
 mod rewrite;
 pub(crate) mod section_bullet;
 mod start_selection;
@@ -49,6 +50,10 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
+/// Revision 29 admits requirement bullets: checkbox bullets under a task or
+/// requirement are requirements, nest beyond two levels beneath requirement
+/// chains, report `req_marker` spans with a depth, and refuse
+/// `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`.
 /// Revision 28 claims whole-draft `//query` as `note_goto` (previously
 /// prose). Revision 27 adds the additive `record_field` need on record
 /// items with keyless first-level bullets. Revision 26 adds notebook
@@ -60,7 +65,7 @@ mod type_marker;
 /// forms. Revision 22 makes sized `Nx` closes execute (see
 /// `sized_pomodoro_close.md`); older clients parse the size as literal
 /// task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 28;
+pub(crate) const GRAMMAR_REVISION: u32 = 29;
 
 #[cfg(test)]
 mod tests;

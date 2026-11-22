@@ -163,6 +163,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -220,6 +221,7 @@ pub(super) fn editor_operator_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -275,6 +277,7 @@ pub(super) fn editor_start_invalid_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -825,6 +828,7 @@ fn editor_named_valid_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -876,6 +880,7 @@ fn editor_start_drop_incomplete_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -1084,6 +1089,7 @@ fn editor_named_incomplete_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -1425,6 +1431,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     drawer_bullet_target: None,
                     targets: Vec::new(),
                     merge_in: None,
+                    req_markers: Vec::new(),
                 },
                 declarations: Vec::new(),
             })
@@ -1467,6 +1474,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     drawer_bullet_target: None,
                     targets: Vec::new(),
                     merge_in: None,
+                    req_markers: Vec::new(),
                 },
                 declarations: Vec::new(),
             })
@@ -1736,6 +1744,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 drawer_bullet_target: None,
                 targets: Vec::new(),
                 merge_in: None,
+                req_markers: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -1793,6 +1802,7 @@ pub(super) fn parse_editor_split_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -2028,6 +2038,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                 drawer_bullet_target: None,
                 targets: Vec::new(),
                 merge_in: None,
+                req_markers: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -2085,6 +2096,7 @@ pub(super) fn parse_editor_merge_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -2140,6 +2152,7 @@ fn editor_merge_invalid_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -2195,6 +2208,7 @@ fn editor_split_invalid_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -3371,6 +3385,7 @@ fn editor_past_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -4042,6 +4057,7 @@ fn editor_close_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }

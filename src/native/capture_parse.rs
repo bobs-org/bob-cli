@@ -79,6 +79,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             directive: span.directive,
             count: span.count,
             gmail: None,
+            depth: span.depth,
         })
         .collect();
     TemplateProtocolParse { route, spans }
@@ -194,8 +195,12 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 28` for the capture-language revision while \
-`schema_version` stays 1. Gmail URLs add `gmail_url` spans with offline \
+Success JSON reports `grammar: 29` for the capture-language revision while \
+`schema_version` stays 1. An admitted requirement bullet's checkbox (`[ ] ` \
+under a task or requirement) reports a `req_marker` span with its \
+requirement `depth`; refused positions report `req_in_drawer`, \
+`req_parent`, `req_state`, or `req_depth` on the bullet's line, and \
+`sub_bullet_depths` can exceed 2 beneath requirements. Gmail URLs add `gmail_url` spans with offline \
 `gmail: {verdict, date_hint?}`, decoded thread `key`, and saved-label `title`. \
 No Gmail calls are made.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
@@ -1134,6 +1139,10 @@ pub(crate) struct CaptureParseSpan {
     pub(crate) count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) gmail: Option<super::gmail::capture::SpanMetadata>,
+    /// Requirement depth on a `req_marker` span (1 is a direct child of
+    /// the owning task). Omitted on every other span.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) depth: Option<u8>,
 }
 
 fn attach_gmail_spans(result: &mut CaptureParseResult) {
@@ -1399,6 +1408,7 @@ impl CaptureParseResult {
             parse.spans,
             capture_links::wikilink_spans(&input),
         ));
+        stamp_req_marker_depths(&mut spans, &parse.items);
         stamp_directive_spans(&mut spans, &input);
         fill_span_gaps(
             &mut spans,
@@ -1869,6 +1879,7 @@ impl CaptureParseResult {
             &row_summaries,
         );
         spans.extend(wire_spans(row_record_spans));
+        stamp_req_marker_depths(&mut spans, &parsed.items);
         spans.sort_by_key(|span| (span.start, span.end, span.kind.label()));
         spans.dedup_by(|left, right| {
             left.start == right.start
@@ -2309,6 +2320,22 @@ fn stamp_directive_spans(spans: &mut [CaptureParseSpan], input: &str) {
     }
 }
 
+/// Stamp each `req_marker` span with the depth its item recorded.
+fn stamp_req_marker_depths(
+    spans: &mut [CaptureParseSpan],
+    items: &[EditorItemParse],
+) {
+    for span in spans.iter_mut().filter(|span| {
+        span.kind == super::capture_language::SpanKind::ReqMarker
+    }) {
+        span.depth = items
+            .iter()
+            .flat_map(|item| item.req_markers.iter())
+            .find(|marker| marker.start == span.start && marker.end == span.end)
+            .map(|marker| marker.depth);
+    }
+}
+
 fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
     spans
         .into_iter()
@@ -2330,6 +2357,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             directive: None,
             count: None,
             gmail: None,
+            depth: None,
         })
         .collect()
 }
@@ -2373,6 +2401,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                     directive: None,
                     count: None,
                     gmail: None,
+                    depth: None,
                 });
             }
             cursor = cursor.max(end);
@@ -2399,6 +2428,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                 count: None,
                 gmail: None,
                 section_action: None,
+                depth: None,
             });
         }
         spans.append(&mut additions);
@@ -2504,6 +2534,7 @@ fn template_spans(
                     directive: None,
                     count: None,
                     gmail: None,
+                    depth: None,
                 });
             }
             cursor = cursor.max(placeholder.range.end);
@@ -2527,6 +2558,7 @@ fn template_spans(
                 count: None,
                 gmail: None,
                 section_action: None,
+                depth: None,
             });
         }
     }
@@ -2550,6 +2582,7 @@ fn template_spans(
             count: None,
             gmail: None,
             section_action: None,
+            depth: None,
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -2571,6 +2604,7 @@ fn template_spans(
             count: None,
             gmail: None,
             section_action: None,
+            depth: None,
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -2592,6 +2626,7 @@ fn template_spans(
             count: None,
             gmail: None,
             section_action: None,
+            depth: None,
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));
@@ -5113,7 +5148,7 @@ record:
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 28);
+        assert_eq!(value["grammar"], 29);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -5179,7 +5214,7 @@ record:
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 28);
+        assert_eq!(value["grammar"], 29);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -6033,7 +6068,7 @@ record:
     fn json_reports_merge_in_wire_shape_and_grammar_27() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 28);
+        assert_eq!(value["grammar"], 29);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

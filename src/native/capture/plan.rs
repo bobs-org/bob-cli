@@ -2397,6 +2397,21 @@ pub(super) fn plan_capture_item(
             }
         }
     }
+    // The draft parsed as a new task; a forced target re-decides which
+    // checkbox bullets are requirements (same-line form, single note, or
+    // drawer).
+    if request.forced_sub_bullet_target.is_some()
+        || request.forced_drawer.is_some()
+    {
+        capture_language::req_bullets::reresolve_forced_target(
+            &parsed.kind,
+            &parsed.body,
+            &mut parsed.sub_bullets,
+        )
+        .map_err(|refusal| {
+            CaptureError::usage_code(refusal.message, refusal.code)
+        })?;
+    }
     if parsed.clip.is_none()
         && let Some(clip) = request.forced_clip.as_ref()
     {

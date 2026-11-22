@@ -15,6 +15,11 @@ use super::pomodoro_literal::{
     canonicalize_exact_name, lex_exact_name_after_hash, opens_exact_name,
 };
 use super::project_tasks::*;
+use super::req_bullets::{
+    invalid_child_line_message, is_deep_placeholder_row, leading_checkbox,
+    LevelGate as ReqLevelGate, ReqHost, FREE_LEVELS as REQ_FREE_LEVELS,
+    LIST_FREE_LEVELS as REQ_LIST_FREE_LEVELS,
+};
 use super::start_selection::*;
 use super::tokens::*;
 use crate::native::url_routing::{classify_token, RefIntent, RoutingEntry};
@@ -707,6 +712,9 @@ pub(super) fn parse_capture_item<'a>(
                 ));
             }
             if let Some(code) = super::drawer_bullet::code_for_message(&error) {
+                return Err(CaptureItemParseError::coded(code, error));
+            }
+            if let Some(code) = super::req_bullets::code_for_message(&error) {
                 return Err(CaptureItemParseError::coded(code, error));
             }
             if let Some(code) = super::move_bullet::code_for_message(&error) {
@@ -1444,16 +1452,32 @@ fn parse_list_bullet_item<'a>(
         .map_err(CaptureItemParseError::generic)?;
 
     let mut sub_bullets = Vec::new();
+    let mut sub_bullet_lines = Vec::new();
+    let mut sub_bullet_marks = Vec::new();
+    // Levels count after the list shift: the bullet is the item line, so
+    // only requirement chains nest past its first nested level.
+    let mut level_gate = ReqLevelGate::new(REQ_LIST_FREE_LEVELS);
     for line in item.lines.iter().skip(1) {
         let line_number = line.line_number;
         let authored = match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Item(authored)
-                if authored.depth.level() <= TWO_LEVEL_CAP =>
+                if level_gate.admits(authored.depth.shallower().level()) =>
             {
                 authored
             }
-            AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
+            AuthoredLineClass::Invalid
+                if !notes && is_deep_placeholder_row(line.raw.text) =>
+            {
+                continue;
+            }
+            AuthoredLineClass::Item(_) => {
+                return Err(coded(
+                    "invalid_child_line",
+                    invalid_child_line_message(line_number, !notes),
+                ));
+            }
+            AuthoredLineClass::Invalid => {
                 return Err(coded(
                     "invalid_child_line",
                     invalid_child_line_error(line_number),
@@ -1578,9 +1602,13 @@ fn parse_list_bullet_item<'a>(
         // The bullet line is this item's text line, so its nested lines sit
         // one level higher than their lexical depth: exactly as `<text>
         // @route` plus those lines as direct children would parse (the
-        // equivalence invariant). A line deeper than two levels refuses
-        // above.
+        // equivalence invariant). Deeper lines pass only beneath
+        // requirement chains above.
         let depth = authored.depth.shallower();
+        let mark = leading_checkbox(authored.body);
+        level_gate.push(depth.level(), mark.is_some());
+        sub_bullet_lines.push(line_number);
+        sub_bullet_marks.push(mark);
         sub_bullets.push(AuthoredSubBullet {
             body,
             depth,
@@ -1588,6 +1616,7 @@ fn parse_list_bullet_item<'a>(
             move_task: None,
             move_choice: None,
             drawer: None,
+            req: None,
         });
     }
     let has_creation_modifiers = aggregate.clip.is_some()
@@ -1629,6 +1658,15 @@ fn parse_list_bullet_item<'a>(
         &mut sub_bullets,
     )
     .map_err(CaptureItemParseError::generic)?;
+    super::req_bullets::apply_to_execution(
+        ReqHost::from_kind(&kind, &parent_body),
+        &parent_body,
+        REQ_LIST_FREE_LEVELS,
+        &mut sub_bullets,
+        &sub_bullet_lines,
+        &sub_bullet_marks,
+    )
+    .map_err(|refusal| coded(refusal.code, refusal.message))?;
     let (dependencies, dependency_target) = execution_item_dependencies(
         &item_dependencies,
         &kind,
@@ -2495,17 +2533,43 @@ fn parse_capture_item_masked<'a>(
     let mut sub_bullet_lines = Vec::new();
     let mut sub_bullet_stripped = Vec::new();
     let mut sub_bullet_moves: Vec<Option<MoveBulletHit>> = Vec::new();
+    let mut sub_bullet_marks: Vec<Option<char>> = Vec::new();
     let mut has_first_level_owner = false;
+    let mut level_gate = ReqLevelGate::new(REQ_FREE_LEVELS);
     for line in child_lines {
         let line_number = line.line_number;
+        // The item's kind is final only after every child line, so deeper
+        // lines pass a lexical gate here and the host-aware resolver
+        // re-checks them below. Refusal copy reads the host known so far.
+        let nests_reqs = || {
+            provisional_req_host(
+                aggregate.route.as_ref().map(|route| &route.token.kind),
+                &parent_outcome.body,
+                forced_route.is_some(),
+                forced_section.is_some(),
+                note,
+            )
+            .nests_reqs()
+        };
         let authored = match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Item(authored)
-                if authored.depth.level() <= TWO_LEVEL_CAP =>
+                if level_gate.admits(authored.depth.level()) =>
             {
                 authored
             }
-            AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
+            AuthoredLineClass::Invalid
+                if is_deep_placeholder_row(line.raw.text) && nests_reqs() =>
+            {
+                continue;
+            }
+            AuthoredLineClass::Item(_) => {
+                return Err(invalid_child_line_message(
+                    line_number,
+                    nests_reqs(),
+                ));
+            }
+            AuthoredLineClass::Invalid => {
                 return Err(invalid_child_line_error(line_number));
             }
         };
@@ -2657,10 +2721,14 @@ fn parse_capture_item_masked<'a>(
             move_task: None,
             move_choice: None,
             drawer,
+            req: None,
         });
         sub_bullet_lines.push(line_number);
         sub_bullet_stripped.push(child_stripped);
         sub_bullet_moves.push(move_hit);
+        let mark = leading_checkbox(authored.body);
+        sub_bullet_marks.push(mark);
+        level_gate.push(authored.depth.level(), mark.is_some());
         if authored.depth.is_first() {
             has_first_level_owner = true;
         }
@@ -2817,6 +2885,14 @@ fn parse_capture_item_masked<'a>(
             &parent_outcome.body,
             &mut sub_bullets,
         )?;
+        apply_execution_reqs(
+            &kind,
+            &parent_outcome.body,
+            REQ_FREE_LEVELS,
+            &mut sub_bullets,
+            &sub_bullet_lines,
+            &sub_bullet_marks,
+        )?;
         return Ok(parsed_capture_item_outcome(
             item,
             ParsedCaptureText {
@@ -2866,6 +2942,14 @@ fn parse_capture_item_masked<'a>(
             &CaptureKind::Task,
             &parent_outcome.body,
             &mut sub_bullets,
+        )?;
+        apply_execution_reqs(
+            &CaptureKind::Task,
+            &parent_outcome.body,
+            REQ_FREE_LEVELS,
+            &mut sub_bullets,
+            &sub_bullet_lines,
+            &sub_bullet_marks,
         )?;
         return Ok(parsed_capture_item_outcome(
             item,
@@ -3078,6 +3162,32 @@ fn parse_capture_item_masked<'a>(
         &parent_outcome.body,
         &mut sub_bullets,
     )?;
+    let had_sub_bullets = !sub_bullets.is_empty();
+    apply_execution_reqs(
+        &kind,
+        &parent_outcome.body,
+        REQ_FREE_LEVELS,
+        &mut sub_bullets,
+        &sub_bullet_lines,
+        &sub_bullet_marks,
+    )?;
+    // A note-less `@route+id` whose only bullets were empty requirement
+    // placeholders reads like `@route+id` plus a marker-only `- ` row.
+    let kind = if had_sub_bullets
+        && sub_bullets.is_empty()
+        && matches!(kind, CaptureKind::SubBullet { .. })
+    {
+        resolve_sub_bullet_kind(
+            kind,
+            parent_body_is_empty,
+            true,
+            aggregate.scheduled_offset,
+            aggregate.priority_level,
+            aggregate.clip.is_some(),
+        )?
+    } else {
+        kind
+    };
     let (dependencies, dependency_target) = execution_item_dependencies(
         &item_dependencies,
         &kind,
@@ -3106,6 +3216,47 @@ fn parse_capture_item_masked<'a>(
         declarations,
         local_destination_marker,
     ))
+}
+
+/// The requirement host an execution item has so far, while its child
+/// lines are still being read: forced destinations and `%n` decide first,
+/// then the destination marker seen so far, else a new task.
+fn provisional_req_host(
+    kind: Option<&CaptureKind>,
+    parent_body: &str,
+    forced_route: bool,
+    forced_section: bool,
+    note: bool,
+) -> ReqHost {
+    if note || forced_section {
+        return ReqHost::Ineligible;
+    }
+    if forced_route {
+        return ReqHost::NewTask;
+    }
+    ReqHost::from_kind(kind.unwrap_or(&CaptureKind::Task), parent_body)
+}
+
+/// Resolve an execution item's requirement positions once its kind is
+/// final, as `String` errors for the main parse path (their codes come
+/// from `req_bullets::code_for_message`).
+fn apply_execution_reqs(
+    kind: &CaptureKind,
+    parent_body: &str,
+    free_levels: u8,
+    sub_bullets: &mut Vec<AuthoredSubBullet>,
+    line_numbers: &[usize],
+    marks: &[Option<char>],
+) -> Result<(), String> {
+    super::req_bullets::apply_to_execution(
+        ReqHost::from_kind(kind, parent_body),
+        parent_body,
+        free_levels,
+        sub_bullets,
+        line_numbers,
+        marks,
+    )
+    .map_err(|refusal| refusal.message)
 }
 
 /// Finish dependency ownership after `@@` inheritance: a locally owned

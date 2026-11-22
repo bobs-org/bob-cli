@@ -1695,6 +1695,7 @@ fn mint_and_splice(
             }),
             move_choice: None,
             drawer: None,
+            req: None,
         });
     }
     target

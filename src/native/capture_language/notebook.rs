@@ -1398,6 +1398,7 @@ fn notebook_sub_bullets(
                     move_task: None,
                     move_choice: None,
                     drawer: None,
+                    req: None,
                 });
             }
             super::draft::AuthoredLineClass::Invalid => {

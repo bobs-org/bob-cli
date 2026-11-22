@@ -43,6 +43,23 @@ use super::{
 /// or dropped silently.
 pub(crate) const MAX_REQ_DEPTH: usize = 16;
 
+/// Exact refusal copy shared by capture's requirement positions and the
+/// task-block layout writers, so every surface teaches the same sentence.
+pub(crate) mod copy {
+    /// `req_in_drawer`: a requirement under a drawer header or entry.
+    pub(crate) const REQ_IN_DRAWER: &str =
+        "Drawers hold notes — put the requirement directly under the task";
+    /// `req_parent`: a requirement whose parent is neither a task nor a
+    /// requirement.
+    pub(crate) const REQ_PARENT: &str =
+        "A requirement needs a task or requirement directly above it";
+    /// `req_state`: a requirement authored with a mark other than space.
+    pub(crate) const REQ_STATE: &str =
+        "Requirements start open — they're met when the task closes";
+    /// `req_depth`: a requirement deeper than [`super::MAX_REQ_DEPTH`].
+    pub(crate) const REQ_DEPTH: &str = "Requirements nest at most 16 deep — carry this branch into its own task";
+}
+
 /// The raw checkbox mark on a req line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReqMark {

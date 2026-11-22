@@ -496,6 +496,7 @@ fn leveled(body: &str, level: u8) -> AuthoredSubBullet {
         move_task: None,
         move_choice: None,
         drawer: None,
+        req: None,
     }
 }
 

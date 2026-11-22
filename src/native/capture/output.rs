@@ -5678,19 +5678,43 @@ fn print_human_multi_note_notes(result: &CaptureItemResult, styler: &Styler) {
             println!("  {}{created_tag}", styler.cyan(&header_drawer.title));
             for grouped in &result.notes[index..end] {
                 println!("    {}", styler.dim(&grouped.task_line));
-                for child in &grouped.sub_bullets {
-                    println!("      {}", styler.dim(child.trim_start()));
+                for (indent, child) in preview_child_lines(&grouped.sub_bullets)
+                {
+                    println!("      {indent}{}", styler.dim(child));
                 }
             }
             index = end;
         } else {
             println!("  {}", styler.dim(&note.task_line));
-            for child in &note.sub_bullets {
-                println!("    {}", styler.dim(child.trim_start()));
+            for (indent, child) in preview_child_lines(&note.sub_bullets) {
+                println!("    {indent}{}", styler.dim(child));
             }
             index += 1;
         }
     }
+}
+
+/// A note's rendered child lines for the human preview: each line's text
+/// plus its indentation relative to the shallowest child (tabs read as two
+/// columns), so deeper bullets beneath requirements keep their shape and
+/// one-level children print exactly as before.
+fn preview_child_lines(children: &[String]) -> Vec<(String, &str)> {
+    let width = |line: &str| -> usize {
+        line.chars()
+            .take_while(|character| character.is_whitespace())
+            .map(|character| if character == '\t' { 2 } else { 1 })
+            .sum()
+    };
+    let base = children.iter().map(|line| width(line)).min().unwrap_or(0);
+    children
+        .iter()
+        .map(|line| {
+            (
+                " ".repeat(width(line).saturating_sub(base)),
+                line.trim_start(),
+            )
+        })
+        .collect()
 }
 
 fn parent_under_marker(result: &CaptureItemResult, styler: &Styler) -> String {

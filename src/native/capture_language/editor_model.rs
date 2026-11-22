@@ -112,6 +112,9 @@ pub(crate) enum SpanKind {
     DrawerBullet,
     MergeInArrow,
     MergeInSource,
+    /// An admitted requirement's checkbox: `[`, the mark, `]`, and one
+    /// following space or tab. The wire span carries the requirement depth.
+    ReqMarker,
 }
 
 impl SpanKind {
@@ -203,6 +206,7 @@ impl SpanKind {
             Self::DrawerBullet => "drawer_bullet",
             Self::MergeInArrow => "merge_in_arrow",
             Self::MergeInSource => "merge_in_source",
+            Self::ReqMarker => "req_marker",
         }
     }
 
@@ -824,6 +828,18 @@ pub(crate) struct EditorItemParse {
     /// Complete merge-in clause for this item, when claimed. `None` for
     /// ordinary items.
     pub(crate) merge_in: Option<EditorMergeIn>,
+    /// Every admitted requirement checkbox on this item, in source order,
+    /// with its depth. The wire stamps `depth` on each `req_marker` span.
+    pub(crate) req_markers: Vec<ReqMarker>,
+}
+
+/// One admitted requirement's `req_marker` range and depth (1 is a direct
+/// child of the owning task).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReqMarker {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) depth: u8,
 }
 
 /// One complete local destination marker token an item owns, with the span

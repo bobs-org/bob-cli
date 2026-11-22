@@ -144,6 +144,7 @@ mod past;
 mod pomodoro_merge;
 mod record;
 mod ref_grammar;
+mod reqs;
 mod retired_close;
 mod rewrite;
 mod section_bullet;

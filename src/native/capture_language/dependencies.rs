@@ -13,9 +13,7 @@
 //! and leaves the visible `&...` in task text. `&` inside `[[wikilinks]]`
 //! and `` `code` `` spans is never a modifier.
 
-use super::draft::{
-    classify_authored_line_capped, AuthoredLineClass, TWO_LEVEL_CAP,
-};
+use super::draft::{classify_authored_line, AuthoredLineClass};
 use super::editor_model::{DependencyEntry, RelationEntry, Span, SpanKind};
 use super::editor_parse::tokenize_line_with_spans;
 use super::markers::{
@@ -1511,12 +1509,32 @@ pub(crate) fn scan_item_dependencies(
         true,
     );
     found.absorb(&parent_deps);
+    // Deeper lines count only where the parsers admit them: beneath a
+    // requirement chain, with list bullets counting levels after the shift.
+    let list = item.list.is_some();
+    let mut gate = super::req_bullets::LevelGate::new(if list {
+        super::req_bullets::LIST_FREE_LEVELS
+    } else {
+        super::req_bullets::FREE_LEVELS
+    });
     for child in children {
         let AuthoredLineClass::Item(authored) =
-            classify_authored_line_capped(child.raw, TWO_LEVEL_CAP)
+            classify_authored_line(child.raw)
         else {
             continue;
         };
+        let level = if list {
+            authored.depth.shallower().level()
+        } else {
+            authored.depth.level()
+        };
+        if !gate.admits(level) {
+            continue;
+        }
+        gate.push(
+            level,
+            super::req_bullets::leading_checkbox(authored.body).is_some(),
+        );
         let child_line = RawLine {
             text: authored.body,
             start: authored.body_start,

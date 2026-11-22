@@ -11,6 +11,11 @@ use super::model::*;
 use super::move_bullet::MoveBulletHit;
 use super::move_bullet::MoveBulletInvalid;
 use super::project_tasks::*;
+use super::req_bullets::{
+    checkbox_range, invalid_child_line_message, is_deep_placeholder_row,
+    LevelGate as ReqLevelGate, ReqHost, ReqLine,
+    FREE_LEVELS as REQ_FREE_LEVELS, LIST_FREE_LEVELS as REQ_LIST_FREE_LEVELS,
+};
 use super::tokens::*;
 use crate::native::url_routing::{classify_token, RoutingEntry};
 
@@ -1140,6 +1145,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -1197,6 +1203,7 @@ pub(super) fn parse_editor_note_goto_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -1254,6 +1261,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -1315,6 +1323,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         })
     };
     match claim {
@@ -1502,6 +1511,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -1599,6 +1609,7 @@ fn parse_editor_ref_item<'a>(
                 drawer_bullet_target: None,
                 targets: Vec::new(),
                 merge_in: None,
+                req_markers: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -1681,6 +1692,7 @@ fn parse_editor_ref_item<'a>(
                 drawer_bullet_target: None,
                 targets: Vec::new(),
                 merge_in: None,
+                req_markers: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -1737,6 +1749,7 @@ fn record_editor_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -1781,6 +1794,7 @@ fn notebook_editor_outcome<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -2748,6 +2762,7 @@ fn empty_editor_item(
         drawer_bullet_target: None,
         targets: Vec::new(),
         merge_in: None,
+        req_markers: Vec::new(),
     }
 }
 
@@ -2921,8 +2936,9 @@ fn parse_editor_item_singleton_with_target_run<'a>(
         }
     }
     if occurrences.is_empty() && directive_occurrences.is_empty() {
-        let mut outcome =
-            parse_editor_item_inner(item, options, false, false, target_run);
+        let mut outcome = parse_editor_item_inner(
+            item, options, false, false, target_run, false,
+        );
         attach_list_header_marker_diagnostic(item, &mut outcome.item);
         return outcome;
     }
@@ -2947,6 +2963,7 @@ fn parse_editor_item_singleton_with_target_run<'a>(
         has_clip,
         has_listen,
         target_run,
+        has_note,
     );
     let declarations =
         remap_type_marker_declarations(inner.declarations, item.source);
@@ -3178,6 +3195,7 @@ fn combine_editor_target_members<'a>(
         drawer_bullet_target: first.item.drawer_bullet_target.clone(),
         targets,
         merge_in: None,
+        req_markers: Vec::new(),
     };
     EditorItemOutcome { item, declarations }
 }
@@ -4030,6 +4048,7 @@ pub(super) fn list_refusal_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -4316,21 +4335,39 @@ pub(super) fn parse_editor_list_item<'a>(
         mode = EditorMode::Incomplete;
     }
     let mut sub_bullets = Vec::new();
+    let mut req_lines: Vec<ReqLine> = Vec::new();
+    // Levels count after the list shift: the bullet is the item line, so
+    // only requirement chains nest past its first nested level.
+    let mut level_gate = ReqLevelGate::new(REQ_LIST_FREE_LEVELS);
     for line in item.lines.iter().skip(1) {
         let line_number = line.line_number;
         let authored = match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Item(authored)
-                if authored.depth.level() <= TWO_LEVEL_CAP =>
+                if level_gate.admits(authored.depth.shallower().level()) =>
             {
                 authored
             }
+            AuthoredLineClass::Invalid
+                if !notes && is_deep_placeholder_row(line.raw.text) =>
+            {
+                continue;
+            }
             AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
+                // Only a well-formed deeper bullet learns the requirement
+                // chain; malformed lines keep today's sentence.
+                let deep_bullet = matches!(
+                    classify_authored_line(line.raw),
+                    AuthoredLineClass::Item(_)
+                );
                 return error_item(
                     spans.clone(),
                     needs.clone(),
                     "invalid_child_line",
-                    invalid_child_line_error(line_number),
+                    invalid_child_line_message(
+                        line_number,
+                        !notes && deep_bullet,
+                    ),
                     Some((line.raw.start, line.raw.end)),
                 );
             }
@@ -4468,8 +4505,33 @@ pub(super) fn parse_editor_list_item<'a>(
             move_task: None,
             move_choice: None,
             drawer: None,
+            req: None,
         });
+        let req_line = ReqLine::new(
+            line_number,
+            (line.raw.start, line.raw.end),
+            authored.body,
+            authored.body_start,
+        );
+        level_gate.push(depth.level(), req_line.mark.is_some());
+        req_lines.push(req_line);
     }
+    let req_host = if notes {
+        ReqHost::Ineligible
+    } else {
+        ReqHost::NewTask
+    };
+    let req_markers = super::req_bullets::apply_to_editor(
+        req_host,
+        &owner_body,
+        None,
+        (parent_line.raw.start, parent_line.raw.end),
+        REQ_LIST_FREE_LEVELS,
+        &mut sub_bullets,
+        &req_lines,
+        &mut spans,
+        &mut diagnostics,
+    );
     spans.sort_by_key(|span| (span.start, span.end));
     EditorItemOutcome {
         item: EditorItemParse {
@@ -4506,6 +4568,7 @@ pub(super) fn parse_editor_list_item<'a>(
             drawer_bullet_target: None,
             targets: Vec::new(),
             merge_in: None,
+            req_markers,
         },
         declarations,
     }
@@ -4788,6 +4851,7 @@ pub(super) fn parse_editor_item_inner<'a>(
     has_clip: bool,
     has_listen: bool,
     target_run: Option<&super::item::TargetRunContext>,
+    has_note: bool,
 ) -> EditorItemOutcome<'a> {
     // List bullets parse as their own task-bullet grammar: no whole-item
     // claims, no operator or picker forms.
@@ -4956,22 +5020,44 @@ pub(super) fn parse_editor_item_inner<'a>(
     let mut child_task_stripped: Vec<Option<StrippedTaskId<'_>>> = Vec::new();
     let mut child_task_lines: Vec<usize> = Vec::new();
     let mut child_move_hits: Vec<Option<MoveBulletHit>> = Vec::new();
+    let mut req_lines: Vec<ReqLine> = Vec::new();
     let mut has_first_level_owner = false;
+    let mut level_gate = ReqLevelGate::new(REQ_FREE_LEVELS);
     for line in item.lines.iter().skip(1) {
         let line_number = line.line_number;
         let raw = line.raw;
+        // The item's mode is final only after every child line, so deeper
+        // lines pass a lexical gate here and the host-aware resolver
+        // re-checks them below. Refusal copy reads the mode known so far.
+        // A `%n` item becomes a Pomodoro note after this parse.
+        let nests_reqs = !has_note
+            && ReqHost::from_mode(mode, &body, section.as_deref()).nests_reqs();
         let authored = match classify_authored_line(raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Item(authored)
-                if authored.depth.level() <= TWO_LEVEL_CAP =>
+                if level_gate.admits(authored.depth.level()) =>
             {
                 authored
             }
+            AuthoredLineClass::Invalid
+                if nests_reqs && is_deep_placeholder_row(raw.text) =>
+            {
+                continue;
+            }
             AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
+                // Only a well-formed deeper bullet learns the requirement
+                // chain; malformed lines keep today's sentence.
+                let deep_bullet = matches!(
+                    classify_authored_line(raw),
+                    AuthoredLineClass::Item(_)
+                );
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     code: "invalid_child_line",
-                    message: invalid_child_line_error(line_number),
+                    message: invalid_child_line_message(
+                        line_number,
+                        nests_reqs && deep_bullet,
+                    ),
                     range: Some((raw.start, raw.end)),
                     rewrite: None,
                 });
@@ -5173,7 +5259,17 @@ pub(super) fn parse_editor_item_inner<'a>(
                     move_task: None,
                     move_choice: None,
                     drawer,
+                    req: None,
                 });
+                let req_line = ReqLine::new(
+                    line_number,
+                    (raw.start, raw.end),
+                    authored.body,
+                    authored.body_start,
+                );
+                level_gate
+                    .push(authored.depth.level(), req_line.mark.is_some());
+                req_lines.push(req_line);
                 if authored.depth.is_first() {
                     has_first_level_owner = true;
                 }
@@ -6370,6 +6466,49 @@ pub(super) fn parse_editor_item_inner<'a>(
             .iter()
             .any(|span| span.kind == SpanKind::TaskToggleExplicitToggle),
     );
+    // Requirement positions resolve from the mode on entry too, once the
+    // item's shape is final.
+    let item_mark_range = parent_parse.body_tokens.first().and_then(|token| {
+        let offset = token.start.checked_sub(parent_line.start)?;
+        checkbox_range(parent_line.text.get(offset..)?, token.start)
+    });
+    let had_sub_bullets = !sub_bullets.is_empty();
+    let req_host = if has_note {
+        ReqHost::Ineligible
+    } else {
+        ReqHost::from_mode(entry_mode, &body, section.as_deref())
+    };
+    let req_markers = super::req_bullets::apply_to_editor(
+        req_host,
+        &body,
+        item_mark_range,
+        (parent_line.start, parent_line.end),
+        REQ_FREE_LEVELS,
+        &mut sub_bullets,
+        &req_lines,
+        &mut spans,
+        &mut diagnostics,
+    );
+    // A note-less `@route+id` whose only bullets were empty requirement
+    // placeholders reads like `@route+id` plus a marker-only `- ` row:
+    // the same task toggle `bob capture` executes.
+    if mode == EditorMode::SubBullet
+        && had_sub_bullets
+        && sub_bullets.is_empty()
+        && body.is_empty()
+        && section.is_none()
+        && !seen.schedule
+        && !seen.priority
+        && !seen.clip
+    {
+        mode = EditorMode::TaskToggle;
+        rekind_sub_bullet_spans(&mut spans);
+        if let Some(marker) = own_local_destination_marker_index
+            .and_then(|index| local_destination_markers.get_mut(index))
+        {
+            marker.mode = EditorMode::TaskToggle;
+        }
+    }
 
     spans.sort_by_key(|span| (span.start, span.end));
     EditorItemOutcome {
@@ -6407,6 +6546,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             drawer_bullet_target,
             targets: Vec::new(),
             merge_in: None,
+            req_markers,
         },
         declarations,
     }

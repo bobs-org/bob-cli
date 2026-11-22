@@ -483,12 +483,8 @@ fn note_to_req(
         Some(true),
         &settings.global_filter,
     );
-    let refuse_parent = || {
-        WriteRefusal::new(
-            "req_parent",
-            "A requirement needs a task or requirement directly above it",
-        )
-    };
+    let refuse_parent =
+        || WriteRefusal::new("req_parent", task_reqs::copy::REQ_PARENT);
     let Some(body) = list_item_body(text) else {
         return Err(WriteRefusal::new(
             "not_a_note",
@@ -520,19 +516,13 @@ fn note_to_req(
     } else {
         let parent_body = list_item_body(lines[parent].text).unwrap_or("");
         return Err(if capture_drawers::is_drawer_title(parent_body.trim()) {
-            WriteRefusal::new(
-                    "req_in_drawer",
-                    "Drawers hold notes — put the requirement directly under the task",
-                )
+            WriteRefusal::new("req_in_drawer", task_reqs::copy::REQ_IN_DRAWER)
         } else {
             refuse_parent()
         });
     };
     if depth > MAX_REQ_DEPTH {
-        return Err(WriteRefusal::new(
-            "req_depth",
-            "Requirements nest at most 16 deep — carry this branch into its own task",
-        ));
+        return Err(WriteRefusal::new("req_depth", task_reqs::copy::REQ_DEPTH));
     }
 
     let prefix = &text[..text.len() - body.len()];
@@ -652,7 +642,7 @@ pub(crate) fn insert_reqs(
         if !open {
             return Err(WriteRefusal::new(
                 "req_state",
-                "Requirements start open — they're met when the task closes",
+                task_reqs::copy::REQ_STATE,
             ));
         }
     }
@@ -687,10 +677,7 @@ pub(crate) fn insert_reqs(
         .iter()
         .any(|node| node.owner_line == task.line_index && node.depth_exceeded);
     if deepest {
-        return Err(WriteRefusal::new(
-            "req_depth",
-            "Requirements nest at most 16 deep — carry this branch into its own task",
-        ));
+        return Err(WriteRefusal::new("req_depth", task_reqs::copy::REQ_DEPTH));
     }
     let top_level: Vec<usize> = {
         let mut heads: Vec<usize> =

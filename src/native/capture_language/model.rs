@@ -1020,6 +1020,16 @@ pub(crate) struct AuthoredSubBullet {
     /// bullet names a drawer. Literal ALL-CAPS drawer bullets gain this
     /// after grouping. Nested notes keep `None`.
     pub(crate) drawer: Option<DrawerSelector>,
+    /// Set on an admitted requirement bullet once the item's requirement
+    /// positions resolve. The body keeps its leading checkbox.
+    pub(crate) req: Option<ReqBulletInfo>,
+}
+
+/// An admitted requirement bullet's resolved position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReqBulletInfo {
+    /// Requirement depth: 1 is a direct child of the owning task.
+    pub(crate) depth: u8,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

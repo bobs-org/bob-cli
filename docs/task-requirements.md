@@ -410,7 +410,15 @@ as a `code` in `bob capture` errors:
 | `req_depth`  | beyond `MAX_REQ_DEPTH`                           | `Requirements nest at most 16 deep — carry this branch into its own task` |
 
 Notebook routes still refuse checkboxes, and `@route` task lists still strip
-`[ ]`. (Shipped in the `capture-reqs` phase.)
+`[ ]` from the list bullet itself.
+
+Positions, deeper nesting beneath req chains, the `req_marker` span with its
+`depth`, and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`
+refusals shipped with capture grammar 29 (see
+[Requirement bullets](capture.md#requirement-bullets)). Until the req writes
+land, an admitted req is written at its authored depth in authored order.
+Placement in the reqs zone with the NOTES rule, the first-req scoop, and the
+`req_link` refusal land later in the `capture-reqs` phase.
 
 **Pasted text never becomes a requirement.** Text copied from outside
 writers (gcal descriptions and private notes, gkeep, gmail, highlights, ref

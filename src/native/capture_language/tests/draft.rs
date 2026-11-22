@@ -282,18 +282,20 @@ fn authored_depth_levels_and_predicates() {
 }
 
 #[test]
-fn task_host_parsers_keep_refusing_lines_past_two_levels() {
-    // Every task-host parser still refuses a third level with today's
-    // code and range, whatever the line holds.
+fn task_host_parsers_refuse_a_third_level_outside_requirement_chains() {
+    // Every task-host parser refuses a third level beneath plain notes
+    // with today's code and range; the copy gains the requirement hint.
     for raw in [
         "Task\n- note\n  - nested\n    - deep",
-        "Task\n- [ ] req\n  - [ ] sub\n    - [ ] subsub",
         "@work+abc\n- note\n  - nested\n    - deep",
         "@work\n- task one\n  - note\n    - deep",
     ] {
         let error = execute(raw).expect_err("third level refuses");
         assert!(
-            error.contains("must be a column-zero bullet or a two-space"),
+            error.contains("must be a column-zero bullet or a two-space")
+                && error.ends_with(
+                    "deeper bullets nest only beneath a requirement (`- [ ] …`)"
+                ),
             "{raw:?}: {error}"
         );
         let parsed = editor(raw);

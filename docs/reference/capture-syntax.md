@@ -85,6 +85,7 @@ Incomplete **picker** input cannot execute.
 | `T < @a+x @b+y` | Merge into the new task | [`<` merge-in](#merge-in) |
 | `@route+block-id#drawer` | Child inside a task drawer | [`@route+block-id#drawer`](#plus-child-section) |
 | `- #drawer` / `- #Section` | Drawer, or notebook section under `@nb`/`%n` | [Drawer bullets](#drawer-bullets) |
+| `- [ ] text` | Requirement | [Requirement bullets](../capture.md#requirement-bullets) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
 | `@route+block-id!` | Toggle that task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
 | `%n` | Pomodoro note, or notebook with `@parent^id@` | [`%n`](#trailing-hash) |
@@ -1371,10 +1372,9 @@ ALL-CAPS works too. Empty `- #drawer` fails; empty ALL-CAPS stays a note.
 Under a route-only notebook `@nb` or `@parent^id@ %n`, `- #Section` selects
 a `##` heading; nest notes or escape `\#git`.
 
-A note-less `@route+id` files each first-level bullet as a separate note;
-drawer bullets append inside their drawers. With `@route+id#drawer`, every
-bullet files inside that drawer. Same-line note text keeps its children
-nested under that one note.
+Note-less `@route+id` files each first-level bullet as a note, drawer
+bullets in their drawers; `@route+id#drawer` takes them all. A same-line
+note keeps its children.
 
 Contract: [Several notes at once](../capture.md#several-notes-at-once).
 
