@@ -53,6 +53,7 @@ pub(super) struct CompleteRequest<'a> {
     pub(super) next_missing_field: bool,
     pub(super) record_field: Option<&'a str>,
     pub(super) source_note: Option<&'a str>,
+    pub(super) task_links: bool,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -74,6 +75,7 @@ pub(super) fn build_result(
         next_missing_field: false,
         record_field: None,
         source_note: None,
+        task_links: false,
     })
 }
 
@@ -117,27 +119,106 @@ pub(super) fn build_result_for(
 }
 
 /// Plain-prose completion for `--links-only`: only wikilink note,
-/// heading, and block fields complete. Capture grammar never applies, so
-/// routes, markers, records, Work Log phrases, and `((` stay literal, and
-/// the Work Log block-link suppression does not apply.
+/// heading, and block fields complete, plus `((` task links with
+/// `--task-links`. Capture grammar never applies, so routes, markers,
+/// records, and Work Log phrases stay literal, and the Work Log
+/// block-link suppression does not apply.
 fn links_only_result(
     request: &CompleteRequest<'_>,
 ) -> Result<CaptureCompleteResult, CompleteError> {
     let has_source = request.source_note.is_some_and(|note| !note.is_empty());
     let current_note = request.source_note.unwrap_or("");
-    let Some(field) = capture_links::completion_field_at(
+    if let Some(field) = capture_links::completion_field_at(
         request.raw_text,
         request.cursor,
         current_note.to_string(),
-    ) else {
-        return Ok(CaptureCompleteResult::empty(request.cursor));
-    };
-    // Same-note `[[#...]]` / `[[#^...]]` fields need an explicit
-    // `--source-note`; without one they stay an empty success.
-    if field.is_same_note_scope() && !has_source {
-        return Ok(CaptureCompleteResult::empty(request.cursor));
+    ) {
+        // Same-note `[[#...]]` / `[[#^...]]` fields need an explicit
+        // `--source-note`; without one they stay an empty success.
+        if field.is_same_note_scope() && !has_source {
+            return Ok(CaptureCompleteResult::empty(request.cursor));
+        }
+        return wikilink_field_result(request.bob_dir, request.cursor, &field);
     }
-    wikilink_field_result(request.bob_dir, request.cursor, &field)
+    // `[[` fields win; a `((` field completes only on request. Without a
+    // source note there is no "this note" group.
+    if request.task_links
+        && let Some(field) = capture_task_wikilinks::prose_completion_field_at(
+            request.raw_text,
+            request.cursor,
+        )
+    {
+        return Ok(wikilink_task_result(
+            request.bob_dir,
+            request.cursor,
+            field,
+            current_note,
+        ));
+    }
+    Ok(CaptureCompleteResult::empty(request.cursor))
+}
+
+/// The `wikilink_task` response for a `((query` field, shared by capture
+/// drafts and `--links-only --task-links` prose. Rows group against
+/// `owner_note` (vault-relative, with `.md`; empty for no owner).
+fn wikilink_task_result(
+    bob_dir: &Path,
+    cursor: usize,
+    field: capture_task_wikilinks::WikilinkTaskField,
+    owner_note: &str,
+) -> CaptureCompleteResult {
+    let (rows, warnings) =
+        capture_task_wikilinks::candidates(bob_dir, &field, owner_note);
+    let marker_range = Replacement {
+        start: field.replacement.0,
+        end: field.replacement.1,
+    };
+    CaptureCompleteResult {
+        ok: true,
+        schema_version: SCHEMA_VERSION,
+        grammar: capture_language::GRAMMAR_REVISION,
+        cursor,
+        replacement: marker_range,
+        context: Some(CompletionContext::WikilinkTask),
+        initial_selection: None,
+        subject: None,
+        candidates: Candidates::WikilinkTask(rows),
+        target: None,
+        theme_suggestion: None,
+        r#override: None,
+        block_id: None,
+        warnings,
+        query: Some(field.query),
+        owner: None,
+        relation: None,
+        relation_cancel: None,
+        relation_complete: None,
+        relation_merge: None,
+        relation_successor: None,
+        picker: Some(PickerDescriptor {
+            kind: PickerKind::WikilinkTask,
+            scope: PickerScope::Vault,
+            scope_token: "((".to_string(),
+            note_target: None,
+            marker_range,
+            trigger_removal_range: Replacement {
+                start: field.replacement.0 + 1,
+                end: field.replacement.1,
+            },
+            destination: None,
+            continuation: None,
+            action_continuation_keys: None,
+            action_continuation_aliases: None,
+            relationship: None,
+        }),
+        note_goto: None,
+        hidden_count: None,
+        one_off: None,
+        project_task_move: None,
+        record: None,
+        diagnostics: Vec::new(),
+        place_menu: None,
+    }
 }
 
 fn wikilink_field_result(
@@ -293,61 +374,12 @@ fn build_result_inner(
             &current_note_path,
         )
     {
-        let (rows, warnings) = capture_task_wikilinks::candidates(
+        return Ok(wikilink_task_result(
             bob_dir,
-            &field,
-            &current_note_path,
-        );
-        let marker_range = Replacement {
-            start: field.replacement.0,
-            end: field.replacement.1,
-        };
-        return Ok(CaptureCompleteResult {
-            ok: true,
-            schema_version: SCHEMA_VERSION,
-            grammar: capture_language::GRAMMAR_REVISION,
             cursor,
-            replacement: marker_range,
-            context: Some(CompletionContext::WikilinkTask),
-            initial_selection: None,
-            subject: None,
-            candidates: Candidates::WikilinkTask(rows),
-            target: None,
-            theme_suggestion: None,
-            r#override: None,
-            block_id: None,
-            warnings,
-            query: Some(field.query),
-            owner: None,
-            relation: None,
-            relation_cancel: None,
-            relation_complete: None,
-            relation_merge: None,
-            relation_successor: None,
-            picker: Some(PickerDescriptor {
-                kind: PickerKind::WikilinkTask,
-                scope: PickerScope::Vault,
-                scope_token: "((".to_string(),
-                note_target: None,
-                marker_range,
-                trigger_removal_range: Replacement {
-                    start: field.replacement.0 + 1,
-                    end: field.replacement.1,
-                },
-                destination: None,
-                continuation: None,
-                action_continuation_keys: None,
-                action_continuation_aliases: None,
-                relationship: None,
-            }),
-            note_goto: None,
-            hidden_count: None,
-            one_off: None,
-            project_task_move: None,
-            record: None,
-            diagnostics: Vec::new(),
-            place_menu: None,
-        });
+            field,
+            &current_note_path,
+        ));
     }
 
     let work_log_field =

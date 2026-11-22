@@ -9971,7 +9971,7 @@ types `#` and `\` types `%`.
 ## `bob capture-complete`
 
 ```bash
-bob capture-complete --cursor BYTE [-a|--all-tasks] [-A|--archived-notes] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-L|--links-only] [-n|--next-missing-field] [-F|--record-field KEY] [-S|--source-note PATH] [--] [TEXT]...
+bob capture-complete --cursor BYTE [-a|--all-tasks] [-A|--archived-notes] [-b|--bob-dir DIR] [-C|--closed-tasks] [-f|--format human|json] [-L|--links-only] [-n|--next-missing-field] [-F|--record-field KEY] [-S|--source-note PATH] [-T|--task-links] [--] [TEXT]...
 ```
 
 In a `<` source slot, `< +` / `< +query` opens the
@@ -10526,12 +10526,22 @@ link-value suggestions. Tiers follow the same path rules as `//`
 to complete wikilinks in plain prose instead of a capture draft: only note,
 heading, and block fields complete (`[[note`, `[[#...]]`, `[[##...]]`,
 `[[^^...]]`), every other caret position returns an empty success, and capture
-grammar — routes, markers, records, Work Log phrases, and `((` — never applies,
+grammar — routes, markers, records, and Work Log phrases — never applies,
 including the Work Log block-link suppression. Pair it with `-S/--source-note
 PATH` so same-note `[[#...]]` and `[[#^...]]` resolve against that
 vault-relative note; without it those fields return an empty success. For
 example, `bob capture-complete -L -S sase.md -c 9 -f json -- 'See [[#De'`
-lists that note's matching headings. Target-scoped
+lists that note's matching headings. `((` stays literal under `-L` unless
+`-T/--task-links` (which requires `-L`) also completes it. A `((query` token
+then returns the same `wikilink_task` response a capture draft gets: rows,
+guards, `picker`, `replacement`, and `cursor_after`. The prose rules are the
+draft token rules below minus every capture-grammar check, so `x ((foo`,
+`- 1 ((foo`, and `@inbox ((foo` open here. `[[` fields win, and rows group
+against `-S/--source-note`; without it there is no this-note group.
+`tests/fixtures/task_wikilinks/prose_trigger_vectors.json` pins these prose
+trigger rules for every port. For example,
+`bob capture-complete -L -T -S projects/api.md -c 22 -f json -- 'Superseded by ((api do'`
+returns `wikilink_task` with replacement `{14,22}`. Target-scoped
 completion (`[[note#`, `[[note#^`, `[[#`, `[[#^`) and link resolution are
 unchanged, so an archived note stays linkable. A `((query` token in free
 text — at line start or after a space or tab, outside code and existing

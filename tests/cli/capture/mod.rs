@@ -14,6 +14,7 @@ mod complete_dependency;
 mod complete_drawers;
 mod complete_editor;
 mod complete_links_only;
+mod complete_links_only_tasks;
 mod complete_notebook_sections;
 mod complete_parent_task;
 mod complete_project_task_move;

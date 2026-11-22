@@ -54,6 +54,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         .map(String::as_str);
     let source_note =
         matches.get_one::<String>("source-note").map(String::as_str);
+    let task_links = matches.get_flag("task-links");
     let bob_dir = bob_dir_from_matches(&matches);
     let cursor = *matches.get_one::<usize>("cursor").expect("required");
 
@@ -83,6 +84,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         next_missing_field,
         record_field,
         source_note,
+        task_links,
     }) {
         Ok(result) => {
             print_success(&result, output_format);
@@ -364,16 +366,22 @@ up to the cursor.\n\n\
 Pass -L/--links-only to complete wikilinks in plain prose instead of a \
 capture draft: only note, heading, and block fields complete (`[[note`, \
 `[[#...]]`, `[[##...]]`, `[[^^...]]`), every other caret position returns \
-an empty success, and capture grammar — routes, markers, records, Work \
-Log phrases, and `((` — never applies, including the Work Log block-link \
+an empty success, and capture grammar — routes, markers, records, and Work \
+Log phrases — never applies, including the Work Log block-link \
 suppression. Pair it with -S/--source-note PATH so same-note `[[#...]]` \
 and `[[#^...]]` resolve against that vault-relative note; without it \
-those fields return an empty success.",
+those fields return an empty success. `((` stays literal unless \
+-T/--task-links also completes it: a `((query` token at line start or \
+after a space or tab, outside code and `[[…]]`, returns the same \
+`wikilink_task` response as a capture draft, with no capture-grammar \
+checks. `[[` fields win, and rows group against -S/--source-note (no \
+this-note group without it).",
         )
         .after_help(
             "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'
   bob capture-complete -L -c 9 -f json -- 'Read [[da because of the outage'
-  bob capture-complete -L -S sase.md -c 10 -f json -- 'See [[#De'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -C -c 1 -f json -- '/'\n  bob capture-complete -c 2 -f json -- '//'\n  bob capture-complete -A -c 2 -f json -- '//'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n  bob capture-complete -c 7 -- '@inbox+ > @db'\n  bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'\n  bob capture-complete -c 16 -f json -- '@inbox+bench > +'\n  bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'\n  bob capture-complete -F visited -c 16 -f json -- 'Ramen Nagi @eat/'\n\nContexts:\n  route, section, record_field, record_value, pomodoro_block_id, task_block_id, project_task_block_id, project_task_move, pomodoro_name, pomodoro_start_name, pomodoro_past_name, pomodoro_past_segment, work_log, task, drawer, active_task, task_type, directive, task_link, task_goto, note_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
+  bob capture-complete -L -S sase.md -c 10 -f json -- 'See [[#De'
+  bob capture-complete -L -T -S projects/api.md -c 22 -f json -- 'Superseded by ((api do'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -C -c 1 -f json -- '/'\n  bob capture-complete -c 2 -f json -- '//'\n  bob capture-complete -A -c 2 -f json -- '//'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n  bob capture-complete -c 7 -- '@inbox+ > @db'\n  bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'\n  bob capture-complete -c 16 -f json -- '@inbox+bench > +'\n  bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'\n  bob capture-complete -F visited -c 16 -f json -- 'Ramen Nagi @eat/'\n\nContexts:\n  route, section, record_field, record_value, pomodoro_block_id, task_block_id, project_task_block_id, project_task_move, pomodoro_name, pomodoro_start_name, pomodoro_past_name, pomodoro_past_segment, work_log, task, drawer, active_task, task_type, directive, task_link, task_goto, note_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -387,6 +395,7 @@ those fields return an empty success.",
         .arg(next_missing_field_arg())
         .arg(record_field_arg())
         .arg(source_note_arg())
+        .arg(task_links_arg())
         .arg(text_arg())
 }
 
@@ -489,6 +498,17 @@ pub(super) fn source_note_arg() -> Arg {
         .requires("links-only")
         .help(
             "Vault-relative note same-note [[#...]] links resolve against (requires --links-only)",
+        )
+}
+
+pub(super) fn task_links_arg() -> Arg {
+    Arg::new("task-links")
+        .long("task-links")
+        .short('T')
+        .action(ArgAction::SetTrue)
+        .requires("links-only")
+        .help(
+            "Also complete `((` task links in plain prose (requires --links-only)",
         )
 }
 

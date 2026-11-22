@@ -1,9 +1,12 @@
 //! `((query` Task Wikilink completion: field detection and the vault-wide
 //! `wikilink_task` snapshot.
 //!
-//! `((` is a draft-only trigger. Accepting a row inserts a plain Obsidian
-//! block link (`[[target#^id]]`); the vault never stores `((`. Bob owns
-//! the trigger grammar, the candidates, the link text, and the ID write.
+//! `((` is a draft and prose-field trigger. Accepting a row inserts a plain
+//! Obsidian block link (`[[target#^id]]`); the vault never stores `((`. Bob
+//! owns the trigger grammar, the candidates, the link text, and the ID
+//! write. Capture drafts use [`completion_field_at`]; plain prose fields
+//! (`capture-complete --links-only --task-links`) use
+//! [`prose_completion_field_at`], which drops every capture-grammar check.
 
 use std::path::Path;
 
@@ -79,7 +82,25 @@ pub(crate) fn completion_field_at(
     wikilink_task_tokens(raw)
         .into_iter()
         .filter_map(|token| field_at_token(raw, token, cursor))
-        .last()
+        .next_back()
+}
+
+/// Locate the `((query` field at `cursor` in plain prose (`capture-complete
+/// --links-only --task-links`). These are the capture-draft token rules
+/// minus every capture-grammar check: prose has no items, Work Log text,
+/// or whole-item actions, so `x ((foo` and `- 1 ((foo` open here. The
+/// shared `prose_trigger_vectors.json` pins these rules for every port.
+pub(crate) fn prose_completion_field_at(
+    raw: &str,
+    cursor: usize,
+) -> Option<WikilinkTaskField> {
+    if cursor > raw.len() || !raw.is_char_boundary(cursor) {
+        return None;
+    }
+    tokens_where(raw, |_| true)
+        .into_iter()
+        .filter_map(|token| field_at_token(raw, token, cursor))
+        .next_back()
 }
 
 fn is_whole_item_action(item: &capture_language::EditorItemParse) -> bool {
@@ -146,28 +167,36 @@ pub(crate) fn wikilink_task_spans(raw: &str) -> Vec<Span> {
         .collect()
 }
 
+/// Capture-draft tokens: the prose tokens minus those in Work Log text or
+/// on a whole-item action.
 fn wikilink_task_tokens(raw: &str) -> Vec<WikilinkTaskToken> {
+    tokens_where(raw, |opener| {
+        !capture_language::cursor_in_close_log_text(raw, opener + 2)
+            && !capture_language::editor_item_at(raw, opener + 2)
+                .is_some_and(|item| is_whole_item_action(&item))
+    })
+}
+
+/// Every valid `((` token per physical line whose opener also passes
+/// `keep`.
+fn tokens_where(
+    raw: &str,
+    keep: impl Fn(usize) -> bool,
+) -> Vec<WikilinkTaskToken> {
     let bytes = raw.as_bytes();
     let mut tokens = Vec::new();
     for line in capture_language::split_physical_lines(raw) {
         let mut index = line.start;
         while index + 1 < line.end {
-            if bytes[index] == b'(' && bytes[index + 1] == b'(' {
-                if is_valid_opener(raw, line.start, index, line.end)
-                    && let Some(token) = token_from_opener(raw, index, line.end)
-                    && !capture_language::cursor_in_close_log_text(
-                        raw,
-                        index + 2,
-                    )
-                    && !capture_language::editor_item_at(raw, index + 2)
-                        .is_some_and(|item| is_whole_item_action(&item))
-                {
-                    tokens.push(token);
-                }
-                index += 1;
-            } else {
-                index += 1;
+            if bytes[index] == b'('
+                && bytes[index + 1] == b'('
+                && is_valid_opener(raw, line.start, index, line.end)
+                && let Some(token) = token_from_opener(raw, index, line.end)
+                && keep(index)
+            {
+                tokens.push(token);
             }
+            index += 1;
         }
     }
     tokens
@@ -537,6 +566,93 @@ mod tests {
     fn work_log_child_is_not_a_field() {
         let raw = "x\n- Follow up ((s";
         assert!(field_at(raw, raw.len()).is_none());
+    }
+
+    #[test]
+    fn prose_opens_where_capture_grammar_suppresses() {
+        for raw in
+            ["x ((foo", "- 1 ((foo", "x\n- Follow up ((s", "@inbox ((foo"]
+        {
+            let prose = prose_completion_field_at(raw, raw.len())
+                .unwrap_or_else(|| panic!("prose field for {raw:?}"));
+            let opener = raw.rfind("((").expect("opener");
+            assert_eq!(prose.replacement, (opener, raw.len()), "{raw:?}");
+        }
+        let work_log = "x\n- Follow up ((s";
+        assert!(field_at(work_log, work_log.len()).is_none());
+    }
+
+    #[test]
+    fn prose_keeps_the_token_rules() {
+        for raw in ["f((x", "(((x", "See [[note ((x", "see `((x`"] {
+            assert!(
+                prose_completion_field_at(raw, raw.len()).is_none(),
+                "{raw:?}"
+            );
+        }
+        let raw = "Superseded by ((api do";
+        let found =
+            prose_completion_field_at(raw, raw.len() - 3).expect("prose field");
+        assert_eq!(found.query, "api");
+        assert_eq!(found.replacement, (14, 19));
+    }
+
+    #[test]
+    fn prose_rejects_cursor_off_a_char_boundary() {
+        let raw = "Café ((s";
+        assert!(prose_completion_field_at(raw, 4).is_none());
+        assert!(prose_completion_field_at(raw, raw.len() + 1).is_none());
+    }
+
+    /// The shared prose trigger contract: bob-plugins replays the same
+    /// bytes through its own `fieldAt` port, so every case is written as
+    /// strings, never offsets. If bob's behavior differs from a
+    /// hand-written expectation, read the code and decide which is wrong.
+    #[test]
+    fn prose_trigger_vectors_match() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/task_wikilinks/prose_trigger_vectors.json"
+        ))
+        .expect("prose trigger vectors parse");
+        assert_eq!(vectors["version"], 1);
+        assert_eq!(
+            vectors["source"],
+            "tests/fixtures/task_wikilinks/prose_trigger_vectors.json"
+        );
+        let cases = vectors["cases"].as_array().expect("cases array");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let before = case["before"].as_str().expect("before");
+            let after = case["after"].as_str().expect("after");
+            let raw = format!("{before}{after}");
+            let actual = prose_completion_field_at(&raw, before.len());
+            let expected = &case["expect"];
+            if expected.is_null() {
+                assert!(actual.is_none(), "{name}: expected no field");
+                continue;
+            }
+            let field =
+                actual.unwrap_or_else(|| panic!("{name}: expected a field"));
+            assert_eq!(
+                field.query,
+                expected["query"].as_str().expect("query"),
+                "{name}: query"
+            );
+            let replaced = &raw[field.replacement.0..field.replacement.1];
+            assert_eq!(
+                replaced,
+                expected["replaced"].as_str().expect("replaced"),
+                "{name}: replaced"
+            );
+            // A replacement ends in `))` exactly when the token is
+            // closed: an unclosed query stops before any `)`.
+            assert_eq!(
+                replaced.ends_with("))"),
+                expected["closed"].as_bool().expect("closed"),
+                "{name}: closed"
+            );
+        }
     }
 
     #[test]

@@ -136,6 +136,7 @@ impl RecordVault {
                 next_missing_field: next_missing,
                 record_field,
                 source_note: None,
+                task_links: false,
             })
             .expect("targeted complete")
         } else {

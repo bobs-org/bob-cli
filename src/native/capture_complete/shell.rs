@@ -80,6 +80,7 @@ pub(crate) fn shell_completion(
         next_missing_field: false,
         record_field: None,
         source_note: None,
+        task_links: false,
     };
     if let Some(result) = super::records::try_complete(&record_request)
         .map_err(|error| error.message)?

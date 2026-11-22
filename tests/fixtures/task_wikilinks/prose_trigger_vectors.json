@@ -1,0 +1,390 @@
+{
+  "version": 1,
+  "source": "tests/fixtures/task_wikilinks/prose_trigger_vectors.json",
+  "cases": [
+    {
+      "name": "opener at line start",
+      "before": "((api",
+      "after": "",
+      "expect": {
+        "query": "api",
+        "replaced": "((api",
+        "closed": false
+      }
+    },
+    {
+      "name": "opener after a space",
+      "before": "Superseded by ((api",
+      "after": "",
+      "expect": {
+        "query": "api",
+        "replaced": "((api",
+        "closed": false
+      }
+    },
+    {
+      "name": "opener after a tab",
+      "before": "Notes\t((api",
+      "after": "",
+      "expect": {
+        "query": "api",
+        "replaced": "((api",
+        "closed": false
+      }
+    },
+    {
+      "name": "bare opener has an empty query",
+      "before": "See ((",
+      "after": "",
+      "expect": {
+        "query": "",
+        "replaced": "((",
+        "closed": false
+      }
+    },
+    {
+      "name": "unclosed token keeps prose after a space",
+      "before": "Superseded by ((api",
+      "after": " tomorrow",
+      "expect": {
+        "query": "api",
+        "replaced": "((api",
+        "closed": false
+      }
+    },
+    {
+      "name": "caret on the opener of an unclosed token",
+      "before": "See ",
+      "after": "((api",
+      "expect": {
+        "query": "",
+        "replaced": "((api",
+        "closed": false
+      }
+    },
+    {
+      "name": "caret before the opener's space",
+      "before": "See",
+      "after": " ((api",
+      "expect": null
+    },
+    {
+      "name": "mid-word opener never opens",
+      "before": "f((x",
+      "after": "",
+      "expect": null
+    },
+    {
+      "name": "triple paren never opens",
+      "before": "(((x",
+      "after": "",
+      "expect": null
+    },
+    {
+      "name": "escaped paren never opens",
+      "before": "\\((x",
+      "after": "",
+      "expect": null
+    },
+    {
+      "name": "inside an inline code span",
+      "before": "see `((x",
+      "after": "`",
+      "expect": null
+    },
+    {
+      "name": "inside a double-backtick code span",
+      "before": "see ``a ((b",
+      "after": "``",
+      "expect": null
+    },
+    {
+      "name": "unclosed backtick covers the rest of the line",
+      "before": "see `((x",
+      "after": "",
+      "expect": null
+    },
+    {
+      "name": "escaped backtick stays literal",
+      "before": "see \\` ((x",
+      "after": "",
+      "expect": {
+        "query": "x",
+        "replaced": "((x",
+        "closed": false
+      }
+    },
+    {
+      "name": "code span earlier on the line",
+      "before": "`code` ((x",
+      "after": "",
+      "expect": {
+        "query": "x",
+        "replaced": "((x",
+        "closed": false
+      }
+    },
+    {
+      "name": "inside a closed wikilink",
+      "before": "[[a ((b",
+      "after": "]]",
+      "expect": null
+    },
+    {
+      "name": "after an unclosed wikilink",
+      "before": "[[a ((b",
+      "after": " more",
+      "expect": null
+    },
+    {
+      "name": "after a closed wikilink",
+      "before": "[[a]] ((b",
+      "after": "",
+      "expect": {
+        "query": "b",
+        "replaced": "((b",
+        "closed": false
+      }
+    },
+    {
+      "name": "closed token with the caret before the opener",
+      "before": "",
+      "after": "((a))",
+      "expect": {
+        "query": "",
+        "replaced": "((a))",
+        "closed": true
+      }
+    },
+    {
+      "name": "closed token with the caret inside",
+      "before": "((a",
+      "after": "))",
+      "expect": {
+        "query": "a",
+        "replaced": "((a))",
+        "closed": true
+      }
+    },
+    {
+      "name": "closed token with the caret between the closers",
+      "before": "((a)",
+      "after": ")",
+      "expect": {
+        "query": "a",
+        "replaced": "((a))",
+        "closed": true
+      }
+    },
+    {
+      "name": "closed token with the caret right after the closer",
+      "before": "((a))",
+      "after": " tomorrow",
+      "expect": {
+        "query": "a",
+        "replaced": "((a))",
+        "closed": true
+      }
+    },
+    {
+      "name": "one character past the closer",
+      "before": "((a)) ",
+      "after": "more",
+      "expect": null
+    },
+    {
+      "name": "empty closed token",
+      "before": "((",
+      "after": "))",
+      "expect": {
+        "query": "",
+        "replaced": "(())",
+        "closed": true
+      }
+    },
+    {
+      "name": "mid-token caret replaces the whole token",
+      "before": "((ap",
+      "after": "i more",
+      "expect": {
+        "query": "ap",
+        "replaced": "((api",
+        "closed": false
+      }
+    },
+    {
+      "name": "query with spaces is a multi-term filter",
+      "before": "See ((fix login",
+      "after": " bug",
+      "expect": {
+        "query": "fix login",
+        "replaced": "((fix login",
+        "closed": false
+      }
+    },
+    {
+      "name": "query stops at an open bracket",
+      "before": "((foo",
+      "after": "[bar",
+      "expect": {
+        "query": "foo",
+        "replaced": "((foo",
+        "closed": false
+      }
+    },
+    {
+      "name": "caret past an open bracket",
+      "before": "((foo[",
+      "after": "bar",
+      "expect": null
+    },
+    {
+      "name": "query stops at a lone close paren",
+      "before": "((foo",
+      "after": ") bar",
+      "expect": {
+        "query": "foo",
+        "replaced": "((foo",
+        "closed": false
+      }
+    },
+    {
+      "name": "caret past a lone close paren",
+      "before": "((foo)",
+      "after": " bar",
+      "expect": null
+    },
+    {
+      "name": "query stops at a backtick",
+      "before": "((foo",
+      "after": "`code`",
+      "expect": {
+        "query": "foo",
+        "replaced": "((foo",
+        "closed": false
+      }
+    },
+    {
+      "name": "query stops at an open paren",
+      "before": "((fo(o",
+      "after": "",
+      "expect": null
+    },
+    {
+      "name": "two tokens with the caret in the second",
+      "before": "((a ((b",
+      "after": "",
+      "expect": {
+        "query": "b",
+        "replaced": "((b",
+        "closed": false
+      }
+    },
+    {
+      "name": "two tokens meeting at the caret: last wins",
+      "before": "((a ",
+      "after": "((b",
+      "expect": {
+        "query": "",
+        "replaced": "((b",
+        "closed": false
+      }
+    },
+    {
+      "name": "token on the second line",
+      "before": "First line\n((sec",
+      "after": "",
+      "expect": {
+        "query": "sec",
+        "replaced": "((sec",
+        "closed": false
+      }
+    },
+    {
+      "name": "token on the second line after CRLF",
+      "before": "First line\r\n((sec",
+      "after": "",
+      "expect": {
+        "query": "sec",
+        "replaced": "((sec",
+        "closed": false
+      }
+    },
+    {
+      "name": "token on an earlier line never reaches the caret",
+      "before": "((a\nb",
+      "after": "",
+      "expect": null
+    },
+    {
+      "name": "emoji neighbours",
+      "before": "🎉 ((café",
+      "after": " ☕",
+      "expect": {
+        "query": "café",
+        "replaced": "((café",
+        "closed": false
+      }
+    },
+    {
+      "name": "RTL neighbours",
+      "before": "שלום ((مرحبا",
+      "after": " עוד",
+      "expect": {
+        "query": "مرحبا",
+        "replaced": "((مرحبا",
+        "closed": false
+      }
+    },
+    {
+      "name": "capture close action is plain prose",
+      "before": "x ((foo",
+      "after": "",
+      "expect": {
+        "query": "foo",
+        "replaced": "((foo",
+        "closed": false
+      }
+    },
+    {
+      "name": "capture Work Log bullet is plain prose",
+      "before": "- 1 ((foo",
+      "after": "",
+      "expect": {
+        "query": "foo",
+        "replaced": "((foo",
+        "closed": false
+      }
+    },
+    {
+      "name": "capture Work Log child line is plain prose",
+      "before": "x\n- Follow up ((s",
+      "after": "",
+      "expect": {
+        "query": "s",
+        "replaced": "((s",
+        "closed": false
+      }
+    },
+    {
+      "name": "capture route marker is plain prose",
+      "before": "@inbox ((foo",
+      "after": "",
+      "expect": {
+        "query": "foo",
+        "replaced": "((foo",
+        "closed": false
+      }
+    },
+    {
+      "name": "at sigil inside the query",
+      "before": "((@foo",
+      "after": "",
+      "expect": {
+        "query": "@foo",
+        "replaced": "((@foo",
+        "closed": false
+      }
+    }
+  ]
+}
