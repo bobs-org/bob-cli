@@ -466,9 +466,10 @@ as one undo step; a refusal writes nothing and shows its copy:
 | Typing `- [` then space | Expands to `- [ ] ` on any list-item start (autopair on or off, Vim insert included); a `]` typed right after the expansion is absorbed, and so is a space typed right after that `]`; Backspace right after a bullet-start `[ ] ` removes the whole marker; one Undo returns the plain-space bytes |
 
 A line that changed under an open prompt refuses with `The line changed —
-try again`. Ctrl+Shift+T on a req is not part of this phase: until the
-`obsidian-close-card` phase lands it runs today's split, which also makes it
-a task. (Shipped in the `obsidian-gestures` phase; see [Task Status
+try again`. Ctrl+Shift+T on a requirement line keeps its existing task-split
+behavior; requirement Carry on the close card is available only after a
+managed Done gesture opens that card. (Shipped in the `obsidian-gestures` and
+`obsidian-close-card` phases; see [Task Status
 Cycler](reference/plugins/task-status-cycler.md), [Navigation
 Hotkeys](reference/plugins/bob-navigation-hotkeys.md), [Block ID
 Prompt](reference/plugins/block-id-prompt.md), and [Task
