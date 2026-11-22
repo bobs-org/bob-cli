@@ -67,6 +67,7 @@ pub(super) fn plan_task_complete_item(
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: Vec::new(),
             task_theme: None,
             type_relocation: None,
             ok: true,

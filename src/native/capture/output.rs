@@ -1061,6 +1061,63 @@ pub(crate) struct CaptureItemResult {
     /// Additive: omitted otherwise so older output stays byte-identical.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) notebook: Option<super::notebook_note::NotebookSummary>,
+    /// Requirements this item wrote into a block it created. One entry per
+    /// owner, omitted when empty so older output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) requirements: Vec<RequirementWriteJson>,
+}
+
+/// One owner's requirements written by a new-task or project-note capture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RequirementWriteJson {
+    pub(super) owner: String,
+    pub(super) added: usize,
+    pub(super) notes_filed: usize,
+    pub(super) notes_created: bool,
+    pub(super) summary: String,
+}
+
+impl RequirementWriteJson {
+    pub(super) fn from_canonical(
+        block: &crate::native::task_block_layout::CanonicalReqBlock,
+        dry_run: bool,
+    ) -> Self {
+        Self {
+            owner: block.owner.clone(),
+            added: block.added,
+            notes_filed: block.notes_filed,
+            notes_created: block.notes_created,
+            summary: requirement_write_summary(
+                &block.owner,
+                block.added,
+                block.notes_filed,
+                dry_run,
+            ),
+        }
+    }
+}
+
+pub(super) fn requirement_write_summary(
+    owner: &str,
+    added: usize,
+    notes_filed: usize,
+    dry_run: bool,
+) -> String {
+    let added_verb = if dry_run { "adds" } else { "added" };
+    let req_word = if added == 1 {
+        "requirement"
+    } else {
+        "requirements"
+    };
+    let mut line = format!("⌗⌗ {added_verb} {added} {req_word} to “{owner}”");
+    if notes_filed > 0 {
+        let filed_verb = if dry_run { "files" } else { "filed" };
+        let note_word = if notes_filed == 1 { "note" } else { "notes" };
+        line.push_str(&format!(
+            " · {filed_verb} {notes_filed} {note_word} under NOTES"
+        ));
+    }
+    line
 }
 
 /// Album identity carried on album-backed record payloads.
@@ -4356,6 +4413,7 @@ pub(super) fn print_human_item_success(
             println!("  {}", styler.dim(line));
         }
     }
+    print_human_requirement_writes(result, &styler);
     if let (Some(day_file), Some(block_link)) =
         (&result.day_file, &result.block_link)
     {
@@ -4477,6 +4535,12 @@ fn format_clip_history_summary(
         crate::native::capture_templates::command::age_unit(newest),
         crate::native::capture_templates::command::age_unit(oldest),
     )
+}
+
+fn print_human_requirement_writes(result: &CaptureItemResult, styler: &Styler) {
+    for entry in &result.requirements {
+        println!("  {}", styler.dim(&entry.summary));
+    }
 }
 
 fn print_human_project_note_moves(
@@ -8543,6 +8607,7 @@ mod tests {
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: Vec::new(),
             task_theme: None,
             type_relocation: None,
             ok: true,

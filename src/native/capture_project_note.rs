@@ -9,18 +9,23 @@
 //! The module is free of filesystem and clock access: the caller passes the
 //! resolved body, the current datetime (`bob_env::current_datetime()`), the
 //! resolved scheduled date, the resolved priority field, pre-rendered
-//! schedule-log lines, and the item's authored sub-bullets with their task
-//! IDs. `render_project_note` returns the file contents plus a small
+//! schedule-log lines, the item's authored sub-bullets with their task
+//! IDs, and the note-task settings used to canonicalize requirement rows.
+//! `render_project_note` returns the file contents plus a small
 //! summary (`basename`, rendered `^prj` line, section titles, task count) for
 //! the execution layer's JSON contract.
 //!
 //! Section mapping follows `buildProjectSeedFromChildBullets` in
 //! `plugins/bob-navigation-hotkeys/main.js`: a first-level authored bullet is
 //! a section when it has at least one nested bullet and its body matches the
-//! ALL-CAPS title shape, otherwise it is a task. Managed schedule/work log
-//! markers are deliberately not special-cased here: a capture draft authors a
-//! brand-new task rather than moving an existing one, so a log-shaped bullet
-//! is an ordinary task or section bullet.
+//! ALL-CAPS title shape, otherwise it is a task. Nested checkbox bullets
+//! under a task row are that row's requirements: the row is canonicalized
+//! so reqs sit in the reqs zone and loose notes file into `NOTES` (created
+//! only when a note lands). Rows without reqs, sections, moves, and the
+//! `^prj` line stay as authored. Managed schedule/work log markers are
+//! deliberately not special-cased here: a capture draft authors a brand-new
+//! task rather than moving an existing one, so a log-shaped bullet is an
+//! ordinary task or section bullet.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -31,8 +36,9 @@ use chrono_tz::Tz;
 
 use super::capture_dependency_tasks::has_hide_tag;
 use super::capture_language::{split_leading_checkbox, AuthoredSubBullet};
-use super::note_tasks::TaskStatusType;
+use super::note_tasks::{NoteTaskSettings, TaskStatusType};
 use super::projects::edits::normalize_prj_is_blocked_tag;
+use super::task_block_layout::{canonicalize_new_req_block, CanonicalReqBlock};
 
 /// Placeholder task kept under `## Tasks` when no authored task children were
 /// rendered. Matches the template's `(REPLACE WITH TASK DESCRIPTION)` line
@@ -60,6 +66,9 @@ pub(crate) struct ProjectNoteRenderInput<'a> {
     pub(crate) schedule_log_lines: &'a [String],
     pub(crate) sub_bullets: &'a [AuthoredSubBullet],
     pub(crate) status_types: BTreeMap<char, TaskStatusType>,
+    /// Settings for canonicalizing a `## Tasks` row that owns requirements.
+    /// The renderer never reads the vault; the caller supplies them.
+    pub(crate) settings: &'a NoteTaskSettings,
 }
 
 /// Rendered note plus the summary the execution layer reports.
@@ -85,6 +94,8 @@ pub(crate) struct RenderedProjectNote {
     /// Final zero-based task-root slots for authored move bullets. Slots
     /// count task roots only; headings and section-note bullets do not count.
     pub(crate) move_slots: Vec<ProjectNoteMoveSlot>,
+    /// One entry per `## Tasks` row that owns requirements, in output order.
+    pub(crate) req_writes: Vec<CanonicalReqBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,6 +319,32 @@ fn nested_line(bullet: &AuthoredSubBullet, base_level: u8) -> String {
     format!("{}- {}", "\t".repeat(usize::from(tabs)), bullet.body.trim())
 }
 
+/// Canonicalize one `## Tasks` row when it owns requirements: reqs sit in
+/// the reqs zone and loose notes file into `NOTES`. A row with no reqs
+/// stays byte-identical.
+fn canonicalize_task_row(
+    task_line: String,
+    nested: &[&AuthoredSubBullet],
+    owner_level: u8,
+    settings: &NoteTaskSettings,
+    req_writes: &mut Vec<CanonicalReqBlock>,
+) -> Vec<String> {
+    let mut row_lines = Vec::with_capacity(1 + nested.len());
+    row_lines.push(task_line);
+    for bullet in nested {
+        row_lines.push(nested_line(bullet, owner_level));
+    }
+    let row_block = row_lines.join("\n");
+    match canonicalize_new_req_block(&row_block, settings) {
+        Some(canonical) => {
+            let lines = canonical.updated.lines().map(str::to_string).collect();
+            req_writes.push(canonical);
+            lines
+        }
+        None => row_lines,
+    }
+}
+
 /// Render one authored task line: preserve an authored checkbox status
 /// (defaulting to open), add `#task` unless present, append
 /// `[created::DATE]` unless the body already carries one, and finally append
@@ -402,6 +439,7 @@ pub(crate) fn render_project_note(
     let mut tasks_block: Vec<String> = Vec::new();
     let mut task_entries: usize = 0;
     let mut pending_tasks: Vec<PendingTask> = Vec::new();
+    let mut req_writes: Vec<CanonicalReqBlock> = Vec::new();
     let mut move_slots = Vec::new();
     let mut sections: Vec<SectionEntry> = Vec::new();
     let mut section_index: HashMap<String, usize> = HashMap::new();
@@ -493,12 +531,15 @@ pub(crate) fn render_project_note(
                 source_index: Some(group.owner_index),
                 task_line: task_line.clone(),
             });
-            tasks_block.push(task_line);
+            let row_lines = canonicalize_task_row(
+                task_line,
+                &group.nested,
+                group.owner.depth.level(),
+                input.settings,
+                &mut req_writes,
+            );
+            tasks_block.extend(row_lines);
             task_entries += 1;
-            for nested in &group.nested {
-                tasks_block
-                    .push(nested_line(nested, group.owner.depth.level()));
-            }
         }
     }
 
@@ -609,6 +650,7 @@ pub(crate) fn render_project_note(
         named_tasks,
         task_rows,
         move_slots,
+        req_writes,
     }
 }
 
@@ -630,8 +672,11 @@ fn assign_rendered_task_lines(contents: &str, tasks: &mut [RenderedTask]) {
 #[cfg(test)]
 mod tests {
     use super::super::capture_language::{AuthoredDepth, ProjectTaskId};
+    use super::super::note_tasks;
     use super::*;
     use chrono::NaiveDate;
+    use std::path::Path;
+    use std::sync::OnceLock;
 
     fn test_now() -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 9, 20)
@@ -672,6 +717,13 @@ mod tests {
         }
     }
 
+    fn test_settings() -> &'static NoteTaskSettings {
+        static SETTINGS: OnceLock<NoteTaskSettings> = OnceLock::new();
+        SETTINGS.get_or_init(|| {
+            note_tasks::read_settings(Path::new("/no-bob-vault"))
+        })
+    }
+
     fn base_input<'a>(
         sub_bullets: &'a [AuthoredSubBullet],
     ) -> ProjectNoteRenderInput<'a> {
@@ -695,6 +747,7 @@ mod tests {
                 ('-', TaskStatusType::Cancelled),
                 ('>', TaskStatusType::Cancelled),
             ]),
+            settings: test_settings(),
         }
     }
 
@@ -742,6 +795,7 @@ mod tests {
         );
         assert_eq!(rendered.sections, Vec::<String>::new());
         assert_eq!(rendered.task_count, 1);
+        assert!(rendered.req_writes.is_empty());
     }
 
     #[test]
@@ -938,10 +992,16 @@ mod tests {
              \t- [ ] Confirm the account number\n\
              \t\t- [ ] Find the statement\n\
              \t\t\t- It is in the blue folder\n\
-             \t- Ask about fees\n\
+             \t- NOTES\n\
+             \t\t- Ask about fees\n\
              - [ ] #task Book the flight [created::2026-09-20]\n"
         ));
         assert_eq!(rendered.task_count, 2);
+        assert_eq!(rendered.req_writes.len(), 1);
+        assert_eq!(rendered.req_writes[0].owner, "Call Morgan Stanley");
+        assert_eq!(rendered.req_writes[0].added, 2);
+        assert_eq!(rendered.req_writes[0].notes_filed, 1);
+        assert!(rendered.req_writes[0].notes_created);
     }
 
     #[test]

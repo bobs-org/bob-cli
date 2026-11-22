@@ -301,6 +301,7 @@ fn json_success_shape_is_stable() {
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: Vec::new(),
             task_theme: None,
             type_relocation: None,
             ok: true,

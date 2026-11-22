@@ -415,10 +415,12 @@ Notebook routes still refuse checkboxes, and `@route` task lists still strip
 Positions, deeper nesting beneath req chains, the `req_marker` span with its
 `depth`, and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`
 refusals shipped with capture grammar 29 (see
-[Requirement bullets](capture.md#requirement-bullets)). Until the req writes
-land, an admitted req is written at its authored depth in authored order.
-Placement in the reqs zone with the NOTES rule, the first-req scoop, and the
-`req_link` refusal land later in the `capture-reqs` phase.
+[Requirement bullets](capture.md#requirement-bullets)). New-task, list,
+Pomodoro-created, and project-note-row writes place admitted requirements in
+the reqs zone with the NOTES rule (`notes_drawer_birth = with_first_note`).
+Existing-task writes (`@route+id`, the same-line `[ ]` form), the first-req
+scoop on a target that already exists, and the `req_link` refusal land in
+the rest of the `capture-reqs` phase.
 
 **Pasted text never becomes a requirement.** Text copied from outside
 writers (gcal descriptions and private notes, gkeep, gmail, highlights, ref

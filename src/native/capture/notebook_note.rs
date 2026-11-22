@@ -1014,5 +1014,6 @@ pub(super) fn notebook_item_result(
         note_pull: None,
         record_note: None,
         notebook: Some(notebook),
+        requirements: Vec::new(),
     }
 }

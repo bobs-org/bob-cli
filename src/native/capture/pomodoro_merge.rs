@@ -882,6 +882,7 @@ pub(super) fn plan_pomodoro_merge_item(
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: Vec::new(),
             task_theme: None,
             type_relocation: None,
             ok: true,

@@ -940,6 +940,7 @@ fn record_item_result(
         note_pull: None,
         record_note: Some(summary),
         notebook: None,
+        requirements: Vec::new(),
         task_theme: None,
         type_relocation: None,
         ok: true,

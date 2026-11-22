@@ -818,6 +818,7 @@ fn planned_item_from_pomodoro_link_plan(
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: Vec::new(),
             task_theme: None,
             type_relocation: None,
             ok: true,

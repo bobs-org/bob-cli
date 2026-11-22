@@ -276,6 +276,7 @@ pub(super) fn plan_project_note_item(
             schedule_log_lines: &schedule_log_lines,
             sub_bullets: &parsed.sub_bullets,
             status_types: settings.status_types.clone(),
+            settings: &settings,
         },
     );
 
@@ -635,6 +636,7 @@ pub(super) fn plan_project_note_item(
                     schedule_log_lines: &schedule_log_lines,
                     sub_bullets: &parsed.sub_bullets,
                     status_types: settings.status_types.clone(),
+                    settings: &settings,
                 },
             );
             for offer in &mut frozen_offers {
@@ -1783,6 +1785,13 @@ pub(super) fn plan_project_note_item(
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: rendered
+                .req_writes
+                .iter()
+                .map(|block| {
+                    RequirementWriteJson::from_canonical(block, request.dry_run)
+                })
+                .collect(),
             task_theme,
             type_relocation: None,
             ok: true,

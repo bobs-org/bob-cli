@@ -4,6 +4,7 @@ use super::{
     super::{
         capture_drawers::{self, Drawer},
         note_tasks::{NoteTask, NoteTaskSettings},
+        task_reqs,
     },
     desired_order,
     edit::{
@@ -72,6 +73,57 @@ pub(crate) fn plan_tidy(
     (updated != contents).then_some(TidyPlan {
         updated,
         moves,
+        notes_filed,
+        notes_created,
+    })
+}
+
+/// A newly written task block after its reqs and notes have been placed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalReqBlock {
+    /// The standalone block, canonical when the task is open.
+    pub(crate) updated: String,
+    /// Owner display text (`NoteTask::description`).
+    pub(crate) owner: String,
+    /// Requirement lines written under this owner, any depth.
+    pub(crate) added: usize,
+    /// Loose notes scooped into `NOTES`.
+    pub(crate) notes_filed: usize,
+    /// `NOTES` was created to hold them.
+    pub(crate) notes_created: bool,
+}
+
+/// Canonicalize a standalone newly-written task block that owns
+/// requirements: reqs sit in the reqs zone, loose notes file into `NOTES`
+/// (created only when a note lands), other drawers follow, logs last.
+///
+/// Returns `None` when the block's first line is not an open-or-closed
+/// task or the task owns no reqs, so a zero-req capture stays
+/// byte-identical. A task that is not open keeps authored order and still
+/// reports the reqs it already holds.
+pub(crate) fn canonicalize_new_req_block(
+    block: &str,
+    settings: &NoteTaskSettings,
+) -> Option<CanonicalReqBlock> {
+    let task = find_task(block, 0, settings)?;
+    let read = TaskBlock::read(block, &task, &settings.global_filter);
+    if !read.owns_reqs() {
+        return None;
+    }
+    let (updated, notes_filed, notes_created) = if task.status_type.is_open() {
+        match plan_tidy(block, &task, &TidyPolicy { settings }) {
+            Some(plan) => (plan.updated, plan.notes_filed, plan.notes_created),
+            None => (block.to_string(), 0, false),
+        }
+    } else {
+        (block.to_string(), 0, false)
+    };
+    let task = find_task(&updated, 0, settings)?;
+    let added = task_reqs::req_forest(&updated, &task, settings).len();
+    (added > 0).then_some(CanonicalReqBlock {
+        updated,
+        owner: task.description.clone(),
+        added,
         notes_filed,
         notes_created,
     })

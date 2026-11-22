@@ -509,3 +509,71 @@ fn a_note_without_a_final_newline_keeps_that_state() {
         (0, 1, true)
     );
 }
+
+#[test]
+fn canonicalize_new_req_block_files_notes_and_keeps_req_subtrees() {
+    let settings = settings();
+    let block = concat!(
+        "- [ ] #task Ship the exporter [created::2026-06-15]\n",
+        "\t- see the ticket\n",
+        "\t- [ ] Handles CRLF\n",
+        "\t\t- [ ] Windows\n",
+        "\t\t\t- seen in March\n",
+        "\t- FUTURE WORK\n",
+        "\t\t- later\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-06-16* — tomorrow",
+    );
+    let canonical =
+        canonicalize_new_req_block(block, &settings).expect("owns reqs");
+    assert_eq!(canonical.owner, "Ship the exporter");
+    assert_eq!(canonical.added, 2);
+    assert_eq!(canonical.notes_filed, 1);
+    assert!(canonical.notes_created);
+    assert_eq!(
+        canonical.updated,
+        concat!(
+            "- [ ] #task Ship the exporter [created::2026-06-15]\n",
+            "\t- [ ] Handles CRLF\n",
+            "\t\t- [ ] Windows\n",
+            "\t\t\t- seen in March\n",
+            "\t- NOTES\n",
+            "\t\t- see the ticket\n",
+            "\t- FUTURE WORK\n",
+            "\t\t- later\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-06-16* — tomorrow",
+        )
+    );
+    let task = find_task(&canonical.updated, 0, &settings).expect("task");
+    assert!(layout_violations(&canonical.updated, &task, &settings).is_empty());
+    assert!(plan_tidy(
+        &canonical.updated,
+        &task,
+        &TidyPolicy {
+            settings: &settings
+        }
+    )
+    .is_none());
+}
+
+#[test]
+fn canonicalize_new_req_block_leaves_zero_req_and_closed_blocks() {
+    let settings = settings();
+    let zero_req = concat!(
+        "- [ ] #task No reqs [created::2026-06-15]\n",
+        "\t- just a note",
+    );
+    assert_eq!(canonicalize_new_req_block(zero_req, &settings), None);
+    let closed = concat!(
+        "- [x] #task Done already [created::2026-06-15]\n",
+        "\t- leftover note\n",
+        "\t- [ ] still a req",
+    );
+    let canonical = canonicalize_new_req_block(closed, &settings)
+        .expect("closed owns reqs");
+    assert_eq!(canonical.updated, closed);
+    assert_eq!(canonical.added, 1);
+    assert_eq!(canonical.notes_filed, 0);
+    assert!(!canonical.notes_created);
+}

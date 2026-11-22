@@ -66,7 +66,11 @@ requirement, and requirement chains may nest deeper than two levels (each \
 deeper level adds two spaces; a requirement's note keeps one nested note \
 level). A requirement under a drawer, under a note, pre-checked, or deeper \
 than 16 is refused `req_in_drawer`, `req_parent`, `req_state`, or \
-`req_depth`; an empty `- [ ] ` with nothing nested is skipped. Every recognized \
+`req_depth`; an empty `- [ ] ` with nothing nested is skipped. Admitted \
+requirements on a new task, list task, Pomodoro-created task, or \
+project-note row land in the reqs zone with their subtrees, and that \
+owner's loose notes file into NOTES (created only when a note lands). \
+Every recognized \
 terminal 's:<N>', '$<N>', '%...', and '@route' marker configures only its own \
 capture item and is stripped from the rendered line it was typed on; a second \
 line in the same item resolving the same marker is ambiguous and fails before \

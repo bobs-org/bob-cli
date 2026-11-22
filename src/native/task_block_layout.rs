@@ -50,7 +50,10 @@ mod tests;
 // The public surface later epic phases import; nothing outside the module
 // names every type yet.
 #[allow(unused_imports)]
-pub(crate) use tidy::{plan_tidy, TidyPlan, TidyPolicy};
+pub(crate) use tidy::{
+    canonicalize_new_req_block, plan_tidy, CanonicalReqBlock, TidyPlan,
+    TidyPolicy,
+};
 #[allow(unused_imports)]
 pub(crate) use writers::{
     drop_req, insert_reqs, restore_req, toggle_note_req, InsertWrite,

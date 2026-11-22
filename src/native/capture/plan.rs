@@ -1846,6 +1846,7 @@ fn plan_ref_item(
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: Vec::new(),
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -2528,6 +2529,7 @@ pub(super) fn plan_capture_item(
                 note_pull: None,
                 record_note: None,
                 notebook: None,
+                requirements: Vec::new(),
                 ok: true,
                 dry_run: request.dry_run,
                 routed: true,
@@ -3281,6 +3283,25 @@ pub(super) fn plan_capture_item(
         clip_plan.as_ref().map(|plan| plan.output.lines.as_slice()),
         schedule_log.as_ref().map(|log| log.lines.as_slice()),
     );
+    let mut requirement_writes = Vec::new();
+    if matches!(
+        parsed.kind,
+        CaptureKind::Task
+            | CaptureKind::TaskWithBlockId { .. }
+            | CaptureKind::Pomodoro { close: None, .. }
+    ) {
+        let settings = note_tasks::read_settings(&request.bob_dir);
+        if let Some(canonical) = task_block_layout::canonicalize_new_req_block(
+            &capture_block,
+            &settings,
+        ) {
+            requirement_writes.push(RequirementWriteJson::from_canonical(
+                &canonical,
+                request.dry_run,
+            ));
+            capture_block = canonical.updated;
+        }
+    }
     if is_clip_note {
         // A dry run with `--no-clip` never stages: validate the parent and
         // drawer read-only below and return before any write.
@@ -3574,6 +3595,7 @@ pub(super) fn plan_capture_item(
                     note_pull: None,
                     record_note: None,
                     notebook: None,
+                    requirements: Vec::new(),
                     ok: true,
                     dry_run: request.dry_run,
                     routed: parsed.route.is_some(),
@@ -4483,6 +4505,7 @@ pub(super) fn plan_capture_item(
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: requirement_writes,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),
@@ -5790,6 +5813,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             note_pull: None,
             record_note: None,
             notebook: None,
+            requirements: Vec::new(),
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),
