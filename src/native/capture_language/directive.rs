@@ -135,18 +135,19 @@ pub(crate) fn clip_not_read_error() -> String {
 /// are excluded from edge checks; returned ranges stay absolute.
 #[allow(dead_code)]
 pub(crate) fn scan_line(line: &str, base: usize) -> Vec<DirectiveOccurrence> {
-    scan_line_inner(line, base, false)
+    scan_line_inner(line, base, None)
 }
 
+/// `child_cap` is `None` for an item line and, for an authored child
+/// line, the deepest level whose bullet prefix leaves the edge checks.
 fn scan_line_inner(
     line: &str,
     base: usize,
-    child_line: bool,
+    child_cap: Option<u8>,
 ) -> Vec<DirectiveOccurrence> {
-    let (body_start, body) = if child_line {
-        authored_body(line)
-    } else {
-        (0, line)
+    let (body_start, body) = match child_cap {
+        Some(max_level) => authored_body(line, max_level),
+        None => (0, line),
     };
     let protected = protected_ranges(body);
     let dependency_scans = scan_line_dependencies(body, 0)
@@ -333,16 +334,20 @@ pub(crate) fn template_tokens_in_line(
     line: &RawLine<'_>,
     child_line: bool,
 ) -> Vec<Range<usize>> {
-    scan_line_inner(line.text, line.start, child_line)
-        .into_iter()
-        .filter_map(|occurrence| match occurrence {
-            DirectiveOccurrence::Complete {
-                kind: DirectiveKind::Template,
-                span,
-            } => Some(span),
-            _ => None,
-        })
-        .collect()
+    scan_line_inner(
+        line.text,
+        line.start,
+        child_line.then_some(super::draft::TWO_LEVEL_CAP),
+    )
+    .into_iter()
+    .filter_map(|occurrence| match occurrence {
+        DirectiveOccurrence::Complete {
+            kind: DirectiveKind::Template,
+            span,
+        } => Some(span),
+        _ => None,
+    })
+    .collect()
 }
 
 pub(crate) fn collect_item(item: &CaptureItem<'_>) -> Vec<DirectiveOccurrence> {
@@ -353,13 +358,16 @@ pub(crate) fn collect_item(item: &CaptureItem<'_>) -> Vec<DirectiveOccurrence> {
         .first()
         .map(|line| line.raw.start)
         .unwrap_or(item.start);
-    for item_line in &item.lines {
+    let admitted = super::req_bullets::admitted_authored_lines(item);
+    for (index, item_line) in item.lines.iter().enumerate() {
         let Some(line) = lines.iter().find(|line| {
             line.start <= item_line.raw.start && item_line.raw.start <= line.end
         }) else {
             continue;
         };
-        let child = line.start > first_line_start;
+        let child = (line.start > first_line_start).then(|| {
+            super::req_bullets::child_bullet_cap(admitted[index].is_some())
+        });
         found.extend(
             scan_line_inner(line.text, line.start, child)
                 .into_iter()
@@ -537,8 +545,8 @@ pub(crate) fn resolve(
     Ok(directives)
 }
 
-fn authored_body(line: &str) -> (usize, &str) {
-    super::draft::strip_authored_bullet(line, super::draft::TWO_LEVEL_CAP)
+fn authored_body(line: &str, max_level: u8) -> (usize, &str) {
+    super::draft::strip_authored_bullet(line, max_level)
         .map_or((0, line), |(_, body_start, body)| (body_start, body))
 }
 

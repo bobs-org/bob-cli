@@ -664,16 +664,18 @@ pub(super) fn parent_task_selector_tokens<'a>(
     item: &CaptureItem<'a>,
 ) -> Vec<ParentTaskSelectorToken<'a>> {
     let mut selectors = Vec::new();
+    // Deeper lines select only where the parsers admit them: beneath a
+    // requirement chain, exactly like a level-2 line.
+    let admitted = super::req_bullets::admitted_authored_lines(item);
     for (line_index, item_line) in item.lines.iter().enumerate() {
         let line = item_line.raw;
         let scan_line = if line_index == 0 {
             line
         } else {
-            let AuthoredLineClass::Item(authored) =
-                classify_authored_line_capped(line, TWO_LEVEL_CAP)
-            else {
+            let Some(admitted) = admitted[line_index] else {
                 continue;
             };
+            let authored = admitted.authored;
             if authored.depth.is_nested()
                 && !item.lines[1..line_index].iter().any(|previous| {
                     matches!(

@@ -932,10 +932,11 @@ pub(crate) enum AuthoredLineClass<'a> {
 
 /// The authored-level cap for every reader that sees only a first-level
 /// bullet and one nested level: the notebook, record, close-log, section,
-/// and Pomodoro hosts, every first-level-only rule, and the task-host
-/// lexical helpers (selectors, type markers, directives, dependencies,
-/// target runs, and child-line completion) that must agree with a parser
-/// refusing deeper lines.
+/// and Pomodoro hosts, and every first-level-only rule. Task-host lexical
+/// helpers (selectors, type markers, directives, dependencies, target runs,
+/// child-line completion, and typing aliases) read deeper lines through
+/// `req_bullets::admitted_authored_lines` instead, so they agree with the
+/// parsers on lines admitted beneath a requirement chain.
 pub(crate) const TWO_LEVEL_CAP: u8 = 2;
 
 /// Classify one physical continuation line at any authored level. A real

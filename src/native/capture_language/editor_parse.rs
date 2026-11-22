@@ -5005,16 +5005,15 @@ pub(super) fn parse_editor_item_inner<'a>(
     // extraction and schedule/priority markers behind it still resolve.
     // The project-note marker may sit on a child line: a sealed marker
     // there routes the whole item, so every sibling takes the ID rule.
+    // Deeper children count only where the loop below admits them.
+    let child_seals_note = super::req_bullets::admitted_authored_lines(item)
+        .iter()
+        .flatten()
+        .any(|admitted| child_line_seals_project_note(admitted.authored.body));
     let parent_takes_ids = matches!(
         mode,
         EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
-    ) || item.lines.iter().skip(1).any(|line| {
-        matches!(
-            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
-            AuthoredLineClass::Item(authored)
-                if child_line_seals_project_note(authored.body)
-        )
-    });
+    ) || child_seals_note;
     let mut sub_bullets = Vec::new();
     let mut child_task_tokens: Vec<Option<Token<'_>>> = Vec::new();
     let mut child_task_stripped: Vec<Option<StrippedTaskId<'_>>> = Vec::new();

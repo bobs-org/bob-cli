@@ -77,22 +77,23 @@ struct Candidate {
 /// Scan an authored physical line for type markers. Child bullet prefixes
 /// are excluded from edge checks, while all returned ranges remain absolute.
 pub(crate) fn scan_line(line: &str, base: usize) -> Vec<TypeMarkerOccurrence> {
-    scan_line_with_positions(line, base, false, None)
+    scan_line_with_positions(line, base, None, None)
         .into_iter()
         .map(|(occurrence, _)| occurrence)
         .collect()
 }
 
+/// `child_cap` is `None` for an item line and, for an authored child
+/// line, the deepest level whose bullet prefix leaves the edge checks.
 fn scan_line_with_positions(
     line: &str,
     base: usize,
-    child_line: bool,
+    child_cap: Option<u8>,
     item: Option<&CaptureItem<'_>>,
 ) -> Vec<(TypeMarkerOccurrence, bool)> {
-    let (body_start, body) = if child_line {
-        authored_body(line)
-    } else {
-        (0, line)
+    let (body_start, body) = match child_cap {
+        Some(max_level) => authored_body(line, max_level),
+        None => (0, line),
     };
     let protected = protected_ranges(body);
     let quoted_route_tokens = quoted_route_tokens(body);
@@ -276,16 +277,22 @@ pub(crate) fn completion_at(
         .first()
         .map(|line| line.raw.start)
         .unwrap_or(item.start);
-    for item_line in &item.lines {
+    // Deeper child lines lose their bullet prefix only where the parsers
+    // admit them: beneath a requirement chain, exactly like level 2.
+    let admitted = super::req_bullets::admitted_authored_lines(item);
+    for (index, item_line) in item.lines.iter().enumerate() {
         let Some(line) = lines.iter().find(|line| {
             line.start <= item_line.raw.start && item_line.raw.start <= line.end
         }) else {
             continue;
         };
+        let child_cap = (line.start > first_line_start).then(|| {
+            super::req_bullets::child_bullet_cap(admitted[index].is_some())
+        });
         for (occurrence, leading) in scan_line_with_positions(
             line.text,
             line.start,
-            line.start > first_line_start,
+            child_cap,
             Some(item),
         ) {
             let span = occurrence.span().clone();
@@ -540,8 +547,8 @@ fn parse_candidate(
     }
 }
 
-fn authored_body(line: &str) -> (usize, &str) {
-    super::draft::strip_authored_bullet(line, super::draft::TWO_LEVEL_CAP)
+fn authored_body(line: &str, max_level: u8) -> (usize, &str) {
+    super::draft::strip_authored_bullet(line, max_level)
         .map_or((0, line), |(_, body_start, body)| (body_start, body))
 }
 
@@ -747,16 +754,22 @@ fn collect_item_with_positions(
         .first()
         .map(|line| line.raw.start)
         .unwrap_or(item.start);
-    for item_line in &item.lines {
+    // Deeper child lines lose their bullet prefix only where the parsers
+    // admit them: beneath a requirement chain, exactly like level 2.
+    let admitted = super::req_bullets::admitted_authored_lines(item);
+    for (index, item_line) in item.lines.iter().enumerate() {
         let Some(line) = lines.iter().find(|line| {
             line.start <= item_line.raw.start && item_line.raw.start <= line.end
         }) else {
             continue;
         };
+        let child_cap = (line.start > first_line_start).then(|| {
+            super::req_bullets::child_bullet_cap(admitted[index].is_some())
+        });
         let occurrences = scan_line_with_positions(
             line.text,
             line.start,
-            line.start > first_line_start,
+            child_cap,
             Some(item),
         );
         found.extend(occurrences.into_iter().filter(|(occurrence, _)| {
@@ -862,6 +875,9 @@ pub(crate) fn marker_only_child_lines(
     occurrences: &[TypeMarkerOccurrence],
 ) -> Vec<(usize, usize)> {
     let mut skips = Vec::new();
+    // Stays at two levels: a deeper marker-only row beneath a requirement
+    // chain is already a skipped placeholder in task hosts, and dropping
+    // it here would hide it from an ineligible host's refusal.
     for line in item.lines.iter().skip(1) {
         let raw = line.raw;
         let (body_start, body) = super::draft::strip_authored_bullet(

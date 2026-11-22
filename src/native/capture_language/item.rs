@@ -926,22 +926,15 @@ pub(super) fn select_target_run_for_item(
         .and_then(|outcome| outcome.route.map(|route| route.token.kind));
     let parent_is_project_note =
         matches!(parent_route, Some(CaptureKind::ProjectNote { .. }));
-    let child_seals_note = child_lines.iter().any(|line| {
-        matches!(
-            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
-            AuthoredLineClass::Item(authored)
-                if child_line_seals_project_note(authored.body)
-        )
-    });
+    // Deeper children count only where the parsers admit them: beneath a
+    // requirement chain, exactly like a level-2 child.
+    let admitted_children = admitted_child_lines(&masked_item, child_lines);
+    let child_seals_note = admitted_children
+        .iter()
+        .any(|(_, authored)| child_line_seals_project_note(authored.body));
     let parent_takes_ids = parent_is_project_note || child_seals_note;
 
-    for line in child_lines {
-        let authored =
-            match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
-                AuthoredLineClass::EmptyOrPlaceholder
-                | AuthoredLineClass::Invalid => continue,
-                AuthoredLineClass::Item(authored) => authored,
-            };
+    for &(line, authored) in &admitted_children {
         let child_line = RawLine {
             text: authored.body,
             start: authored.body_start,
@@ -1039,22 +1032,15 @@ pub(super) fn find_editor_target_run(
         .and_then(|outcome| outcome.route.map(|route| route.token.kind));
     let parent_is_project_note =
         matches!(parent_route, Some(CaptureKind::ProjectNote { .. }));
-    let child_seals_note = child_lines.iter().any(|line| {
-        matches!(
-            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
-            AuthoredLineClass::Item(authored)
-                if child_line_seals_project_note(authored.body)
-        )
-    });
+    // Deeper children count only where the parsers admit them: beneath a
+    // requirement chain, exactly like a level-2 child.
+    let admitted_children = admitted_child_lines(&masked_item, child_lines);
+    let child_seals_note = admitted_children
+        .iter()
+        .any(|(_, authored)| child_line_seals_project_note(authored.body));
     let parent_takes_ids = parent_is_project_note || child_seals_note;
 
-    for line in child_lines {
-        let authored =
-            match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
-                AuthoredLineClass::EmptyOrPlaceholder
-                | AuthoredLineClass::Invalid => continue,
-                AuthoredLineClass::Item(authored) => authored,
-            };
+    for &(line, authored) in &admitted_children {
         let child_line = RawLine {
             text: authored.body,
             start: authored.body_start,
@@ -2183,6 +2169,26 @@ fn interpret_execution_move(
     }
 }
 
+/// The child lines of `item` its parsers admit, each with its authored
+/// line: levels within two always, deeper ones only beneath a requirement
+/// chain. `child_lines` is `item.lines[1..]`.
+fn admitted_child_lines<'i, 'a>(
+    item: &CaptureItem<'a>,
+    child_lines: &'i [ItemLine<'a>],
+) -> Vec<(&'i ItemLine<'a>, AuthoredLine<'a>)> {
+    child_lines
+        .iter()
+        .zip(
+            super::req_bullets::admitted_authored_lines(item)
+                .into_iter()
+                .skip(1),
+        )
+        .filter_map(|(line, admitted)| {
+            admitted.map(|admitted| (line, admitted.authored))
+        })
+        .collect()
+}
+
 fn parse_capture_item_masked<'a>(
     item: &CaptureItem<'a>,
     forced_route: Option<&str>,
@@ -2517,13 +2523,10 @@ fn parse_capture_item_masked<'a>(
     );
     // The project-note marker may sit on a child line: a sealed marker
     // there routes the whole item, so every sibling takes the ID rule.
-    let child_seals_note = child_lines.iter().any(|line| {
-        matches!(
-            classify_authored_line_capped(line.raw, TWO_LEVEL_CAP),
-            AuthoredLineClass::Item(authored)
-                if child_line_seals_project_note(authored.body)
-        )
-    });
+    // Deeper children count only where the loop below admits them.
+    let child_seals_note = admitted_child_lines(item, child_lines)
+        .iter()
+        .any(|(_, authored)| child_line_seals_project_note(authored.body));
     let parent_takes_ids = parent_is_project_note || child_seals_note;
     let mut aggregate = AggregateMarkers::default();
     aggregate.clip = clip;

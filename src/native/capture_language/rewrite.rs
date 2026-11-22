@@ -2627,11 +2627,17 @@ fn candidate_selects_plain_marker(
             let (line_text, line_base, line_end) = if leading {
                 (line.raw.text, line.raw.start, line.raw.end)
             } else {
-                match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
-                    AuthoredLineClass::Item(authored) => {
-                        (authored.body, authored.body_start, line.raw.end)
-                    }
-                    _ => return false,
+                // Deeper lines toggle only where the parsers admit them:
+                // beneath a requirement chain, exactly like level 2.
+                match super::req_bullets::admitted_authored_lines(item)
+                    [position]
+                {
+                    Some(admitted) => (
+                        admitted.authored.body,
+                        admitted.authored.body_start,
+                        line.raw.end,
+                    ),
+                    None => return false,
                 }
             };
             if start < line_base || end > line_end {

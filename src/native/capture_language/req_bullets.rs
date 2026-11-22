@@ -16,13 +16,16 @@
 //! lexical pre-check that only lets a deeper line through when the
 //! checkbox shape of its ancestors could make it a requirement chain.
 
-use super::draft::marker_only_placeholder_after_prefix;
+use super::draft::{
+    classify_authored_line, marker_only_placeholder_after_prefix, AuthoredLine,
+    AuthoredLineClass, TWO_LEVEL_CAP,
+};
 use super::editor_model::{
     Diagnostic, EditorMode, ReqMarker, Severity, Span, SpanKind,
 };
 use super::line::invalid_child_line_error;
 use super::model::{
-    AuthoredDepth, AuthoredSubBullet, CaptureKind, ReqBulletInfo,
+    AuthoredDepth, AuthoredSubBullet, CaptureItem, CaptureKind, ReqBulletInfo,
 };
 use super::project_tasks::split_leading_checkbox;
 use crate::native::task_reqs::{copy, MAX_REQ_DEPTH};
@@ -254,6 +257,67 @@ impl LevelGate {
             self.stack.pop();
         }
         self.stack.push((level, checkbox));
+    }
+}
+
+/// One authored continuation line the item's parsers admit, with its
+/// effective level (after any list shift).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AdmittedLine<'a> {
+    pub(crate) authored: AuthoredLine<'a>,
+    pub(crate) level: u8,
+}
+
+/// The lexical admission every task-host helper shares with the parser
+/// loops: for each line of `item` (index 0 is the item line, always
+/// `None`), the authored line and its effective level when the parsers
+/// admit it. Levels within the free levels always pass; deeper ones only
+/// beneath a requirement chain ([`LevelGate`]). List items count levels
+/// after the shift. Empty, placeholder, invalid, and refused lines map to
+/// `None`, so on lines no deeper than two this matches the two-level
+/// classifier exactly.
+pub(crate) fn admitted_authored_lines<'a>(
+    item: &CaptureItem<'a>,
+) -> Vec<Option<AdmittedLine<'a>>> {
+    let list = item.list.is_some();
+    let mut gate =
+        LevelGate::new(if list { LIST_FREE_LEVELS } else { FREE_LEVELS });
+    let mut admitted = Vec::with_capacity(item.lines.len());
+    for (index, line) in item.lines.iter().enumerate() {
+        if index == 0 {
+            admitted.push(None);
+            continue;
+        }
+        let AuthoredLineClass::Item(authored) =
+            classify_authored_line(line.raw)
+        else {
+            admitted.push(None);
+            continue;
+        };
+        let level = if list {
+            authored.depth.shallower().level()
+        } else {
+            authored.depth.level()
+        };
+        if !gate.admits(level) {
+            admitted.push(None);
+            continue;
+        }
+        gate.push(level, leading_checkbox(authored.body).is_some());
+        admitted.push(Some(AdmittedLine { authored, level }));
+    }
+    admitted
+}
+
+/// The bullet-prefix cap for one authored child line's edge scans (type
+/// markers, directives): a line the parsers admit loses its prefix at any
+/// level, and every other line keeps the two-level reading, so a refused
+/// deeper line scans exactly as before.
+pub(crate) fn child_bullet_cap(admitted: bool) -> u8 {
+    if admitted {
+        AuthoredDepth::MAX_LEVEL
+    } else {
+        TWO_LEVEL_CAP
     }
 }
 

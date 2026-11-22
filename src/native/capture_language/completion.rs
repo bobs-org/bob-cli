@@ -2430,11 +2430,16 @@ pub(crate) fn completion_field_at_with(
     let scan_line = if leading {
         line
     } else {
-        let AuthoredLineClass::Item(authored) =
-            classify_authored_line_capped(line, TWO_LEVEL_CAP)
+        // Deeper lines complete only where the parsers admit them:
+        // beneath a requirement chain, exactly like a level-2 line.
+        let Some(Some(admitted)) =
+            super::req_bullets::admitted_authored_lines(item)
+                .get(line_index)
+                .copied()
         else {
             return None;
         };
+        let authored = admitted.authored;
         if authored.depth.is_nested()
             && !has_previous_first_level_authored_item(&item.lines, line_index)
         {

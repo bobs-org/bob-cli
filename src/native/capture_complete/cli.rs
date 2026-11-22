@@ -121,7 +121,8 @@ highlighting derived from that command. TEXT accepts the same \
 blank-line-separated batch draft `bob capture` does; completion always scopes \
 to the item and physical line the cursor is on, so only that item's first \
 (parent) line offers a leading marker and a later column-zero or valid \
-two-space nested authored line only completes its own trailing marker. A \
+nested authored line (deeper than two spaces only beneath a requirement) only \
+completes its own trailing marker. A \
 cursor on a blank separator row returns an empty success. The \
 service decides whether completion applies at all: an unrecognized marker, \
 a cursor in plain body text, a cursor on an authored line's indentation or \

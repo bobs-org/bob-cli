@@ -105,6 +105,7 @@ mod relations_cancel;
 mod relations_complete;
 mod relations_merge;
 mod reqs_existing;
+mod reqs_lexical;
 mod reqs_new;
 mod reqs_refusals;
 mod retype_closeout;

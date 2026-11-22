@@ -1090,7 +1090,9 @@ requirement, so a requirement's note keeps one nested note level. Any other
 third-level bullet, and a jump of more than one level, stays
 `invalid_child_line`; under a task the message adds that deeper bullets nest
 only beneath a requirement (`- [ ] …`). A task-list bullet counts levels after
-the list shift, so its notes gain no extra nesting. Every other item
+the list shift, so its notes gain no extra nesting. An admitted deeper line
+reads like a level-2 line: its markers, modifiers, `+query` picks, completion
+pickers, and typing aliases work as they do one level up. Every other item
 (notebook routes and lists, `@route` note lists, `@route#section` and
 `--section` bullets, records, close logs, Pomodoro starts and closes,
 transfers, merge-ins, and templates) keeps its existing checkbox and level
