@@ -1534,9 +1534,9 @@ Req-only close:
 }]
 ```
 
-Clients treat `owner.key` and `row.offer.key` as opaque. Plugin v6
-consumes this protocol in a later phase; this capture contract does not
-deploy that client.
+Clients treat `owner.key` and `row.offer.key` as opaque. The navigation
+picker v6 consumes these requirement rows when available; older picker
+versions continue without the requirement card.
 
 **Project-created rows (`project_note.successors`)**
 
@@ -2726,8 +2726,8 @@ and Carry plus pull-in — through the same result shape, and a jump pin
 on a requirement row stays navigation only resolved per §12.25. The cycler attaches requirement
 groups only when `api.successors.version >= 6`; an older picker keeps
 the v5 card and the close still succeeds with every Pending req Met.
-Plugin v6 consumes this protocol in a later phase; this capture contract
-does not deploy that client.
+Navigation picker v6 consumes this protocol when available; older picker
+versions continue to close with every Pending requirement treated as Met.
 
 **Notice API v2 (keep-moving).** `api.notice.version` is `2`.
 `buildUnblockedNoticeModel` reads an optional `keep_moving` row array.
@@ -4048,8 +4048,8 @@ requirements](task-requirements.md) §§1–6; carry bytes follow that
 document's Task Split rules (§6 there) and the RW/SP vectors — there is
 no second carry or Cancel Log writer. Defaults never stamp requirement
 completion: no `[fresh::]` or `[unblocked::]` is ever written for a
-requirement verdict. Plugin v6 consumes this protocol in a later phase;
-this capture contract does not deploy that client.
+requirement verdict. Navigation picker v6 consumes this protocol when
+available; older picker versions continue with the defaults.
 
 **Eligibility and collection.** Only a managed Done closing set is
 audited: the root and the actual embedded or nested real tasks closed
