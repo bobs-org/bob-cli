@@ -448,6 +448,32 @@ removes the whole marker and leaves `- `. Paste, templates, and
 phase; the Obsidian typing assist lands with `obsidian-gestures` and the Mac
 with `mac-authoring`.)
 
+**Obsidian gestures.** In Obsidian the shipped requirement gestures work on
+the req line under the cursor (fenced, quoted, frontmatter, drawer,
+note-nested, and managed-line checkboxes are never reqs). Every write lands
+as one undo step; a refusal writes nothing and shows its copy:
+
+| Gesture | On a req line |
+| ------- | ------------- |
+| Ctrl+] | Toggles the req back into a note (at depth 1, filed into `NOTES`) or a note into the reqs zone; the first req of a task scoops loose notes into `NOTES` and reports `⌗⌗ First requirement` (plus `· filed {n} note(s) under NOTES`) |
+| Alt+[ | Opens a reason prompt (`Why drop it? (optional)`) and drops the req with its nested branch; reports `⊘ Dropped “{T}”` (plus `· {k} nested go with it` when `k > 0`) |
+| Alt+] | Restores a dropped req (`↺ Restored “{T}”`); on a pending req refuses with the owner copy below |
+| Ctrl+Enter | Refuses — `Requirements are met when “{Owner}” closes — Ctrl+Enter on the task` |
+| Ctrl+Shift+P | Opens the owner's Task Card |
+| Alt+N, Alt+F, Ctrl+Alt+F, Ctrl+Shift+], Ctrl+Shift+Enter, counted cycles, other lane/schedule gestures | Refuse — `Requirements have no lane or schedule — Ctrl+Shift+T makes it a task` |
+| Any gesture on a carried `[>]` stub | Refuses — `Carried — open the linked task`, and never deletes the stub's link |
+| `o` / `O` | Continues any req line with `- [ ] `, never copying `[-]` or `[>]` |
+| Typing `- [` then space | Expands to `- [ ] ` on any list-item start (autopair on or off, Vim insert included); a `]` typed right after the expansion is absorbed, and so is a space typed right after that `]`; Backspace right after a bullet-start `[ ] ` removes the whole marker; one Undo returns the plain-space bytes |
+
+A line that changed under an open prompt refuses with `The line changed —
+try again`. Ctrl+Shift+T on a req is not part of this phase: until the
+`obsidian-close-card` phase lands it runs today's split, which also makes it
+a task. (Shipped in the `obsidian-gestures` phase; see [Task Status
+Cycler](reference/plugins/task-status-cycler.md), [Navigation
+Hotkeys](reference/plugins/bob-navigation-hotkeys.md), [Block ID
+Prompt](reference/plugins/block-id-prompt.md), and [Task
+Card](reference/plugins/task-card.md).)
+
 ## 6. Carry: a req becomes its own task
 
 Carry reuses [Task Split](task-split.md) (`src/native/task_split/`); the
@@ -547,3 +573,8 @@ and `vault-migration` phases.)
 - **RV** (`tests/fixtures/req_close/vectors.json`): close-card row building,
   verdict bytes, overlaps, staleness, jump landings, and copy strings.
   (Added in `close-engine`.)
+- **Twins**: the Task Status Cycler, Navigation Hotkeys, and Block ID Prompt
+  run the RQ/RL/RW vectors above through byte-identical JavaScript twins of
+  this contract (the cycler and nav hold all three; Block ID Prompt holds
+  RQ). `bob-cli` stays the authority: a behavior difference is a twin bug,
+  never a vector edit. (Shipped in the `obsidian-gestures` phase.)
