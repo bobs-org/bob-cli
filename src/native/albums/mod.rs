@@ -92,6 +92,11 @@ pub(crate) struct AlbumDeclaration {
     /// Whether a top-level `walk_by` key is present, including invalid
     /// authored values whose effective selection is `None`.
     pub(crate) walk_by_authored: bool,
+    /// Effective `[!records]` heading field: a declared non-list choices
+    /// key, or `None` when the key is absent or invalid. Only the index
+    /// headings read it; the tally, `groups`, and the catalog chip stay on
+    /// the auto-picked status field.
+    pub(crate) index_group_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
     /// Physical 1-based line of the `record:` key, when present.
     pub(crate) record_line: Option<usize>,
@@ -143,12 +148,13 @@ pub(crate) fn parse_album_declaration(
     let emoji = top_level_string(&frontmatter, "emoji");
     let created = top_level_string(&frontmatter, "created");
     let index_by = top_level_string(&frontmatter, "index_by");
-    let (walk_by_key, walk_by_line) = frontmatter_walk_by(&frontmatter);
-    let walk_by_authored = !matches!(walk_by_key, FrontmatterWalkBy::Absent);
-    let walk_by_raw = match &walk_by_key {
-        FrontmatterWalkBy::Valid(name) => Some(name.clone()),
-        FrontmatterWalkBy::Absent | FrontmatterWalkBy::Invalid => None,
-    };
+    let (walk_by_key, walk_by_line) =
+        frontmatter_selector(&frontmatter, "walk_by");
+    let walk_by_authored = !matches!(walk_by_key, FrontmatterSelector::Absent);
+    let walk_by_raw = walk_by_key.valid_name();
+    let (index_group_key, index_group_line) =
+        frontmatter_selector(&frontmatter, "index_group_by");
+    let index_group_raw = index_group_key.valid_name();
     let summary = decode_summary(&frontmatter);
     let (title_key, title_line) = frontmatter_title(&frontmatter);
     let title = match &title_key {
@@ -261,7 +267,7 @@ pub(crate) fn parse_album_declaration(
             "index_by must be a non-empty field name".to_owned(),
         ));
     }
-    if matches!(walk_by_key, FrontmatterWalkBy::Invalid) {
+    if matches!(walk_by_key, FrontmatterSelector::Invalid) {
         findings.push(finding(
             "album_walk_by_invalid",
             AlbumIssueSeverity::Warning,
@@ -269,6 +275,17 @@ pub(crate) fn parse_album_declaration(
             walk_by_line.or_else(|| line_by_path.get("walk_by").copied()),
             Some("walk_by".to_owned()),
             "walk_by must be a non-empty field name".to_owned(),
+        ));
+    }
+    if matches!(index_group_key, FrontmatterSelector::Invalid) {
+        findings.push(finding(
+            "album_index_group_by_invalid",
+            AlbumIssueSeverity::Warning,
+            &path,
+            index_group_line
+                .or_else(|| line_by_path.get("index_group_by").copied()),
+            Some("index_group_by".to_owned()),
+            "index_group_by must be a non-empty field name".to_owned(),
         ));
     }
     let mut index_facets =
@@ -331,42 +348,30 @@ pub(crate) fn parse_album_declaration(
         }
     }
 
-    let walk_by = match walk_by_raw.as_deref() {
-        None => None,
-        Some(key) => match parsed_schema.record_type.as_ref() {
-            None => None,
-            Some(record_type) => match record_type.field(key) {
-                None => {
-                    findings.push(finding(
-                        "album_walk_field_unknown",
-                        AlbumIssueSeverity::Warning,
-                        &path,
-                        line_by_path.get("walk_by").copied(),
-                        Some("walk_by".to_owned()),
-                        format!("walk_by names undeclared field {key:?}"),
-                    ));
-                    None
-                }
-                Some(field) => match &field.kind {
-                    FieldKind::Choices(_) if !field.list => {
-                        Some(key.to_owned())
-                    }
-                    _ => {
-                        findings.push(finding(
-                            "album_walk_by_not_choices",
-                            AlbumIssueSeverity::Warning,
-                            &path,
-                            line_by_path.get("walk_by").copied(),
-                            Some("walk_by".to_owned()),
-                            "walk_by must name a single-value choices field"
-                                .to_owned(),
-                        ));
-                        None
-                    }
-                },
-            },
+    let walk_by = effective_selector(
+        walk_by_raw.as_deref(),
+        parsed_schema.record_type.as_ref(),
+        &SelectorCodes {
+            key: "walk_by",
+            unknown: "album_walk_field_unknown",
+            not_choices: "album_walk_by_not_choices",
         },
-    };
+        &path,
+        &line_by_path,
+        &mut findings,
+    );
+    let index_group_by = effective_selector(
+        index_group_raw.as_deref(),
+        parsed_schema.record_type.as_ref(),
+        &SelectorCodes {
+            key: "index_group_by",
+            unknown: "album_index_group_field_unknown",
+            not_choices: "album_index_group_by_not_choices",
+        },
+        &path,
+        &line_by_path,
+        &mut findings,
+    );
 
     Some(AlbumDeclaration {
         path,
@@ -380,6 +385,7 @@ pub(crate) fn parse_album_declaration(
         index_by,
         walk_by,
         walk_by_authored,
+        index_group_by,
         index_facets,
         record_line: record_section_line,
         schema_field_lines,
@@ -471,27 +477,46 @@ fn frontmatter_title(
     (state, Some(start + 2))
 }
 
-/// The album's frontmatter `walk_by` key, decoded from its own span only.
+/// A top-level field-selector key (`walk_by`, `index_group_by`), decoded
+/// from its own span only.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum FrontmatterWalkBy {
+enum FrontmatterSelector {
     Absent,
     Valid(String),
     Invalid,
 }
 
-/// Decode the top-level `walk_by` entry from its own span: the first
-/// column-0 `walk_by:` line plus any indented or blank continuation
-/// lines up to the next column-0 non-blank line, parsed as a one-key
-/// mapping. Quoted, escaped, and commented spellings share one
-/// effective selection. Keep this repair local to `walk_by`.
-fn frontmatter_walk_by(
+impl FrontmatterSelector {
+    /// The authored field name, when the key decoded to a usable string.
+    fn valid_name(&self) -> Option<String> {
+        match self {
+            Self::Valid(name) => Some(name.clone()),
+            Self::Absent | Self::Invalid => None,
+        }
+    }
+}
+
+/// Finding codes one selector key reports, named after its own key.
+struct SelectorCodes {
+    key: &'static str,
+    unknown: &'static str,
+    not_choices: &'static str,
+}
+
+/// Decode the top-level `key` entry from its own span: the first column-0
+/// `key:` line plus any indented or blank continuation lines up to the
+/// next column-0 non-blank line, parsed as a one-key mapping. Quoted,
+/// escaped, and commented spellings share one effective selection. Keep
+/// this repair local to the selector keys (`walk_by`, `index_group_by`).
+fn frontmatter_selector(
     frontmatter: &Frontmatter<'_>,
-) -> (FrontmatterWalkBy, Option<usize>) {
+    key: &str,
+) -> (FrontmatterSelector, Option<usize>) {
     let Some(start) = frontmatter.lines.iter().position(|line| {
-        line.strip_prefix("walk_by")
+        line.strip_prefix(key)
             .is_some_and(|rest| rest.starts_with(':'))
     }) else {
-        return (FrontmatterWalkBy::Absent, None);
+        return (FrontmatterSelector::Absent, None);
     };
     let mut end = start + 1;
     while end < frontmatter.lines.len() {
@@ -503,23 +528,68 @@ fn frontmatter_walk_by(
     }
     let yaml = frontmatter.lines[start..end].join("\n");
     let value = match serde_yaml::from_str::<Value>(&yaml) {
-        Ok(Value::Mapping(mapping)) => {
-            mapping_get(&mapping, "walk_by").cloned()
-        }
+        Ok(Value::Mapping(mapping)) => mapping_get(&mapping, key).cloned(),
         _ => None,
     };
     let state = match value {
         Some(Value::String(text)) => {
             let trimmed = text.trim();
             if trimmed.is_empty() || trimmed.contains(['\n', '\r']) {
-                FrontmatterWalkBy::Invalid
+                FrontmatterSelector::Invalid
             } else {
-                FrontmatterWalkBy::Valid(trimmed.to_owned())
+                FrontmatterSelector::Valid(trimmed.to_owned())
             }
         }
-        _ => FrontmatterWalkBy::Invalid,
+        _ => FrontmatterSelector::Invalid,
     };
     (state, Some(start + 2))
+}
+
+/// The effective selection for one selector key: a declared single-value
+/// choices field, else `None` plus a warning. Without a parsed schema there
+/// is nothing to check against, so the selection is `None` without a
+/// finding, exactly as `walk_by` always behaved.
+fn effective_selector(
+    raw: Option<&str>,
+    record_type: Option<&RecordType>,
+    codes: &SelectorCodes,
+    path: &str,
+    line_by_path: &HashMap<String, usize>,
+    findings: &mut Vec<AlbumFinding>,
+) -> Option<String> {
+    let name = raw?;
+    let record_type = record_type?;
+    let line = line_by_path.get(codes.key).copied();
+    match record_type.field(name) {
+        None => {
+            findings.push(finding(
+                codes.unknown,
+                AlbumIssueSeverity::Warning,
+                path,
+                line,
+                Some(codes.key.to_owned()),
+                format!("{} names undeclared field {name:?}", codes.key),
+            ));
+            None
+        }
+        Some(field) => match &field.kind {
+            FieldKind::Choices(_) if !field.list => Some(name.to_owned()),
+            _ => {
+                findings.push(finding(
+                    codes.not_choices,
+                    AlbumIssueSeverity::Warning,
+                    path,
+                    line,
+                    Some(codes.key.to_owned()),
+                    format!(
+                        "{} must name a single-value choices field",
+                        codes.key
+                    ),
+                ));
+                None
+            }
+        },
+    }
 }
 
 fn decode_summary(frontmatter: &Frontmatter<'_>) -> Option<String> {
@@ -1198,6 +1268,120 @@ mod tests {
                 "line {line:?}: {:?}",
                 declaration.findings
             );
+        }
+    }
+
+    #[test]
+    fn index_group_by_validates_a_single_value_choices_field() {
+        let valid = parse(
+            "---\ntype: [[album]]\nsummary: Sample\nindex_group_by: section\nindex_by: status\nrecord:\n  noun: sample\n  fields:\n    status: {values: {open: Open}}\n    section: {values: {intro: Intro, body: Body}}\n---\n",
+        );
+        assert_eq!(valid.index_group_by.as_deref(), Some("section"));
+        // It is independent of the walk selector.
+        assert_eq!(valid.walk_by, None);
+        assert!(!valid.walk_by_authored);
+        assert_eq!(valid.index_by.as_deref(), Some("status"));
+        assert!(valid.findings.is_empty(), "{:?}", valid.findings);
+
+        let absent = parse(
+            "---\ntype: [[album]]\nrecord: {noun: sample, fields: {status: {values: {open: Open}}}}\n---\n",
+        );
+        assert_eq!(absent.index_group_by, None);
+        assert!(!absent
+            .findings
+            .iter()
+            .any(|finding| finding.code.starts_with("album_index_group")));
+    }
+
+    #[test]
+    fn index_group_by_quoted_and_commented_share_effective_selection() {
+        let schema = "summary: Sample\nrecord:\n  noun: sample\n  fields:\n    status: {values: {open: Open}}\n    section: {values: {intro: Intro}}\n";
+        for line in [
+            "index_group_by: section",
+            "index_group_by: \"section\"",
+            "index_group_by: 'section'",
+            "index_group_by: \"section\" # authored",
+            "index_group_by: section # authored",
+            "index_group_by: \"sec\\x74ion\"",
+        ] {
+            let declaration = parse_album_declaration(
+                Path::new("sample.md"),
+                &format!("---\ntype: [[album]]\n{line}\n{schema}---\n"),
+            )
+            .unwrap();
+            assert_eq!(
+                declaration.index_group_by.as_deref(),
+                Some("section"),
+                "line {line:?}"
+            );
+            assert!(
+                !declaration.findings.iter().any(|finding| finding
+                    .code
+                    .starts_with("album_index_group")),
+                "line {line:?}: {:?}",
+                declaration.findings
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_index_group_by_warns_falls_back_and_never_errors() {
+        let fields = "record:\n  noun: sample\n  fields:\n    status: {values: {open: Open}}\n    location: {}\n    tags: {list: true, values: {a: A}}\n";
+        for (key, code, message) in [
+            (
+                "index_group_by: \"  \"\n",
+                "album_index_group_by_invalid",
+                "index_group_by must be a non-empty field name",
+            ),
+            (
+                "index_group_by: |\n  one\n  two\n",
+                "album_index_group_by_invalid",
+                "index_group_by must be a non-empty field name",
+            ),
+            (
+                "index_group_by: [status]\n",
+                "album_index_group_by_invalid",
+                "index_group_by must be a non-empty field name",
+            ),
+            (
+                "index_group_by: missing\n",
+                "album_index_group_field_unknown",
+                "index_group_by names undeclared field \"missing\"",
+            ),
+            (
+                "index_group_by: location\n",
+                "album_index_group_by_not_choices",
+                "index_group_by must name a single-value choices field",
+            ),
+            (
+                "index_group_by: tags\n",
+                "album_index_group_by_not_choices",
+                "index_group_by must name a single-value choices field",
+            ),
+        ] {
+            let declaration = parse(&format!(
+                "---\ntype: [[album]]\nsummary: Sample\n{key}{fields}---\n"
+            ));
+            assert_eq!(declaration.index_group_by, None, "key {key:?}");
+            let finding = declaration
+                .findings
+                .iter()
+                .find(|finding| finding.code == code)
+                .unwrap_or_else(|| {
+                    panic!("key {key:?}: {:?}", declaration.findings)
+                });
+            assert_eq!(finding.severity, AlbumIssueSeverity::Warning);
+            assert_eq!(finding.key_path.as_deref(), Some("index_group_by"));
+            assert_eq!(finding.message, message, "key {key:?}");
+            assert!(
+                !declaration.findings.iter().any(
+                    |finding| finding.severity == AlbumIssueSeverity::Error
+                ),
+                "key {key:?}: {:?}",
+                declaration.findings
+            );
+            // The walk selector is untouched by a bad heading key.
+            assert!(!declaration.walk_by_authored);
         }
     }
 

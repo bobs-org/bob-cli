@@ -2039,3 +2039,65 @@ fn walk_by_mismatching_restore_writes_nothing() {
         "mismatching restore writes nothing"
     );
 }
+
+#[test]
+fn field_remove_refuses_the_index_group_by_field_and_changes_no_bytes() {
+    let temp = TempDir::new("album-update-index-group-guard");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write(&vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+    let album = ALBUM
+        .replace("record:\n", "index_group_by: section\nrecord:\n")
+        .replace(
+            "    status:\n",
+            "    section:\n      values:\n        intro: Intro\n    status:\n",
+        );
+    write(&vault, "eat.md", &album);
+    fs::create_dir_all(vault.join("eat")).expect("record folder");
+    write(&vault, "eat/ninja.md", RECORD);
+    write(&vault, "eat.base", "filters: {}\n");
+    commit_all(&vault, "index_group_by fixture");
+    let synced = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(synced.status.code(), Some(0), "{}", format_output(&synced));
+    let listed = list_json(&vault, &temp);
+    assert_eq!(listed["albums"][0]["index_group_by"], "section");
+
+    let expect = fingerprint(&vault, &temp);
+    let before_head = head(&vault);
+    let before_album = fs::read_to_string(vault.join("eat.md")).unwrap();
+    // `section` is unused by every record, so only the heading reference
+    // can refuse the removal.
+    let body = envelope(&expect, r#"{"op":"field.remove","field":"section"}"#);
+    let output = run(
+        &vault,
+        &temp,
+        &[
+            "update",
+            "eat",
+            "-f",
+            "json",
+            "-i",
+            write_envelope(&temp, "rm_section.json", &body)
+                .to_str()
+                .unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let payload = json(&output);
+    let error = &payload["error"];
+    assert_eq!(error["code"], "index_reference", "{payload}");
+    assert_eq!(error["key_path"], "index_group_by", "{payload}");
+    assert_eq!(error["field"], "section", "{payload}");
+    assert!(
+        error["message"].as_str().is_some_and(|message| message.ends_with(
+            "field \"section\" is named by index_group_by; remove the index reference in YAML first"
+        )),
+        "{payload}"
+    );
+    assert!(error["hint"].is_string(), "{payload}");
+    assert_eq!(head(&vault), before_head);
+    assert_eq!(
+        fs::read_to_string(vault.join("eat.md")).unwrap(),
+        before_album,
+        "a refused removal changes no bytes"
+    );
+}

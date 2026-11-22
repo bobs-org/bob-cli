@@ -135,6 +135,7 @@ pub(crate) fn plan_album_write(
     let grouping = group_records(
         schema_fields,
         declaration.index_by.as_deref(),
+        declaration.index_group_by.as_deref(),
         &declaration.index_facets,
         &grouping_records,
     );

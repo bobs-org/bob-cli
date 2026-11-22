@@ -105,6 +105,9 @@ impl std::error::Error for OpError {}
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct IndexRefs {
     pub(crate) index_by: Option<String>,
+    /// Effective `index_group_by` heading field, or `None` when the key is
+    /// absent or invalid.
+    pub(crate) index_group_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
     pub(crate) walk_by: Option<String>,
     /// Whether a top-level `walk_by` key is present, including invalid
@@ -1343,6 +1346,21 @@ fn apply_field_remove(
             MIGRATION_HINT,
         );
         error.field = Some(field.to_owned());
+        return Err(error);
+    }
+    if let Some(index_group_by) = inputs.index_refs.index_group_by.as_deref()
+        && index_group_by == field
+    {
+        let mut error = OpError::refusal(
+            "index_reference",
+            index,
+            format!(
+                "field {field:?} is named by index_group_by; remove the index reference in YAML first"
+            ),
+            MIGRATION_HINT,
+        );
+        error.field = Some(field.to_owned());
+        error.key_path = Some("index_group_by".to_owned());
         return Err(error);
     }
     if inputs
@@ -2799,6 +2817,7 @@ fields:
 
     static EMPTY_REFS: IndexRefs = IndexRefs {
         index_by: None,
+        index_group_by: None,
         index_facets: Vec::new(),
         walk_by: None,
         walk_by_authored: false,
@@ -3254,6 +3273,7 @@ fields:
         };
         let refs = IndexRefs {
             index_by: Some("status".to_owned()),
+            index_group_by: None,
             index_facets: vec!["location".to_owned()],
             walk_by: None,
             walk_by_authored: false,
@@ -3308,6 +3328,7 @@ fields:
         let (unused_type, unused_plural) = parse_type(&unused_raw, "eat");
         let indexed = IndexRefs {
             index_by: Some("extra".to_owned()),
+            index_group_by: None,
             index_facets: Vec::new(),
             walk_by: None,
             walk_by_authored: false,

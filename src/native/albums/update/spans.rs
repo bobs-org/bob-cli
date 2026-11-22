@@ -1765,6 +1765,7 @@ mod tests {
         )
         .map(|declaration| IndexRefs {
             index_by: declaration.index_by,
+            index_group_by: declaration.index_group_by,
             index_facets: declaration.index_facets,
             walk_by: declaration.walk_by,
             walk_by_authored: declaration.walk_by_authored,

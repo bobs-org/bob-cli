@@ -98,12 +98,18 @@ pub(crate) fn render_callout(
         }
         return canonical_callout(&spec, &rows);
     }
-    for group in &grouping.groups {
+    // `index_group_by` swaps only the headings; the tally above keeps
+    // reading `grouping.groups`.
+    let (groups, needs) = match &grouping.index_headings {
+        Some(headings) => (&headings.groups, &headings.needs),
+        None => (&grouping.groups, &grouping.needs),
+    };
+    for group in groups {
         rows.extend(render_group(
             album_stem, fields, grouping, index_by, group,
         ));
     }
-    if let Some(needs) = &grouping.needs {
+    if let Some(needs) = needs {
         rows.extend(render_group(
             album_stem, fields, grouping, index_by, needs,
         ));
@@ -549,7 +555,7 @@ mod tests {
     #[test]
     fn empty_album_renders_the_teaching_index() {
         let fields = eat_fields();
-        let grouping = group_records(&fields, Some("location"), &[], &[]);
+        let grouping = group_records(&fields, Some("location"), None, &[], &[]);
         let lines = render_callout(
             "eat",
             &nouns("restaurant", "restaurants"),
@@ -605,7 +611,8 @@ mod tests {
                 ],
             ),
         ];
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         let lines = render_callout(
             "eat",
             &nouns("restaurant", "restaurants"),
@@ -656,7 +663,7 @@ mod tests {
                 &[("status", scalar("done")), ("topic", scalar("python"))],
             ),
         ];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         let lines = render_callout(
             "podcasts",
             &nouns("podcast", "podcasts"),
@@ -684,7 +691,7 @@ mod tests {
             record("movies/dune.md", "Dune", &[("year", scalar("2021"))]),
             record("movies/heat.md", "Heat", &[("year", scalar("1995"))]),
         ];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         let lines = render_callout(
             "movies",
             &nouns("movie", "movies"),
@@ -714,7 +721,7 @@ mod tests {
             "Severance",
             &[("status", scalar("to_watch"))],
         )];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         let lines = render_callout(
             "tv",
             &nouns("TV show", "TV shows"),
@@ -732,7 +739,7 @@ mod tests {
             ),
             record("tv/silo.md", "Silo", &[("status", scalar("watched"))]),
         ];
-        let grouping_two = group_records(&fields, None, &[], &two);
+        let grouping_two = group_records(&fields, None, None, &[], &two);
         let two_lines = render_callout(
             "tv",
             &nouns("TV show", "TV shows"),
@@ -749,7 +756,8 @@ mod tests {
     fn malformed_member_keeps_filename_fallback_in_needs_status() {
         let fields = eat_fields();
         let records = vec![record("eat/mystery_spot.md", "mystery spot", &[])];
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         let lines = render_callout(
             "eat",
             &nouns("restaurant", "restaurants"),
@@ -765,7 +773,8 @@ mod tests {
             record("eat/mystery_spot.md", "mystery spot", &[]),
             record("eat/other_spot.md", "other spot", &[]),
         ];
-        let grouping_two = group_records(&fields, Some("location"), &[], &two);
+        let grouping_two =
+            group_records(&fields, Some("location"), None, &[], &two);
         let two_lines = render_callout(
             "eat",
             &nouns("restaurant", "restaurants"),
@@ -791,7 +800,7 @@ mod tests {
                 ("category", scalar("Ramen *x*")),
             ],
         )];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         let lines = render_callout(
             "eat",
             &nouns("restaurant", "restaurants"),
@@ -833,6 +842,7 @@ mod tests {
         let grouping = group_records(
             &fields,
             None,
+            None,
             &["companions".to_owned(), "notes".to_owned()],
             &records,
         );
@@ -864,7 +874,8 @@ mod tests {
                 ],
             ));
         }
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         assert!(!grouping.groups[0].subgroups.is_empty());
         let lines = render_callout(
             "eat",
@@ -899,6 +910,7 @@ mod tests {
         let grouping = group_records(
             &fields,
             Some("location"),
+            None,
             &["location".to_owned()],
             &records,
         );
@@ -920,7 +932,7 @@ mod tests {
             record("eat/b.md", "Same", &[("location", scalar("Clark"))]),
             record("eat/a.md", "Same", &[("location", scalar("Clark"))]),
         ];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         let lines = render_callout(
             "eat",
             &nouns("restaurant", "restaurants"),
@@ -938,7 +950,7 @@ mod tests {
     #[test]
     fn first_insert_and_second_render_are_stable() {
         let fields = eat_fields();
-        let grouping = group_records(&fields, Some("location"), &[], &[]);
+        let grouping = group_records(&fields, Some("location"), None, &[], &[]);
         let text = "---\ntype: [[album]]\n---\n\n# Eat\n\nIntro.\n\n## Notes\n\n- hi\n";
         let plan = plan_index(
             "eat.md",
@@ -975,7 +987,7 @@ mod tests {
     #[test]
     fn moved_callout_stays_put_and_duplicates_heal() {
         let fields = eat_fields();
-        let grouping = group_records(&fields, Some("location"), &[], &[]);
+        let grouping = group_records(&fields, Some("location"), None, &[], &[]);
         let callout = join(&render_callout(
             "eat",
             &nouns("restaurant", "restaurants"),
@@ -1023,7 +1035,7 @@ mod tests {
     #[test]
     fn fences_bom_and_crlf_are_preserved() {
         let fields = eat_fields();
-        let grouping = group_records(&fields, Some("location"), &[], &[]);
+        let grouping = group_records(&fields, Some("location"), None, &[], &[]);
         let fenced = "---\n---\n\n```md\n> [!records] stale\n```\n\n# Eat\n";
         let plan = plan_index(
             "eat.md",
@@ -1063,7 +1075,7 @@ mod tests {
     #[test]
     fn incomplete_folder_or_missing_text_is_damaged() {
         let fields = eat_fields();
-        let grouping = group_records(&fields, Some("location"), &[], &[]);
+        let grouping = group_records(&fields, Some("location"), None, &[], &[]);
         let damaged = plan_index(
             "eat.md",
             Some("# Eat\n"),
@@ -1108,7 +1120,7 @@ mod tests {
         let fields = vec![choices("status", &[("to_try", hostile_label)])];
         let records =
             vec![record("eat/one.md", "One", &[("status", scalar("to_try"))])];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         let hostile = nouns(hostile_singular, hostile_plural);
         let lines = render_callout(
             "eat",
@@ -1135,7 +1147,7 @@ mod tests {
         // Second render of the same bytes is a no-op: plan against the
         // installed text yields Current with no edit.
         let text = format!("# Eat\n\n{}\n", join(&lines));
-        let regroup = group_records(&fields, None, &[], &records);
+        let regroup = group_records(&fields, None, None, &[], &records);
         let plan = plan_index(
             "eat.md",
             Some(&text),
@@ -1153,7 +1165,7 @@ mod tests {
             "eat",
             &hostile,
             &fields,
-            &group_records(&fields, None, &[], &[]),
+            &group_records(&fields, None, None, &[], &[]),
             None,
             0,
         );
@@ -1167,13 +1179,13 @@ mod tests {
     #[test]
     fn tally_text_uses_singular_for_one_and_plural_otherwise() {
         let fields = eat_fields();
-        let empty_grouping = group_records(&fields, None, &[], &[]);
+        let empty_grouping = group_records(&fields, None, None, &[], &[]);
         assert_eq!(
             tally_text(&nouns("restaurant", "restaurants"), &empty_grouping, 0),
             "No restaurants yet"
         );
         let one = vec![record("eat/one.md", "One", &[])];
-        let one_grouping = group_records(&fields, None, &[], &one);
+        let one_grouping = group_records(&fields, None, None, &[], &one);
         assert!(tally_text(
             &nouns("restaurant", "restaurants"),
             &one_grouping,
@@ -1190,7 +1202,7 @@ mod tests {
             record("eat/one.md", "One", &[]),
             record("eat/two.md", "Two", &[]),
         ];
-        let two_grouping = group_records(&fields, None, &[], &two);
+        let two_grouping = group_records(&fields, None, None, &[], &two);
         let two_tally =
             tally_text(&nouns("restaurant", "restaurants"), &two_grouping, 2);
         assert!(two_tally.starts_with("2 restaurants"));
@@ -1205,7 +1217,7 @@ mod tests {
             &[("to_watch", "To watch"), ("watched", "Watched")],
         )];
         let acronym_grouping =
-            group_records(&tv_fields, None, &[], &acronym_one);
+            group_records(&tv_fields, None, None, &[], &acronym_one);
         assert!(tally_text(
             &nouns("TV show", "TV shows"),
             &acronym_grouping,
@@ -1213,7 +1225,8 @@ mod tests {
         )
         .starts_with("1 TV show"));
         let irregular = vec![record("people/ada.md", "Ada", &[])];
-        let irregular_grouping = group_records(&fields, None, &[], &irregular);
+        let irregular_grouping =
+            group_records(&fields, None, None, &[], &irregular);
         assert!(
             tally_text(&nouns("person", "people"), &irregular_grouping, 1)
                 .starts_with("1 person")
@@ -1222,5 +1235,133 @@ mod tests {
             tally_text(&nouns("person", "people"), &irregular_grouping, 1)
                 .contains("⚠️ 1 needs a status")
         );
+    }
+
+    fn outline_fields() -> Vec<RecordField> {
+        vec![
+            choices("status", &[("seed", "🌱 Seed"), ("done", "✅ Done")]),
+            choices(
+                "section",
+                &[
+                    ("intro", "🪝 Intro"),
+                    ("empty", "🕳️ Empty"),
+                    ("what", "🧱 What is SASE?"),
+                    ("future", "🔮 Future Work"),
+                ],
+            ),
+            text("claim", true),
+        ]
+    }
+
+    fn outline_records() -> Vec<GroupingRecord> {
+        vec![
+            record(
+                "zettel/why_a_tui.md",
+                "Why a TUI",
+                &[
+                    ("status", scalar("seed")),
+                    ("section", scalar("what")),
+                    ("claim", scalar("Terminals")),
+                ],
+            ),
+            record(
+                "zettel/what_came_before.md",
+                "What Came Before",
+                &[
+                    ("status", scalar("seed")),
+                    ("section", scalar("intro")),
+                    ("claim", scalar("I went through")),
+                ],
+            ),
+            record(
+                "zettel/loose.md",
+                "Loose Note",
+                &[("status", scalar("done")), ("claim", scalar("Unfiled"))],
+            ),
+            record(
+                "zettel/many.md",
+                "sase is many abstractions",
+                &[
+                    ("status", scalar("seed")),
+                    ("section", scalar("what")),
+                    ("claim", scalar("Many")),
+                ],
+            ),
+        ]
+    }
+
+    fn render_outline(
+        index_group_by: Option<&str>,
+        explicit_facets: &[String],
+    ) -> String {
+        let fields = outline_fields();
+        let records = outline_records();
+        let grouping = group_records(
+            &fields,
+            None,
+            index_group_by,
+            explicit_facets,
+            &records,
+        );
+        join(&render_callout(
+            "zettel",
+            &nouns("zettel", "zettels"),
+            &fields,
+            &grouping,
+            None,
+            records.len(),
+        ))
+    }
+
+    #[test]
+    fn index_group_by_renders_section_headings_with_a_status_tally() {
+        assert_eq!(
+            render_outline(Some("section"), &[]),
+            "\
+> [!records] 4 zettels · 🌱 3 seed · ✅ 1 done
+>
+> - **🪝 Intro** · 1
+>   - [[zettel/what_came_before|What Came Before]] — 🌱 Seed · I went through
+> - **🧱 What is SASE?** · 2
+>   - [[zettel/many|sase is many abstractions]] — 🌱 Seed · Many
+>   - [[zettel/why_a_tui|Why a TUI]] — 🌱 Seed · Terminals
+> - **⚠️ Needs section** · 1
+>   - [[zettel/loose|Loose Note]] — ✅ Done · Unfiled"
+        );
+    }
+
+    #[test]
+    fn index_group_by_with_explicit_facets_lists_exactly_those() {
+        assert_eq!(
+            render_outline(Some("section"), &["claim".to_owned()]),
+            "\
+> [!records] 4 zettels · 🌱 3 seed · ✅ 1 done
+>
+> - **🪝 Intro** · 1
+>   - [[zettel/what_came_before|What Came Before]] — I went through
+> - **🧱 What is SASE?** · 2
+>   - [[zettel/many|sase is many abstractions]] — Many
+>   - [[zettel/why_a_tui|Why a TUI]] — Terminals
+> - **⚠️ Needs section** · 1
+>   - [[zettel/loose|Loose Note]] — Unfiled"
+        );
+    }
+
+    #[test]
+    fn absent_index_group_by_and_status_keep_todays_bytes() {
+        let today = render_outline(None, &[]);
+        assert_eq!(
+            today,
+            "\
+> [!records] 4 zettels · 🌱 3 seed · ✅ 1 done
+>
+> - **🌱 Seed** · 3
+>   - [[zettel/many|sase is many abstractions]] — 🧱 What is SASE? · Many
+>   - [[zettel/what_came_before|What Came Before]] — 🪝 Intro · I went through
+>   - [[zettel/why_a_tui|Why a TUI]] — 🧱 What is SASE? · Terminals
+> - **✅ Done** · 1
+>   - [[zettel/loose|Loose Note]] — Unfiled"
+        );
+        assert_eq!(render_outline(Some("status"), &[]), today);
     }
 }

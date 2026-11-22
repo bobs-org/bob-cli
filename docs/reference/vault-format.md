@@ -447,7 +447,8 @@ An album is a vault-root note with `type: "[[album]]"`. Its stem is the
 record folder and route. Canonical records use `type: "[[record]]"`;
 `record.noun` names the kind and legacy type spelling. `record.fields` is
 optional. `index_by` and `index_facets` shape grouping peeks, subgroup
-headings, and row facets. Each album owns a `[!records]` index; each owner
+headings, and row facets; an optional `index_group_by` names the choices
+field that heads the index. Each album owns a `[!records]` index; each owner
 area or project owns a stable `[!albums]` catalog. `list` and `check` report
 `index.state` and `catalogs[].state` (`current`, `missing`, `stale`,
 `damaged`) without writing. `bob albums sync` repairs both in one guarded

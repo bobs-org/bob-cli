@@ -117,6 +117,8 @@ pub(crate) struct AlbumReportEntry {
     pub(crate) group_field: Option<String>,
     pub(crate) index_by: Option<String>,
     pub(crate) walk_by: Option<String>,
+    /// Effective `[!records]` heading field, or `None` when unset or invalid.
+    pub(crate) index_group_by: Option<String>,
     pub(crate) index_facets: Vec<String>,
     pub(crate) records: usize,
     pub(crate) groups: Vec<RecordGroup>,
@@ -198,6 +200,7 @@ impl AlbumReportEntry {
             "group_field": self.group_field,
             "index_by": self.index_by,
             "walk_by": self.walk_by,
+            "index_group_by": self.index_group_by,
             "index_facets": self.index_facets,
             "records": self.records,
             "groups": self.groups.iter().map(|group| json!({
@@ -415,6 +418,7 @@ pub(crate) fn project_album_from_folder(
     let grouping = group_records(
         schema_fields,
         declaration.index_by.as_deref(),
+        declaration.index_group_by.as_deref(),
         &declaration.index_facets,
         &members,
     );
@@ -589,6 +593,7 @@ pub(crate) fn project_album_from_folder(
             group_field: grouping.group_field,
             index_by: declaration.index_by.clone(),
             walk_by: declaration.walk_by.clone(),
+            index_group_by: declaration.index_group_by.clone(),
             index_facets: grouping.index_facets,
             records: members.len(),
             groups: grouping.groups,

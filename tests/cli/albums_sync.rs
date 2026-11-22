@@ -618,6 +618,86 @@ fn grouped_sync_orders_walk_lines_and_is_idempotent() {
 }
 
 #[test]
+fn index_group_by_heads_the_index_in_walk_order_and_is_idempotent() {
+    let temp = TempDir::new("album-sync-index-group");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    fs::create_dir_all(vault.join("zettel")).expect("zettel folder");
+    write(&vault, "body.md", "---\ntype: [[area]]\n---\n\n# Body\n");
+    write(
+        &vault,
+        "zettel.md",
+        "---\ntype: [[album]]\nparent: \"[[body]]\"\nsummary: Notes.\nwalk_by: section\nindex_group_by: section\nrecord:\n  noun: note\n  fields:\n    section:\n      values: {intro: Intro, body: Body}\n    status:\n      values: {open: Open, done: Done}\n---\n\n# Zettel\n",
+    );
+    for (stem, title, section, status) in [
+        ("zeta", "Zeta", "intro", "done"),
+        ("alpha", "Alpha", "body", "open"),
+        ("beta", "Beta", "body", "done"),
+    ] {
+        write(
+            &vault,
+            &format!("zettel/{stem}.md"),
+            &format!(
+                "---\ntype: [[record]]\nparent: \"[[zettel]]\"\ntitle: {title}\nsection: {section}\nstatus: {status}\n---\n"
+            ),
+        );
+    }
+    commit_all(&vault, "index group fixture");
+
+    let first = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(first.status.code(), Some(0), "{}", format_output(&first));
+    let payload = json(&first);
+    assert_eq!(payload["ok"], true);
+    let album = &payload["albums"][0];
+    assert_eq!(album["index_group_by"], "section");
+    // The default facets now carry status, the old heading field.
+    assert_eq!(album["index_facets"], serde_json::json!(["status"]));
+    // The report's own groups stay on status.
+    assert_eq!(album["group_field"], "status");
+    assert_eq!(album["groups"][0]["value"], "open");
+
+    let album_text = fs::read_to_string(vault.join("zettel.md")).unwrap();
+    let callout: Vec<&str> = album_text
+        .lines()
+        .skip_while(|line| !line.starts_with("> [!records]"))
+        .take_while(|line| line.starts_with('>'))
+        .collect();
+    assert_eq!(
+        callout,
+        [
+            "> [!records] 3 notes · 1 open · 2 done",
+            ">",
+            "> - **Intro** · 1",
+            ">   - [[zettel/zeta|Zeta]] — Done",
+            "> - **Body** · 2",
+            ">   - [[zettel/alpha|Alpha]] — Open",
+            ">   - [[zettel/beta|Beta]] — Done",
+        ],
+        "{album_text}"
+    );
+
+    // With walk_by naming the same field, the index order is the ]n walk.
+    let index_order: Vec<String> = callout
+        .iter()
+        .filter_map(|line| line.split("[[zettel/").nth(1))
+        .filter_map(|rest| rest.split('|').next())
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        album["walk"]["order"],
+        serde_json::json!(index_order),
+        "{payload}"
+    );
+
+    let before = head(&vault);
+    let second = run(&vault, &temp, &["sync", "-f", "json"]);
+    assert_eq!(second.status.code(), Some(0), "{}", format_output(&second));
+    let again = json(&second);
+    assert_eq!(again["ok"], true);
+    assert!(changed_paths(&again).is_empty(), "{again}");
+    assert_eq!(head(&vault), before);
+}
+
+#[test]
 fn nightly_continues_after_album_failure_and_publishes_healthy_indexes() {
     let temp = TempDir::new("album-nightly");
     let vault = fixture(&temp, true);

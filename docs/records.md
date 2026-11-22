@@ -69,7 +69,27 @@ record:
 - **Summary:** one plain line; more than 140 characters produces a warning.
 - **Grouping:** `status` choices when present, otherwise the first choices
   field, otherwise none. Empty groups are omitted. Missing, unknown, or
-  list-mismatched values count as `needs_status`.
+  list-mismatched values count as `needs_status`. This auto rule picks the
+  title tally, the report's `groups`, and the index headings, unless
+  `index_group_by` overrides the headings.
+- **`index_group_by`:** an optional top-level key beside `walk_by`,
+  `index_by`, and `index_facets` that names the field heading the `[!records]`
+  index. The field must be declared `Choices` with `list: false`, the same
+  test as `walk_by`. Headings are its choice labels in declared order, so the
+  YAML order is the outline order; empty choices are omitted, members keep
+  `title_order`, and missing, blank, malformed, list-shaped, or undeclared
+  values go last under `⚠️ Needs <field>`. A heading group larger than 12
+  still renders `index_by` subgroups. Only the index headings (and the
+  default facets below) change: the title tally, `groups`, `needs_status`,
+  peeks, the owner catalog chip, record `group` JSON, and the
+  `group_before`/`group_after` of `bob albums update` stay on the Grouping
+  field. Naming the Grouping field itself leaves the index byte-identical,
+  and an album without the key never changes. A blank, multi-line, or
+  non-string value warns `album_index_group_by_invalid`, an undeclared field
+  `album_index_group_field_unknown`, and a field that is not single-value
+  choices `album_index_group_by_not_choices`; each falls back to the
+  Grouping field and leaves the index intact. With `walk_by` naming the same
+  field, the index order is exactly the `]n` walk order.
 - **`index_by`:** a declared field name. Groups larger than 12 with at least
   two distinct normalized values render `index_by` subgroup headings (and
   peeks follow that order). Values fold by case and wikilink display text.
@@ -77,8 +97,11 @@ record:
   plain-text spelling on ties. Missing values sort last under `**—**`.
   Smaller groups stay flat. Peeks are the first three rendered titles.
 - **`index_facets`:** an explicit list of at most three field names, or the
-  default of other choice fields then `suggest` fields, excluding the group
-  field, capped at three. Flat rows keep `index_by` as a facet; subgrouped
+  default of other choice fields then `suggest` fields, excluding the heading
+  field (the `index_group_by` field when it is in effect, otherwise the
+  Grouping field, so `status` becomes an eligible default facet under
+  `index_group_by`), capped at three. An explicit list is honored exactly as
+  written. Flat rows keep `index_by` as a facet; subgrouped
   rows omit that repeated field unless `index_facets` is explicit. Choices
   show labels, links show display text, lists join with `, `, numbers stay
   plain, and empty values disappear.
@@ -268,8 +291,8 @@ warning summary.
 List and check share one JSON envelope (`schema_version: 1`). Albums are
 ordered by path. `parent` is the parent stem. `ok` is false when error
 findings exist or runtime I/O failed. Each album carries `noun`, `label`,
-`plural`, the additive display `singular`, `walk_by` (the effective field key
-or `null`), and the `walk` object (`state`, `total`,
+`plural`, the additive display `singular`, `walk_by` and `index_group_by` (each
+the effective field key or `null`), and the `walk` object (`state`, `total`,
 `counts: {current, missing, stale, damaged}`, `order: [stem…]`, `groups`,
 and empty order/groups when held). Group entries contain the stored choice
 `value` (null for the trailing needs group), display `label`, `count`, and the
@@ -424,10 +447,13 @@ explicitly with its target and complete-scan usage count plus an
 `edit in YAML (y)` hint: field/choice key rename, kind/list-shape change,
 merge, noun change, and used removal. Typed errors carry `field`/`choice`,
 `key_path` where applicable, and `affected`. A removed field named by
-`index_by` or `index_facets` refuses rather than changing those top-level
-bytes. The index chooses its group field independently (preferring `status`
-choices, otherwise the first choices field); `walk_by` explicitly chooses the
-walk's field and does not change index order or grouping. A selected walk field
+`index_by`, `index_group_by`, or `index_facets` refuses rather than changing
+those top-level bytes (the `index_group_by` refusal carries `key_path`
+`index_group_by`). The index chooses its group field independently (preferring
+`status` choices, otherwise the first choices field) unless `index_group_by`
+overrides its headings; `walk_by` explicitly chooses the walk's field and does
+not change index order or grouping. There is no `index_group_by` update op:
+edit the key in YAML. A selected walk field
 cannot be removed until `walk_by` is unset. Reordering its choices replans the
 walk; unrelated schema edits do not. A cross-album storage clash names the
 conflicting key and album paths.
@@ -510,7 +536,9 @@ An album may declare `walk_by: section` at the frontmatter top level, beside
 `index_by` and `index_facets`. The value must name a declared `Choices` field
 with `list: false`. Invalid or ineligible values produce a finding and use
 flat title order. The generated `[!records]` index keeps its independent group
-field and ordering.
+field and ordering unless `index_group_by` names its heading field. For an
+outline album, pair `walk_by: section` with `index_group_by: section` so the
+index lists the same sections in the same order as `]n`.
 
 ```markdown
 ---
@@ -543,7 +571,9 @@ documents `[n` / `]n` and the missing-record guard.
   undeclared values form one trailing `⚠️ Needs <field>` group (`⚠️ Needs a
   status` for `status`). An invalid or ineligible declaration reports a
   finding and falls back to flat title order; it does not damage walk lines.
-  Walk grouping is independent of the generated index's grouping and order.
+  Walk grouping is independent of the generated index's grouping and order,
+  except that `index_group_by` naming the same field gives the index that
+  group and member order.
   Every member appears once. The ring wraps at both ends; `M = 1` has no arms
   and `M = 2` points both arms at the other record.
 - **Bytes.** The canonical line for `M >= 2` is

@@ -47,9 +47,9 @@
 //! - `ops::OpOutcome { after_raw, after_type, after_plural, per_op,
 //!   derived_keys, consequence, inverse_ops, group_before/after,
 //!   walk_before/after }`
-//! - `ops::IndexRefs { index_by, index_facets, walk_by, walk_by_authored }` and
-//!   `ops::OtherAlbumField { path, key, storage, list }` for the
-//!   planner's registry overlay checks.
+//! - `ops::IndexRefs { index_by, index_group_by, index_facets, walk_by,
+//!   walk_by_authored }` and `ops::OtherAlbumField { path, key, storage,
+//!   list }` for the planner's registry overlay checks.
 
 pub(crate) mod ops;
 pub(crate) mod plan;

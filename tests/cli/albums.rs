@@ -1548,6 +1548,123 @@ fn walk_by_groups_the_report_independently_of_the_index() {
     assert_eq!(payload["counts"]["errors"], 0);
 }
 
+#[test]
+fn index_group_by_is_reported_and_invalid_shapes_warn_without_errors() {
+    let (_temp, vault) = vault_fixture("albums-index-group-by");
+    write_note(&vault, "body.md", area_note());
+    let fields = "    status:\n      values: {open: Open, done: Done}\n    section:\n      values: {intro: Intro, body: Body}\n    location: {}\n    tags:\n      list: true\n      values: {a: A}\n";
+    for (stem, key) in [
+        ("plain", ""),
+        ("valid", "index_group_by: section\n"),
+        ("quoted", "index_group_by: \"section\" # outline\n"),
+        ("blank", "index_group_by: \"  \"\n"),
+        ("multiline", "index_group_by: |\n  one\n  two\n"),
+        ("notstring", "index_group_by: [section]\n"),
+        ("unknown", "index_group_by: missing\n"),
+        ("text", "index_group_by: location\n"),
+        ("listed", "index_group_by: tags\n"),
+    ] {
+        write_note(
+            &vault,
+            &format!("{stem}.md"),
+            &album("body", stem, "Notes.", stem, key, fields),
+        );
+    }
+
+    let output = albums_command(&vault)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list json");
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json(&output);
+    assert_eq!(payload["counts"]["errors"], 0, "{payload}");
+
+    // Valid spellings report the effective key; everything else is null.
+    for stem in ["valid", "quoted"] {
+        assert_eq!(
+            album_by_stem(&payload, stem)["index_group_by"],
+            "section",
+            "{stem}"
+        );
+    }
+    for stem in [
+        "plain",
+        "blank",
+        "multiline",
+        "notstring",
+        "unknown",
+        "text",
+        "listed",
+    ] {
+        let entry = album_by_stem(&payload, stem);
+        assert!(
+            entry.get("index_group_by").is_some_and(Value::is_null),
+            "{stem}: {entry}"
+        );
+        // The heading key never touches the status-based report fields.
+        assert_eq!(entry["group_field"], "status", "{stem}");
+        assert!(entry["walk_by"].is_null(), "{stem}");
+    }
+
+    for (stem, code, message) in [
+        (
+            "blank",
+            "album_index_group_by_invalid",
+            "index_group_by must be a non-empty field name",
+        ),
+        (
+            "multiline",
+            "album_index_group_by_invalid",
+            "index_group_by must be a non-empty field name",
+        ),
+        (
+            "notstring",
+            "album_index_group_by_invalid",
+            "index_group_by must be a non-empty field name",
+        ),
+        (
+            "unknown",
+            "album_index_group_field_unknown",
+            "index_group_by names undeclared field \"missing\"",
+        ),
+        (
+            "text",
+            "album_index_group_by_not_choices",
+            "index_group_by must name a single-value choices field",
+        ),
+        (
+            "listed",
+            "album_index_group_by_not_choices",
+            "index_group_by must name a single-value choices field",
+        ),
+    ] {
+        let issues = album_by_stem(&payload, stem)["issues"]
+            .as_array()
+            .expect("issues");
+        assert!(
+            issues.iter().any(|issue| {
+                issue["code"] == code
+                    && issue["severity"] == "warning"
+                    && issue["message"] == message
+            }),
+            "{stem} should warn {code}: {issues:?}"
+        );
+    }
+    for stem in ["plain", "valid", "quoted"] {
+        assert!(
+            album_by_stem(&payload, stem)["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|issue| !issue["code"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("index_group")),
+            "{stem}"
+        );
+    }
+}
+
 fn init_vault_git(vault: &Path) {
     git_in(vault, ["init", "-q"]);
     git_in(vault, ["symbolic-ref", "HEAD", "refs/heads/master"]);

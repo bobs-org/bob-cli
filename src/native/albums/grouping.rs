@@ -69,11 +69,25 @@ pub(crate) struct RecordGrouping {
     pub(crate) groups: Vec<RecordGroup>,
     pub(crate) needs: Option<RecordGroup>,
     pub(crate) needs_status: usize,
+    /// `[!records]` headings when `index_group_by` selects a field other
+    /// than the auto-picked group field; `None` keeps `groups` and `needs`
+    /// as the headings.
+    pub(crate) index_headings: Option<IndexHeadings>,
     /// Title-then-path order when the album has no choice groups.
     pub(crate) ungrouped: Vec<GroupingRecord>,
     pub(crate) last_record: Option<String>,
     pub(crate) index_facets: Vec<String>,
     pub(crate) explicit_facets: bool,
+}
+
+/// Index headings for an `index_group_by` field that differs from the
+/// auto-picked group field. Only the rendered `[!records]` callout reads
+/// them; the tally, `groups`, and `needs_status` stay on the group field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IndexHeadings {
+    pub(crate) field: String,
+    pub(crate) groups: Vec<RecordGroup>,
+    pub(crate) needs: Option<RecordGroup>,
 }
 
 /// One nonempty choice group in declaration order.
@@ -106,11 +120,14 @@ pub(crate) struct ChoiceBucket<'a> {
 }
 
 /// Project counts, groups, peeks, facets, and freshness from schema
-/// plus folder members. `explicit_facets` is the authored `index_facets`
-/// list; an empty slice selects the default facet rule.
+/// plus folder members. `index_group_by` is the album's effective
+/// `[!records]` heading field; it changes only `index_headings` and the
+/// default facet exclusion. `explicit_facets` is the authored
+/// `index_facets` list; an empty slice selects the default facet rule.
 pub(crate) fn group_records(
     fields: &[RecordField],
     index_by: Option<&str>,
+    index_group_by: Option<&str>,
     explicit_facets: &[String],
     records: &[GroupingRecord],
 ) -> RecordGrouping {
@@ -128,6 +145,7 @@ pub(crate) fn group_records(
             groups: Vec::new(),
             needs: None,
             needs_status: 0,
+            index_headings: None,
             ungrouped,
             last_record,
             index_facets: facets(fields, None, explicit_facets),
@@ -159,20 +177,71 @@ pub(crate) fn group_records(
         ))
     };
 
+    let index_headings =
+        index_headings(fields, group_field, index_group_by, index_by, records);
+    let heading_key = index_headings
+        .as_ref()
+        .map_or(group_field.key.as_str(), |headings| headings.field.as_str());
+    let index_facets = facets(fields, Some(heading_key), explicit_facets);
+
     RecordGrouping {
         group_field: Some(group_field.key.clone()),
         groups,
         needs,
         needs_status,
+        index_headings,
         ungrouped: Vec::new(),
         last_record,
-        index_facets: facets(
-            fields,
-            Some(group_field.key.as_str()),
-            explicit_facets,
-        ),
+        index_facets,
         explicit_facets: explicit,
     }
+}
+
+/// Headings for an `index_group_by` field, or `None` when the key is unset,
+/// is not a single-value choices field, or names the auto-picked group
+/// field (that index is already today's bytes).
+fn index_headings(
+    fields: &[RecordField],
+    group_field: &RecordField,
+    index_group_by: Option<&str>,
+    index_by: Option<&str>,
+    records: &[GroupingRecord],
+) -> Option<IndexHeadings> {
+    let key = index_group_by?;
+    let field = fields.iter().find(|field| field.key == key)?;
+    if field.key == group_field.key
+        || field.list
+        || !matches!(field.kind, FieldKind::Choices(_))
+    {
+        return None;
+    }
+    let (occupied, needs) = bucket_choice_members(field, records);
+    let groups = occupied
+        .iter()
+        .map(|bucket| {
+            finish_group(
+                bucket.value.clone(),
+                bucket.label.clone(),
+                &bucket.members,
+                index_by,
+            )
+        })
+        .collect();
+    let needs = if needs.is_empty() {
+        None
+    } else {
+        Some(finish_group(
+            String::new(),
+            needs_group_label(field),
+            &needs,
+            index_by,
+        ))
+    };
+    Some(IndexHeadings {
+        field: field.key.clone(),
+        groups,
+        needs,
+    })
 }
 
 pub(crate) fn group_field(fields: &[RecordField]) -> Option<&RecordField> {
@@ -188,8 +257,9 @@ pub(crate) fn group_field(fields: &[RecordField]) -> Option<&RecordField> {
         })
 }
 
-/// Needs-group heading for a walk grouped by `field`. Index grouping keeps
-/// the status wording even when the auto-picked field is not status.
+/// Needs-group heading for a walk or `index_group_by` heading grouped by
+/// `field`. The auto-picked index group keeps the status wording even when
+/// that field is not status.
 pub(crate) fn needs_group_label(field: &RecordField) -> String {
     if field.key == "status" {
         NEEDS_STATUS_LABEL.to_owned()
@@ -624,7 +694,7 @@ mod tests {
                 )],
             ),
         ];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         assert_eq!(grouping.group_field.as_deref(), Some("status"));
         assert_eq!(grouping.groups.len(), 2);
         assert_eq!(grouping.groups[0].value, "to_try");
@@ -649,7 +719,7 @@ mod tests {
             None,
             &[("verdict", scalar("up"))],
         )];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         assert_eq!(grouping.group_field.as_deref(), Some("verdict"));
         assert_eq!(grouping.groups[0].value, "up");
         assert_eq!(grouping.needs_status, 0);
@@ -664,7 +734,7 @@ mod tests {
             Some("2026-01-01"),
             &[("location", scalar("Clark"))],
         )];
-        let grouping = group_records(&fields, None, &[], &records);
+        let grouping = group_records(&fields, None, None, &[], &records);
         assert_eq!(grouping.group_field, None);
         assert!(grouping.groups.is_empty());
         assert_eq!(grouping.needs_status, 0);
@@ -681,6 +751,7 @@ mod tests {
         let grouping = group_records(
             &fields,
             Some("location"),
+            None,
             &["location".to_owned(), "category".to_owned()],
             &[],
         );
@@ -696,7 +767,7 @@ mod tests {
             text("category", true),
             text("quiet", false),
         ];
-        let grouping = group_records(&fields, Some("location"), &[], &[]);
+        let grouping = group_records(&fields, Some("location"), None, &[], &[]);
         assert_eq!(grouping.index_facets, ["kind", "location", "category"]);
     }
 
@@ -728,7 +799,7 @@ mod tests {
                 &[("status", IndexedFieldValue::Unsupported)],
             ),
         ];
-        let grouping = group_records(&[status], None, &[], &list_records);
+        let grouping = group_records(&[status], None, None, &[], &list_records);
         assert_eq!(grouping.groups[0].count, 1);
         assert_eq!(grouping.needs_status, 4);
 
@@ -745,7 +816,7 @@ mod tests {
             record("eat/empty.md", "Empty", None, &[("status", scalar(""))]),
         ];
         let grouping =
-            group_records(&[scalar_status], None, &[], &scalar_records);
+            group_records(&[scalar_status], None, None, &[], &scalar_records);
         assert!(grouping.groups.is_empty());
         assert_eq!(grouping.needs_status, 2);
     }
@@ -774,7 +845,8 @@ mod tests {
                 &[("status", scalar("to_try")), ("location", scalar(location))],
             ));
         }
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         assert_eq!(grouping.groups[0].count, 13);
         assert_eq!(grouping.groups[0].subgroups.len(), 2);
         assert_eq!(grouping.groups[0].subgroups[0].display, "Clark");
@@ -808,7 +880,8 @@ mod tests {
                 &[("status", scalar("to_try")), ("location", scalar(location))],
             ));
         }
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         assert!(grouping.groups[0].subgroups.is_empty());
         assert_eq!(
             grouping.groups[0].peek,
@@ -836,7 +909,8 @@ mod tests {
                 &[("status", scalar("to_try")), ("location", scalar(location))],
             ));
         }
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         assert!(grouping.groups[0].subgroups.is_empty());
         assert_eq!(
             grouping.groups[0].peek,
@@ -866,7 +940,8 @@ mod tests {
                 &[("status", scalar("to_try")), ("location", scalar(location))],
             ));
         }
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         let cranford = grouping.groups[0]
             .subgroups
             .iter()
@@ -894,7 +969,8 @@ mod tests {
                 &values,
             ));
         }
-        let grouping = group_records(&fields, Some("location"), &[], &records);
+        let grouping =
+            group_records(&fields, Some("location"), None, &[], &records);
         let subgroups = &grouping.groups[0].subgroups;
         assert_eq!(subgroups.len(), 2);
         assert_eq!(subgroups[0].display, "Clark");
@@ -953,8 +1029,13 @@ mod tests {
         assert_eq!(needs_group_label(&section), "⚠️ Needs section");
         assert_eq!(needs_group_label(&status), NEEDS_STATUS_LABEL);
 
-        let index =
-            group_records(&[status.clone(), section], None, &[], &records);
+        let index = group_records(
+            &[status.clone(), section],
+            None,
+            None,
+            &[],
+            &records,
+        );
         assert_eq!(index.group_field.as_deref(), Some("status"));
         assert_eq!(index.groups[0].value, "open");
     }
@@ -974,11 +1055,252 @@ mod tests {
             None,
             &[("category", members)],
         )];
-        let grouping = group_records(&[category], None, &[], &records);
+        let grouping = group_records(&[category], None, None, &[], &records);
         assert_eq!(grouping.group_field.as_deref(), Some("category"));
         assert_eq!(grouping.groups.len(), 1);
         assert_eq!(grouping.groups[0].value, "Science, fiction");
         assert_eq!(grouping.groups[0].count, 1);
         assert_eq!(grouping.needs_status, 0);
+    }
+
+    fn outline_fields() -> Vec<RecordField> {
+        vec![
+            choices("status", &[("seed", "🌱 Seed"), ("done", "✅ Done")]),
+            choices(
+                "section",
+                &[
+                    ("intro", "🪝 Intro"),
+                    ("empty", "🕳️ Empty"),
+                    ("what", "🧱 What is SASE?"),
+                    ("future", "🔮 Future Work"),
+                ],
+            ),
+            choices("claim", &[("a", "A"), ("b", "B")]),
+        ]
+    }
+
+    fn outline_records() -> Vec<GroupingRecord> {
+        vec![
+            record(
+                "z/future_b.md",
+                "Zeta Future",
+                None,
+                &[("status", scalar("seed")), ("section", scalar("future"))],
+            ),
+            record(
+                "z/what_b.md",
+                "why a tui",
+                None,
+                &[("status", scalar("seed")), ("section", scalar("what"))],
+            ),
+            record(
+                "z/intro.md",
+                "What Came Before",
+                None,
+                &[("status", scalar("done")), ("section", scalar("intro"))],
+            ),
+            record(
+                "z/what_a.md",
+                "Abstractions",
+                None,
+                &[("status", scalar("seed")), ("section", scalar("what"))],
+            ),
+            record(
+                "z/missing.md",
+                "No Section",
+                None,
+                &[("status", scalar("seed"))],
+            ),
+            record(
+                "z/unknown.md",
+                "Unknown Section",
+                None,
+                &[("status", scalar("seed")), ("section", scalar("nope"))],
+            ),
+            record(
+                "z/list.md",
+                "List Section",
+                None,
+                &[
+                    ("status", scalar("seed")),
+                    (
+                        "section",
+                        IndexedFieldValue::List(vec!["intro".to_owned()]),
+                    ),
+                ],
+            ),
+        ]
+    }
+
+    #[test]
+    fn index_group_by_heads_the_index_in_declared_order() {
+        let fields = outline_fields();
+        let grouping = group_records(
+            &fields,
+            None,
+            Some("section"),
+            &[],
+            &outline_records(),
+        );
+        let headings = grouping.index_headings.as_ref().expect("headings");
+        assert_eq!(headings.field, "section");
+        // Declared choice order, empty choices omitted.
+        assert_eq!(
+            headings
+                .groups
+                .iter()
+                .map(|group| group.value.as_str())
+                .collect::<Vec<_>>(),
+            ["intro", "what", "future"]
+        );
+        // Members keep title order inside a heading, ignoring case.
+        assert_eq!(
+            headings.groups[1]
+                .members
+                .iter()
+                .map(|record| record.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Abstractions", "why a tui"]
+        );
+        assert_eq!(headings.groups[1].count, 2);
+        // Missing, unknown, and list-shaped values go last under the
+        // section-named needs heading.
+        let needs = headings.needs.as_ref().expect("needs heading");
+        assert_eq!(needs.label, "⚠️ Needs section");
+        assert_eq!(
+            needs
+                .members
+                .iter()
+                .map(|record| record.title.as_str())
+                .collect::<Vec<_>>(),
+            ["List Section", "No Section", "Unknown Section"]
+        );
+    }
+
+    #[test]
+    fn index_group_by_leaves_status_groups_and_needs_status_alone() {
+        let fields = outline_fields();
+        let records = outline_records();
+        let plain = group_records(&fields, None, None, &[], &records);
+        let headed =
+            group_records(&fields, None, Some("section"), &[], &records);
+        assert_eq!(plain.index_headings, None);
+        assert_eq!(headed.group_field.as_deref(), Some("status"));
+        assert_eq!(headed.groups, plain.groups);
+        assert_eq!(headed.needs, plain.needs);
+        assert_eq!(headed.needs_status, plain.needs_status);
+        assert_eq!(headed.last_record, plain.last_record);
+        assert_eq!(headed.groups[0].value, "seed");
+        assert_eq!(headed.groups[0].count, 6);
+    }
+
+    #[test]
+    fn index_group_by_default_facets_swap_the_excluded_field() {
+        let fields = outline_fields();
+        let records = outline_records();
+        let plain = group_records(&fields, None, None, &[], &records);
+        assert_eq!(plain.index_facets, ["section", "claim"]);
+        let headed =
+            group_records(&fields, None, Some("section"), &[], &records);
+        assert_eq!(headed.index_facets, ["status", "claim"]);
+        assert!(!headed.explicit_facets);
+    }
+
+    #[test]
+    fn index_group_by_honors_explicit_facets_exactly() {
+        let fields = outline_fields();
+        let explicit = ["section".to_owned(), "claim".to_owned()];
+        let headed = group_records(
+            &fields,
+            None,
+            Some("section"),
+            &explicit,
+            &outline_records(),
+        );
+        assert!(headed.index_headings.is_some());
+        assert_eq!(headed.index_facets, ["section", "claim"]);
+        assert!(headed.explicit_facets);
+    }
+
+    #[test]
+    fn index_group_by_still_subgroups_a_large_heading_group() {
+        let mut fields = outline_fields();
+        fields.push(text("location", true));
+        let records: Vec<GroupingRecord> = (0..=LARGE_GROUP)
+            .map(|index| {
+                let place = if index % 2 == 0 { "Boston" } else { "Austin" };
+                record(
+                    &format!("z/n{index:02}.md"),
+                    &format!("Note {index:02}"),
+                    None,
+                    &[
+                        ("status", scalar("seed")),
+                        ("section", scalar("what")),
+                        ("location", scalar(place)),
+                    ],
+                )
+            })
+            .collect();
+        let grouping = group_records(
+            &fields,
+            Some("location"),
+            Some("section"),
+            &[],
+            &records,
+        );
+        let headings = grouping.index_headings.as_ref().expect("headings");
+        assert_eq!(headings.groups.len(), 1);
+        let group = &headings.groups[0];
+        assert_eq!(group.count, LARGE_GROUP + 1);
+        assert_eq!(
+            group
+                .subgroups
+                .iter()
+                .map(|subgroup| subgroup.display.as_str())
+                .collect::<Vec<_>>(),
+            ["Austin", "Boston"]
+        );
+    }
+
+    #[test]
+    fn index_group_by_equal_to_the_auto_field_has_no_headings() {
+        let fields = outline_fields();
+        let records = outline_records();
+        let named_status =
+            group_records(&fields, None, Some("status"), &[], &records);
+        assert_eq!(named_status.index_headings, None);
+        let plain = group_records(&fields, None, None, &[], &records);
+        assert_eq!(named_status, plain);
+
+        // A non-status auto field is the same no-op.
+        let no_status = vec![fields[1].clone(), fields[2].clone()];
+        let auto =
+            group_records(&no_status, None, Some("section"), &[], &records);
+        assert_eq!(auto.group_field.as_deref(), Some("section"));
+        assert_eq!(auto.index_headings, None);
+    }
+
+    #[test]
+    fn index_group_by_ignores_unusable_fields() {
+        let mut fields = outline_fields();
+        fields.push(text("location", true));
+        let mut tags = choices("tags", &[("x", "X")]);
+        tags.list = true;
+        fields.push(tags);
+        let records = outline_records();
+        for key in ["location", "tags", "missing"] {
+            let grouping =
+                group_records(&fields, None, Some(key), &[], &records);
+            assert_eq!(grouping.index_headings, None, "key {key:?}");
+        }
+        // Without any choices field there is nothing to group by.
+        let ungrouped = group_records(
+            &[text("location", true)],
+            None,
+            Some("section"),
+            &[],
+            &records,
+        );
+        assert_eq!(ungrouped.index_headings, None);
     }
 }

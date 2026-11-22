@@ -1356,7 +1356,7 @@ mod tests {
                 })
                 .collect();
             let slots = project_walk(&records, None).slots;
-            let index_tally = group_records(&[], None, &[], &records).ungrouped.len();
+            let index_tally = group_records(&[], None, None, &[], &records).ungrouped.len();
             prop_assert_eq!(slots.len(), index_tally);
             let by_path: HashMap<String, &WalkSlot> = slots
                 .iter()

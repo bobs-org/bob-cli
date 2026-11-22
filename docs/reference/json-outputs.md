@@ -163,7 +163,7 @@ sets `one_off: true`.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob albums list` | `-f json` | Albums, independent index groups and `walk_by`, walk order/groups with first-member heads, issues, owner `catalogs`, and `capabilities` (`record_walk_groups_v1`) | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums list` | `-f json` | Albums, independent index groups, `walk_by`, and `index_group_by`, walk order/groups with first-member heads, issues, owner `catalogs`, and `capabilities` (`record_walk_groups_v1`) | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums sync` | `-f json` | Index entries, grouped `walk`, owner `catalogs`, `kind`/`walk_lines`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 | `bob albums tidy` | `-f json` | Tidied albums, counts, kept H1s, transaction results | `schema_version: 1` | [Tidying album titles](../records.md#tidying-album-titles) |

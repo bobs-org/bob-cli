@@ -624,7 +624,7 @@ pub(crate) fn plan_create(
         singular: &singular,
         plural: &plural,
     };
-    let grouping = group_records(&[], None, &[], &[]);
+    let grouping = group_records(&[], None, None, &[], &[]);
     let intro = render_intro(&plural, &stem);
     let before = format!("{head}\n{intro}");
     let index_plan = plan_index(
