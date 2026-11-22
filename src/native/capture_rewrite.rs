@@ -98,13 +98,16 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Apply the capture grammar's editor typing assists to TEXT and \
 report the resulting edits, cursor, and a human summary.\n\n\
 The command is read-only and takes no --bob-dir: every rewrite is purely \
-lexical except two bounded vault reads. When the byte before --cursor is `/` \
+lexical except bounded route-policy reads. When the byte before --cursor is `/` \
 at a first-level bullet start (`- /`), it reads notebook route frontmatter \
 from the configured vault (BOB_DIR) to decide whether `- /` becomes `- #`. \
 When the byte before --cursor is `/` or `#` glued to a single-`@` route \
 (`@eat/`), it reads that one album head to decide whether `/` stays literal. \
+When the cursor follows the space in an authored dash-bullet `- [ ` start, it \
+reads notebook route metadata, and record route metadata when applicable, so \
+the shared capture resolver can decide whether the marker is a requirement. \
 Every other rewrite never opens the vault, never reads the clipboard, and \
-never touches the filesystem. It implements five rules.\n\n\
+never touches the filesystem. The rules are described below.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
 '@route+id', or '+' after '@route:id' or '@route^id' consumes that character \
@@ -235,6 +238,16 @@ escaped tokens, partial or invalid relations, and text glued after the caret \
 stay unchanged. The cursor lands just past the flipped relation, and the rule \
 is 'toggle_relation_direction'. Without --cursor this rule is skipped rather \
 than searching the draft.\n\n\
+Requirement marker expansion (requires --cursor): when the space completes an \
+authored dash-bullet start `- [ `, bob probes the draft with `[ ] ` and asks \
+the shared capture resolver whether that exact marker is an admitted \
+requirement. Only then does it return `- [ ] ` with the caret after the \
+trailing space and rule 'expand_req_marker'. Notebook and record routes keep \
+their ineligible checkbox behavior. Templates, pasted text, `bob capture`, \
+and `bob capture-parse` are not rewritten. An editor client should absorb a \
+typed `]` and then a space when those keys overtype the inserted marker; \
+Backspace immediately after `[ ] ` should delete all four marker bytes as one \
+edit, whether or not this rewrite created them.\n\n\
 Bare '@@' absorption: typing a bare '@@' inside an item that already \
 carries a local destination marker (or, absent that, when the draft already \
 carries exactly one other '@@' declaration) rewrites the bare token to \
@@ -428,15 +441,22 @@ struct SourceRange {
 
 impl CaptureRewriteResult {
     fn new(input: String, cursor: Option<usize>) -> Self {
-        // Two bounded vault reads: notebook frontmatter when a `/` or `#`
-        // sits at a first-level bullet start, and one album head when a
-        // `/` or `#` is glued to `@route`. Every other rewrite stays
+        // Build route policies only for the rewrites that need them:
+        // notebook metadata for a section alias or requirement-marker
+        // candidate, and record metadata for an album alias or requirement
+        // candidate with a record route. Every other rewrite stays
         // filesystem-free.
+        let req_marker_candidate = cursor.is_some_and(|position| {
+            capture_language::req_marker_may_need_notebook_policy(
+                &input, position,
+            )
+        });
         let notebook_store = match cursor {
             Some(position)
-                if capture_language::bullet_sigil_may_need_notebook_policy(
-                    &input, position,
-                ) =>
+                if req_marker_candidate
+                    || capture_language::bullet_sigil_may_need_notebook_policy(
+                        &input, position,
+                    ) =>
             {
                 Some(super::capture_notebooks::notebook_policy_for_draft(
                     &bob_env::bob_dir(),
@@ -445,18 +465,28 @@ impl CaptureRewriteResult {
             }
             _ => None,
         };
-        let record_store = match cursor.and_then(|position| {
+        let album_alias = cursor.and_then(|position| {
             capture_language::slash_route_may_need_album_policy(
                 &input, position,
             )
-        }) {
-            Some(route) => {
-                Some(super::capture_record::record_policy_for_draft(
-                    &bob_env::bob_dir(),
-                    &format!("@{route}/"),
-                ))
+        });
+        let record_store = if req_marker_candidate
+            && !capture_language::candidate_dirs(&input).is_empty()
+        {
+            Some(super::capture_record::record_policy_for_draft(
+                &bob_env::bob_dir(),
+                &input,
+            ))
+        } else {
+            match album_alias {
+                Some(route) => {
+                    Some(super::capture_record::record_policy_for_draft(
+                        &bob_env::bob_dir(),
+                        &format!("@{route}/"),
+                    ))
+                }
+                None => None,
             }
-            None => None,
         };
         let policies = RewritePolicies {
             notebook: notebook_store.as_ref(),

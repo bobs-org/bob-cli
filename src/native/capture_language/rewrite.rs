@@ -64,6 +64,7 @@ pub(crate) struct TextEdit {
 pub(crate) enum RewriteRule {
     AbsorbLocalMarker,
     AbsorbDeclaration,
+    ExpandReqMarker,
     SwitchBlockIdSeparator,
     AttachRelationLabel,
     ToggleRelationDirection,
@@ -76,6 +77,7 @@ impl RewriteRule {
         match self {
             Self::AbsorbLocalMarker => "absorb_local_marker",
             Self::AbsorbDeclaration => "absorb_declaration",
+            Self::ExpandReqMarker => "expand_req_marker",
             Self::SwitchBlockIdSeparator => "switch_block_id_separator",
             Self::AttachRelationLabel => "attach_relation_label",
             Self::ToggleRelationDirection => "toggle_relation_direction",
@@ -117,11 +119,12 @@ pub(crate) fn rewrite_draft(
 /// Apply the capture grammar's editor typing assists with optional
 /// notebook and record route policies.
 ///
-/// Policy-aware assists are the `/` -> `#` alias at a first-level bullet
-/// start (notebook section menu) and the same alias glued to `@route`
-/// (literal `/` on an album record route). Every other assist stays
-/// lexical. The caller performs any vault I/O (see
-/// [`bullet_sigil_may_need_notebook_policy`] and
+/// Policy-aware assists include the requirement marker expansion, the `/`
+/// -> `#` alias at a first-level bullet start (notebook section menu), and
+/// the same alias glued to `@route` (literal `/` on an album record route).
+/// The caller performs any vault I/O (see
+/// [`req_marker_may_need_notebook_policy`],
+/// [`bullet_sigil_may_need_notebook_policy`], and
 /// [`slash_route_may_need_album_policy`]); this function itself never
 /// touches the filesystem.
 pub(crate) fn rewrite_draft_with(
@@ -131,6 +134,11 @@ pub(crate) fn rewrite_draft_with(
 ) -> DraftRewrite {
     if super::template::analyze(raw_text).directive.is_some() {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
+    }
+    if let Some(position) = cursor
+        && let Some(rewrite) = expand_req_marker(raw_text, position, policies)
+    {
+        return rewrite;
     }
     if let Some(position) = cursor
         && let Some(rewrite) = collapse_global_destination(raw_text, position)
@@ -165,6 +173,75 @@ pub(crate) fn rewrite_draft_with(
     }
 
     absorb_bare_declaration(raw_text, cursor)
+}
+
+/// Cheap lexical preflight for the requirement checkbox rewrite. It only
+/// opts into a notebook-policy lookup when the cursor follows the space in
+/// an authored dash-bullet `- [ ` start. The shared editor parser remains
+/// the authority on whether that position is an eligible requirement.
+pub(crate) fn req_marker_may_need_notebook_policy(
+    raw_text: &str,
+    cursor: usize,
+) -> bool {
+    if cursor > raw_text.len() || !raw_text.is_char_boundary(cursor) {
+        return false;
+    }
+    let line_start =
+        raw_text[..cursor].rfind('\n').map_or(0, |index| index + 1);
+    let Some(prefix) = raw_text.get(line_start..cursor) else {
+        return false;
+    };
+    let Some(indent) = prefix.strip_suffix("- [ ") else {
+        return false;
+    };
+    indent.len() % 2 == 0 && indent.bytes().all(|byte| byte == b' ')
+}
+
+/// Expand the typed space in `- [` only when the same editor parser that
+/// serves `capture-parse` resolves the hypothetical `[ ] ` as a requirement.
+/// This keeps notebook, record, depth, and structural eligibility in the
+/// shared resolver instead of reimplementing those rules in the editor
+/// assist.
+fn expand_req_marker(
+    raw_text: &str,
+    cursor: usize,
+    policies: RewritePolicies<'_>,
+) -> Option<DraftRewrite> {
+    if !req_marker_may_need_notebook_policy(raw_text, cursor) {
+        return None;
+    }
+    let start = cursor.checked_sub(1)?;
+    let edits = vec![TextEdit {
+        start,
+        end: cursor,
+        replacement: " ] ".to_string(),
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    let marker_start = cursor.checked_sub(2)?;
+    let marker_end = cursor.checked_add(2)?;
+    let options = EditorParseOptions {
+        record_policy: policies.record,
+        notebook_policy: policies.notebook,
+        ..EditorParseOptions::routing_off()
+    };
+    let parsed = super::editor_parse::parse_for_editor_with(&text, &options);
+    let admitted = parsed.spans.iter().any(|span| {
+        span.kind == SpanKind::ReqMarker
+            && span.start == marker_start
+            && span.end == marker_end
+    });
+    if !admitted {
+        return None;
+    }
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::ExpandReqMarker),
+        edits,
+        text,
+        cursor: Some(marker_end),
+        summary: Some("Expanded requirement marker".to_string()),
+        notices: Vec::new(),
+        alias: None,
+    })
 }
 
 /// Cheap lexical preflight for the notebook-aware `/` (and `#` tip) alias:

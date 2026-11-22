@@ -44,6 +44,43 @@ fn rewrite_draft_absorbs_a_leading_local_marker() {
 }
 
 #[test]
+fn rewrite_draft_expands_an_admitted_requirement_marker() {
+    let raw = "Ship exporter\n- [ ";
+    let cursor = raw.len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandReqMarker));
+    assert_eq!(RewriteRule::ExpandReqMarker.code(), "expand_req_marker");
+    assert_eq!(rewrite.text, "Ship exporter\n- [ ] ");
+    assert_eq!(rewrite.cursor, Some(cursor + 2));
+    assert_eq!(
+        rewrite.summary.as_deref(),
+        Some("Expanded requirement marker")
+    );
+    assert_eq!(
+        rewrite.edits,
+        vec![TextEdit {
+            start: cursor - 1,
+            end: cursor,
+            replacement: " ] ".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn rewrite_draft_leaves_unadmitted_requirement_markers_literal() {
+    for raw in [
+        "Ship exporter\n- Context\n  - [ ",
+        "Ship exporter\n- NOTES\n  - [ ",
+        "Ship exporter\n  - [ ",
+    ] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+}
+
+#[test]
 fn rewrite_draft_absorbs_a_parent_lines_marker_from_a_child_lines_bare_at_at() {
     let raw = "Buy milk @dev\n- more detail @@";
     let rewrite = rewrite_draft(raw, None);

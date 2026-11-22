@@ -1116,6 +1116,14 @@ The span never covers the bullet marker or the text, and its wire object adds
 exceed 2 beneath requirements. Admitted requirements are written in authored
 order at their authored depth, with their checkbox kept.
 
+In an editor, typing the space in an eligible dash-bullet start `- [` expands
+it to `- [ ] ` through `bob capture-rewrite`; the shared resolver decides
+eligibility, so notebook checkboxes and other refused positions stay literal.
+The editor absorbs a typed `]` and then a space when they overtype the inserted
+marker. Backspace immediately after `[ ] ` removes the entire four-byte marker
+as one edit, even when it was not just expanded. Pasting text and `bob capture`
+do not apply this typing assist.
+
 Authored children render before clipboard children and the priority
 schedule log, so the full block order is: parent line, authored children,
 clipboard children, then the schedule log.
@@ -9539,16 +9547,20 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 
 Applies the capture grammar's automatic draft rewrites -- the
 block-ID separator toggle, relation-label pipe attach, sigil aliases, global
-destination collapse, relation direction toggle, and bare `@@` absorption -- and reports the
-resulting edits, cursor, and a human summary. It is read-only and takes no
-`--bob-dir`: every rewrite is purely lexical except two bounded vault reads.
+destination collapse, relation direction toggle, requirement marker expansion,
+and bare `@@` absorption -- and reports the resulting edits, cursor, and a
+human summary. It is read-only and takes no `--bob-dir`: rewrites are lexical
+except for bounded route-policy reads.
 When the byte before `--cursor` is `/` at a first-level bullet start
 (`- /`), it reads notebook route frontmatter from the configured vault
 (`BOB_DIR`) to decide whether `- /` becomes `- #`. When the byte before
 `--cursor` is `/` or `#` glued to a single-`@` route (`@eat/`), it reads
-that one album head to decide whether `/` stays literal. Every other rewrite
-never opens the vault, never reads the clipboard or the URL routing config,
-and never touches the filesystem. `bob capture-parse` reads that config unless
+that one album head to decide whether `/` stays literal. When the cursor
+follows the space in a dash-bullet `- [ ` start, it reads notebook route
+metadata and, when the draft contains a record route, record route metadata
+so the shared resolver can decide whether that checkbox is a requirement.
+Every other rewrite never opens the vault, never reads the clipboard or the
+URL routing config, and never touches the filesystem. `bob capture-parse` reads that config unless
 `--no-ref` is set; see [above](#bob-capture-parse).
 If `TEXT` is omitted and stdin is piped, it reads the complete piped stdin
 stream. Missing `TEXT`, invalid options, or a cursor outside `TEXT` or
@@ -9559,6 +9571,22 @@ are never rewritten: they keep their quotes and spelling byte-for-byte.
 Template drafts are never rewritten: `capture-rewrite` returns
 `changed: false`, with no rule or edits, so it cannot absorb `@@` or toggle a
 template marker.
+
+**Requirement marker expansion.** With `--cursor`, the space in an authored
+dash-bullet start `- [ ` is replaced with ` ] ` only when probing the result
+through the shared editor parser produces the matching `req_marker` span.
+This makes the capture resolver authoritative for task, requirement-chain,
+notebook, record, drawer, and depth eligibility. The returned draft contains
+`- [ ] `, the cursor lands after its trailing space, and the rule is
+`expand_req_marker`. The rewrite is one edit over the typed space. It does not
+run on pasted text, templates, `bob capture`, or `bob capture-parse`.
+
+Editor clients handle the next keys locally: when `]` and then a space
+overtype the inserted marker, absorb those keystrokes instead of inserting
+duplicates. Backspace with the cursor immediately after `[ ] ` deletes the
+whole four-byte marker in one edit, whether it was produced by this rewrite or
+was already present. For example, a marker span over `[ ] ` lets a client make
+Backspace leave the original `- ` bullet prefix intact.
 
 **Block-ID separator toggle.** Typing `^` immediately after a complete
 plain `@route:id` or `@route+id`, `:` after `@route^id` or `@route+id`, or `+`
@@ -9850,14 +9878,16 @@ JSON output is a single versioned object:
 ```
 
 `rule` is `switch_block_id_separator`, `attach_relation_label`,
-`toggle_relation_direction`, `expand_sigil_alias`, `absorb_local_marker`, or
+`toggle_relation_direction`, `expand_req_marker`, `expand_sigil_alias`,
+`collapse_global_destination`, `absorb_local_marker`, or
 `absorb_declaration`,
 omitted when nothing changed. `cursor` is present only when `--cursor` was
 supplied and is mapped through every edit. Separator toggles land
 just past the unchanged ID, sigil aliases keep the caret just past the sigil,
 pipe attaches land just past the glued `|`, and
-relation direction toggles land just past the flipped relation, and absorption
-lands just past the rewritten `@@<payload>` token.
+relation direction toggles land just past the flipped relation, requirement
+marker expansion lands just after `[ ] `, and absorption lands just past the
+rewritten `@@<payload>` token.
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`

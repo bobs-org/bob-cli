@@ -13,8 +13,9 @@ fn capture_rewrite_help_describes_only_the_remaining_rules() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("It implements five rules."),
-        "capture-rewrite help miscounts its rules:\n{out}"
+        out.contains("Requirement marker expansion")
+            && out.contains("expand_req_marker"),
+        "capture-rewrite help should describe requirement marker expansion:\n{out}"
     );
     assert!(
         out.contains("lowercase 'x' or 's'")
@@ -1484,6 +1485,36 @@ fn capture_rewrite_json(
 }
 
 #[test]
+fn capture_rewrite_json_expands_an_admitted_requirement_marker() {
+    let draft = "Ship exporter\n- [ ";
+    let json = capture_rewrite_json(draft, Some(draft.len()));
+
+    assert_eq!(json["input"], draft, "{json}");
+    assert_eq!(json["text"], "Ship exporter\n- [ ] ", "{json}");
+    assert_eq!(json["changed"], true, "{json}");
+    assert_eq!(json["cursor"], draft.len() + 2, "{json}");
+    assert_eq!(json["rule"], "expand_req_marker", "{json}");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": draft.len() - 1, "end": draft.len() }, "replacement": " ] " },
+        ]),
+        "{json}"
+    );
+}
+
+#[test]
+fn capture_rewrite_keeps_requirement_marker_literal_at_an_ineligible_position()
+{
+    let draft = "Ship exporter\n- Context\n  - [ ";
+    let json = capture_rewrite_json(draft, Some(draft.len()));
+
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], draft, "{json}");
+    assert_eq!(json["rule"], serde_json::Value::Null, "{json}");
+}
+
+#[test]
 fn capture_rewrite_json_expands_close_outcome_aliases() {
     for (draft, expected, replacement, summary) in [
         ("xx", "x!", "!", "Typed ! for x"),
@@ -1880,6 +1911,30 @@ fn capture_rewrite_json_expands_slash_to_hash_in_a_notebook_list() {
         serde_json::json!({ "id": "hash_menu", "key": "/", "sigil": "#" }),
         "{json}"
     );
+}
+
+#[test]
+fn capture_rewrite_keeps_requirement_marker_literal_in_a_notebook_list() {
+    let temp = TempDir::new("bob-cli-rewrite-notebook-req-marker");
+    let vault = notebook_alias_vault(&temp);
+    let draft = "@dev_tools\n- [ ";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], draft, "{json}");
+    assert_eq!(json["rule"], serde_json::Value::Null, "{json}");
+}
+
+#[test]
+fn capture_rewrite_keeps_requirement_marker_literal_in_a_record_note() {
+    let temp = TempDir::new("bob-cli-rewrite-record-req-marker");
+    let vault = album_alias_vault(&temp);
+    let draft = "Ramen Nagi @eat/\n- [ ";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], draft, "{json}");
+    assert_eq!(json["rule"], serde_json::Value::Null, "{json}");
 }
 
 #[test]
