@@ -49,6 +49,9 @@ pub(crate) fn render_html(
     let nodes = parse_container(document.root_element(), &mut context);
     let mut segments = Segments::default();
     split_segments(&nodes, Segment::Main, &mut segments);
+    normalize_blocks(&mut segments.main);
+    normalize_blocks(&mut segments.quoted);
+    normalize_blocks(&mut segments.signature);
     let has_table = [&segments.main, &segments.quoted, &segments.signature]
         .iter()
         .any(|blocks| blocks_have_table(blocks));
@@ -156,6 +159,330 @@ fn blocks_have_link(blocks: &[Block]) -> bool {
     })
 }
 
+/// HTML ASCII whitespace plus the Unicode separators `normalize_sender`
+/// would otherwise turn back into newlines.
+fn is_collapsible_html_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0009}'
+            | '\u{000a}'
+            | '\u{000c}'
+            | '\u{000d}'
+            | '\u{0020}'
+            | '\u{0085}'
+            | '\u{2028}'
+            | '\u{2029}'
+    )
+}
+
+/// Fold each collapsible run in an HTML text node to one U+0020. U+00A0
+/// and other non-collapsible characters stay.
+fn collapse_html_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_ws = false;
+    for c in text.chars() {
+        if is_collapsible_html_whitespace(c) {
+            if !in_ws {
+                out.push(' ');
+                in_ws = true;
+            }
+        } else {
+            out.push(c);
+            in_ws = false;
+        }
+    }
+    out
+}
+
+fn is_invisible_label_char(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '\u{00ad}'
+                | '\u{034f}'
+                | '\u{180e}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{feff}'
+        )
+}
+
+fn inlines_have_visible_character(inlines: &[Inline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        Inline::Text(text) => text.chars().any(|c| !is_invisible_label_char(c)),
+        Inline::Code(_) => true,
+        Inline::Emphasis(children) | Inline::Strong(children) => {
+            inlines_have_visible_character(children)
+        }
+        Inline::Link { label, .. } => inlines_have_visible_character(label),
+    })
+}
+
+struct WsState {
+    at_line_start: bool,
+    last_was_space: bool,
+}
+
+/// Collapse line-edge and duplicate spaces, drop leading/trailing `<br>`
+/// breaks, prune empty wrappers, and drop links whose labels have no
+/// visible character.
+fn normalize_inline_whitespace(inlines: Vec<Inline>) -> Vec<Inline> {
+    let mut state = WsState {
+        at_line_start: true,
+        last_was_space: false,
+    };
+    let mut out = normalize_inlines(inlines, &mut state);
+    strip_trailing_spaces(&mut out);
+    strip_leading_breaks(&mut out);
+    strip_trailing_breaks(&mut out);
+    prune_empty_inlines(out)
+}
+
+fn normalize_inlines(inlines: Vec<Inline>, state: &mut WsState) -> Vec<Inline> {
+    let mut out = Vec::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) => push_normalized_text(&mut out, &text, state),
+            Inline::Emphasis(children) => {
+                let inner = normalize_inlines(children, state);
+                if !inner.is_empty() {
+                    out.push(Inline::Emphasis(inner));
+                }
+            }
+            Inline::Strong(children) => {
+                let inner = normalize_inlines(children, state);
+                if !inner.is_empty() {
+                    out.push(Inline::Strong(inner));
+                }
+            }
+            Inline::Code(code) => {
+                state.at_line_start = false;
+                state.last_was_space = false;
+                out.push(Inline::Code(code));
+            }
+            Inline::Link { label, url } => {
+                if !inlines_have_visible_character(&label) {
+                    continue;
+                }
+                let label = normalize_inlines(label, state);
+                if !inlines_have_visible_character(&label) {
+                    continue;
+                }
+                out.push(Inline::Link { label, url });
+            }
+        }
+    }
+    out
+}
+
+fn push_normalized_text(
+    out: &mut Vec<Inline>,
+    text: &str,
+    state: &mut WsState,
+) {
+    let mut buf = String::new();
+    for c in text.chars() {
+        if c == '\n' {
+            while buf.ends_with(' ') {
+                buf.pop();
+            }
+            if buf.is_empty() {
+                strip_trailing_spaces(out);
+            }
+            buf.push('\n');
+            state.at_line_start = true;
+            state.last_was_space = false;
+        } else if c == ' ' {
+            if state.at_line_start || state.last_was_space {
+                continue;
+            }
+            buf.push(' ');
+            state.last_was_space = true;
+        } else {
+            buf.push(c);
+            state.at_line_start = false;
+            state.last_was_space = false;
+        }
+    }
+    if !buf.is_empty() {
+        out.push(Inline::Text(buf));
+    }
+}
+
+fn strip_trailing_spaces(inlines: &mut Vec<Inline>) {
+    let mut index = inlines.len();
+    while index > 0 {
+        index -= 1;
+        match &mut inlines[index] {
+            Inline::Text(text) => {
+                let trimmed = text.trim_end_matches(' ');
+                if trimmed.is_empty() {
+                    inlines.remove(index);
+                    continue;
+                }
+                if trimmed.len() != text.len() {
+                    *text = trimmed.to_string();
+                }
+                return;
+            }
+            Inline::Emphasis(children) | Inline::Strong(children) => {
+                strip_trailing_spaces(children);
+                if children.is_empty() {
+                    inlines.remove(index);
+                    continue;
+                }
+                return;
+            }
+            Inline::Link { label, .. } => {
+                strip_trailing_spaces(label);
+                return;
+            }
+            Inline::Code(_) => return,
+        }
+    }
+}
+
+fn strip_leading_breaks(inlines: &mut Vec<Inline>) {
+    while !inlines.is_empty() {
+        match &mut inlines[0] {
+            Inline::Text(text) => {
+                let stripped = text.trim_start_matches('\n');
+                if stripped.is_empty() {
+                    inlines.remove(0);
+                    continue;
+                }
+                if stripped.len() != text.len() {
+                    *text = stripped.to_string();
+                }
+                return;
+            }
+            Inline::Emphasis(children) | Inline::Strong(children) => {
+                strip_leading_breaks(children);
+                if children.is_empty() {
+                    inlines.remove(0);
+                    continue;
+                }
+                return;
+            }
+            Inline::Link { label, .. } => {
+                strip_leading_breaks(label);
+                return;
+            }
+            Inline::Code(_) => return,
+        }
+    }
+}
+
+fn strip_trailing_breaks(inlines: &mut Vec<Inline>) {
+    let mut index = inlines.len();
+    while index > 0 {
+        index -= 1;
+        match &mut inlines[index] {
+            Inline::Text(text) => {
+                let stripped = text.trim_end_matches('\n');
+                if stripped.is_empty() {
+                    inlines.remove(index);
+                    continue;
+                }
+                if stripped.len() != text.len() {
+                    *text = stripped.to_string();
+                }
+                return;
+            }
+            Inline::Emphasis(children) | Inline::Strong(children) => {
+                strip_trailing_breaks(children);
+                if children.is_empty() {
+                    inlines.remove(index);
+                    continue;
+                }
+                return;
+            }
+            Inline::Link { label, .. } => {
+                strip_trailing_breaks(label);
+                return;
+            }
+            Inline::Code(_) => return,
+        }
+    }
+}
+
+fn prune_empty_inlines(inlines: Vec<Inline>) -> Vec<Inline> {
+    inlines
+        .into_iter()
+        .filter_map(|inline| match inline {
+            Inline::Text(text) if text.is_empty() => None,
+            Inline::Emphasis(children) => {
+                let children = prune_empty_inlines(children);
+                (!children.is_empty()).then_some(Inline::Emphasis(children))
+            }
+            Inline::Strong(children) => {
+                let children = prune_empty_inlines(children);
+                (!children.is_empty()).then_some(Inline::Strong(children))
+            }
+            Inline::Link { label, url } => {
+                let label = prune_empty_inlines(label);
+                inlines_have_visible_character(&label)
+                    .then_some(Inline::Link { label, url })
+            }
+            other => Some(other),
+        })
+        .collect()
+}
+
+/// Normalize every segment after quote/signature split and before
+/// `has_table` / `has_link`. Drops paragraphs with no visible content
+/// and list items (or lists) that become empty.
+fn normalize_blocks(blocks: &mut Vec<Block>) {
+    let mut out = Vec::new();
+    for block in std::mem::take(blocks) {
+        match block {
+            Block::Paragraph(inlines) => {
+                let inlines = normalize_inline_whitespace(inlines);
+                if inlines_have_visible_character(&inlines) {
+                    out.push(Block::Paragraph(inlines));
+                }
+            }
+            Block::List {
+                ordered,
+                start,
+                items,
+            } => {
+                let mut kept = Vec::new();
+                for mut item in items {
+                    normalize_blocks(&mut item);
+                    if !item.is_empty() {
+                        kept.push(item);
+                    }
+                }
+                if !kept.is_empty() {
+                    out.push(Block::List {
+                        ordered,
+                        start,
+                        items: kept,
+                    });
+                }
+            }
+            Block::Table { headers, rows } => {
+                let headers = headers
+                    .into_iter()
+                    .map(normalize_inline_whitespace)
+                    .collect();
+                let rows = rows
+                    .into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .map(normalize_inline_whitespace)
+                            .collect()
+                    })
+                    .collect();
+                out.push(Block::Table { headers, rows });
+            }
+            other => out.push(other),
+        }
+    }
+    *blocks = out;
+}
+
 fn parse_container(
     element: ElementRef<'_>,
     context: &mut WalkContext<'_>,
@@ -168,13 +495,14 @@ fn parse_container(
         let value = child.value();
         let Some(child_element) = ElementRef::wrap(child) else {
             if let Node::Text(text) = value {
+                let text = collapse_html_whitespace(text);
                 if quote_tail {
                     flush_inline(&mut inline, &mut output);
                     output.push(RenderNode::Quote(vec![RenderNode::Block(
-                        Block::Paragraph(vec![Inline::Text(text.to_string())]),
+                        Block::Paragraph(vec![Inline::Text(text)]),
                     )]));
                 } else {
-                    inline.push(Inline::Text(text.to_string()));
+                    inline.push(Inline::Text(text));
                 }
             }
             continue;
@@ -338,7 +666,7 @@ fn parse_inline_children(
         if let Some(child_element) = ElementRef::wrap(child) {
             output.extend(parse_inline_element(child_element, context));
         } else if let Node::Text(text) = value {
-            output.push(Inline::Text(text.to_string()));
+            output.push(Inline::Text(collapse_html_whitespace(text)));
         }
     }
     output
@@ -510,7 +838,11 @@ fn parse_table(
         out.extend(scan.extra);
         return out;
     };
-    let headers = scan.rows[header_index].cells.clone();
+    let headers: Vec<Vec<Inline>> = scan.rows[header_index]
+        .cells
+        .iter()
+        .map(|cell| blocks_to_cell_inlines(cell))
+        .collect();
     if headers.is_empty() || headers.iter().all(|cell| cell_is_empty(cell)) {
         let mut out = linear_table(&scan);
         out.extend(scan.extra);
@@ -521,7 +853,12 @@ fn parse_table(
         .iter()
         .enumerate()
         .filter(|(index, _)| *index != header_index)
-        .map(|(_, row)| row.cells.clone())
+        .map(|(_, row)| {
+            row.cells
+                .iter()
+                .map(|cell| blocks_to_cell_inlines(cell))
+                .collect()
+        })
         .collect();
     let mut output = Vec::new();
     if let Some(caption) =
@@ -535,7 +872,7 @@ fn parse_table(
 }
 
 struct TableRow {
-    cells: Vec<Vec<Inline>>,
+    cells: Vec<Vec<Block>>,
     has_header_cells: bool,
 }
 
@@ -627,7 +964,7 @@ fn scan_table_children(
                             }
                         }
                     }
-                    cells.push(blocks_to_cell_inlines(&main_blocks));
+                    cells.push(main_blocks);
                 }
                 if !cells.is_empty() {
                     scan.rows.push(TableRow {
@@ -649,20 +986,28 @@ fn linear_table(scan: &TableScan) -> Vec<RenderNode> {
         output.push(RenderNode::Block(Block::Paragraph(caption.clone())));
     }
     for row in &scan.rows {
-        let mut combined: Vec<Inline> = Vec::new();
-        for cell in &row.cells {
-            if cell_is_empty(cell) {
-                continue;
+        let filled: Vec<&[Block]> = row
+            .cells
+            .iter()
+            .filter(|cell| !cell_is_empty(&blocks_to_cell_inlines(cell)))
+            .map(Vec::as_slice)
+            .collect();
+        match filled.as_slice() {
+            [] => {}
+            [cell] => {
+                output.extend(cell.iter().cloned().map(RenderNode::Block));
             }
-            if !combined.is_empty() {
-                combined.push(Inline::Text(" · ".to_string()));
+            many => {
+                let mut combined: Vec<Inline> = Vec::new();
+                for cell in many {
+                    if !combined.is_empty() {
+                        combined.push(Inline::Text(" · ".to_string()));
+                    }
+                    combined.extend(blocks_to_cell_inlines(cell));
+                }
+                output.push(RenderNode::Block(Block::Paragraph(combined)));
             }
-            combined.extend(cell.clone());
         }
-        if combined.is_empty() {
-            continue;
-        }
-        output.push(RenderNode::Block(Block::Paragraph(combined)));
     }
     output
 }
@@ -1411,5 +1756,143 @@ mod tests {
         assert!(result.markdown.contains('2'));
         assert!(result.markdown.contains('3'), "extra cell truncated");
         assert!(result.has_table);
+    }
+
+    #[test]
+    fn alertmanager_layout_tables_follow_browser_whitespace() {
+        let result = render(
+            r#"<table class="body-wrap">
+  <tr>
+    <td></td>
+    <td class="container">
+      <div class="content">
+        <table class="main" width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td class="alert">
+              1 alert for
+              alertname=MacDiskLow
+            </td>
+          </tr>
+          <tr>
+            <td class="content-wrap">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td class="content-block">
+                    <a href="http://athena:9093/">View in Alertmanager</a>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="content-block">
+                    <strong>[1] Firing</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="content-block">
+                    <strong>Labels</strong><br />
+                    alertname = MacDiskLow<br />
+                    instance = 127.0.0.1:9100<br />
+                    <strong>Annotations</strong><br />
+                    summary = low<br />
+                    <a href="http://athena:9090/graph">Source</a><br />
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+        <div class="footer">
+          <table width="100%">
+            <tr>
+              <td class="aligncenter content-block">
+                <a href="http://athena:9093/">Sent by Alertmanager</a>
+              </td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </td>
+    <td></td>
+  </tr>
+</table>
+<a href="http://t.example/a">&#8203;</a><a href="http://t.example/b"> </a>"#,
+        );
+        let expected = "\
+1 alert for alertname=MacDiskLow
+
+[View in Alertmanager](<http://athena:9093/>)
+
+**\\[1\\] Firing**
+
+**Labels**
+alertname = MacDiskLow
+instance = 127.0.0.1:9100
+**Annotations**
+summary = low
+[Source](<http://athena:9090/graph>)
+
+[Sent by Alertmanager](<http://athena:9093/>)";
+        assert_eq!(result.markdown, expected);
+        assert!(!result.markdown.contains("&#32;"), "{:?}", result.markdown);
+        assert!(
+            !result.markdown.contains("t.example"),
+            "invisible tracking links survived:\n{}",
+            result.markdown
+        );
+    }
+
+    #[test]
+    fn html_whitespace_collapses_like_a_browser() {
+        assert_eq!(render("<p>  a\n   b  </p>").markdown, "a b");
+        assert_eq!(render("<p>a<br>\n   b</p>").markdown, "a\nb");
+        assert_eq!(render("<p>a <b> b</b></p>").markdown, "a&#32;**b**");
+        assert_eq!(render("<p><br>a<br></p>").markdown, "a");
+        let between = render("<div>A</div>\n   \n<div>B</div>");
+        assert_eq!(between.markdown, "A\n\nB");
+        assert!(!between.markdown.contains("&#32;"));
+        assert!(
+            render("<p>keep&nbsp;&nbsp;together</p>")
+                .markdown
+                .contains("keep\u{a0}\u{a0}together"),
+            "nbsp collapsed"
+        );
+    }
+
+    #[test]
+    fn invisible_label_links_drop_and_image_links_survive() {
+        let zwsp = render("<p><a href='https://t.example/a'>&#8203;</a></p>");
+        assert!(
+            !zwsp.markdown.contains("t.example"),
+            "zwsp link survived:\n{}",
+            zwsp.markdown
+        );
+        assert!(!zwsp.has_link);
+
+        let space = render("<p><a href='https://t.example/b'> </a>visible</p>");
+        assert_eq!(space.markdown, "visible");
+        assert!(!space.has_link);
+
+        let image = render(
+            "<p><a href='https://example.test/page'><img alt='x' src='https://example.test/i.png'></a></p>",
+        );
+        assert!(
+            image.markdown.contains("🖼 x"),
+            "image label lost:\n{}",
+            image.markdown
+        );
+        assert!(
+            image.markdown.contains("https://example.test/i.png"),
+            "image URL lost:\n{}",
+            image.markdown
+        );
+        assert!(image.has_link);
+    }
+
+    #[test]
+    fn layout_row_with_one_filled_cell_keeps_paragraphs() {
+        let result =
+            render("<table><tr><td><p>One</p><p>Two</p></td></tr></table>");
+        assert_eq!(result.markdown, "One\n\nTwo");
+        let two = render("<table><tr><td>A</td><td>B</td></tr></table>");
+        assert_eq!(two.markdown, "A · B");
     }
 }

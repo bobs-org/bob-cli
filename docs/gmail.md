@@ -158,6 +158,10 @@ already decide what the saved notes will contain:
   fields, checkboxes, Templater openers, and executable code fences cannot
   survive in a body, a header, a snippet, or a filename shown in the note.
   Raw filenames and IDs stay untrusted path inputs for the save phase.
+- HTML whitespace collapses like a browser's: only `<br>` and block
+  boundaries break lines, whitespace with nothing else drops, links with
+  no visible label drop, and a layout-table row with one filled cell keeps
+  that cell's paragraphs.
 
 ## Setup
 
