@@ -141,6 +141,9 @@ pub(crate) struct PomodoroClosePlan {
     pub clock_warning: Option<String>,
     /// Per-link clock diagnostics that decided a counted link's clock.
     pub clock_diagnostics: Vec<(&'static str, String)>,
+    /// Pre-close requirement forests for tasks this close moved open →
+    /// Done, in close order.
+    pub req_owners: Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +275,7 @@ struct ClosePlanner<'a, V> {
     unresolved_indices: BTreeMap<String, usize>,
     tasks: Vec<PomodoroCloseTask>,
     warnings: Vec<String>,
+    req_owners: Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
 }
 
 impl<'a, V: CloseVault> ClosePlanner<'a, V> {
@@ -310,6 +314,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             unresolved_indices: BTreeMap::new(),
             tasks: Vec::new(),
             warnings: Vec::new(),
+            req_owners: Vec::new(),
         }
     }
 
@@ -733,6 +738,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                 | EmbeddedVisitOutcome::DepthCapped { .. } => {}
             }
         }
+        self.req_owners.extend(outcome.req_owners);
         for (path, contents) in &outcome.changed_files {
             self.save_file(path, contents.clone());
         }
@@ -1203,6 +1209,7 @@ pub(crate) fn plan_pomodoro_close_for_entry<V: CloseVault>(
         clock_note: closed_clock.clock_note,
         clock_warning: closed_clock.clock_warning,
         clock_diagnostics: closed_clock.diagnostics,
+        req_owners: planner.req_owners,
     })
 }
 

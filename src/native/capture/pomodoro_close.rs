@@ -671,6 +671,15 @@ pub(super) struct CloseSuccessorOutcome {
     pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
     pub(super) keep_moving_folds:
         Vec<crate::native::task_complete::KeepMovingFold>,
+    /// Pre-close requirement forests in close order. Attached even when
+    /// successor pre-gates skip the dependents lookup. The card/view
+    /// phases (bob-cli-on.8.1.2+) read these fields.
+    #[allow(dead_code)]
+    pub(super) req_owners:
+        Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
+    #[allow(dead_code)]
+    pub(super) req_groups:
+        Vec<crate::native::task_complete::req_close::ReqCloseGroup>,
 }
 
 /// 0-based line of the closed entry in the post-close day text: the
@@ -836,6 +845,8 @@ pub(super) fn plan_close_successors(
     day_relative: &str,
     task_block_refs: &mut Vec<TaskBlockRef>,
 ) -> Result<CloseSuccessorOutcome, CaptureError> {
+    let req_owners = plan.req_owners.clone();
+    let req_groups = super::req_close::groups_for_close(&req_owners);
     let empty = |check: &'static str| CloseSuccessorOutcome {
         unblocked: Vec::new(),
         keep_moving: Vec::new(),
@@ -847,6 +858,8 @@ pub(super) fn plan_close_successors(
         unblocked_check: check,
         project_folds: Vec::new(),
         keep_moving_folds: Vec::new(),
+        req_owners: req_owners.clone(),
+        req_groups: req_groups.clone(),
     };
     let bob_dir = &request.bob_dir;
     let settings = note_tasks::read_settings(bob_dir);
@@ -1281,6 +1294,8 @@ pub(super) fn plan_close_successors(
         unblocked_check,
         project_folds: successor_plan.project_folds.clone(),
         keep_moving_folds: successor_plan.keep_moving_folds.clone(),
+        req_owners,
+        req_groups,
     })
 }
 

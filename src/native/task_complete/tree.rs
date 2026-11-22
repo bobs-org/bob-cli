@@ -96,6 +96,9 @@ pub(crate) struct CompleteTreeOutcome {
     pub(crate) closed_subtasks: Vec<ClosedTask>,
     pub(crate) left_open: Vec<LeftOpenTask>,
     pub(crate) warnings: Vec<String>,
+    /// Pre-close requirement forests in close order (children before
+    /// parents). Recurring owners are omitted.
+    pub(crate) req_owners: Vec<super::req_close::ReqCloseOwner>,
 }
 
 /// One `x` embedded-tree root: the ledger link plus the file it was
@@ -149,6 +152,9 @@ pub(crate) struct EmbeddedTreesOutcome {
     /// Warnings in traversal order. The close regenerates these inline
     /// while replaying visits, so it ignores this list.
     pub(crate) warnings: Vec<String>,
+    /// Pre-close requirement forests in close order (children before
+    /// parents). Recurring owners are omitted.
+    pub(crate) req_owners: Vec<super::req_close::ReqCloseOwner>,
 }
 
 /// Whether `symbol` may be closed under `policy`. `CloseLink` matches the
@@ -330,6 +336,7 @@ struct TreeWork<'a, V> {
     closed: Vec<ClosedTask>,
     left_open: Vec<LeftOpenTask>,
     visits: Vec<EmbeddedTreeVisit>,
+    req_owners: Vec<super::req_close::ReqCloseOwner>,
 }
 
 impl<'a, V: CloseVault> TreeWork<'a, V> {
@@ -674,6 +681,17 @@ impl<'a, V: CloseVault> TreeWork<'a, V> {
         if !task_has_global_filter(&line, &self.settings) {
             return Ok(false);
         }
+        if !is_recurring_task_line(&line) {
+            let relative = PathBuf::from(self.relative_target(path));
+            if let Some(owner) = super::req_close::collect_owner(
+                &contents,
+                &relative,
+                &current,
+                &self.settings,
+            ) {
+                self.req_owners.push(owner);
+            }
+        }
         let Some(mut updated) = set_task_line_status(&line, 'x') else {
             return Ok(false);
         };
@@ -811,6 +829,7 @@ pub(crate) fn complete_task_tree<V: CloseVault>(
         closed: Vec::new(),
         left_open: Vec::new(),
         visits: Vec::new(),
+        req_owners: Vec::new(),
     };
     let wikilink = format!("#^{block_id}");
     work.close_node(root_path, root_path, "", block_id, &wikilink, 0, true, 0)?;
@@ -826,6 +845,7 @@ pub(crate) fn complete_task_tree<V: CloseVault>(
         closed_subtasks: work.closed,
         left_open: work.left_open,
         warnings: work.warnings,
+        req_owners: work.req_owners,
     })
 }
 
@@ -862,6 +882,7 @@ pub(crate) fn complete_embedded_trees<V: CloseVault>(
         closed: Vec::new(),
         left_open: Vec::new(),
         visits: Vec::new(),
+        req_owners: Vec::new(),
     };
     for root in roots {
         let path = match vault
@@ -923,6 +944,7 @@ pub(crate) fn complete_embedded_trees<V: CloseVault>(
         changed_files,
         visits: work.visits,
         warnings: work.warnings,
+        req_owners: work.req_owners,
     })
 }
 

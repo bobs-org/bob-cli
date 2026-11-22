@@ -1,0 +1,1302 @@
+{
+  "schema_version": 1,
+  "contract": "docs/task-requirements.md §7",
+  "family": "rows",
+  "copy": {
+    "why": "Met when it closes, unless you say otherwise",
+    "drop_prompt": "Why drop it? (optional)",
+    "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+    "jump_hint": "↗ jumps to the requirement — ⌃⇧T makes it a task",
+    "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+    "teaching": "Part of this task's scope. Met when the task closes. Drop it or make it a task",
+    "overlap": "“{ancestor}” already takes this branch — restage it as met to choose here",
+    "nested_go_with_it": "· {k} nested go with it",
+    "met_receipt": "✓ {n} requirements met with “{S}”",
+    "human_met": "⌗⌗ {n} requirements met with “{S}”",
+    "drop_receipt": "⊘ Dropped “{T}”",
+    "carry_receipt": "→ “{T}” is its own task now",
+    "carry_pulled_receipt": "→ “{T}” is its own task now · pulled in",
+    "summary": "reqs ✓4 ⊘1 →1",
+    "accessibility": "requirement, level 2, will be dropped"
+  },
+  "cases": [
+    {
+      "id": "RV1",
+      "family": "rows",
+      "title": "three depths of pending requirements",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Ship the exporter ^export",
+            "\t- [ ] Handles supported inputs",
+            "\t\t- [ ] Handles Windows files",
+            "\t\t\t- [ ] Preserves CRLF",
+            "\t\t- [ ] Handles empty input"
+          ],
+          "closing": [
+            {
+              "block_id": "export"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^export",
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+            "path": "Tasks.md",
+            "block_id": "export",
+            "line": 1,
+            "text": "Ship the exporter",
+            "preimage": "- [ ] #task Ship the exporter ^export\n\t- [ ] Handles supported inputs\n\t\t- [ ] Handles Windows files\n\t\t\t- [ ] Preserves CRLF\n\t\t- [ ] Handles empty input\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^export",
+              "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+              "path": "Tasks.md",
+              "block_id": "export",
+              "line": 1,
+              "text": "Ship the exporter"
+            },
+            "copy": {
+              "title": "Requirements · “Ship the exporter”",
+              "scope": "4 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Handles supported inputs",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 3
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Handles supported inputs”",
+                  "carry": "→ “Handles supported inputs” is its own task now",
+                  "carry_pulled": "→ “Handles supported inputs” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1.1",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+                  "text": "Handles Windows files",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 1
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Handles Windows files”",
+                  "carry": "→ “Handles Windows files” is its own task now",
+                  "carry_pulled": "→ “Handles Windows files” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1.1.1",
+                  "depth": 3,
+                  "parent_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+                  "text": "Preserves CRLF",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Preserves CRLF”",
+                  "carry": "→ “Preserves CRLF” is its own task now",
+                  "carry_pulled": "→ “Preserves CRLF” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗⌗",
+                "accessibility": "requirement, level 3, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198",
+                  "path": "1.2",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+                  "text": "Handles empty input",
+                  "line": 5,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Handles empty input”",
+                  "carry": "→ “Handles empty input” is its own task now",
+                  "carry_pulled": "→ “Handles empty input” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV2",
+      "family": "rows",
+      "title": "mixed space and tab indentation at depth 1",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Mixed indent ^mixed",
+            "  - [ ] Two-space req",
+            "\t- [ ] Tab req"
+          ],
+          "closing": [
+            {
+              "block_id": "mixed"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^mixed",
+            "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+            "path": "Tasks.md",
+            "block_id": "mixed",
+            "line": 1,
+            "text": "Mixed indent",
+            "preimage": "- [ ] #task Mixed indent ^mixed\n  - [ ] Two-space req\n\t- [ ] Tab req\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^mixed",
+              "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+              "path": "Tasks.md",
+              "block_id": "mixed",
+              "line": 1,
+              "text": "Mixed indent"
+            },
+            "copy": {
+              "title": "Requirements · “Mixed indent”",
+              "scope": "2 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef/req/1~64741448",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Two-space req",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Two-space req”",
+                  "carry": "→ “Two-space req” is its own task now",
+                  "carry_pulled": "→ “Two-space req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef/req/2~48ecec71",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^mixed@14cd268d38ed50e2a632f696a33a78b2bc19a78f415523fb1e567547866492ef",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Tab req",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Tab req”",
+                  "carry": "→ “Tab req” is its own task now",
+                  "carry_pulled": "→ “Tab req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV3",
+      "family": "rows",
+      "title": "a note interrupts ancestry so its checkbox is not a req",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [ ] Real req",
+            "\t- a note",
+            "\t\t- [ ] Not a req",
+            "\t- [ ] Another req"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [ ] Real req\n\t- a note\n\t\t- [ ] Not a req\n\t- [ ] Another req\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "2 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f/req/1~a15a505f",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Real req",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Real req”",
+                  "carry": "→ “Real req” is its own task now",
+                  "carry_pulled": "→ “Real req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f/req/2~eb8fd2fb",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@6b78c6342a237d333e2218d721746870915e978f08fb54f882728acaa104db2f",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Another req",
+                  "line": 5,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Another req”",
+                  "carry": "→ “Another req” is its own task now",
+                  "carry_pulled": "→ “Another req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV4",
+      "family": "rows",
+      "title": "nested real-task owners each keep their own forest",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Parent ^parent",
+            "\t- [ ] Parent req",
+            "\t- [ ] #task Child ^child",
+            "\t\t- [ ] Child req"
+          ],
+          "closing": [
+            {
+              "block_id": "child"
+            },
+            {
+              "block_id": "parent"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^child",
+            "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277",
+            "path": "Tasks.md",
+            "block_id": "child",
+            "line": 3,
+            "text": "Child",
+            "preimage": "\t- [ ] #task Child ^child\n\t\t- [ ] Child req\n",
+            "depth_exceeded": false
+          },
+          {
+            "task_key": "Tasks.md#^parent",
+            "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32",
+            "path": "Tasks.md",
+            "block_id": "parent",
+            "line": 1,
+            "text": "Parent",
+            "preimage": "- [ ] #task Parent ^parent\n\t- [ ] Parent req\n\t- [ ] #task Child ^child\n\t\t- [ ] Child req\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^child",
+              "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277",
+              "path": "Tasks.md",
+              "block_id": "child",
+              "line": 3,
+              "text": "Child"
+            },
+            "copy": {
+              "title": "Requirements · “Child”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Child req",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Child req”",
+                  "carry": "→ “Child req” is its own task now",
+                  "carry_pulled": "→ “Child req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          },
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^parent",
+              "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32",
+              "path": "Tasks.md",
+              "block_id": "parent",
+              "line": 1,
+              "text": "Parent"
+            },
+            "copy": {
+              "title": "Requirements · “Parent”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32/req/1~46c0aa32",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Parent req",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Parent req”",
+                  "carry": "→ “Parent req” is its own task now",
+                  "carry_pulled": "→ “Parent req” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV5",
+      "family": "rows",
+      "title": "recurring owners are excluded from the audit",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Recurring [repeat:: every week] ^rec",
+            "\t- [ ] A req"
+          ],
+          "closing": [
+            {
+              "block_id": "rec"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [],
+        "groups": []
+      }
+    },
+    {
+      "id": "RV6",
+      "family": "rows",
+      "title": "resolved folds count dropped, carried, and met earlier",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [ ] Live",
+            "\t- [-] Dropped",
+            "\t\t- [ ] Excluded child",
+            "\t- [>] [[#^carried|Carried]]",
+            "\t- [x] Hand met"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [ ] Live\n\t- [-] Dropped\n\t\t- [ ] Excluded child\n\t- [>] [[#^carried|Carried]]\n\t- [x] Hand met\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": "· 1 dropped earlier · 1 carried earlier · 1 met earlier"
+            },
+            "folded": {
+              "dropped": 1,
+              "carried": 1,
+              "met": 1
+            },
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e/req/1~b64ac05f",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@7e086cc40b89972771cb7e93c6c12019c5dc8a0cfd6e26f040a0cfbb3b60019e",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Live",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Live”",
+                  "carry": "→ “Live” is its own task now",
+                  "carry_pulled": "→ “Live” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV7",
+      "family": "rows",
+      "title": "flagged unknown marks stay pending",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [?] Flagged",
+            "\t- [*] Starred"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [?] Flagged\n\t- [*] Starred\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "2 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269/req/1~2f1978c6",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Flagged",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Flagged”",
+                  "carry": "→ “Flagged” is its own task now",
+                  "carry_pulled": "→ “Flagged” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269/req/2~07a2d579",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@725a9f1ec65f00801f71310c62492fba71846da904ee4e18f4866a0c2e700269",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Starred",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Starred”",
+                  "carry": "→ “Starred” is its own task now",
+                  "carry_pulled": "→ “Starred” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV8",
+      "family": "rows",
+      "title": "no pending rows yields a snapshot without a group",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [-] Dropped",
+            "\t- [x] Hand met"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@d231ee0247c724f4737ace3b4062ce7653face0d6533ac29e2fdf3b96a9e2492",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [-] Dropped\n\t- [x] Hand met\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": []
+      }
+    },
+    {
+      "id": "RV9",
+      "family": "rows",
+      "title": "multiple closing owners keep explicit close order",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task First ^first",
+            "\t- [ ] Req A",
+            "- [ ] #task Second ^second",
+            "\t- [ ] Req B"
+          ],
+          "closing": [
+            {
+              "block_id": "first"
+            },
+            {
+              "block_id": "second"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^first",
+            "key": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589",
+            "path": "Tasks.md",
+            "block_id": "first",
+            "line": 1,
+            "text": "First",
+            "preimage": "- [ ] #task First ^first\n\t- [ ] Req A\n",
+            "depth_exceeded": false
+          },
+          {
+            "task_key": "Tasks.md#^second",
+            "key": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097",
+            "path": "Tasks.md",
+            "block_id": "second",
+            "line": 3,
+            "text": "Second",
+            "preimage": "- [ ] #task Second ^second\n\t- [ ] Req B\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^first",
+              "key": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589",
+              "path": "Tasks.md",
+              "block_id": "first",
+              "line": 1,
+              "text": "First"
+            },
+            "copy": {
+              "title": "Requirements · “First”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589/req/1~e018c9a1",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^first@102c38ebf34bb23027393e30bf101271d44354d195244224442e2aa880979589",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Req A",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Req A”",
+                  "carry": "→ “Req A” is its own task now",
+                  "carry_pulled": "→ “Req A” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          },
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^second",
+              "key": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097",
+              "path": "Tasks.md",
+              "block_id": "second",
+              "line": 3,
+              "text": "Second"
+            },
+            "copy": {
+              "title": "Requirements · “Second”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097/req/1~8e514986",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^second@04c60692e1f3521d60376d6eeb15aa023195303f57bec140a8aa3e6305479097",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Req B",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Req B”",
+                  "carry": "→ “Req B” is its own task now",
+                  "carry_pulled": "→ “Req B” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV10",
+      "family": "rows",
+      "title": "duplicate labels in different branches get distinct row keys",
+      "notes": [
+        {
+          "path": "Tasks.md",
+          "source_lines": [
+            "- [ ] #task Owner ^owner",
+            "\t- [ ] Same",
+            "\t\t- [ ] Left child",
+            "\t- [ ] Same",
+            "\t\t- [ ] Right child"
+          ],
+          "closing": [
+            {
+              "block_id": "owner"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "Tasks.md#^owner",
+            "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+            "path": "Tasks.md",
+            "block_id": "owner",
+            "line": 1,
+            "text": "Owner",
+            "preimage": "- [ ] #task Owner ^owner\n\t- [ ] Same\n\t\t- [ ] Left child\n\t- [ ] Same\n\t\t- [ ] Right child\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "Tasks.md#^owner",
+              "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+              "path": "Tasks.md",
+              "block_id": "owner",
+              "line": 1,
+              "text": "Owner"
+            },
+            "copy": {
+              "title": "Requirements · “Owner”",
+              "scope": "4 reqs in 2 branches",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Same",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 1
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Same”",
+                  "carry": "→ “Same” is its own task now",
+                  "carry_pulled": "→ “Same” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1.1~4f271740",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "1.1",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+                  "text": "Left child",
+                  "line": 3,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Left child”",
+                  "carry": "→ “Left child” is its own task now",
+                  "carry_pulled": "→ “Left child” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2~2a98b1de",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "2",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Same",
+                  "line": 4,
+                  "state": "pending",
+                  "pending_descendants": 1
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Same”",
+                  "carry": "→ “Same” is its own task now",
+                  "carry_pulled": "→ “Same” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              },
+              {
+                "offer": {
+                  "key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2.1~ae369099",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d",
+                  "path": "2.1",
+                  "depth": 2,
+                  "parent_key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/2~2a98b1de",
+                  "text": "Right child",
+                  "line": 5,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Right child”",
+                  "carry": "→ “Right child” is its own task now",
+                  "carry_pulled": "→ “Right child” is its own task now · pulled in"
+                },
+                "run": "⌗⌗⌗",
+                "accessibility": "requirement, level 2, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV11",
+      "family": "rows",
+      "title": "identical owner-block hashes stay distinct through task_key",
+      "notes": [
+        {
+          "path": "alpha.md",
+          "source_lines": [
+            "- [ ] #task Same ^same",
+            "\t- [ ] Shared"
+          ],
+          "closing": [
+            {
+              "block_id": "same"
+            }
+          ]
+        },
+        {
+          "path": "beta.md",
+          "source_lines": [
+            "- [ ] #task Same ^same",
+            "\t- [ ] Shared"
+          ],
+          "closing": [
+            {
+              "block_id": "same"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "owners": [
+          {
+            "task_key": "alpha.md#^same",
+            "key": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+            "path": "alpha.md",
+            "block_id": "same",
+            "line": 1,
+            "text": "Same",
+            "preimage": "- [ ] #task Same ^same\n\t- [ ] Shared\n",
+            "depth_exceeded": false
+          },
+          {
+            "task_key": "beta.md#^same",
+            "key": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+            "path": "beta.md",
+            "block_id": "same",
+            "line": 1,
+            "text": "Same",
+            "preimage": "- [ ] #task Same ^same\n\t- [ ] Shared\n",
+            "depth_exceeded": false
+          }
+        ],
+        "groups": [
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "alpha.md#^same",
+              "key": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+              "path": "alpha.md",
+              "block_id": "same",
+              "line": 1,
+              "text": "Same"
+            },
+            "copy": {
+              "title": "Requirements · “Same”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0/req/1~e3c4b39d",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "alpha.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Shared",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Shared”",
+                  "carry": "→ “Shared” is its own task now",
+                  "carry_pulled": "→ “Shared” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          },
+          {
+            "group": "requirements",
+            "kind": "requirements",
+            "owner": {
+              "task_key": "beta.md#^same",
+              "key": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+              "path": "beta.md",
+              "block_id": "same",
+              "line": 1,
+              "text": "Same"
+            },
+            "copy": {
+              "title": "Requirements · “Same”",
+              "scope": "1 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in",
+              "history": null
+            },
+            "folded": {},
+            "rows": [
+              {
+                "offer": {
+                  "key": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0/req/1~e3c4b39d",
+                  "n": 0,
+                  "group": "requirements",
+                  "selected": false
+                },
+                "req": {
+                  "owner": "beta.md#^same@0a5dd1ec14b2f5d85fad550ff99eaf712f545833f992054e9d1bd84c0b8889d0",
+                  "path": "1",
+                  "depth": 1,
+                  "parent_key": null,
+                  "text": "Shared",
+                  "line": 2,
+                  "state": "pending",
+                  "pending_descendants": 0
+                },
+                "consequences": {
+                  "met": "Met when it closes, unless you say otherwise",
+                  "drop": "⊘ Dropped “Shared”",
+                  "carry": "→ “Shared” is its own task now",
+                  "carry_pulled": "→ “Shared” is its own task now · pulled in"
+                },
+                "run": "⌗⌗",
+                "accessibility": "requirement, level 1, will be met"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

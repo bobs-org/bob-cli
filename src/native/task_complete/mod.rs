@@ -13,6 +13,10 @@ pub(crate) mod project_pull_in;
 #[cfg(test)]
 pub(crate) mod recovery;
 pub(crate) mod relation_successors;
+// Row identity and group copy are consumed by bob-cli-on.8.1.2+; this
+// phase collects snapshots onto close outcomes and pins RV vectors.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod req_close;
 pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;

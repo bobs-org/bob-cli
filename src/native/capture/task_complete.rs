@@ -29,6 +29,11 @@ pub(super) struct CompleteExistingTaskOutcome {
     pub(super) top_day_file: Option<String>,
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) task_block_refs: Vec<TaskBlockRef>,
+    /// Pre-close requirement forests in close order. Empty when the
+    /// already-done path skips the tree close. The card/view phases
+    /// (bob-cli-on.8.1.2+) read this field.
+    #[allow(dead_code)]
+    pub(super) req_owners: Vec<engine::req_close::ReqCloseOwner>,
 }
 
 /// Plan one `TaskComplete` item: resolve vault-wide, validate status and
@@ -243,6 +248,7 @@ pub(super) fn complete_existing_task(
             top_day_file: None,
             pomodoro_refs: Vec::new(),
             task_block_refs: Vec::new(),
+            req_owners: Vec::new(),
         });
     }
     if task.status_symbol == '-'
@@ -872,6 +878,7 @@ pub(super) fn complete_existing_task(
         top_day_file: top_day_file.clone(),
         pomodoro_refs: pomodoro_refs.clone(),
         task_block_refs: task_block_refs.clone(),
+        req_owners: outcome.req_owners.clone(),
     })
 }
 
