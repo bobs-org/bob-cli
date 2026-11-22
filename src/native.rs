@@ -99,6 +99,8 @@ mod pomodoro_themes;
 mod pref_journal;
 mod project_dependencies;
 mod projects;
+#[cfg(test)]
+mod props;
 mod randomize;
 mod randomize_plan;
 pub(crate) mod records;
