@@ -465,6 +465,7 @@ pub(super) fn plan_note_pull_item(
                     pomodoro_refs: Vec::new(),
                     task_block_refs: Vec::new(),
                     project_move_landings: Vec::new(),
+                    req_owners: Vec::new(),
                 });
             }
         }
@@ -732,6 +733,7 @@ pub(super) fn plan_note_pull_item(
             pomodoro_refs: Vec::new(),
             task_block_refs: Vec::new(),
             project_move_landings: Vec::new(),
+            req_owners: Vec::new(),
         });
     }
     // Lane pull order (Pending → Next → Ready), then source line.
@@ -1215,6 +1217,7 @@ pub(super) fn plan_note_pull_item(
         pomodoro_refs: Vec::new(),
         task_block_refs,
         project_move_landings: Vec::new(),
+        req_owners: Vec::new(),
     })
 }
 
@@ -1595,6 +1598,7 @@ mod tests {
             complete_offers: Vec::new(),
             cancel_offers: Vec::new(),
             offer_verdicts: Vec::new(),
+            carry: Vec::new(),
             refuse_override: false,
             require_inbox_route_choice: false,
             require_pull_in_choice: false,
@@ -1602,6 +1606,8 @@ mod tests {
             argv: false,
             template_origin: None,
             raw_text: "@sase".to_string(),
+            req_choice: false,
+            req_selection: None,
             selection,
         };
         let today_date = today();
@@ -2493,6 +2499,7 @@ mod tests {
             complete_offers: Vec::new(),
             cancel_offers: Vec::new(),
             offer_verdicts: Vec::new(),
+            carry: Vec::new(),
             refuse_override: false,
             require_inbox_route_choice: false,
             require_pull_in_choice: false,
@@ -2500,6 +2507,8 @@ mod tests {
             argv: false,
             template_origin: None,
             raw_text: raw_text.to_string(),
+            req_choice: false,
+            req_selection: None,
             selection: SuccessorSelection::None,
         };
         BatchVault {

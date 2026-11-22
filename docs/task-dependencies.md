@@ -1448,6 +1448,93 @@ stale `[ ]` resident).
   `code`, Bob-authored error text, and the current offer rows with their
   eligibility descriptors. Existing error exit and JSON conventions apply.
 
+**Requirement rows (`pull_in.reqs`, `kind: "requirements"`)**
+
+Requirement close is additive on the same successor card. A supported
+response always includes `pull_in.reqs: {"supported": true, "pending": N}`.
+`pending` counts every pre-close Pending requirement on the managed Done
+set, including descendants that a later verdict folds. Older bobs omit
+the object. `req_outcomes[]` reports applied verdicts and is omitted when
+empty.
+
+Normal CLI previews and `--req-choice` clients share one number space
+with requirements first, then ordinary offers. `-p all` never selects a
+requirement row. Row kind decides the flag:
+
+| Flag | Requirement row | Offer row |
+| --- | --- | --- |
+| `-k, --carry` | Carry (own task, unlinked) | refused |
+| `-p N\|KEY` | CarryPulled (own task, linked, raised Next) | pull in |
+| `-X N[=why]` | Drop (`[-]`, optional Cancel Log) | cancel |
+| `-x N` | explicit Met (acknowledgement, no req bytes) | complete |
+| `-j N\|KEY` | jump pin (navigation only) | jump pin |
+
+Default and explicit Met write no requirement bytes: the owner closes
+`[x]` and Pending reqs stay `[ ]`. Carry writes a `[>]` stub and one
+real task per disjoint branch. CarryPulled also links that task at the
+ordinary successor destination and never stamps `[fresh::]` or
+`[unblocked::]`. `-k` plus `-p` on the same requirement is
+`offer_verdict_conflict`. A stale keyed replay is `req_close_stale` and
+includes a `current` recovery payload.
+
+Handshake: `--require-pull-in-choice` without `--req-choice` is the
+legacy client. It keeps offer-only numbering, still advertises
+`pull_in.reqs.supported`, omits requirement groups from `pull_in.groups`,
+and leaves requirements at Met, so a task-offer number cannot drop a
+req. A `--req-choice` client (and the normal CLI, which is req-aware
+without either flag) numbers requirements first. With both handshake
+flags, Pending reqs alone demand a choice; `-p none` or an explicit
+req verdict acknowledges, and a jump pin does not. `offer_count` counts
+actionable card rows; `picked_count` counts actual pull-in links.
+
+Human copy prints the requirement group first. The CLI hint is
+`-k N own task · -X N[=why] drop · -p N pull in`. Receipts:
+
+- `✓ n requirements met with “S”` (human `⌗⌗ n requirements met with “S”`)
+- `⊘ Dropped “T”` with optional ` · “why”`
+- `→ “T” is its own task now` with optional ` · pulled in`
+
+Dry runs use `would meet` / `would drop` / `would make … its own task`.
+
+Req-only close:
+
+```json
+"pull_in": {
+  "supported": true, "offer_count": 2, "choice": null, "picked_count": 0,
+  "close": {"supported": true, "done_count": 0, "cancelled_count": 0},
+  "jump": {"supported": true},
+  "reqs": {"supported": true, "pending": 2},
+  "groups": [{
+    "group": "requirements", "kind": "requirements",
+    "owner": {"task_key": "sase.md#^ship", "key": "sase.md#^ship@…",
+              "path": "sase.md", "block_id": "ship", "line": 1,
+              "text": "Ship parser"},
+    "rows": [{
+      "offer": {"key": "sase.md#^ship@…/req/1~abcd1234", "n": 1,
+                "group": "requirements", "selected": false},
+      "req": {"owner": "sase.md#^ship@…", "path": "1", "depth": 1,
+              "text": "Handles empty input", "line": 2, "state": "pending",
+              "pending_descendants": 0},
+      "consequences": {
+        "met": "Met when it closes, unless you say otherwise",
+        "drop": "⊘ Dropped “Handles empty input”",
+        "carry": "→ “Handles empty input” is its own task now",
+        "carry_pulled": "→ “Handles empty input” is its own task now · pulled in"
+      }
+    }]
+  }]
+},
+"req_outcomes": [{
+  "n": 1, "key": "sase.md#^ship@…", "verdict": "met",
+  "text": "Ship parser", "pulled": false,
+  "message": "✓ 2 requirements met with “Ship parser”"
+}]
+```
+
+Clients treat `owner.key` and `row.offer.key` as opaque. Plugin v6
+consumes this protocol in a later phase; this capture contract does not
+deploy that client.
+
 **Project-created rows (`project_note.successors`)**
 
 A capture item `@route:id@` (Capture's

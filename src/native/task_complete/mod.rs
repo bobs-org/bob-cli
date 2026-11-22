@@ -13,24 +13,18 @@ pub(crate) mod project_pull_in;
 #[cfg(test)]
 pub(crate) mod recovery;
 pub(crate) mod relation_successors;
-// Row identity and group copy are consumed by bob-cli-on.8.1.2+; this
-// phase collects snapshots onto close outcomes and pins RV vectors.
+// Frozen copy, card-state, and jump helpers stay on the engine for
+// plugin and later-phase consumers; capture uses a subset.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_close;
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) mod req_verdicts;
-// Atomic carry/drop planning reuses the split and writer primitives;
-// the capture adapter (bob-cli-on.8.1.3) and the pull-in/jump phase
-// (bob-cli-on.8.1.4) consume this module.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) mod req_writes;
-// Carried-task pull-in placement and pinned-requirement jump landings
-// (bob-cli-on.8.1.4); the capture integration phase (bob-cli-on.8.1.5)
-// wires them into every managed Done entry and drops these allowances.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_landing;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod req_placement;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod req_verdicts;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod req_writes;
 pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;

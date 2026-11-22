@@ -1868,5 +1868,6 @@ pub(super) fn record_one_member(
         pomodoro_refs,
         task_block_refs,
         project_move_landings: Vec::new(),
+        req_owners: successors.req_owners,
     })
 }

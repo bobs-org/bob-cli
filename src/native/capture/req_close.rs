@@ -23,17 +23,12 @@ use super::{
 use crate::native::{
     note_tasks,
     task_complete::{
-        req_close::{groups_from_owners, ReqCloseGroup, ReqCloseOwner},
+        req_close::ReqCloseOwner,
         req_verdicts::ReqVerdictSelection,
         req_writes::{plan_req_writes, ReqWritePlan},
     },
     task_split::plan::SplitSettings,
 };
-
-/// Requirement groups for a closing set, in the owners' close order.
-pub(super) fn groups_for_close(owners: &[ReqCloseOwner]) -> Vec<ReqCloseGroup> {
-    groups_from_owners(owners)
-}
 
 /// Plan every structural requirement verdict on the staged snapshot.
 ///
@@ -44,7 +39,6 @@ pub(super) fn groups_for_close(owners: &[ReqCloseOwner]) -> Vec<ReqCloseGroup> {
 /// through the planner bound to the exact snapshot it was planned from.
 /// Any refusal stages nothing new for this pass, so every vault file keeps
 /// its original bytes.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn plan_req_write_pass(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,

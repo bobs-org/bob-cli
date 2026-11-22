@@ -936,6 +936,7 @@ fn planned_item_from_pomodoro_link_plan(
         pomodoro_refs,
         task_block_refs: link.task_block_ref.clone().into_iter().collect(),
         project_move_landings: Vec::new(),
+        req_owners: Vec::new(),
     })
 }
 

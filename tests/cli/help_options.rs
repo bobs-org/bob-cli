@@ -86,6 +86,7 @@ fn capture_help_lists_options_alphabetically() {
         &[
             "-b, --bob-dir",
             "-X, --cancel-offer",
+            "-k, --carry",
             "-c, --clip",
             "-x, --complete-offer",
             "-D, --drawer",
@@ -107,7 +108,7 @@ fn capture_help_lists_options_alphabetically() {
     assert!(
         help.contains("-j, --jump-offer <N|KEY>")
             && help.contains(
-                "Focus this offer after the capture (any verdict); one offer"
+                "Focus this offer or requirement after the capture (any verdict); one pick"
             )
             && help.contains("-E, --expand")
             && help.contains("before vault access or planning")
@@ -118,6 +119,10 @@ fn capture_help_lists_options_alphabetically() {
     assert!(
         !help.contains("--require-pull-in-choice"),
         "hidden --require-pull-in-choice must stay out of help:\n{help}"
+    );
+    assert!(
+        !help.contains("--req-choice"),
+        "hidden --req-choice must stay out of help:\n{help}"
     );
     assert!(
         !help.contains("--refuse-override"),

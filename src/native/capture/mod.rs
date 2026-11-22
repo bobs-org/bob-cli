@@ -105,9 +105,8 @@ mod relations_complete;
 mod relations_mentions;
 mod relations_merge;
 mod relations_mirror;
+mod req_choice;
 mod req_close;
-// Pull-in placement and requirement jumps; bob-cli-on.8.1.5 wires them.
-#[cfg_attr(not(test), allow(dead_code))]
 mod req_placement;
 pub(crate) mod sections;
 pub(crate) mod shell_guard;
@@ -433,11 +432,23 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let theme_refs = append_theme_refs(&request, &mut batch);
     append_unconfigured_theme_warnings(&request, &mut batch);
     let open_notes = build_open_notes(&request.bob_dir, &batch);
-    let jump = jump::build_capture_jump(
-        &request.bob_dir,
-        &batch,
-        request.jump_offer.as_deref(),
-    );
+    let jump = match batch.req_jump.as_ref() {
+        Some(target) if target.requirement.is_some() => {
+            req_placement::build_req_capture_jump(
+                &request.bob_dir,
+                &batch,
+                target,
+                &batch.req_owners,
+                &batch.req_write_plan,
+            )?
+            .map(|(json, _)| json)
+        }
+        _ => jump::build_capture_jump(
+            &request.bob_dir,
+            &batch,
+            request.jump_offer.as_deref(),
+        ),
+    };
     if !request.dry_run {
         commit_capture_batch(&mut batch, &request.bob_dir)?;
         let pending_gmail_urls: std::collections::HashSet<_> = batch
@@ -506,6 +517,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         jump,
         pull_in,
         batch.offer_closes,
+        batch.req_outcomes,
         batch.inbox_route,
         batch.move_choice,
         batch.type_agreement,

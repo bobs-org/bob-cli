@@ -92,13 +92,16 @@ Options:
           Bob vault root; defaults to BOB_DIR or ~/bob
 
   -X, --cancel-offer <N|KEY[=REASON]>
-          Cancel one offer; REASON goes to its Cancel Log. Repeatable, one offer per flag
+          Cancel one offer or drop a requirement; REASON goes to its Cancel Log. Repeatable, one pick per flag
+
+  -k, --carry <PICKS>
+          Carry requirement(s) as own tasks; PICKS is a comma list. Repeatable
 
   -c, --clip
           Force a clipboard read as if %c were written
 
   -x, --complete-offer <PICKS>
-          Mark offer(s) Done; PICKS is a comma list. Repeatable
+          Mark offer(s) Done or acknowledge requirement(s) as Met; PICKS is a comma list. Repeatable
 
   -D, --drawer <TITLE>
           Nest under the exact drawer TITLE; requires --route and --task
@@ -122,7 +125,7 @@ Options:
           Route an inbox task this capture changes: <N|KEY>=<NOTE> moves it, <N|KEY>= keeps it in its inbox, keep keeps every otherwise unanswered candidate; repeatable
 
   -j, --jump-offer <N|KEY>
-          Focus this offer after the capture (any verdict); one offer
+          Focus this offer or requirement after the capture (any verdict); one pick
 
   -m, --move-in <PICKS>
           Answer a - ^^ move choice: none, all, or a comma list of row numbers and keys; a leading : also links; repeatable
@@ -134,7 +137,7 @@ Options:
           Keep bare links as inbox tasks instead of queueing them for the reading queue
 
   -p, --pull-in <PICKS>
-          Pull in successor offers: all, none, or a comma list of offer numbers and keys ($<N> in TEXT is still priority)
+          Pull in successor offers or carry a requirement into today's session: all, none, or a comma list of numbers and keys ($<N> in TEXT is still priority); all never selects requirements
 
   -r, --route <NAME>
           Force the route to NAME.md and keep @tokens in text literal

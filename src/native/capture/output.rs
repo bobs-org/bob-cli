@@ -552,6 +552,10 @@ pub(super) struct CaptureResult {
     /// Applied card verdicts, in flag order. Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) offer_closes: Vec<OfferCloseJson>,
+    /// Applied requirement verdicts, in closing-owner order. Omitted
+    /// when empty (`docs/task-dependencies.md` §12.5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) req_outcomes: Vec<super::req_choice::ReqOutcomeJson>,
     /// Inbox tasks whose checkbox status changed during this batch.
     pub(super) inbox_route: InboxRouteReport,
     /// Move-choice report. Present on every success.
@@ -605,6 +609,7 @@ impl CaptureResult {
         jump: Option<CaptureJumpJson>,
         pull_in: PullInJson,
         offer_closes: Vec<OfferCloseJson>,
+        req_outcomes: Vec<super::req_choice::ReqOutcomeJson>,
         inbox_route: InboxRouteReport,
         move_choice: super::move_choice::MoveChoiceReport,
         type_agreement: Vec<TypeAgreementJson>,
@@ -648,6 +653,7 @@ impl CaptureResult {
             jump,
             pull_in,
             offer_closes,
+            req_outcomes,
             inbox_route,
             move_choice,
             type_agreement,
@@ -1666,6 +1672,9 @@ pub(super) struct PullInJson {
     /// Successor jump capability. Older bobs omit it, which is the
     /// Mac's feature gate for `--jump-offer`.
     pub(super) jump: PullInJumpJson,
+    /// Requirement-close capability. Always present once the public
+    /// path ships (`docs/task-dependencies.md` §12.5).
+    pub(super) reqs: super::req_choice::PullInReqsJson,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) groups: Vec<PullInGroupJson>,
     /// Bob-authored picker title, capsule, and glyph. Omitted when there
@@ -1696,6 +1705,10 @@ impl PullInJson {
                 cancelled_count: 0,
             },
             jump: PullInJumpJson { supported: true },
+            reqs: super::req_choice::PullInReqsJson {
+                supported: true,
+                pending: 0,
+            },
             groups: Vec::new(),
             copy: None,
         }
@@ -1761,6 +1774,14 @@ pub(super) struct PullInGroupCopyJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) fold: Option<String>,
     pub(super) glyph: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) history: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) footer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hint: Option<String>,
 }
 
 /// Relation-group `after` identity (`docs/task-dependencies.md` §12.5).
@@ -1777,6 +1798,10 @@ pub(super) struct PullInAfterJson {
 pub(super) struct PullInGroupJson {
     pub(super) group: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) owner: Option<super::req_choice::PullInReqOwnerJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) after: Option<PullInAfterJson>,
@@ -1789,6 +1814,8 @@ pub(super) struct PullInGroupJson {
     pub(super) note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) folded: Option<PullInFoldedJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) rows: Vec<super::req_choice::PullInReqRowJson>,
     pub(super) copy: PullInGroupCopyJson,
 }
 
@@ -2553,6 +2580,45 @@ fn sized_close_tip(
     Some(format!("tip: {token} closes at {duration}m in one step"))
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ReqHuman<'a> {
+    groups: &'a [PullInGroupJson],
+    outcomes: &'a [super::req_choice::ReqOutcomeJson],
+}
+
+fn req_human_for<'a>(
+    result: &'a CaptureResult,
+    first_item: bool,
+) -> Option<ReqHuman<'a>> {
+    if !first_item {
+        return None;
+    }
+    let has_groups = result
+        .pull_in
+        .groups
+        .iter()
+        .any(|group| group.group == "requirements");
+    if !has_groups && result.req_outcomes.is_empty() {
+        return None;
+    }
+    Some(ReqHuman {
+        groups: &result.pull_in.groups,
+        outcomes: &result.req_outcomes,
+    })
+}
+
+fn print_req_card(reqs: Option<ReqHuman<'_>>, dry_run: bool, styler: &Styler) {
+    let Some(reqs) = reqs else {
+        return;
+    };
+    super::req_choice::print_human_req_card(
+        reqs.groups,
+        reqs.outcomes,
+        dry_run,
+        styler,
+    );
+}
+
 pub(super) fn print_human_success(result: &CaptureResult) {
     if let Some(global) = &result.global_destination {
         print_global_destination_summary(global);
@@ -2568,7 +2634,12 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     }
     if result.captures.is_empty() {
         print_list_summary(&result.item);
-        print_human_item_success(result, None, &result.theme_refs);
+        print_human_item_success(
+            result,
+            None,
+            &result.theme_refs,
+            req_human_for(result, true),
+        );
         print_human_merge_block_unless_task_merge(&result.item);
         if let Some(past) = result.item.pomodoro_past.as_ref() {
             print_human_past_trims(&past.trims);
@@ -2601,6 +2672,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
             item,
             Some((index + 1, total)),
             &result.theme_refs,
+            req_human_for(result, index == 0),
         );
         print_human_merge_block_unless_task_merge(item);
         if index > 0
@@ -3852,6 +3924,7 @@ pub(super) fn print_task_complete_details(
     summary: &TaskCompleteSummaryJson,
     dry_run: bool,
     styler: &Styler,
+    reqs: Option<ReqHuman<'_>>,
 ) {
     for subtask in &summary.subtasks {
         let previous =
@@ -3918,6 +3991,7 @@ pub(super) fn print_task_complete_details(
         },
         dry_run,
         styler,
+        reqs,
     );
     print_human_keep_moving_rows(
         &summary.keep_moving,
@@ -4072,6 +4146,7 @@ pub(super) fn print_human_item_success(
     result: &CaptureItemResult,
     ordinal: Option<(usize, usize)>,
     theme_refs: &BTreeMap<String, Vec<super::super::pomodoro_themes::ThemeRef>>,
+    mut reqs: Option<ReqHuman<'_>>,
 ) {
     let styler = Styler::detect();
     let target_label = if result.route_label.is_empty() {
@@ -4097,13 +4172,21 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
     if let Some(past) = result.pomodoro_past.as_ref() {
         print_human_pomodoro_past_success(
-            result, past, &styler, &prefix, &ordinal,
+            result,
+            past,
+            &styler,
+            &prefix,
+            &ordinal,
+            reqs.take(),
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4115,7 +4198,9 @@ pub(super) fn print_human_item_success(
             &prefix,
             &ordinal,
             &target_label,
+            reqs.take(),
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4127,6 +4212,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4148,6 +4234,7 @@ pub(super) fn print_human_item_success(
                 styler.dim(&format!("removed {count} live Pomodoro link(s)"))
             );
         }
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4161,6 +4248,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4171,7 +4259,9 @@ pub(super) fn print_human_item_success(
             &prefix,
             &ordinal,
             &target_label,
+            reqs.take(),
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4184,7 +4274,9 @@ pub(super) fn print_human_item_success(
             &prefix,
             &ordinal,
             &target_label,
+            reqs.take(),
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4197,6 +4289,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4209,6 +4302,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4221,6 +4315,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4233,6 +4328,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4247,6 +4343,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4256,6 +4353,7 @@ pub(super) fn print_human_item_success(
         print_human_ref_item_success(
             result, reference, &styler, &prefix, &ordinal,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4270,6 +4368,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         return;
     }
     if matches!(
@@ -4280,19 +4379,23 @@ pub(super) fn print_human_item_success(
         print_human_notebook_success(
             result, notebook, &styler, &prefix, &ordinal,
         );
+        print_req_card(reqs.take(), result.dry_run, &styler);
         return;
     }
     if result.note_pull.is_some() {
+        print_req_card(reqs.take(), result.dry_run, &styler);
         return;
     }
     if result.kind == "task_merge" {
         print_human_transfer_merges(result);
+        print_req_card(reqs.take(), result.dry_run, &styler);
         return;
     }
     if result.kind == "task_move"
         && !result.transfer_move_output.moves.is_empty()
     {
         print_human_transfer_moves(result, &styler);
+        print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
     }
@@ -4404,7 +4507,7 @@ pub(super) fn print_human_item_success(
         println!("  {}", styler.dim(line));
     }
     print_human_dependency_updates(result, &styler);
-    print_human_relation_updates(result, &styler);
+    print_human_relation_updates(result, &styler, reqs.take());
     if let Some(clip) = &result.clip {
         if let Some(history) = &clip.history {
             println!("  {}", styler.dim(&format_clip_history_summary(history)));
@@ -4496,6 +4599,7 @@ pub(super) fn print_human_item_success(
             RelationHumanOutput::empty(),
             result.dry_run,
             &styler,
+            None,
         );
     }
     if let Some(note) = result.project_note.as_ref()
@@ -4522,6 +4626,7 @@ pub(super) fn print_human_item_success(
             )
         );
     }
+    print_req_card(reqs.take(), result.dry_run, &styler);
     print_consumed_links(result, &styler);
 }
 
@@ -4875,6 +4980,7 @@ pub(super) fn print_human_pomodoro_close_success(
     prefix: &str,
     ordinal: &str,
     _target_label: &str,
+    reqs: Option<ReqHuman<'_>>,
 ) {
     let verb = if result.dry_run {
         "would close"
@@ -4950,13 +5056,14 @@ pub(super) fn print_human_pomodoro_close_success(
         ));
     }
     println!("{prefix} {ordinal}{header}");
-    print_close_body(result, close, styler);
+    print_close_body(result, close, styler, reqs);
 }
 
 fn print_close_body(
     result: &CaptureItemResult,
     close: &PomodoroCloseSummaryJson,
     styler: &Styler,
+    reqs: Option<ReqHuman<'_>>,
 ) {
     // Link forms: existing link status and ledger lines.
     if result.routed
@@ -5177,6 +5284,7 @@ fn print_close_body(
         },
         result.dry_run,
         styler,
+        reqs,
     );
     print_human_keep_moving_rows(
         &close.keep_moving,
@@ -5311,6 +5419,7 @@ pub(super) fn print_human_pomodoro_past_success(
     styler: &Styler,
     prefix: &str,
     ordinal: &str,
+    reqs: Option<ReqHuman<'_>>,
 ) {
     let close = &*past.close;
     let verb = if result.dry_run {
@@ -5379,7 +5488,7 @@ pub(super) fn print_human_pomodoro_past_success(
     }
     // Records never overrun and never decrement by construction.
     println!("{prefix} {ordinal}{header}");
-    print_close_body(result, close, styler);
+    print_close_body(result, close, styler, reqs);
 }
 
 fn format_event_hhmm(value: &str) -> String {
@@ -5665,6 +5774,7 @@ pub(super) fn print_human_task_dependency_success(
     prefix: &str,
     ordinal: &str,
     target_label: &str,
+    reqs: Option<ReqHuman<'_>>,
 ) {
     let verb = if result.dry_run {
         "would update"
@@ -5674,7 +5784,7 @@ pub(super) fn print_human_task_dependency_success(
     println!("{prefix} {verb}  {ordinal}{target_label}");
     print_human_owner_status_row(result, styler);
     print_human_dependency_updates(result, styler);
-    print_human_relation_updates(result, styler);
+    print_human_relation_updates(result, styler, reqs);
 }
 
 fn print_human_owner_status_row(result: &CaptureItemResult, styler: &Styler) {
@@ -5841,7 +5951,11 @@ fn parent_previous_status(
     })
 }
 
-fn print_human_relation_updates(result: &CaptureItemResult, styler: &Styler) {
+fn print_human_relation_updates(
+    result: &CaptureItemResult,
+    styler: &Styler,
+    mut reqs: Option<ReqHuman<'_>>,
+) {
     for update in &result.relation_updates {
         println!("  {}", human_relation_line(result.dry_run, update));
     }
@@ -5862,9 +5976,11 @@ fn print_human_relation_updates(result: &CaptureItemResult, styler: &Styler) {
                 &complete.task_complete,
                 result.dry_run,
                 styler,
+                reqs.take(),
             );
         }
     }
+    print_req_card(reqs.take(), result.dry_run, styler);
     for hide in &result.relation_label_hides {
         if hide.action != RelationLabelHideAction::Hide {
             continue;
@@ -6196,6 +6312,7 @@ pub(super) fn print_human_task_toggle_success(
         },
         result.dry_run,
         styler,
+        None,
     );
 }
 
@@ -6679,6 +6796,7 @@ pub(super) fn print_human_task_complete_success(
     prefix: &str,
     ordinal: &str,
     target_label: &str,
+    reqs: Option<ReqHuman<'_>>,
 ) {
     let Some(summary) = result.task_complete.as_ref() else {
         let verb = if result.dry_run {
@@ -6687,6 +6805,7 @@ pub(super) fn print_human_task_complete_success(
             "completed"
         };
         println!("{prefix} {verb}  {ordinal}{target_label}");
+        print_req_card(reqs, result.dry_run, styler);
         return;
     };
     let block_label = styler.cyan(&format!("^{}", summary.block_id));
@@ -6704,6 +6823,7 @@ pub(super) fn print_human_task_complete_success(
         println!(
             "{prefix} already done {body}  {ordinal}{target_label} {block_label} · nothing to change"
         );
+        print_req_card(reqs, result.dry_run, styler);
         return;
     }
     let verb = if result.dry_run {
@@ -6733,7 +6853,7 @@ pub(super) fn print_human_task_complete_success(
     println!(
         "{prefix} {verb} {head}  {ordinal}{target_label} {block_label}{pulled}"
     );
-    print_task_complete_details(summary, result.dry_run, styler);
+    print_task_complete_details(summary, result.dry_run, styler, reqs);
 }
 
 /// Relation rows, groups, and held metadata for one human successor
@@ -6767,7 +6887,9 @@ pub(super) fn print_human_successor_rows(
     relation: RelationHumanOutput<'_>,
     dry_run: bool,
     styler: &Styler,
+    reqs: Option<ReqHuman<'_>>,
 ) {
+    print_req_card(reqs, dry_run, styler);
     let mut offered: Vec<&TaskCompleteUnblockedJson> =
         unblocked.iter().filter(|row| row.offer.is_some()).collect();
     offered.sort_by_key(|row| {
@@ -7777,6 +7899,7 @@ pub(super) fn print_capture_error(
                     },
                     false,
                     &styler,
+                    None,
                 );
                 print_human_keep_moving_rows(
                     &moving,
@@ -8289,6 +8412,14 @@ impl CaptureError {
 
     pub(crate) fn with_typed(mut self, typed: CaptureFailureKind) -> Self {
         self.typed = Some(typed);
+        self
+    }
+
+    pub(super) fn with_extra(
+        mut self,
+        extra: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        self.extra = Some(extra);
         self
     }
 

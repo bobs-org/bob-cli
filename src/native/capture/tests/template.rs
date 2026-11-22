@@ -23,6 +23,7 @@ fn template_request(vault: &Path, raw_text: &str) -> CaptureRequest {
         complete_offers: Vec::new(),
         cancel_offers: Vec::new(),
         offer_verdicts: Vec::new(),
+        carry: Vec::new(),
         refuse_override: false,
         require_inbox_route_choice: false,
         require_pull_in_choice: false,
@@ -30,6 +31,8 @@ fn template_request(vault: &Path, raw_text: &str) -> CaptureRequest {
         argv: false,
         template_origin: None,
         raw_text: raw_text.to_string(),
+        req_choice: false,
+        req_selection: None,
         selection: crate::native::task_complete::SuccessorSelection::None,
     }
 }

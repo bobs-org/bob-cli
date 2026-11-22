@@ -1173,6 +1173,7 @@ mod disk_guard_tests {
                 outcome: OfferVerdictOutcome::Done,
                 reason: String::new(),
             }],
+            carry: Vec::new(),
             refuse_override: false,
             require_inbox_route_choice: false,
             require_pull_in_choice: false,
@@ -1180,6 +1181,8 @@ mod disk_guard_tests {
             argv: false,
             template_origin: None,
             raw_text: "!sase:bar".to_string(),
+            req_choice: false,
+            req_selection: None,
             selection: SuccessorSelection::None,
         };
         let mut batch = super::super::plan_capture_batch(&request, None)

@@ -766,6 +766,7 @@ fn plan_notebook_note(
         pomodoro_refs: Vec::new(),
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
+        req_owners: Vec::new(),
     })
 }
 
@@ -908,6 +909,7 @@ fn plan_notebook_sub_note(
         pomodoro_refs: Vec::new(),
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
+        req_owners: Vec::new(),
     })
 }
 

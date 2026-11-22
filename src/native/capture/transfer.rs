@@ -421,6 +421,7 @@ pub(super) fn plan_transfer_item(
         pomodoro_refs: Vec::new(),
         task_block_refs,
         project_move_landings: Vec::new(),
+        req_owners: Vec::new(),
     })
 }
 

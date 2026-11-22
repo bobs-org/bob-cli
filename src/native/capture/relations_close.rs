@@ -37,6 +37,8 @@ pub(super) struct RelationCloseReports {
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) task_block_refs: Vec<TaskBlockRef>,
     pub(super) day_file: Option<String>,
+    pub(super) req_owners:
+        Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
 }
 
 /// Collect Added/Relabeled edges whose label is in the effective list
@@ -348,6 +350,7 @@ pub(super) fn plan_relation_close_effects(
         pomodoro_refs: complete.pomodoro_refs,
         task_block_refs,
         day_file: complete.day_file,
+        req_owners: complete.req_owners,
     })
 }
 

@@ -87,6 +87,22 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) album_files: Vec<AlbumFileJson>,
     /// Pre-existing album neighbours whose walk lines changed in this batch.
     pub(super) walk_files: Vec<super::output::WalkFileJson>,
+    /// Frozen pre-close requirement owners collected after the successor
+    /// net, in closing order across the batch.
+    pub(super) req_owners:
+        Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
+    /// Structural carry/drop plan applied by the req post-pass. Empty
+    /// when the batch wrote no requirement bytes.
+    pub(super) req_write_plan:
+        crate::native::task_complete::req_writes::ReqWritePlan,
+    /// Navigation pin resolved against the requirement-first card.
+    /// Task-offer pins stay on `CaptureRequest::jump_offer`.
+    pub(super) req_jump:
+        Option<crate::native::task_complete::req_verdicts::ReqCardTarget>,
+    /// True when this plan used the requirement-first number space.
+    pub(super) req_aware: bool,
+    /// Applied requirement receipts, filled after the final plan.
+    pub(super) req_outcomes: Vec<super::req_choice::ReqOutcomeJson>,
 }
 
 /// One reference item's staged ref job plus its position in the
@@ -108,6 +124,10 @@ pub(super) struct PlannedCaptureItem {
     /// Project-note move landings for tracker forwarding. The batch loop
     /// remaps tracked roots before ordinary forwarding; never serialized.
     pub(super) project_move_landings: Vec<ProjectMoveLanding>,
+    /// Pre-close requirement forests for managed Done items, in close
+    /// order. Empty when this item did not close an eligible owner.
+    pub(super) req_owners:
+        Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
 }
 
 #[derive(Clone)]
@@ -1053,6 +1073,31 @@ pub(super) fn plan_capture_batch_with_config_path(
         Path::new(&day_relative),
         request.dry_run,
     )?;
+    // Requirement carry/drop writes and pull-in links run on the same
+    // staged snapshot, after offer verdicts and before inbox-route
+    // detection. Probe plans keep `req_selection = None` so this pass
+    // collects owners without writing.
+    let day_before_req = planner.peek_text(&day_file);
+    let (req_owners, req_write_plan, req_jump) =
+        super::req_choice::plan_req_post_pass(
+            &mut planner,
+            request,
+            &items,
+            &dependency_ctx,
+            today,
+            &day_file,
+            &day_relative,
+        )?;
+    // Carry-pulled links insert under today's open Pomodoro after item
+    // refs were recorded. Forward tracked headlines through that rewrite
+    // so `finish_with_successor_reasons` still finds each entry.
+    let day_after_req = planner.peek_text(&day_file);
+    if let (Some(pre), Some(post)) =
+        (day_before_req.as_deref(), day_after_req.as_deref())
+        && pre != post
+    {
+        block_tracker.track_item(Some(pre), Some(post), Vec::new());
+    }
     // Move-choice report was precomputed before item planning (with mint
     // and splice); reuse it before pull-in and inbox-route refusals.
     let move_choice = move_choice_report;
@@ -1240,6 +1285,11 @@ pub(super) fn plan_capture_batch_with_config_path(
         catalog_walks: dependency_ctx.catalog_walk_count(),
         #[cfg(test)]
         snapshot_read_counts: dependency_ctx.snapshot_read_counts(),
+        req_owners,
+        req_write_plan,
+        req_jump,
+        req_aware: super::req_choice::is_req_aware(request),
+        req_outcomes: Vec::new(),
     })
 }
 
@@ -1970,6 +2020,7 @@ fn plan_ref_item(
         pomodoro_refs: Vec::new(),
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
+        req_owners: Vec::new(),
     };
     Ok((planned, staged))
 }
@@ -2643,6 +2694,7 @@ pub(super) fn plan_capture_item(
                 .chain(toggle.relation.task_block_refs.iter().cloned())
                 .collect(),
             project_move_landings: Vec::new(),
+            req_owners: Vec::new(),
         };
         if let Some((original, applied)) = marker_retype {
             let marker = parsed.type_marker.as_ref().ok_or_else(|| {
@@ -3699,6 +3751,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_refs: Vec::new(),
                 task_block_refs: vec![task_ref],
                 project_move_landings: Vec::new(),
+                req_owners: Vec::new(),
             });
         }
         // Clipboard notes are direct children with no wrapper bullet: the
@@ -4241,6 +4294,9 @@ pub(super) fn plan_capture_item(
     let mut relation_merge_output = RelationMergeOutput::default();
     let mut close_day_file: Option<String> = None;
     let mut close_task_block_refs: Vec<TaskBlockRef> = Vec::new();
+    let mut close_req_owners: Vec<
+        crate::native::task_complete::req_close::ReqCloseOwner,
+    > = Vec::new();
     let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
     if !parsed.relations.is_empty() {
@@ -4294,6 +4350,7 @@ pub(super) fn plan_capture_item(
         };
         pomodoro_refs.extend(close.pomodoro_refs);
         close_task_block_refs = close.task_block_refs;
+        close_req_owners = close.req_owners;
         close_day_file = close.day_file;
         if let Some(block_id) = reports.owner_block_id.as_deref() {
             let relocated = locate_task_by_block_id(
@@ -4684,6 +4741,7 @@ pub(super) fn plan_capture_item(
             refs
         },
         project_move_landings: Vec::new(),
+        req_owners: close_req_owners,
     };
 
     if let (Some(clause), Some(block_id)) =
@@ -5834,6 +5892,9 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let mut relation_merge_output = RelationMergeOutput::default();
     let mut close_day_file: Option<String> = None;
     let mut close_task_block_refs: Vec<TaskBlockRef> = Vec::new();
+    let mut close_req_owners: Vec<
+        crate::native::task_complete::req_close::ReqCloseOwner,
+    > = Vec::new();
     let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
     let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
         Vec::new();
@@ -5883,6 +5944,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         };
         pomodoro_refs.extend(close.pomodoro_refs);
         close_task_block_refs = close.task_block_refs;
+        close_req_owners = close.req_owners;
         close_day_file = close.day_file;
     }
     let (dependency_update, dependency_updates) =
@@ -6045,5 +6107,6 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             refs
         },
         project_move_landings: Vec::new(),
+        req_owners: close_req_owners,
     })
 }

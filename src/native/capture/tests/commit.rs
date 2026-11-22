@@ -670,6 +670,7 @@ fn move_choice_capture_rolls_back_every_file_when_source_replace_fails() {
         complete_offers: Vec::new(),
         cancel_offers: Vec::new(),
         offer_verdicts: Vec::new(),
+        carry: Vec::new(),
         refuse_override: false,
         require_inbox_route_choice: false,
         require_pull_in_choice: false,
@@ -677,6 +678,8 @@ fn move_choice_capture_rolls_back_every_file_when_source_replace_fails() {
         argv: false,
         template_origin: None,
         raw_text: "Finish @cash^x@\n- ^^\n".to_string(),
+        req_choice: false,
+        req_selection: None,
         selection: crate::native::task_complete::SuccessorSelection::None,
     };
     let mut batch = plan_capture_batch(&request, None)
@@ -828,6 +831,7 @@ fn merge_fixture() -> (
         complete_offers: Vec::new(),
         cancel_offers: Vec::new(),
         offer_verdicts: Vec::new(),
+        carry: Vec::new(),
         refuse_override: false,
         require_inbox_route_choice: false,
         require_pull_in_choice: false,
@@ -835,6 +839,8 @@ fn merge_fixture() -> (
         argv: false,
         template_origin: None,
         raw_text: "@a+s > @z+t".to_string(),
+        req_choice: false,
+        req_selection: None,
         selection: crate::native::task_complete::SuccessorSelection::None,
     };
     (dir, request, guard)

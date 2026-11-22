@@ -469,6 +469,11 @@ mod tests {
             record_files_opened: 0,
             album_files: Vec::new(),
             walk_files: Vec::new(),
+            req_owners: Vec::new(),
+            req_write_plan: Default::default(),
+            req_jump: None,
+            req_aware: false,
+            req_outcomes: Vec::new(),
         }
     }
 

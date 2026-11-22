@@ -208,9 +208,14 @@ fn double_dash_offers_long_forms_only() {
     assert!(names.contains(&"--pull-in".to_string()));
     assert!(names.contains(&"--complete-offer".to_string()));
     assert!(names.contains(&"--cancel-offer".to_string()));
+    assert!(names.contains(&"--carry".to_string()));
     assert!(
         !names.contains(&"--require-pull-in-choice".to_string()),
         "hidden --require-pull-in-choice must stay out of completion: {names:?}"
+    );
+    assert!(
+        !names.contains(&"--req-choice".to_string()),
+        "hidden --req-choice must stay out of completion: {names:?}"
     );
     assert!(
         !names.contains(&"--refuse-override".to_string()),
@@ -297,6 +302,7 @@ fn offer_verdict_values_are_free_text() {
     for (flag, value) in [
         ("--complete-offer", "PICKS"),
         ("--cancel-offer", "N|KEY[=REASON]"),
+        ("--carry", "PICKS"),
     ] {
         let output = complete(&["bob", "capture", flag, ""]);
         assert_success(&output);

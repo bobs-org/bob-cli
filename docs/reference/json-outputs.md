@@ -246,8 +246,9 @@ Selection is explicit. Fields:
 | A note-pull offered row | `offer.note` is the requested source, matching `pull_in.groups[].note`; `note_path` is the final home after a later move |
 | An offered row with a relation reason | `relation: {label, key, event, after}`; `event` is `parked` or `done`, and `after[]` identifies the triggering tasks with `note_path`, `block_id`, and `text`. A relation-group row also has `offer.after`, a `note.md#^id` string |
 | A held relation row | Task identity, the relation, and `reason`: `already_planned`, `already_started`, `blocked`, `hidden`, or `waits_for` |
-| Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; optional `groups[]` and `copy: {title, capsule, glyph}` |
-| `pull_in.groups[]` | `group`, optional `project` or note-pull `note`, `copy: {title, why?, tag?, fold?, glyph}`, and optional `folded` counts; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, and `event` |
+| Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; always-present `reqs: {supported, pending}`; optional `groups[]` and `copy: {title, capsule, glyph}` |
+| `pull_in.groups[]` | `group`, optional `project` or note-pull `note`, optional requirement `kind`/`owner`/`rows`, `copy: {title, why?, tag?, fold?, glyph, scope?, history?, footer?, hint?}`, and optional `folded` counts; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, and `event` |
+| Batch `req_outcomes[]` | Applied requirement verdicts (`met`, `drop`, `carry`, `carry_pulled`); omitted when empty |
 
 Empty `groups` and absent `copy` are omitted. See the [successor JSON contract](../task-dependencies.md#125-reporting-model)
 and [relation events](../task-dependencies.md#1218-relation-successors-starts-after).

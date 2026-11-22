@@ -2199,6 +2199,7 @@ pub(super) fn plan_project_note_item(
                     .collect()
             },
         ),
+        req_owners: Vec::new(),
     })
 }
 
@@ -3272,6 +3273,7 @@ mod tests {
             complete_offers: Vec::new(),
             cancel_offers: Vec::new(),
             offer_verdicts: Vec::new(),
+            carry: Vec::new(),
             refuse_override: false,
             require_inbox_route_choice: false,
             require_pull_in_choice: false,
@@ -3279,6 +3281,8 @@ mod tests {
             argv: false,
             template_origin: None,
             raw_text: String::new(),
+            req_choice: false,
+            req_selection: None,
             selection: SuccessorSelection::None,
         };
         let today = test_now().date();

@@ -3505,6 +3505,9 @@ pub(super) fn plan_dependency_only_item(
     let mut relation_completes: Vec<RelationCompleteJson> = Vec::new();
     let mut relation_merge_output = RelationMergeOutput::default();
     let mut close_day_file: Option<String> = None;
+    let mut close_req_owners: Vec<
+        crate::native::task_complete::req_close::ReqCloseOwner,
+    > = Vec::new();
     if !parsed.relations.is_empty() {
         let relation_owner = RelationOwner::from_dependent(
             ctx,
@@ -3546,6 +3549,7 @@ pub(super) fn plan_dependency_only_item(
         pomodoro_refs.extend(close.pomodoro_refs);
         task_block_refs.extend(close.task_block_refs);
         close_day_file = close.day_file;
+        close_req_owners = close.req_owners;
     }
     let relocated = locate_task_by_block_id(
         ctx,
@@ -3667,6 +3671,7 @@ pub(super) fn plan_dependency_only_item(
         pomodoro_refs,
         task_block_refs,
         project_move_landings: Vec::new(),
+        req_owners: close_req_owners,
     })
 }
 

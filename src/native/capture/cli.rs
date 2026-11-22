@@ -613,6 +613,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .disable_help_flag(true)
         .arg(bob_dir_arg())
         .arg(cancel_offer_arg())
+        .arg(carry_arg())
         .arg(clip_arg())
         .arg(complete_offer_arg())
         .arg(drawer_arg())
@@ -628,6 +629,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(no_ref_arg())
         .arg(pull_in_arg())
         .arg(refuse_override_arg())
+        .arg(req_choice_arg())
         .arg(require_inbox_route_choice_arg())
         .arg(require_pull_in_choice_arg())
         .arg(route_arg())
@@ -645,8 +647,17 @@ pub(super) fn cancel_offer_arg() -> Arg {
         .value_name("N|KEY[=REASON]")
         .action(ArgAction::Append)
         .help(
-            "Cancel one offer; REASON goes to its Cancel Log. Repeatable, one offer per flag",
+            "Cancel one offer or drop a requirement; REASON goes to its Cancel Log. Repeatable, one pick per flag",
         )
+}
+
+pub(super) fn carry_arg() -> Arg {
+    Arg::new("carry")
+        .long("carry")
+        .short('k')
+        .value_name("PICKS")
+        .action(ArgAction::Append)
+        .help("Carry requirement(s) as own tasks; PICKS is a comma list. Repeatable")
 }
 
 pub(super) fn clip_arg() -> Arg {
@@ -664,7 +675,9 @@ pub(super) fn complete_offer_arg() -> Arg {
         .short('x')
         .value_name("PICKS")
         .action(ArgAction::Append)
-        .help("Mark offer(s) Done; PICKS is a comma list. Repeatable")
+        .help(
+            "Mark offer(s) Done or acknowledge requirement(s) as Met; PICKS is a comma list. Repeatable",
+        )
 }
 
 pub(super) fn bob_dir_arg() -> Arg {
@@ -726,7 +739,7 @@ pub(super) fn jump_offer_arg() -> Arg {
         .long("jump-offer")
         .short('j')
         .value_name("N|KEY")
-        .help("Focus this offer after the capture (any verdict); one offer")
+        .help("Focus this offer or requirement after the capture (any verdict); one pick")
 }
 
 pub(super) fn move_in_arg() -> Arg {
@@ -763,7 +776,7 @@ pub(super) fn pull_in_arg() -> Arg {
         .short('p')
         .value_name("PICKS")
         .help(
-            "Pull in successor offers: all, none, or a comma list of offer numbers and keys ($<N> in TEXT is still priority)",
+            "Pull in successor offers or carry a requirement into today's session: all, none, or a comma list of numbers and keys ($<N> in TEXT is still priority); all never selects requirements",
         )
 }
 
@@ -780,6 +793,14 @@ pub(super) fn refuse_override_arg() -> Arg {
         .long("refuse-override")
         .action(ArgAction::SetTrue)
         .hide(true)
+}
+
+pub(super) fn req_choice_arg() -> Arg {
+    Arg::new("req-choice")
+        .long("req-choice")
+        .action(ArgAction::SetTrue)
+        .hide(true)
+        .help("Internal handshake: number requirements first on the successor card")
 }
 
 pub(super) fn require_inbox_route_choice_arg() -> Arg {
@@ -926,12 +947,23 @@ pub(super) struct CaptureRequest {
     pub(super) jump_offer: Option<String>,
     pub(super) complete_offers: Vec<String>,
     pub(super) cancel_offers: Vec<String>,
+    /// Raw `-k/--carry` selectors, resolved against the probe card by
+    /// `plan_with_pull_in`. Empty when no `--carry` flag was given.
+    pub(super) carry: Vec<String>,
     /// Staged card verdicts resolved against the probe offer list by
     /// `plan_with_pull_in`. Empty when no `-x`/`-X` flag was given.
     pub(super) offer_verdicts: Vec<super::offer_verdicts::OfferVerdictRequest>,
     pub(super) refuse_override: bool,
     pub(super) require_inbox_route_choice: bool,
     pub(super) require_pull_in_choice: bool,
+    /// Hidden handshake: a req-aware client re-previews with this flag
+    /// so numbers address requirements first. Old clients pass
+    /// `--require-pull-in-choice` alone and keep offer-only numbering.
+    pub(super) req_choice: bool,
+    /// Frozen requirement verdicts from the probe, applied once by the
+    /// final batch post-pass. `None` on the probe so writes do not run.
+    pub(super) req_selection:
+        Option<crate::native::task_complete::req_verdicts::ReqVerdictSelection>,
     pub(super) expect_past_windows: Option<String>,
     pub(super) argv: bool,
     pub(super) template_origin: Option<String>,
@@ -1020,11 +1052,17 @@ impl CaptureRequest {
                 .get_many::<String>("cancel-offer")
                 .map(|values| values.cloned().collect())
                 .unwrap_or_default(),
+            carry: matches
+                .get_many::<String>("carry")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
             offer_verdicts: Vec::new(),
             refuse_override: matches.get_flag("refuse-override"),
             require_inbox_route_choice: matches
                 .get_flag("require-inbox-route-choice"),
             require_pull_in_choice: matches.get_flag("require-pull-in-choice"),
+            req_choice: matches.get_flag("req-choice"),
+            req_selection: None,
             expect_past_windows: matches
                 .get_one::<String>("expect-past-windows")
                 .cloned(),

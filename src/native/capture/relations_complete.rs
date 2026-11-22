@@ -16,6 +16,8 @@ pub(super) struct RelationCompleteReports {
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) task_block_refs: Vec<TaskBlockRef>,
     pub(super) day_file: Option<String>,
+    pub(super) req_owners:
+        Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
 }
 
 /// Plan the complete-label commits for one item's already-staged
@@ -82,6 +84,9 @@ pub(super) fn plan_relation_completes(
                     reports.day_file =
                         complete.task_complete_refs.day_file.clone();
                 }
+                reports
+                    .req_owners
+                    .extend(complete.task_complete_refs.req_owners);
             }
             reports.completes.push(complete.row);
         }
@@ -123,6 +128,7 @@ struct CompleteTracking {
     pomodoro_refs: Vec<PomodoroBlockRef>,
     task_block_refs: Vec<TaskBlockRef>,
     day_file: Option<String>,
+    req_owners: Vec<crate::native::task_complete::req_close::ReqCloseOwner>,
 }
 
 struct PlannedSourceComplete {
@@ -352,6 +358,7 @@ fn plan_source_complete(
                 pomodoro_refs: outcome.pomodoro_refs.clone(),
                 task_block_refs: outcome.task_block_refs.clone(),
                 day_file: outcome.top_day_file.clone(),
+                req_owners: outcome.req_owners.clone(),
             };
             Ok(Some(PlannedSourceComplete {
                 row: RelationCompleteJson {

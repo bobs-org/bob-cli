@@ -30,9 +30,7 @@ pub(super) struct CompleteExistingTaskOutcome {
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) task_block_refs: Vec<TaskBlockRef>,
     /// Pre-close requirement forests in close order. Empty when the
-    /// already-done path skips the tree close. The card/view phases
-    /// (bob-cli-on.8.1.2+) read this field.
-    #[allow(dead_code)]
+    /// already-done path skips the tree close.
     pub(super) req_owners: Vec<engine::req_close::ReqCloseOwner>,
 }
 
@@ -162,6 +160,7 @@ pub(super) fn plan_task_complete_item(
         pomodoro_refs: outcome.pomodoro_refs.clone(),
         task_block_refs: outcome.task_block_refs.clone(),
         project_move_landings: Vec::new(),
+        req_owners: outcome.req_owners,
     })
 }
 
@@ -878,8 +877,56 @@ pub(super) fn complete_existing_task(
         top_day_file: top_day_file.clone(),
         pomodoro_refs: pomodoro_refs.clone(),
         task_block_refs: task_block_refs.clone(),
-        req_owners: outcome.req_owners.clone(),
+        req_owners: overlay_pre_item_req_owners(
+            outcome.req_owners.clone(),
+            planner,
+            bob_dir,
+            &settings,
+        ),
     })
+}
+
+/// Re-collect each owner's forest from the planner's pre-item bytes.
+///
+/// Relation complete stages a LINKS drawer before the tree close, and
+/// `req_forest` treats that drawer as a structural container that swallows
+/// same-indent first-child requirements. `!` and `~` of the same starting
+/// vault must share owner keys, so the snapshot is the note as it existed
+/// before this item's writes.
+fn overlay_pre_item_req_owners(
+    owners: Vec<engine::req_close::ReqCloseOwner>,
+    planner: &CaptureBatchPlanner,
+    bob_dir: &Path,
+    settings: &note_tasks::NoteTaskSettings,
+) -> Vec<engine::req_close::ReqCloseOwner> {
+    owners
+        .into_iter()
+        .map(|owner| {
+            let absolute = bob_dir.join(&owner.path);
+            let Some((original, _)) = planner.loaded_texts(&absolute) else {
+                return owner;
+            };
+            let scan = note_tasks::scan(&original, settings);
+            let task = if owner.block_id.is_empty() {
+                scan.task_at(owner.line.saturating_sub(1)).cloned()
+            } else {
+                match scan.by_block_id(&owner.block_id) {
+                    BlockIdLookup::Found(task) => Some(task.clone()),
+                    _ => None,
+                }
+            };
+            let Some(task) = task else {
+                return owner;
+            };
+            engine::req_close::collect_owner(
+                &original,
+                Path::new(&owner.path),
+                &task,
+                settings,
+            )
+            .unwrap_or(owner)
+        })
+        .collect()
 }
 
 /// Pomodoro-block removal refs for placeholders retirement deleted, in

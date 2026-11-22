@@ -144,6 +144,7 @@ pub(super) fn plan_notebook_create_item(
         pomodoro_refs: Vec::new(),
         task_block_refs: Vec::new(),
         project_move_landings: Vec::new(),
+        req_owners: Vec::new(),
     })
 }
 
