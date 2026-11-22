@@ -21,7 +21,7 @@ fn settings() -> crate::native::note_tasks::NoteTaskSettings {
     note_tasks::read_settings(Path::new("/no-bob-vault"))
 }
 
-fn vectors() -> serde_json::Value {
+pub(super) fn vectors() -> serde_json::Value {
     serde_json::from_str(VECTORS).expect("valid requirement-close vectors")
 }
 
@@ -54,7 +54,7 @@ fn closing_task<'a>(
     }
 }
 
-fn collect_case(
+pub(super) fn collect_case(
     case: &serde_json::Value,
     settings: &crate::native::note_tasks::NoteTaskSettings,
 ) -> (Vec<ReqCloseOwner>, Vec<ReqCloseGroup>) {
@@ -242,10 +242,13 @@ fn fixture_lists_every_row_case_without_renumbering() {
     assert_eq!(vectors["family"], "rows");
     assert_eq!(vectors["contract"], "docs/task-requirements.md §7");
     let cases = vectors["cases"].as_array().expect("case list");
-    assert_eq!(cases.len(), 11, "family rows freezes RV1–RV11");
-    for (index, case) in cases.iter().enumerate() {
+    let row_cases: Vec<_> = cases
+        .iter()
+        .filter(|case| case["family"] == "rows")
+        .collect();
+    assert_eq!(row_cases.len(), 11, "family rows freezes RV1–RV11");
+    for (index, case) in row_cases.iter().enumerate() {
         assert_eq!(case["id"], format!("RV{}", index + 1));
-        assert_eq!(case["family"], "rows");
     }
 }
 
@@ -344,7 +347,12 @@ fn copy_catalog_matches_shared_fixture() {
 fn fixture_vectors_match_collector_and_groups() {
     let vectors = vectors();
     let settings = settings();
-    for case in vectors["cases"].as_array().expect("case list") {
+    for case in vectors["cases"]
+        .as_array()
+        .expect("case list")
+        .iter()
+        .filter(|case| case["family"] == "rows")
+    {
         let id = case["id"].as_str().unwrap_or("?");
         let (owners, groups) = collect_case(case, &settings);
         let expected_owners =

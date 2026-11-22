@@ -1297,6 +1297,424 @@
           }
         ]
       }
+    },
+    {
+      "id": "RV12",
+      "family": "choices",
+      "title": "every same-row final verdict pair",
+      "input": {
+        "base_case": "RV1",
+        "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+        "pairs": [
+          {
+            "left": "met",
+            "right": "met",
+            "result": "idempotent"
+          },
+          {
+            "left": "met",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "drop",
+            "result": "idempotent"
+          },
+          {
+            "left": "drop",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "carry",
+            "result": "idempotent"
+          },
+          {
+            "left": "carry",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry_pulled",
+            "result": "idempotent"
+          }
+        ]
+      },
+      "expect": {
+        "pair_results": [
+          {
+            "left": "met",
+            "right": "met",
+            "result": "idempotent"
+          },
+          {
+            "left": "met",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "met",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "drop",
+            "result": "idempotent"
+          },
+          {
+            "left": "drop",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "drop",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry",
+            "right": "carry",
+            "result": "idempotent"
+          },
+          {
+            "left": "carry",
+            "right": "carry_pulled",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "met",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "drop",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry",
+            "result": "offer_verdict_conflict"
+          },
+          {
+            "left": "carry_pulled",
+            "right": "carry_pulled",
+            "result": "idempotent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV13",
+      "family": "choices",
+      "title": "structural ancestor choice rejects an explicit descendant choice",
+      "input": {
+        "base_case": "RV1",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "drop"
+          },
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": "req_verdict_overlap",
+        "ancestor_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+        "descendant_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      }
+    },
+    {
+      "id": "RV14",
+      "family": "choices",
+      "title": "navigation pin may target a descendant owned by an ancestor choice",
+      "input": {
+        "base_case": "RV1",
+        "requests": [
+          {
+            "selector": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "carry"
+          }
+        ],
+        "jump": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88"
+      },
+      "expect": {
+        "error_code": null,
+        "verdicts": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "carry"
+          }
+        ],
+        "jump": {
+          "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+          "kind": "requirement",
+          "owner": "Ship the exporter"
+        }
+      }
+    },
+    {
+      "id": "RV15",
+      "family": "choices",
+      "title": "shared numbering puts requirements first and mark-all skips them",
+      "input": {
+        "base_case": "RV1",
+        "task_offer_keys": [
+          "offer:a",
+          "offer:b"
+        ]
+      },
+      "expect": {
+        "numbered": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "n": 1,
+            "kind": "requirement"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "n": 2,
+            "kind": "requirement"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "n": 3,
+            "kind": "requirement"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "n": 4,
+            "kind": "requirement"
+          },
+          {
+            "key": "offer:a",
+            "n": 5,
+            "kind": "task_offer"
+          },
+          {
+            "key": "offer:b",
+            "n": 6,
+            "kind": "task_offer"
+          }
+        ],
+        "mark_all": [
+          "offer:a",
+          "offer:b"
+        ]
+      }
+    },
+    {
+      "id": "RV16",
+      "family": "choices",
+      "title": "folding retains staged descendants and met unfolds them",
+      "input": {
+        "base_case": "RV1",
+        "actions": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "verdict": "carry"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "drop"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "verdict": "met"
+          }
+        ],
+        "toggle_key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+        "toggle": [
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "drop"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          },
+          {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe",
+            "verdict": "carry"
+          }
+        ]
+      },
+      "expect": {
+        "after_drop": {
+          "visible": [
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+          ],
+          "hidden": {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "hidden_by": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf"
+          },
+          "nested_go_with_it": {
+            "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "count": 1
+          },
+          "overlap_code": "req_verdict_overlap"
+        },
+        "after_met": {
+          "visible": [
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1~84afa836",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1~11514ecf",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+            "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.2~a59403fe"
+          ],
+          "choices": [
+            {
+              "key": "Tasks.md#^export@4cf95b07b40730583f6d1e1bc0f25dc6ecd0b205d2052000a7d1a3e4ce3fe198/req/1.1.1~ec98ff88",
+              "verdict": "carry"
+            }
+          ],
+          "error_code": null
+        },
+        "toggle_final": "met"
+      }
+    },
+    {
+      "id": "RV17",
+      "family": "choices",
+      "title": "disjoint choices across closing owners stay independent",
+      "input": {
+        "base_case": "RV4",
+        "requests": [
+          {
+            "selector": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "verdict": "carry"
+          },
+          {
+            "selector": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32/req/1~46c0aa32",
+            "verdict": "drop"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": null,
+        "verdicts": [
+          {
+            "key": "Tasks.md#^child@3332592137d4aca4a04940b060df4d6ca8ebab5475f2d69bb73ef1f5850f0277/req/1~cc8b8daf",
+            "verdict": "carry",
+            "owner_task_key": "Tasks.md#^child"
+          },
+          {
+            "key": "Tasks.md#^parent@2a589c99d11757d5fac639210a5356224bdfb41055c4ce00e6ae35f9db9d9f32/req/1~46c0aa32",
+            "verdict": "drop",
+            "owner_task_key": "Tasks.md#^parent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "RV18",
+      "family": "choices",
+      "title": "same-labelled branches reordered after preview are stale",
+      "input": {
+        "base_case": "RV10",
+        "source_lines_after": [
+          "- [ ] #task Owner ^owner",
+          "\t- [ ] Same",
+          "\t\t- [ ] Right child",
+          "\t- [ ] Same",
+          "\t\t- [ ] Left child"
+        ],
+        "requests": [
+          {
+            "selector": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de",
+            "verdict": "drop"
+          }
+        ]
+      },
+      "expect": {
+        "error_code": "req_close_stale",
+        "old_key": "Tasks.md#^owner@35aad3849db9d65d66a97e1fbae3961fa0b11b4d5fad8cab2b8aa78dc04fa26d/req/1~2a98b1de"
+      }
+    },
+    {
+      "id": "RV19",
+      "family": "choices",
+      "title": "duplicate closing owner identities refuse safely",
+      "input": {
+        "base_case": "RV4",
+        "duplicate_owner_index": 0
+      },
+      "expect": {
+        "error_code": "req_close_stale"
+      }
     }
   ]
 }
