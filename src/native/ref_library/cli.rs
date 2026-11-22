@@ -194,7 +194,7 @@ pub(crate) fn list_command() -> ClapCommand {
                 .value_name("TYPE")
                 .num_args(1..)
                 .value_delimiter(',')
-                .help("Library subdirectory, such as papers, blogs, docs, chat, or ai (comma-separated)"),
+                .help("Library subdirectory, such as papers, blogs, podcasts, docs, chat, or ai (comma-separated)"),
         )
         .after_help(
             "With no filter option at all, list shows the reading queue (queued and started notes) in every format. Any filter option searches every reading state unless -R narrows it.\n\

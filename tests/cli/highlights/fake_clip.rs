@@ -4,7 +4,8 @@
 //! copies a tiny fixture PDF to the requested `out_pdf`, and prints a canned
 //! response. Capture N reads `response-N.json` when present. Compose and
 //! render copy the fixture PDF and print `compose.json` / `render.json`
-//! (or a canned default). No test touches the network or a real browser.
+//! (or a canned default); render also keeps a copy of the `article.json`
+//! it was asked to print. No test touches the network or a real browser.
 
 use crate::support::*;
 use std::fs;
@@ -55,6 +56,10 @@ case "$request" in
     if [ -n "$out_pdf" ] && [ -f "$ROOT/fixture.pdf" ]; then
       mkdir -p "$(dirname "$out_pdf")"
       cp "$ROOT/fixture.pdf" "$out_pdf"
+    fi
+    article_json=$(printf '%s' "$request" | sed -n 's/.*"article_json":"\([^"]*\)".*/\1/p')
+    if [ -n "$article_json" ] && [ -f "$article_json" ]; then
+      cp "$article_json" "$ROOT/render-article.json"
     fi
     if [ -f "$ROOT/render.json" ]; then cat "$ROOT/render.json"; else printf '%s' '{RENDER}'; fi
     ;;
@@ -133,6 +138,13 @@ esac
     pub(crate) fn respond_render(&self, body: &str) {
         fs::write(self.root.join("render.json"), body)
             .expect("write fake render response");
+    }
+
+    /// The `article.json` payload the last `render` request named.
+    pub(crate) fn rendered_article(&self) -> serde_json::Value {
+        let raw = fs::read_to_string(self.root.join("render-article.json"))
+            .expect("read the rendered article.json copy");
+        serde_json::from_str(&raw).expect("parse the rendered article.json")
     }
 
     pub(crate) fn called(&self) -> bool {

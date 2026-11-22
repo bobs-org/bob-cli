@@ -126,9 +126,6 @@ pub(super) fn fetch_url(
 /// cap: curl aborts a download whose size it learns is over `max_bytes`,
 /// and a body that still lands over the cap is refused afterwards, so no
 /// caller ever reads more than `max_bytes`.
-// The podcast episode metadata ladder consumes this; the episode route
-// that calls the ladder lands in a later phase.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn fetch_url_capped(
     url: &str,
     dest: &Path,

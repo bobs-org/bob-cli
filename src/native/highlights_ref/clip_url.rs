@@ -557,11 +557,16 @@ pub(super) fn snake_case(text: &str) -> String {
 /// stem candidate, compared ASCII case-insensitively.
 fn strip_title_extension(title: &str) -> &str {
     for extension in [".md", ".markdown", ".txt"] {
-        if title.len() >= extension.len()
-            && title[title.len() - extension.len()..]
-                .eq_ignore_ascii_case(extension)
+        // `get` keeps a non-ASCII tail (a split character) from
+        // panicking: it simply is not an extension.
+        let Some(split) = title.len().checked_sub(extension.len()) else {
+            continue;
+        };
+        if title
+            .get(split..)
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(extension))
         {
-            return &title[..title.len() - extension.len()];
+            return &title[..split];
         }
     }
     title
@@ -998,6 +1003,16 @@ mod tests {
             "attention_is_all_you_need",
             "a trailing text extension is removed before title derivation"
         );
+    }
+
+    #[test]
+    fn title_stems_never_split_a_character() {
+        // A tail shorter than `.markdown` that ends mid-character must
+        // not panic; a title with no ASCII letters yields no stem.
+        assert_eq!(title_stem("ソフトウェア工場"), "");
+        assert_eq!(title_stem("工場.md"), "");
+        assert_eq!(title_stem("Ep 3: 工場"), "ep_3");
+        assert_eq!(short_title_stem("ソフトウェア工場.txt"), "");
     }
 
     #[test]

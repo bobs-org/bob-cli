@@ -18,7 +18,10 @@
 //!   interior ones become `<hr>`.
 //!
 //! A block element the segmenter leaves whole keeps its original markup;
-//! one that a run splits is rewrapped piece by piece.
+//! one that a run splits is rewrapped piece by piece. Top-level inline
+//! content (text outside any block, such as a trailing
+//! `<br><br>Get full access at …`) is always wrapped in a `<p>`, so every
+//! fragment is block-structured and prints inside the notes column.
 
 use std::{ops::Range, sync::OnceLock};
 
@@ -129,7 +132,8 @@ enum GroupKind {
     Block(String),
     /// A `<ul>`/`<ol>` whose lines are its items.
     List(String),
-    /// Top-level text and inline elements, split at `<br>`.
+    /// Top-level text and inline elements, split at `<br>` and always
+    /// emitted as one `<p>`.
     Inline,
     /// A block kept whole (`<pre>`, `<table>`, …): one line.
     Opaque,
@@ -652,11 +656,11 @@ fn emit(layout: &Layout, classified: &Classified) -> ShowNotes {
             .filter(|first| destinations.iter().all(|other| other == *first));
         match uniform {
             Some(Destination::Body) => {
-                tokens.push(Token::Html(group.html.clone()));
+                tokens.push(Token::Html(whole_html(layout, group)));
                 continue;
             }
             Some(Destination::Sponsors) => {
-                sponsors.push(group.html.clone());
+                sponsors.push(whole_html(layout, group));
                 continue;
             }
             _ => {}
@@ -718,6 +722,17 @@ fn emit(layout: &Layout, classified: &Classified) -> ShowNotes {
     ShowNotes { blocks, words }
 }
 
+/// A group no run splits: a block keeps its original markup, while
+/// top-level inline content is wrapped in a paragraph.
+fn whole_html(layout: &Layout, group: &Group) -> String {
+    match group.kind {
+        GroupKind::Inline => {
+            rewrap(&group.kind, &layout.lines[group.lines.clone()])
+        }
+        _ => group.html.clone(),
+    }
+}
+
 /// Rewrap the pieces of a split group in its container.
 fn rewrap(kind: &GroupKind, lines: &[Line]) -> String {
     let joined = || {
@@ -737,7 +752,7 @@ fn rewrap(kind: &GroupKind, lines: &[Line]) -> String {
                 .collect();
             format!("<{tag}>{items}</{tag}>")
         }
-        GroupKind::Inline => joined().join("<br>"),
+        GroupKind::Inline => format!("<p>{}</p>", joined().join("<br>")),
         GroupKind::Opaque | GroupKind::Rule => joined().concat(),
     }
 }
@@ -836,6 +851,14 @@ mod tests {
         );
         assert_eq!(html[1].matches("<hr>").count(), 1, "{}", html[1]);
         assert!(html[1].contains("Get full access to The Pragmatic Engineer"));
+        // The trailing call to action sits outside any block in the
+        // publisher HTML; it is emitted as its own paragraph.
+        assert!(
+            html[1].contains("<p>Get full access to The Pragmatic Engineer")
+                && html[1].ends_with("</a></p>"),
+            "{}",
+            html[1]
+        );
         assert!(!html[1].contains('\u{2060}'));
         assert!(notes.words > 400, "{}", notes.words);
     }
@@ -1027,9 +1050,23 @@ mod tests {
             None,
         );
         assert_eq!(notes.chapters().count(), 3);
+        // Text outside any block becomes a paragraph, so it prints
+        // inside the notes column; the blank `<br>` lines are dropped.
         assert_eq!(
             html_blocks(&notes),
-            vec![" <br><br>Get full access at <a href=\"https://example.com\">example.com</a>"]
+            vec!["<p>Get full access at <a href=\"https://example.com\">example.com</a></p>"]
+        );
+    }
+
+    #[test]
+    fn inline_text_between_blocks_becomes_its_own_paragraph() {
+        let notes = segment_notes(
+            "<p>One.</p>Loose <b>bold</b> text<br>second line<p>Two.</p>",
+            None,
+        );
+        assert_eq!(
+            html_blocks(&notes),
+            vec!["<p>One.</p><p>Loose <b>bold</b> text<br>second line</p><p>Two.</p>"]
         );
     }
 

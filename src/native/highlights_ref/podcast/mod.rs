@@ -1,19 +1,26 @@
 //! Podcast episode references: browserless Spotify episode metadata
 //! ([`metadata`]), show-notes segmentation ([`notes`]), cover art
-//! ([`cover`]), the publisher feed match ([`feed`]), and publisher
-//! transcript parsing ([`transcript`]).
+//! ([`cover`]), the publisher feed match ([`feed`]), publisher transcript
+//! parsing ([`transcript`]), and the episode dossier builder
+//! ([`dossier`]) that `bob ref create` (and URL ingest) print episodes
+//! through.
 //!
-//! This is a library: the episode dossier builder (`dossier.rs`) and the
-//! create and ingest routes that call it land in later phases. Every
-//! network step goes through [`super::fetch`], so each hop is validated
-//! and pinned like every other Highlights fetch, and every parser treats
-//! Spotify's undocumented page shapes defensively: an unknown shape
-//! yields nothing and never panics.
+//! Every network step goes through [`super::fetch`], so each hop is
+//! validated and pinned like every other Highlights fetch, and every
+//! parser treats Spotify's undocumented page shapes defensively: an
+//! unknown shape yields nothing and never panics.
 
 pub(crate) mod cover;
+pub(crate) mod dossier;
+// The publisher feed match library; the dossier enrichment that calls it
+// lands in a later phase.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod feed;
 pub(crate) mod metadata;
 pub(crate) mod notes;
+// The publisher transcript parser; the dossier enrichment that calls it
+// lands in a later phase.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod transcript;
 
 /// Remove the invisible characters Spotify descriptions carry (U+2060

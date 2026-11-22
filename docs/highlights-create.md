@@ -1,13 +1,15 @@
 # `bob ref create` — vault notes, Markdown, PDF, and URL targets
 
 `bob ref create <TARGET>` turns a vault note, Markdown, a local PDF, a PDF URL,
-an arXiv paper URL, or a web article URL into a Highlights-ready reference.
+an arXiv paper URL, a Spotify podcast episode, or a web article URL into a
+Highlights-ready reference.
 By default, create files the PDF in `lib/`, writes the `ref/` note and reading
 task, commits those paths together, and pushes. If intake is kept or cannot
 run safely, create leaves the PDF in `xlib/` with a queue reason for
 `bob ref scan -i` or the host's local timer to drain later. Vault notes become
 projected reading snapshots; other Markdown uses pandoc, a PDF is stamped as
-is, and web article URLs run through the web-article engine.
+is, a Spotify episode prints as an episode dossier, and web article URLs run
+through the web-article engine.
 
 ```bash
 bob ref create [OPTIONS] <TARGET>...
@@ -27,6 +29,9 @@ bob ref create https://example.com/paper.pdf -N my_paper -P sase
 
 # arXiv paper, preview only
 bob ref create https://arxiv.org/abs/1706.03762 -d -P bob
+
+# Spotify podcast episode as an episode dossier, preview only (default ref type podcasts)
+bob ref create https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC -d -P sase
 
 # Web article through the web-article engine (default ref type blogs)
 bob ref create https://example.com/article/hello -P sase
@@ -418,6 +423,7 @@ What it still does depends on the target:
 | Markdown | Returns before pandoc and XeLaTeX run. When Mermaid fences are present, prints their approximate count; dry-run never starts the adapter or browser |
 | PDF URL | Downloads the PDF with `curl`, then prints the plan |
 | arXiv | Downloads the API metadata and the PDF, then prints the plan |
+| Spotify episode | Downloads the episode metadata and cover, then prints the plan. Nothing renders |
 | Web article | Launches the browser and loads the page. Image localization and the PDF write are skipped |
 | Web article with `--html` | Skips the `curl` classification fetch, launches the browser in html-file mode, and loads the page. Image localization and the PDF write are skipped |
 
@@ -433,6 +439,7 @@ state only.
 | Local PDF (`.pdf` or `%PDF-` magic) | Stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, file stem if it passes `--name` validation, else `snake_case` |
 | PDF URL (PDF content-type or sniffed `%PDF-`) | Downloaded with `curl`, stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, URL slug, short-title stem, `<host>_<YYYYMMDD>` |
 | arXiv (`arxiv.org` abs/html/pdf) | PDF fetched from `arxiv.org/pdf/<id>`, metadata from the API | `papers` | `-T`, arXiv API title, plausible Info `/Title`, `arXiv <id>` (no version) | `-N`, short-title stem, `arxiv_<id>` (no version) |
+| Spotify episode (`open.spotify.com/episode/…`, `spotify:episode:…`, short link) | Episode dossier printed from Spotify's public metadata | `podcasts` | `-T`, episode title | `-N`, title stem, `spotify_episode_<lowercased id>` |
 | Web article (HTML 2xx or 403/429/503) | Captured with the web-article engine | `blogs` | web-article rules (`-T` overrides the title) | web-article rules (`-N`) |
 | Several web articles (2–20 URLs) | Captured in order and composed into one PDF | `blogs` | Shared title prefix or humanized name (`-T` overrides) | Collection naming waterfall above |
 
@@ -584,9 +591,10 @@ A local source file is never modified.
 
 Every route stamps `captured` as the local capture time
 (`YYYY-MM-DDTHH:mm±ZZZZ`, minute precision). URL routes also stamp
-`source_url` (cleaned URL, or `https://arxiv.org/abs/<id>` with version),
-`author`, `published` (arXiv first-version date), and always `id` (the
-stem). Local PDFs stamp `captured` and `id` (`-i` embeds the name; with
+`source_url` (cleaned URL, `https://arxiv.org/abs/<id>` with version, or
+`https://open.spotify.com/episode/<id>`), `author` (the show for a Spotify
+episode), `published` (arXiv first-version date, or an episode's local
+release date), and always `id` (the stem). Local PDFs stamp `captured` and `id` (`-i` embeds the name; with
 `-N`, `-i` embeds the name).
 
 A local PDF inside `lib/` or `xlib/` with a marker is already captured:
@@ -736,11 +744,78 @@ before any capture work:
 
 A `spotify:episode:<id>` TARGET is captured as its canonical
 `https://open.spotify.com/episode/<id>` URL. `?t=<seconds>` on a shared link
-records the shared moment and is never part of identity. An episode is
-captured through the web-article route for now; its recorded `source_url`
-is the canonical URL. Capture jobs and Keep pulls (`ingest_url`) resolve a
-short link before dedupe and fail anything but an episode as a permanent
+records the shared moment and is never part of identity. `bob ref create`
+prints an episode as an episode dossier (see
+[Spotify episodes](#spotify-episodes)); its recorded `source_url` is the
+canonical URL. Capture jobs and Keep pulls (`ingest_url`) resolve a short
+link before dedupe and fail anything but an episode as a permanent
 `unsupported_content` error with the same message and hint.
+
+## Spotify episodes
+
+An episode link never reaches the web-article engine. Create reads the
+episode from Spotify's public, browserless surfaces and prints a Bob-built
+episode dossier through the web-clip adapter's offline `render` op (see
+[web article capture](highlights-clip.md)): the cover, show, title, absolute
+release date, and duration on page 1, then the full show notes with
+clickable chapters where the publisher listed them and sponsor runs moved
+to a quiet card at the end. Episode audio is never downloaded; `-a FILE`
+binds audio you already have exactly as on the arXiv route.
+
+Metadata comes from, in order: the episode page
+(`https://open.spotify.com/episode/<id>`: its embedded episode state, then
+its JSON-LD, then its meta tags), the embed player when the title or show
+notes are still missing, and oEmbed when the title is still missing. A later
+source fills only fields that are still empty, and every source must name
+the same episode id. The capture fails closed and writes nothing when no
+source yields a title (`Spotify returned no episode metadata for <id>`,
+`hint: retry later; if it persists, Spotify changed its page and bob needs
+an update`), when the page answers 404
+(`Spotify has no public episode <id> (HTTP 404)`), or when it answers 429 or
+5xx. A degraded capture still files and prints exactly one `warning:` line
+per loss: one when the metadata fell back to the embed player or oEmbed
+(naming what is still missing, such as the show notes), and one when the
+cover is missing.
+
+| Field | Rule |
+| --- | --- |
+| `source_url`, dedupe key | `https://open.spotify.com/episode/<id>` |
+| Ref type | `podcasts`; `-t` wins |
+| Title | `-T`, else the episode title |
+| Author | `-A`, else the show name |
+| Published | `-p`, else the release date in Bob's day zone (a date-only release keeps its date) |
+| Stem | `-N`, else the title stem (80-char cap), else `spotify_episode_<lowercased id>`; never the raw id |
+| `id` | The final stem |
+| PDF Info author | The show |
+
+A shared link's `?t=<seconds>` adds a Shared at pill when it falls inside the
+episode. Bare `-f` reads an episode again as `<stem>__vN`, and `-f overwrite`
+replaces the selected reading in place, keeping its note, stem, id, task, and
+type, exactly as for arXiv. After install the dossier's source view is saved
+as the write-once source store with the canonical URL as its origin, so
+`bob ref links` lists the publisher's own links (chapter times are plain
+text, not Spotify deep links).
+
+A dry run fetches the metadata and cover but renders and writes nothing:
+
+```text
+ok would create Highlights-ready podcast PDF
+source: https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC (Spotify episode)
+pdf: ~/bob/xlib/podcasts/software_factories_and_code_reviews_with_harjot_gill.pdf
+audio: none
+…
+title: Software factories and code reviews with Harjot Gill (spotify page)
+author: The Pragmatic Engineer (spotify page) · published: 2026-11-18 (spotify page)
+duration: 1 h 26 min · chapters: 16 · cover: yes
+…
+writes: none
+```
+
+A real create prints `created Highlights-ready podcast PDF` with the
+arXiv-style block plus `duration:`, a capture line such as
+`capture: episode dossier · 16 chapters · show notes 413 words`, and
+`pages: N · size: …`, followed by the source store and intake lines. The
+report never claims audio or a transcript it did not keep (`audio: none`).
 
 ## Dedupe
 

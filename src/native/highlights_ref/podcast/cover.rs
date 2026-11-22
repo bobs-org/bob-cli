@@ -56,6 +56,7 @@ impl CoverFormat {
     }
 
     /// The MIME type.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn mime(self) -> &'static str {
         match self {
             Self::Jpeg => "image/jpeg",

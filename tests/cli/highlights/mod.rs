@@ -18,6 +18,7 @@ mod overwrite_annotated;
 mod overwrite_local;
 pub(crate) mod overwrite_recovery;
 mod overwrite_web;
+mod podcast_create;
 mod replaced_capture;
 mod scan;
 mod scan_hooks;

@@ -58,6 +58,9 @@ pub(crate) enum MetadataSource {
 impl MetadataSource {
     /// The stable identifier: `spotify_page`, `spotify_embed`, or
     /// `spotify_oembed`.
+    // Machine-readable reports (URL ingest's job results) name sources
+    // by this identifier.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Page => "spotify_page",
@@ -233,6 +236,8 @@ impl EpisodeError {
     }
 
     /// Whether retrying later can help: 429, 5xx, and transport failures.
+    // URL ingest classifies its typed job errors with this.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn retryable(&self) -> bool {
         match self {
             Self::HttpStatus { status, .. } => is_transient_status(*status),
@@ -242,6 +247,8 @@ impl EpisodeError {
     }
 
     /// The HTTP status behind the failure, when there is one.
+    // URL ingest classifies its typed job errors with this.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn status(&self) -> Option<u16> {
         match self {
             Self::NotFound { .. } => Some(404),

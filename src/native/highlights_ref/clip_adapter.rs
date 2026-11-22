@@ -193,7 +193,6 @@ impl ClipAdapterClient {
     /// Print one Bob-built article.json offline (no network, no
     /// extraction, no fidelity verdict). The episode route uses it for the
     /// podcast dossier.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn render(
         &self,
         request: &RenderRequest,
@@ -513,7 +512,6 @@ impl ComposeRequest {
 /// `podcast_episode` dossier payload) without network or extraction.
 /// Assets resolve against the article.json directory; the adapter writes
 /// `render/` under `workdir`.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct RenderRequest {
     pub(super) protocol: u32,
@@ -524,7 +522,6 @@ pub(super) struct RenderRequest {
     pub(super) tables: Option<TablesSettings>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl RenderRequest {
     pub(super) fn new(
         article_json: String,
@@ -668,7 +665,6 @@ pub(super) struct DiagramsSuccess {
 
 /// A successful `render` response: the same printed-PDF report as
 /// `compose` (PDF bytes, source view, code anchors, tables, images).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) type RenderSuccess = ComposeSuccess;
 
 /// A successful `compose` (or `render`) response.

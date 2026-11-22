@@ -139,8 +139,6 @@ impl SpotifyLink {
     }
 
     /// The episode this link names, if it names one.
-    // The episode route (metadata ladder, dossier) consumes this.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn episode(&self) -> Option<SpotifyEpisode> {
         match self {
             Self::Entity {
@@ -199,15 +197,12 @@ impl SpotifyLink {
 
 /// One Spotify episode: its case-preserved id plus the shared moment
 /// (`?t=<seconds>`) of the link it came from.
-// The episode route (metadata ladder, dossier) consumes this.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpotifyEpisode {
     pub(crate) id: String,
     pub(crate) shared_at: Option<u32>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl SpotifyEpisode {
     /// `https://open.spotify.com/episode/<id>`.
     pub(crate) fn canonical_url(&self) -> String {
@@ -220,6 +215,7 @@ impl SpotifyEpisode {
     }
 
     /// The canonical URL opened at `secs` seconds (`?t=<secs>`).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn at(&self, secs: u32) -> String {
         format!("{}?t={secs}", self.canonical_url())
     }
