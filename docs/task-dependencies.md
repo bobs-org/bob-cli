@@ -1450,6 +1450,9 @@ stale `[ ]` resident).
 
 **Requirement rows (`pull_in.reqs`, `kind: "requirements"`)**
 
+Normative contract: §12.25; shared vectors: §12.26. What follows is the
+reporting-model view; §12.25 governs on any difference.
+
 Requirement close is additive on the same successor card. A supported
 response always includes `pull_in.reqs: {"supported": true, "pending": N}`.
 `pending` counts every pre-close Pending requirement on the managed Done
@@ -1624,10 +1627,14 @@ Held already-planned rows are JSON-only.
 has one entry for each offered group of every kind, with bob-authored
 `copy: {title, why?, tag?, fold?, glyph}`. The `glyph` is one of
 `hand_off`, `project`, `project_created`, `project_finished`,
-`keep_moving`, `relation`, or `note_pull`. A `note_pull` group also carries
+`keep_moving`, `relation`, `note_pull`, or `requirements` (the last with
+glyph `⌗⌗`). A `note_pull` group also carries
 its vault-relative `note` path and the `folded` counts in §12.20. Existing
 project and keep-moving groups keep their keys and add `copy`; hand-off and
-project-finished groups have no `folded`. A relation entry has `group`, an `after` object
+project-finished groups have no `folded`. Requirement groups carry
+`kind: "requirements"`, `owner`, `rows`, and `copy` with
+`title`/`scope`/`why`/`history`/`footer`/`hint`; `folded.hidden` counts
+explicit historical states when nonzero (§12.25). A relation entry has `group`, an `after` object
 (`key`, `note_path`, `block_id`, `text`), `label`, `event`, and `copy`.
 Its optional `folded` object counts held rows: `hidden`, `already_planned`,
 `blocked`, and `already_started`; `waits_for` counts their unreleased targets.
@@ -1691,6 +1698,8 @@ Present on **every** successful capture JSON (dry-run too):
   keep-moving groups also carry `blocked` and `scheduled` (§12.15);
   relation groups carry the optional held counts described above (§12.18);
   note-pull groups carry `note` and the folded counts from §12.20.
+  Requirement groups carry `kind: "requirements"` plus `owner` and `rows`
+  with the `copy` and historical `folded` counts from §12.25.
   Hand-off and project-finished groups have no
   `folded` field. The example relation entry is
   `{"group": "relation", "after": {"key": "agents.md#^implement",
@@ -2703,6 +2712,23 @@ that landing parks the walk at the closed row's neighbour instead of
 advancing; focusing the pinned task never stamps it. Models without the
 capability keep the v4 behavior.
 
+**Picker API v6 (requirements on the successor card).** Nav bumps
+`api.successors.version` to `6`. A model adds one `requirements` group
+per eligible closing owner, placed first on the card before every
+task-offer group, with the normative wire shape in §12.25: `group:
+"requirements"`, the `kind: "requirements"` discriminator, the opaque
+snapshot-bound `owner` (including `key`), canonical `copy` (`title`,
+`scope`, `why`, `history`, `footer`, `hint`, `glyph: "⌗⌗"`), and one row
+per Pending req in document order carrying the `offer` envelope, `req`,
+and bob-authored `consequences`. The card resolves the §12.25 verdict
+model on those rows — Met (the default, writes nothing), Drop, Carry,
+and Carry plus pull-in — through the same result shape, and a jump pin
+on a requirement row stays navigation only resolved per §12.25. The cycler attaches requirement
+groups only when `api.successors.version >= 6`; an older picker keeps
+the v5 card and the close still succeeds with every Pending req Met.
+Plugin v6 consumes this protocol in a later phase; this capture contract
+does not deploy that client.
+
 **Notice API v2 (keep-moving).** `api.notice.version` is `2`.
 `buildUnblockedNoticeModel` reads an optional `keep_moving` row array.
 When every row is keep-moving, the card title is `Keep ‹N› moving` with
@@ -2728,34 +2754,61 @@ unknown, stale, or out-of-range pick is a teaching error that writes
 nothing and lists current offers. `all` / `none` with zero offers is a
 no-op.
 
-Offer verdict flags are additive to `-p`:
+Offer verdict flags are additive to `-p` (alphabetical by long name;
+`-k` sits between `--cancel-offer` and `--complete-offer`):
 
 ```text
-  -X, --cancel-offer <N|KEY>[=REASON]  Cancel one offer; REASON goes to its Cancel Log.
-  -x, --complete-offer <PICKS>         Mark offer(s) Done; PICKS is a comma list.
-  -j, --jump-offer <N|KEY>             Focus this offer after the capture (any verdict); one offer
+  -X, --cancel-offer <N|KEY>[=REASON]  Cancel one offer; REASON goes to its Cancel Log. Repeatable, one pick per flag
+  -k, --carry <PICKS>                  Carry requirement(s) as own tasks; PICKS is a comma list. Repeatable
+  -x, --complete-offer <PICKS>         Mark offer(s) Done or acknowledge requirement(s) as Met; PICKS is a comma list. Repeatable
+  -j, --jump-offer <N|KEY>             Focus this offer or requirement after the capture (any verdict); one pick
 ```
 
-All three options accept the numbered offers or stable offer keys. `-x` and
-`-X` are repeatable; `-j` selects one offer. `-X` addresses one offer per
-occurrence and splits on the first `=`; commas in its reason are literal. A
-verdict is an explicit pull-in choice for
-`--require-pull-in-choice`. `-p all` selects every selectable offer that has
-no verdict. Selecting one row for pull-in and Done/Cancel, or selecting it
-for both Done and Cancel, is the write-free teaching refusal
-`offer_verdict_conflict`; the refusal lists current rows and eligibility.
-Unknown, stale, or ineligible verdict targets are also refused before any
-capture write.
+Hidden internal `--req-choice` (no short alias; internal subprocess
+argument, absent from `--help`) marks a client req-aware: requirements
+are numbered first on the shared card. The normal CLI is req-aware
+without either flag. Hidden internal `--require-pull-in-choice` (below)
+without `--req-choice` is the legacy client: it keeps offer-only
+numbering, omits requirement groups from `pull_in.groups`, and leaves
+every Pending req Met. Row kind decides what a flag means (§12.25):
 
-`-j, --jump-offer <N|KEY>` selects one offer by the same numbered offer
-list or stable key. It is navigation only: it does not pull in the task,
-change a verdict, or count as the explicit choice required by
+| Flag | Requirement row | Offer row |
+| --- | --- | --- |
+| `-k, --carry` | Carry (own task, unlinked) | refused |
+| `-p N\|KEY` | Carry plus pull-in (own task, linked, raised Next) | pull in |
+| `-X N[=why]` | Drop (`[-]`, optional Cancel Log) | cancel |
+| `-x N` | explicit Met (acknowledgement, no req bytes) | complete |
+| `-j N\|KEY` | jump pin (navigation only) | jump pin |
+
+All five options accept the numbered card rows or stable opaque keys.
+`-k`, `-x`, and `-X` are repeatable; `-j` selects one row. `-X`
+addresses one row per occurrence and splits on the first `=`; commas in
+its reason are literal. A verdict is an explicit pull-in choice for
+`--require-pull-in-choice`. `-p all` selects every selectable offer
+that has no verdict and never selects a requirement row. Selecting one
+row for pull-in and Done/Cancel, selecting it for both Done and Cancel,
+or combining `-k` and `-p` on the same requirement is the write-free
+teaching refusal `offer_verdict_conflict`; the refusal lists current
+rows and eligibility. An ancestor Drop or Carry owning a branch while a
+descendant carries its own explicit verdict is `req_verdict_overlap`.
+A stale keyed replay of an edited or reordered card is
+`req_close_stale` with a `current` recovery payload for the fresh card.
+Unknown, stale, or ineligible verdict targets are also refused before
+any capture write. Numbers address the current command's probe only;
+clients holding a card submit its opaque keys, including for the jump
+pin. `-j` alone is never an acknowledgement: with both handshake flags,
+`-p none` or an explicit req verdict acknowledges, and a pin does not.
+
+`-j, --jump-offer <N|KEY>` selects one card row by the same numbered
+card list or stable key — an offer row or a requirement row (§12.25).
+It is navigation only: it does not pull in the task, change a verdict,
+or count as the explicit choice required by
 `--require-pull-in-choice`. Use `-p none -j N` to leave the row open and
 focus it. The selected row's outcome is reported as `pulled_in`, `done`,
 `cancelled`, or `left`. Unknown, stale, and out-of-range selectors,
-including any selector when no offers exist, refuse write-free with exit
-2 and `code: "offer_jump_stale"`; the JSON includes `pull_in` and the
-current flat `offers` list.
+including any selector when no card rows exist, refuse write-free with
+exit 2 and `code: "offer_jump_stale"`; the JSON includes `pull_in` and
+the current flat `offers` list.
 
 Hidden internal `--require-pull-in-choice` (no short alias; internal
 subprocess argument, absent from `--help`): when offers exist and no
@@ -2776,9 +2829,12 @@ payload, and the pick validation like any other offer, and the refusal
 writes neither the project note nor the daily note.
 
 Human output: numbered `offer N` rows under group headers (a project
-created by capture's `@route:id@` prints `New project <basename>`). A dry-run
+created by capture's `@route:id@` prints `New project <basename>`), with
+requirement groups first per §12.25. A dry-run
 hint shows `-p 1,2 · -p all`; when an unresolved offer supports Done or
-Cancel, it appends `· -x N done · -X N[=why] cancel`. A real run without a pick says the
+Cancel, it appends `· -x N done · -X N[=why] cancel`; a requirement
+group prints its own hint line `-k N own task · -X N[=why] drop · -p N
+pull in`. A real run without a pick says the
 offers were not pulled in and names Obsidian / Bob Mac Capture /
 Ctrl+Shift+Enter as the way to link later.
 
@@ -3980,6 +4036,301 @@ includes top-level `pull_in` and `offers`. It writes no vault files.
 | JS14 | Target identity cannot be settled | `landing: null`, exit 0, writes kept, lost receipt printed |
 | JS15 | `-j 9` while offers exist | `offer_jump_stale`, exit 2, vault byte-identical |
 | JS16 | Later item inserts a child above two ID-less Betas; `-j KEY` of the second (`-p none`, or `-p 1` of the earlier twin) | Landing is the second Beta's post-write line; unique `~2` key is unchanged |
+
+### 12.25 Requirements on the successor card
+
+Normative contract for requirement close on the managed Done successor
+card. The reporting-model view is §12.5, CLI selection is §12.14, the
+Obsidian picker model is §12.13 (v6), and the shared vectors are §12.26.
+On any difference, this section governs. Recognition, layout, and the
+drop/restore/carry writers it builds on are [Task
+requirements](task-requirements.md) §§1–6; carry bytes follow that
+document's Task Split rules (§6 there) and the RW/SP vectors — there is
+no second carry or Cancel Log writer. Defaults never stamp requirement
+completion: no `[fresh::]` or `[unblocked::]` is ever written for a
+requirement verdict. Plugin v6 consumes this protocol in a later phase;
+this capture contract does not deploy that client.
+
+**Eligibility and collection.** Only a managed Done closing set is
+audited: the root and the actual embedded or nested real tasks closed
+with it, deduplicated in explicit closing order. Recurring owners are
+skipped. Cancels, parked/kept/deferred links, automated closes,
+reconcile, raw edits, and another card's offer-close verdict never open
+another requirement audit. A `^prj` owner is eligible under the same
+rule. Requirements are read from the owner's pre-close snapshot:
+Pending includes flagged unknown marks as recognized by `task_reqs`;
+excluded descendants are never Pending; a manual `[x]` is Met for that
+row only. Depth above `MAX_REQ_DEPTH` (16) is reported as `req_depth`
+and refused by writers, never truncated. Req-less closes keep the
+no-extra-vault-scan path.
+
+**Snapshot-bound identity.** The owner key binds the canonical task
+identity to the complete pre-close owner-block preimage, so swapping two
+identically labelled branches with different children across separate
+preview and submit processes cannot alias:
+
+```text
+task_key = existing canonical note/task identity
+owner.key = task_key + "@" + sha256(exact pre-close owner-block bytes)
+row.key = owner.key + "/req/" + sibling_path + "~" + sha256(clean_text)[0..8]
+```
+
+The owner object also carries `task_key`, note path, block ID when
+present, 1-based source line, and display text. An idless owner's
+canonical identity uses the existing deterministic line/digest identity
+conventions; no IDs are minted for a preview. Keys are opaque to
+clients: implementations compare the complete supplied row key against
+freshly enumerated rows, never the `/req/` suffix alone, and re-check the
+same-key preimage between the probe and the final batch and again at
+disk commit. Card numbers address the current command's probe only; a
+client holding a card submits its opaque keys, including for the jump
+pin. A two-process preview/edit/submit scenario is pinned in RV.
+
+**Owner order, groups, and numbering.** Owners stay in explicit closing
+order. Each owner with Pending rows gets one `requirements` group,
+placed first on the card before every task-offer group. Rows list every
+Pending req in document order at their actual depth, drawn with the
+capped glyph run `⌗⌗`, `⌗⌗⌗`, then `⌗⌗⌗⌗` for depth 3+. A normal CLI
+preview and every `--req-choice` client share one number space with
+requirements first; `-p all` never selects a requirement row. The legacy
+handshake (`--require-pull-in-choice` without `--req-choice`) keeps
+offer-only numbering, omits requirement groups from `pull_in.groups`,
+still advertises `pull_in.reqs.supported`, and leaves requirements at
+Met, so a task-offer number can never drop a req. Either way
+`offer_count` counts actionable card rows and `picked_count` counts
+actual pull-in links (including carry-pulled links), while `reqs.pending`
+counts every pre-close Pending req, including descendants a later
+verdict folds.
+
+**Wire shape.** Requirement close is additive: existing task-offer
+fields keep their meaning and old clients ignore what they do not know.
+A supported response always includes
+`pull_in.reqs: {"supported": true, "pending": N}`; older bobs omit the
+object. `req_outcomes[]` reports applied verdicts in parallel with the
+existing `offer_closes[]` and is omitted when empty. Requirement rows
+are never inserted into `unblocked[]` as if they were recovered tasks,
+and the existing capture item `requirements[]` (authored requirement
+writes) is untouched.
+
+Group discriminator: `group: "requirements"` with
+`kind: "requirements"`. Clients switch on `kind` and fall back to
+`group`; no other group carries `kind: "requirements"`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `pull_in.reqs.supported` | bool | always `true` on a supporting bob |
+| `pull_in.reqs.pending` | integer | pre-close Pending count, folded descendants included |
+| `group` / `kind` | string consts | `"requirements"` / `"requirements"` |
+| `owner.task_key` | string | canonical note/task identity |
+| `owner.key` | string | opaque snapshot-bound owner key |
+| `owner.path` | string | vault-relative note path |
+| `owner.block_id` | string | `""` when the owner has none |
+| `owner.line` | integer | 1-based pre-close source line |
+| `owner.text` | string | display text |
+| `copy.title` | string | `Requirements · “S”` |
+| `copy.scope` | string | `{n} reqs`, or `{n} reqs in {b} branches` when more than one pending branch |
+| `copy.why` | string | `Met when it closes, unless you say otherwise` |
+| `copy.history` | string, omitted when all zero | `· {d} dropped earlier · {c} carried earlier · {m} met earlier`, zero segments omitted; counts explicit historical states, never excluded descendants |
+| `copy.footer` | string | `⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump` |
+| `copy.hint` | string | `-k N own task · -X N[=why] drop · -p N pull in` |
+| `copy.glyph` | string const | `⌗⌗` |
+| `folded` | object, omitted when empty | `hidden` counts dropped+carried+met history; remaining counts are `0` |
+| `offer.key` | string | opaque row key |
+| `offer.n` | integer | 1-based card number in this probe |
+| `offer.group` | string const | `"requirements"` |
+| `offer.selected` | bool | `true` only when the row is carry-pulled |
+| `offer.destination` | object | present but unused on requirement rows (empty placeholder, `entry_role: "slot"`) |
+| `offer.block_id_needed` | bool | always `false`; offer-close `close` descriptors never attach to requirement rows |
+| `req.owner` | string | the owner key |
+| `req.path` | string | 1-based sibling path (`"1"`, `"1.2"`) |
+| `req.depth` | integer | exact depth, 1 for a direct child |
+| `req.parent_key` | string, `null` at depth 1 | the parent row's key |
+| `req.text` | string | clean row text |
+| `req.line` | integer | 1-based pre-close source line |
+| `req.state` | string const | always `"pending"` on a listed row |
+| `req.pending_descendants` | integer | Pending count below this row |
+| `consequences.met` | string | `Met when it closes, unless you say otherwise` |
+| `consequences.drop` | string | `⊘ Dropped “T”` |
+| `consequences.carry` | string | `→ “T” is its own task now` |
+| `consequences.carry_pulled` | string | `→ “T” is its own task now · pulled in` |
+
+`req_outcomes[]` rows carry `n` (the row's card number; a Met receipt
+uses its group's first row number), `key` (the row key, or the owner key
+for a Met receipt), `owner_key`, `owner_task_key`, `path`, `text`,
+`verdict` (`"met"`, `"drop"`, `"carry"`, or `"carry_pulled"`), `reason`
+(present only on a drop with a nonblank, whitespace-collapsed reason),
+`carried` (present only on a carry: `path`, `block_id`, 1-based `line`
+of the created task), `pulled` (bool), and the bob-authored `message`
+receipt. The Met receipt aggregates one owner (`met_count` is a
+crate-private count, never serialized).
+
+**Verdicts and conflicts.** The four verdicts are Met, Drop, Carry, and
+Carry plus pull-in. The CLI accepts final choices rather than replaying
+keystrokes; repeating an interactive verdict returns to Met, and changing
+it replaces the verdict. Identical repeated carry picks are idempotent.
+Default and explicit Met write no requirement bytes: the owner closes
+`[x]` and Pending reqs stay `[ ]`. Drop rewrites only the selected root
+to `[-]` with the standard Cancel Log for an optional reason; Carry
+creates exactly one real task plus a `[>]` stub for each disjoint
+selected branch, with notes, anchors, and descendant history travelling
+under the existing Task Split rules and no dependency invented. NOTES
+appears only when notes are filed into it. Carry plus pull-in additionally
+links the new task at the ordinary successor destination and raises it to
+Next — never with a freshness stamp, and never through a new public
+destination flag: when no valid destination exists the whole batch
+refuses instead of silently downgrading. Carry without pull-in leaves the
+new task unlinked. Mark-all selects ordinary eligible offers only.
+
+An ancestor Drop or Carry owns its branch: a descendant explicit verdict
+conflicts as `req_verdict_overlap`, while a navigation-only descendant
+pin stays allowed. Default Met descendants are not explicit choices.
+Staging a structural verdict folds descendant rows into
+`· {k} nested go with it`; restoring Met unfolds them with staged choices
+retained. Folding is display state, never silently discarded selection: a
+hidden conflicting choice is refused before any write, and overlap is
+resolved before planning any writes. Row kind decides every flag (§12.14):
+combine `-k` with `-p` on one requirement, or mix `-p`/`-x`/`-X` verdicts
+on one row, and the write-free refusal is `offer_verdict_conflict`. A
+stale keyed replay — reordered, re-indented, edited-duplicate, or
+disappeared rows, or duplicate closing owner identities — refuses as
+`req_close_stale` with a `current` recovery payload carrying the fresh
+groups and current numbered rows. `-j` alone never acknowledges a card
+demanding a choice (`pull_in_choice_required` still fires).
+
+**Receipts and copy.** Every string below is frozen and pinned in RV;
+the JSON `message` and the human line report the exact committed outcome
+(or its dry-run `would` form — dry runs plan the same successor changes
+as real runs and differ only in `dry_run` and preview wording):
+
+| Where | Text |
+| --- | --- |
+| Receipt, Met | `✓ {n} requirements met with “S”` (human `⌗⌗ {n} requirements met with “S”`; dry run `would meet {n} requirements with “S”`) |
+| Receipt, Drop | `⊘ Dropped “T”`, plus `· “reason”` when nonblank (dry run `would drop “T”` plus reason) |
+| Receipt, Carry | `→ “T” is its own task now` (dry run `would make “T” its own task`) |
+| Receipt, Carry plus pull-in | `→ “T” is its own task now · pulled in` |
+| Overlap refusal | `“{ancestor}” already takes this branch — restage it as met to choose here` |
+| Drop prompt | `Why drop it? (optional)` |
+| Fold line | `· {k} nested go with it` |
+| Card summary | `reqs ✓{met} ⊘{dropped} →{carried}` |
+| Jump hint | `↗ jumps to the requirement — ⌃⇧T makes it a task` |
+| Accessibility | `requirement, level {depth}, {will be met \| will be dropped \| …}` naming the semantic state and exact depth |
+
+Human output prints each requirement group first with its title, scope,
+history, indented rows (capped glyph run, card number, text), and hint
+line, then outcome lines per receipt above. Excluded or carried
+descendants are never counted as Met.
+
+**One commit, then placement and jump.** Capture has one all-or-nothing
+commit: a stale row, overlapping structural choices, a missing
+destination, or a failed guard leaves every vault file byte-identical —
+this includes stale repair-file or file-set changes discovered mid-write.
+Drops apply through their guarded note text; disjoint carries apply
+bottom-to-top with composed coordinates and preserved preimages, and the
+existing close code keeps its equivalent final ordering without folding
+a capture-created task into a blanket close. Known internal
+transformations (a carry's own `[>]` stubs, drop Cancel Logs, link
+repairs, inbox routing, daily-owner moves) are never mistaken for
+external staleness, and nothing is matched by label. `req_outcomes[]`
+returns the moved-line and created-task identities; exclusion and
+folded-descendant rules from collection apply.
+
+A jump pin resolves after all planned writes and routing: the new task
+for a carried root, the move-mapped line for a descendant moved with an
+ancestor, the requirement's own final line otherwise — composed across
+carry descendant moves, preceding drop-log insertions, other disjoint
+carries, and inbox-route moves. An ambiguous or lost pinned target
+refuses before commit; a settled-but-missing target lands as
+`landing: null`, never on a same-text neighbour or a req stub when the
+created task was requested. The one-pin and walk-park contract is
+preserved: bob-cli returns the landing while clients own focus and walk
+state. Jump shapes, outcomes, and the `offer_jump_stale` refusal follow
+§12.24, with requirement rows as first-class pinnable rows.
+
+A mixed card with one carried branch reports both families side by side:
+
+```json
+"pull_in": {
+  "supported": true, "offer_count": 3, "choice": "subset",
+  "picked_count": 2,
+  "reqs": {"supported": true, "pending": 2},
+  "groups": [
+    {"group": "requirements", "kind": "requirements",
+     "owner": {"task_key": "sase.md#^ship", "key": "sase.md#^ship@…",
+               "path": "sase.md", "block_id": "ship", "line": 1,
+               "text": "Ship parser"},
+     "copy": {"title": "Requirements · “Ship parser”", "scope": "2 reqs",
+              "why": "Met when it closes, unless you say otherwise",
+              "glyph": "⌗⌗",
+              "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
+              "hint": "-k N own task · -X N[=why] drop · -p N pull in"},
+     "rows": [
+       {"offer": {"key": "sase.md#^ship@…/req/1~abcd1234", "n": 1,
+                  "group": "requirements", "selected": true},
+        "req": {"owner": "sase.md#^ship@…", "path": "1", "depth": 1,
+                "parent_key": null, "text": "Handles empty input",
+                "line": 2, "state": "pending", "pending_descendants": 0},
+        "consequences": {
+          "met": "Met when it closes, unless you say otherwise",
+          "drop": "⊘ Dropped “Handles empty input”",
+          "carry": "→ “Handles empty input” is its own task now",
+          "carry_pulled": "→ “Handles empty input” is its own task now · pulled in"}},
+       {"offer": {"key": "sase.md#^ship@…/req/2~ef567890", "n": 2,
+                  "group": "requirements", "selected": false},
+        "req": {"owner": "sase.md#^ship@…", "path": "2", "depth": 1,
+                "parent_key": null, "text": "Handles unicode",
+                "line": 3, "state": "pending", "pending_descendants": 0},
+        "consequences": {
+          "met": "Met when it closes, unless you say otherwise",
+          "drop": "⊘ Dropped “Handles unicode”",
+          "carry": "→ “Handles unicode” is its own task now",
+          "carry_pulled": "→ “Handles unicode” is its own task now · pulled in"}}
+     ]},
+    {"group": "hand_off",
+     "copy": {"title": "Hand-offs", "glyph": "hand_off"},
+     "rows": [{}]}
+  ]
+},
+"req_outcomes": [
+  {"n": 1, "key": "sase.md#^ship@…/req/1~abcd1234",
+   "owner_key": "sase.md#^ship@…", "owner_task_key": "sase.md#^ship",
+   "path": "1", "text": "Handles empty input",
+   "verdict": "carry_pulled",
+   "carried": {"path": "sase.md", "block_id": "empty-input", "line": 12},
+   "pulled": true,
+   "message": "→ “Handles empty input” is its own task now · pulled in"}
+]
+```
+
+The unchosen second req stays `[ ]` under the closed owner and needs no
+receipt; a req-only close reports the aggregated Met receipt instead
+(§12.5). Human output for this card prints the requirement group, then
+`→ “Handles empty input” is its own task now · pulled in`.
+
+### 12.26 RV — requirement close vectors
+
+`tests/fixtures/req_close/vectors.json` (with its `README.md`) is the
+single source of truth for close-card row building, verdicts, writes,
+placement, and jump landings. Bob-cli owns the file; clients copy it
+byte for byte — a behavior change edits the contract and the fixture
+together. `schema_version` is currently `1`; every case carries `id`,
+`family`, `title`, and `expect`, and `copy` freezes the canonical
+strings every surface spells the same way (§12.25). RV cases never
+duplicate the RQ/RL/RW/SP fixtures: those stay authoritative for the
+recognizer, layout, writers, and carry primitives.
+
+| Family | Cases | Pins |
+| --- | --- | --- |
+| `rows` | RV1–RV11 | three depths, mixed indentation, notes interrupting ancestry, nested real-task owners, recurring exclusion, resolved folds, flagged marks, no pending rows, multiple closing owners in close order, duplicate labels with distinct keys, identical owner-block hashes distinct through `task_key` |
+| `choices` | RV12–RV19 | every same-row final verdict pair, ancestor structural choice versus explicit descendant choice, navigation-only descendant pin, requirement-first shared numbering with mark-all exclusion, fold/unfold with retained staged choices, disjoint multi-owner choices, stale replay after same-text branch reorder, duplicate closing owner identities |
+| `writes` | RV20–RV28 | depth-1 and nested leaf/branch carry bytes, disjoint mixed carry/drop, carry with notes, anchor reuse, no-op Met bytes, drop with Cancel Log reason, cross-note daily carry; transaction cases inject stale source/destination/repair-file and file-set changes and require byte-identical vaults |
+| `placement` | RV29–RV35 | pulled carry linking at slot, inherit, closing continuation, implicit fallback, and inbox-route destinations; Next with no freshness stamp; card-order links for several carries; the no-destination whole-batch refusal |
+| `jump` | RV36–RV43 | landing on the created task, on the move-mapped line with an ancestor, after sibling carries, drop logs, dropped ancestors, and inbox-route renames; identity (not label) landing between same-labelled carried branches; pin-only commits writing nothing; null landings |
+
+The two-process preview/edit/submit staleness proof, toggle/fold
+selection-state transitions, and every canonical copy string live in the
+`choices` family; the exact committed bytes and receipts live in
+`writes`. Rust runs them through the fixture loader and focused planner
+tests; no network, real vault, or UI is needed.
 
 ## 13. Project dependencies
 

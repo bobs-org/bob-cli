@@ -247,10 +247,21 @@ Selection is explicit. Fields:
 | An offered row with a relation reason | `relation: {label, key, event, after}`; `event` is `parked` or `done`, and `after[]` identifies the triggering tasks with `note_path`, `block_id`, and `text`. A relation-group row also has `offer.after`, a `note.md#^id` string |
 | A held relation row | Task identity, the relation, and `reason`: `already_planned`, `already_started`, `blocked`, `hidden`, or `waits_for` |
 | Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; always-present `reqs: {supported, pending}`; optional `groups[]` and `copy: {title, capsule, glyph}` |
-| `pull_in.groups[]` | `group`, optional `project` or note-pull `note`, optional requirement `kind`/`owner`/`rows`, `copy: {title, why?, tag?, fold?, glyph, scope?, history?, footer?, hint?}`, and optional `folded` counts; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, and `event` |
+| `pull_in.groups[]` | `group`, optional `project` or note-pull `note`, requirement `kind`/`owner`/`rows` only on the `requirements` discriminator, `copy: {title, why?, tag?, fold?, glyph, scope?, history?, footer?, hint?}`, and optional `folded` counts; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, and `event` |
 | Batch `req_outcomes[]` | Applied requirement verdicts (`met`, `drop`, `carry`, `carry_pulled`); omitted when empty |
 
-Empty `groups` and absent `copy` are omitted. See the [successor JSON contract](../task-dependencies.md#125-reporting-model)
+Empty `groups` and absent `copy` are omitted. Requirement groups carry
+`kind: "requirements"` (clients switch on `kind`, fall back to `group`),
+an opaque snapshot-bound `owner` (with `key`), one row per Pending req
+(`offer` envelope, `req`, bob-authored `consequences`), canonical `copy`,
+and historical `folded` counts only when nonzero; `req.parent_key` is
+`null` at depth 1, `req_outcomes[].reason` appears only on a drop with a
+nonblank reason, and `carried` appears only on a carry. See the [successor
+JSON contract](../task-dependencies.md#125-reporting-model) with its
+req-only close example, the [normative requirement
+contract](../task-dependencies.md#1225-requirements-on-the-successor-card)
+with its mixed-card example, the [RV
+vectors](../task-dependencies.md#1226-rv-requirement-close-vectors),
 and [relation events](../task-dependencies.md#1218-relation-successors-starts-after).
 
 ### Move-choice results

@@ -532,8 +532,11 @@ with an inline reason, Ctrl+Shift+T carry into its own task, Space/Tab carry
 plus pull-in, Ctrl+J jump pin. Overlapping picks are refused on the row, and
 stale rows (reordered, re-indented, or edited duplicates while the card is
 open) refuse as `req_close_stale`. With no flags, Pending reqs are Met with
-no write. (Shipped in the `close-engine` phase; wire details live in
-[Task dependency links](task-dependencies.md) §12.)
+no write. (Shipped in the `close-engine` phase; the normative wire
+contract is [Task dependency
+links](task-dependencies.md#1225-requirements-on-the-successor-card)
+§12.25, with [shared vectors](task-dependencies.md#1226-rv-requirement-close-vectors)
+§12.26 and the fixture roster in §10.)
 
 ## 8. Promotion moves the boundary one level
 
@@ -571,7 +574,9 @@ and `vault-migration` phases.)
   stubs, whole-branch moves with rebased depth, the NOTES rule on the new
   task, move maps, daily-note owners, and the carry refusals (§6).
 - **RV** (`tests/fixtures/req_close/vectors.json`): close-card row building,
-  verdict bytes, overlaps, staleness, jump landings, and copy strings.
+  verdict bytes, overlaps, staleness, jump landings, and copy strings —
+  inventoried in [Task dependency
+  links](task-dependencies.md#1226-rv-requirement-close-vectors) §12.26.
   (Added in `close-engine`.)
 - **Twins**: the Task Status Cycler, Navigation Hotkeys, and Block ID Prompt
   run the RQ/RL/RW vectors above through byte-identical JavaScript twins of
