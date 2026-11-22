@@ -149,9 +149,6 @@ pub(super) fn fetch_url_capped(
 /// would start with less than a second left is refused, so a chain of
 /// requests (a feed lookup, then a transcript) stays inside one budget.
 /// Use [`deadline_spent`] to tell a spent budget from other failures.
-// The publisher feed lookup consumes this; the dossier builder that
-// calls the lookup lands in a later phase.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn fetch_url_before(
     url: &str,
     dest: &Path,
@@ -173,7 +170,6 @@ pub(super) fn fetch_url_before(
 
 /// Whether less than a second is left before `deadline`: the point at
 /// which [`fetch_url_before`] refuses to start another hop.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn deadline_spent(deadline: Instant) -> bool {
     deadline.saturating_duration_since(Instant::now()) < Duration::from_secs(1)
 }

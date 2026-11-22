@@ -91,6 +91,30 @@ impl ShowNotes {
     pub(crate) fn is_empty(&self) -> bool {
         self.blocks.is_empty()
     }
+
+    /// Replace inline chapter runs with `chapters` (Podcasting 2.0). The
+    /// new list sits where the first chapter run was, or just before the
+    /// sponsor card, or at the end.
+    pub(crate) fn replace_chapters(&mut self, chapters: Vec<Chapter>) {
+        if chapters.is_empty() {
+            return;
+        }
+        let insert_at = self
+            .blocks
+            .iter()
+            .position(|block| {
+                matches!(
+                    block,
+                    NotesBlock::Chapters(_) | NotesBlock::Sponsors(_)
+                )
+            })
+            .unwrap_or(self.blocks.len());
+        self.blocks
+            .retain(|block| !matches!(block, NotesBlock::Chapters(_)));
+        let insert_at = insert_at.min(self.blocks.len());
+        self.blocks
+            .insert(insert_at, NotesBlock::Chapters(chapters));
+    }
 }
 
 /// Segment HTML show notes. `duration_ms` bounds the last chapter when

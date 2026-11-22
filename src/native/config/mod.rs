@@ -350,8 +350,6 @@ impl HighlightsConfig {
     }
 
     /// `highlights.podcasts.enrich` (default `auto`).
-    // The episode dossier builder reads this; it lands in a later phase.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn podcast_enrich(&self) -> PodcastEnrich {
         self.podcast_enrich
     }

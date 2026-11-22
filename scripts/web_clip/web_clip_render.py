@@ -9,7 +9,8 @@ supplied by the adapter's ``launcher``.
 ``{"pdf_bytes", "images", "warnings", "source_html", "code_anchors"}``.
 A Bob-built ``article.json`` whose ``kind`` is ``podcast_episode`` prints
 as an episode dossier instead of an article; that branch needs the
-adapter's ``sanitize`` callable for the publisher's show-notes HTML.
+adapter's ``sanitize`` callable for the publisher's show-notes HTML. A
+transcript object, when present, starts a new page after the notes.
 
 ``render_collection(parts, collection, workdir, out_pdf, launcher)``
 typesets ordered article.json parts into one PDF: an opening page with
@@ -962,6 +963,17 @@ _EPISODE_ID_PREFIX = "ep-"
 _LANG_TAG_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$")
 _COVER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _EMPTY_ANCHOR_RE = re.compile(r"<a\b[^>]*>\s*</a>", re.IGNORECASE)
+_TRANSCRIPT_FORMAT_LABELS = {
+    "json": "JSON",
+    "vtt": "VTT",
+    "srt": "SRT",
+    "html": "HTML",
+    "text": "text",
+}
+_TRANSCRIPT_FORMATS = frozenset(_TRANSCRIPT_FORMAT_LABELS)
+_TRANSCRIPT_DRIFT_NOTE = (
+    "Timestamps follow the publisher's file and may differ from Spotify's "
+    "playback")
 # Inline icons keep the pills independent of host emoji/symbol fonts; they
 # carry no text, so the PDF text layer reads "Listen on Spotify".
 _PLAY_ICON = (
@@ -1065,9 +1077,59 @@ def validate_episode(article: dict) -> None:
                 or not isinstance(entry.get("source"), str)):
             raise PayloadError(
                 f"episode.provenance[{index}] needs string label and source")
-    transcript = episode.get("transcript")
-    if transcript is not None and not isinstance(transcript, dict):
-        raise PayloadError("episode.transcript must be an object or null")
+    _validate_transcript(episode.get("transcript"))
+
+
+def _validate_transcript(transcript) -> None:
+    """Check ``episode.transcript``; ``None`` is a dossier without one."""
+    if transcript is None:
+        return
+    where = "episode.transcript"
+    if not isinstance(transcript, dict):
+        raise PayloadError(f"{where} must be an object or null")
+    fmt = transcript.get("format")
+    if fmt not in _TRANSCRIPT_FORMATS:
+        raise PayloadError(
+            f"{where}.format must be one of "
+            f"{', '.join(sorted(_TRANSCRIPT_FORMATS))}")
+    if not _is_count(transcript.get("words")):
+        raise PayloadError(f"{where}.words must be a non-negative integer")
+    for key in ("roles_inferred", "names_from_file", "link_times"):
+        if not isinstance(transcript.get(key), bool):
+            raise PayloadError(f"{where}.{key} must be a boolean")
+    paragraphs = transcript.get("paragraphs")
+    if not isinstance(paragraphs, list) or not paragraphs:
+        raise PayloadError(f"{where}.paragraphs must be a non-empty array")
+    for index, paragraph in enumerate(paragraphs):
+        spot = f"{where}.paragraphs[{index}]"
+        if not isinstance(paragraph, dict):
+            raise PayloadError(f"{spot} must be an object")
+        start = paragraph.get("start_secs")
+        if start is not None and not _is_count(start):
+            raise PayloadError(
+                f"{spot}.start_secs must be a non-negative integer or null")
+        speaker = paragraph.get("speaker")
+        if speaker is not None and not isinstance(speaker, str):
+            raise PayloadError(f"{spot}.speaker must be a string or null")
+        text = paragraph.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise PayloadError(f"{spot}.text must be a non-empty string")
+    marks = transcript.get("chapter_marks")
+    if not isinstance(marks, list):
+        raise PayloadError(f"{where}.chapter_marks must be an array")
+    for index, mark in enumerate(marks):
+        spot = f"{where}.chapter_marks[{index}]"
+        if not isinstance(mark, dict):
+            raise PayloadError(f"{spot} must be an object")
+        if not _is_count(mark.get("start_secs")):
+            raise PayloadError(
+                f"{spot}.start_secs must be a non-negative integer")
+        title = mark.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise PayloadError(f"{spot}.title must be a non-empty string")
+        if not _is_count(mark.get("paragraph_index")):
+            raise PayloadError(
+                f"{spot}.paragraph_index must be a non-negative integer")
 
 
 def format_episode_duration(duration_ms: int | None) -> str | None:
@@ -1244,6 +1306,105 @@ def _chapter_list(chapters: list[dict], listen_url: str,
     return "".join(rows)
 
 
+def _transcript_credit(transcript: dict) -> str:
+    """The honest line under the Transcript heading."""
+    label = _TRANSCRIPT_FORMAT_LABELS[transcript["format"]]
+    line = f"Publisher transcript ({label}) from the show's RSS feed"
+    extras: list[str] = []
+    if transcript.get("roles_inferred"):
+        extras.append("roles inferred, names not guessed")
+    if transcript.get("names_from_file"):
+        extras.append("speaker names from the file")
+    if extras:
+        line = f"{line} · {' · '.join(extras)}"
+    return line
+
+
+def _marks_by_paragraph(transcript: dict) -> dict[int, list[dict]]:
+    grouped: dict[int, list[dict]] = {}
+    for mark in transcript.get("chapter_marks") or []:
+        grouped.setdefault(int(mark["paragraph_index"]), []).append(mark)
+    return grouped
+
+
+def _transcript_time_html(secs: int, listen_url: str, link_times: bool) -> str:
+    label = html.escape(format_timestamp(secs))
+    if link_times and listen_url:
+        href = html.escape(episode_time_url(listen_url, secs), quote=True)
+        label = f'<a href="{href}">{label}</a>'
+    return f'<span class="transcript-time">{label}</span>'
+
+
+def assemble_transcript(transcript: dict, listen_url: str) -> str:
+    """Print the transcript on a new page, with gutter times and speakers."""
+    paragraphs = transcript.get("paragraphs") or []
+    marks = _marks_by_paragraph(transcript)
+    link_times = bool(transcript.get("link_times"))
+    parts = [
+        '<section class="episode-transcript">',
+        '<h2 class="episode-label episode-transcript-label">Transcript</h2>',
+        f'<p class="episode-transcript-credit">'
+        f"{html.escape(_transcript_credit(transcript))}</p>",
+    ]
+    if not link_times:
+        parts.append(
+            f'<p class="episode-transcript-drift">'
+            f"{html.escape(_TRANSCRIPT_DRIFT_NOTE)}</p>")
+    last_speaker = object()
+    for index, paragraph in enumerate(paragraphs):
+        for mark in marks.get(index, []):
+            parts.append(
+                f'<h3 class="transcript-chapter">'
+                f'{html.escape(mark["title"].strip())}</h3>')
+        speaker = paragraph.get("speaker")
+        speaker = speaker.strip() if isinstance(speaker, str) else ""
+        show_speaker = bool(speaker) and speaker != last_speaker
+        if speaker:
+            last_speaker = speaker
+        else:
+            last_speaker = None
+        start = paragraph.get("start_secs")
+        time_html = (
+            _transcript_time_html(int(start), listen_url, link_times)
+            if start is not None else '<span class="transcript-time"></span>')
+        body = []
+        if show_speaker:
+            body.append(
+                f'<p class="transcript-speaker">{html.escape(speaker)}</p>')
+        body.append(
+            f'<p class="transcript-text">'
+            f'{html.escape(paragraph.get("text") or "")}</p>')
+        parts.append(
+            f'<div class="transcript-para">{time_html}'
+            f'<div class="transcript-body">{"".join(body)}</div></div>')
+    parts.append("</section>")
+    return "".join(parts)
+
+
+def assemble_transcript_source(transcript: dict) -> str:
+    """Source-view transcript: ``**Speaker** (3:17)`` and plain times."""
+    paragraphs = transcript.get("paragraphs") or []
+    marks = _marks_by_paragraph(transcript)
+    parts = ["<h2>Transcript</h2>"]
+    for index, paragraph in enumerate(paragraphs):
+        for mark in marks.get(index, []):
+            parts.append(f'<h3>{html.escape(mark["title"].strip())}</h3>')
+        speaker = paragraph.get("speaker")
+        speaker = speaker.strip() if isinstance(speaker, str) else ""
+        start = paragraph.get("start_secs")
+        if speaker and start is not None:
+            parts.append(
+                f"<p><strong>{html.escape(speaker)}</strong> "
+                f"({html.escape(format_timestamp(start))})</p>")
+        elif speaker:
+            parts.append(f"<p><strong>{html.escape(speaker)}</strong></p>")
+        elif start is not None:
+            parts.append(
+                f"<p>({html.escape(format_timestamp(start))})</p>")
+        parts.append(f"<p>{html.escape(paragraph.get('text') or '')}</p>")
+    return "\n".join(parts)
+
+
 def assemble_episode(article: dict) -> str:
     """Build the episode dossier page from a prepared episode article."""
     episode = article.get("episode") or {}
@@ -1329,6 +1490,9 @@ def assemble_episode(article: dict) -> str:
     if footer:
         body.append(f'<footer class="episode-footer"><p>'
                     f'{" · ".join(footer)}</p></footer>')
+    transcript = episode.get("transcript")
+    if isinstance(transcript, dict):
+        body.append(assemble_transcript(transcript, listen_url))
 
     footer_title = css_escape_string(short_footer_title(title))
     return f"""<!DOCTYPE html>
@@ -1396,6 +1560,9 @@ def assemble_episode_source(article: dict) -> str:
     if sponsors:
         parts.append("<h2>Sponsors</h2>")
         parts.append(sponsors)
+    transcript = episode.get("transcript")
+    if isinstance(transcript, dict):
+        parts.append(assemble_transcript_source(transcript))
     return _source_document(title, "\n".join(parts), episode_language(article))
 
 

@@ -341,6 +341,7 @@ fn prepare_dossier(
         author: options.author.clone(),
         published: options.published.clone(),
     };
+    let enrich = super::podcast_enrich_setting()?;
     let dossier = dossier::prepare(
         episode,
         &overrides,
@@ -348,6 +349,8 @@ fn prepare_dossier(
         scratch.path(),
         Some(&fetch_progress),
         None,
+        enrich,
+        !options.dry_run,
     )
     .map_err(|error| CommandError::new(error.render()))?;
     for warning in &dossier.warnings {
@@ -450,6 +453,12 @@ fn print_dry_run(
         dossier.chapter_count(),
         if dossier.has_cover() { "yes" } else { "no" },
     );
+    if let Some(line) = dossier.dry_run_feed_line() {
+        println!("{line}");
+    }
+    if let Some(line) = dossier.dry_run_transcript_line() {
+        println!("{line}");
+    }
     println!("captured: {captured}");
     for hit in legacy {
         println!(

@@ -9,8 +9,8 @@
 use super::fake_clip::FakeClip;
 use super::ingest::seed_synced_vault;
 use super::spotify_fake::{
-    fixture as spotify_fixture, FakeSpotify, CANONICAL, ID, LEGACY_SOURCE,
-    PUBLISHED, SHOW, STEM, TITLE,
+    fixture as spotify_fixture, FakeSpotify, CANONICAL, FEED_URL, ID,
+    LEGACY_SOURCE, PUBLISHED, SHOW, STEM, TITLE, TRANSCRIPT_URL,
 };
 use crate::support::*;
 use std::fs;
@@ -143,6 +143,9 @@ fn dry_run_reports_the_episode_without_rendering_or_writing() {
             "author: {SHOW} (spotify page) · published: {PUBLISHED} (spotify page)"
         ),
         "duration: 1 h 26 min · chapters: 16 · cover: yes".to_string(),
+        "feed: api.substack.com (matched on title, date, duration)"
+            .to_string(),
+        "transcript: publisher VTT (would attach)".to_string(),
         "audio: none".to_string(),
         format!("id: {STEM}"),
         format!("- source_url: {CANONICAL}"),
@@ -173,12 +176,22 @@ fn dry_run_reports_the_episode_without_rendering_or_writing() {
         "a dry run writes nothing"
     );
     // The page alone held every field: no embed or oEmbed fallback.
+    // A dry run looks the feed up and does not download the transcript.
     let requests = episode.spotify.requests();
     assert_eq!(requests[0], CANONICAL, "{requests:?}");
     assert!(
         requests
             .iter()
             .all(|url| !url.contains("/embed/") && !url.contains("/oembed")),
+        "{requests:?}"
+    );
+    assert!(
+        requests.iter().any(|url| url.contains("itunes.apple.com")),
+        "{requests:?}"
+    );
+    assert!(requests.iter().any(|url| url == FEED_URL), "{requests:?}");
+    assert!(
+        requests.iter().all(|url| url != TRANSCRIPT_URL),
         "{requests:?}"
     );
 }
@@ -210,7 +223,7 @@ fn create_files_a_podcasts_reference_from_the_dossier() {
     }
     assert!(
         report.lines().any(|line| line.starts_with(
-            "capture: episode dossier · 16 chapters · show notes "
+            "capture: episode dossier · 16 chapters · publisher show notes · publisher transcript "
         ) && line.ends_with(" words")),
         "{report}"
     );
@@ -218,7 +231,6 @@ fn create_files_a_podcasts_reference_from_the_dossier() {
         report.lines().any(|line| line.starts_with("pages: ")),
         "{report}"
     );
-    assert!(!report.contains("transcript"), "{report}");
 
     // The note is filed under podcasts/ with the canonical identity.
     let note = episode.note(&format!("ref/podcasts/{STEM}.md"));
@@ -267,6 +279,11 @@ fn create_files_a_podcasts_reference_from_the_dossier() {
         detail["sponsors_html"]
             .as_str()
             .is_some_and(|html| html.contains("turbopuffer")),
+        "{payload}"
+    );
+    assert_eq!(detail["transcript"]["format"], "vtt", "{payload}");
+    assert!(
+        detail["transcript"]["words"].as_u64().unwrap_or(0) >= 200,
         "{payload}"
     );
 }
@@ -465,4 +482,60 @@ fn a_cover_failure_prints_exactly_one_warning() {
         .vault
         .join(format!("ref/podcasts/{STEM}.md"))
         .is_file());
+}
+
+#[test]
+fn a_missed_feed_match_warns_once() {
+    let episode = episode_fixture("bob-cli-podcast-no-feed", true);
+    episode.stage_source_view();
+    episode.spotify.serve("itunes", 404, "text/html", b"");
+    let output = episode.run(&[CANONICAL, "-P", "sase"]);
+    assert_success(&output);
+    let warnings: Vec<String> = warning_lines(&output)
+        .into_iter()
+        .filter(|line| !line.contains("source store"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "{}", format_output(&output));
+    assert!(
+        warnings[0].contains(
+            "no public feed matched \"The Pragmatic Engineer\" (show notes from Spotify; no transcript)"
+        ),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        episode.adapter.rendered_article()["episode"]["transcript"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
+fn enrich_off_makes_no_itunes_request() {
+    let episode = episode_fixture("bob-cli-podcast-enrich-off", false);
+    let config = episode.temp.path().join("config.yml");
+    fs::write(&config, "highlights:\n  podcasts:\n    enrich: off\n")
+        .expect("write config");
+    let output = episode
+        .command(&[CANONICAL, "-P", "sase", "-d"])
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run bob ref create");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("feed:") && !report.contains("transcript:"),
+        "{report}"
+    );
+    assert!(
+        warning_lines(&output).is_empty(),
+        "{}",
+        format_output(&output)
+    );
+    let requests = episode.spotify.requests();
+    assert!(
+        requests
+            .iter()
+            .all(|url| !url.contains("itunes.apple.com") && url != FEED_URL),
+        "{requests:?}"
+    );
 }

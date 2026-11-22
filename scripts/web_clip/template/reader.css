@@ -556,7 +556,8 @@ ol.contents > li > a {
 .article-body.episode-body > .episode-label,
 .article-body.episode-body > ol.episode-chapters,
 .article-body.episode-body > .episode-sponsors,
-.article-body.episode-body > .episode-footer {
+.article-body.episode-body > .episode-footer,
+.article-body.episode-body > .episode-transcript {
   max-width: 365.5pt;
 }
 
@@ -656,5 +657,67 @@ ol.episode-chapters > li {
 }
 
 .episode-footer p {
+  margin: 0;
+}
+
+.article-body .episode-transcript-label {
+  break-before: page;
+  margin-top: 0;
+}
+
+.episode-transcript-credit,
+.episode-transcript-drift {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 8pt;
+  color: #57606a;
+  margin: 0 0 0.55em;
+}
+
+.episode-transcript-drift {
+  font-style: italic;
+}
+
+h3.transcript-chapter {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 11pt;
+  font-weight: 600;
+  color: #2b4c7e;
+  margin: 1.15em 0 0.45em;
+  break-after: avoid;
+}
+
+.transcript-para {
+  display: grid;
+  grid-template-columns: 3.2em 1fr;
+  column-gap: 0.75em;
+  margin: 0 0 0.85em;
+  break-inside: avoid;
+}
+
+.transcript-time {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 7pt;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: #57606a;
+  padding-top: 0.28em;
+}
+
+.article-body .transcript-time a {
+  color: #2b4c7e;
+  border-bottom: none;
+}
+
+.transcript-speaker {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 8pt;
+  font-weight: 600;
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.08em;
+  color: #2b4c7e;
+  margin: 0 0 0.18em;
+}
+
+.transcript-text {
   margin: 0;
 }

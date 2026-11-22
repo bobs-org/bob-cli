@@ -1206,6 +1206,10 @@ fn ref_jobs_run_files_a_spotify_episode_through_the_dossier() {
     assert_eq!(payload["source_url"], CANONICAL, "{payload}");
     assert_eq!(payload["episode"]["shared_at_secs"], 1235, "{payload}");
     assert_eq!(payload["episode"]["listen_url"], CANONICAL, "{payload}");
+    assert_eq!(
+        payload["episode"]["transcript"]["format"], "vtt",
+        "{payload}"
+    );
 
     let done = done_contents(&temp);
     assert!(

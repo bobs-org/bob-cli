@@ -23,7 +23,8 @@ Ops:
   as fitted vector PDFs with per-diagram error isolation.
 - ``render``: print one Bob-built ``article.json`` offline (no network,
   no Defuddle, no fidelity verdict). A ``podcast_episode`` payload prints
-  as an episode dossier: cover card, chapters, show notes, and sponsors.
+  as an episode dossier: cover card, chapters, show notes, sponsors, and
+  a transcript on a new page when the payload carries one.
 
 Siblings loaded at runtime (same directory, on ``sys.path``):
 
@@ -3297,6 +3298,79 @@ def _episode_render_failures(fixtures_dir: str) -> list[str]:
           and "<h2>Show notes</h2>" in source
           and source.find("<h2>Sponsors</h2>")
           > source.find("Get full access"))
+    check("a null transcript adds no transcript section",
+          "episode-transcript" not in body
+          and "<h2>Transcript</h2>" not in source)
+
+    def sample_transcript(**overrides):
+        attached = {
+            "format": "vtt",
+            "words": 240,
+            "roles_inferred": True,
+            "names_from_file": False,
+            "link_times": True,
+            "paragraphs": [
+                {"start_secs": 0, "speaker": "Host",
+                 "text": "Welcome to the show today."},
+                {"start_secs": 197, "speaker": "Guest",
+                 "text": "Thanks for having me on."},
+                {"start_secs": 210, "speaker": "Guest",
+                 "text": "We shipped five thousand pull requests."},
+            ],
+            "chapter_marks": [
+                {"start_secs": 0, "title": "Intro", "paragraph_index": 0},
+                {"start_secs": 197,
+                 "title": "How Harjot shipped over 5,000 pull requests in a month",
+                 "paragraph_index": 1},
+            ],
+        }
+        attached.update(overrides)
+        return attached
+
+    with_tx = build(lambda a: a["episode"].update(
+        transcript=sample_transcript()))
+    tx_body = body_of(with_tx[0])
+    tx_source = with_tx[1]
+    check("transcript heading starts a new page",
+          '<h2 class="episode-label episode-transcript-label">Transcript</h2>'
+          in tx_body
+          and tx_body.find("episode-footer")
+          < tx_body.find("episode-transcript-label"))
+    check("transcript credit names the publisher format",
+          "Publisher transcript (VTT) from the show&#x27;s RSS feed · "
+          "roles inferred, names not guessed" in tx_body)
+    check("speaker labels appear only at a speaker change",
+          tx_body.count('<p class="transcript-speaker">Host</p>') == 1
+          and tx_body.count('<p class="transcript-speaker">Guest</p>') == 1)
+    check("transcript times link when link_times is set",
+          'href="https://open.spotify.com/episode/4UgVFWty2I8hGAgSvT7pjC'
+          '?t=197">3:17</a>' in tx_body)
+    tx_section = tx_body[tx_body.find('<section class="episode-transcript">'):]
+    check("chapter headings sit on the marked paragraph",
+          tx_section.find('<h3 class="transcript-chapter">Intro</h3>')
+          < tx_section.find("Welcome to the show today.")
+          < tx_section.find("How Harjot shipped over 5,000 pull requests")
+          < tx_section.find("Thanks for having me on."))
+    check("source view uses speaker names and plain times",
+          "<h2>Transcript</h2>" in tx_source
+          and "<p><strong>Host</strong> (0:00)</p>" in tx_source
+          and "<p><strong>Guest</strong> (3:17)</p>" in tx_source
+          and "?t=" not in tx_source)
+    drifted = body_of(build(lambda a: a["episode"].update(
+        transcript=sample_transcript(link_times=False)))[0])
+    drifted_section = drifted[drifted.find(
+        '<section class="episode-transcript">'):]
+    check("drift mutes transcript times and notes the publisher file",
+          "?t=" not in drifted_section
+          and '<span class="transcript-time">3:17</span>' in drifted_section
+          and "Timestamps follow the publisher&#x27;s file and may differ "
+          "from Spotify&#x27;s playback" in drifted_section)
+    named = body_of(build(lambda a: a["episode"].update(
+        transcript=sample_transcript(roles_inferred=False,
+                                     names_from_file=True)))[0])
+    check("named speakers credit the file",
+          "speaker names from the file" in named
+          and "roles inferred" not in named)
 
     check("duration formats",
           render.format_episode_duration(5197032) == "1 h 26 min"
@@ -3344,6 +3418,17 @@ def _episode_render_failures(fixtures_dir: str) -> list[str]:
             lambda a: a["episode"].update(provenance=[{"label": "x"}]))
     rejects("a non-boolean chapter_links",
             lambda a: a["episode"].update(chapter_links="yes"))
+    rejects("a transcript that is not an object",
+            lambda a: a["episode"].update(transcript="vtt"))
+    rejects("an unknown transcript format",
+            lambda a: a["episode"].update(transcript=sample_transcript(
+                format="pdf")))
+    rejects("a transcript without paragraphs",
+            lambda a: a["episode"].update(transcript=sample_transcript(
+                paragraphs=[])))
+    rejects("a non-boolean transcript link_times",
+            lambda a: a["episode"].update(transcript=sample_transcript(
+                link_times="yes")))
 
     with tempfile.TemporaryDirectory(prefix="bob-episode-req-") as root:
         good = os.path.join(root, "article.json")

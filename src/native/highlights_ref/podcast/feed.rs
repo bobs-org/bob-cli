@@ -47,6 +47,9 @@ pub(crate) const FEED_MAX_BYTES: u64 = 25 * 1024 * 1024;
 /// Size cap for a Podcasting 2.0 chapters file.
 const CHAPTERS_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Size cap for a publisher transcript file.
+const TRANSCRIPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Per-request time cap; the shared deadline may cut it shorter.
 const FETCH_MAX_TIME_SECS: u64 = 30;
 
@@ -167,6 +170,7 @@ pub(crate) enum FeedOutcome {
 impl FeedOutcome {
     /// Why there is no match, for [`Self::NoFeed`] and
     /// [`Self::NoMatch`].
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn reason(&self) -> Option<&str> {
         match self {
             Self::NoFeed(reason) | Self::NoMatch(reason) => Some(reason),
@@ -181,6 +185,17 @@ pub(crate) enum ChaptersOutcome {
     /// Valid chapters with strictly increasing start times.
     Chapters(Vec<Chapter>),
     /// The file was missing or invalid, and why.
+    Ignored(String),
+    /// The shared deadline ran out first.
+    DeadlineExceeded,
+}
+
+/// What [`fetch_feed_transcript`] produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TranscriptFileOutcome {
+    /// The file's bytes.
+    Bytes(Vec<u8>),
+    /// The file was missing or unreadable, and why.
     Ignored(String),
     /// The shared deadline ran out first.
     DeadlineExceeded,
@@ -307,6 +322,28 @@ pub(crate) fn fetch_feed_chapters(
     match parse_chapters_json(&body) {
         Ok(chapters) => ChaptersOutcome::Chapters(chapters),
         Err(reason) => ChaptersOutcome::Ignored(reason),
+    }
+}
+
+/// Download a matched item's transcript file under the shared deadline.
+pub(crate) fn fetch_feed_transcript(
+    offer: &FeedTranscript,
+    scratch: &Path,
+    deadline: Instant,
+    progress: Option<&dyn Fn(&str)>,
+) -> TranscriptFileOutcome {
+    let dest = scratch.join("podcast-transcript");
+    match fetch_body(
+        &offer.url,
+        &dest,
+        TRANSCRIPT_MAX_BYTES,
+        deadline,
+        progress,
+        "transcript",
+    ) {
+        Ok((_, body)) => TranscriptFileOutcome::Bytes(body),
+        Err(Stop::Deadline) => TranscriptFileOutcome::DeadlineExceeded,
+        Err(Stop::Reason(reason)) => TranscriptFileOutcome::Ignored(reason),
     }
 }
 

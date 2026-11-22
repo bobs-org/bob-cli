@@ -759,8 +759,10 @@ episode dossier through the web-clip adapter's offline `render` op (see
 [web article capture](highlights-clip.md)): the cover, show, title, absolute
 release date, and duration on page 1, then the full show notes with
 clickable chapters where the publisher listed them and sponsor runs moved
-to a quiet card at the end. Episode audio is never downloaded; `-a FILE`
-binds audio you already have exactly as on the arXiv route.
+to a quiet card at the end. When a public publisher feed matches the
+episode, the transcript starts on a new page. Episode audio is never
+downloaded; `-a FILE` binds audio you already have exactly as on the arXiv
+route.
 
 Metadata comes from, in order: the episode page
 (`https://open.spotify.com/episode/<id>`: its embedded episode state, then
@@ -796,7 +798,8 @@ as the write-once source store with the canonical URL as its origin, so
 `bob ref links` lists the publisher's own links (chapter times are plain
 text, not Spotify deep links).
 
-A dry run fetches the metadata and cover but renders and writes nothing:
+A dry run fetches the metadata and cover, looks the publisher feed up, and
+renders and writes nothing:
 
 ```text
 ok would create Highlights-ready podcast PDF
@@ -807,15 +810,36 @@ audio: none
 title: Software factories and code reviews with Harjot Gill (spotify page)
 author: The Pragmatic Engineer (spotify page) · published: 2026-11-18 (spotify page)
 duration: 1 h 26 min · chapters: 16 · cover: yes
+feed: api.substack.com (matched on title, date, duration)
+transcript: publisher VTT (would attach)
 …
 writes: none
 ```
 
 A real create prints `created Highlights-ready podcast PDF` with the
 arXiv-style block plus `duration:`, a capture line such as
-`capture: episode dossier · 16 chapters · show notes 413 words`, and
-`pages: N · size: …`, followed by the source store and intake lines. The
+`capture: episode dossier · 16 chapters · publisher show notes · publisher transcript 18,736 words`,
+and `pages: N · size: …`, followed by the source store and intake lines. The
 report never claims audio or a transcript it did not keep (`audio: none`).
+
+### Publisher feed
+
+After Spotify's metadata, create and ingest look up the show's public RSS
+feed when `highlights.podcasts.enrich` is `auto` (the default). iTunes
+Search finds candidate feeds; a proven 2-of-3 match on title, date, and
+duration attaches the item's notes, Podcasting 2.0 chapters, and a
+transcript. The lookup shares a 45 s deadline and a 10 MiB transcript cap,
+and it fails open: a miss, a dropped transcript, or a spent deadline files
+the dossier with Spotify's notes and exactly one `warning:` line.
+
+Chapter and transcript times deep-link to Spotify `?t=` only when the feed
+duration is within 10 s of Spotify's. Otherwise they print as plain times
+and the transcript page notes that timestamps follow the publisher's file.
+
+A dry run looks the feed up and does not download the transcript. Setting
+`highlights.podcasts.enrich: off` skips iTunes and the feed entirely. The
+capture line then reads `episode dossier (publisher feed lookup off)` and
+no enrichment warning prints.
 
 ## Dedupe
 
@@ -1276,6 +1300,11 @@ bob ref create https://example.com/a https://example.com/b -f -L -P sase
 
 ```yaml
 highlights:
+  podcasts:
+    # Look up the show's public RSS feed (iTunes Search, then the feed)
+    # for show notes, chapters, and a transcript. `off` makes no iTunes
+    # or feed request.
+    enrich: auto
   # `bob ref create --listen` narrates the target
   # with `sase listen render ...`, which must write MP3 audio to {audio}; bob binds it as
   # the PDF's companion audio. bob passes {target} {pdf} {audio} {title} as single

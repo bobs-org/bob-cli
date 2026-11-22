@@ -9,3 +9,5 @@
 docs/mirrored.md | tests/cli/ref_library/migrate_zorg.rs | Fixture-vault path in a test, not a published page.
 # Fixture vault-note path in a unit test, not a published page.
 docs/sase.md | src/native/vault_links.rs | Fixture vault-note path in a unit test, not a published page.
+# Podcasting 2.0 xmlns URI, not a published bob-cli page.
+docs/1.0.md | src/native/highlights_ref/podcast/feed.rs | Podcast Index namespace URI, not a published page.

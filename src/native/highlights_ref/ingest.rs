@@ -918,6 +918,8 @@ fn ingest_podcast_route(
     if let Some(report) = progress {
         report("capturing episode…");
     }
+    let enrich =
+        super::create::podcast_enrich_setting().map_err(command_error)?;
     let dossier = dossier::prepare(
         &episode,
         &EpisodeOverrides::default(),
@@ -925,6 +927,8 @@ fn ingest_podcast_route(
         scratch.path(),
         progress,
         None,
+        enrich,
+        true,
     )
     .map_err(dossier_ingest_error)?;
     for warning in &dossier.warnings {

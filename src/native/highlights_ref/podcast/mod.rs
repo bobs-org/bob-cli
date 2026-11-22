@@ -12,15 +12,9 @@
 
 pub(crate) mod cover;
 pub(crate) mod dossier;
-// The publisher feed match library; the dossier enrichment that calls it
-// lands in a later phase.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod feed;
 pub(crate) mod metadata;
 pub(crate) mod notes;
-// The publisher transcript parser; the dossier enrichment that calls it
-// lands in a later phase.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod transcript;
 
 /// Remove the invisible characters Spotify descriptions carry (U+2060

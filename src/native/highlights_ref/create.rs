@@ -381,6 +381,16 @@ pub(super) fn table_layout_settings() -> Result<(String, u32)> {
     ))
 }
 
+/// `highlights.podcasts.enrich` (default `auto`).
+pub(super) fn podcast_enrich_setting(
+) -> Result<crate::native::config::PodcastEnrich> {
+    let highlights = super::bob_config::load_highlights_config(
+        &super::bob_config::config_path(),
+    )
+    .map_err(super::config_error)?;
+    Ok(highlights.podcast_enrich())
+}
+
 impl CreatePlan {
     fn target_plan(&self) -> TargetPlan {
         TargetPlan {

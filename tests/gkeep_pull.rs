@@ -1226,34 +1226,99 @@ const SPOTIFY_STEM: &str =
     "software_factories_and_code_reviews_with_harjot_gill";
 const SPOTIFY_TITLE: &str =
     "Software factories and code reviews with Harjot Gill";
+const SPOTIFY_FEED_URL: &str =
+    "https://api.substack.com/feed/podcast/458709.rss";
+const SPOTIFY_TRANSCRIPT_URL: &str = "https://api.substack.com/feed/podcast/transcript/225268679/5716fdd023036d0a64c51e7e8330539c.vtt";
 
-/// Fake curl serving the trimmed Spotify episode fixtures by URL shape.
+fn spotify_url_surface(url: &str) -> String {
+    let key: String = url
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                byte as char
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("url-{key}")
+}
+
+fn serve_spotify_surface(
+    root: &Path,
+    surface: &str,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) {
+    fs::write(root.join(format!("{surface}.status")), status.to_string())
+        .expect("spotify status");
+    fs::write(root.join(format!("{surface}.type")), content_type)
+        .expect("spotify type");
+    fs::write(root.join(format!("{surface}.body")), body)
+        .expect("spotify body");
+}
+
+/// Fake curl serving the trimmed Spotify fixtures by URL shape and the
+/// publisher feed and transcript by exact URL.
 fn write_spotify_curl(dir: &Path) -> (PathBuf, PathBuf) {
     let root = dir.join("spotify");
     fs::create_dir_all(&root).expect("spotify root");
     let fixtures =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/spotify");
-    fs::copy(fixtures.join("episode_page.html"), root.join("page.body"))
-        .expect("copy page");
-    fs::write(root.join("page.status"), "200").expect("page status");
-    fs::write(root.join("page.type"), "text/html").expect("page type");
-    fs::copy(fixtures.join("episode_embed.html"), root.join("embed.body"))
-        .expect("copy embed");
-    fs::write(root.join("embed.status"), "200").expect("embed status");
-    fs::write(root.join("embed.type"), "text/html").expect("embed type");
-    fs::copy(
-        fixtures.join("episode_oembed.json"),
-        root.join("oembed.body"),
-    )
-    .expect("copy oembed");
-    fs::write(root.join("oembed.status"), "200").expect("oembed status");
-    fs::write(root.join("oembed.type"), "application/json")
-        .expect("oembed type");
+    let podcast =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/podcast");
+    serve_spotify_surface(
+        &root,
+        "page",
+        200,
+        "text/html",
+        &fs::read(fixtures.join("episode_page.html")).expect("page"),
+    );
+    serve_spotify_surface(
+        &root,
+        "embed",
+        200,
+        "text/html",
+        &fs::read(fixtures.join("episode_embed.html")).expect("embed"),
+    );
+    serve_spotify_surface(
+        &root,
+        "oembed",
+        200,
+        "application/json",
+        &fs::read(fixtures.join("episode_oembed.json")).expect("oembed"),
+    );
     let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F'];
     jpeg.extend_from_slice(&[0; 24]);
-    fs::write(root.join("cover.body"), jpeg).expect("cover body");
-    fs::write(root.join("cover.status"), "200").expect("cover status");
-    fs::write(root.join("cover.type"), "image/jpeg").expect("cover type");
+    serve_spotify_surface(&root, "cover", 200, "image/jpeg", &jpeg);
+    serve_spotify_surface(
+        &root,
+        "itunes",
+        200,
+        "application/json",
+        &fs::read(podcast.join("itunes_pragmatic_engineer.json"))
+            .expect("itunes"),
+    );
+    serve_spotify_surface(
+        &root,
+        &spotify_url_surface(SPOTIFY_FEED_URL),
+        200,
+        "application/rss+xml",
+        &fs::read(podcast.join("feed_pragmatic_engineer.rss")).expect("feed"),
+    );
+    let mut vtt = fs::read(podcast.join("pragmatic_engineer_transcript.vtt"))
+        .expect("vtt");
+    vtt.extend_from_slice(
+        b"\n61\n01:20:00.000 --> 01:20:04.000\n<v SPEAKER_01>That's the episode.\n",
+    );
+    serve_spotify_surface(
+        &root,
+        &spotify_url_surface(SPOTIFY_TRANSCRIPT_URL),
+        200,
+        "text/vtt",
+        &vtt,
+    );
     let path = dir.join("fake-spotify-curl.sh");
     write_executable(
         &path,
@@ -1268,12 +1333,18 @@ for arg in "$@"; do
   url="$arg"
 done
 printf '%s\n' "$url" >> "$ROOT/requests.log"
-case "$url" in
-  *"/oembed?"*) surface=oembed ;;
-  *"/embed/episode/"*) surface=embed ;;
-  *"open.spotify.com/episode/"*) surface=page ;;
-  *) surface=cover ;;
-esac
+key="url-$(printf '%s' "$url" | tr -c 'A-Za-z0-9' '_')"
+if [ -f "$ROOT/$key.status" ] || [ -f "$ROOT/$key.exit" ]; then
+  surface="$key"
+else
+  case "$url" in
+    *"/oembed?"*) surface=oembed ;;
+    *"/embed/episode/"*) surface=embed ;;
+    *"open.spotify.com/episode/"*) surface=page ;;
+    *"itunes.apple.com/search?"*) surface=itunes ;;
+    *) surface=cover ;;
+  esac
+fi
 status=404
 type="text/html"
 if [ -f "$ROOT/$surface.status" ]; then status="$(cat "$ROOT/$surface.status")"; fi
@@ -1731,6 +1802,10 @@ fn url_only_spotify_share_note_files_a_podcasts_reference() {
     assert_eq!(payload["kind"], "podcast_episode", "{payload}");
     assert_eq!(payload["source_url"], SPOTIFY_CANONICAL, "{payload}");
     assert_eq!(payload["episode"]["shared_at_secs"], 1235, "{payload}");
+    assert_eq!(
+        payload["episode"]["transcript"]["format"], "vtt",
+        "{payload}"
+    );
 }
 
 #[test]
