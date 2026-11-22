@@ -2,6 +2,384 @@
 
 All notable changes to Bob are documented here.
 
+## [0.6.0](https://github.com/bobs-org/bob-cli/compare/v0.5.0...v0.6.0) - 2026-11-22
+
+### Added
+
+- *(albums)* group the records index by index_group_by
+- *(task-complete)* place pulled requirement carries and resolve req jump landings
+- *(task-complete)* add atomic carry/drop req write planning
+- *(task-complete)* add requirement verdict selection model
+- *(task-complete)* collect pre-close requirement groups and snapshot identity
+- *(ref)* attach publisher feed notes and transcripts to episode dossiers
+- *(ref)* ingest Spotify episodes from capture jobs and Keep through the podcast route
+- *(ref)* file Spotify episodes as podcasts references through the episode dossier route
+- *(capture)* complete (( task links in plain prose with capture-complete -L -T
+- *(ref)* parse publisher podcast transcripts into speaker paragraphs
+- *(capture)* write requirements to existing tasks
+- *(ref)* find the publisher feed item that proves a Spotify episode
+- *(capture)* write new-task requirement bullets into the reqs zone
+- *(capture)* add requirement marker typing rewrite
+- *(ref)* add the offline adapter render op and the podcast episode dossier
+- *(ref)* add the Spotify episode metadata ladder and show-notes segmentation
+- *(task)* add bob task rename-drawer to rename and merge drawers vault-wide
+- cap worker pools with BOB_MAX_THREADS and test threads at 16
+- *(task)* add bob task tidy to repair open task blocks
+- *(task-reqs)* keep readers and writers off requirement lines
+- *(task-reqs)* add task block layout and req line writers
+- *(bank)* share the five-step note cleaner and document tail order
+- *(capture-complete)* add -L/--links-only and -S/--source-note
+- *(task-reqs)* add req forest recognizer contract
+- *(albums)* add reversible walk_by updates to the album writer
+- *(records)* apply grouped walk updates
+- *(albums)* group record walks by declared walk_by
+- *(capture)* add successor jump offer contract
+- *(albums)* read frontmatter title first and add bob albums tidy
+- *(capture)* rank completed task history by match score
+- *(capture)* implement work_log log-reason recall completion
+- *(periods)* add intentions step to migrate and new scaffolds
+- *(intentions)* recover task rewrite integration
+- *(periods)* report legacy and malformed intention findings
+- *(intentions)* repair owned fields in reference link rewrites
+- *(bank)* add import -D/--delete with digest-gated cleanup
+- *(periods)* add day brief, summary drafting, and brief-carried instructions
+- *(bank)* expand import file operands
+- *(intentions)* repair owned links during vault rewrites
+- *(capture)* add work log phrase completion
+- *(logs)* add vault-derived phrase recall
+- *(periods)* add guarded intention updates
+- *(intentions)* add unified fields contract and readers
+- *(albums)* plan each album walk once and pin landing tests
+- *(tick)* add step gates and per-step adapters
+- *(tick)* add the ordered background work engine and CLI views
+- *(walks)* report lane excess for attention marks
+- *(records)* show, check, and tidy learn the record walk line
+- *(records)* stage record walk neighbours atomically
+- *(albums)* sync repairs record walk lines and reports walk health
+- *(albums)* add pure record walk planner
+- *(walks)* light footer s across all nine review tiers with counts
+- *(records)* write H1-less record notes and tidy redundant H1s
+- *(daily-headline)* carry headline report integration
+- *(walks)* add read-only attention report and contract
+- *(scan)* snapshot the full pre-planning read-set
+- *(capture)* expand item-start dot to route alias
+- *(periods)* serve Daily Headline on week days and capture --tasks
+- *(scan)* finish highlights scan lock-window landing repairs
+- *(records)* create records without empty Notes section and add tidy command
+- *(records)* guarded JSON envelope for bob records update
+- *(scan)* apply prepared full scans inside a bounded lock window
+- *(records)* add per-record show STEM and fingerprint
+- *(scan)* share prepared full-scan planning and validation inputs
+- *(capture)* keep / literal after album routes
+- *(bank)* report period closing balances in bank report
+- *(bank)* add historical posted-balance resolver and check findings
+- *(capture)* prioritize living vault link suggestions
+- *(note-catalog)* add archive tiers to note goto
+- *(native)* add read-only note catalog scan and rank
+- *(bank)* add bank subscriptions report command
+- *(bank)* add account, rule, and setting writer ops
+- *(bank)* link import rows to subscriptions with summary
+- *(bank)* add native bank checks and subscription registry
+- *(bank)* add guarded config update for category and group ops
+- *(bank)* integrate subscription core into rows, suggestions, and docs
+- *(bank)* add subscription attribution and ledger
+- *(bank)* add read-only config report
+- *(gcal)* expose calendar marks across CLI and JSON surfaces
+- *(gcal)* freeze rows from calendars that left the config
+- *(bank)* add subscription registry and matching
+- *(bank)* extract YAML span primitives and add a bank config editor
+- *(capture)* allow sentence punctuation in drawer titles
+- *(gcal)* render calendar marks at the front of Google-owned title spans
+- *(areas)* add guarded areas sync writer, nightly step, and coverage
+- *(areas)* add read-only bob areas list and check
+- *(gmail)* finish reply-reopen reports, docs and regression coverage
+- *(areas)* validated area graph and pure nested catalog planner
+- *(areas)* shared catalog engine for generated Areas catalogs
+- *(gmail)* plan closed-thread reply reopens over vault snapshots
+- *(bank)* teach ]b in the import Next line and document the bank walk
+- *(gmail)* prepare closed-thread replies with resumable activity cursors
+- *(bank)* add bob bank report -c child-period chart aggregate
+- *(gmail)* follow merge edges and surface remaining archive holds
+- *(bank)* close badge epic with period identity, empty-range bound and docs
+- *(bank)* report counts stats-strip periods with coverage and navigation
+- *(projects)* finish subprojects catalog epic
+- *(capture)* list new project notes in the parent Projects catalog at birth
+- *(projects)* add versioned projects list report
+- *(bank)* add category hotkeys, groups, hidden, and row suggestions
+- *(highlights)* render the projects catalog in note snapshots
+- *(bank)* clean QFX payees and merchant keys
+- *(projects)* add dual-format SUBOPEN catalog reader
+- *(capture)* protect generated project catalog heading
+- *(gmail)* add receipt-scoped unarchive command
+- *(gmail)* materialize owned archive receipts into mail notes
+- *(gmail)* project archive receipts for readers
+- *(gmail)* describe Task Link Gmail hop and warn on disabled sync deploys
+- *(capture)* advertise record_field need on keyless first-level bullets
+- *(gmail)* add archive apply support
+- *(gcal)* add ack diagnostics and stale notices
+- *(gcal)* add one-key ack review session [bob-cli-l5.3.1.3]
+- *(gcal)* add external event ack CLI
+- *(gcal)* share note selection, editing, and preview services
+- *(gcal)* reconcile the unacked row tag and surface ack warnings
+- *(gcal)* add ack journal and event classifier
+- *(gmail)* add archive state journal
+- *(albums)* singular record counts and retired config-reader gate
+- *(gcal)* include synced day in human output
+- *(albums)* repair guarded writer landing
+- *(gcal)* sync the last N days
+- *(albums)* remove records config fallback
+- *(gcal)* close Bob-filed rows on past-day sync
+- *(gmail)* add archive config and modify login scope
+- *(gcal)* support batched multi-day sync
+- *(albums)* ship guarded albums update command and its contract
+- *(albums)* preserve schema spans and plan reversible updates
+- *(albums)* validate ordered schema operations and consequences
+- *(bank)* verify balances and restore missing rows
+- *(albums)* report schema metadata and emit canonical YAML records
+- *(web-clip)* add network guards and image handling
+- *(albums)* create albums and their Base and catalogs atomically
+- *(albums)* sync owner catalogs with records indexes
+- *(albums)* report owner catalog health
+- *(bank)* add guarded import command and recovery
+- *(albums)* finish index write safety and preview parity
+- *(albums)* sync generated record indexes
+- *(bank)* add import planner and payee naming for match-name plan
+- *(albums)* rebuild the records index inside record transactions
+- *(bank)* parse OFX/CSV exports and fold the bank journal
+- *(albums)* render the records index and report its state
+- *(capture)* add notebook-aware slash alias in capture-rewrite
+- *(bank)* add list, report, ensure, and ack to bob bank
+- *(capture)* add notebook section menu and Bob-authored place-menu chrome
+- *(bank)* add bank grammar, month notes, and read-only bob bank check
+- *(capture)* use album registry across targets and completion
+- *(records)* add album-aware records commands and membership checks
+- *(highlights)* finish SVG landing repairs for bob-cli-k6
+- *(capture)* resolve notebook sections with staged draft view
+- *(records)* add shared album record context
+- *(highlights)* render local SVG embeds as vector PDFs
+- *(keep-moving)* skip only umbrella projects, not every root
+- *(highlights)* guard SVG images in PDF renders
+- *(albums)* add list/check reports, completion, and docs
+- *(albums)* add vault-scoped album registry
+- *(albums)* parse declarations through shared schema validation
+- *(gcal)* finish private event note extras
+- *(capture)* implement hash_fallback drop branch with directive_menu alias
+- *(periods)* emit charts, stacks, and display_short on show
+- *(stats)* add task_type parts dimension with configured-type split
+- *(gcal)* expose effective buffer reasons in note JSON
+- *(gcal)* edit and adopt private event notes
+- *(gcal)* add private event note writes and preview
+- *(capture)* prefer dependency alias once item is routed
+- *(gcal)* add bob gcal note selection and read-only modes
+- *(capture)* add comma alias separator switch
+- *(plugins)* name the landed build in deploy-guard refusals
+- *(gcal)* record note provenance in gcal.row and fail-safe reads
+- *(gcal)* layer private event notes over Google descriptions
+- *(archive)* treat only top-level done/ as the archive
+- *(task-restore)* add bob task restore over the task-move engine
+- *(collect-done)* rename-following archive plan with link repair
+- *(capture)* toggle block ID separators with glued dot
+- *(archive)* report health findings and use bound pair destinations
+- *(archive)* migrate remaining archive readers
+- *(archive)* add recoverable removals to the guarded writer
+- *(capture)* add notebook route parsing
+- *(archive)* apply plans under the lock with dry-run preview and JSON report
+- *(notebooks)* generate Notebooks catalogs with sync, create, and a nightly step
+- *(collect-done)* snapshot inputs with exact replay and plan-wide refusal
+- *(notebooks)* recognize notebooks with list, check, and contract docs
+- *(capture)* prove sigil alias typing tips in capture-rewrite
+- *(archive)* create missing files in the guarded write engine
+- *(archive)* select only area and project notes for done/
+- *(capture)* add per-item record_note summary to record JSON output
+- *(capture)* alias . to & and ; to * in capture drafts
+- *(gcal)* add forced day reset
+- *(vault-sync)* detect linked task losses
+- *(gcal)* name every skipped event and stop re-tombstoning
+- *(records)* add records init CLI to scaffold type notes and Bases
+- *(capture)* close the running Pomodoro at a stated size
+- *(gcal)* refuse to sync into a note Templater has not rendered
+- *(capture)* land existing-record update fixes
+- *(capture)* add update-aware record assistance
+- *(capture)* write existing record updates transactionally
+- *(capture)* parse existing record updates
+- *(capture)* address named Record Card fields in complete
+- *(records)* add shared plan update target resolution over byte-preserving edit
+- *(capture)* add guided record field completion
+- *(capture)* create record notes through the capture transaction
+- *(capture)* resolve record metadata and expose targets
+- *(capture)* add shared record route classifier with fail-closed execution
+- *(records)* add records CLI and docs
+- *(gmail)* refile resolved inbox routes and alarm stale skips
+- *(capture)* alias spaced dot to @ where route completion opens
+- *(gmail)* apply reply-watch effects after a confirmed send
+- *(gmail)* wire reply watch polling into sync
+- *(records)* harden planning and byte-preserving updates
+- *(gmail)* apply watched turns through sync transaction
+- *(gmail)* add watch journal and preparation planning
+- *(records)* add side-effect-free creation planner
+- *(records)* add lazy per-folder catalog index and suggestions
+- *(records)* add typed rendering and byte-preserving updates
+- *(capture)* alias x and s to close outcomes while typing
+- *(records)* add schema validation and stem fixtures
+- *(capture)* install new notes without replacing existing files
+- *(capture)* refuse operator-only link-start bodies
+- *(capture)* treat trailing plus after a bare start name as later timing
+- *(google)* configure gog executable and config root
+- *(gmail)* coordinate every sync Gmail read through one retry layer
+- *(capture)* add signed later Pomodoro starts
+- *(gmail)* stage routed sync filings in one vault transaction
+- *(gmail)* add sync discovery, guard, and retry helpers
+- *(gmail)* add sync enrollment fold, watching-task scan, and adoption decisions
+- *(gmail)* record whose turn a thread is in on mail notes
+- *(homes)* resolve hues from the nearest area or project color slot, add grey mute, and root review_time at gtd
+- *(gmail)* add sync routing config, label resolver, and doctor routes row
+
+### Breaking
+
+- *(capture)* [**breaking**] admit requirement bullets with req_marker spans (grammar 29)
+- *(ref)* [**breaking**] give Spotify links canonical identity and refuse non-episodes
+- *(task-split)* [**breaking**] carry a requirement branch into its own task
+- *(attachments)* [**breaking**] stream and guard attachment copies
+- *(capture)* [**breaking**] embed clipboard videos from vid/
+- *(capture)* [**breaking**] claim whole-draft //query as Go To Notes
+- *(gcal)* [**breaking**] require unique marks on non-primary calendars
+- *(gcal)* [**breaking**] root Event Tasks at meet_inbox by default
+- *(gmail)* [**breaking**] add archive receipts and explicit undo
+- *(projects)* [**breaking**] sync lifecycles and sub-project catalogs via host transaction
+- *(projects)* [**breaking**] add pure sub-project catalog planner and renderer [bob-cli-ld.4]
+- *(gmail)* [**breaking**] notify once when sync archives mail
+- *(plugins)* [**breaking**] require plugins.sync allowlist for bob plugins sync
+- *(gmail)* [**breaking**] fail closed at archive mutation boundaries
+- *(gmail)* [**breaking**] archive surfaces reports help docs and verification [bob-cli-kx.2.1.8.4]
+- *(gmail)* [**breaking**] apply mutation boundary, let-go isolation, and fault tests [bob-cli-kx.2.1.8.2]
+- *(gmail)* [**breaking**] complete archive reports and conformance audit
+- *(gmail)* [**breaking**] add archive apply, let-go and crash reconciliation
+- *(gmail)* [**breaking**] add digest-confirmed archive batch planning preview
+- *(gmail)* [**breaking**] add constrained archive label transport
+- *(gmail)* [**breaking**] add strict archive evidence scan
+- *(plugins)* [**breaking**] deploy enclosing checkout and fetch on pull failure
+- *(capture)* [**breaking**] finish the album consumer landing repairs
+- *(capture)* [**breaking**] add grammar 26 notebook section bullets
+- *(capture)* [**breaking**] per-route album resolution with task-home refusals
+- *(notebooks)* [**breaking**] land marker-free catalogs, checker fix, and CI retarget
+- *(capture)* [**breaking**] switch dot suffix after route+id to caret marker
+- *(archive)* [**breaking**] finish configurable keep-window behavior
+- *(capture)* [**breaking**] complete notebook capture assistance
+- *(capture)* [**breaking**] create notebooks from sealed @parent^id@ %n drafts
+- *(archive)* [**breaking**] keep window and group archived closures by month
+- *(capture)* [**breaking**] repair notebook capture landing
+- *(gcal)* [**breaking**] hold replaced Events sections
+- *(capture)* [**breaking**] expose notebook capture targets and verify contract
+- *(capture)* [**breaking**] write notebook notes through guarded transaction
+- *(task-merge)* [**breaking**] copy merged source notes instead of moving them
+- *(capture)* [**breaking**] compose notebook routes with lists, globals, and #section^id
+- *(archive)* [**breaking**] resolve archive pairs from metadata first
+- *(archive)* [**breaking**] correct archive link repair
+- *(periods)* [**breaking**] v2 period review instructions and brief v2
+- *(capture)* [**breaking**] show similar records in capture-related
+- *(capture)* [**breaking**] claim the sized Nx close in the capture grammar
+- *(records)* [**breaking**] add records update CLI with shell completion
+- *(capture)* [**breaking**] complete record claiming and preview contracts
+- *(gmail)* [**breaking**] reply hold/lift line rules with running-session guard
+- *(capture)* [**breaking**] finish signed-start diagnostics and landing
+- *(gmail)* [**breaking**] file labelled threads by routing label as bob gmail sync
+
+### Fixed
+
+- *(albums)* heal Obsidian-rewritten record walk arms
+- *(capture)* read deep requirement-chain lines like level 2 in completion, selectors, and aliases
+- *(capture)* count nested requirements added to existing tasks
+- *(ref)* keep base62 ids out of stems, save ingest source stores, and print the recorded URL in mastheads
+- *(capture)* preserve wikilink fields and rank candidates
+- *(albums)* restore walk_by at original slot and bind emitted selection
+- *(capture)* preserve ID-less jump identity across later insertions
+- *(capture)* settle ID-less successor jump landings
+- *(ref)* follow the vault's Dataview inline-query prefix in note snapshots
+- *(periods)* register update, keep fenced migrate bodies
+- *(periods)* remove empty legacy slots during intentions migrate
+- *(intentions)* preserve links through vault rewrites
+- *(bank)* match relative glob operands consistently
+- *(records)* validate stored literal lists without CLI comma splitting
+- *(records)* preserve literal YAML values in reads and undo
+- *(tick)* count changed PDFs in refs summaries and finish the tick landing
+- *(n7)* complete T4 exact macOS verification
+- *(subprocess)* make detached-grandchild pipe-drain tests deterministic and portable
+- *(note-catalog)* canonicalize library roots for symlinked vaults
+- *(gmail)* honor Reply-To for plain replies
+- *(capture)* keep record field punctuation literal during rewrite
+- *(capture)* guard unknown short options
+- *(vault-sync)* corroborate created-time identity matches
+- *(capture)* refuse past-midnight Pomodoro offset starts
+- *(capture)* preserve Pomodoro preview identity and report settled name
+- *(capture)* refuse ambiguous notebook bullets
+- *(capture)* never promote closed or archived prerequisites
+- *(bank)* complete period closing balance landing
+- *(bank)* land subscription gaps from the landing review
+- *(bank)* integrate bank setup writer and config findings with subscriptions
+- *(bank)* pass config to ledger recomputation
+- *(bank)* repair subscription core ledger, import after-state, and guards
+- *(gcal)* land calendar marks epic with docs budget, marked-primary JSON, and guide fixes
+- *(areas)* land Areas catalogs epic with command-count, glossary, and catalog docs fixes
+- *(gmail)* keep branching merge terminals and line-shift-proof confirms
+- *(gmail)* make reply reopen recovery ownership-safe
+- *(gmail)* reopen synced messages
+- *(gmail)* make archive confirmation line-shift proof
+- *(gmail)* keep the archive epoch in dry-run once the receipt label id resolves
+- *(ci)* clear four release-train blockers on master
+- *(notify)* remove dead PATH helper
+- *(gmail)* land archive receipt integration fixes
+- *(gmail)* preserve archive preview and sync safety
+- *(gcal)* repair ack queue and terminal edge cases
+- *(bank)* stamp month notes in the configured timezone
+- *(git)* use literal pathspecs for remaining filename callers
+- apply five small security-audit corrections
+- *(gcal)* escape organizer title tags and links
+- *(git)* use literal pathspecs for file mutations
+- *(storage)* harden vault and cache writes
+- *(albums)* guard create collisions, catalog deps, and records-init claims
+- *(bank)* harden import planning and recovery
+- *(capture)* complete notebook section menu round-trips
+- *(stats)* drop HomesEngine resolver borrow before remember
+- *(capture)* stamp created/captured in the configured timezone
+- *(keep-moving)* restore the sub-project leaf rule
+- *(kf)* land six epic-caused defect repairs with regression tests
+- *(git)* move vault_git tests after is_ignored
+- *(scripts)* persist notify, harden tracker apply, restore git globs
+- *(git)* restore check-ignore probes
+- *(bank)* validate out-of-month headings, BOM frontmatter, planner anchors
+- *(subprocess)* bound pipe draining and harden notify sleeps
+- *(gcal)* collapse hostile titles and encode badge URL whitespace
+- *(sync)* harden vault sync and rewrite write durability
+- *(web-clip)* guard out-of-band fetches and CSS/SVG clip sinks
+- *(albums)* confine routes, recover nouns, and restore report diagnostics
+- *(capture)* restore disjoint record parse spans
+- *(gcal)* finish private note landing boundary cases
+- *(gcal)* complete private event note write contract
+- *(gcal-notes)* nine select fixes for note previews, options, clear, list/show
+- *(gcal)* fold private notes per account and report held rows honestly
+- *(gcal)* clean event note lint and add preview fixtures
+- *(gcal)* share the replaced-Events detector between sync and list
+- *(task-merge)* preserve code text in merge copies and harden fence handling
+- *(archive)* repair guarded landing validation
+- *(records)* insert a blank line before a new named update section
+- *(vault-sync)* key inbound task-loss links by resolved note
+- *(gmail)* finish sync health repairs and land reply-watch epic
+- *(records)* map stemless titles to record_title and document engine allowances
+- *(gmail)* preserve watched targets across shifted lines
+- *(gmail)* clear reply-watch lint and stale dead-code allowances
+- *(gmail)* land remaining sync retry, recovery, and watch-membership lint
+- *(gmail)* land remaining sync retry, recovery, and watch-membership defects
+- *(gmail)* host-local idempotent sync recovery evidence
+- *(gmail)* list sync and RFC thread ids through gog threads.list
+- *(gmail)* repair sync landing gaps for filing, coordination, reports, and recovery
+- *(task-status)* cap a grouped Tasks section's trailing gap at one blank line
+- *(vault-sync)* union same-point Markdown insertions instead of quarantining
+
+### Performance
+
+- *(freshness)* reuse task index during scans
+- *(archive)* cache pair facts for read-only consumers
+
 ## [0.5.0](https://github.com/bobs-org/bob-cli/compare/v0.4.0...v0.5.0) - 2026-11-07
 
 ### Added
