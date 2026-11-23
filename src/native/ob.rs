@@ -283,36 +283,42 @@ impl std::fmt::Display for LockWaitError {
 /// Acquire the shared vault-maintenance lock, waiting up to `timeout` while
 /// another run holds it.
 ///
-/// Polls [`try_acquire_lock`] with short sleeps (about 250 ms).
-/// `on_first_wait` runs exactly once, when the first poll finds the lock
-/// contended, so callers can print a single "waiting…" line. A zero `timeout`
-/// fails fast without waiting.
+/// Opens the lock file once and retries [`FileExt::try_lock_exclusive`] on
+/// that fd with short sleeps (about 250 ms), so `/proc/<pid>/fd` shows the
+/// waiter for the whole wait. `on_first_wait` runs exactly once, when the
+/// first poll finds the lock contended, so callers can print a single
+/// "waiting…" line. A zero `timeout` fails fast without waiting.
 pub(crate) fn acquire_lock_waiting(
     timeout: Duration,
     on_first_wait: impl FnOnce(),
 ) -> Result<File, LockWaitError> {
+    let path = lock_file_from_env().unwrap_or_else(default_lock_file);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|error| LockWaitError::Open {
+            path: path.clone(),
+            error,
+        })?;
     let started = Instant::now();
     let mut on_first_wait = Some(on_first_wait);
     loop {
-        match try_acquire_lock() {
-            Ok(file) => return Ok(file),
-            Err(LockAcquireError::Contended) => {
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok(file),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 if let Some(callback) = on_first_wait.take() {
                     callback();
                 }
                 if started.elapsed() >= timeout {
-                    return Err(LockWaitError::Timeout {
-                        path: lock_file_from_env()
-                            .unwrap_or_else(default_lock_file),
-                    });
+                    return Err(LockWaitError::Timeout { path });
                 }
                 let remaining = timeout.saturating_sub(started.elapsed());
                 std::thread::sleep(remaining.min(Duration::from_millis(250)));
             }
-            Err(LockAcquireError::Open { path, error }) => {
-                return Err(LockWaitError::Open { path, error });
-            }
-            Err(LockAcquireError::Acquire { path, error }) => {
+            Err(error) => {
                 return Err(LockWaitError::Acquire { path, error });
             }
         }

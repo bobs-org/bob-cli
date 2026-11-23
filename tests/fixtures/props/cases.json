@@ -327,5 +327,75 @@
     "kind": "day",
     "ops": [{ "op": "prop.set", "key": "title", "value": "Hi", "before": "type" }],
     "contains": ["title: Hi", "type: [[day]]"]
+  },
+  {
+    "id": "header-comment-block-scalar-to-scalar",
+    "note": "---\nx: |- # inline\n  hello\n  world\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "x", "value": "new" }],
+    "candidate": "---\nx: new # inline\ncreated: 2026-11-22\n---\n"
+  },
+  {
+    "id": "header-comment-block-scalar-to-multiline",
+    "note": "---\nx: |- # inline\n  hello\n  world\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "x", "value": "hello\nworld", "kind": "text" }],
+    "candidate": "---\nx: |- # inline\n  hello\n  world\ncreated: 2026-11-22\n---\n"
+  },
+  {
+    "id": "newline-only-block-scalar",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "notes", "value": "\n", "kind": "text" }],
+    "contains": ["notes: |2+"]
+  },
+  {
+    "id": "keep-chomp-block-scalar",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "notes", "value": "hello\n\n", "kind": "text" }],
+    "contains": ["notes: |+\n  hello\n"]
+  },
+  {
+    "id": "leading-space-block-scalar",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "notes", "value": "  hello\n", "kind": "text" }],
+    "contains": ["notes: |2\n    hello\n"]
+  },
+  {
+    "id": "set-yaml-refuses-alias",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set_yaml", "key": "notes", "yaml": "*summary" }],
+    "error": "prop_bad_value"
+  },
+  {
+    "id": "set-yaml-refuses-nested-alias",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set_yaml", "key": "notes", "yaml": "{a: *b}" }],
+    "error": "prop_bad_value"
+  },
+  {
+    "id": "done-tasks-derived-on-area",
+    "note": "---\ntype: [[area]]\ndone_tasks: \"[[done/work_done]]\"\ncreated: 2026-11-22\n---\n",
+    "kind": "area",
+    "ops": [{ "op": "prop.set", "key": "done_tasks", "value": "[[done/other_done]]" }],
+    "error": "prop_derived"
+  },
+  {
+    "id": "project-status-derived",
+    "note": "---\ntype: [[project]]\nstatus: wip\ncreated: 2026-11-22\n---\n",
+    "kind": "project",
+    "ops": [{ "op": "prop.set", "key": "status", "value": "done" }],
+    "error": "prop_derived"
+  },
+  {
+    "id": "template-stays-loose",
+    "note": "---\ntype: [[project]]\ntemplate: task\ncreated: 2026-11-22\n---\n",
+    "kind": "project",
+    "ops": [{ "op": "prop.set", "key": "template", "value": "note" }],
+    "contains": ["template: note"]
   }
 ]

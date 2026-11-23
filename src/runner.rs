@@ -949,7 +949,7 @@ Examples:
   bob props show notes/groceries.md
   bob props show eat/ninja -f json
   bob props update notes/groceries.md -i update.json -f json
-  bob props update eat/ninja -i - -n -f json < preview.json
+  bob props update eat/ninja -i - -d -f json < preview.json
 
 See docs/props.md for the envelope, operations, Undo, and JSON.
 Run 'bob props <command> --help' for more information on a command.";

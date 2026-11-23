@@ -784,8 +784,8 @@ fn mark_duplicates(entries: &mut [PropertyEntry]) {
 }
 
 fn root_trivia(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.is_empty() || (indentation(line) == 0 && trimmed.starts_with('#'))
+    indentation(line) == 0
+        && (line.trim().is_empty() || line.trim_start().starts_with('#'))
 }
 
 fn build_entry(
@@ -864,7 +864,7 @@ fn build_entry(
     }
 }
 
-fn yaml_contains_merge(value: &YamlValue) -> bool {
+pub(crate) fn yaml_contains_merge(value: &YamlValue) -> bool {
     match value {
         YamlValue::Mapping(mapping) => {
             mapping.keys().any(|key| key.as_str() == Some("<<"))
@@ -1084,6 +1084,54 @@ mod tests {
             Some("# keep")
         );
         assert_eq!(document.end_line, Some(5));
+    }
+
+    #[test]
+    fn header_comment_on_block_scalar_sits_inside_value_range() {
+        let note = "---\nx: |- # inline\n  hello\n  world\n---\n";
+        let document = PropsDocument::parse(note);
+        assert_eq!(document.entries.len(), 1);
+        let entry = &document.entries[0];
+        assert_eq!(&document.source[entry.value_range.clone()][..2], "|-");
+        assert!(
+            document.source[entry.value_range.clone()].contains("hello"),
+            "value range covers children"
+        );
+        assert_eq!(
+            entry
+                .inline_comment_range
+                .as_ref()
+                .map(|range| &document.source[range.clone()]),
+            Some("# inline")
+        );
+        let comment = entry.inline_comment_range.as_ref().unwrap();
+        assert!(
+            comment.start >= entry.value_range.start
+                && comment.end <= entry.value_range.end,
+            "header comments sit inside the block value range"
+        );
+    }
+
+    #[test]
+    fn newline_only_keep_block_parses_as_a_single_newline() {
+        let document = PropsDocument::parse(
+            "---\nnotes: |2+\n  \ncreated: 2026-11-22\n---\n",
+        );
+        let entry = document
+            .entries
+            .iter()
+            .find(|entry| entry.key == "notes")
+            .expect("notes");
+        assert_eq!(entry.value, json!("\n"));
+        assert!(!entry.opaque);
+        assert!(
+            document.source[entry.value_range.clone()].starts_with("|2+"),
+            "value range starts at the block header"
+        );
+        assert!(
+            document.source[entry.value_range.clone()].contains("  "),
+            "indented empty keep line stays inside the value range"
+        );
     }
 
     #[test]

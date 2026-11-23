@@ -3,7 +3,10 @@
 use crate::support::*;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 const NOTE: &str =
     "---\ntitle: Groceries\ncount: 3\ndone: false\n---\n\n# Groceries\n";
@@ -151,6 +154,14 @@ fn help_lists_options_alphabetically_with_short_aliases() {
         assert_success(&output);
         let help = stdout(&output);
         assert_text_order(&help, &options);
+        assert!(
+            help.contains("Output format: text or json"),
+            "help advertises text|json:\n{help}"
+        );
+        assert!(
+            help.contains("[possible values: text, json]"),
+            "human alias stays hidden:\n{help}"
+        );
         assert_stdout_has_no_ansi(&output);
     }
     let output = bob_command()
@@ -544,4 +555,300 @@ fn apply_replans_fresh_and_preserves_concurrent_body_edit() {
         fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap();
     assert!(final_note.contains("count: 7"), "replanned:\n{final_note}");
     assert!(final_note.contains("Buy milk."), "body kept:\n{final_note}");
+}
+
+#[test]
+fn format_text_human_and_json_are_accepted() {
+    let vault = vault("format");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+
+    let text = bob_command()
+        .args(["props", "show", "notes/groceries.md", "-f", "text"])
+        .env("BOB_DIR", vault.path())
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("show -f text");
+    assert_success(&text);
+    let text_out = stdout(&text);
+    assert!(text_out.contains("Properties"), "text:\n{text_out}");
+
+    let human = bob_command()
+        .args(["props", "show", "notes/groceries.md", "-f", "human"])
+        .env("BOB_DIR", vault.path())
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("show -f human");
+    assert_success(&human);
+    assert_eq!(stdout(&human), text_out);
+
+    let json = show(vault.path(), "notes/groceries.md", &[]);
+    assert_success(&json);
+    assert_eq!(report(&json)["ok"], true);
+}
+
+#[test]
+fn stdin_envelope_applies_and_six_ops_undo() {
+    let vault = vault("stdin-ops");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+    let envelope = json!({
+        "schema_version": 1,
+        "expect": expect,
+        "ops": [
+            {"op": "prop.set", "key": "aisle", "value": "produce", "after": "count"},
+            {"op": "prop.set_yaml", "key": "notes", "yaml": "keep"},
+            {"op": "prop.rename", "key": "aisle", "to": "section"},
+            {"op": "prop.move", "key": "section", "before": "title"},
+            {"op": "prop.unset", "key": "done"},
+            {"op": "prop.restore", "key": "done", "raw": "done: false\n"},
+        ],
+    })
+    .to_string();
+
+    let mut preview = bob_command();
+    preview
+        .args([
+            "props",
+            "update",
+            "notes/groceries.md",
+            "-i",
+            "-",
+            "-d",
+            "-f",
+            "json",
+        ])
+        .env("BOB_DIR", vault.path())
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault.path().join("vault.lock"))
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = preview.spawn().expect("spawn dry-run");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(envelope.as_bytes())
+        .expect("write envelope");
+    let output = child.wait_with_output().expect("dry-run");
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["dry_run"], true);
+    assert_eq!(
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap(),
+        NOTE
+    );
+
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &envelope,
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["changed"], true);
+    let applied =
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap();
+    assert!(applied.contains("section: produce"), "applied:\n{applied}");
+    assert!(applied.contains("notes: keep"), "applied:\n{applied}");
+    assert!(applied.contains("done: false"), "applied:\n{applied}");
+
+    let reverted = update(
+        vault.path(),
+        "notes/groceries.md",
+        &json!({
+            "schema_version": 1,
+            "expect": body["fingerprint_after"],
+            "ops": body["inverse_ops"],
+        })
+        .to_string(),
+        &["-f", "json"],
+    );
+    assert_success(&reverted);
+    assert_eq!(
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap(),
+        NOTE
+    );
+}
+
+#[test]
+fn absolute_note_with_relative_bob_dir_stays_confined() {
+    let vault = vault("abs-rel");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let parent = vault.path().parent().expect("parent");
+    let name = vault.path().file_name().expect("name");
+    let absolute = vault
+        .path()
+        .join("notes/groceries.md")
+        .display()
+        .to_string();
+    let output = bob_command()
+        .current_dir(parent)
+        .args([
+            "props",
+            "show",
+            &absolute,
+            "-b",
+            name.to_str().expect("utf8"),
+            "-f",
+            "json",
+        ])
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault.path().join("vault.lock"))
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("show absolute + relative -b");
+    assert_success(&output);
+    assert_eq!(report(&output)["path"], "notes/groceries.md");
+}
+
+#[cfg(unix)]
+fn wait_until_child_opens_lock(pid: u32, lock: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let want = fs::metadata(lock).ok();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let (Ok(entries), Some(want)) =
+            (fs::read_dir(format!("/proc/{pid}/fd")), want.as_ref())
+        {
+            for entry in entries.flatten() {
+                if fs::metadata(entry.path()).ok().is_some_and(|meta| {
+                    meta.dev() == want.dev() && meta.ino() == want.ino()
+                }) {
+                    return;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("child {pid} never opened {}", lock.display());
+}
+
+#[cfg(unix)]
+fn spawn_update(
+    vault: &Path,
+    note: &str,
+    envelope: &str,
+) -> std::process::Child {
+    let input = vault.join("update-envelope.json");
+    fs::write(&input, envelope).expect("write envelope");
+    bob_command()
+        .args(["props", "update", note, "-i"])
+        .arg(&input)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault.join("vault.lock"))
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn update")
+}
+
+#[test]
+#[cfg(unix)]
+fn lock_wait_preserves_formatting_only_frontmatter_edit() {
+    let vault = vault("lock-format");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+    let envelope = json!({
+        "schema_version": 1,
+        "expect": expect,
+        "ops": [{"op": "prop.set", "key": "count", "value": 7}],
+    })
+    .to_string();
+    let held = hold_lock(vault.path());
+    let child = spawn_update(vault.path(), "notes/groceries.md", &envelope);
+    wait_until_child_opens_lock(child.id(), &vault.path().join("vault.lock"));
+    let concurrent =
+        "---\ntitle: Groceries\ncount: 3\ndone: false # keep\n---\n\n# Groceries\n";
+    fs::write(vault.path().join("notes/groceries.md"), concurrent)
+        .expect("formatting-only edit");
+    drop(held);
+    let output = child.wait_with_output().expect("wait");
+    assert_success(&output);
+    let final_note =
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap();
+    assert!(final_note.contains("count: 7"), "applied:\n{final_note}");
+    assert!(
+        final_note.contains("done: false # keep"),
+        "formatting kept:\n{final_note}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn lock_wait_semantic_edit_is_stale() {
+    let vault = vault("lock-stale");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+    let envelope = json!({
+        "schema_version": 1,
+        "expect": expect,
+        "ops": [{"op": "prop.set", "key": "count", "value": 7}],
+    })
+    .to_string();
+    let held = hold_lock(vault.path());
+    let child = spawn_update(vault.path(), "notes/groceries.md", &envelope);
+    wait_until_child_opens_lock(child.id(), &vault.path().join("vault.lock"));
+    fs::write(
+        vault.path().join("notes/groceries.md"),
+        "---\ntitle: Groceries\ncount: 9\ndone: false\n---\n\n# Groceries\n",
+    )
+    .expect("semantic edit");
+    drop(held);
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(report(&output)["error"]["code"], "prop_stale");
+}
+
+#[test]
+#[cfg(unix)]
+fn lock_wait_schema_change_owns_a_previously_loose_field() {
+    let vault = vault("lock-schema");
+    write_note(
+        vault.path(),
+        "body.md",
+        "---\ntype: [[area]]\n---\n# Body\n",
+    );
+    write_note(
+        vault.path(),
+        "eat.md",
+        "---\ntype: [[album]]\nparent: [[body]]\ntitle: Restaurants\nrecord:\n  noun: restaurant\n  fields: {}\n---\n# Restaurants\n",
+    );
+    let record = "---\ntype: [[restaurant]]\nparent: [[eat]]\ntitle: Ramen\nrating: 5\ncreated: 2026-11-22\n---\n# Ramen\n";
+    write_note(vault.path(), "eat/ramen.md", record);
+    let expect = fingerprint(vault.path(), "eat/ramen.md");
+    let envelope = json!({
+        "schema_version": 1,
+        "expect": expect,
+        "ops": [{"op": "prop.set", "key": "rating", "value": 4}],
+    })
+    .to_string();
+    let preview = update(
+        vault.path(),
+        "eat/ramen.md",
+        &envelope,
+        &["-d", "-f", "json"],
+    );
+    assert_success(&preview);
+    assert_eq!(report(&preview)["changed"], true);
+
+    let held = hold_lock(vault.path());
+    let child = spawn_update(vault.path(), "eat/ramen.md", &envelope);
+    wait_until_child_opens_lock(child.id(), &vault.path().join("vault.lock"));
+    fs::write(
+        vault.path().join("eat.md"),
+        "---\ntype: [[album]]\nparent: [[body]]\ntitle: Restaurants\nrecord:\n  noun: restaurant\n  fields:\n    rating:\n      values: number\n---\n# Restaurants\n",
+    )
+    .expect("schema change");
+    drop(held);
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(report(&output)["error"]["code"], "prop_owned");
+    assert_eq!(
+        fs::read_to_string(vault.path().join("eat/ramen.md")).unwrap(),
+        record
+    );
 }

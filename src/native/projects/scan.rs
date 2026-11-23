@@ -330,7 +330,9 @@ fn report_prj_inline_schedule_issues(
 pub(crate) fn parse_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {
     let mut lines = contents.lines();
     let first = lines.next()?;
-    if trim_cr(first) != "---" {
+    let first = trim_cr(first);
+    let first = first.strip_prefix('\u{feff}').unwrap_or(first);
+    if first != "---" {
         return None;
     }
 

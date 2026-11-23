@@ -11,10 +11,12 @@ use serde_yaml::{Mapping, Value as YamlValue};
 
 use super::{
     document::{
-        datetime_parts, is_date, is_datetime, PropertyKind, ValueStyle,
+        datetime_parts, is_date, is_datetime, yaml_contains_merge,
+        PropertyKind, ValueStyle,
     },
     PropsError,
 };
+use crate::native::yaml_spans;
 
 /// Rendered flow-list inner length at or below which an existing one-line
 /// flow list is retained.
@@ -450,30 +452,41 @@ fn emit_block_scalar(text: &str, newline: &str) -> String {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let trailing = trailing_newline_count(&normalized);
     let body = normalized.trim_end_matches('\n');
-    let indicator = match trailing {
-        0 => "|-",
-        1 => "|",
-        _ => "|+",
-    };
-    let mut out = indicator.to_owned();
     if body.is_empty() {
-        if trailing >= 2 {
+        // Clip of an empty body is `""`. Keep chomping needs an indented
+        // empty line so a following `---` fence does not eat the newline.
+        let mut out = String::from("|2+");
+        for _ in 0..trailing {
             out.push_str(newline);
-            for _ in 0..(trailing.saturating_sub(1)) {
-                out.push_str(newline);
-            }
+            out.push_str("  ");
         }
+        out.push_str(newline);
         return out;
     }
+    let needs_indent_indicator = body
+        .split('\n')
+        .any(|line| line.starts_with(' ') || line.starts_with('\t'));
+    let chomp = match trailing {
+        0 => "-",
+        1 => "",
+        _ => "+",
+    };
+    let mut out = String::from("|");
+    if needs_indent_indicator {
+        out.push('2');
+    }
+    out.push_str(chomp);
     for line in body.split('\n') {
         out.push_str(newline);
-        out.push_str("  ");
-        out.push_str(line);
-    }
-    if trailing >= 2 {
-        for _ in 0..(trailing - 1) {
-            out.push_str(newline);
+        if !line.is_empty() {
+            out.push_str("  ");
+            out.push_str(line);
         }
+    }
+    // Terminate the last content line. Clip keeps that one newline; keep
+    // chomping adds `trailing - 1` extra blank lines after it.
+    for _ in 0..trailing.max(1) {
+        out.push_str(newline);
     }
     out
 }
@@ -682,7 +695,62 @@ pub(crate) fn parse_yaml_fragment(
             &format!("yaml fragment is not valid YAML: {error}"),
         )
     })?;
+    refuse_incoming_opaque(yaml, &value, key, op_index)?;
     Ok(value)
+}
+
+fn refuse_incoming_opaque(
+    yaml: &str,
+    value: &YamlValue,
+    key: &str,
+    op_index: usize,
+) -> Result<(), PropsError> {
+    if matches!(value, YamlValue::Tagged(_)) || yaml_contains_merge(value) {
+        return Err(opaque_fragment(key, op_index));
+    }
+    let trimmed = yaml.trim_end_matches(['\n', '\r']);
+    let wrapped = format!("---\n{key}: {trimmed}\n---\n");
+    let parsed = super::document::PropsDocument::parse(&wrapped);
+    if parsed.entries.iter().any(|entry| entry.key != key) {
+        return Err(bad_value(
+            key,
+            op_index,
+            "yaml fragment would inject sibling keys",
+        ));
+    }
+    let Some(entry) = parsed.entries.iter().find(|entry| entry.key == key)
+    else {
+        return Ok(());
+    };
+    let feature_source = match value {
+        YamlValue::String(_)
+        | YamlValue::Null
+        | YamlValue::Bool(_)
+        | YamlValue::Number(_) => {
+            let header = wrapped
+                .get(entry.colon_range.end..)
+                .unwrap_or("")
+                .split(['\n', '\r'])
+                .next()
+                .unwrap_or("");
+            header.to_owned()
+        }
+        YamlValue::Mapping(_)
+        | YamlValue::Sequence(_)
+        | YamlValue::Tagged(_) => wrapped.clone(),
+    };
+    if yaml_spans::has_yaml_feature(&yaml_spans::split_lines(&feature_source)) {
+        return Err(opaque_fragment(key, op_index));
+    }
+    Ok(())
+}
+
+fn opaque_fragment(key: &str, op_index: usize) -> PropsError {
+    bad_value(
+        key,
+        op_index,
+        "yaml fragments cannot contain anchors, aliases, tags, or merge keys",
+    )
 }
 
 /// True when two YAML values are semantically equal for a no-op set.
@@ -756,6 +824,39 @@ mod tests {
         assert_eq!(rendered, "[work, home]");
     }
 
+    fn round_trip_block(text: &str) -> String {
+        let emitted = emit_value(
+            &YamlValue::String(text.into()),
+            PropertyKind::Text,
+            None,
+            false,
+            "\n",
+        );
+        let wrapped = format!(
+            "---\nk: {emitted}{}---\n",
+            if emitted.ends_with('\n') { "" } else { "\n" }
+        );
+        let document =
+            crate::native::props::document::PropsDocument::parse(&wrapped);
+        document
+            .entries
+            .iter()
+            .find(|entry| entry.key == "k")
+            .and_then(|entry| entry.raw_value.as_ref())
+            .and_then(YamlValue::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected string in\n{wrapped}\nentries={:?}",
+                    document
+                        .entries
+                        .iter()
+                        .map(|e| (&e.key, &e.raw_value))
+                        .collect::<Vec<_>>()
+                )
+            })
+            .to_owned()
+    }
+
     #[test]
     fn multiline_text_uses_literal_block_chomping() {
         let none = emit_value(
@@ -773,7 +874,7 @@ mod tests {
             false,
             "\n",
         );
-        assert_eq!(one, "|\n  hello");
+        assert_eq!(one, "|\n  hello\n");
         let two = emit_value(
             &YamlValue::String("hello\n\n".into()),
             PropertyKind::Text,
@@ -789,7 +890,35 @@ mod tests {
             false,
             "\n",
         );
-        assert_eq!(inner, "|-\n  hello\n  world");
+        assert_eq!(inner, "|-\n  hello\n  world\n");
+        assert_eq!(round_trip_block("hello\n"), "hello\n");
+        assert_eq!(round_trip_block("hello\n\n"), "hello\n\n");
+        assert_eq!(round_trip_block("hello\nworld"), "hello\nworld");
+        assert_eq!(round_trip_block("\n"), "\n");
+        assert_eq!(round_trip_block("\n\n"), "\n\n");
+        assert_eq!(round_trip_block("  hello\n"), "  hello\n");
+        let leading = emit_value(
+            &YamlValue::String("  hello\n".into()),
+            PropertyKind::Text,
+            None,
+            false,
+            "\n",
+        );
+        assert!(
+            leading.starts_with("|2"),
+            "leading spaces need an indent indicator: {leading}"
+        );
+    }
+
+    #[test]
+    fn set_yaml_refuses_incoming_anchors_aliases_and_merges() {
+        use super::parse_yaml_fragment;
+        for yaml in ["*summary", "&id value", "!!str tagged", "<<: {a: 1}"] {
+            let error = parse_yaml_fragment(yaml, "notes", 0).expect_err(yaml);
+            assert_eq!(error.code, "prop_bad_value", "{yaml}");
+        }
+        assert!(parse_yaml_fragment("\"*summary\"", "notes", 0).is_ok());
+        assert!(parse_yaml_fragment("|\n  *not_an_alias", "notes", 0).is_ok());
     }
 
     #[test]

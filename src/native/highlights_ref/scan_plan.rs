@@ -927,7 +927,7 @@ fn read_set_changed(
             continue;
         }
         let was_intake_dest = intake.iter().any(|item| {
-            &item.destination == path
+            item.destination == *path
                 || item.companions.iter().any(|(_, dest)| dest == path)
         });
         if !was_intake_dest {

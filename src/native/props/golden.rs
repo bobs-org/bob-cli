@@ -197,9 +197,10 @@ mod tests {
                     assert_eq!(
                         Some(error.code.as_str()),
                         case.error.as_deref(),
-                        "{}: unexpected error {}",
+                        "{}: unexpected error {} ({})",
                         case.id,
-                        error.code
+                        error.code,
+                        error.message
                     );
                 }
                 Ok(outcome) => {

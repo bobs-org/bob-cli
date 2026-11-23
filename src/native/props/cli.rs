@@ -16,8 +16,8 @@ use std::{
 };
 
 use clap::{
-    builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
-    Command as ClapCommand,
+    builder::{OsStringValueParser, PossibleValue, PossibleValuesParser},
+    Arg, ArgAction, ArgMatches, Command as ClapCommand,
 };
 use serde_json::{json, Value};
 
@@ -98,7 +98,7 @@ pub(crate) fn update_command() -> ClapCommand {
         .after_help(
             "Examples:\n  \
              bob props update notes/groceries.md -i update.json -f json\n  \
-             bob props update eat/ninja -i - -n -f json < preview.json\n  \
+             bob props update eat/ninja -i - -d -f json < preview.json\n  \
              bob props update 2026/20261122 -i undo.json\n\n\
              Environment:\n  \
              BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -177,9 +177,12 @@ fn format_arg() -> Arg {
         .long("format")
         .short('f')
         .value_name("FORMAT")
-        .value_parser(["human", "json"])
-        .default_value("human")
-        .help("Output format: human or json")
+        .value_parser(PossibleValuesParser::new([
+            PossibleValue::new("text").alias("human"),
+            PossibleValue::new("json"),
+        ]))
+        .default_value("text")
+        .help("Output format: text or json")
 }
 
 fn help_arg() -> Arg {
@@ -211,7 +214,7 @@ fn format_from(matches: &ArgMatches) -> OutputFormat {
     match matches
         .get_one::<String>("format")
         .map(String::as_str)
-        .unwrap_or("human")
+        .unwrap_or("text")
     {
         "json" => OutputFormat::Json,
         _ => OutputFormat::Human,
@@ -219,10 +222,22 @@ fn format_from(matches: &ArgMatches) -> OutputFormat {
 }
 
 fn vault_from(matches: &ArgMatches) -> PathBuf {
-    matches
+    let vault = matches
         .get_one::<OsString>("bob-dir")
         .map(PathBuf::from)
-        .unwrap_or_else(bob_env::bob_dir)
+        .unwrap_or_else(bob_env::bob_dir);
+    lexical_normalize(&absolute_path(&vault))
+}
+
+fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(_) => path.to_path_buf(),
+        }
+    }
 }
 
 /// One typed CLI failure with its process exit code.

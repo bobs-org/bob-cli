@@ -144,6 +144,8 @@ impl RoleContext {
         if is_derived_key(key)
             || (self.note_kind == NoteKind::Reference
                 && key == "source_markdown")
+            || (self.note_kind == NoteKind::Project
+                && matches!(key, "status" | "scheduled"))
         {
             return derived_role(key, self.note_kind);
         }
@@ -436,14 +438,19 @@ fn potential_record_folder(path: &Path, album_paths: &[String]) -> bool {
 /// write the digest/drafted markers, while `periods::note` carries them across
 /// rewrites; the Zorg migration and Gmail archive paths own `zorg_*` and
 /// `generated_from_zorg*`; reference sync/attach/overwrite own the write-once
-/// `source_markdown` pointer. `created` is intentionally absent: a creation
-/// default alone does not make it derived.
+/// `source_markdown` pointer; `bob task archive` owns `done_tasks`; the
+/// project-tasks plugin owns `task_count`/`open_task_count`; `bob projects
+/// sync` owns project `status`/`scheduled`. `created` and `template` stay
+/// loose: a creation default alone does not make a field derived.
 fn is_derived_key(key: &str) -> bool {
     key.ends_with("_digest")
         || key.ends_with("_drafted")
         || key.starts_with("review_")
         || key.starts_with("zorg_")
         || key.starts_with("generated_from_zorg")
+        || key == "done_tasks"
+        || key == "task_count"
+        || key == "open_task_count"
 }
 
 fn derived_role(key: &str, note_kind: NoteKind) -> PropertyRole {
@@ -459,6 +466,23 @@ fn derived_role(key: &str, note_kind: NoteKind) -> PropertyRole {
         (
             "Zorg importer",
             "the importer records source lineage and generated-note status here.",
+        )
+    } else if key == "done_tasks" {
+        (
+            "bob task archive",
+            "bob task archive owns the done_tasks archive link.",
+        )
+    } else if key == "task_count" || key == "open_task_count" {
+        (
+            "bob-project-tasks",
+            "the project-tasks plugin derives these counts from the note's tasks.",
+        )
+    } else if note_kind == NoteKind::Project
+        && matches!(key, "status" | "scheduled")
+    {
+        (
+            "bob projects sync",
+            "bob projects sync owns project status and scheduled dates.",
         )
     } else if key.ends_with("_digest")
         || key.ends_with("_drafted")
@@ -638,6 +662,23 @@ mod tests {
         let reference = context(NoteKind::Reference, None);
         let note = context(NoteKind::Note, None);
         assert_eq!(project.classify("created").role, Some(Role::Loose));
+        assert_eq!(project.classify("template").role, Some(Role::Loose));
+        assert_eq!(project.classify("status").role, Some(Role::Derived));
+        assert_eq!(
+            project.classify("status").owner.as_deref(),
+            Some("bob projects sync")
+        );
+        assert_eq!(project.classify("scheduled").role, Some(Role::Derived));
+        assert_eq!(project.classify("done_tasks").role, Some(Role::Derived));
+        assert_eq!(
+            project.classify("done_tasks").owner.as_deref(),
+            Some("bob task archive")
+        );
+        assert_eq!(project.classify("task_count").role, Some(Role::Derived));
+        assert_eq!(
+            project.classify("open_task_count").role,
+            Some(Role::Derived)
+        );
         assert_eq!(notebook.classify("created").role, Some(Role::Loose));
         assert_eq!(
             reference.classify("source_markdown").role,
@@ -720,6 +761,18 @@ mod tests {
             &records,
         );
         assert_eq!(area.note_kind, NoteKind::Area);
+        assert_eq!(area.classify("done_tasks").role, Some(Role::Derived));
+        assert_eq!(area.classify("status").role, Some(Role::Loose));
+        assert_eq!(area.classify("task_count").role, Some(Role::Derived));
+        assert_eq!(area.classify("template").role, Some(Role::Loose));
+
+        let bom_area = resolve_note_context(
+            vault,
+            "body.md",
+            "\u{feff}---\ntype: [[area]]\n---\n# Body\n",
+            &records,
+        );
+        assert_eq!(bom_area.note_kind, NoteKind::Area);
 
         let project = resolve_note_context(
             vault,

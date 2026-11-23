@@ -146,19 +146,19 @@ kind names are `day`, `week`, `quarter`, `year`, `all_time`, `record`,
 | Role     | Keys/context                                                                                                            | Owner or action           |
 | -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | identity | `type`; record/album `parent`; album `title`                                                                            | locked with reason        |
-| derived  | `*_digest`, `*_drafted`, `review_*`, `zorg_*`, `generated_from_zorg*`; day/period `parent`; reference `source_markdown` | writer name and reason    |
+| derived  | `*_digest`, `*_drafted`, `review_*`, `zorg_*`, `generated_from_zorg*`; day/period `parent`; reference `source_markdown`; `done_tasks`; `task_count`; `open_task_count`; project `status`/`scheduled` | writer name and reason    |
 | card     | record schema fields                                                                                                    | `record`, editor `==`     |
 | card     | day/period `intentions`, `summary`, `reflection`                                                                        | `intentions`, editor `==` |
 | card     | album `record`                                                                                                          | `album`, editor `==`      |
 | card     | bank hub `bank`                                                                                                         | `bank`, editor `==`       |
-| loose    | remaining keys, including `created`                                                                                     | editable here             |
+| loose    | remaining keys, including `created` and `template`                                                                      | editable here             |
 
 Audit sources for the derived list: intention writers under
 `intentions/` and `periods/`, record and album writers under `records/` and
 `albums/`, bank writers under `bank/`, reference importers, note-creation
 defaults, and the frontmatter predicates in `projects`, `notebooks`
 snapshots, and the album registry. A creation-time default alone does not
-make a field derived; `created` stays loose. Where note/schema discovery
+make a field derived; `created` and `template` stay loose. Where note/schema discovery
 fails, the note does not silently downgrade a potentially owned field to
 loose: `show` carries the diagnostic and `update` refuses dependent edits
 until ownership resolves.

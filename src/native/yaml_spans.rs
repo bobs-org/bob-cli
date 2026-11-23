@@ -124,12 +124,22 @@ pub(crate) fn join_lines(lines: &[Line]) -> String {
 }
 
 /// Frontmatter YAML with Unix newlines for `serde_yaml`.
+///
+/// Keep-chomp empty block lines only survive when the last source line's
+/// ending is preserved. `join("\n")` alone drops it and collapses `"\n"`
+/// to `""`.
 pub(crate) fn yaml_text(lines: &[Line]) -> String {
-    lines
-        .iter()
-        .map(|line| line.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(&line.text);
+    }
+    if lines.last().is_some_and(|line| !line.ending.is_empty()) {
+        out.push('\n');
+    }
+    out
 }
 
 /// Split a value fragment into the value and a trailing `#` comment.
@@ -477,6 +487,14 @@ fn looks_typed(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn yaml_text_keeps_the_last_line_ending() {
+        let closed = split_lines("notes: |2+\n  \n---\n");
+        assert_eq!(yaml_text(&closed[..2]), "notes: |2+\n  \n");
+        let eof = split_lines("notes: |2+\n  ");
+        assert_eq!(yaml_text(&eof), "notes: |2+\n  ");
+    }
 
     #[test]
     fn split_lines_keeps_bom_crlf_and_a_missing_final_newline() {

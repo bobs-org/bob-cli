@@ -28,7 +28,7 @@ Examples:
   bob props show notes/groceries.md
   bob props show eat/ninja -f json
   bob props update notes/groceries.md -i update.json -f json
-  bob props update eat/ninja -i - -n -f json < preview.json
+  bob props update eat/ninja -i - -d -f json < preview.json
 
 See docs/props.md for the envelope, operations, Undo, and JSON.
 Run 'bob props <command> --help' for more information on a command.
@@ -52,10 +52,10 @@ Options:
           Bob vault root; defaults to BOB_DIR or ~/bob
 
   -f, --format <FORMAT>
-          Output format: human or json
+          Output format: text or json
 
-          [default: human]
-          [possible values: human, json]
+          [default: text]
+          [possible values: text, json]
 
   -h, --help
           Show help
@@ -98,10 +98,10 @@ Options:
           Preview the plan without writing files
 
   -f, --format <FORMAT>
-          Output format: human or json
+          Output format: text or json
 
-          [default: human]
-          [possible values: human, json]
+          [default: text]
+          [possible values: text, json]
 
   -h, --help
           Show help
@@ -111,7 +111,7 @@ Options:
 
 Examples:
   bob props update notes/groceries.md -i update.json -f json
-  bob props update eat/ninja -i - -n -f json < preview.json
+  bob props update eat/ninja -i - -d -f json < preview.json
   bob props update 2026/20261122 -i undo.json
 
 Environment:

@@ -207,6 +207,16 @@ fn project_parser_reports_malformed_and_multiple_prj_lines() {
 }
 
 #[test]
+fn parse_frontmatter_strips_a_leading_bom() {
+    let frontmatter = parse_frontmatter(
+        "\u{feff}---\ntype: [[project]]\nstatus: wip\n---\n# Body\n",
+    )
+    .expect("BOM-prefixed typed notes still parse");
+    assert!(frontmatter_is_project(&frontmatter));
+    assert!(!frontmatter_is_area(&frontmatter));
+}
+
+#[test]
 fn type_forms_all_match_project_and_area() {
     // R11: every type form is eligible in both Rust and JS.
     for contents in [

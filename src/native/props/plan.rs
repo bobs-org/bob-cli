@@ -9,7 +9,10 @@ use std::ops::Range;
 use serde_yaml::Value as YamlValue;
 
 use super::{
-    document::{FrontmatterState, PropertyEntry, PropertyKind, PropsDocument},
+    document::{
+        datetime_parts, is_datetime, FrontmatterState, PropertyEntry,
+        PropertyKind, PropsDocument,
+    },
     emit::{
         emit_key, emit_value, existing_is_short_flow_list, parse_yaml_fragment,
         typed_from_json, yaml_eq,
@@ -20,6 +23,8 @@ use super::{
     show::ShowReport,
     InspectContext, PropsError,
 };
+use crate::native::yaml_spans;
+use serde_json::Value as JsonValue;
 
 /// Successful in-memory plan for one envelope.
 #[derive(Debug, Clone, PartialEq)]
@@ -97,7 +102,10 @@ pub(crate) fn plan(
     let mut current = contents.to_owned();
     let mut inverse_groups = Vec::with_capacity(envelope.ops.len());
     for (index, op) in envelope.ops.iter().enumerate() {
+        let before_op = PropsDocument::parse(&current);
         let (next, inverse) = apply_one(&current, context, op, index)?;
+        let after_op = PropsDocument::parse(&next);
+        verify_op(&before_op, &after_op, op, index)?;
         current = next;
         inverse_groups.push(inverse);
     }
@@ -109,7 +117,7 @@ pub(crate) fn plan(
     verify(&before.document, &after.document, &envelope.ops)?;
     let fingerprint_after =
         after.document.fingerprint.clone().ok_or_else(|| {
-            verify_failed("candidate fingerprint is unavailable", None)
+            verify_failed("candidate fingerprint is unavailable", None, None)
         })?;
     Ok(PlanOutcome {
         changed: current != contents,
@@ -526,20 +534,12 @@ fn rebuild_entry_with_value(
     } else {
         after_colon
     };
-    let comment = entry
-        .inline_comment_range
-        .as_ref()
-        .map(|range| {
-            let gap = &source[entry.value_range.end..range.start];
-            format!("{gap}{}", &source[range.clone()])
-        })
-        .unwrap_or_default();
-    let after_comment = entry
-        .inline_comment_range
-        .as_ref()
-        .map(|range| range.end)
-        .unwrap_or(entry.value_range.end);
-    let trailing = &source[after_comment..entry.source_range.end];
+    let comment = header_comment_suffix(source, entry);
+    let value_and_comment_end = match &entry.inline_comment_range {
+        Some(comment) => comment.end.max(entry.value_range.end),
+        None => entry.value_range.end,
+    };
+    let trailing = &source[value_and_comment_end..entry.source_range.end];
     if emitted.contains('\n') || emitted.contains('\r') {
         let (first, rest) = split_once_ending(emitted, newline);
         let (eol, extra) = split_once_ending(trailing, newline);
@@ -548,6 +548,29 @@ fn rebuild_entry_with_value(
     } else {
         format!("{leading}{key}:{gap}{emitted}{comment}{trailing}")
     }
+}
+
+/// Reattach a header-line `#` comment after the first emitted line.
+///
+/// Block scalars keep `value_range` starting at `|-` and spanning children,
+/// so the comment sits *inside* that range. Trailing after
+/// `max(value_end, comment_end)` then drops the old children instead of
+/// duplicating them.
+fn header_comment_suffix(source: &str, entry: &PropertyEntry) -> String {
+    if entry.inline_comment_range.is_none() {
+        return String::new();
+    }
+    let after_colon_start = entry.colon_range.end;
+    let header_end = source[after_colon_start..]
+        .find(['\n', '\r'])
+        .map(|index| after_colon_start + index)
+        .unwrap_or(source.len());
+    let after = &source[after_colon_start..header_end];
+    let (_, comment) = yaml_spans::split_comment(after);
+    if comment.is_empty() {
+        return String::new();
+    }
+    format!("{}{comment}", yaml_spans::whitespace_before_comment(after))
 }
 
 fn split_once_ending<'a>(text: &'a str, newline: &str) -> (&'a str, &'a str) {
@@ -829,6 +852,18 @@ fn restore_absence(
     }
 }
 
+/// Wrap restore raw as a one-entry frontmatter document.
+///
+/// Keep-chomp empty block lines are significant, so a raw that already
+/// ends with a newline must not gain a second blank before the closer.
+fn wrap_restore_raw(raw: &str) -> String {
+    if raw.ends_with('\n') || raw.ends_with('\r') {
+        format!("---\n{raw}---\n")
+    } else {
+        format!("---\n{raw}\n---\n")
+    }
+}
+
 fn validate_raw(raw: &str, key: &str, index: usize) -> Result<(), PropsError> {
     if raw.contains('\u{feff}') {
         return Err(bad_restore(
@@ -847,7 +882,7 @@ fn validate_raw(raw: &str, key: &str, index: usize) -> Result<(), PropsError> {
             "restore raw cannot contain a frontmatter delimiter or body",
         ));
     }
-    let wrapped = format!("---\n{raw}\n---\n");
+    let wrapped = wrap_restore_raw(raw);
     let parsed = PropsDocument::parse(&wrapped);
     if parsed.entries.len() != 1 {
         return Err(bad_restore(
@@ -861,6 +896,13 @@ fn validate_raw(raw: &str, key: &str, index: usize) -> Result<(), PropsError> {
             key,
             index,
             "restore raw must describe the addressed key",
+        ));
+    }
+    if parsed.entries[0].opaque {
+        return Err(bad_restore(
+            key,
+            index,
+            "restore raw cannot contain anchors, aliases, tags, or merge keys",
         ));
     }
     if !parsed.body_range.is_empty()
@@ -1017,7 +1059,7 @@ fn verify(
     let original_body = &original.source[original.body_range.clone()];
     let candidate_body = &candidate.source[candidate.body_range.clone()];
     if original_body != candidate_body {
-        return Err(verify_failed("operation changed body bytes", None));
+        return Err(verify_failed("operation changed body bytes", None, None));
     }
     let original_bom = original
         .bom_range
@@ -1030,7 +1072,7 @@ fn verify(
         .map(|range| &candidate.source[range.clone()])
         .unwrap_or("");
     if original_bom != candidate_bom {
-        return Err(verify_failed("operation changed BOM bytes", None));
+        return Err(verify_failed("operation changed BOM bytes", None, None));
     }
     let touched = touched_keys(ops);
     for entry in &original.entries {
@@ -1043,28 +1085,337 @@ fn verify(
             return Err(verify_failed(
                 &format!("untouched key {:?} is missing", entry.key),
                 Some(entry.key.clone()),
+                None,
             ));
         };
         if entry.raw(&original.source) != after.raw(&candidate.source) {
             return Err(verify_failed(
                 &format!("untouched key {:?} changed bytes", entry.key),
                 Some(entry.key.clone()),
+                None,
             ));
         }
         if entry.raw_value != after.raw_value {
             return Err(verify_failed(
                 &format!("untouched key {:?} changed meaning", entry.key),
                 Some(entry.key.clone()),
+                None,
             ));
         }
         if entry.value != after.value {
             return Err(verify_failed(
                 &format!("untouched key {:?} changed JSON value", entry.key),
                 Some(entry.key.clone()),
+                None,
             ));
         }
     }
     Ok(())
+}
+
+fn verify_op(
+    before: &PropsDocument,
+    after: &PropsDocument,
+    op: &Op,
+    index: usize,
+) -> Result<(), PropsError> {
+    match op {
+        Op::Set {
+            key,
+            value,
+            kind,
+            position,
+        } => {
+            let typed = typed_from_json(key, value, *kind, index)?;
+            verify_expected_value(after, key, &typed.yaml, index)?;
+            if find_entry(before, key).is_none()
+                && let Some(position) = position
+            {
+                verify_position(after, key, position, index)?;
+            }
+            Ok(())
+        }
+        Op::SetYaml {
+            key,
+            yaml,
+            position,
+        } => {
+            let parsed = parse_yaml_fragment(yaml, key, index)?;
+            verify_expected_value(after, key, &parsed, index)?;
+            if find_entry(before, key).is_none()
+                && let Some(position) = position
+            {
+                verify_position(after, key, position, index)?;
+            }
+            Ok(())
+        }
+        Op::Unset { key } => verify_absent(after, key, index),
+        Op::Rename { key, to } => {
+            if key == to {
+                return Ok(());
+            }
+            verify_absent(after, key, index)?;
+            let Some(original) = find_entry(before, key) else {
+                return Ok(());
+            };
+            let Some(expected) = original.raw_value.as_ref() else {
+                return Ok(());
+            };
+            verify_expected_value(after, to, expected, index)
+        }
+        Op::Move { key, position } => {
+            verify_position(after, key, position, index)
+        }
+        Op::Restore {
+            key,
+            raw,
+            position,
+            framing: _,
+        } => match raw {
+            Some(raw) => {
+                let wrapped = wrap_restore_raw(raw);
+                let parsed = PropsDocument::parse(&wrapped);
+                let Some(expected) = parsed
+                    .entries
+                    .first()
+                    .and_then(|entry| entry.raw_value.as_ref())
+                else {
+                    return Ok(());
+                };
+                verify_expected_value(after, key, expected, index)?;
+                if find_entry(before, key).is_none()
+                    && let Some(position) = position
+                {
+                    verify_position(after, key, position, index)?;
+                }
+                Ok(())
+            }
+            None => verify_absent(after, key, index),
+        },
+    }
+}
+
+fn verify_expected_value(
+    document: &PropsDocument,
+    key: &str,
+    expected: &serde_yaml::Value,
+    index: usize,
+) -> Result<(), PropsError> {
+    let Some(entry) = find_entry(document, key) else {
+        return Err(verify_failed(
+            &format!("operation did not leave {key:?}"),
+            Some(key.to_owned()),
+            Some(index),
+        ));
+    };
+    if entry.opaque {
+        return Err(verify_failed(
+            &format!("operation produced an opaque {key:?} value"),
+            Some(key.to_owned()),
+            Some(index),
+        ));
+    }
+    let Some(actual) = entry.raw_value.as_ref() else {
+        return Err(verify_failed(
+            &format!("{key:?} has no parsed YAML after the operation"),
+            Some(key.to_owned()),
+            Some(index),
+        ));
+    };
+    if !yaml_semantically_eq(actual, expected) {
+        return Err(verify_failed(
+            &format!("{key:?} YAML does not match the operation"),
+            Some(key.to_owned()),
+            Some(index),
+        ));
+    }
+    let expected_json =
+        crate::native::records::fingerprint::yaml_to_canonical_json(expected);
+    if !json_semantically_eq(&entry.value, &expected_json) {
+        return Err(verify_failed(
+            &format!("{key:?} JSON does not match the operation"),
+            Some(key.to_owned()),
+            Some(index),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_absent(
+    document: &PropsDocument,
+    key: &str,
+    index: usize,
+) -> Result<(), PropsError> {
+    if find_entry(document, key).is_some() {
+        return Err(verify_failed(
+            &format!("operation left {key:?} in place"),
+            Some(key.to_owned()),
+            Some(index),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_position(
+    document: &PropsDocument,
+    key: &str,
+    position: &Position,
+    index: usize,
+) -> Result<(), PropsError> {
+    let keys: Vec<&str> = document
+        .entries
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
+    let Some(key_at) = keys.iter().position(|item| *item == key) else {
+        return Err(verify_failed(
+            &format!("operation did not leave {key:?}"),
+            Some(key.to_owned()),
+            Some(index),
+        ));
+    };
+    match position {
+        Position::Before(neighbor) => {
+            let Some(neighbor_at) =
+                keys.iter().position(|item| *item == neighbor.as_str())
+            else {
+                return Err(verify_failed(
+                    &format!("position neighbor {neighbor:?} is missing"),
+                    Some(neighbor.clone()),
+                    Some(index),
+                ));
+            };
+            if key_at + 1 != neighbor_at {
+                return Err(verify_failed(
+                    &format!("{key:?} is not before {neighbor:?}"),
+                    Some(key.to_owned()),
+                    Some(index),
+                ));
+            }
+        }
+        Position::After(neighbor) => {
+            let Some(neighbor_at) =
+                keys.iter().position(|item| *item == neighbor.as_str())
+            else {
+                return Err(verify_failed(
+                    &format!("position neighbor {neighbor:?} is missing"),
+                    Some(neighbor.clone()),
+                    Some(index),
+                ));
+            };
+            if neighbor_at + 1 != key_at {
+                return Err(verify_failed(
+                    &format!("{key:?} is not after {neighbor:?}"),
+                    Some(key.to_owned()),
+                    Some(index),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn yaml_semantically_eq(
+    left: &serde_yaml::Value,
+    right: &serde_yaml::Value,
+) -> bool {
+    match (left, right) {
+        (serde_yaml::Value::String(left), serde_yaml::Value::String(right)) => {
+            datetime_canon(left)
+                .zip(datetime_canon(right))
+                .is_some_and(|(left, right)| left == right)
+                || left == right
+        }
+        (
+            serde_yaml::Value::Sequence(left),
+            serde_yaml::Value::Sequence(right),
+        ) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| yaml_semantically_eq(left, right))
+        }
+        (
+            serde_yaml::Value::Mapping(left),
+            serde_yaml::Value::Mapping(right),
+        ) => {
+            left.len() == right.len()
+                && left.iter().all(|(key, value)| {
+                    right
+                        .get(key)
+                        .is_some_and(|other| yaml_semantically_eq(value, other))
+                })
+        }
+        (serde_yaml::Value::Tagged(left), serde_yaml::Value::Tagged(right)) => {
+            left.tag == right.tag
+                && yaml_semantically_eq(&left.value, &right.value)
+        }
+        _ => left == right,
+    }
+}
+
+fn json_semantically_eq(left: &JsonValue, right: &JsonValue) -> bool {
+    match (left, right) {
+        (JsonValue::String(left), JsonValue::String(right)) => {
+            datetime_canon(left)
+                .zip(datetime_canon(right))
+                .is_some_and(|(left, right)| left == right)
+                || left == right
+        }
+        (JsonValue::Array(left), JsonValue::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| json_semantically_eq(left, right))
+        }
+        (JsonValue::Object(left), JsonValue::Object(right)) => {
+            left.len() == right.len()
+                && left.iter().all(|(key, value)| {
+                    right
+                        .get(key)
+                        .is_some_and(|other| json_semantically_eq(value, other))
+                })
+        }
+        _ => left == right,
+    }
+}
+
+fn datetime_canon(text: &str) -> Option<String> {
+    if !is_datetime(text) {
+        return None;
+    }
+    let (_, offset) = datetime_parts(text)?;
+    let date = &text[..10];
+    let rest = &text[11..];
+    let time = if offset.is_empty() {
+        rest
+    } else {
+        rest.strip_suffix(&offset).unwrap_or(rest)
+    };
+    Some(format!("{date}T{time}{}", canon_offset(&offset)))
+}
+
+fn canon_offset(offset: &str) -> String {
+    if offset.is_empty() {
+        return String::new();
+    }
+    if offset == "Z" || offset == "+0000" || offset == "+00:00" {
+        return "Z".to_owned();
+    }
+    let Some(sign) = offset.chars().next() else {
+        return offset.to_owned();
+    };
+    let digits: String = offset
+        .chars()
+        .skip(1)
+        .filter(char::is_ascii_digit)
+        .collect();
+    if digits.len() < 4 {
+        return offset.to_owned();
+    }
+    format!("{sign}{}:{}", &digits[..2], &digits[2..4])
 }
 
 fn touched_keys(ops: &[Op]) -> Vec<String> {
@@ -1294,7 +1645,11 @@ fn ensure_trailing_newline(text: &str, newline: &str) -> String {
     }
 }
 
-fn verify_failed(message: &str, key: Option<String>) -> PropsError {
+fn verify_failed(
+    message: &str,
+    key: Option<String>,
+    op_index: Option<usize>,
+) -> PropsError {
     PropsError {
         code: "prop_verify_failed".to_owned(),
         message: message.to_owned(),
@@ -1303,7 +1658,7 @@ fn verify_failed(message: &str, key: Option<String>) -> PropsError {
                 .to_owned(),
         key,
         line: None,
-        op_index: None,
+        op_index,
     }
 }
 
@@ -1543,6 +1898,35 @@ mod tests {
             plan_ops("---\nname: a\nname: b\n---\n", NoteKind::Note, "")
                 .expect_err("duplicate");
         assert_eq!(duplicate.code, "prop_duplicate_key");
+    }
+
+    #[test]
+    fn header_comment_on_block_scalar_survives_replace() {
+        let note =
+            "---\nx: |- # inline\n  hello\n  world\ncreated: 2026-11-22\n---\n";
+        let scalar = plan_ops(
+            note,
+            NoteKind::Note,
+            r#"{"op":"prop.set","key":"x","value":"new"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            scalar.candidate,
+            "---\nx: new # inline\ncreated: 2026-11-22\n---\n"
+        );
+        assert_inverse_restores(note, NoteKind::Note, &scalar);
+
+        let multiline = plan_ops(
+            note,
+            NoteKind::Note,
+            r#"{"op":"prop.set","key":"x","value":"hello\nworld","kind":"text"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            multiline.candidate,
+            "---\nx: |- # inline\n  hello\n  world\ncreated: 2026-11-22\n---\n"
+        );
+        assert_inverse_restores(note, NoteKind::Note, &multiline);
     }
 
     #[test]
