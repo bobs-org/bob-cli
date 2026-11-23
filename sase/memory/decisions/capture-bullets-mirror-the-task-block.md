@@ -9,8 +9,10 @@ summary:
   "A first-level capture bullet is its task's child: ALL-CAPS with notes is a drawer, a
   leading # names one, and note-less @file+id files each bullet as a note."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-11-02
+  superseded_by:
+    - decisions:task-reqs-are-met-with-their-task
 ---
 
 **Applies to.** bob-cli and Bob Mac Capture.
@@ -47,3 +49,8 @@ back.
 (first-level `#` is a drawer shortcut, grammar 4), `5ac2fbc2` (several notes on one
 existing task), and the bullet-menu phase `bob-cli-fc.3`. See also
 [[decisions:capture-sigils-say-where-what-how]] and [[glossary:task-drawer]].
+
+Superseded in part: a `- [ ]` bullet under a task or req is now a
+[[glossary:task-requirement]], not a note, and authored capture bullets may
+nest beneath req chains — see
+[[decisions:task-reqs-are-met-with-their-task]].

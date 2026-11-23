@@ -1060,13 +1060,20 @@ targets, and dep links never count as Pomodoro Task Links. See
 *Aliases: drawer.*
 
 A direct non-checkbox ALL-CAPS child bullet of a `#task` line, with its notes nested
-beneath it. A drawer holds part of one task's work (`REQUIREMENTS`, `FUTURE WORK`);
+beneath it. A drawer holds part of one task's work (`NOTES`, `FUTURE WORK`);
 its entries are plain bullets with no checkbox, `#task`, or `created` field. A drawer
 is nonempty by construction: capture never creates an empty drawer, and promotion of a
 task to a project note turns each drawer into an H2 section while reversal restores
 them.
 
-In capture, a `#` glued after `@route+id` always names a drawer (`@foo+bar#requirements`),
+A task that owns [Task Requirement](#task-requirement)s keeps its notes in `NOTES`. That drawer is
+born only when a note lands in it (`notes_drawer_birth = with_first_note`): the
+first-req scoop moved at least one note, or a note is being written. A req-owning
+task with no notes has no `NOTES` header. Drawers sit after requirements and before
+logs. A checkbox inside a drawer is never a requirement. The `REQUIREMENTS` drawer
+was renamed to `NOTES` vault-wide.
+
+In capture, a `#` glued after `@route+id` always names a drawer (`@foo+bar#notes`),
 matched exactly against the target task at commit time and created on demand with the
 catalog's most-used spelling. A quoted literal (`#"FUTURE WORK"`) or `--drawer TITLE`
 forces creation and skips the near-duplicate guard; an unquoted slug that is a strict
@@ -1152,6 +1159,45 @@ A relation whose label is a configured successor label (such as `starts after`) 
 offers its source as a [Successor Offer](#successor-offer) when its target is parked (left Pending with
 no live Task Link today) or done; it still never blocks, and its mirror reads
 `starts before`.
+
+### Task Requirement {#task-requirement}
+
+*Aliases: req, task req.*
+
+A Markdown checkbox child of a `#task` line or of another requirement that does not
+itself carry `#task`. Following structural parents reaches exactly one owner task.
+Depth is 1 under the owner and grows with each req ancestor; it is computed, never
+stored. A nested `#task` child is a subtask, not a requirement: it starts its own
+ownership boundary.
+
+A req is **met** or **moot** with its owner and never written as completed. Pending
+`[ ]` bytes stay `[ ]` under a done or cancelled owner. The only Bob writes are drop
+(`[ ]` → `[-]` plus an optional Cancel Log), restore (`[-]` → `[ ]`, keeping the
+log), and carry (the line becomes a `[>]` stub via [Task Split](#task-split)). A descendant
+under a dropped or carried ancestor is Excluded, never called met. A req never has
+`#task`, `[created::]`, a lane, freshness, priority, a schedule, dependencies,
+[Task Link](#task-link)s, walk rows, Ready-cap or Today membership, or stats. It may have
+child notes, child reqs, a trailing `^anchor`, and a Cancel Log when dropped.
+Depth above 16 is refused.
+
+Obsidian and Bob Mac Capture draw a tightly kerned hash run in the owner's ink over
+the checkbox: `⌗⌗` at depth 1, `⌗⌗⌗` at 2, `⌗⌗⌗⌗` at 3 or more. The checkbox cannot
+be clicked. Teaching copy: *Part of this task's scope. Met when the task closes.
+Drop it or make it a task.*
+
+A task that owns any req keeps its notes in a `NOTES` [Task Drawer](#task-drawer), born only
+when a note lands in it. Drawers sit after reqs and before logs. A checkbox
+inside a drawer, under a note, in a fence, or in a quote is never a requirement.
+
+On a managed Done, the successor card audits every Pending req once. Default /
+Ctrl+X is Met (no write); Ctrl+Shift+X drops; Ctrl+Shift+T carries into its own
+task; Space/Tab carries and pulls in as a [Successor Offer](#successor-offer). Promotion maps
+each outer req to a `## Tasks` row (nested reqs stay reqs) and notes plus
+`NOTES` into `## Notes`.
+
+Not a nested-`#task` subtask, a [Task Drawer](#task-drawer) entry, a GTD `#pre`/`#post`
+checklist row, or a [Pomodoro](#pomodoro). See `docs/task-requirements.md` and
+[Task Requirements Are Met With Their Task](../develop/decisions.md#task-reqs-are-met-with-their-task).
 
 ### Task Split {#task-split}
 

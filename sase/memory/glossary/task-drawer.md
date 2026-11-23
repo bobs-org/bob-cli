@@ -5,13 +5,20 @@ aliases:
 ---
 
 A direct non-checkbox ALL-CAPS child bullet of a `#task` line, with its notes nested
-beneath it. A drawer holds part of one task's work (`REQUIREMENTS`, `FUTURE WORK`);
+beneath it. A drawer holds part of one task's work (`NOTES`, `FUTURE WORK`);
 its entries are plain bullets with no checkbox, `#task`, or `created` field. A drawer
 is nonempty by construction: capture never creates an empty drawer, and promotion of a
 task to a project note turns each drawer into an H2 section while reversal restores
 them.
 
-In capture, a `#` glued after `@route+id` always names a drawer (`@foo+bar#requirements`),
+A task that owns [[task-requirement]]s keeps its notes in `NOTES`. That drawer is
+born only when a note lands in it (`notes_drawer_birth = with_first_note`): the
+first-req scoop moved at least one note, or a note is being written. A req-owning
+task with no notes has no `NOTES` header. Drawers sit after requirements and before
+logs. A checkbox inside a drawer is never a requirement. The `REQUIREMENTS` drawer
+was renamed to `NOTES` vault-wide.
+
+In capture, a `#` glued after `@route+id` always names a drawer (`@foo+bar#notes`),
 matched exactly against the target task at commit time and created on demand with the
 catalog's most-used spelling. A quoted literal (`#"FUTURE WORK"`) or `--drawer TITLE`
 forces creation and skips the near-duplicate guard; an unquoted slug that is a strict

@@ -201,7 +201,8 @@ edited in place.
     `decisions:synced-meetings-link-by-phase`]_ Synced calendar events live in their
     daily note's Events section with root attribution and one appended MEET.
 16. **Capture Bullets Mirror The Task Block**
-    (`capture-bullets-mirror-the-task-block`) - A first-level capture bullet is its
+    (`capture-bullets-mirror-the-task-block`) - _[partly superseded by
+    `decisions:task-reqs-are-met-with-their-task`]_ A first-level capture bullet is its
     task's child: ALL-CAPS with notes is a drawer, a leading # names one, and note-less
     @file+id files each bullet as a note.
 17. **Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites**
@@ -428,37 +429,41 @@ edited in place.
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-69. **The Mac `w` Mark Counts Lane Excess** (`w-count-reads-lane-excess`) - The Mac `w`
+69. **Task Requirements Are Met With Their Task**
+    (`task-reqs-are-met-with-their-task`) - A req is a non-#task checkbox child of a
+    task or of another req; it is met or moot with its owner and never written as
+    completed; only drop and carry write to it.
+70. **The Mac `w` Mark Counts Lane Excess** (`w-count-reads-lane-excess`) - The Mac `w`
     mark shows Bob's summed WIP/NEXT/READY lane excess.
-70. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
+71. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
     (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
     color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
     top-level area stem, then name hash; clients render the hue Bob reports.
-71. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
+72. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
     (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
     `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
     then plan.exempt mute, then top-level area stem, then name hash; clients render the
     hue Bob reports.
-72. **Theme Preferences Live In A Per-Host Journal**
+73. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
     the only writer.
-73. **Today Is Read From The Ledger, Never Written To Tasks**
+74. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-74. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+75. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-75. **Unblocked Tasks Resurface As Ticklers**
+76. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`,
     `decisions:gmail-reply-wait-is-a-tagged-hold`]_ Every automatic Blocked-to-Ready
     recovery records [unblocked:: today] unless a WRITE skip applies, so the task is
     TICKLER in the next morning review; a keep on that row leaves the streak unchanged.
-76. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
+77. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
     _[superseded by `decisions:off-clock-pomodoros-count-apart`]_ A timed ledger row
     without [t::] is an untracked session; writers decide trackedness when they write a
     span and readers only look at the row.
@@ -494,9 +499,10 @@ Strip (period strip, week strip, quarter strip, year strip); Successor Offer; Ta
 (decay, decay ladder, decay card, step down); Task Dependency Link (task dep link, dep
 link); Task Drawer (drawer); Task Freshness (freshness); Task Link (task block link);
 Task Mention (mention, text mention); Task Merge; Task Relation (relation, LINKS line,
-LINKED FROM line); Task Split; Task Successor (successor); Task Type (type, theme,
-pomodoro theme, pomodoro-theme); Top-Level Project (top project); Walker Footer (walk
-footer, lane footer, links footer, bank footer); Work Log
+LINKED FROM line); Task Requirement (req, task req); Task Split; Task Successor
+(successor); Task Type (type, theme, pomodoro theme, pomodoro-theme); Top-Level Project
+(top project); Walker Footer (walk footer, lane footer, links footer, bank footer); Work
+Log
 
 ### 3.3 Task Bead Types (task_types)
 
