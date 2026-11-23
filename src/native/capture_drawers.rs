@@ -38,12 +38,45 @@ use super::{
     task_block_layout,
 };
 
-/// A direct-child ALL-CAPS drawer bullet under a resolved task.
+/// The authored form that made a list item a drawer.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DrawerMarker {
+    Bold,
+    LegacyCaps,
+    Section,
+}
+
+impl DrawerMarker {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Bold => "bold",
+            Self::LegacyCaps => "legacy_caps",
+            Self::Section => "section",
+        }
+    }
+}
+
+/// A direct-child drawer bullet or eligible project H2 section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Drawer {
     pub(crate) title: String,
     pub(crate) key: String,
     pub(crate) slug: String,
+    pub(crate) marker: DrawerMarker,
+    /// Half-open UTF-8 byte offsets for the complete header line.
+    pub(crate) header_range: std::ops::Range<usize>,
+    /// Half-open UTF-8 byte offsets for the title alone.
+    pub(crate) title_range: std::ops::Range<usize>,
     /// One-based line number of the drawer bullet.
     pub(crate) line: usize,
     pub(crate) indentation: String,
@@ -69,12 +102,12 @@ pub(crate) struct DrawerInsertion {
 pub(crate) fn normalize_drawer_literal(decoded: &str) -> Option<String> {
     let canonical =
         capture_language::normalize_task_text(decoded).to_ascii_uppercase();
-    is_drawer_title(&canonical).then_some(canonical)
+    is_legacy_drawer_title(&canonical).then_some(canonical)
 }
 
-/// Uppercase collapsed key for a drawer title.
+/// Whitespace-collapsed Unicode uppercase key for a drawer title.
 pub(crate) fn drawer_key(title: &str) -> String {
-    capture_language::normalize_task_text(title).to_ascii_uppercase()
+    capture_language::normalize_task_text(title).to_uppercase()
 }
 
 /// Whether `value` is a valid drawer slug: ASCII letter start, then ASCII
@@ -133,10 +166,8 @@ pub(crate) fn reserved_selector_key(
         let key = drawer_key(selector_text);
         return is_reserved_drawer_key(&key).then_some(key);
     }
-    let key_plain = selector_text.to_ascii_uppercase();
-    let key_spaced =
-        capture_language::normalize_task_text(&selector_text.replace('-', " "))
-            .to_ascii_uppercase();
+    let key_plain = drawer_key(selector_text);
+    let key_spaced = drawer_key(&selector_text.replace('-', " "));
     [key_plain, key_spaced]
         .into_iter()
         .find(|key| is_reserved_drawer_key(key))
@@ -158,7 +189,7 @@ pub(crate) fn reserved_selector_error(
 // Cached drawer catalog (relation_labels/scan.rs precedent).
 // ---------------------------------------------------------------------------
 
-pub(crate) const DRAWER_CATALOG_VERSION: u32 = 2;
+pub(crate) const DRAWER_CATALOG_VERSION: u32 = 3;
 const DRAWER_SNAPSHOT_TTL_SECS: u64 = 60;
 const DRAWER_STALE_TMP_SECS: u64 = 10 * 60;
 const DRAWER_RECENT_DAYS: u64 = 90;
@@ -188,6 +219,7 @@ pub(crate) struct DrawerCatalogEntry {
     pub(crate) key: String,
     pub(crate) title: String,
     pub(crate) slug: String,
+    pub(crate) marker: DrawerMarker,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -200,6 +232,9 @@ pub(crate) struct DrawerCatalogRecord {
     pub(crate) last_seen: u64,
     #[serde(default)]
     pub(crate) spellings: HashMap<String, u64>,
+    /// Counts by authored title and the source marker that supplied it.
+    #[serde(default)]
+    pub(crate) spelling_markers: HashMap<String, HashMap<String, u64>>,
     #[serde(default)]
     pub(crate) notes: Vec<String>,
 }
@@ -279,6 +314,10 @@ pub(crate) fn load_drawer_catalog(
     let mut per_key_recent: BTreeMap<String, HashSet<String>> = BTreeMap::new();
     let mut per_key_spellings: BTreeMap<String, HashMap<String, u64>> =
         BTreeMap::new();
+    let mut per_key_spelling_markers: BTreeMap<
+        String,
+        HashMap<String, HashMap<String, u64>>,
+    > = BTreeMap::new();
     let mut per_key_last: BTreeMap<String, u64> = BTreeMap::new();
     let mut per_key_slug: BTreeMap<String, String> = BTreeMap::new();
     let now = drawer_now_unix();
@@ -319,6 +358,13 @@ pub(crate) fn load_drawer_catalog(
                 .or_default()
                 .entry(entry.title.clone())
                 .or_insert(0) += 1;
+            *per_key_spelling_markers
+                .entry(entry.key.clone())
+                .or_default()
+                .entry(entry.title.clone())
+                .or_default()
+                .entry(entry.marker.as_str().to_string())
+                .or_insert(0) += 1;
             per_key_slug
                 .entry(entry.key.clone())
                 .or_insert_with(|| entry.slug.clone());
@@ -331,6 +377,8 @@ pub(crate) fn load_drawer_catalog(
     for (key, notes) in per_key_notes {
         let recent = per_key_recent.get(&key).map_or(0, |s| s.len() as u64);
         let spellings = per_key_spellings.remove(&key).unwrap_or_default();
+        let spelling_markers =
+            per_key_spelling_markers.remove(&key).unwrap_or_default();
         let title =
             most_used_spelling(&spellings).unwrap_or_else(|| key.clone());
         let slug = per_key_slug
@@ -347,6 +395,7 @@ pub(crate) fn load_drawer_catalog(
                 recent_count: recent,
                 last_seen: per_key_last.get(&key).copied().unwrap_or(0),
                 spellings,
+                spelling_markers,
                 notes: {
                     let mut v: Vec<String> = notes.into_iter().collect();
                     v.sort();
@@ -428,6 +477,7 @@ fn scan_drawer_note(
     let push_entry = |key: String,
                       title: String,
                       slug: String,
+                      marker: DrawerMarker,
                       entries: &mut Vec<DrawerCatalogEntry>,
                       seen: &mut HashSet<String>| {
         if is_reserved_drawer_key(&key) {
@@ -446,7 +496,12 @@ fn scan_drawer_note(
             // the aggregator count them, but dedupe distinct notes
             // via the notes set. So allow duplicates here.
         }
-        entries.push(DrawerCatalogEntry { key, title, slug });
+        entries.push(DrawerCatalogEntry {
+            key,
+            title,
+            slug,
+            marker,
+        });
     };
     // Drawer children of #task lines.
     let settings =
@@ -468,6 +523,7 @@ fn scan_drawer_note(
                 drawer.key.clone(),
                 drawer.title.clone(),
                 drawer.slug.clone(),
+                drawer.marker,
                 &mut entries,
                 &mut seen_in_note,
             );
@@ -480,6 +536,7 @@ fn scan_drawer_note(
                 h2.key,
                 h2.title,
                 h2.slug,
+                h2.marker,
                 &mut entries,
                 &mut seen_in_note,
             );
@@ -529,6 +586,7 @@ fn project_h2_entries(contents: &str) -> Vec<DrawerCatalogEntry> {
             key: key.clone(),
             title: title.to_string(),
             slug: capture_language::selector_slug(title),
+            marker: DrawerMarker::Section,
         });
     }
     entries
@@ -600,6 +658,7 @@ pub(crate) fn project_h2_drawers(contents: &str) -> Vec<Drawer> {
         if title.is_empty() {
             continue;
         }
+        let title_start = title.as_ptr() as usize - line.text.as_ptr() as usize;
         let key = drawer_key(title);
         if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
             continue;
@@ -607,10 +666,15 @@ pub(crate) fn project_h2_drawers(contents: &str) -> Vec<Drawer> {
         let end_line = h2_section_end_line(&lines, &fenced, idx);
         let entry_count =
             h2_section_entry_count(&lines, &fenced, idx + 1, end_line);
+        let header_start = line_start(&lines, idx);
         drawers.push(Drawer {
             key: key.clone(),
             slug: capture_language::selector_slug(title),
             title: title.to_string(),
+            marker: DrawerMarker::Section,
+            header_range: header_start..header_start + line.text.len(),
+            title_range: header_start + title_start
+                ..header_start + title_start + title.len(),
             line: idx + 1,
             indentation: String::new(),
             block_end: line_offset(&lines, end_line),
@@ -765,11 +829,7 @@ pub(crate) fn resolve_h2_for_write(
         vec![drawer_key(selector_text)]
     } else {
         let slug = selector_text.to_string();
-        vec![
-            slug.to_ascii_uppercase(),
-            capture_language::normalize_task_text(&slug.replace('-', " "))
-                .to_ascii_uppercase(),
-        ]
+        vec![drawer_key(&slug), drawer_key(&slug.replace('-', " "))]
     };
     for key in &keys {
         if is_structural_h2_key(key) {
@@ -923,6 +983,28 @@ pub(crate) fn drawer_catalog_recent<'a>(
         .collect()
 }
 
+fn catalog_spelling_marker(
+    record: &DrawerCatalogRecord,
+    title: &str,
+) -> DrawerMarker {
+    let markers = record.spelling_markers.get(title);
+    let Some(markers) = markers else {
+        return DrawerMarker::LegacyCaps;
+    };
+    let selected = ["bold", "legacy_caps", "section"]
+        .into_iter()
+        .filter_map(|name| markers.get(name).map(|count| (name, *count)))
+        .max_by(|left, right| {
+            left.1.cmp(&right.1).then_with(|| right.0.cmp(left.0))
+        })
+        .map(|(name, _)| name);
+    match selected {
+        Some("bold") => DrawerMarker::Bold,
+        Some("section") => DrawerMarker::Section,
+        _ => DrawerMarker::LegacyCaps,
+    }
+}
+
 /// How a typed drawer query matches a drawer's key or slug.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DrawerMatch {
@@ -939,7 +1021,7 @@ pub(crate) fn drawer_query_match(
     slug: &str,
     query: &str,
 ) -> Option<DrawerMatch> {
-    let q = capture_language::normalize_task_text(query).to_ascii_uppercase();
+    let q = drawer_key(query);
     let q_slug = capture_language::selector_slug(query);
     if q.is_empty() && q_slug.is_empty() {
         return None;
@@ -1074,10 +1156,8 @@ pub(crate) fn resolve_drawer_for_write(
     }
     // Slug path.
     let slug = selector_text.to_string();
-    let key_plain = slug.to_ascii_uppercase();
-    let key_spaced =
-        capture_language::normalize_task_text(&slug.replace('-', " "))
-            .to_ascii_uppercase();
+    let key_plain = drawer_key(&slug);
+    let key_spaced = drawer_key(&slug.replace('-', " "));
     // Exact key matches (slug key or hyphen-space variant).
     let mut matches: Vec<&Drawer> = drawers
         .iter()
@@ -1122,7 +1202,7 @@ pub(crate) fn resolve_drawer_for_write(
     if let Some(near) = find_near_duplicate_drawer(drawers, &slug) {
         let intended = drawer_spelling_for_slug(catalog, &slug);
         let intended = cased_creation_title(
-            if is_drawer_title(&intended) {
+            if is_legacy_drawer_title(&intended) {
                 &intended
             } else {
                 &key_spaced
@@ -1152,7 +1232,7 @@ pub(crate) fn resolve_drawer_for_write(
     // fall back to uppercase spaced. `##` sections then take promotion
     // Title Case.
     let title = cased_creation_title(
-        if is_drawer_title(&title) {
+        if is_legacy_drawer_title(&title) {
             &title
         } else {
             &key_spaced
@@ -1189,10 +1269,8 @@ pub(crate) fn find_near_duplicate_drawer<'a>(
     drawers: &'a [Drawer],
     slug: &str,
 ) -> Option<&'a Drawer> {
-    let needle_key = slug.to_ascii_uppercase();
-    let needle_spaced =
-        capture_language::normalize_task_text(&slug.replace('-', " "))
-            .to_ascii_uppercase();
+    let needle_key = drawer_key(slug);
+    let needle_spaced = drawer_key(&slug.replace('-', " "));
     // Strict prefix of a drawer key.
     // Edit distance 1 from a drawer key.
     let mut candidates: Vec<&Drawer> = Vec::new();
@@ -1280,10 +1358,8 @@ pub(crate) fn drawer_spelling_for_slug(
     records: &BTreeMap<String, DrawerCatalogRecord>,
     slug: &str,
 ) -> String {
-    let key_plain = slug.to_ascii_uppercase();
-    let key_spaced = slug.replace('-', " ").to_ascii_uppercase();
-    let key_spaced =
-        capture_language::normalize_task_text(&key_spaced).to_ascii_uppercase();
+    let key_plain = drawer_key(slug);
+    let key_spaced = drawer_key(&slug.replace('-', " "));
     let mut candidates: Vec<(&String, &DrawerCatalogRecord)> = Vec::new();
     for (key, record) in records {
         if *key == key_plain || *key == key_spaced {
@@ -1317,25 +1393,15 @@ pub(crate) fn drawer_spelling_for_slug(
 /// Enumerate qualifying drawer bullets that are direct children of `task`.
 pub(crate) fn drawers(contents: &str, task: &NoteTask) -> Vec<Drawer> {
     let lines = line_spans(contents);
-    let text_lines: Vec<&str> = lines.iter().map(|line| line.text).collect();
-    let fenced = fenced_lines(&text_lines, 0..text_lines.len());
     let children =
         direct_child_list_indexes(&lines, task.line_index, task.block_end);
     let mut drawers = Vec::new();
     for (index, &line_index) in children.iter().enumerate() {
-        if fenced.contains(&line_index) {
+        let Some(header) = recognize_drawer_header(contents, task, line_index)
+        else {
             continue;
-        }
+        };
         let line = lines[line_index];
-        if parse_managed_task_log_marker(line.text).is_some() {
-            continue;
-        }
-        let Some(body) = list_item_body(line.text) else {
-            continue;
-        };
-        let Some(title) = parse_drawer_title(body) else {
-            continue;
-        };
         let block_end = children
             .get(index + 1)
             .map(|&next| line_start(&lines, next))
@@ -1343,9 +1409,12 @@ pub(crate) fn drawers(contents: &str, task: &NoteTask) -> Vec<Drawer> {
         let entry_count =
             direct_child_list_indexes(&lines, line_index, block_end).len();
         drawers.push(Drawer {
-            key: drawer_key(title),
-            slug: capture_language::selector_slug(title),
-            title: title.to_string(),
+            key: drawer_key(&header.title),
+            slug: capture_language::selector_slug(&header.title),
+            title: header.title,
+            marker: header.marker,
+            header_range: header.header_range,
+            title_range: header.title_range,
             line: line_index + 1,
             indentation: leading_whitespace(line.text).to_string(),
             block_end,
@@ -1399,7 +1468,7 @@ pub(crate) fn ensure_drawer(
                 let header_offset = task_block_layout::drawer_header_offset(
                     contents,
                     task,
-                    *key == task_block_layout::NOTES_TITLE,
+                    *key == task_block_layout::NOTES_KEY,
                 );
                 let header = format!("{drawer_indent}- {title}");
                 let addition = insertion_text_preserving_line_endings(
@@ -1463,7 +1532,7 @@ pub(crate) fn select_drawer_exact<'a>(
 ) -> Option<&'a Drawer> {
     drawers
         .iter()
-        .find(|drawer| drawer.title.eq_ignore_ascii_case(title))
+        .find(|drawer| drawer_key(&drawer.title) == drawer_key(title))
 }
 
 /// Dispatch slug/prefix matching or exact title matching.
@@ -1569,22 +1638,182 @@ pub(crate) fn drawer_last_entry_text(
         .filter(|text| !text.is_empty())
 }
 
-/// Title of a list-item body when it is a drawer, else `None`.
-///
-/// Capture does **not** require a nested list item under the bullet. The
-/// plugin's Ctrl+Shift+Alt+N conversion does, because a childless bullet would
-/// seed an empty `##` heading. Requiring that lookahead would reject a freshly
-/// authored, still-empty `REQUIREMENTS` bullet — the moment this feature is
-/// most useful. `entry_count` lets a picker badge emptiness instead.
-fn parse_drawer_title(body: &str) -> Option<&str> {
+/// Body-level drawer grammar. This is deliberately independent of note
+/// context; vault readers must call [`recognize_drawer_header`].
+pub(crate) fn drawer_body_title(body: &str) -> Option<(&str, DrawerMarker)> {
     if has_task_checkbox(body) {
         return None;
     }
-    let title = body.trim();
-    is_drawer_title(title).then_some(title)
+    let trimmed = body.trim();
+    if is_legacy_drawer_title(trimmed) {
+        return Some((trimmed, DrawerMarker::LegacyCaps));
+    }
+    let inner = trimmed.strip_prefix("**")?.strip_suffix("**")?;
+    if inner.is_empty()
+        || inner
+            .chars()
+            .any(|character| matches!(character, '\n' | '\r' | '*'))
+        || inner.trim() != inner
+        || inner.ends_with(':')
+        || !inner.chars().any(char::is_alphanumeric)
+    {
+        return None;
+    }
+    Some((inner, DrawerMarker::Bold))
 }
 
-/// Whether `title` is a drawer title.
+/// Named refusal returned by pure drawer-title validation helpers.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DrawerTitleRefusal {
+    NotADrawerTitle,
+    Reserved,
+    EmptyDrawer,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl DrawerTitleRefusal {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::NotADrawerTitle => "not_a_drawer_title",
+            Self::Reserved => "reserved",
+            Self::EmptyDrawer => "empty_drawer",
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn valid_bold_drawer_title(title: &str) -> bool {
+    !title.is_empty()
+        && title.trim() == title
+        && !title
+            .chars()
+            .any(|character| matches!(character, '\n' | '\r'))
+        && !title.contains('*')
+        && !title.ends_with(':')
+        && title.chars().any(char::is_alphanumeric)
+}
+
+/// Validate a new drawer name and its required content independently of
+/// recognition. Capture creation remains nonempty during the dual-read
+/// window.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn can_create_drawer(
+    title: &str,
+    has_content: bool,
+) -> Result<(), DrawerTitleRefusal> {
+    if !valid_bold_drawer_title(title) {
+        return Err(DrawerTitleRefusal::NotADrawerTitle);
+    }
+    let key = drawer_key(title);
+    if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
+        return Err(DrawerTitleRefusal::Reserved);
+    }
+    if !has_content {
+        return Err(DrawerTitleRefusal::EmptyDrawer);
+    }
+    Ok(())
+}
+
+/// Map a drawer header to its project-note H2 spelling. Bold titles are
+/// lossless; legacy ALL-CAPS titles keep today's Title Case conversion.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn heading_for_drawer(title: &str, marker: DrawerMarker) -> String {
+    match marker {
+        DrawerMarker::LegacyCaps => format_project_section_title(title),
+        DrawerMarker::Bold | DrawerMarker::Section => title.to_string(),
+    }
+}
+
+/// Map an H2 heading to a drawer title, preserving its authored bytes. Empty
+/// sections map to valid empty drawers; creation policy is checked separately.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn drawer_for_heading(
+    title: &str,
+) -> Result<String, DrawerTitleRefusal> {
+    if title.is_empty() {
+        return Ok(String::new());
+    }
+    if !valid_bold_drawer_title(title) {
+        return Err(DrawerTitleRefusal::NotADrawerTitle);
+    }
+    let key = drawer_key(title);
+    if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
+        return Err(DrawerTitleRefusal::Reserved);
+    }
+    Ok(title.to_string())
+}
+
+/// A contextually recognized task drawer header, with source byte ranges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DrawerHeader {
+    pub(crate) title: String,
+    pub(crate) marker: DrawerMarker,
+    pub(crate) header_range: std::ops::Range<usize>,
+    pub(crate) title_range: std::ops::Range<usize>,
+}
+
+/// Recognize a drawer only as a direct, live list-item child of a task.
+/// Fences, quotes, managed rows, reserved keys, and the checkbox rule are
+/// shared here by all vault readers.
+pub(crate) fn recognize_drawer_header(
+    contents: &str,
+    task: &NoteTask,
+    line_index: usize,
+) -> Option<DrawerHeader> {
+    let lines = line_spans(contents);
+    let line = *lines.get(line_index)?;
+    let direct_children =
+        direct_child_list_indexes(&lines, task.line_index, task.block_end);
+    if !direct_children.contains(&line_index) {
+        return None;
+    }
+    let logical: Vec<&str> = lines
+        .iter()
+        .map(|line| list_item_body(line.text).unwrap_or(line.text))
+        .collect();
+    if fenced_lines(&logical, 0..logical.len()).contains(&line_index) {
+        return None;
+    }
+    let body = list_item_body(line.text)?;
+    if crate::native::markdown::is_blockquote_line(body)
+        || is_managed_drawer_line(line.text)
+    {
+        return None;
+    }
+    let (title, marker) = drawer_body_title(body)?;
+    let key = drawer_key(title);
+    if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
+        return None;
+    }
+    let line_offset = line_start(&lines, line_index);
+    let body_offset = body.as_ptr() as usize - line.text.as_ptr() as usize;
+    let title_offset = title.as_ptr() as usize - body.as_ptr() as usize;
+    let title_offset = body_offset + title_offset;
+    Some(DrawerHeader {
+        title: title.to_string(),
+        marker,
+        header_range: line_offset..line_offset + line.text.len(),
+        title_range: line_offset + title_offset
+            ..line_offset + title_offset + title.len(),
+    })
+}
+
+fn is_managed_drawer_line(line: &str) -> bool {
+    crate::native::task_relations::parse::is_subprojects_line(line)
+        || crate::native::task_dependencies::is_managed_link_line(line)
+        || crate::native::task_dependencies::blocks::is_cancel_log(line)
+        || parse_managed_task_log_marker(line).is_some()
+}
+
+/// Title of a list-item body when its body shape is drawer-like, else `None`.
+/// Contextual vault readers use [`recognize_drawer_header`].
+#[cfg(test)]
+fn parse_drawer_title(body: &str) -> Option<&str> {
+    drawer_body_title(body).map(|(title, _)| title)
+}
+
+/// Whether `title` matches the original ALL-CAPS drawer grammar.
 ///
 /// Shared base: lead `A-Z` or `0-9`, rest from `A-Z`, `0-9`, space, tab,
 /// and `& ' ( ) , . / -`, with at least one `A-Z`. Drawer titles add `?`,
@@ -1593,8 +1822,23 @@ fn parse_drawer_title(body: &str) -> Option<&str> {
 /// and `OPTIONS::` do not). `+` stays out because
 /// [`parse_drawer_title`] uses this predicate to decide whether an
 /// ordinary child bullet is a drawer.
-pub(crate) fn is_drawer_title(title: &str) -> bool {
-    is_title(title, TitleGrammar::Drawer)
+pub(crate) fn is_legacy_drawer_title(title: &str) -> bool {
+    let mut chars = title.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !is_legacy_drawer_title_first(first) {
+        return false;
+    }
+    let mut has_letter = first.is_ascii_uppercase();
+    let rest: Vec<char> = chars.collect();
+    for (index, character) in rest.iter().enumerate() {
+        if !is_legacy_drawer_rest(*character, index + 1 == rest.len()) {
+            return false;
+        }
+        has_letter |= character.is_ascii_uppercase();
+    }
+    has_letter
 }
 
 /// Whether `name` is a canonical Pomodoro name.
@@ -1604,35 +1848,16 @@ pub(crate) fn is_drawer_title(title: &str) -> bool {
 /// one `A-Z`. Pomodoro names never take the drawer punctuation (`?`, `!`,
 /// `;`, `:`), so `WHY?` is not a Pomodoro name.
 pub(crate) fn is_pomodoro_name(name: &str) -> bool {
-    is_title(name, TitleGrammar::PomodoroName)
-}
-
-/// Drawer titles and Pomodoro names share a lead/first rule but diverge
-/// on the rest alphabet: drawers take sentence punctuation, Pomodoro
-/// names take `+`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TitleGrammar {
-    Drawer,
-    PomodoroName,
-}
-
-fn is_title(title: &str, grammar: TitleGrammar) -> bool {
-    let mut chars = title.chars();
+    let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
     };
-    if !is_drawer_title_first(first) {
+    if !is_legacy_drawer_title_first(first) {
         return false;
     }
     let mut has_letter = first.is_ascii_uppercase();
-    let rest: Vec<char> = chars.collect();
-    for (index, character) in rest.iter().enumerate() {
-        let is_last = index + 1 == rest.len();
-        let allowed = match grammar {
-            TitleGrammar::Drawer => is_drawer_rest(*character, is_last),
-            TitleGrammar::PomodoroName => is_pomodoro_rest(*character),
-        };
-        if !allowed {
+    for character in chars {
+        if !is_pomodoro_rest(character) {
             return false;
         }
         has_letter |= character.is_ascii_uppercase();
@@ -1640,12 +1865,12 @@ fn is_title(title: &str, grammar: TitleGrammar) -> bool {
     has_letter
 }
 
-fn is_drawer_title_first(character: char) -> bool {
+fn is_legacy_drawer_title_first(character: char) -> bool {
     character.is_ascii_uppercase() || character.is_ascii_digit()
 }
 
-fn is_drawer_rest(character: char, is_last: bool) -> bool {
-    if is_drawer_title_first(character) {
+fn is_legacy_drawer_rest(character: char, is_last: bool) -> bool {
+    if is_legacy_drawer_title_first(character) {
         return true;
     }
     if matches!(
@@ -1664,7 +1889,7 @@ fn is_drawer_rest(character: char, is_last: bool) -> bool {
 }
 
 fn is_pomodoro_rest(character: char) -> bool {
-    is_drawer_title_first(character)
+    is_legacy_drawer_title_first(character)
         || matches!(
             character,
             ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
@@ -1770,13 +1995,14 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("List the ALL-CAPS child drawers of a capture task")
+        .about("List a task's drawers and project-note sections")
         .long_about(
-            "List the ALL-CAPS direct-child drawer bullets of one task in a \
+            "List the direct-child drawer bullets of one task in a \
 routed Bob note.\n\n\
+Task drawers include legacy ALL-CAPS headers and whole-bold titles.\n\n\
 The command is read-only and reports every qualifying drawer in document \
-order with its original title, key, whitespace-free slug, line, and entry \
-count, plus recent catalog drawers absent from the task. When the parent is \
+order with its original title, key, whitespace-free slug, marker, line, and \
+entry count, plus recent catalog drawers absent from the task. When the parent is \
 the project note's own `^prj` task, the note's eligible `##` sections are \
 reported instead of task-child drawers. It uses the same \
 parent-task lookup and error messages as `bob capture`: a missing, \
@@ -1958,6 +2184,7 @@ struct ListedDrawer {
     title: String,
     key: String,
     slug: String,
+    marker: DrawerMarker,
     line: usize,
     entry_count: usize,
 }
@@ -1966,6 +2193,7 @@ struct ListedDrawer {
 struct RecentDrawer {
     title: String,
     key: String,
+    marker: DrawerMarker,
     note_count: u64,
     last_seen: u64,
 }
@@ -2007,6 +2235,7 @@ fn list_capture_drawers(
             title: drawer.title.clone(),
             key: drawer.key.clone(),
             slug: drawer.slug.clone(),
+            marker: drawer.marker,
             line: drawer.line,
             entry_count: drawer.entry_count,
         })
@@ -2023,6 +2252,7 @@ fn list_capture_drawers(
         .map(|record| RecentDrawer {
             title: record.title.clone(),
             key: record.key.clone(),
+            marker: catalog_spelling_marker(record, &record.title),
             note_count: record.note_count,
             last_seen: record.last_seen,
         })
@@ -2212,6 +2442,7 @@ mod tests {
 
     use super::*;
     use crate::native::note_tasks;
+    use serde_json::Value;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -2239,6 +2470,133 @@ mod tests {
             .iter()
             .find(|drawer| drawer.title == title)
             .unwrap_or_else(|| panic!("missing drawer {title:?}"))
+    }
+
+    fn drawer_vectors() -> Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/task_drawers/vectors.json"
+        ))
+        .expect("valid drawer vectors")
+    }
+
+    fn vector_source(case: &Value) -> String {
+        let lines: Vec<&str> = case["source_lines"]
+            .as_array()
+            .expect("source lines")
+            .iter()
+            .map(|line| line.as_str().expect("line string"))
+            .collect();
+        let ending = if case["eol"].as_str() == Some("crlf") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        format!("{}{ending}", lines.join(ending))
+    }
+
+    fn vector_task(contents: &str, owner_id: &str) -> NoteTask {
+        let settings = note_tasks::read_settings(Path::new("/nonexistent"));
+        let scan = note_tasks::scan(contents, &settings);
+        match scan.by_block_id(owner_id) {
+            BlockIdLookup::Found(task) => task.clone(),
+            _ => panic!("missing task block id {owner_id}"),
+        }
+    }
+
+    fn check_drawer_expectations(
+        contents: &str,
+        task: &NoteTask,
+        expected: &Value,
+        id: &str,
+    ) {
+        let found = drawers(contents, task);
+        let expected = expected.as_array().expect("expected drawer list");
+        assert_eq!(found.len(), expected.len(), "{id}");
+        for (drawer, expected) in found.iter().zip(expected) {
+            assert_eq!(drawer.title, expected["title"], "{id}");
+            assert_eq!(drawer.key, expected["key"], "{id}");
+            assert_eq!(drawer.marker.as_str(), expected["marker"], "{id}");
+            assert_eq!(
+                drawer.line,
+                expected["line"].as_u64().unwrap() as usize,
+                "{id}"
+            );
+            if let Some(range) = expected["header_range"].as_array() {
+                let start = range[0].as_u64().unwrap() as usize;
+                let end = range[1].as_u64().unwrap() as usize;
+                assert_eq!(drawer.header_range, start..end, "{id}");
+                assert_eq!(
+                    &contents[drawer.header_range.clone()],
+                    capture::line_spans(contents)[drawer.line_index()].text,
+                    "{id} header bytes"
+                );
+            }
+            if let Some(range) = expected["title_range"].as_array() {
+                let start = range[0].as_u64().unwrap() as usize;
+                let end = range[1].as_u64().unwrap() as usize;
+                assert_eq!(drawer.title_range, start..end, "{id}");
+                assert_eq!(
+                    &contents[drawer.title_range.clone()],
+                    drawer.title.as_str(),
+                    "{id} title bytes"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn drawer_conformance_vectors_match_reader_and_mapping() {
+        let vectors = drawer_vectors();
+        assert_eq!(vectors["schema_version"], 1);
+        for (index, case) in
+            vectors["cases"].as_array().unwrap().iter().enumerate()
+        {
+            let id = case["id"].as_str().unwrap();
+            assert_eq!(id, format!("DV{}", index + 1));
+            let contents = vector_source(case);
+            let task = vector_task(&contents, case["owner"].as_str().unwrap());
+            check_drawer_expectations(&contents, &task, &case["expect"], id);
+            if let Some(owner) = case["other_owner"].as_str() {
+                let task = vector_task(&contents, owner);
+                check_drawer_expectations(
+                    &contents,
+                    &task,
+                    &case["other_expect"],
+                    id,
+                );
+            }
+        }
+        for (index, case) in
+            vectors["body_cases"].as_array().unwrap().iter().enumerate()
+        {
+            let id = case["id"].as_str().unwrap();
+            assert_eq!(id, format!("DV{}", index + 5));
+            let result = drawer_body_title(case["body"].as_str().unwrap());
+            if case["excluded"].as_bool().unwrap_or(false) {
+                assert_eq!(result, None, "{id}");
+            } else {
+                let (title, marker) = result.unwrap_or_else(|| panic!("{id}"));
+                assert_eq!(title, case["title"], "{id}");
+                assert_eq!(marker.as_str(), case["marker"], "{id}");
+            }
+        }
+        for (index, case) in vectors["heading_mappings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            let id = case["id"].as_str().unwrap();
+            assert_eq!(id, format!("DH{}", index + 1));
+            let title = case["title"].as_str().unwrap();
+            let heading = heading_for_drawer(title, DrawerMarker::Bold);
+            assert_eq!(heading, case["heading"], "{id}");
+            assert_eq!(
+                drawer_for_heading(&heading),
+                Ok(title.to_string()),
+                "{id}"
+            );
+        }
     }
 
     #[test]
@@ -2339,6 +2697,79 @@ mod tests {
                 .collect();
         assert_eq!(keys, ["FUTURE ONE", "SUB FUTURE"]);
         assert!(drawer_catalog_search(&records, "", &exclude).is_empty());
+    }
+
+    #[test]
+    fn catalog_v3_rebuilds_v2_and_keeps_marker_provenance_per_spelling() {
+        assert_eq!(DRAWER_CATALOG_VERSION, 3);
+        let temp = TempDir::new("bob-cli-drawer-catalog-v3");
+        fs::write(
+            temp.path().join("one.md"),
+            "- [ ] #task Parent\n  - **Future Work**\n    - note\n  - FUTURE WORK\n",
+        )
+        .expect("write note");
+        let v3_path = drawer_cache_path(temp.path());
+        let v2_name = v3_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("cache filename")
+            .replacen("catalog-v3-", "catalog-v2-", 1);
+        let v2_path = v3_path.with_file_name(v2_name);
+        fs::create_dir_all(v2_path.parent().unwrap()).expect("cache dir");
+        fs::write(
+            &v2_path,
+            serde_json::to_string(&DrawerScanCache {
+                version: 2,
+                vault: drawer_vault_key(temp.path()),
+                last_scan_unix: drawer_now_unix(),
+                files: BTreeMap::new(),
+                records: BTreeMap::new(),
+            })
+            .unwrap(),
+        )
+        .expect("write stale v2 cache");
+
+        let records = load_drawer_catalog(temp.path()).expect("rebuild cache");
+        let record = &records["FUTURE WORK"];
+        assert_eq!(record.spellings["Future Work"], 1);
+        assert_eq!(record.spellings["FUTURE WORK"], 1);
+        assert_eq!(record.spelling_markers["Future Work"]["bold"], 1);
+        assert_eq!(record.spelling_markers["FUTURE WORK"]["legacy_caps"], 1);
+        let cached: DrawerScanCache = serde_json::from_str(
+            &fs::read_to_string(v3_path).expect("v3 cache exists"),
+        )
+        .expect("v3 cache JSON");
+        assert_eq!(cached.version, 3);
+
+        let mut explicit_only = BTreeMap::new();
+        explicit_only.insert(
+            "FUTURE WORK".to_string(),
+            DrawerCatalogRecord {
+                key: "FUTURE WORK".to_string(),
+                title: "Future Work".to_string(),
+                slug: "future-work".to_string(),
+                spellings: HashMap::from([("Future Work".to_string(), 5)]),
+                spelling_markers: HashMap::from([(
+                    "Future Work".to_string(),
+                    HashMap::from([("bold".to_string(), 5)]),
+                )]),
+                ..DrawerCatalogRecord::default()
+            },
+        );
+        let created = resolve_drawer_for_write(
+            &[],
+            "future-work",
+            false,
+            &explicit_only,
+            "one",
+            Some("parent"),
+            DrawerScope::Task,
+        )
+        .expect("legacy writer remains valid");
+        let DrawerResolveOutcome::Create { title, .. } = created.outcome else {
+            panic!("new task drawer should be created")
+        };
+        assert_eq!(title, "FUTURE WORK");
     }
 
     #[test]
@@ -2457,9 +2888,9 @@ mod tests {
         assert!(is_pomodoro_name("C++"));
         assert!(is_pomodoro_name("BOB+SASE"));
         assert!(is_pomodoro_name("A+B"));
-        assert!(!is_drawer_title("C++"));
-        assert!(!is_drawer_title("BOB+SASE"));
-        assert!(!is_drawer_title("A+B"));
+        assert!(!is_legacy_drawer_title("C++"));
+        assert!(!is_legacy_drawer_title("BOB+SASE"));
+        assert!(!is_legacy_drawer_title("A+B"));
         // Depends-On lines are never drawers
         // (`docs/task-dependencies.md` §2.4).
         for title in [
@@ -2468,11 +2899,11 @@ mod tests {
             "**DEPENDS ON:** [[#^a]]",
             "⛓ **DEPENDS ON:**",
         ] {
-            assert!(!is_drawer_title(title), "{title}");
+            assert!(!is_legacy_drawer_title(title), "{title}");
         }
         for invalid in ["+", "+A", "++"] {
             assert!(!is_pomodoro_name(invalid), "{invalid}");
-            assert!(!is_drawer_title(invalid), "{invalid}");
+            assert!(!is_legacy_drawer_title(invalid), "{invalid}");
         }
 
         let contents = concat!(
@@ -2525,7 +2956,7 @@ mod tests {
             "OPTIONS:",
             "WHAT NEXT:",
         ] {
-            assert!(is_drawer_title(title), "{title:?}");
+            assert!(is_legacy_drawer_title(title), "{title:?}");
             assert_eq!(parse_drawer_title(title), Some(title), "{title:?}");
         }
         for title in [
@@ -2541,7 +2972,7 @@ mod tests {
             "A+B",
             "FOO:BAR",
         ] {
-            assert!(!is_drawer_title(title), "{title:?}");
+            assert!(!is_legacy_drawer_title(title), "{title:?}");
             assert_eq!(parse_drawer_title(title), None, "{title:?}");
         }
         // Pomodoro names never take the drawer punctuation.
@@ -2561,6 +2992,128 @@ mod tests {
         assert_eq!(found[0].title, "WHAT IS SASE?");
         assert_eq!(found[0].key, "WHAT IS SASE?");
         assert_eq!(found[0].slug, "what-is-sase?");
+    }
+
+    #[test]
+    fn bold_drawer_titles_keep_authored_bytes_and_unicode_keys() {
+        for title in ["API Design", "C++ Notes", "Q1: Goals", "Café", "123"] {
+            assert_eq!(
+                drawer_body_title(&format!("**{title}**")),
+                Some((title, DrawerMarker::Bold)),
+            );
+        }
+        assert_eq!(drawer_key("Straße"), "STRASSE");
+        assert_eq!(drawer_key("Café"), "CAFÉ");
+        for body in [
+            "** API Design**",
+            "**API Design **",
+            "****",
+            "**Note:**",
+            "**Name* With Star**",
+            "**API Design** trailing",
+            "**API Design** ^id",
+            "**API Design** #tag",
+            "__API Design__",
+            "- [ ] requirement",
+            "[ ] requirement",
+        ] {
+            assert_eq!(drawer_body_title(body), None, "{body:?}");
+        }
+    }
+
+    #[test]
+    fn drawer_heading_mapping_is_lossless_and_creation_stays_nonempty() {
+        for title in [
+            "API Design",
+            "C++ Notes",
+            "Q1: Goals",
+            "Café",
+            "Internal   whitespace",
+        ] {
+            let heading = heading_for_drawer(title, DrawerMarker::Bold);
+            assert_eq!(heading, title);
+            assert_eq!(drawer_for_heading(&heading), Ok(title.to_string()));
+        }
+        assert_eq!(
+            heading_for_drawer("API DESIGN", DrawerMarker::LegacyCaps),
+            format_project_section_title("API DESIGN")
+        );
+        assert_eq!(drawer_for_heading(""), Ok(String::new()));
+        assert_eq!(heading_for_drawer("", DrawerMarker::Bold), "");
+        for title in ["***", "Label:", "!!!"] {
+            assert_eq!(
+                drawer_for_heading(title).unwrap_err().code(),
+                "not_a_drawer_title"
+            );
+            assert_eq!(
+                can_create_drawer(title, true).unwrap_err().code(),
+                "not_a_drawer_title"
+            );
+        }
+        for title in ["Tasks", "Projects"] {
+            assert_eq!(
+                drawer_for_heading(title).unwrap_err().code(),
+                "reserved"
+            );
+            assert_eq!(
+                can_create_drawer(title, true).unwrap_err().code(),
+                "reserved"
+            );
+        }
+        assert_eq!(
+            can_create_drawer("Future Work", false).unwrap_err().code(),
+            "empty_drawer"
+        );
+        assert_eq!(can_create_drawer("Future Work", true), Ok(()));
+    }
+
+    #[test]
+    fn contextual_reader_filters_false_drawers_and_reports_byte_ranges() {
+        let contents = concat!(
+            "- [ ] #task Parent\r\n",
+            "  - **API Design**\r\n",
+            "    - note\r\n",
+            "\t- **C++ Notes**\r\n",
+            "  - **Q1: Goals**\r\n",
+            "  - **Café**\r\n",
+            "  - NOTES\r\n",
+            "  - **Notes**\r\n",
+            "  - **Tasks**\r\n",
+            "  - **Note:**\r\n",
+            "  - **Trailing** text\r\n",
+            "  - __Escaped__\r\n",
+            "  - > **Quoted**\r\n",
+            "  - ```md\r\n",
+            "    - **Fenced**\r\n",
+            "  - ```\r\n",
+            "  - ordinary note\r\n",
+            "    - **Nested note**\r\n",
+        );
+        let found = drawers_of(contents);
+        assert_eq!(
+            found
+                .iter()
+                .map(|drawer| drawer.title.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "API Design",
+                "C++ Notes",
+                "Q1: Goals",
+                "Café",
+                "NOTES",
+                "Notes"
+            ]
+        );
+        let api = drawer_named(&found, "API Design");
+        assert_eq!(&contents[api.header_range.clone()], "  - **API Design**");
+        assert_eq!(&contents[api.title_range.clone()], "API Design");
+        let cafe = drawer_named(&found, "Café");
+        assert_eq!(&contents[cafe.title_range.clone()], "Café");
+        let notes = found.iter().filter(|drawer| drawer.key == "NOTES").count();
+        assert_eq!(
+            notes, 2,
+            "case twins remain visible for ambiguity handling"
+        );
     }
 
     #[test]
@@ -3172,6 +3725,7 @@ mod tests {
                 title: "REQUIREMENTS".to_string(),
                 key: "REQUIREMENTS".to_string(),
                 slug: "requirements".to_string(),
+                marker: DrawerMarker::LegacyCaps,
                 line: 3,
                 entry_count: 1,
             }],
@@ -3198,6 +3752,7 @@ mod tests {
                 "\"title\"",
                 "\"key\"",
                 "\"slug\"",
+                "\"marker\"",
                 "\"line\"",
                 "\"entry_count\"",
             ],

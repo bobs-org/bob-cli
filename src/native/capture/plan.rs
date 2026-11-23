@@ -3583,7 +3583,7 @@ pub(super) fn plan_capture_item(
                                 task_block_layout::drawer_header_offset(
                                     &contents,
                                     parent,
-                                    key == task_block_layout::NOTES_TITLE,
+                                    key == task_block_layout::NOTES_KEY,
                                 );
                             let placement = if anchor >= contents.len() {
                                 Placement::Appended
@@ -3651,7 +3651,7 @@ pub(super) fn plan_capture_item(
                         (
                             Some(DrawerJson {
                                 title: title.to_string(),
-                                key: task_block_layout::NOTES_TITLE.to_string(),
+                                key: task_block_layout::NOTES_KEY.to_string(),
                                 created: true,
                             }),
                             offset,

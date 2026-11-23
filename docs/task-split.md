@@ -309,3 +309,4 @@ bob-plugins copies the file byte-for-byte; bob-cli is authoritative.
 | SP49 | A line selection across a requirement and its descendant is an overlap |
 | SP50 | A requirement's kept Cancel Log stays the new task's first child |
 | SP51 | A note with children lands directly below P's block when more follows |
+| SP52 | A bold note under a drawer remains splittable note content |

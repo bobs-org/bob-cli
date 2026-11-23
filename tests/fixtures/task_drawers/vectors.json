@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "contract": "docs/task-drawers.md §1–§4",
+  "cases": [
+    {
+      "id": "DV1",
+      "title": "dual readers preserve true-case titles and byte ranges",
+      "eol": "crlf",
+      "owner": "parent",
+      "source_lines": [
+        "- [ ] #task Parent ^parent",
+        "  - **API Design**",
+        "    - note",
+        "\t- **C++ Notes**",
+        "  - **Q1: Goals**",
+        "  - **Café**",
+        "  - NOTES",
+        "  - **Notes**",
+        "  - **Tasks**",
+        "  - **Note:**",
+        "  - **Trailing** prose",
+        "  - **API Design** ^id",
+        "  - **API Design** #tag",
+        "  - __API Design__",
+        "  - > **Quoted**",
+        "  - ```md",
+        "    - **Fenced**",
+        "  - ```",
+        "  - plain note",
+        "    - **Nested Note**"
+      ],
+      "expect": [
+        {"title": "API Design", "key": "API DESIGN", "marker": "bold", "line": 2, "header_range": [28, 46], "title_range": [34, 44]},
+        {"title": "C++ Notes", "key": "C++ NOTES", "marker": "bold", "line": 4, "header_range": [60, 76], "title_range": [65, 74]},
+        {"title": "Q1: Goals", "key": "Q1: GOALS", "marker": "bold", "line": 5, "header_range": [78, 95], "title_range": [84, 93]},
+        {"title": "Café", "key": "CAFÉ", "marker": "bold", "line": 6, "header_range": [97, 110], "title_range": [103, 108]},
+        {"title": "NOTES", "key": "NOTES", "marker": "legacy_caps", "line": 7, "header_range": [112, 121], "title_range": [116, 121]},
+        {"title": "Notes", "key": "NOTES", "marker": "bold", "line": 8, "header_range": [123, 136], "title_range": [129, 134]}
+      ]
+    },
+    {
+      "id": "DV2",
+      "title": "reserved and managed names, quotes, and list fences stay excluded",
+      "owner": "parent",
+      "source_lines": [
+        "- [ ] #task Parent ^parent",
+        "  - **Tasks**",
+        "  - **Projects**",
+        "  - **Notebooks**",
+        "  - **WORK LOG**",
+        "  - ⛓️ **DEPENDS ON:** [[#^other]]",
+        "  - 🧱 **BLOCKS:** [[#^other]]",
+        "  - 🔗 **LINKS:** [[#^other]]",
+        "  - 🔗 **LINKED FROM:** [[#^other]]",
+        "  - **Sub-projects:** [[Project]]",
+        "  - > **Quoted**",
+        "  - ```md",
+        "    - **Fenced**",
+        "  - ```"
+      ],
+      "expect": []
+    },
+    {
+      "id": "DV3",
+      "title": "direct child depth and nested task ownership stay distinct",
+      "owner": "parent",
+      "source_lines": [
+        "- [ ] #task Parent ^parent",
+        "  - ordinary note",
+        "    - **Nested note**",
+        "  - [ ] #task Child ^child",
+        "    - **Child Drawer**",
+        "      - note"
+      ],
+      "expect": [],
+      "other_owner": "child",
+      "other_expect": [
+        {"title": "Child Drawer", "key": "CHILD DRAWER", "marker": "bold", "line": 5}
+      ]
+    },
+    {
+      "id": "DV4",
+      "title": "Unicode uppercase twins keep authored title and become ambiguous by key",
+      "owner": "parent",
+      "source_lines": [
+        "- [ ] #task Parent ^parent",
+        "  - **Café**",
+        "  - **CAFÉ**",
+        "  - **Straße**",
+        "  - **STRASSE**"
+      ],
+      "expect": [
+        {"title": "Café", "key": "CAFÉ", "marker": "bold", "line": 2},
+        {"title": "CAFÉ", "key": "CAFÉ", "marker": "bold", "line": 3},
+        {"title": "Straße", "key": "STRASSE", "marker": "bold", "line": 4},
+        {"title": "STRASSE", "key": "STRASSE", "marker": "bold", "line": 5}
+      ]
+    }
+  ],
+  "body_cases": [
+    {"id": "DV5", "body": "**API Design**", "title": "API Design", "marker": "bold"},
+    {"id": "DV6", "body": "**C++ Notes**", "title": "C++ Notes", "marker": "bold"},
+    {"id": "DV7", "body": "**Q1: Goals**", "title": "Q1: Goals", "marker": "bold"},
+    {"id": "DV8", "body": "**Café**", "title": "Café", "marker": "bold"},
+    {"id": "DV9", "body": "OPTIONS:", "title": "OPTIONS:", "marker": "legacy_caps"},
+    {"id": "DV10", "body": "** Title**", "excluded": true},
+    {"id": "DV11", "body": "**Title **", "excluded": true},
+    {"id": "DV12", "body": "****", "excluded": true},
+    {"id": "DV13", "body": "**!!!**", "excluded": true},
+    {"id": "DV14", "body": "**Note:**", "excluded": true},
+    {"id": "DV15", "body": "**Name* With Star**", "excluded": true},
+    {"id": "DV16", "body": "NOTE: X", "excluded": true},
+    {"id": "DV17", "body": "KEY:: VALUE", "excluded": true},
+    {"id": "DV18", "body": "OPTIONS::", "excluded": true},
+    {"id": "DV19", "body": "__API Design__", "excluded": true},
+    {"id": "DV20", "body": "**Title** trailing", "excluded": true},
+    {"id": "DV21", "body": "**Title** ^id", "excluded": true},
+    {"id": "DV22", "body": "**Title** #tag", "excluded": true},
+    {"id": "DV23", "body": "**Title** [field:: value]", "excluded": true},
+    {"id": "DV24", "body": "[ ] checkbox", "excluded": true}
+  ],
+  "heading_mappings": [
+    {"id": "DH1", "title": "API Design", "heading": "API Design"},
+    {"id": "DH2", "title": "C++ Notes", "heading": "C++ Notes"},
+    {"id": "DH3", "title": "Q1: Goals", "heading": "Q1: Goals"},
+    {"id": "DH4", "title": "Café", "heading": "Café"},
+    {"id": "DH5", "title": "Internal   whitespace", "heading": "Internal   whitespace"},
+    {"id": "DH6", "title": "", "heading": ""}
+  ]
+}

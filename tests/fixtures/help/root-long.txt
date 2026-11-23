@@ -59,7 +59,7 @@ Setup:
 
 Capture protocol:
   capture-complete       Complete the capture marker at the cursor
-  capture-drawers        List the ALL-CAPS child drawers of a capture task
+  capture-drawers        List a task's drawers and project-note sections
   capture-parse          Explain what in-progress capture text currently means
   capture-pomodoro-name  Write a name onto an open unnamed Pomodoro
   capture-pomodoros      List today's Pomodoro ledger entries

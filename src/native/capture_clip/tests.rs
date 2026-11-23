@@ -996,6 +996,30 @@ fn renders_inline_lines_and_long_text_modes() {
 }
 
 #[test]
+fn clipboard_items_that_look_like_drawers_are_escaped_after_rendering() {
+    let lines = rendered_lines(
+        &[
+            "**API Design**".to_string(),
+            "AGENDA".to_string(),
+            "plain note".to_string(),
+        ],
+        "\t",
+    );
+    assert_eq!(
+        lines,
+        ["\t- __API Design__", "\t- __AGENDA__", "\t- plain note"]
+    );
+    for line in &lines {
+        let body = line.trim_start().trim_start_matches("- ");
+        assert_eq!(
+            crate::native::capture_drawers::drawer_body_title(body),
+            None,
+            "clipboard line became a drawer: {line}"
+        );
+    }
+}
+
+#[test]
 fn tab_indent_renders_every_clipboard_shape() {
     assert_eq!(
         rendered_lines(&["one".to_string(), "two".to_string()], "\t"),

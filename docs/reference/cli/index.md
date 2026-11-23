@@ -136,7 +136,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | Command | What it does |
 | --- | --- |
 | [`bob capture-complete`](capture-complete.md) | Complete the capture marker at the cursor |
-| [`bob capture-drawers`](capture-drawers.md) | List the ALL-CAPS child drawers of a capture task |
+| [`bob capture-drawers`](capture-drawers.md) | List a task's drawers and project-note sections |
 | [`bob capture-parse`](capture-parse.md) | Explain what in-progress capture text currently means |
 | [`bob capture-pomodoro-name`](capture-pomodoro-name.md) | Write a name onto an open unnamed Pomodoro |
 | [`bob capture-pomodoros`](capture-pomodoros.md) | List today's Pomodoro ledger entries |
@@ -217,7 +217,7 @@ Setup:
 
 Capture protocol:
   capture-complete       Complete the capture marker at the cursor
-  capture-drawers        List the ALL-CAPS child drawers of a capture task
+  capture-drawers        List a task's drawers and project-note sections
   capture-parse          Explain what in-progress capture text currently means
   capture-pomodoro-name  Write a name onto an open unnamed Pomodoro
   capture-pomodoros      List today's Pomodoro ledger entries

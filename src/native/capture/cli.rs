@@ -533,7 +533,8 @@ Work Log; if neither managed log exists, the child is appended at the end of the
 task block. The note and task must already exist. Existing child indentation and \
 line endings are preserved; run 'bob capture-tasks -r <route>' to list eligible \
 task block IDs. A trailing '#<drawer>' component, as in \
-'@<route>+<block-id>#<drawer>', names an ALL-CAPS child drawer of that task. \
+'@<route>+<block-id>#<drawer>', names an existing child drawer by key; a \
+missing task drawer is created with the legacy ALL-CAPS writer form. \
 The selector is a slug or quoted literal; matching is exact by key, with \
 reserved and near-duplicate refusals, and a missing drawer is created. The \
 captured block is appended at the end of that drawer, before a managed log \
@@ -598,7 +599,8 @@ headings (generated status-group headings under Tasks are skipped); if no \
 heading matches, the bullet falls back to the pre-heading \
 section.\n\n\
 Use --route with --task and --drawer TITLE to nest a sub-bullet under \
-the named ALL-CAPS child drawer of that task. The title is matched exactly, \
+an existing child drawer of that task, including a whole-bold drawer. A \
+missing drawer is created with the legacy ALL-CAPS writer form. The title is matched exactly, \
 case insensitively; unlike a typed #<drawer> selector, it is not slug- or \
 prefix-matched, so --drawer future-work does not match FUTURE WORK. On a \
 '^prj' parent it matches the project note's eligible '##' sections instead, \

@@ -488,6 +488,40 @@ fn a_created_notes_drawer_lands_first_among_the_drawers() {
 }
 
 #[test]
+fn notes_home_matches_bold_notes_by_key_and_tidy_reuses_its_header() {
+    let settings = settings();
+    let contents = concat!(
+        "- [ ] #task A ^a\n",
+        "\t- [ ] req\n",
+        "\t- **Notes**\n",
+        "\t\t- existing note\n",
+        "\t- loose note\n",
+    );
+    let task = find_task(contents, 0, &settings).expect("task");
+    let Some(plan) = plan_tidy(
+        contents,
+        &task,
+        &TidyPolicy {
+            settings: &settings,
+        },
+    ) else {
+        panic!("loose note should file into the existing notes drawer");
+    };
+    assert_eq!(plan.notes_filed, 1);
+    assert!(!plan.notes_created);
+    assert_eq!(plan.updated.matches("**Notes**").count(), 1);
+    assert!(plan
+        .updated
+        .contains("\t\t- existing note\n\t\t- loose note\n"));
+    assert!(!plan.updated.contains("\t- NOTES\n"));
+    let refreshed =
+        find_task(&plan.updated, 0, &settings).expect("task remains");
+    let drawer = notes_drawer(&plan.updated, &refreshed).expect("notes home");
+    assert_eq!(drawer.title, "Notes");
+    assert_eq!(drawer.marker, capture_drawers::DrawerMarker::Bold);
+}
+
+#[test]
 fn a_note_without_a_final_newline_keeps_that_state() {
     let settings = settings();
     let contents = "- [ ] #task A ^a\n\t- loose\n\t- [ ] first req";

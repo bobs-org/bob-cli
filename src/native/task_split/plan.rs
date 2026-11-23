@@ -818,6 +818,9 @@ fn collect_candidates(
         .collect::<Vec<_>>();
     let mut result = Vec::new();
     if kind == OwnerKind::Task {
+        let owner_task = note_tasks::scan(source, settings)
+            .task_at(owner_line)
+            .cloned();
         let reqs: Vec<task_reqs::ReqNode> =
             task_reqs::note_req_forest(source, settings)
                 .into_iter()
@@ -838,9 +841,12 @@ fn collect_candidates(
             {
                 continue;
             }
-            let classified =
-                task_children::classify_task_child(content[index], None);
-            if let TaskChildKind::Drawer { .. } = classified {
+            if owner_task.as_ref().is_some_and(|task| {
+                crate::native::capture_drawers::recognize_drawer_header(
+                    source, task, index,
+                )
+                .is_some()
+            }) {
                 let drawer_indent = indent(content[index]).len();
                 for entry in
                     index + 1..=owner_end.min(content.len().saturating_sub(1))
@@ -875,12 +881,19 @@ fn collect_candidates(
             if !is_direct && !drawer_lines.contains(&index) {
                 continue;
             }
-            let child_kind =
+            let drawer_header = owner_task.as_ref().and_then(|task| {
+                crate::native::capture_drawers::recognize_drawer_header(
+                    source, task, index,
+                )
+            });
+            let mut child_kind =
                 task_children::classify_task_child(content[index], None);
-            let drawer_title = match child_kind {
-                TaskChildKind::Drawer { ref title } => Some(title.clone()),
-                _ => None,
-            };
+            if drawer_header.is_none()
+                && matches!(child_kind, TaskChildKind::Drawer { .. })
+            {
+                child_kind = TaskChildKind::Authored;
+            }
+            let drawer_title = drawer_header.map(|header| header.title);
             if drawer_title.is_some()
                 || matches!(
                     child_kind,

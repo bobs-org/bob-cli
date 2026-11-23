@@ -7,9 +7,8 @@
 //! Imported prose (gcal descriptions) goes further through
 //! [`escape_note_inline`] (mid-line hazards) and [`escape_note_text`]
 //! (plus the line-start hazards for text that begins a list item body).
-//! Both leave URLs alone — link targets are the bullet renderer's job —
-//! and neither applies the drawer or managed-line guards; those need
-//! the row context and live in the bullet renderer.
+//! Both leave URLs alone — link targets are the bullet renderer's job. The
+//! final rendered child body also passes through [`defuse_drawer_header`].
 
 use std::sync::LazyLock;
 
@@ -26,11 +25,40 @@ pub(crate) fn escape_task_text(text: &str) -> String {
 
 /// Escape free text for a child bullet: the task-line escaping plus the
 /// leading-marker and bullet-start checkbox rules, since a child starts a
-/// fresh list item.
+/// fresh list item. It also defuses whole-line drawer lookalikes.
 pub(crate) fn escape_child_text(text: &str) -> String {
-    escape_leading_marker(&escape_bullet_start_checkbox(&escape_task_text(
-        text,
-    )))
+    let escaped = escape_leading_marker(&escape_bullet_start_checkbox(
+        &escape_task_text(text),
+    ));
+    defuse_drawer_header(&escaped)
+}
+
+/// Keep imported child text inert under the task drawer dual-reader. A body
+/// that would be recognized as either a legacy or bold drawer becomes the
+/// same visibly bold, escaped note. Whitespace around the body is preserved.
+pub(crate) fn defuse_drawer_header(body: &str) -> String {
+    let start = body.len() - body.trim_start().len();
+    let end = body.trim_end().len();
+    let trimmed = &body[start..end];
+    let Some((title, marker)) =
+        crate::native::capture_drawers::drawer_body_title(trimmed)
+    else {
+        return body.to_string();
+    };
+    if !matches!(
+        marker,
+        crate::native::capture_drawers::DrawerMarker::Bold
+            | crate::native::capture_drawers::DrawerMarker::LegacyCaps
+    ) {
+        return body.to_string();
+    }
+    let key = crate::native::capture_drawers::drawer_key(title);
+    if crate::native::capture_drawers::is_reserved_drawer_key(&key)
+        || crate::native::capture_drawers::is_structural_h2_key(&key)
+    {
+        return body.to_string();
+    }
+    format!("{}__{}__{}", &body[..start], title, &body[end..])
 }
 
 /// Escape a body that would start a checkbox list item (`[c]` or `[c] …`)
@@ -421,6 +449,36 @@ mod tests {
         assert_eq!(escape_child_text("see [ ] later"), "see [ ] later");
         assert_eq!(escape_note_text("[ ] item"), "\\[ ] item");
         assert_eq!(escape_note_inline("[ ] item"), "\\[ ] item");
+    }
+
+    #[test]
+    fn child_text_defuses_legacy_and_bold_drawer_headers_idempotently() {
+        for (input, expected) in [
+            ("AGENDA", "__AGENDA__"),
+            ("**Agenda**", "__Agenda__"),
+            ("  **API Design**  ", "  __API Design__  "),
+        ] {
+            let escaped = defuse_drawer_header(input);
+            assert_eq!(escaped, expected);
+            assert_eq!(defuse_drawer_header(&escaped), escaped);
+            assert_eq!(
+                crate::native::capture_drawers::drawer_body_title(&escaped),
+                None
+            );
+        }
+        for body in [
+            "__API Design__",
+            "**Note:**",
+            "**API Design** trailing",
+            "ordinary note",
+        ] {
+            assert_eq!(defuse_drawer_header(body), body);
+        }
+        for reserved in ["NOTES", "**Tasks**"] {
+            assert_eq!(defuse_drawer_header(reserved), reserved);
+        }
+        assert_eq!(escape_child_text("AGENDA"), "__AGENDA__");
+        assert_eq!(escape_child_text("**Agenda**"), "__Agenda__");
     }
 
     #[test]

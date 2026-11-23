@@ -16,7 +16,8 @@ use super::model::{
 use super::pomodoro_literal::lex_exact_name_after_hash;
 use super::project_tasks::split_leading_checkbox;
 use crate::native::capture_drawers::{
-    drawer_key, is_drawer_slug, is_drawer_title, normalize_drawer_literal,
+    drawer_key, is_drawer_slug, is_legacy_drawer_title,
+    normalize_drawer_literal,
 };
 use std::ops::Range;
 
@@ -453,7 +454,7 @@ pub(crate) fn is_all_caps_drawer_title(body: &str) -> bool {
     if split_leading_checkbox(trimmed).0.is_some() {
         return false;
     }
-    is_drawer_title(trimmed)
+    is_legacy_drawer_title(trimmed)
 }
 
 fn parse_hit(

@@ -2,7 +2,7 @@
 
 `vectors.json` is the single source of truth for the recursive requirement
 recognizer in bob-cli (`src/native/task_reqs.rs`, contract
-`docs/task-requirements.md` §1–§2). Its cases are `RQ1`–`RQ21`, covering:
+`docs/task-requirements.md` §1–§2). Its cases are `RQ1`–`RQ22`, covering:
 
 - every positive and negative position (notes, drawers, managed lines, logs,
   notebook-adjacent rows, fences inside list items, quotes, pasted checklists);
@@ -16,6 +16,7 @@ recognizer in bob-cli (`src/native/task_reqs.rs`, contract
 - duplicate texts in different branches, which must give distinct row keys;
 - trailing `^anchor` capture and clean text;
 - whole-token `#task` matching (`#tasks` and `#taskbar` are not tasks).
+- bold drawer headers that keep their checkbox children out of reqs.
 
 Bob-cli owns this file; the Obsidian twins copy it byte for byte. A behavior
 change edits the contract and this fixture together.
@@ -45,15 +46,15 @@ change edits the contract and this fixture together.
 
 # Layout and writer vectors
 
-`layout.json` (`RL1`–`RL60`) and `writes.json` (`RW1`–`RW57`) pin the task
+`layout.json` (`RL1`–`RL61`) and `writes.json` (`RW1`–`RW57`) pin the task
 block layout module (`src/native/task_block_layout.rs`, contract
 `docs/task-requirements.md` §3). bob-cli owns both files; each plugin copies
 them byte for byte after updating bob-cli first. A behavior change edits the
 contract and these fixtures together. Source notes are `source_lines` joined
 with `\n` plus a trailing newline (`eol: "crlf"` joins with `\r\n`), and every
-line number is 1-based. `RL53`–`RL60` and `RW54`–`RW57` pin a req-owning
+line number is 1-based. `RL53`–`RL61` and `RW54`–`RW57` pin a req-owning
 `^prj` task's `## Notes` home (slots, tidy, note homes, first-req scoop,
-req→note, CRLF).
+req→note, CRLF); `RL61` also proves a bold `**Notes**` drawer is reused.
 
 ## `layout.json`
 

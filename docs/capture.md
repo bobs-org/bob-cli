@@ -10870,9 +10870,12 @@ bob capture-tasks --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 These read-only discovery commands support interactive capture pickers. A
 *route* is the canonical lowercase name for a `<route>.md` note at the vault
 root; for example, route `cash` selects `cash.md`. The command-line route
-options accept ASCII uppercase too and normalize it to lowercase. A picker
-normally uses the commands in this order. Pomodoro notes (`text %n`) skip this
-list and call `bob capture` directly:
+options accept ASCII uppercase too and normalize it to lowercase.
+`capture-drawers` reads both legacy ALL-CAPS and whole-bold task drawer
+headers; see the [task drawer contract](task-drawers.md) for recognition,
+marker fields, and the unchanged capture writer form. A picker normally uses
+the commands in this order. Pomodoro notes (`text %n`) skip this list and call
+`bob capture` directly:
 
 1. Run `capture-targets` and let the user choose a route.
 2. For a bullet capture (`@route#`), run `capture-sections` for that route and
@@ -10882,7 +10885,7 @@ list and call `bob capture` directly:
    let the user choose an open task. Other capture modes skip this step.
 4. Optionally run `capture-drawers` for that parent (`--block-id` or
    `--task-ref`) and let the user choose a drawer title, then pass
-   `--drawer TITLE` to nest under that ALL-CAPS child drawer.
+   `--drawer TITLE` to nest under that child drawer.
 5. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, omit
    `--section` for a task, or run
    `bob capture --route NAME --task-ref REF [--drawer TITLE] -- <text>`
@@ -11081,8 +11084,9 @@ load plan configuration nor include the budget. The budget depends on both the
 daily-note contents and plan configuration; the rest of the agenda is derived
 from its existing note inputs.
 
-`capture-drawers` lists the ALL-CAPS direct-child drawer bullets of one
-parent task in document order. When the parent is the project note's own
+`capture-drawers` lists the direct-child task drawer bullets of one parent
+task in document order, recognizing both legacy ALL-CAPS and whole-bold
+headers. Each JSON row reports its `marker`. When the parent is the project note's own
 `^prj` task it lists the note's eligible `##` sections instead. Exactly one of `--block-id`/`-i` or
 `--task-ref`/`-t` is required; the parent lookup and error messages match
 `bob capture` (missing ID with a close-match suggestion, duplicate ID, non-task
@@ -11093,8 +11097,8 @@ state. JSON success is a single versioned object with `ok`, `schema_version`
 `1`, `route`, nullable `block_id` (null when the parent was resolved by
 `--task-ref` and still has no ID), `ref`, `count`, an ordered `drawers`
 array, and a `recent` array of catalog drawers absent from the task. Each
-drawer has `title`, `key`, `slug`, `line`, and `entry_count`; each recent row
-has `title`, `key`, `note_count`, and `last_seen`. JSON failure is
+drawer has `title`, `key`, `slug`, `marker`, `line`, and `entry_count`; each recent row
+has `title`, `key`, `marker`, `note_count`, and `last_seen`. JSON failure is
 `{"ok": false, "error": "..."}`.
 
 ## `bob capture-templates`

@@ -56,7 +56,7 @@ bob plan -f json -b /path/to/synthetic-vault
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-targets` | `-f json` | `bob_dir`, `count`, `targets`; notebook `kind: "notebook"`. Record rows: `kind: "record"`, `type` (album noun), optional `emoji`, `count`. Albums add `title`, optional `summary`/`owner`, and `breadcrumb` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md#record-notes) |
 | `bob capture-task-id` | `-f json` | ID write (or `-d` plan) plus `note_path` and picker `*_replacement` strings; notebook notes add `item_kind: "note"` and `parent_replacement: "@nb+ID"` | `schema_version: 1` | [Capture](../capture.md) |
-| `bob capture-drawers` | `-f json` | ALL-CAPS child drawers of one task plus catalog recents | `schema_version: 1` | [Capture](../capture.md) |
+| `bob capture-drawers` | `-f json` | Direct-child drawers plus catalog recents; drawer rows include `marker` (`legacy_caps` or `bold`) and project-note sections use `section` | `schema_version: 1` | [Task drawers](../task-drawers.md) |
 | `bob capture-tasks` | `-f json` | Open tasks of one note with block IDs and status names | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-templates list` | `-f json` | Saved-template shelf entries | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates save` | `-f json` | Saved definition plus shelf position | `schema_version: 1` | [Capture](../capture.md#saved-templates) |

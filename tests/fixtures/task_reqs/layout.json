@@ -1226,6 +1226,20 @@
       "expect": {
         "home": "new-notes"
       }
+    },
+    {
+      "id": "RL61",
+      "title": "a req-owning task reuses a bold Notes drawer",
+      "source_lines": [
+        "- [ ] #task A ^a",
+        "  - **Notes**",
+        "    - [ ] a req"
+      ],
+      "task": 1,
+      "expect": {
+        "home": "notes",
+        "line": 2
+      }
     }
   ]
 }

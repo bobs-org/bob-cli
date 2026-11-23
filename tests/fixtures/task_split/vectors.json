@@ -2429,6 +2429,40 @@
           "path": "db.md"
         }
       }
+    },
+    {
+      "id": "SP52",
+      "title": "a bold note under a drawer remains splittable note content",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **API Design**\n    - **Nested note**\n      - endpoint details\n"
+        },
+        "owner": {
+          "line": 1,
+          "path": "db.md"
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "inbox_route": "inbox.md",
+          "linked_from_lines": true,
+          "linked_from_mentions": true
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": ""
+        },
+        "tasks": [],
+        "stubs": [],
+        "cursor": {},
+        "notice": "",
+        "placement": {}
+      }
     }
   ]
 }

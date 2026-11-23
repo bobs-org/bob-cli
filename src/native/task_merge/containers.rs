@@ -338,15 +338,16 @@ fn resolve_section_title(
     let matches: Vec<&capture_drawers::Drawer> = if selector.exact {
         drawers
             .iter()
-            .filter(|drawer| drawer.title.eq_ignore_ascii_case(&selector.text))
+            .filter(|drawer| {
+                capture_drawers::drawer_key(&drawer.title)
+                    == capture_drawers::drawer_key(&selector.text)
+            })
             .collect()
     } else {
         let slug = capture_language::selector_slug(&selector.text);
-        let plain_key = selector.text.to_ascii_uppercase();
-        let spaced_key = capture_language::normalize_task_text(
-            &selector.text.replace('-', " "),
-        )
-        .to_ascii_uppercase();
+        let plain_key = capture_drawers::drawer_key(&selector.text);
+        let spaced_key =
+            capture_drawers::drawer_key(&selector.text.replace('-', " "));
         drawers
             .iter()
             .filter(|drawer| {

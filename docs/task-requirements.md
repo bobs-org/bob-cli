@@ -59,7 +59,7 @@ These are **never** reqs:
   its own ownership boundary and owns its own reqs.
 
 A plain note, drawer, or log between a checkbox and the task breaks the
-chain. A pasted checklist under `NOTES`, or under a req's note, therefore
+chain. A pasted checklist under `NOTES` or another drawer, or under a req's note, therefore
 stays an ordinary checklist. "Any checkbox somewhere below a task" is
 explicitly **not** the rule.
 
@@ -73,6 +73,9 @@ A req **may have**:
 
 - child notes, child reqs, a trailing `^anchor`, and a ❌ CANCEL LOG child
   when dropped.
+
+Drawer recognition and the dual-read migration are defined in the
+[task drawer contract](task-drawers.md).
 
 The moment a req needs any of the "never has" items, it is carried into a
 real task. A `^prj` task may own reqs; they are the project's completion
@@ -687,7 +690,8 @@ and `vault-migration` phases.)
 - **RL** (`tests/fixtures/task_reqs/layout.json`): insertion slots,
   violations, tidy before/after, and note homes (§3.1–§3.2): Cancel Log,
   nested tasks, mixed indentation, drawers, fenced lookalikes, and a
-  req-owning `^prj` task's `## Notes` home (`RL53`–`RL60`).
+  req-owning `^prj` task's `## Notes` home (`RL53`–`RL61`), including bold
+  `**Notes**` drawer reuse (`RL61`).
 - **RW** (`tests/fixtures/task_reqs/writes.json`): drop, restore, toggle,
   insert, the first-req scoop, the `with_first_note` NOTES birth, CRLF notes,
   every refusal code (§3.3), and the `^prj` `## Notes` writers (`RW54`–`RW57`).

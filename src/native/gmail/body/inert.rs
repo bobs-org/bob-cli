@@ -1076,19 +1076,26 @@ fn render_list(
         };
         let mut first = true;
         for block in item {
+            let guard_drawer_body = matches!(block, Block::Paragraph(_));
             let mut rendered = String::new();
             render_block(block, depth + 1, &mut rendered);
             for line in rendered.trim_end_matches('\n').split('\n') {
+                let body = line.trim_start();
+                let body = if guard_drawer_body {
+                    crate::native::task_text_escape::defuse_drawer_header(body)
+                } else {
+                    body.to_string()
+                };
                 if first {
                     first = false;
                     out.push_str(&indent);
                     out.push_str(&marker);
                     out.push(' ');
-                    out.push_str(line.trim_start());
+                    out.push_str(&body);
                 } else {
                     out.push_str(&indent);
                     out.push_str("  ");
-                    out.push_str(line.trim_start());
+                    out.push_str(&body);
                 }
                 out.push('\n');
             }
@@ -1404,6 +1411,30 @@ mod tests {
                 "live checkbox survived in blocks from {fragment:?}:\n{blocks}"
             );
         }
+    }
+
+    #[test]
+    fn whole_bold_and_legacy_list_items_are_defused_as_imported_children() {
+        let rendered = render_blocks(&[Block::List {
+            ordered: false,
+            start: 1,
+            items: vec![
+                vec![Block::Paragraph(vec![Inline::Text(
+                    "AGENDA".to_string(),
+                )])],
+                vec![Block::Paragraph(vec![Inline::Strong(vec![
+                    Inline::Text("Agenda".to_string()),
+                ])])],
+            ],
+        }]);
+        let bodies: Vec<&str> = rendered
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .collect();
+        assert_eq!(bodies, ["__AGENDA__", "__Agenda__"]);
+        assert!(bodies.iter().all(|body| {
+            crate::native::capture_drawers::drawer_body_title(body).is_none()
+        }));
     }
 
     #[test]

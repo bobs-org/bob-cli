@@ -1095,6 +1095,18 @@
           {"line": 3, "owner": 3, "is_req": false}
         ]
       }
+    },
+    {
+      "id": "RQ22",
+      "title": "a bold drawer header keeps its checkbox child out of requirements",
+      "source_lines": [
+        "- [ ] #task Parent ^parent",
+        "  - **API Design**",
+        "    - [ ] Review endpoint"
+      ],
+      "expect": {
+        "nodes": []
+      }
     }
   ]
 }

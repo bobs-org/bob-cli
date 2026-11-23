@@ -127,8 +127,15 @@ pub(crate) fn classify_task_child_with_filter(
     }
 
     if let Some(body) = list_item_body(line) {
-        let title = body.trim();
-        if super::capture_drawers::is_drawer_title(title) {
+        if let Some((title, _)) =
+            super::capture_drawers::drawer_body_title(body)
+            && !super::capture_drawers::is_reserved_drawer_key(
+                &super::capture_drawers::drawer_key(title),
+            )
+            && !super::capture_drawers::is_structural_h2_key(
+                &super::capture_drawers::drawer_key(title),
+            )
+        {
             return TaskChildKind::Drawer {
                 title: title.to_string(),
             };
@@ -217,14 +224,24 @@ fn classify_direct_children_with(
             {
                 return None;
             }
-            Some(ClassifiedTaskChild {
-                line_index,
-                kind: classify_task_child_with_filter(
-                    line.text,
-                    nested_task_open(line_index),
-                    global_filter,
-                ),
-            })
+            let classified = classify_task_child_with_filter(
+                line.text,
+                nested_task_open(line_index),
+                global_filter,
+            );
+            let kind = if let Some(header) =
+                super::capture_drawers::recognize_drawer_header(
+                    contents, parent, line_index,
+                ) {
+                TaskChildKind::Drawer {
+                    title: header.title,
+                }
+            } else if matches!(classified, TaskChildKind::Drawer { .. }) {
+                TaskChildKind::Authored
+            } else {
+                classified
+            };
+            Some(ClassifiedTaskChild { line_index, kind })
         })
         .collect()
 }

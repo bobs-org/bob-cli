@@ -230,11 +230,11 @@ where
 
 /// Whether a trimmed authored body is a project-note section title.
 ///
-/// Delegates to [`crate::native::capture_drawers::is_drawer_title`] so the
+/// Delegates to [`crate::native::capture_drawers::is_legacy_drawer_title`] so the
 /// two grammars never drift: drawer sentence punctuation (`?`, `!`, `;`,
 /// trailing `:`) qualifies here too.
 pub(crate) fn is_project_section_title(body: &str) -> bool {
-    crate::native::capture_drawers::is_drawer_title(body.trim())
+    crate::native::capture_drawers::is_legacy_drawer_title(body.trim())
 }
 
 /// Lowercase the whole body, then uppercase the first character of every

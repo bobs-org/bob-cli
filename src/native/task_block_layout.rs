@@ -64,6 +64,9 @@ pub(crate) use writers::{
 };
 
 /// Drawer key of the notes drawer a req-owning task keeps.
+/// Identity key shared by every spelling of the notes home.
+pub(crate) const NOTES_KEY: &str = "NOTES";
+/// New task-drawer spelling; this phase keeps the legacy bytes.
 pub(crate) const NOTES_TITLE: &str = "NOTES";
 
 /// Title Case heading created for a `^prj` task's `## Notes` section.
@@ -177,7 +180,7 @@ impl BlockChild {
         matches!(
             &self.kind,
             TaskChildKind::Drawer { title }
-                if capture_drawers::drawer_key(title) == NOTES_TITLE
+                if capture_drawers::drawer_key(title) == NOTES_KEY
         )
     }
 }
@@ -370,7 +373,7 @@ fn create_notes() -> DrawerResolved {
     DrawerResolved {
         outcome: DrawerResolveOutcome::Create {
             title: NOTES_TITLE.to_string(),
-            key: NOTES_TITLE.to_string(),
+            key: NOTES_KEY.to_string(),
             slug: "notes".to_string(),
         },
         created: true,
@@ -383,7 +386,7 @@ fn create_prj_notes() -> DrawerResolved {
     DrawerResolved {
         outcome: DrawerResolveOutcome::Create {
             title: NOTES_SECTION_TITLE.to_string(),
-            key: NOTES_TITLE.to_string(),
+            key: NOTES_KEY.to_string(),
             slug: "notes".to_string(),
         },
         created: true,
@@ -412,7 +415,7 @@ pub(crate) fn ensure_notes_drawer(
 pub(crate) fn project_notes_drawer(contents: &str) -> Option<Drawer> {
     capture_drawers::project_h2_drawers(contents)
         .into_iter()
-        .find(|drawer| drawer.key == NOTES_TITLE)
+        .find(|drawer| drawer.key == NOTES_KEY)
 }
 
 /// The NOTES home of `task`: the project `## Notes` section on a `^prj`
@@ -423,7 +426,7 @@ pub(crate) fn notes_drawer(contents: &str, task: &NoteTask) -> Option<Drawer> {
     } else {
         capture_drawers::drawers(contents, task)
             .into_iter()
-            .find(|drawer| drawer.key == NOTES_TITLE)
+            .find(|drawer| drawer.key == NOTES_KEY)
     }
 }
 

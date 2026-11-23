@@ -317,9 +317,13 @@ pub(crate) fn checkbox_mark_without_filter(
 /// managed link/log lines.
 fn is_structural_container(line: &str) -> bool {
     if let Some(body) = list_item_body(line) {
-        let title = body.trim();
-        if capture_drawers::is_drawer_title(title) {
-            return true;
+        if let Some((title, _)) = capture_drawers::drawer_body_title(body) {
+            let key = capture_drawers::drawer_key(title);
+            if !capture_drawers::is_reserved_drawer_key(&key)
+                && !capture_drawers::is_structural_h2_key(&key)
+            {
+                return true;
+            }
         }
     }
     if task_relations::parse::is_subprojects_line(line)

@@ -24,7 +24,7 @@ use super::{
         LineSpan,
     },
     capture_drawers::{
-        drawer_key, is_drawer_title, is_reserved_drawer_key,
+        drawer_body_title, drawer_key, is_reserved_drawer_key,
         is_structural_h2_key, normalize_drawer_literal, project_h2_drawers,
         Drawer,
     },
@@ -324,8 +324,12 @@ fn old_bullet_lines(lines: &[LineSpan<'_>], spec: &RenameSpec) -> Vec<usize> {
         .enumerate()
         .filter(|(_, line)| {
             list_item_body(line.text).is_some_and(|body| {
-                let title = body.trim();
-                is_drawer_title(title) && spec.is_old(title)
+                drawer_body_title(body).is_some_and(|(title, _)| {
+                    let key = drawer_key(title);
+                    !is_reserved_drawer_key(&key)
+                        && !is_structural_h2_key(&key)
+                        && spec.is_old(title)
+                })
             })
         })
         .map(|(index, _)| index)
@@ -766,8 +770,12 @@ fn lookalike(text: &str, spec: &RenameSpec) -> Option<Lookalike> {
     {
         return Some(Lookalike::Heading { level });
     }
-    let title = list_item_body(text)?.trim();
-    (is_drawer_title(title) && spec.is_old(title)).then_some(Lookalike::Bullet)
+    let (title, _) = drawer_body_title(list_item_body(text)?)?;
+    let key = drawer_key(title);
+    (!is_reserved_drawer_key(&key)
+        && !is_structural_h2_key(&key)
+        && spec.is_old(title))
+    .then_some(Lookalike::Bullet)
 }
 
 /// The text after any blockquote markers, and whether there were any.
@@ -935,8 +943,9 @@ fn header_kind(line: &str, spec: &RenameSpec) -> Option<bool> {
         Some((2, title)) => title,
         Some(_) => return None,
         None => {
-            let title = list_item_body(line)?.trim();
-            if !is_drawer_title(title) {
+            let (title, _) = drawer_body_title(list_item_body(line)?)?;
+            let key = drawer_key(title);
+            if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
                 return None;
             }
             title

@@ -1,7 +1,7 @@
 # Task-split vectors
 
 `vectors.json` is the single source of truth for split-bullet planners in
-bob-cli and bob-plugins (`docs/task-split.md` §6). Its cases are `SP1`–`SP51`,
+bob-cli and bob-plugins (`docs/task-split.md` §6). Its cases are `SP1`–`SP52`,
 covering cursor, count, clamped count, line-range, non-contiguous `nth`, and
 `match` selection; anchor reuse; silent owner mint; alias flattening (`|`,
 `]]`, `#`, links, emphasis); 80-character truncation; ALL-CAPS drawers;
@@ -36,6 +36,7 @@ collapse whitespace, truncate at 80 characters on a word boundary with `…`).
 | `SP32`–`SP39`, `SP44`–`SP48`, `SP50` | carried requirements: `[>]` stub bytes, the new block's layout, `req_depth`, and the `moves` map (1-based `from` in the owner's note before, `to` in the task's note after) |
 | `SP40`–`SP43`, `SP49` | requirement refusals `split_not_splittable` (dropped, carried), `split_req_excluded`, and `split_overlap` |
 | `SP51` | a split with children lands directly below the owner's block when more follows |
+| `SP52` | a bold note under a drawer remains splittable note content |
 
 ## Selection kinds
 

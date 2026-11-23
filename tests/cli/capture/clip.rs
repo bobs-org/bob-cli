@@ -108,6 +108,84 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
 }
 
 #[test]
+fn clipboard_drawer_lookalikes_stay_notes_on_new_and_req_owning_tasks() {
+    let temp = TempDir::new("bob-cli-capture-clip-drawer-lookalikes");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(
+        &clipboard,
+        "#!/bin/sh\nprintf '**API Design**\\nAGENDA\\n'\n",
+    );
+    let target = vault.join("work.md");
+    write_file(
+        &target,
+        "# Work\n## Tasks\n- [ ] #task Existing ^parent\n  - [ ] requirement\n",
+    );
+
+    let new_task = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .args(["Create", "task", "@work^newtask", "%c"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture clipboard under a new task");
+    assert_success(&new_task);
+    let new_json: serde_json::Value =
+        serde_json::from_str(stdout(&new_task).trim()).expect("capture JSON");
+    assert_eq!(
+        new_json["clip"]["lines"],
+        serde_json::json!(["\t- __API Design__", "\t- __AGENDA__"])
+    );
+
+    let existing_task = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["Clip", "note", "@work+parent", "%c"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture clipboard under an existing req-owning task");
+    assert_success(&existing_task);
+
+    let contents = fs::read_to_string(&target).expect("read captured note");
+    assert!(contents.contains("__API Design__"), "{contents}");
+    assert!(contents.contains("__AGENDA__"), "{contents}");
+    assert!(!contents.contains("**API Design**"), "{contents}");
+
+    for block_id in ["newtask", "parent"] {
+        let listed = bob_command()
+            .arg("capture-drawers")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-r")
+            .arg("work")
+            .arg("-i")
+            .arg(block_id)
+            .arg("-f")
+            .arg("json")
+            .output()
+            .expect("read captured task drawers");
+        assert_success(&listed);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&listed).trim()).expect("drawer JSON");
+        assert!(
+            json["drawers"]
+                .as_array()
+                .expect("drawers")
+                .iter()
+                .all(|drawer| drawer["title"] != "API Design"),
+            "{block_id}: {json}"
+        );
+    }
+}
+
+#[test]
 fn capture_headerless_clip_marker_renders_under_tasks_and_pomodoros() {
     let temp = TempDir::new("bob-cli-capture-headerless-clip-placement");
     let vault = temp.path().join("vault");

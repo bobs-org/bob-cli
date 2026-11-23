@@ -268,6 +268,8 @@ fn capture_drawers_json_and_human_list_sections() {
             "\t\t- existing\n",
             "\t- FUTURE WORK\n",
             "\t- NOTES\n",
+            "\t- **API Design**\n",
+            "\t\t- review endpoint\n",
         ),
     );
 
@@ -303,6 +305,7 @@ fn capture_drawers_json_and_human_list_sections() {
             "\"title\"",
             "\"key\"",
             "\"slug\"",
+            "\"marker\"",
             "\"line\"",
             "\"entry_count\"",
         ],
@@ -313,10 +316,11 @@ fn capture_drawers_json_and_human_list_sections() {
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["route"], "foo");
     assert_eq!(json["block_id"], "bar");
-    assert_eq!(json["count"], 3);
+    assert_eq!(json["count"], 4);
     assert_eq!(json["drawers"][0]["title"], "REQUIREMENTS");
     assert_eq!(json["drawers"][0]["key"], "REQUIREMENTS");
     assert_eq!(json["drawers"][0]["slug"], "requirements");
+    assert_eq!(json["drawers"][0]["marker"], "legacy_caps");
     assert_eq!(json["drawers"][0]["line"], 3);
     assert_eq!(json["drawers"][0]["entry_count"], 1);
     assert_eq!(json["drawers"][1]["title"], "FUTURE WORK");
@@ -324,6 +328,10 @@ fn capture_drawers_json_and_human_list_sections() {
     assert_eq!(json["drawers"][1]["slug"], "future-work");
     assert_eq!(json["drawers"][2]["title"], "NOTES");
     assert_eq!(json["drawers"][2]["entry_count"], 0);
+    assert_eq!(json["drawers"][3]["title"], "API Design");
+    assert_eq!(json["drawers"][3]["key"], "API DESIGN");
+    assert_eq!(json["drawers"][3]["marker"], "bold");
+    assert_eq!(json["drawers"][3]["entry_count"], 1);
     let task_ref = json["ref"].as_str().expect("ref");
     let (line, digest) = task_ref.split_once(':').expect("ref separator");
     assert_eq!(line, "2");
@@ -348,7 +356,7 @@ fn capture_drawers_json_and_human_list_sections() {
     assert!(text.contains("REQUIREMENTS"), "{text}");
     assert!(text.contains("requirements"), "{text}");
     assert!(text.contains("FUTURE WORK"), "{text}");
-    assert!(text.contains("3 drawers"), "{text}");
+    assert!(text.contains("4 drawers"), "{text}");
 }
 
 #[test]

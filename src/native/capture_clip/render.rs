@@ -3,7 +3,11 @@ use super::{ClipMode, ClipOutput, ClipStatus};
 pub(super) fn rendered_lines(items: &[String], indent: &str) -> Vec<String> {
     items
         .iter()
-        .map(|item| format!("{indent}- {item}"))
+        .map(|item| {
+            let item =
+                crate::native::task_text_escape::defuse_drawer_header(item);
+            format!("{indent}- {item}")
+        })
         .collect()
 }
 

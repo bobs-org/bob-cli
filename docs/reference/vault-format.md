@@ -84,6 +84,7 @@ filter, with a custom Blocked status whose symbol is `?`. Without
 use emoji format and several writers refuse Blocked transitions.
 
 Contract: [Getting started](../getting-started.md#vault-requirements),
+[Task drawers](../task-drawers.md),
 [Task Status Hooks](../task-status-hooks.md),
 [Next and Pending are sticky](../develop/decisions.md#task-lanes-are-sticky).
 

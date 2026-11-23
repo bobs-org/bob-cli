@@ -137,10 +137,9 @@ fn render_line(line: &super::DescriptionLine) -> Bullet {
     let managed = is_managed_line(&normal, &body_text);
     let body = if managed {
         format!("{marker} *{}*", escape_note_body(&body_text))
-    } else if capture_drawers::is_drawer_title(body_text.trim()) {
-        format!("{marker} **{}**", escape_note_body(&body_text))
     } else {
-        normal
+        let rendered = task_text_escape::defuse_drawer_header(&rendered);
+        format!("{marker} {rendered}")
     };
     Bullet {
         depth: line.depth.clamp(1, 2),
@@ -636,7 +635,7 @@ mod tests {
                     })
                     .unwrap_or(&line);
                 assert!(
-                    !capture_drawers::is_drawer_title(body),
+                    capture_drawers::drawer_body_title(body).is_none(),
                     "drawer: {line}"
                 );
                 assert!(
@@ -784,7 +783,7 @@ mod tests {
                         })
                         .unwrap_or(line);
                     assert!(
-                        !capture_drawers::is_drawer_title(body),
+                        capture_drawers::drawer_body_title(body).is_none(),
                         "drawer: {line}"
                     );
                     assert!(

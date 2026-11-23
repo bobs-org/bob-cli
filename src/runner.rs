@@ -1419,7 +1419,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "capture-drawers",
-        about: "List the ALL-CAPS child drawers of a capture task",
+        about: "List a task's drawers and project-note sections",
         section: Section::CaptureProtocol,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::CaptureDrawers,

@@ -515,7 +515,13 @@ fn note_to_req(
         (req.owner_line, req.depth + 1)
     } else {
         let parent_body = list_item_body(lines[parent].text).unwrap_or("");
-        return Err(if capture_drawers::is_drawer_title(parent_body.trim()) {
+        let drawer_parent = capture_drawers::drawer_body_title(parent_body)
+            .is_some_and(|(title, _)| {
+                let key = capture_drawers::drawer_key(title);
+                !capture_drawers::is_reserved_drawer_key(&key)
+                    && !capture_drawers::is_structural_h2_key(&key)
+            });
+        return Err(if drawer_parent {
             WriteRefusal::new("req_in_drawer", task_reqs::copy::REQ_IN_DRAWER)
         } else {
             refuse_parent()
