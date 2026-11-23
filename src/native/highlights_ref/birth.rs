@@ -64,6 +64,23 @@ pub(super) fn split_reread_stem(stem: &str) -> Option<(&str, u32)> {
     Some((base, number))
 }
 
+/// Probe birth lineage and report whether the library index was consulted.
+/// Non-reread stems never consult; a reread stem consults even on a miss.
+pub(super) fn probe_birth_lineage(
+    config: &Config,
+    note_path: &Path,
+    marker: &Projection,
+) -> (bool, Option<BirthLineage>) {
+    let Some(stem) = note_path.file_stem().and_then(|stem| stem.to_str())
+    else {
+        return (false, None);
+    };
+    if split_reread_stem(stem).is_none() {
+        return (false, None);
+    }
+    (true, derive_birth_lineage(config, note_path, marker))
+}
+
 /// Derive birth lineage for a new note path from the PDF marker identity.
 /// Returns `None` for ordinary births: a non-reread stem, an unreadable
 /// index, no live predecessor sharing identity, or predecessors spanning

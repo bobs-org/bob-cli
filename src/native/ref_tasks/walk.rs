@@ -544,6 +544,17 @@ impl RefTaskIndex {
             .unwrap_or(&[])
     }
 
+    /// Follow-ups, orphans, and archive-pair facts: everything the locator
+    /// index holds besides per-ref candidates. Scan classification diffs
+    /// this independently so an unrelated follow-up or orphan cannot force
+    /// every PDF through planning.
+    pub(crate) fn non_candidate_debug(&self) -> String {
+        format!(
+            "{:?}\n{:?}\n{:?}",
+            self.follow_ups, self.orphans, self.archive_pairs
+        )
+    }
+
     /// Every orphan task line.
     pub(crate) fn orphans(&self) -> &[OrphanRefTask] {
         &self.orphans

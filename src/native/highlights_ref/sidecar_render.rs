@@ -696,7 +696,11 @@ pub(super) fn render_sidecar_highlights(
                 && !previously_removed.contains(block_id)
         })
         .collect::<BTreeSet<_>>();
-    let linked_absorbed =
+    let mut consulted_vault_links = false;
+    let linked_absorbed = if newly_absorbed_published.is_empty() {
+        BTreeSet::new()
+    } else {
+        consulted_vault_links = true;
         crate::native::vault_links::markdown_links_to_block_ids(
             &config.bob_dir,
             &newly_absorbed_published,
@@ -705,7 +709,8 @@ pub(super) fn render_sidecar_highlights(
             CommandError::new(format!(
                 "could not scan vault Markdown for underline links: {error}"
             ))
-        })?;
+        })?
+    };
     let emphasis_stubs = underline_redirect_stubs(
         &folds,
         &annotations_by_order,
@@ -760,6 +765,7 @@ pub(super) fn render_sidecar_highlights(
     let linked_sections = if section_link_candidates.is_empty() {
         BTreeSet::new()
     } else {
+        consulted_vault_links = true;
         crate::native::vault_links::markdown_links_to_block_ids(
             &config.bob_dir,
             &section_link_candidates,
@@ -982,6 +988,7 @@ pub(super) fn render_sidecar_highlights(
         standalone_ids_by_annotation_order,
         sections: rendered_sections,
         section_diagnostics: section_plan.diagnostics.clone(),
+        consulted_vault_links,
     })
 }
 

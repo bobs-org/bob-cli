@@ -453,6 +453,11 @@ pub(super) struct RenderedHighlights {
     pub(super) sections: Vec<RenderedSection>,
     pub(super) section_diagnostics:
         Vec<crate::native::highlights_ref::sections::SectionDiagnostic>,
+    /// True when rendering walked vault Markdown for a nonempty block-ID
+    /// set. An empty ID set must not set this: `markdown_links_to_block_ids`
+    /// returns immediately then, and nearly every sidecar would otherwise
+    /// look like a vault-link consumer.
+    pub(super) consulted_vault_links: bool,
 }
 
 /// A `<` marker that could not merge because no earlier text highlight exists.
@@ -586,6 +591,37 @@ pub(super) struct RunWriteState {
     pub(super) note_index: Option<crate::native::vault_links::NoteIndex>,
 }
 
+/// Shared reads one PDF plan actually performed. Incomplete observations
+/// (`complete: false`) belong to Failed outcomes that never recorded
+/// flags; classifiers treat those conservatively on Markdown/index churn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PlanDependencyObservations {
+    pub(super) consulted_vault_links: bool,
+    pub(super) consulted_parent_targets: bool,
+    pub(super) consulted_lineage: bool,
+    pub(super) complete: bool,
+}
+
+impl Default for PlanDependencyObservations {
+    fn default() -> Self {
+        Self {
+            consulted_vault_links: false,
+            consulted_parent_targets: false,
+            consulted_lineage: false,
+            complete: true,
+        }
+    }
+}
+
+impl PlanDependencyObservations {
+    pub(super) fn unknown() -> Self {
+        Self {
+            complete: false,
+            ..Self::default()
+        }
+    }
+}
+
 /// Shared per-scan planning context: one immutable locator index plus the
 /// invocation date. Built once after intake, shared across scoped planning
 /// threads; planning never mutates it.
@@ -647,6 +683,7 @@ pub(super) struct PdfSyncPlan {
     pub(super) v2_residence: Option<String>,
     pub(super) pdf_task_signal: PdfTaskStatusSignal,
     pub(super) status_normalization: StatusNormalization,
+    pub(super) observations: PlanDependencyObservations,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -753,6 +790,7 @@ pub(super) struct ScanFailure {
     pub(super) error: CommandError,
     /// Sorted, distinct claimant notes for multiple_open_ref_tasks only.
     pub(super) ref_task_claimants: Vec<String>,
+    pub(super) observations: PlanDependencyObservations,
 }
 
 impl ScanFailure {
@@ -765,6 +803,7 @@ impl ScanFailure {
             pdf,
             error,
             ref_task_claimants,
+            observations: PlanDependencyObservations::unknown(),
         }
     }
 }

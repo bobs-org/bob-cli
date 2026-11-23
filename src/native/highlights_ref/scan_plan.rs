@@ -109,8 +109,8 @@ fn scan_invocation_date() -> String {
 /// - target-note preimages (routed intents, routed writes, reading
 ///   destinations)
 /// - parent/routing/config inputs (highlights config file)
-/// - reading-task locator and ID-occupancy inputs (locator fingerprint plus
-///   destination/archive contents, which carry the occupied IDs)
+/// - reading-task locator and ID-occupancy inputs (per-PDF candidates plus
+///   the non-candidate index rest fingerprint, destination/archive contents)
 /// - archive/capture metadata consulted by holds (`replaced_capture_hold`)
 /// - library and xlib membership plus prospective destination absence
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +120,34 @@ pub(super) struct ScanInputEvidence {
     pub(super) lib_pdfs: Vec<PathBuf>,
     pub(super) xlib_members: Vec<PathBuf>,
     pub(super) intake_destinations: Vec<PathBuf>,
-    pub(super) index_fingerprint: String,
+    /// Path → owning PDFs. Shared targets keep every owner. Vault Markdown
+    /// is never assigned to every PDF.
+    pub(super) owners: BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+    pub(super) markdown_paths: BTreeSet<PathBuf>,
+    pub(super) source_store_paths: BTreeSet<PathBuf>,
+    pub(super) candidates:
+        BTreeMap<PathBuf, Vec<crate::native::ref_tasks::LocatedRefTask>>,
+    pub(super) observations: BTreeMap<PathBuf, PlanDependencyObservations>,
+    pub(super) index_rest_fingerprint: String,
+    pub(super) planned_pdfs: Vec<PathBuf>,
+}
+
+/// Typed coherence result. Production call sites still translate `Refresh`
+/// and `Rebuild` to the existing stale/rebuild path until the refresh
+/// consumer lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ScanChange {
+    Unchanged,
+    Refresh {
+        pdfs: BTreeSet<PathBuf>,
+        reason: String,
+    },
+    Rebuild {
+        reason: String,
+    },
+    DestinationAsset {
+        reason: String,
+    },
 }
 
 /// Owned shared preparation result for one full scan.
@@ -142,12 +169,66 @@ pub(super) struct PreparedFullScan {
     draft_rendered: BTreeMap<PathBuf, (String, String, &'static str)>,
 }
 
-fn locator_fingerprint(ctx: &ScanContext) -> String {
-    // `RefTaskIndex` has no stable digest API; its `Debug` covers the
-    // candidate/follow-up/orphan/archive-pair state that planning reads. A
-    // shared locator change alters this text, so every plan (even one
-    // previously classified unchanged) revalidates to stale.
-    fingerprint_bytes(format!("{:?}", ctx.index).as_bytes())
+fn index_rest_fingerprint(ctx: &ScanContext) -> String {
+    fingerprint_bytes(ctx.index.non_candidate_debug().as_bytes())
+}
+
+fn vault_rel_forward(config: &Config, path: &Path) -> String {
+    path.strip_prefix(&config.bob_dir)
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"))
+}
+
+fn candidates_by_pdf(
+    config: &Config,
+    pdfs: &[PathBuf],
+    ctx: &ScanContext,
+) -> BTreeMap<PathBuf, Vec<crate::native::ref_tasks::LocatedRefTask>> {
+    let mut candidates = BTreeMap::new();
+    for pdf in pdfs {
+        let rel = match super::io::ref_note_path(config, pdf) {
+            Ok(note_path) => vault_rel_forward(config, &note_path),
+            Err(_) => continue,
+        };
+        candidates.insert(pdf.clone(), ctx.index.candidates(&rel).to_vec());
+    }
+    candidates
+}
+
+fn add_owner(
+    owners: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+    path: &Path,
+    pdf: &Path,
+) {
+    owners
+        .entry(path.to_path_buf())
+        .or_default()
+        .insert(pdf.to_path_buf());
+}
+
+fn owners_for_path<'a>(
+    owners: &'a BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+    path: &Path,
+) -> Option<&'a BTreeSet<PathBuf>> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        if let Some(pdfs) = owners.get(candidate) {
+            return Some(pdfs);
+        }
+        current = candidate.parent();
+    }
+    None
+}
+
+fn track_owned(
+    file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+    owners: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+    path: PathBuf,
+    pdf: &Path,
+) -> Result<()> {
+    track_file(file_states, path.clone())?;
+    add_owner(owners, &path, pdf);
+    Ok(())
 }
 
 /// True when one PDF plan still needs a vault or PDF write.
@@ -336,9 +417,6 @@ pub(super) enum PreparedValidation {
 pub(super) fn validate_prepared_scan(
     prepared: &PreparedFullScan,
 ) -> PreparedValidation {
-    // Shared locator changes affect every plan, even one previously
-    // classified unchanged: rebuild the locator index fresh and compare
-    // before comparing file evidence.
     let fresh_index = crate::native::ref_tasks::RefTaskIndex::build(
         &prepared.config.bob_dir,
         &prepared.config.ref_dir,
@@ -347,18 +425,12 @@ pub(super) fn validate_prepared_scan(
         index: fresh_index,
         invocation_date: prepared.invocation_date.clone(),
     };
-    let fresh_fingerprint = locator_fingerprint(&fresh_ctx);
-    if fresh_fingerprint != prepared.evidence.index_fingerprint {
-        return PreparedValidation::Stale {
-            reason: "reading-task locator changed".to_string(),
-        };
-    }
-    let current = match capture_scan_evidence(
+    let mut current = match capture_scan_evidence(
         &prepared.config,
         &prepared.pdfs,
         &prepared.intake,
         &prepared.plan_outcomes,
-        &fresh_fingerprint,
+        &fresh_ctx,
     ) {
         Ok(current) => current,
         Err(error) => return PreparedValidation::Failed(error),
@@ -369,47 +441,33 @@ pub(super) fn validate_prepared_scan(
     // same old planner hashes for Planned outcomes. Re-hash the current
     // bytes on disk so a PDF edit after preparation invalidates instead of
     // comparing old hashes to themselves.
-    {
-        let mut fresh_pdf_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
-        for pdf in prepared.evidence.pdf_hashes.keys() {
-            if let Ok(hash) = super::io::sha256_file(pdf) {
-                fresh_pdf_hashes.insert(pdf.clone(), hash);
-            }
-        }
-        // PDFs that vanished are covered by file_states membership, but a
-        // missing hash entry must also count as stale when the stored plan
-        // expected bytes.
-        if fresh_pdf_hashes != prepared.evidence.pdf_hashes {
-            return PreparedValidation::Stale {
-                reason: "PDF contents changed".to_string(),
-            };
+    let mut fresh_pdf_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for pdf in prepared.evidence.pdf_hashes.keys() {
+        if let Ok(hash) = super::io::sha256_file(pdf) {
+            fresh_pdf_hashes.insert(pdf.clone(), hash);
         }
     }
-    if current.lib_pdfs != prepared.evidence.lib_pdfs {
-        return PreparedValidation::Stale {
-            reason: "library membership changed".to_string(),
-        };
+    current.pdf_hashes = fresh_pdf_hashes;
+    let dest_roots = dest_asset_roots(&prepared.config, &prepared.pdfs);
+    scan_change_to_validation(classify_scan_change(
+        &prepared.evidence,
+        &current,
+        &prepared.config,
+        &dest_roots,
+        &[],
+        false,
+    ))
+}
+
+fn scan_change_to_validation(change: ScanChange) -> PreparedValidation {
+    match change {
+        ScanChange::Unchanged => PreparedValidation::Unchanged,
+        ScanChange::Refresh { reason, .. }
+        | ScanChange::Rebuild { reason }
+        | ScanChange::DestinationAsset { reason } => {
+            PreparedValidation::Stale { reason }
+        }
     }
-    if current.xlib_members != prepared.evidence.xlib_members {
-        return PreparedValidation::Stale {
-            reason: "xlib membership changed".to_string(),
-        };
-    }
-    if current.intake_destinations != prepared.evidence.intake_destinations {
-        return PreparedValidation::Stale {
-            reason: "intake destinations changed".to_string(),
-        };
-    }
-    if current.file_states != prepared.evidence.file_states {
-        let dest_roots = dest_asset_roots(&prepared.config, &prepared.pdfs);
-        let reason = first_state_mismatch(
-            &prepared.evidence.file_states,
-            &current.file_states,
-            &dest_roots,
-        );
-        return PreparedValidation::Stale { reason };
-    }
-    PreparedValidation::Unchanged
 }
 
 fn dest_asset_roots(config: &Config, pdfs: &[PathBuf]) -> Vec<PathBuf> {
@@ -442,28 +500,345 @@ fn file_mismatch_reason(
     }
 }
 
-fn first_state_mismatch(
-    prepared: &BTreeMap<PathBuf, EvidenceFileState>,
-    current: &BTreeMap<PathBuf, EvidenceFileState>,
+fn is_intake_dest(path: &Path, intake: &[IntakeMove]) -> bool {
+    intake.iter().any(|item| {
+        &item.destination == path
+            || item.companions.iter().any(|(_, dest)| dest == path)
+    })
+}
+
+fn is_under(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
+}
+
+fn is_root_markdown(config: &Config, path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        && path.parent() == Some(config.bob_dir.as_path())
+}
+
+fn is_source_store_path(config: &Config, path: &Path) -> bool {
+    is_under(path, &config.bob_dir.join(super::source_store::STORE_ROOT))
+}
+
+fn collect_link_markdown_paths(
+    root: &Path,
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        CommandError::new(format!(
+            "scan vault Markdown {}: {error}",
+            directory.display()
+        ))
+    })?;
+    let mut entries = entries
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| {
+            CommandError::new(format!(
+                "scan vault Markdown {}: {error}",
+                directory.display()
+            ))
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            CommandError::new(format!(
+                "stat vault Markdown {}: {error}",
+                path.display()
+            ))
+        })?;
+        if file_type.is_dir() {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
+            collect_link_markdown_paths(root, &path, paths)?;
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            paths.push(relative.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+/// Union of Markdown paths planning and finalization actually read:
+/// `vault_note_paths` plus the `vault_links` walker (dot-directories only).
+/// Errors propagate so an unreadable tree cannot look unchanged.
+fn collect_coherence_markdown_paths(config: &Config) -> Result<Vec<PathBuf>> {
+    let (dep_paths, warnings) =
+        crate::native::capture_dependency_tasks::vault_note_paths(
+            &config.bob_dir,
+        );
+    if !warnings.is_empty() {
+        return Err(CommandError::new(format!(
+            "scan vault Markdown enumeration: {}",
+            warnings.join("; ")
+        )));
+    }
+    let mut link_paths = Vec::new();
+    if config.bob_dir.is_dir() {
+        collect_link_markdown_paths(
+            &config.bob_dir,
+            &config.bob_dir,
+            &mut link_paths,
+        )?;
+    }
+    let mut all = dep_paths.into_iter().collect::<BTreeSet<_>>();
+    all.extend(link_paths);
+    Ok(all.into_iter().collect())
+}
+
+fn snapshot_source_store_states(
+    config: &Config,
+) -> Result<BTreeMap<PathBuf, EvidenceFileState>> {
+    let mut states = BTreeMap::new();
+    let root = config.bob_dir.join(super::source_store::STORE_ROOT);
+    track_tree_contents(&mut states, &root, "source store")?;
+    Ok(states)
+}
+
+fn first_reason(reasons: &[String], fallback: &str) -> String {
+    reasons
+        .iter()
+        .min()
+        .cloned()
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn classify_scan_change(
+    old: &ScanInputEvidence,
+    new: &ScanInputEvidence,
+    config: &Config,
     dest_roots: &[PathBuf],
-) -> String {
-    for (path, old) in prepared {
-        match current.get(path) {
-            Some(new) if new == old => {}
-            Some(_) => {
-                return file_mismatch_reason(path, "changed", dest_roots);
-            }
-            None => {
-                return file_mismatch_reason(path, "removed", dest_roots);
-            }
+    intake: &[IntakeMove],
+    allow_intake_dest_adds: bool,
+) -> ScanChange {
+    let mut dest_reasons = Vec::new();
+    let mut global_reasons = Vec::new();
+    let mut refresh_pdfs = BTreeSet::new();
+    let mut refresh_reasons = Vec::new();
+    let mut finalization_reasons = Vec::new();
+
+    if old.lib_pdfs != new.lib_pdfs {
+        global_reasons.push("library membership changed".to_string());
+    }
+    if old.xlib_members != new.xlib_members {
+        global_reasons.push("xlib membership changed".to_string());
+    }
+    if old.planned_pdfs != new.planned_pdfs {
+        global_reasons.push(
+            "planned PDF list does not match snapshot membership".to_string(),
+        );
+    }
+    if old.intake_destinations != new.intake_destinations {
+        global_reasons.push("intake destinations changed".to_string());
+    }
+    if old.markdown_paths != new.markdown_paths {
+        global_reasons.push("Markdown membership changed".to_string());
+    }
+    if old.source_store_paths != new.source_store_paths {
+        global_reasons.push("source-store membership changed".to_string());
+    }
+
+    let config_path = super::bob_config::config_path();
+    match (
+        old.file_states.get(&config_path),
+        new.file_states.get(&config_path),
+    ) {
+        (Some(before), Some(after)) if before != after => {
+            global_reasons.push("config changed".to_string());
+        }
+        (None, Some(_)) | (Some(_), None) => {
+            global_reasons.push("config changed".to_string());
+        }
+        _ => {}
+    }
+
+    if old.index_rest_fingerprint != new.index_rest_fingerprint {
+        finalization_reasons.push("reading-task locator changed".to_string());
+    }
+
+    let pdfs: BTreeSet<&PathBuf> = old
+        .planned_pdfs
+        .iter()
+        .chain(new.planned_pdfs.iter())
+        .collect();
+    for pdf in pdfs {
+        let before = old.candidates.get(pdf);
+        let after = new.candidates.get(pdf);
+        if before != after {
+            refresh_pdfs.insert(pdf.clone());
+            refresh_reasons.push(format!(
+                "reading-task candidates changed: {}",
+                pdf.display()
+            ));
         }
     }
-    for path in current.keys() {
-        if !prepared.contains_key(path) {
-            return file_mismatch_reason(path, "added", dest_roots);
+
+    for pdf in old.pdf_hashes.keys().chain(new.pdf_hashes.keys()) {
+        if old.pdf_hashes.get(pdf) != new.pdf_hashes.get(pdf) {
+            refresh_pdfs.insert(pdf.clone());
+            refresh_reasons
+                .push(format!("PDF contents changed: {}", pdf.display()));
         }
     }
-    "inputs changed".to_string()
+
+    let mut diffs: Vec<(&Path, &str, bool)> = Vec::new();
+    for (path, old_state) in &old.file_states {
+        match new.file_states.get(path) {
+            Some(new_state) if new_state == old_state => {}
+            Some(new_state) => {
+                diffs.push((path, "changed", new_state.exists));
+            }
+            None => diffs.push((path, "removed", false)),
+        }
+    }
+    for (path, new_state) in &new.file_states {
+        if old.file_states.contains_key(path) {
+            continue;
+        }
+        if !new_state.exists {
+            continue;
+        }
+        if allow_intake_dest_adds && is_intake_dest(path, intake) {
+            continue;
+        }
+        diffs.push((path, "added", new_state.exists));
+    }
+    diffs.sort_by(|left, right| left.0.cmp(right.0).then(left.1.cmp(right.1)));
+
+    let vault_link_consumers = old
+        .observations
+        .iter()
+        .filter(|(_, obs)| obs.consulted_vault_links)
+        .map(|(pdf, _)| pdf.clone())
+        .collect::<BTreeSet<_>>();
+    let lineage_consumers = old
+        .observations
+        .iter()
+        .filter(|(_, obs)| obs.consulted_lineage)
+        .map(|(pdf, _)| pdf.clone())
+        .collect::<BTreeSet<_>>();
+    let parent_consumers = old
+        .observations
+        .iter()
+        .filter(|(_, obs)| obs.consulted_parent_targets)
+        .map(|(pdf, _)| pdf.clone())
+        .collect::<BTreeSet<_>>();
+    let incomplete_failures = old
+        .observations
+        .iter()
+        .filter(|(_, obs)| !obs.complete)
+        .map(|(pdf, _)| pdf.clone())
+        .collect::<BTreeSet<_>>();
+
+    for (path, kind, _) in diffs {
+        let reason = file_mismatch_reason(path, kind, dest_roots);
+        if is_dest_asset_path(path, dest_roots) {
+            dest_reasons.push(reason);
+            continue;
+        }
+        if path == config_path.as_path() {
+            continue;
+        }
+        if is_source_store_path(config, path)
+            || old.source_store_paths.contains(path)
+            || new.source_store_paths.contains(path)
+        {
+            global_reasons.push(reason);
+            continue;
+        }
+        if is_under(path, &config.ref_dir) {
+            global_reasons.push(reason);
+            continue;
+        }
+        let markdown_content = old.markdown_paths.contains(path)
+            && new.markdown_paths.contains(path)
+            && kind == "changed";
+        if markdown_content {
+            let mut selected = BTreeSet::new();
+            if let Some(owners) = owners_for_path(&old.owners, path) {
+                selected.extend(owners.iter().cloned());
+            }
+            selected.extend(vault_link_consumers.iter().cloned());
+            selected.extend(lineage_consumers.iter().cloned());
+            if is_root_markdown(config, path) {
+                selected.extend(parent_consumers.iter().cloned());
+            }
+            selected.extend(incomplete_failures.iter().cloned());
+            if selected.is_empty() {
+                finalization_reasons.push(reason);
+            } else {
+                refresh_pdfs.extend(selected);
+                refresh_reasons.push(reason);
+            }
+            continue;
+        }
+        if let Some(owners) = owners_for_path(&old.owners, path) {
+            refresh_pdfs.extend(owners.iter().cloned());
+            refresh_reasons.push(reason);
+            continue;
+        }
+        if let Some(owners) = owners_for_path(&new.owners, path) {
+            refresh_pdfs.extend(owners.iter().cloned());
+            refresh_reasons.push(reason);
+            continue;
+        }
+        if old.markdown_paths.contains(path)
+            || new.markdown_paths.contains(path)
+        {
+            global_reasons.push(reason);
+            continue;
+        }
+        global_reasons.push(reason);
+    }
+
+    if !incomplete_failures.is_empty()
+        && (!finalization_reasons.is_empty()
+            || old.markdown_paths != new.markdown_paths
+            || old.index_rest_fingerprint != new.index_rest_fingerprint)
+    {
+        refresh_pdfs.extend(incomplete_failures);
+        if refresh_reasons.is_empty() {
+            refresh_reasons.push(first_reason(
+                &finalization_reasons,
+                "reading-task locator changed",
+            ));
+        }
+    }
+
+    if let Some(reason) = dest_reasons.into_iter().min() {
+        return ScanChange::DestinationAsset { reason };
+    }
+    if !global_reasons.is_empty() {
+        return ScanChange::Rebuild {
+            reason: first_reason(&global_reasons, "inputs changed"),
+        };
+    }
+    if !refresh_pdfs.is_empty() {
+        return ScanChange::Refresh {
+            pdfs: refresh_pdfs,
+            reason: first_reason(&refresh_reasons, "inputs changed"),
+        };
+    }
+    if !finalization_reasons.is_empty() {
+        return ScanChange::Refresh {
+            pdfs: BTreeSet::new(),
+            reason: first_reason(&finalization_reasons, "inputs changed"),
+        };
+    }
+    ScanChange::Unchanged
 }
 
 /// Compare a pre-planning snapshot to post-planning evidence.
@@ -473,6 +848,7 @@ fn first_state_mismatch(
 /// snapshot missed — including `text.markdown`, nested assets, and dest
 /// copies — are stale. Intake destinations that were absent before a
 /// move are expected and skipped.
+#[cfg(test)]
 fn read_set_changed(
     pre: &BTreeMap<PathBuf, EvidenceFileState>,
     post: &BTreeMap<PathBuf, EvidenceFileState>,
@@ -601,22 +977,11 @@ pub(super) fn prepare_from_inputs(
     // the planner may read — both TextBundle text filenames, present or
     // absent sidecars, nested source assets, dest asset trees, image-note
     // source files named in those sidecars, audio companions, archive
-    // metadata, vault Markdown, and config — before the pure planning
-    // pass. Compared after planning; a source mismatch is a stale read
-    // that the bounded retry rebuilds, and a dest-asset mismatch fails
+    // metadata, vault Markdown, source store, and config — before the pure
+    // planning pass. Compared after planning; a source mismatch is a stale
+    // read that the bounded retry rebuilds, and a dest-asset mismatch fails
     // closed because overwrite protection cannot restore.
-    let mut pre_file_states = snapshot_vault_md_states(config)?;
-    let pre_config = fingerprint_file(&super::bob_config::config_path())?;
-    pre_file_states
-        .insert(super::bob_config::config_path(), pre_config.clone());
-    snapshot_pdf_companion_states(config, &pdfs, &mut pre_file_states)?;
-    snapshot_intake_states(&intake, &mut pre_file_states)?;
-    let mut pre_pdf_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
-    for pdf in &pdfs {
-        if let Ok(hash) = super::io::sha256_file(pdf) {
-            pre_pdf_hashes.insert(pdf.clone(), hash);
-        }
-    }
+    let mut pre_evidence = capture_pre_scan_evidence(config, &pdfs, &intake)?;
     scan_test::pause("after_snapshot");
     let ctx = match invocation_date {
         Some(invocation_date) => ScanContext {
@@ -628,6 +993,8 @@ pub(super) fn prepare_from_inputs(
         },
         None => ScanContext::build(config),
     };
+    pre_evidence.candidates = candidates_by_pdf(config, &pdfs, &ctx);
+    pre_evidence.index_rest_fingerprint = index_rest_fingerprint(&ctx);
     let invocation_date = ctx.invocation_date.clone();
     let mut plan_outcomes = plan_pdfs(config, &pdfs, options, jobs, &ctx);
     let mut drafts_candidates: BTreeMap<PathBuf, Vec<AnnotationTaskCandidate>> =
@@ -669,41 +1036,18 @@ pub(super) fn prepare_from_inputs(
         })
         .collect::<Vec<_>>();
     validate_planned_asset_collisions(&plans)?;
-    let index_fingerprint = locator_fingerprint(&ctx);
     // Private test seam: mutate sidecar/ref/config/parent inputs after
     // their reads but before evidence capture. Production builds compile
     // this into a no-op; tests use the handshake to plant same-length
     // edits or newly created inputs that the old plan did not select.
     scan_test::pause("before_evidence");
-    let evidence = capture_scan_evidence(
-        config,
-        &pdfs,
-        &intake,
-        &plan_outcomes,
-        &index_fingerprint,
-    )?;
+    let mut evidence =
+        capture_scan_evidence(config, &pdfs, &intake, &plan_outcomes, &ctx)?;
     // During-preparation coherence: the pure planning pass must not attach
-    // newer evidence to an older plan. Compare the pre-planning read set
-    // to the post-planning evidence; any membership or content mismatch
-    // (including a PDF arriving mid-planning, same-length sidecar/ref/
-    // config/parent/asset edits, or a newly created input the old plan
-    // did not select) is stale so the bounded retry rebuilds with current
-    // data.
+    // newer evidence to an older plan. Compare the pre-planning snapshot
+    // to the post-planning evidence with the typed classifier, then
+    // translate Refresh/Rebuild back to the existing stale/rebuild path.
     {
-        let mut pre_sorted = pre_lib.clone();
-        pre_sorted.sort();
-        if pre_sorted != evidence.lib_pdfs {
-            return Err(scan_inputs_changed_error(
-                "library membership changed during planning",
-            ));
-        }
-        let mut pre_x_sorted = pre_xlib.clone();
-        pre_x_sorted.sort();
-        if pre_x_sorted != evidence.xlib_members {
-            return Err(scan_inputs_changed_error(
-                "xlib membership changed during planning",
-            ));
-        }
         let expected_pdfs = planned_pdfs_from_membership(
             config,
             options,
@@ -711,34 +1055,7 @@ pub(super) fn prepare_from_inputs(
             &evidence.lib_pdfs,
             &evidence.xlib_members,
         )?;
-        if expected_pdfs != pdfs {
-            return Err(scan_inputs_changed_error(
-                "planned PDF list does not match snapshot membership",
-            ));
-        }
-        let dest_roots = dest_asset_roots(config, &pdfs);
-        if let Some(reason) = read_set_changed(
-            &pre_file_states,
-            &evidence.file_states,
-            &intake,
-            &dest_roots,
-        ) {
-            if is_destination_asset_stale(&reason) {
-                return Err(destination_asset_changed_error(&format!(
-                    "{reason} during planning"
-                )));
-            }
-            return Err(scan_inputs_changed_error(&format!(
-                "{reason} during planning"
-            )));
-        }
-        if fingerprint_file(&super::bob_config::config_path())? != pre_config {
-            return Err(scan_inputs_changed_error(
-                "config changed during planning",
-            ));
-        }
-        // Locator changes during planning invalidate every plan, even one
-        // previously classified unchanged.
+        evidence.planned_pdfs = expected_pdfs.clone();
         let fresh_index = crate::native::ref_tasks::RefTaskIndex::build(
             &config.bob_dir,
             &config.ref_dir,
@@ -747,9 +1064,33 @@ pub(super) fn prepare_from_inputs(
             index: fresh_index,
             invocation_date: invocation_date.clone(),
         };
-        if locator_fingerprint(&fresh_ctx) != index_fingerprint {
+        evidence.candidates = candidates_by_pdf(config, &pdfs, &fresh_ctx);
+        evidence.index_rest_fingerprint = index_rest_fingerprint(&fresh_ctx);
+        let dest_roots = dest_asset_roots(config, &pdfs);
+        match classify_scan_change(
+            &pre_evidence,
+            &evidence,
+            config,
+            &dest_roots,
+            &intake,
+            true,
+        ) {
+            ScanChange::Unchanged => {}
+            ScanChange::DestinationAsset { reason } => {
+                return Err(destination_asset_changed_error(&format!(
+                    "{reason} during planning"
+                )));
+            }
+            ScanChange::Refresh { reason, .. }
+            | ScanChange::Rebuild { reason } => {
+                return Err(scan_inputs_changed_error(&format!(
+                    "{reason} during planning"
+                )));
+            }
+        }
+        if expected_pdfs != pdfs {
             return Err(scan_inputs_changed_error(
-                "reading-task locator changed during planning",
+                "planned PDF list does not match snapshot membership",
             ));
         }
         // Planner PDF hashes must match the post-planning bytes actually on
@@ -769,36 +1110,6 @@ pub(super) fn prepare_from_inputs(
                     return Err(scan_inputs_changed_error(&format!(
                         "PDF contents changed during planning: {}",
                         plan.pdf.display()
-                    )));
-                }
-                // Same-length content changes to the PDF itself that the
-                // planner somehow missed are still caught here via the
-                // pre hash: the pre bytes must equal the post bytes.
-                if let Some(pre_hash) = pre_pdf_hashes.get(&plan.pdf)
-                    && pre_hash != &post_hash
-                {
-                    return Err(scan_inputs_changed_error(&format!(
-                        "PDF contents changed during planning: {}",
-                        plan.pdf.display()
-                    )));
-                }
-            }
-        }
-        // Input PDFs that were held/failed still need pre vs post coherence:
-        // a same-length edit during planning must not be accepted.
-        for pdf in &pdfs {
-            if let Some(pre_hash) = pre_pdf_hashes.get(pdf) {
-                if let Ok(post_hash) = super::io::sha256_file(pdf) {
-                    if pre_hash != &post_hash {
-                        return Err(scan_inputs_changed_error(&format!(
-                            "PDF contents changed during planning: {}",
-                            pdf.display()
-                        )));
-                    }
-                } else {
-                    return Err(scan_inputs_changed_error(&format!(
-                        "input removed during planning: {}",
-                        pdf.display()
                     )));
                 }
             }
@@ -1048,24 +1359,116 @@ fn audio_companion_candidates(pdf: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn capture_shared_inventory(
+    config: &Config,
+    pdfs: &[PathBuf],
+    intake: &[IntakeMove],
+    file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+    owners: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+) -> Result<(
+    Vec<PathBuf>,
+    Vec<PathBuf>,
+    Vec<PathBuf>,
+    BTreeSet<PathBuf>,
+    BTreeSet<PathBuf>,
+)> {
+    snapshot_pdf_companion_states(config, pdfs, file_states, owners)?;
+    track_file(file_states, super::bob_config::config_path())?;
+    let vault_md = snapshot_vault_md_states(config)?;
+    let markdown_paths = vault_md.keys().cloned().collect::<BTreeSet<_>>();
+    for (path, state) in vault_md {
+        file_states.entry(path).or_insert(state);
+    }
+    let source_store = snapshot_source_store_states(config)?;
+    let source_store_paths =
+        source_store.keys().cloned().collect::<BTreeSet<_>>();
+    for (path, state) in source_store {
+        file_states.entry(path).or_insert(state);
+    }
+    let mut lib_pdfs = collect_lib_membership(config)?;
+    lib_pdfs.sort();
+    let mut xlib_members = collect_xlib_membership(config)?;
+    xlib_members.sort();
+    let mut intake_destinations = intake
+        .iter()
+        .flat_map(|item| {
+            let mut paths = vec![item.destination.clone()];
+            paths.extend(item.companions.iter().map(|(_, dest)| dest.clone()));
+            paths
+        })
+        .collect::<Vec<_>>();
+    intake_destinations.sort();
+    snapshot_intake_states(intake, file_states)?;
+    Ok((
+        lib_pdfs,
+        xlib_members,
+        intake_destinations,
+        markdown_paths,
+        source_store_paths,
+    ))
+}
+
+fn capture_pre_scan_evidence(
+    config: &Config,
+    pdfs: &[PathBuf],
+    intake: &[IntakeMove],
+) -> Result<ScanInputEvidence> {
+    let mut file_states = BTreeMap::new();
+    let mut owners = BTreeMap::new();
+    let mut pdf_hashes = BTreeMap::new();
+    for pdf in pdfs {
+        if let Ok(hash) = super::io::sha256_file(pdf) {
+            pdf_hashes.insert(pdf.clone(), hash);
+        }
+    }
+    let (
+        lib_pdfs,
+        xlib_members,
+        intake_destinations,
+        markdown_paths,
+        source_store_paths,
+    ) = capture_shared_inventory(
+        config,
+        pdfs,
+        intake,
+        &mut file_states,
+        &mut owners,
+    )?;
+    Ok(ScanInputEvidence {
+        pdf_hashes,
+        file_states,
+        lib_pdfs,
+        xlib_members,
+        intake_destinations,
+        owners,
+        markdown_paths,
+        source_store_paths,
+        candidates: BTreeMap::new(),
+        observations: BTreeMap::new(),
+        index_rest_fingerprint: String::new(),
+        planned_pdfs: pdfs.to_vec(),
+    })
+}
+
 /// Capture validation evidence together with the bytes/index used for
 /// planning. Explicit trees (all vault-absolute):
 /// `lib_dir` PDFs, `xlib_dir` members plus companions, each plan's
 /// sidecar/companions, ref-note preimages, routed/reading target-note
 /// preimages, the highlights config file, archive records consulted by
-/// `replaced_capture_hold`, and prospective intake-destination absence.
-/// PDF hashes reuse the planner's `source_pdf_sha256`; existing library
-/// PDFs are fingerprinted without repeating PDF parsing/rendering, and no
-/// unrelated vault media is hashed.
+/// `replaced_capture_hold`, the source store, and prospective
+/// intake-destination absence.
 fn capture_scan_evidence(
     config: &Config,
     pdfs: &[PathBuf],
     intake: &[IntakeMove],
     plan_outcomes: &[ScanPlanOutcome],
-    index_fingerprint: &str,
+    ctx: &ScanContext,
 ) -> Result<ScanInputEvidence> {
     let mut pdf_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut file_states: BTreeMap<PathBuf, EvidenceFileState> = BTreeMap::new();
+    let mut owners: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
+    let mut observations: BTreeMap<PathBuf, PlanDependencyObservations> =
+        BTreeMap::new();
 
     for outcome in plan_outcomes {
         if let ScanPlanOutcome::Planned(plan) = outcome {
@@ -1084,114 +1487,159 @@ fn capture_scan_evidence(
             }
         }
     }
-    snapshot_pdf_companion_states(config, pdfs, &mut file_states)?;
+    let (
+        lib_pdfs,
+        xlib_members,
+        intake_destinations,
+        markdown_paths,
+        source_store_paths,
+    ) = capture_shared_inventory(
+        config,
+        pdfs,
+        intake,
+        &mut file_states,
+        &mut owners,
+    )?;
     for outcome in plan_outcomes {
-        let (plan, hold_note, failed_pdf) = match outcome {
-            ScanPlanOutcome::Planned(plan) => (Some(plan.as_ref()), None, None),
-            ScanPlanOutcome::Held(hold) => (None, Some(hold), None),
-            ScanPlanOutcome::Failed(failure) => {
-                (None, None, Some(&failure.pdf))
-            }
-        };
-        if let Some(plan) = plan {
-            track_file(&mut file_states, plan.note_path.clone())?;
-            if let Some(sidecar) = plan.sidecar_path.as_ref() {
-                track_file(&mut file_states, sidecar.clone())?;
-            }
-            for asset in &plan.image_assets {
-                track_file(&mut file_states, asset.dest_path.clone())?;
-                track_file(&mut file_states, asset.source_path.clone())?;
-            }
-            for write in &plan.routed_task_note_writes {
-                track_file(&mut file_states, write.path.clone())?;
-            }
-            for intent in &plan.routed_intents {
-                track_file(&mut file_states, intent.path.clone())?;
-            }
-            if let Some(reading) = plan.reading_task_plan.as_ref() {
-                match &reading.action {
-                    ReadingTaskAction::Insert {
-                        destination_route, ..
-                    } => {
-                        track_file(
-                            &mut file_states,
-                            config
-                                .bob_dir
-                                .join(format!("{destination_route}.md")),
-                        )?;
-                    }
-                    ReadingTaskAction::LineEdit { .. } => {
-                        if let Some(located) = plan.reading_located.as_ref() {
-                            track_file(
+        match outcome {
+            ScanPlanOutcome::Planned(plan) => {
+                observations
+                    .insert(plan.pdf.clone(), plan.observations.clone());
+                track_owned(
+                    &mut file_states,
+                    &mut owners,
+                    plan.note_path.clone(),
+                    &plan.pdf,
+                )?;
+                if let Some(sidecar) = plan.sidecar_path.as_ref() {
+                    track_owned(
+                        &mut file_states,
+                        &mut owners,
+                        sidecar.clone(),
+                        &plan.pdf,
+                    )?;
+                }
+                for asset in &plan.image_assets {
+                    track_owned(
+                        &mut file_states,
+                        &mut owners,
+                        asset.dest_path.clone(),
+                        &plan.pdf,
+                    )?;
+                    track_owned(
+                        &mut file_states,
+                        &mut owners,
+                        asset.source_path.clone(),
+                        &plan.pdf,
+                    )?;
+                }
+                for write in &plan.routed_task_note_writes {
+                    track_owned(
+                        &mut file_states,
+                        &mut owners,
+                        write.path.clone(),
+                        &plan.pdf,
+                    )?;
+                }
+                for intent in &plan.routed_intents {
+                    track_owned(
+                        &mut file_states,
+                        &mut owners,
+                        intent.path.clone(),
+                        &plan.pdf,
+                    )?;
+                }
+                if let Some(reading) = plan.reading_task_plan.as_ref() {
+                    match &reading.action {
+                        ReadingTaskAction::Insert {
+                            destination_route, ..
+                        } => {
+                            track_owned(
                                 &mut file_states,
-                                config.bob_dir.join(&located.path),
+                                &mut owners,
+                                config
+                                    .bob_dir
+                                    .join(format!("{destination_route}.md")),
+                                &plan.pdf,
                             )?;
                         }
+                        ReadingTaskAction::LineEdit { .. } => {
+                            if let Some(located) = plan.reading_located.as_ref()
+                            {
+                                track_owned(
+                                    &mut file_states,
+                                    &mut owners,
+                                    config.bob_dir.join(&located.path),
+                                    &plan.pdf,
+                                )?;
+                            }
+                        }
+                        ReadingTaskAction::NoWrite => {}
                     }
-                    ReadingTaskAction::NoWrite => {}
+                }
+                track_archive_for_note(
+                    config,
+                    &mut file_states,
+                    &mut owners,
+                    &plan.note_path,
+                    Some(&plan.pdf),
+                )?;
+            }
+            ScanPlanOutcome::Held(hold) => {
+                observations.insert(
+                    hold.pdf.clone(),
+                    PlanDependencyObservations::default(),
+                );
+                track_owned(
+                    &mut file_states,
+                    &mut owners,
+                    hold.note_path.clone(),
+                    &hold.pdf,
+                )?;
+                track_archive_for_note(
+                    config,
+                    &mut file_states,
+                    &mut owners,
+                    &hold.note_path,
+                    Some(&hold.pdf),
+                )?;
+            }
+            ScanPlanOutcome::Failed(failure) => {
+                observations
+                    .insert(failure.pdf.clone(), failure.observations.clone());
+                if let Ok(note_path) =
+                    super::io::ref_note_path(config, &failure.pdf)
+                {
+                    track_owned(
+                        &mut file_states,
+                        &mut owners,
+                        note_path.clone(),
+                        &failure.pdf,
+                    )?;
+                    track_archive_for_note(
+                        config,
+                        &mut file_states,
+                        &mut owners,
+                        &note_path,
+                        Some(&failure.pdf),
+                    )?;
                 }
             }
-            // Archive/capture metadata consulted by `replaced_capture_hold`
-            // and by reading/annotation finalization. Shared helper covers
-            // the note, its annotated PDF, and its assets path.
-            track_archive_for_note(config, &mut file_states, &plan.note_path)?;
-        }
-        if let Some(hold) = hold_note {
-            track_file(&mut file_states, hold.note_path.clone())?;
-            // Holds consult the same archive metadata (replaced-capture
-            // holds) and ID-occupancy inputs; a hold caused by an earlier
-            // version being absent must still invalidate when that input
-            // appears.
-            track_archive_for_note(config, &mut file_states, &hold.note_path)?;
-        }
-        if let Some(failed_pdf) = failed_pdf {
-            // Failures carry the inputs that made the plan a failure: the
-            // PDF itself (already tracked via the pdfs loop) plus its
-            // prospective note and archive metadata, so a missing input
-            // that later appears invalidates instead of staying failed.
-            if let Ok(note_path) = super::io::ref_note_path(config, failed_pdf)
-            {
-                track_file(&mut file_states, note_path.clone())?;
-                track_archive_for_note(config, &mut file_states, &note_path)?;
-            }
         }
     }
-    // Parent/routing/config inputs: the highlights config file plus every
-    // vault Markdown note (ref-note preimages, routed/reading destinations,
-    // parent/alias/routing inputs, archive/capture metadata, ID-occupancy
-    // inputs). Explicitly enumerated relevant trees; unrelated vault media
-    // is never hashed.
-    track_file(&mut file_states, super::bob_config::config_path())?;
-    {
-        let vault_md = snapshot_vault_md_states(config)?;
-        for (path, state) in vault_md {
-            file_states.entry(path).or_insert(state);
-        }
-    }
-    // Library and xlib membership plus prospective destination absence.
-    // Propagate membership errors instead of treating unreadable trees as
-    // empty/unchanged.
-    let mut lib_pdfs = collect_lib_membership(config)?;
-    lib_pdfs.sort();
-    let mut xlib_members = collect_xlib_membership(config)?;
-    xlib_members.sort();
-    let mut intake_destinations = intake
-        .iter()
-        .flat_map(|item| {
-            let mut paths = vec![item.destination.clone()];
-            paths.extend(item.companions.iter().map(|(_, dest)| dest.clone()));
-            paths
-        })
-        .collect::<Vec<_>>();
-    intake_destinations.sort();
-    snapshot_intake_states(intake, &mut file_states)?;
     Ok(ScanInputEvidence {
         pdf_hashes,
         file_states,
         lib_pdfs,
         xlib_members,
         intake_destinations,
-        index_fingerprint: index_fingerprint.to_string(),
+        owners,
+        markdown_paths,
+        source_store_paths,
+        candidates: candidates_by_pdf(config, pdfs, ctx),
+        observations,
+        index_rest_fingerprint: index_rest_fingerprint(ctx),
+        planned_pdfs: pdfs.to_vec(),
     })
 }
 
@@ -1219,23 +1667,13 @@ fn collect_xlib_membership(config: &Config) -> Result<Vec<PathBuf>> {
 }
 
 /// Conservative content-and-membership snapshot of the relevant Markdown
-/// trees: every vault `.md` (ref notes, routed/reading destinations, parent
-/// notes, archive records) plus sidecar `.md` companions. Explicitly
-/// enumerated; unrelated vault media is never hashed. Errors propagate so
-/// unreadable inputs fail closed instead of reading as empty/unchanged.
+/// trees: the union of `vault_note_paths` and the `vault_links` walker.
+/// Errors propagate so unreadable inputs fail closed instead of reading
+/// as empty/unchanged.
 fn snapshot_vault_md_states(
     config: &Config,
 ) -> Result<BTreeMap<PathBuf, EvidenceFileState>> {
-    let (relative_paths, warnings) =
-        crate::native::capture_dependency_tasks::vault_note_paths(
-            &config.bob_dir,
-        );
-    if !warnings.is_empty() {
-        return Err(CommandError::new(format!(
-            "scan vault Markdown enumeration: {}",
-            warnings.join("; ")
-        )));
-    }
+    let relative_paths = collect_coherence_markdown_paths(config)?;
     let mut states = BTreeMap::new();
     for relative in relative_paths {
         let absolute = config.bob_dir.join(&relative);
@@ -1250,34 +1688,56 @@ fn snapshot_vault_md_states(
 /// in those sidecars, audio companions, prospective notes, and archive
 /// metadata for each planned PDF. Conservative: inputs the planner may
 /// later name are hashed here so a post-planning capture cannot attach
-/// newer bytes to an older plan.
+/// newer bytes to an older plan. Each companion is owned by that PDF.
 fn snapshot_pdf_companion_states(
     config: &Config,
     pdfs: &[PathBuf],
     file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+    owners: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
 ) -> Result<()> {
     let home = bob_env::home_dir();
     for pdf in pdfs {
-        track_file(file_states, pdf.clone())?;
+        track_owned(file_states, owners, pdf.clone(), pdf)?;
         let mut sidecar = pdf.clone();
         sidecar.set_extension("md");
-        track_file(file_states, sidecar)?;
+        track_owned(file_states, owners, sidecar, pdf)?;
         let mut textbundle = pdf.clone();
         textbundle.set_extension("textbundle");
         track_tree_contents(file_states, &textbundle, "TextBundle")?;
-        snapshot_image_note_sources(pdf, &home, file_states)?;
+        assign_tree_owner(owners, file_states, &textbundle, pdf);
+        snapshot_image_note_sources(pdf, &home, file_states, owners)?;
         for companion in audio_companion_candidates(pdf) {
-            track_file(file_states, companion)?;
+            track_owned(file_states, owners, companion, pdf)?;
         }
         if let Ok(note_path) = super::io::ref_note_path(config, pdf) {
-            track_file(file_states, note_path.clone())?;
+            track_owned(file_states, owners, note_path.clone(), pdf)?;
             if let Ok(assets_dir) = ref_note_assets_dir(&note_path) {
                 track_tree_contents(file_states, &assets_dir, "asset tree")?;
+                assign_tree_owner(owners, file_states, &assets_dir, pdf);
             }
-            track_archive_for_note(config, file_states, &note_path)?;
+            track_archive_for_note(
+                config,
+                file_states,
+                owners,
+                &note_path,
+                Some(pdf),
+            )?;
         }
     }
     Ok(())
+}
+
+fn assign_tree_owner(
+    owners: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+    file_states: &BTreeMap<PathBuf, EvidenceFileState>,
+    root: &Path,
+    pdf: &Path,
+) {
+    for path in file_states.keys() {
+        if path == root || path.starts_with(root) {
+            add_owner(owners, path, pdf);
+        }
+    }
 }
 
 /// Fingerprint image-note source files the sidecar already names, including
@@ -1288,6 +1748,7 @@ fn snapshot_image_note_sources(
     pdf: &Path,
     home: &Path,
     file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+    owners: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
 ) -> Result<()> {
     let mut candidates = vec![pdf.with_extension("md")];
     let bundle = pdf.with_extension("textbundle");
@@ -1314,7 +1775,7 @@ fn snapshot_image_note_sources(
             for image_note in parse_image_note_refs(line) {
                 let source =
                     expand_image_note_source(&image_note.source_text, home);
-                track_file(file_states, source)?;
+                track_owned(file_states, owners, source, pdf)?;
             }
         }
     }
@@ -1393,7 +1854,9 @@ fn track_tree_contents(
 fn track_archive_for_note(
     config: &Config,
     file_states: &mut BTreeMap<PathBuf, EvidenceFileState>,
+    owners: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
     note_path: &Path,
+    pdf: Option<&Path>,
 ) -> Result<()> {
     let note_rel = note_path
         .strip_prefix(&config.bob_dir)
@@ -1413,11 +1876,17 @@ fn track_archive_for_note(
         if !file_states.contains_key(&note_abs) {
             file_states.insert(note_abs.clone(), fingerprint_file(&note_abs)?);
         }
-        if let Some(pdf) = record.annotated_pdf.as_ref() {
-            let pdf_abs = config.bob_dir.join(&pdf.path);
+        if let Some(owner) = pdf {
+            add_owner(owners, &note_abs, owner);
+        }
+        if let Some(annotated) = record.annotated_pdf.as_ref() {
+            let pdf_abs = config.bob_dir.join(&annotated.path);
             if !file_states.contains_key(&pdf_abs) {
                 file_states
                     .insert(pdf_abs.clone(), fingerprint_file(&pdf_abs)?);
+            }
+            if let Some(owner) = pdf {
+                add_owner(owners, &pdf_abs, owner);
             }
         }
         if let Some(assets) = record.assets_path.as_ref() {
@@ -1428,6 +1897,9 @@ fn track_archive_for_note(
                     sha256: None,
                 }
             });
+            if let Some(owner) = pdf {
+                add_owner(owners, &assets_abs, owner);
+            }
         }
     }
     Ok(())
@@ -1561,6 +2033,7 @@ mod tests {
                 status_contributed: None,
             },
             status_normalization: StatusNormalization::default(),
+            observations: PlanDependencyObservations::default(),
         }
     }
 
@@ -1724,13 +2197,12 @@ mod tests {
             ),
             invocation_date: "2026-11-17".to_string(),
         };
-        let fingerprint = locator_fingerprint(&ctx);
         let evidence = capture_scan_evidence(
             &config,
             std::slice::from_ref(&pdf),
             &[],
             &outcomes,
-            &fingerprint,
+            &ctx,
         )
         .expect("capture evidence");
         let prepared = PreparedFullScan {
@@ -1793,13 +2265,12 @@ mod tests {
             ),
             invocation_date: "2026-11-17".to_string(),
         };
-        let fingerprint = locator_fingerprint(&ctx);
         let evidence = capture_scan_evidence(
             &config,
             std::slice::from_ref(&pdf),
             &[],
             &outcomes,
-            &fingerprint,
+            &ctx,
         )
         .expect("capture evidence");
         let prepared = PreparedFullScan {
@@ -1871,7 +2342,13 @@ mod tests {
                 std::slice::from_ref(&pdf),
                 &[],
                 &[],
-                "index",
+                &ScanContext {
+                    index: crate::native::ref_tasks::RefTaskIndex::build(
+                        &config.bob_dir,
+                        &config.ref_dir,
+                    ),
+                    invocation_date: "2026-11-17".to_string(),
+                },
             )
             .expect("capture evidence"),
             draft_annotation_candidates: drafts_candidates,
@@ -1924,7 +2401,13 @@ mod tests {
                 lib_pdfs: Vec::new(),
                 xlib_members: Vec::new(),
                 intake_destinations: Vec::new(),
-                index_fingerprint: String::new(),
+                owners: BTreeMap::new(),
+                markdown_paths: BTreeSet::new(),
+                source_store_paths: BTreeSet::new(),
+                candidates: BTreeMap::new(),
+                observations: BTreeMap::new(),
+                index_rest_fingerprint: String::new(),
+                planned_pdfs: Vec::new(),
             },
             draft_annotation_candidates: BTreeMap::new(),
             draft_rendered: BTreeMap::new(),
@@ -2092,10 +2575,12 @@ mod tests {
         let dest = dest_dir.join("fig.png");
         fs::write(&dest, b"dest-v1").expect("dest");
         let mut states = BTreeMap::new();
+        let mut owners = BTreeMap::new();
         snapshot_pdf_companion_states(
             &config,
             std::slice::from_ref(&pdf),
             &mut states,
+            &mut owners,
         )
         .expect("snapshot");
         assert!(
@@ -2113,10 +2598,12 @@ mod tests {
         let before = states.get(&sidecar).cloned().expect("sidecar state");
         fs::write(&sidecar, "Comment: New content.\n").expect("edit sidecar");
         let mut after = BTreeMap::new();
+        let mut after_owners = BTreeMap::new();
         snapshot_pdf_companion_states(
             &config,
             std::slice::from_ref(&pdf),
             &mut after,
+            &mut after_owners,
         )
         .expect("resnapshot");
         assert_ne!(
@@ -2153,10 +2640,12 @@ mod tests {
         )
         .expect("sidecar");
         let mut states = BTreeMap::new();
+        let mut owners = BTreeMap::new();
         snapshot_pdf_companion_states(
             &config,
             std::slice::from_ref(&pdf),
             &mut states,
+            &mut owners,
         )
         .expect("snapshot");
         assert!(
@@ -2263,5 +2752,581 @@ mod tests {
         );
         assert_eq!(source.code, Some("inputs_changed"));
         assert!(is_inputs_changed_during_planning(&source));
+    }
+
+    fn located_task(
+        path: &str,
+        line_index: usize,
+    ) -> crate::native::ref_tasks::LocatedRefTask {
+        crate::native::ref_tasks::LocatedRefTask {
+            path: path.to_string(),
+            line_index,
+            line: format!("- [ ] read {path}"),
+            mark: ' ',
+            block_id: Some("ref-a".to_string()),
+            archived: false,
+            residence: Some("sase".to_string()),
+            closed_on: None,
+            in_capture_target: true,
+        }
+    }
+
+    fn classify_pair(
+        config: &Config,
+        pdfs: &[PathBuf],
+        old: &ScanInputEvidence,
+        new: &ScanInputEvidence,
+    ) -> ScanChange {
+        let dest_roots = dest_asset_roots(config, pdfs);
+        classify_scan_change(old, new, config, &dest_roots, &[], false)
+    }
+
+    fn write_two_pdfs(bob_dir: &Path) -> (Config, PathBuf, PathBuf) {
+        let config = test_config(bob_dir);
+        let pdf_a = bob_dir.join("lib/papers/a.pdf");
+        let pdf_b = bob_dir.join("lib/papers/b.pdf");
+        fs::create_dir_all(pdf_a.parent().expect("parent")).expect("mkdir");
+        fs::write(&pdf_a, b"%PDF-1.4 a").expect("pdf a");
+        fs::write(&pdf_b, b"%PDF-1.4 b").expect("pdf b");
+        fs::create_dir_all(bob_dir.join("ref/papers")).expect("ref");
+        fs::write(bob_dir.join("ref/papers/a.md"), "# A\n").expect("note a");
+        fs::write(bob_dir.join("ref/papers/b.md"), "# B\n").expect("note b");
+        fs::write(pdf_a.with_extension("md"), "sidecar a\n")
+            .expect("sidecar a");
+        fs::write(pdf_b.with_extension("md"), "sidecar b\n")
+            .expect("sidecar b");
+        (config, pdf_a, pdf_b)
+    }
+
+    #[test]
+    fn companion_and_shared_target_owner_sets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let dest = bob_dir.join("sase.md");
+        fs::write(&dest, "# SASE\n").expect("shared dest");
+        let note_a = bob_dir.join("ref/papers/a.md");
+        let note_b = bob_dir.join("ref/papers/b.md");
+        let mut plan_a = minimal_plan(&pdf_a, &note_a);
+        let mut plan_b = minimal_plan(&pdf_b, &note_b);
+        plan_a
+            .routed_intents
+            .push(routed_intent(dest.clone(), pdf_a.clone()));
+        plan_b
+            .routed_intents
+            .push(routed_intent(dest.clone(), pdf_b.clone()));
+        let ctx = ScanContext {
+            index: crate::native::ref_tasks::RefTaskIndex::build(
+                &config.bob_dir,
+                &config.ref_dir,
+            ),
+            invocation_date: "2026-11-17".to_string(),
+        };
+        let evidence = capture_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+            &[
+                ScanPlanOutcome::Planned(Box::new(plan_a)),
+                ScanPlanOutcome::Planned(Box::new(plan_b)),
+            ],
+            &ctx,
+        )
+        .expect("capture");
+        let sidecar_a = pdf_a.with_extension("md");
+        assert_eq!(
+            evidence.owners.get(&sidecar_a),
+            Some(&BTreeSet::from([pdf_a.clone()])),
+            "each sidecar is owned only by its PDF"
+        );
+        assert_eq!(
+            evidence.owners.get(&dest),
+            Some(&BTreeSet::from([pdf_a.clone(), pdf_b.clone()])),
+            "shared targets keep every owner"
+        );
+        assert!(
+            !evidence
+                .owners
+                .get(&bob_dir.join("ref/papers/a.md"))
+                .is_some_and(|owners| owners.contains(&pdf_b)),
+            "PDF B does not own PDF A's ref note"
+        );
+    }
+
+    #[test]
+    fn classifier_selects_own_pdf_and_source_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let old = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        let mut new = old.clone();
+        let sidecar_a = pdf_a.with_extension("md");
+        new.file_states.insert(
+            sidecar_a.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("sidecar-changed".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &old,
+            &new,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a.clone()]));
+            }
+            other => panic!("expected refresh of PDF A, got {other:?}"),
+        }
+        let mut new = old.clone();
+        new.pdf_hashes
+            .insert(pdf_b.clone(), "pdf-b-changed".to_string());
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &old,
+            &new,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_b]));
+            }
+            other => panic!("expected refresh of PDF B, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classifier_selects_unowned_and_root_markdown_consumers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let daily = bob_dir.join("2026/day.md");
+        fs::create_dir_all(daily.parent().expect("parent")).expect("day dir");
+        fs::write(&daily, "# day\n").expect("daily");
+        let root = bob_dir.join("sase.md");
+        fs::write(&root, "# SASE\n").expect("root");
+        let mut old = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        old.markdown_paths.insert(daily.clone());
+        old.markdown_paths.insert(root.clone());
+        old.file_states.insert(
+            daily.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("daily-old".to_string()),
+            },
+        );
+        old.file_states.insert(
+            root.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("root-old".to_string()),
+            },
+        );
+        old.observations.insert(
+            pdf_a.clone(),
+            PlanDependencyObservations {
+                consulted_vault_links: true,
+                ..PlanDependencyObservations::default()
+            },
+        );
+        old.observations.insert(
+            pdf_b.clone(),
+            PlanDependencyObservations {
+                consulted_parent_targets: true,
+                ..PlanDependencyObservations::default()
+            },
+        );
+        let mut unowned = old.clone();
+        unowned.file_states.insert(
+            daily.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("daily-new".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &old,
+            &unowned,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a.clone()]));
+            }
+            other => panic!("expected vault-link consumer, got {other:?}"),
+        }
+        let mut root_change = old.clone();
+        root_change.file_states.insert(
+            root,
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("root-new".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &old,
+            &root_change,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a, pdf_b]));
+            }
+            other => {
+                panic!("expected parent plus link consumers, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn classifier_unions_owned_and_shared_dependencies() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let shared = bob_dir.join("area.md");
+        fs::write(&shared, "# area\n").expect("area");
+        let mut old = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        old.markdown_paths.insert(shared.clone());
+        old.file_states.insert(
+            shared.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("area-old".to_string()),
+            },
+        );
+        old.owners
+            .entry(shared.clone())
+            .or_default()
+            .insert(pdf_a.clone());
+        old.observations.insert(
+            pdf_b.clone(),
+            PlanDependencyObservations {
+                consulted_vault_links: true,
+                ..PlanDependencyObservations::default()
+            },
+        );
+        let mut new = old.clone();
+        new.file_states.insert(
+            shared,
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("area-new".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &old,
+            &new,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a, pdf_b]));
+            }
+            other => panic!("expected owned-plus-shared union, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classifier_selects_per_pdf_locator_line_shifts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let mut old = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        old.candidates
+            .insert(pdf_a.clone(), vec![located_task("sase.md", 3)]);
+        old.candidates
+            .insert(pdf_b.clone(), vec![located_task("inbox.md", 1)]);
+        let mut shifted = old.clone();
+        shifted
+            .candidates
+            .insert(pdf_a.clone(), vec![located_task("sase.md", 8)]);
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &old,
+            &shifted,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a.clone()]));
+            }
+            other => {
+                panic!("expected candidate line shift of A, got {other:?}")
+            }
+        }
+        let mut rest = old.clone();
+        rest.index_rest_fingerprint = "follow-up-changed".to_string();
+        match classify_pair(&config, &[pdf_a, pdf_b], &old, &rest) {
+            ScanChange::Refresh { pdfs, reason } => {
+                assert!(
+                    pdfs.is_empty(),
+                    "unrelated index data is finalization-only"
+                );
+                assert_eq!(reason, "reading-task locator changed");
+            }
+            other => panic!("expected empty refresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classifier_rebuilds_on_global_membership_config_ref_and_source() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let pdfs = [pdf_a.clone(), pdf_b.clone()];
+        let old = capture_pre_scan_evidence(&config, &pdfs, &[]).expect("pre");
+
+        let mut membership = old.clone();
+        membership.lib_pdfs.push(bob_dir.join("lib/papers/c.pdf"));
+        assert!(matches!(
+            classify_pair(&config, &pdfs, &old, &membership),
+            ScanChange::Rebuild { .. }
+        ));
+
+        let mut config_change = old.clone();
+        let config_path = super::bob_config::config_path();
+        config_change.file_states.insert(
+            config_path,
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("config-new".to_string()),
+            },
+        );
+        assert!(matches!(
+            classify_pair(&config, &pdfs, &old, &config_change),
+            ScanChange::Rebuild { .. }
+        ));
+
+        let mut ref_note = old.clone();
+        let note_a = bob_dir.join("ref/papers/a.md");
+        ref_note.file_states.insert(
+            note_a,
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("ref-changed".to_string()),
+            },
+        );
+        assert!(matches!(
+            classify_pair(&config, &pdfs, &old, &ref_note),
+            ScanChange::Rebuild { .. }
+        ));
+
+        let mut source = old.clone();
+        let store = bob_dir.join(".bob/ref-sources/web/a--abc/source.md");
+        source.source_store_paths.insert(store.clone());
+        source.file_states.insert(
+            store,
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("source".to_string()),
+            },
+        );
+        assert!(matches!(
+            classify_pair(&config, &pdfs, &old, &source),
+            ScanChange::Rebuild { .. }
+        ));
+    }
+
+    #[test]
+    fn classifier_dest_asset_precedes_other_mismatches() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let dest_dir = bob_dir.join("ref/papers/a.assets");
+        fs::create_dir_all(&dest_dir).expect("assets");
+        let dest = dest_dir.join("fig.png");
+        fs::write(&dest, b"dest-v1").expect("dest");
+        let old = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        let mut new = old.clone();
+        new.file_states.insert(
+            dest.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("dest-vandalized".to_string()),
+            },
+        );
+        new.lib_pdfs.push(bob_dir.join("lib/papers/c.pdf"));
+        new.file_states.insert(
+            pdf_a.with_extension("md"),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("sidecar-too".to_string()),
+            },
+        );
+        match classify_pair(&config, &[pdf_a, pdf_b], &old, &new) {
+            ScanChange::DestinationAsset { reason } => {
+                assert!(
+                    reason.contains("destination asset changed"),
+                    "dest-asset must win over global/owned churn: {reason}"
+                );
+                assert!(reason.contains(&dest.display().to_string()));
+            }
+            other => panic!("expected dest-asset failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn markdown_snapshot_includes_vault_links_excluded_dirs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let config = test_config(bob_dir);
+        let excluded = bob_dir.join("_templates/snippet.md");
+        fs::create_dir_all(excluded.parent().expect("parent")).expect("mkdir");
+        fs::write(&excluded, "# template\n").expect("template");
+        let states = snapshot_vault_md_states(&config).expect("snapshot");
+        assert!(
+            states.get(&excluded).is_some_and(|state| state.exists),
+            "notes in directories vault_links reads and the dependency walker excludes must still be snapshotted"
+        );
+        let (dep_paths, warnings) =
+            crate::native::capture_dependency_tasks::vault_note_paths(bob_dir);
+        assert!(warnings.is_empty());
+        assert!(
+            !dep_paths.iter().any(|path| path.ends_with("snippet.md")),
+            "the dependency walker must still exclude _templates"
+        );
+    }
+
+    #[test]
+    fn empty_link_set_does_not_consult_vault_links() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let config = test_config(bob_dir);
+        fs::create_dir_all(bob_dir.join("lib/papers")).expect("lib");
+        fs::create_dir_all(bob_dir.join("ref/papers")).expect("ref");
+        let pdf = bob_dir.join("lib/papers/example.pdf");
+        let note = bob_dir.join("ref/papers/example.md");
+        fs::write(&pdf, b"%PDF-1.4").expect("pdf");
+        fs::write(&note, "# Example\n").expect("note");
+        let sidecar = SidecarInput {
+            path: pdf.with_extension("md"),
+            annotations: parse_sidecar_markdown(
+                "## Page 1\n\n> quoted text\ncomment\n",
+            ),
+        };
+        let rendered = render_sidecar_highlights(
+            &config,
+            &pdf,
+            &note,
+            &ParsedNote::empty(),
+            &sidecar,
+            false,
+        )
+        .expect("render");
+        assert!(
+            !rendered.consulted_vault_links,
+            "an empty ID set must not mark the plan as a vault-link consumer"
+        );
+    }
+
+    #[test]
+    fn incomplete_failures_select_on_markdown_and_index_churn() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let daily = bob_dir.join("2026/day.md");
+        fs::create_dir_all(daily.parent().expect("parent")).expect("day dir");
+        fs::write(&daily, "# day\n").expect("daily");
+        let mut old = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        old.markdown_paths.insert(daily.clone());
+        old.file_states.insert(
+            daily.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("daily-old".to_string()),
+            },
+        );
+        old.observations
+            .insert(pdf_a.clone(), PlanDependencyObservations::unknown());
+        old.observations
+            .insert(pdf_b.clone(), PlanDependencyObservations::default());
+        let mut markdown = old.clone();
+        markdown.file_states.insert(
+            daily,
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("daily-new".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &old,
+            &markdown,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a.clone()]));
+            }
+            other => {
+                panic!("expected incomplete failure on markdown, got {other:?}")
+            }
+        }
+        let mut rest = old.clone();
+        rest.index_rest_fingerprint = "follow-up-changed".to_string();
+        match classify_pair(&config, &[pdf_a.clone(), pdf_b], &old, &rest) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a]));
+            }
+            other => {
+                panic!(
+                    "expected incomplete failure on index rest, got {other:?}"
+                )
+            }
+        }
+    }
+
+    #[test]
+    fn refresh_and_rebuild_still_translate_to_stale() {
+        assert!(matches!(
+            scan_change_to_validation(ScanChange::Refresh {
+                pdfs: BTreeSet::new(),
+                reason: "input changed: day.md".to_string(),
+            }),
+            PreparedValidation::Stale { .. }
+        ));
+        assert!(matches!(
+            scan_change_to_validation(ScanChange::Rebuild {
+                reason: "library membership changed".to_string(),
+            }),
+            PreparedValidation::Stale { .. }
+        ));
+        let dest = scan_change_to_validation(ScanChange::DestinationAsset {
+            reason: "destination asset changed: fig.png".to_string(),
+        });
+        match dest {
+            PreparedValidation::Stale { reason } => {
+                assert!(is_destination_asset_stale(&reason));
+            }
+            other => panic!("expected dest-asset stale, got {other:?}"),
+        }
     }
 }

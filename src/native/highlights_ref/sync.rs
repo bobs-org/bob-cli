@@ -688,6 +688,9 @@ pub(super) fn plan_pdf_sync(
         .into_iter()
         .collect(),
     };
+    let consulted_vault_links = rendered_highlights
+        .as_ref()
+        .is_some_and(|rendered| rendered.consulted_vault_links);
 
     Ok(PdfSyncPlan {
         pdf: pdf.to_path_buf(),
@@ -723,6 +726,10 @@ pub(super) fn plan_pdf_sync(
         v2_residence: None,
         pdf_task_signal,
         status_normalization,
+        observations: PlanDependencyObservations {
+            consulted_vault_links,
+            ..PlanDependencyObservations::default()
+        },
     })
 }
 
@@ -815,11 +822,13 @@ fn plan_pdf_sync_v2(
     // task is archived-terminal, its source residence decides the reopen
     // parent. The planner re-selects internally; this only feeds
     // `archive_source_open`.
+    let consulted_parent = std::cell::Cell::new(false);
     let preliminary =
         ref_tasks_mod::select_for_ref(&candidates, &v1_hits, None);
     let archive_source_open = match &preliminary.task {
         Some(ref_tasks_mod::Selected::V2(located)) if located.archived => {
             located.residence.as_deref().is_some_and(|route| {
+                consulted_parent.set(true);
                 parent_notes_mod::resolve_parent(&config.bob_dir, route).is_ok()
             })
         }
@@ -830,10 +839,10 @@ fn plan_pdf_sync_v2(
     // predecessor sharing identity, and the confirmed reading flows into
     // task creation and previews. Reopens confirm from the existing
     // note's own `earlier:` list instead. Ordinary births carry none.
-    let birth_lineage = if note.exists() {
-        None
+    let (consulted_lineage, birth_lineage) = if note.exists() {
+        (false, None)
     } else {
-        derive_birth_lineage(config, &note_path, &marker_projection)
+        probe_birth_lineage(config, &note_path, &marker_projection)
     };
     let note_raws: Vec<String> = note
         .frontmatter
@@ -865,6 +874,7 @@ fn plan_pdf_sync_v2(
         archive_source_open,
         confirmed_reading,
         resolver: &|hint| {
+            consulted_parent.set(true);
             parent_notes_mod::resolve_parent(&config.bob_dir, hint)
         },
     })?;
@@ -1230,6 +1240,9 @@ fn plan_pdf_sync_v2(
     let reading_located =
         select_v2_located_task(note.exists(), &candidates, &v1_hits);
     let _ = ctx;
+    let consulted_vault_links = rendered_highlights
+        .as_ref()
+        .is_some_and(|rendered| rendered.consulted_vault_links);
     Ok(PdfSyncPlan {
         pdf: pdf.to_path_buf(),
         note_path,
@@ -1264,6 +1277,12 @@ fn plan_pdf_sync_v2(
         v2_residence: residence,
         pdf_task_signal,
         status_normalization,
+        observations: PlanDependencyObservations {
+            consulted_vault_links,
+            consulted_parent_targets: consulted_parent.get(),
+            consulted_lineage,
+            complete: true,
+        },
     })
 }
 
