@@ -545,9 +545,10 @@ duplicates while the card is open) refuse as `req_close_stale`. With no flags,
 Pending reqs are Met with no write. Esc dismisses the card without changing
 req bytes.
 
-Applied Drop and Carry writes show receipts and one guarded Undo. Undo restores
-the req writes only while every affected note still matches its recorded
-postimage; it keeps the owner Done. A same-day Ctrl+Enter reopen changes the
+Applied Drop, Carry, and ordinary offer-close writes show receipts and one
+guarded Undo. Undo restores the requirement writes and ordinary offer-close
+writes together while every affected note still matches its recorded
+postimage; it keeps the initiating owner Done. A same-day Ctrl+Enter reopen changes the
 owner's task status and takes back any untouched successor links recorded by
 the close pass, but it does not reverse the card's Drop or Carry verdicts.
 Use the receipt's guarded Undo to restore those req bytes. API line numbers are
