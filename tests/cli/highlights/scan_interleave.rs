@@ -749,7 +749,148 @@ fn stale_inputs_after_prepare_replans_or_refuses() {
 }
 
 #[test]
+fn lock_stale_sidecar_edit_refreshes_only_its_pdf() {
+    // An edit landing between preparation and lock acquisition must refresh
+    // only its owning PDF outside the writer locks; the latest bytes reach
+    // the output and the unrelated PDF is never reparsed.
+    let temp = TempDir::new("bob-cli-scan-interleave-lock-subset");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let first = env.vault.join("lib/chat/first.pdf");
+    let second = env.vault.join("lib/chat/second.pdf");
+    write_textbundle(
+        &first,
+        "First",
+        b"first-asset",
+        "text.md",
+        Some("Old first"),
+    );
+    write_textbundle(
+        &second,
+        "Second",
+        b"second-asset",
+        "text.md",
+        Some("Stable second"),
+    );
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "after_prepare",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    let sidecar = first.with_extension("textbundle").join("text.md");
+    let body = fs::read_to_string(&sidecar).expect("first sidecar");
+    fs::write(
+        &sidecar,
+        same_length_replace(&body, "Old first", "New first"),
+    )
+    .expect("edit first sidecar between prepare and lock");
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert!(
+        fs::read_to_string(env.vault.join("ref/chat/first.md"))
+            .expect("first ref note")
+            .contains("New first"),
+        "lock-window refresh must import the latest sidecar text"
+    );
+    assert!(!fs::read_to_string(env.vault.join("ref/chat/second.md"))
+        .expect("second ref note")
+        .contains("New first"));
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        2,
+        "one initial and one lock-window subset plan: {plan_log}"
+    );
+    assert!(lines[0].starts_with("locked=0 count=2 "), "{plan_log}");
+    assert_eq!(
+        lines[1],
+        format!("locked=0 count=1 {}", first.display()),
+        "only the changed PDF is reparsed, outside the locks"
+    );
+}
+
+#[test]
+fn lock_stale_daily_edit_finalizes_without_reparsing() {
+    // An unrelated daily edit landing between preparation and lock
+    // acquisition must converge through shared finalization only: no PDF is
+    // reparsed and the new daily task still dedupes the annotation draft.
+    let temp = TempDir::new("bob-cli-scan-interleave-lock-finalization");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let first = env.vault.join("lib/chat/first.pdf");
+    write_textbundle(
+        &first,
+        "First",
+        b"first-asset",
+        "text.md",
+        Some("#task New follow up"),
+    );
+    write_marker_pdf(&env.vault.join("lib/chat/second.pdf"), "Second");
+    let daily = env.vault.join("2026/day.md");
+    write_file(&daily, "before\n");
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "after_prepare",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    fs::write(&daily, "after!\n\n- [ ] #task New follow up\n")
+        .expect("edit existing daily note between prepare and lock");
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["summary"]["created"], 2);
+    let first_note = fs::read_to_string(env.vault.join("ref/chat/first.md"))
+        .expect("first ref note");
+    assert!(
+        !first_note
+            .lines()
+            .any(|line| line.starts_with("- [ ] #task New follow up")),
+        "shared finalization must see the new daily task and skip its duplicate:\n{first_note}"
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        1,
+        "finalization-only lock refresh parses no PDFs: {plan_log}"
+    );
+    assert!(
+        lines[0].starts_with("locked=0 count=2 "),
+        "only the initial full pass should plan PDFs:\n{plan_log}"
+    );
+}
+
+#[test]
 fn repeated_churn_after_prepare_terminates() {
+    // Every lock acquisition revalidates on the shared invocation budget
+    // (four subset refreshes plus one full rebuild). Sustained PDF churn at
+    // each reacquisition must exhaust that budget and terminate with
+    // inputs_changed instead of retrying forever.
     let temp = TempDir::new("bob-cli-scan-interleave-churn");
     let env = ScanEnv {
         vault: temp.path().join("vault"),
@@ -758,14 +899,26 @@ fn repeated_churn_after_prepare_terminates() {
     };
     write_marker_pdf(&env.vault.join("lib/chat/churn.pdf"), "Churn");
     let hs = Handshake::new(temp.path(), "hs");
-    let child =
-        spawn_scan(&env, &["-f", "json"], &hs, "before_lock", true, None);
-    wait_pause(&hs, 1);
-    write_marker_pdf(&env.vault.join("lib/chat/churn.pdf"), "Churn v2");
-    resume(&hs, 1);
-    wait_pause(&hs, 2);
-    write_marker_pdf(&env.vault.join("lib/chat/churn.pdf"), "Churn v3");
-    resume(&hs, 2);
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_lock",
+        true,
+        Some(&plan_log),
+    );
+    // Four subset refreshes plus one full rebuild: the first five stale
+    // lock validations each consume one allowance, and the sixth finds both
+    // allowances spent and refuses.
+    for seq in 1..=6 {
+        wait_pause(&hs, seq);
+        write_marker_pdf(
+            &env.vault.join("lib/chat/churn.pdf"),
+            &format!("Churn v{}", seq + 1),
+        );
+        resume(&hs, seq);
+    }
     let output = child.wait();
     assert_eq!(
         output.status.code(),
@@ -786,6 +939,19 @@ fn repeated_churn_after_prepare_terminates() {
     assert!(
         !scan_receipt_path(&env.state).exists(),
         "abandoned retry must not publish an intermediate receipt"
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        6,
+        "initial plan + four lock-window subset passes + one full rebuild:\n{plan_log}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.starts_with("locked=0 count=1 ")),
+        "every lock-window refresh plans outside writer locks:\n{plan_log}"
     );
 }
 

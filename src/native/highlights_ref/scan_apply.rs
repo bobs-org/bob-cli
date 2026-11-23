@@ -241,8 +241,6 @@ fn lock_validate_intake_and_execute(
     hook: Option<PreScanHook>,
     mut prepared: PreparedFullScan,
 ) -> std::result::Result<AppliedFullScan, ApplyError> {
-    let invocation_date = prepared.invocation_date.clone();
-    let mut retried = false;
     loop {
         let locks = match acquire_mutation_locks() {
             Ok(locks) => locks,
@@ -302,17 +300,17 @@ fn lock_validate_intake_and_execute(
                     }
                 }
                 drop(locks);
-                if retried {
-                    return Err(ApplyError::prelock(
-                        scan_inputs_changed_error(
-                            "overwrite recovery invalidated the prepared scan",
-                        ),
-                    ));
-                }
-                retried = true;
-                prepared =
-                    rebuild_prepared(config, options, jobs, &invocation_date)
-                        .map_err(ApplyError::prelock)?;
+                // Recovery is a full-rebuild cause: it consumes the shared
+                // one-rebuild allowance instead of granting a fresh budget.
+                prepared = match full_rebuild_prepared(
+                    prepared,
+                    options,
+                    jobs,
+                    "overwrite recovery invalidated the prepared scan",
+                ) {
+                    Ok(rebuilt) => rebuilt,
+                    Err(error) => return Err(ApplyError::prelock(error)),
+                };
                 if !prepared_scan_needs_mutation(&prepared) {
                     return Ok(no_work_applied(prepared, hook));
                 }
@@ -321,8 +319,15 @@ fn lock_validate_intake_and_execute(
             Ok(None) => {}
         }
 
-        match validate_prepared_scan(&prepared) {
-            PreparedValidation::Failed(error) => {
+        // Typed coherence check while the locks are held. Every refresh
+        // or rebuild below drops both locks first so no planning ever runs
+        // inside the mutation window; the loop then reacquires the locks in
+        // maintenance/scan order and validates again. The invocation budget
+        // (four subset refreshes plus one full rebuild) travels with the
+        // prepared scan, so preparation churn and lock reacquisitions share
+        // one finite allowance and sustained churn ends in inputs_changed.
+        match classify_prepared_scan(&prepared) {
+            Err(error) => {
                 return Err(finish_locked_error(
                     config,
                     options,
@@ -332,9 +337,7 @@ fn lock_validate_intake_and_execute(
                     locks,
                 ));
             }
-            PreparedValidation::Stale { reason }
-                if is_destination_asset_stale(&reason) =>
-            {
+            Ok(ScanChange::DestinationAsset { reason }) => {
                 // Dest-asset vandalism cannot be restored: overwrite
                 // protection refuses Copy onto existing different bytes, so
                 // a rebuild would collide at write. Fail closed.
@@ -347,23 +350,48 @@ fn lock_validate_intake_and_execute(
                     locks,
                 ));
             }
-            PreparedValidation::Stale { reason } => {
+            Ok(ScanChange::Refresh { pdfs, reason }) => {
                 drop(locks);
-                if retried {
-                    return Err(ApplyError::prelock(
-                        scan_inputs_changed_error(&reason),
-                    ));
+                if prepared.refresh_budget.refreshes_remaining == 0 {
+                    prepared = match full_rebuild_prepared(
+                        prepared, options, jobs, &reason,
+                    ) {
+                        Ok(rebuilt) => rebuilt,
+                        Err(error) => return Err(ApplyError::prelock(error)),
+                    };
+                } else {
+                    let (updated, _) = match refresh_prepared_once(
+                        prepared, &pdfs, options, jobs,
+                    ) {
+                        Ok(refreshed) => refreshed,
+                        // Hard finalization/I/O/collision errors are not
+                        // retries; locks are already dropped so this stays
+                        // a prelock failure with no receipt.
+                        Err(error) => return Err(ApplyError::prelock(error)),
+                    };
+                    prepared = updated;
                 }
-                retried = true;
-                prepared =
-                    rebuild_prepared(config, options, jobs, &invocation_date)
-                        .map_err(ApplyError::prelock)?;
+                // A refresh that eliminates all work uses the existing
+                // lock-free no-work return below.
                 if !prepared_scan_needs_mutation(&prepared) {
                     return Ok(no_work_applied(prepared, hook));
                 }
                 continue;
             }
-            PreparedValidation::Unchanged => {}
+            Ok(ScanChange::Rebuild { reason }) => {
+                drop(locks);
+                prepared = match full_rebuild_prepared(
+                    prepared, options, jobs, &reason,
+                ) {
+                    Ok(rebuilt) => rebuilt,
+                    Err(error) => return Err(ApplyError::prelock(error)),
+                };
+                if !prepared_scan_needs_mutation(&prepared) {
+                    return Ok(no_work_applied(prepared, hook));
+                }
+                continue;
+            }
+            Ok(ScanChange::Unchanged) => {}
         }
 
         scan_test::pause("before_intake");
@@ -382,15 +410,18 @@ fn lock_validate_intake_and_execute(
         };
         if intake != prepared.intake {
             drop(locks);
-            if retried {
-                return Err(ApplyError::prelock(scan_inputs_changed_error(
-                    "intake membership changed",
-                )));
-            }
-            retried = true;
-            prepared =
-                rebuild_prepared(config, options, jobs, &invocation_date)
-                    .map_err(ApplyError::prelock)?;
+            // Fresh intake is a full-rebuild cause on the same shared
+            // allowance; a second intake change after the rebuild is spent
+            // ends the invocation with inputs_changed.
+            prepared = match full_rebuild_prepared(
+                prepared,
+                options,
+                jobs,
+                "intake membership changed",
+            ) {
+                Ok(rebuilt) => rebuilt,
+                Err(error) => return Err(ApplyError::prelock(error)),
+            };
             if !prepared_scan_needs_mutation(&prepared) {
                 return Ok(no_work_applied(prepared, hook));
             }
@@ -504,20 +535,6 @@ fn lock_validate_intake_and_execute(
         drop(locks);
         return Ok(executed);
     }
-}
-
-fn rebuild_prepared(
-    config: &Config,
-    options: SyncOptions,
-    jobs: usize,
-    date: &str,
-) -> Result<PreparedFullScan> {
-    prepare_full_scan_with_retry_date(
-        config,
-        options,
-        jobs,
-        Some(date.to_string()),
-    )
 }
 
 fn execute_prepared_plans(

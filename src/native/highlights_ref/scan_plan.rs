@@ -132,9 +132,10 @@ pub(super) struct ScanInputEvidence {
     pub(super) planned_pdfs: Vec<PathBuf>,
 }
 
-/// Typed coherence result. Production call sites still translate `Refresh`
-/// and `Rebuild` to the existing stale/rebuild path until the refresh
-/// consumer lands.
+/// Typed coherence result. Unlocked preparation converges through
+/// [`settle_prepared_scan`]; the lock-window stale branch classifies with
+/// the same type and refreshes outside the writer locks on the shared
+/// invocation budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ScanChange {
     Unchanged,
@@ -423,7 +424,10 @@ pub(super) fn reset_prepared_finalization(prepared: &mut PreparedFullScan) {
 /// the evidence still matches (the prepared plans remain usable);
 /// `Stale` names the first mismatch (created/deleted/renamed or edited
 /// inputs, including shared locator changes); `Failed` carries a hard
-/// revalidation error.
+/// revalidation error. Unit tests assert the typed classifier still maps to
+/// these legacy stale reasons; production lock validation uses the typed
+/// [`ScanChange`] directly so subset refreshes keep their PDF set.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) enum PreparedValidation {
     Unchanged,
@@ -432,6 +436,7 @@ pub(super) enum PreparedValidation {
 }
 
 /// Recompute evidence and compare with the prepared snapshot.
+#[allow(dead_code)]
 pub(super) fn validate_prepared_scan(
     prepared: &PreparedFullScan,
 ) -> PreparedValidation {
@@ -482,6 +487,7 @@ pub(super) fn classify_prepared_scan(
     ))
 }
 
+#[allow(dead_code)]
 fn scan_change_to_validation(change: ScanChange) -> PreparedValidation {
     match change {
         ScanChange::Unchanged => PreparedValidation::Unchanged,
@@ -525,7 +531,7 @@ fn file_mismatch_reason(
 
 fn is_intake_dest(path: &Path, intake: &[IntakeMove]) -> bool {
     intake.iter().any(|item| {
-        &item.destination == path
+        item.destination == path
             || item.companions.iter().any(|(_, dest)| dest == path)
     })
 }
@@ -1268,7 +1274,7 @@ fn validate_prepared_asset_collisions(
     validate_planned_asset_collisions(&plans)
 }
 
-fn full_rebuild_prepared(
+pub(super) fn full_rebuild_prepared(
     prepared: PreparedFullScan,
     options: SyncOptions,
     jobs: usize,
@@ -1334,7 +1340,7 @@ fn settle_prepared_scan(
 /// replaced, so edits arriving between detection and refresh join the same
 /// pass. A stable result adopts the post-snapshot; a stale result retains
 /// the fresh pre-snapshot as the next trusted baseline.
-fn refresh_prepared_once(
+pub(super) fn refresh_prepared_once(
     mut prepared: PreparedFullScan,
     pending_pdfs: &BTreeSet<PathBuf>,
     options: SyncOptions,
@@ -1536,6 +1542,7 @@ pub(super) fn prepare_full_scan_with_retry(
     prepare_full_scan_with_retry_date(config, options, jobs, None)
 }
 
+#[allow(dead_code)]
 pub(super) fn is_destination_asset_stale(reason: &str) -> bool {
     reason.contains("destination asset changed")
 }

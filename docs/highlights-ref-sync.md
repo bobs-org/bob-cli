@@ -1263,6 +1263,43 @@ a nested writing scan fails immediately with `lock_busy` rather than
 recursing. Human mode is otherwise byte-identical, except for the
 lock-wait lines on stderr and the `lock_busy` / `scan_busy` failures.
 
+### Coherence contract
+
+Planning is optimistic: the scan snapshots its inputs, plans with neither
+lock held, then revalidates. A concurrent edit between the snapshot and the
+write window does not silently win or silently lose. The scan classifies the
+difference with fail-closed precedence and retries outside the writer locks:
+
+1. A changed destination asset (an image, note asset, or other file under the
+   reference note's asset tree) fails closed with `scan_failed`, even when a
+   locator or global change co-occurred. The damaged bytes are never adopted
+   as a fresh baseline and nothing is overwritten.
+2. Global changes require a full rebuild with current discovery: library or
+   `xlib` membership, configuration, intake states, vault Markdown
+   membership, any observed `ref_dir` input, and the hidden
+   `.bob/ref-sources` store. An edit to an existing unrelated note — for
+   example a daily note no plan reads — selects nothing and reparses no PDF.
+3. Other owned content changes refresh only their consumers: a PDF's bytes
+   replan that PDF, a sidecar change replans its PDF, and shared reads
+   (underline/section link targets, birth parents, lineage notes, reading
+   candidates) replan exactly the plans that consulted them. An unowned note
+   with no consumers refreshes shared finalization only, with no PDF parsing.
+4. Overwrite recovery and fresh intake arrivals are full-rebuild causes on
+   the same allowance below, never a fresh budget.
+
+Retries share one invocation budget: four incremental subset refreshes plus
+one full rebuild, across unlocked preparation and every lock reacquisition.
+An empty-subset finalization pass counts as a refresh, and no refresh or
+rebuild ever runs while either writer lock is held — every planning pass in
+the plan log reads `locked=0` (intake subset planning after an owned move is
+the only locked exception, and it never retries). The pinned invocation date
+is reused for every pass. Sustained churn past the remaining allowance ends
+the invocation with `inputs_changed` and a rerun hint, publishing no
+intermediate receipt; a refresh that eliminates all work returns the
+existing lock-free no-work result. Hard finalization, I/O, and collision
+errors abort immediately instead of retrying, and no retry runs after intake
+moves have started.
+
 ### Scan receipt
 
 Every writing `bob ref scan` that acquired the scan writer lock writes the
