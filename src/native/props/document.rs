@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use chrono::{NaiveDate, NaiveTime};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 
@@ -25,7 +25,7 @@ pub(crate) enum FrontmatterState {
 pub(crate) type FrontmatterError = super::PropsError;
 
 /// Reported value category. `tags` and `aliases` are key-aware list kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PropertyKind {
     Text,
@@ -172,50 +172,49 @@ impl PropsDocument {
 
         let parsed = parse_root_mapping(&yaml);
         let duplicate = entries.iter().find(|entry| entry.duplicate);
-        let (state, error, mapping) = match parsed {
-            Err(parse_error) => (
-                FrontmatterState::Invalid,
-                Some(yaml_error(&parse_error, &yaml)),
-                None,
-            ),
-            Ok(None) => (
+        let (state, error, mapping) = if let Some(entry) = duplicate {
+            (
                 FrontmatterState::Invalid,
                 Some(FrontmatterError {
-                    code: "prop_invalid_yaml".to_owned(),
-                    message: "frontmatter YAML must be a mapping".to_owned(),
-                    hint:
-                        "Use a YAML mapping between the frontmatter delimiters."
-                            .to_owned(),
-                    key: None,
-                    line: inner_lines
-                        .iter()
-                        .position(|line| !root_trivia(&line.text))
-                        .map(|index| index + 2),
+                    code: "prop_duplicate_key".to_owned(),
+                    message: format!(
+                        "duplicate frontmatter key {:?}",
+                        entry.key
+                    ),
+                    hint: "Remove or rename duplicate keys before editing properties."
+                        .to_owned(),
+                    key: Some(entry.key.clone()),
+                    line: entry.line,
                     op_index: None,
                 }),
                 None,
-            ),
-            Ok(Some(mapping)) => {
-                if let Some(entry) = duplicate {
-                    (
-                        FrontmatterState::Invalid,
-                        Some(FrontmatterError {
-                            code: "prop_duplicate_key".to_owned(),
-                            message: format!(
-                                "duplicate frontmatter key {:?}",
-                                entry.key
-                            ),
-                            hint: "Remove or rename duplicate keys before editing properties."
+            )
+        } else {
+            match parsed {
+                Err(parse_error) => (
+                    FrontmatterState::Invalid,
+                    Some(yaml_error(&parse_error, &yaml)),
+                    None,
+                ),
+                Ok(None) => (
+                    FrontmatterState::Invalid,
+                    Some(FrontmatterError {
+                        code: "prop_invalid_yaml".to_owned(),
+                        message: "frontmatter YAML must be a mapping"
+                            .to_owned(),
+                        hint:
+                            "Use a YAML mapping between the frontmatter delimiters."
                                 .to_owned(),
-                            key: Some(entry.key.clone()),
-                            line: entry.line,
-                            op_index: None,
-                        }),
-                        None,
-                    )
-                } else {
-                    (FrontmatterState::Ok, None, Some(mapping))
-                }
+                        key: None,
+                        line: inner_lines
+                            .iter()
+                            .position(|line| !root_trivia(&line.text))
+                            .map(|index| index + 2),
+                        op_index: None,
+                    }),
+                    None,
+                ),
+                Ok(Some(mapping)) => (FrontmatterState::Ok, None, Some(mapping)),
             }
         };
         for entry in &mut entries {
@@ -248,6 +247,24 @@ impl PropsDocument {
             bom_range: has_bom.then_some(0..bom_offset(true)),
             body_range: end + close_ending..source.len(),
         }
+    }
+
+    /// First stored line ending in the note, or `\n` when the file has none.
+    pub(crate) fn preferred_newline(&self) -> String {
+        yaml_spans::split_lines(&self.source)
+            .into_iter()
+            .find(|line| !line.ending.is_empty())
+            .map(|line| line.ending)
+            .unwrap_or_else(|| "\n".to_owned())
+    }
+
+    pub(crate) fn root_is_flow(&self) -> bool {
+        let Some(range) = &self.frontmatter_range else {
+            return false;
+        };
+        let lines = yaml_spans::split_lines(&self.source[range.clone()]);
+        let inner = lines.get(1..lines.len().saturating_sub(1)).unwrap_or(&[]);
+        starts_with_flow_mapping(inner)
     }
 }
 
@@ -791,8 +808,13 @@ fn build_entry(
         .as_ref()
         .is_some_and(|value| !value_is_json_safe(value));
     let raw_features = yaml_spans::has_yaml_feature(source_lines);
-    let opaque =
-        opaque_key || raw_value.is_none() || value_is_opaque || raw_features;
+    let merge_key =
+        key == "<<" || raw_value.as_ref().is_some_and(yaml_contains_merge);
+    let opaque = opaque_key
+        || raw_value.is_none()
+        || value_is_opaque
+        || raw_features
+        || merge_key;
     let kind = if opaque {
         PropertyKind::Opaque
     } else {
@@ -803,6 +825,8 @@ fn build_entry(
         if raw_features {
             "anchors, aliases, and custom YAML tags are shown as opaque"
                 .to_owned()
+        } else if merge_key {
+            "YAML merge keys are shown as opaque".to_owned()
         } else if opaque_key {
             "non-string YAML property keys are not editable properties"
                 .to_owned()
@@ -837,6 +861,21 @@ fn build_entry(
         colon_range,
         value_range,
         inline_comment_range,
+    }
+}
+
+fn yaml_contains_merge(value: &YamlValue) -> bool {
+    match value {
+        YamlValue::Mapping(mapping) => {
+            mapping.keys().any(|key| key.as_str() == Some("<<"))
+                || mapping.values().any(yaml_contains_merge)
+        }
+        YamlValue::Sequence(values) => values.iter().any(yaml_contains_merge),
+        YamlValue::Tagged(tagged) => yaml_contains_merge(&tagged.value),
+        YamlValue::Null
+        | YamlValue::Bool(_)
+        | YamlValue::Number(_)
+        | YamlValue::String(_) => false,
     }
 }
 
@@ -884,13 +923,13 @@ fn classify_kind(key: &str, value: &YamlValue) -> PropertyKind {
     }
 }
 
-fn is_date(text: &str) -> bool {
+pub(crate) fn is_date(text: &str) -> bool {
     text.len() == 10
         && NaiveDate::parse_from_str(text, "%Y-%m-%d")
             .is_ok_and(|date| date.format("%Y-%m-%d").to_string() == text)
 }
 
-fn datetime_parts(text: &str) -> Option<(String, String)> {
+pub(crate) fn datetime_parts(text: &str) -> Option<(String, String)> {
     let separator_index = text.char_indices().find_map(|(index, ch)| {
         matches!(ch, 'T' | ' ').then_some((index, ch))
     })?;
@@ -966,7 +1005,7 @@ fn valid_offset(offset: &str) -> bool {
         && minutes.is_some_and(|minutes| minutes <= 59)
 }
 
-fn is_datetime(text: &str) -> bool {
+pub(crate) fn is_datetime(text: &str) -> bool {
     datetime_parts(text).is_some()
 }
 
@@ -1157,6 +1196,17 @@ mod tests {
         );
         assert_eq!(document.entries[0].value, json!("ten"));
         assert_eq!(document.entries[1].value, json!("two"));
+    }
+
+    #[test]
+    fn merge_keys_are_opaque_without_marking_quoted_text() {
+        let document = PropsDocument::parse(
+            "---\ndefaults: { <<: {x: 1}, y: 2 }\nlabel: \"keep << text\"\n---\n",
+        );
+        assert_eq!(document.state, FrontmatterState::Ok);
+        assert!(document.entries[0].opaque);
+        assert!(!document.entries[1].opaque);
+        assert_eq!(document.entries[1].kind, PropertyKind::Text);
     }
 
     #[test]

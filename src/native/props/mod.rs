@@ -9,7 +9,12 @@
 //! can be rerun after locking.
 
 pub(crate) mod document;
+pub(crate) mod emit;
 pub(crate) mod fingerprint;
+#[cfg(test)]
+mod golden;
+pub(crate) mod plan;
+pub(crate) mod protocol;
 pub(crate) mod roles;
 pub(crate) mod show;
 

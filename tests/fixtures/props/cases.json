@@ -1,0 +1,331 @@
+[
+  {
+    "id": "comments-set-preserves-trivia",
+    "source": "comments.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "name", "value": "new" }],
+    "contains": ["# leading", "# name", "name: new # inline", "created: 2026-11-22"],
+    "untouched": ["created"]
+  },
+  {
+    "id": "crlf-set-preserves-endings",
+    "source": "crlf.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "name", "value": "new" }],
+    "contains": ["created: 2026-11-22\r\n", "name: new\r\n", "---\r\nbody\r\n"],
+    "untouched": ["created"]
+  },
+  {
+    "id": "mixed-endings-preserve-untouched",
+    "source": "mixed.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "name", "value": "new" }],
+    "contains": ["created: 2026-11-22\r\n"],
+    "untouched": ["created"]
+  },
+  {
+    "id": "bom-insert-keeps-bom",
+    "source": "bom.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "title", "value": "Hi" }],
+    "contains": ["\ufeff---", "title: Hi", "created: 2026-11-22", "body"],
+    "untouched": ["created"]
+  },
+  {
+    "id": "missing-final-newline-preserved",
+    "source": "no_final_newline.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "name", "value": "new" }],
+    "contains": ["name: new"],
+    "no_final_newline": true
+  },
+  {
+    "id": "nested-flow-bank-untouched",
+    "source": "bank_flow.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-23", "kind": "date" }],
+    "contains": ["bank: {accounts: {}, categories: {}}"],
+    "untouched": ["bank"]
+  },
+  {
+    "id": "short-flow-list-retained",
+    "source": "flow_list.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "tags", "value": ["work", "lab"], "kind": "tags" }],
+    "contains": ["tags: [work, lab]"],
+    "untouched": ["items", "created"]
+  },
+  {
+    "id": "new-list-is-block",
+    "source": "flow_list.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "more", "value": ["a", "b"] }],
+    "contains": ["\nmore:\n  - a\n  - b\n"],
+    "untouched": ["tags", "items", "created"]
+  },
+  {
+    "id": "unquoted-wikilink-untouched",
+    "source": "wikilinks.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-23", "kind": "date" }],
+    "contains": ["parent: [[area]]", "quoted: \"[[page]]\""],
+    "untouched": ["parent", "quoted"]
+  },
+  {
+    "id": "block-scalars-untouched",
+    "source": "blocks.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-23", "kind": "date" }],
+    "contains": ["literal: |", "folded: >"],
+    "untouched": ["literal", "folded"]
+  },
+  {
+    "id": "integer-unicode-quoted-keys",
+    "source": "keys.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "10", "value": "eleven" }],
+    "contains": ["café: coffee", "quoted key"],
+    "untouched": ["café", "quoted key", "created"]
+  },
+  {
+    "id": "datetime-styles-untouched",
+    "source": "datetimes.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-02-02", "kind": "date" }],
+    "contains": [
+      "z: 2026-11-22T09:41:00Z",
+      "space: 2026-11-22 09:41:00-0500",
+      "colon: 2026-11-22T09:41:00-05:00",
+      "naive: 2026-11-22T09:41:00",
+      "day: 2026-11-22"
+    ],
+    "untouched": ["z", "space", "colon", "naive", "day"]
+  },
+  {
+    "id": "coercible-text-untouched",
+    "source": "coercibles.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-23", "kind": "date" }],
+    "contains": ["flag_text: \"false\"", "zero_text: \"0\"", "null_text: \"null\"", "date_text: \"2026-11-22\""],
+    "untouched": ["flag_text", "zero_text", "null_text", "date_text"]
+  },
+  {
+    "id": "empty-values-stay-distinct",
+    "source": "empty_values.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-23", "kind": "date" }],
+    "contains": ["none: null", "blank: ''", "off: false", "zero: 0", "empty_list: []", "empty_map: {}"],
+    "untouched": ["none", "blank", "off", "zero", "empty_list", "empty_map"]
+  },
+  {
+    "id": "no-frontmatter-first-insert",
+    "source": "no_frontmatter.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-22", "kind": "date" }],
+    "contains": ["---\ncreated: 2026-11-22\n---\n# Body only\n"]
+  },
+  {
+    "id": "empty-frontmatter-insert-keeps-comments",
+    "source": "empty_frontmatter.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-22", "kind": "date" }],
+    "contains": ["# authored empty block", "created: 2026-11-22"]
+  },
+  {
+    "id": "unclosed-refuses",
+    "source": "unclosed.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "name", "value": "x" }],
+    "error": "prop_invalid_yaml"
+  },
+  {
+    "id": "duplicates-refuse",
+    "source": "duplicates.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "name", "value": "x" }],
+    "error": "prop_duplicate_key"
+  },
+  {
+    "id": "anchors-refuse-target-and-keep-safe-keys",
+    "source": "unsafe.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "copy", "value": "nope" }],
+    "error": "prop_opaque"
+  },
+  {
+    "id": "quoted-and-block-lookalikes-are-editable",
+    "source": "resembling.md",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "created", "value": "2026-11-23", "kind": "date" }],
+    "contains": ["quoted_alias: \"*summary\"", "block_alias: |", "*not_an_alias"],
+    "untouched": ["quoted_alias", "quoted_tag", "quoted_merge", "block_alias"]
+  },
+  {
+    "id": "rename-then-edit",
+    "note": "---\nname: old\ncreated: 2026-11-22\n---\nbody\n",
+    "kind": "note",
+    "ops": [
+      { "op": "prop.rename", "key": "name", "to": "title" },
+      { "op": "prop.set", "key": "title", "value": "new" }
+    ],
+    "contains": ["title: new", "created: 2026-11-22"],
+    "untouched": ["created"]
+  },
+  {
+    "id": "move-then-remove",
+    "note": "---\ncreated: 2026-11-22\nname: old\nother: 1\n---\n",
+    "kind": "note",
+    "ops": [
+      { "op": "prop.move", "key": "name", "before": "created" },
+      { "op": "prop.unset", "key": "name" }
+    ],
+    "contains": ["created: 2026-11-22", "other: 1"],
+    "absent": ["name:"]
+  },
+  {
+    "id": "repeated-changes-to-one-key",
+    "note": "---\nname: a\n---\n",
+    "kind": "note",
+    "ops": [
+      { "op": "prop.set", "key": "name", "value": "b" },
+      { "op": "prop.set", "key": "name", "value": "c" }
+    ],
+    "candidate": "---\nname: c\n---\n"
+  },
+  {
+    "id": "restore-removed-last-key",
+    "note": "---\nname: old\n---\nbody\n",
+    "kind": "note",
+    "ops": [
+      { "op": "prop.unset", "key": "name" },
+      { "op": "prop.restore", "key": "name", "raw": "name: old\n" }
+    ],
+    "candidate": "---\nname: old\n---\nbody\n"
+  },
+  {
+    "id": "set-yaml-nested-map",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set_yaml", "key": "cfg", "yaml": "{a: 1, b: 2}" }],
+    "contains": ["cfg: {a: 1, b: 2}", "created: 2026-11-22"]
+  },
+  {
+    "id": "set-yaml-rejects-fence",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set_yaml", "key": "cfg", "yaml": "---\nfoo: 1" }],
+    "error": "prop_bad_value"
+  },
+  {
+    "id": "hostile-framing-body-refused",
+    "note": "---\nname: old\n---\nbody\n",
+    "kind": "note",
+    "ops": [{
+      "op": "prop.restore",
+      "key": "name",
+      "raw": null,
+      "framing": { "expected": "---\n---\nbody\n", "prior": "" }
+    }],
+    "error": "prop_bad_value"
+  },
+  {
+    "id": "forged-restore-identity",
+    "source": "day.md",
+    "kind": "day",
+    "ops": [{ "op": "prop.restore", "key": "type", "raw": "type: other\n" }],
+    "error": "prop_identity"
+  },
+  {
+    "id": "rename-to-identity-destination",
+    "source": "day.md",
+    "kind": "day",
+    "ops": [{ "op": "prop.rename", "key": "created", "to": "type" }],
+    "error": "prop_identity"
+  },
+  {
+    "id": "rename-to-existing",
+    "note": "---\nname: a\nother: b\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.rename", "key": "name", "to": "other" }],
+    "error": "prop_exists"
+  },
+  {
+    "id": "same-name-rename-is-noop",
+    "note": "---\n'10': ten\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.rename", "key": "10", "to": "10" }],
+    "candidate": "---\n'10': ten\n---\n"
+  },
+  {
+    "id": "self-move-is-noop",
+    "note": "---\ncreated: 2026-11-22\nname: old\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.move", "key": "name", "after": "created" }],
+    "candidate": "---\ncreated: 2026-11-22\nname: old\n---\n"
+  },
+  {
+    "id": "stale-expect",
+    "note": "---\nname: old\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "name", "value": "new" }],
+    "expect": "sha256:deadbeef",
+    "error": "prop_stale"
+  },
+  {
+    "id": "missing-unset",
+    "note": "---\nname: old\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.unset", "key": "nope" }],
+    "error": "prop_missing"
+  },
+  {
+    "id": "later-op-failure-discards",
+    "note": "---\nname: old\n---\n",
+    "kind": "note",
+    "ops": [
+      { "op": "prop.set", "key": "title", "value": "x" },
+      { "op": "prop.unset", "key": "missing" }
+    ],
+    "error": "prop_missing"
+  },
+  {
+    "id": "quote-wikilink-on-set-text",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "parent", "value": "[[area]]", "kind": "text" }],
+    "contains": ["parent: \"[[area]]\""]
+  },
+  {
+    "id": "multiline-text-literal",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set", "key": "notes", "value": "hello\nworld", "kind": "text" }],
+    "contains": ["notes: |-\n  hello\n  world\n"]
+  },
+  {
+    "id": "null-false-zero-empty-inserts",
+    "note": "---\ncreated: 2026-11-22\n---\n",
+    "kind": "note",
+    "ops": [
+      { "op": "prop.set", "key": "none", "value": null },
+      { "op": "prop.set", "key": "off", "value": false },
+      { "op": "prop.set", "key": "zero", "value": 0 },
+      { "op": "prop.set", "key": "blank", "value": "", "kind": "text" }
+    ],
+    "contains": ["none: null", "\"off\": false", "zero: 0", "blank: \"\""]
+  },
+  {
+    "id": "derived-key-refused",
+    "source": "day.md",
+    "kind": "day",
+    "ops": [{ "op": "prop.set", "key": "summary_drafted", "value": true }],
+    "error": "prop_derived"
+  },
+  {
+    "id": "position-may-name-protected-neighbor",
+    "source": "day.md",
+    "kind": "day",
+    "ops": [{ "op": "prop.set", "key": "title", "value": "Hi", "before": "type" }],
+    "contains": ["title: Hi", "type: [[day]]"]
+  }
+]
