@@ -261,6 +261,35 @@ pub(crate) fn resolve_note_context(
             };
         }
 
+        // Canonical Record Notes all use [[record]]. Their album folder,
+        // not that shared type name, selects the schema. An unresolved
+        // canonical record must never expose its fields as loose properties.
+        if type_names.iter().any(|name| name == "record") {
+            let resolved = if records.registry().is_for_target(vault) {
+                let folder = path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default();
+                resolve_record_kind(vault, path, &[folder.to_owned()], records)
+            } else {
+                Some((None, Some(
+                    "record schema registry belongs to a different vault; property ownership is unresolved".to_owned(),
+                )))
+            };
+            let (record_fields, unresolved) = resolved.unwrap_or((None, None));
+            if record_fields.is_none() {
+                diagnostics.push(unresolved.unwrap_or_else(|| {
+                    "record schema could not be resolved from the canonical album folder".to_owned()
+                }));
+            }
+            return RoleContext {
+                note_kind: NoteKind::Record,
+                record_fields,
+                diagnostics,
+            };
+        }
+
         if !records.registry().is_for_target(vault)
             && type_names.iter().any(|name| {
                 path.parent().is_some_and(|parent| {
@@ -686,6 +715,55 @@ mod tests {
         );
         assert_eq!(reference.classify("created").role, Some(Role::Loose));
         assert_eq!(note.classify("custom_new_key").role, Some(Role::Loose));
+    }
+
+    #[test]
+    fn canonical_record_type_resolves_its_album_and_fails_closed_without_it() {
+        let temp = tempfile::tempdir().expect("fixture vault");
+        let vault = temp.path();
+        fs::write(vault.join("body.md"), "---\ntype: [[area]]\n---\n").unwrap();
+        fs::write(
+            vault.join("eat.md"),
+            "---\ntype: [[album]]\nparent: [[body]]\nrecord:\n  noun: restaurant\n  fields:\n    rating:\n      values: number\n---\n",
+        ).unwrap();
+        fs::create_dir(vault.join("eat")).unwrap();
+        let record = "---\ntype: \"[[record]]\"\nparent: \"[[eat]]\"\ntitle: Ramen\nrating: 5\n---\n";
+        fs::write(vault.join("eat/ramen.md"), record).unwrap();
+        let records = RecordContext::discover(vault);
+        let resolved =
+            resolve_note_context(vault, "eat/ramen.md", record, &records);
+        assert_eq!(resolved.note_kind, NoteKind::Record);
+        assert_eq!(resolved.classify("rating").role, Some(Role::Card));
+        assert_eq!(
+            resolved.classify("rating").owner.as_deref(),
+            Some("record")
+        );
+        assert_eq!(resolved.classify("parent").role, Some(Role::Identity));
+        assert!(resolved.writes_are_safe());
+
+        // Neither a misplaced record nor a registry for another vault may
+        // grant generic write access to schema-owned fields.
+        for path in ["ramen.md", "elsewhere/ramen.md", "eat/nested/ramen.md"] {
+            let unresolved =
+                resolve_note_context(vault, path, record, &records);
+            assert_eq!(unresolved.note_kind, NoteKind::Record);
+            assert_eq!(unresolved.classify("rating").role, None);
+            assert!(!unresolved.writes_are_safe());
+        }
+        let other = tempfile::tempdir().unwrap();
+        let foreign = RecordContext::discover(other.path());
+        let unresolved =
+            resolve_note_context(vault, "eat/ramen.md", record, &foreign);
+        assert_eq!(unresolved.classify("rating").role, None);
+        assert!(!unresolved.writes_are_safe());
+
+        fs::write(vault.join("eat.md"), "---\ntype: [[album]]\nparent: [[body]]\nrecord:\n  noun: restaurant\n  fields: broken\n---\n").unwrap();
+        let broken = RecordContext::discover(vault);
+        let unresolved =
+            resolve_note_context(vault, "eat/ramen.md", record, &broken);
+        assert_eq!(unresolved.note_kind, NoteKind::Record);
+        assert_eq!(unresolved.classify("rating").role, None);
+        assert!(!unresolved.writes_are_safe());
     }
 
     #[test]

@@ -133,6 +133,49 @@ fn show_reports_ordered_properties_with_capability_and_fingerprint() {
 }
 
 #[test]
+fn canonical_record_fields_route_to_the_card_and_refuse_generic_writes() {
+    let vault = vault("canonical-record");
+    write_note(vault.path(), "body.md", "---\ntype: [[area]]\n---\n");
+    write_note(
+        vault.path(),
+        "eat.md",
+        "---\ntype: [[album]]\nparent: [[body]]\nrecord:\n  noun: restaurant\n  fields:\n    rating:\n      values: number\n---\n",
+    );
+    let record = "---\ntype: \"[[record]]\"\nparent: \"[[eat]]\"\ntitle: Ramen\nrating: 5\n---\n\n# Ramen\n";
+    write_note(vault.path(), "eat/ramen.md", record);
+    let output = show(vault.path(), "eat/ramen.md", &[]);
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["note_kind"], "record");
+    let rating = body["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "rating")
+        .unwrap();
+    assert_eq!(rating["role"], "card");
+    assert_eq!(rating["owner"], "record");
+    assert_eq!(rating["editor"], "==");
+
+    let output = update(
+        vault.path(),
+        "eat/ramen.md",
+        &json!({
+            "schema_version": 1,
+            "expect": body["fingerprint"],
+            "ops": [{"op": "prop.set", "key": "rating", "value": 4}]
+        })
+        .to_string(),
+        &["-f", "json"],
+    );
+    assert_eq!(report(&output)["error"]["code"], "prop_owned");
+    assert_eq!(
+        fs::read_to_string(vault.path().join("eat/ramen.md")).unwrap(),
+        record
+    );
+}
+
+#[test]
 fn help_lists_options_alphabetically_with_short_aliases() {
     for (command, options) in [
         ("show", vec!["-b, --bob-dir", "-f, --format", "-h, --help"]),
