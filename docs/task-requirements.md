@@ -466,10 +466,11 @@ as one undo step; a refusal writes nothing and shows its copy:
 | Typing `- [` then space | Expands to `- [ ] ` on any list-item start (autopair on or off, Vim insert included); a `]` typed right after the expansion is absorbed, and so is a space typed right after that `]`; Backspace right after a bullet-start `[ ] ` removes the whole marker; one Undo returns the plain-space bytes |
 
 A line that changed under an open prompt refuses with `The line changed —
-try again`. Ctrl+Shift+T on a requirement line keeps its existing task-split
-behavior; requirement Carry on the close card is available only after a
-managed Done gesture opens that card. (Shipped in the `obsidian-gestures` and
-`obsidian-close-card` phases; see [Task Status
+try again`. In Obsidian, Ctrl+Shift+T on a requirement carries it now through
+Navigation Hotkeys `api.taskSplit`, using the bytes in §6 and landing on the
+new task; Ctrl+O returns to the requirement. The managed Done close card offers
+the same Carry choice after the owner closes. (Shipped in the
+`obsidian-gestures` and `obsidian-close-card` phases; see [Task Status
 Cycler](reference/plugins/task-status-cycler.md), [Navigation
 Hotkeys](reference/plugins/bob-navigation-hotkeys.md), [Block ID
 Prompt](reference/plugins/block-id-prompt.md), and [Task
@@ -524,17 +525,35 @@ byte for byte (see [Task Split](task-split.md) §6).
 
 ## 7. The close card
 
-A managed Done gesture opens the card when its closing set includes a
-non-recurring task with at least one Pending req. One `requirements` group
-per owner, placed first, lists every Pending req in document order,
-indented by depth, with the run, text, and consequence strip. A branch folds
-only when its root gets drop or carry. Keys: Ctrl+X met, Ctrl+Shift+X drop
-with an inline reason, Ctrl+Shift+T carry into its own task, Space/Tab carry
-plus pull-in, Ctrl+J jump pin. Overlapping picks are refused on the row, and
-stale rows (reordered, re-indented, or edited duplicates while the card is
-open) refuse as `req_close_stale`. With no flags, Pending reqs are Met with
-no write. (Shipped in the `close-engine` phase; the normative wire
-contract is [Task dependency
+A managed Done gesture opens the Obsidian card when its closing set includes a
+non-recurring task with at least one Pending req. This covers the local
+Ctrl+Enter toggle, `completeTaskAtCursor`, single and counted cycles into Done,
+and managed Done callers that pass their pre-close
+`context.reqCloseOwners` snapshots. Idless owners are included without
+minting a block ID; an idless owner with no Pending req keeps the ordinary
+no-extra-scan close path. The card requires Navigation Hotkeys picker API v6;
+with an older or missing picker the close still succeeds and req bytes stay
+untouched.
+
+One `requirements` group per owner, placed first, lists every Pending req in
+document order, indented by depth, with the run, text, and consequence strip.
+A branch folds only when its root gets drop or carry. Keys: Ctrl+X met,
+Ctrl+Shift+X drop with an inline reason, Ctrl+Shift+T carry into its own task,
+Space/Tab carry plus pull-in, and Ctrl+J jump pin. Overlapping picks are
+refused on the row, and stale rows (reordered, re-indented, or edited
+duplicates while the card is open) refuse as `req_close_stale`. With no flags,
+Pending reqs are Met with no write. Esc dismisses the card without changing
+req bytes.
+
+Applied Drop and Carry writes show receipts and one guarded Undo. Undo restores
+the req writes only while every affected note still matches its recorded
+postimage; it keeps the owner Done. A same-day Ctrl+Enter reopen changes the
+owner's task status and takes back any untouched successor links recorded by
+the close pass, but it does not reverse the card's Drop or Carry verdicts.
+Use the receipt's guarded Undo to restore those req bytes. API line numbers are
+1-based; they become 0-based only when a caller reads or moves an Obsidian
+editor cursor. (Shipped in `obsidian-close-card`; the normative wire contract
+is [Task dependency
 links](task-dependencies.md#1225-requirements-on-the-successor-card)
 §12.25, with [shared vectors](task-dependencies.md#1226-rv-requirement-close-vectors)
 §12.26 and the fixture roster in §10.)
