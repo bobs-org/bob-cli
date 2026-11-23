@@ -192,6 +192,11 @@ The documented workflows use these external-tool integrations:
   guard
 - `curl` for `bob ref create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
+- `curl`, `uv`, and a discovered browser for Spotify episode
+  imports. Metadata is fetched
+  without a browser; the web-clip adapter uses the browser to print the
+  episode dossier. `pandoc` saves its Markdown source and link catalog.
+  Publisher notes and transcripts are optional; episode audio is never downloaded
 - A narration frontend for `bob ref create --listen`, configured as
   `highlights.listen_command` (`sase listen render ...`). Installing Bob
   does not install one. The SASE plugin (`sase plugin install listen`)
