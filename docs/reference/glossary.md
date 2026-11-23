@@ -1180,10 +1180,13 @@ under a dropped or carried ancestor is Excluded, never called met. A req never h
 child notes, child reqs, a trailing `^anchor`, and a Cancel Log when dropped.
 Depth above 16 is refused.
 
-Obsidian and Bob Mac Capture draw a tightly kerned hash run in the owner's ink over
-the checkbox: `⌗⌗` at depth 1, `⌗⌗⌗` at 2, `⌗⌗⌗⌗` at 3 or more. The checkbox cannot
-be clicked. Teaching copy: *Part of this task's scope. Met when the task closes.
-Drop it or make it a task.*
+Obsidian and Bob Mac Capture draw one constant-size diamond in the owner's ink for a
+requirement at every depth; indentation alone shows nesting. The hollow diamond `◇`
+marks a pending requirement, the filled diamond `◆` a met one, a faded diamond a moot
+or excluded one, a slashed diamond a dropped one, and an arrow `→` a carried one. Plain
+text surfaces print `◇`. The mark cannot toggle the checkbox. Teaching copy: *A
+requirement is part of this task's scope. It is met when the task closes. Drop it or
+make it a task.*
 
 A task that owns any req keeps its notes in a `NOTES` [Task Drawer](#task-drawer), born only
 when a note lands in it. Drawers sit after reqs and before logs. A checkbox
