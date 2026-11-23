@@ -638,8 +638,9 @@ Ctrl+Shift+X drop with an inline reason, Ctrl+Shift+T carry into its own task,
 Space/Tab carry plus pull-in, and Ctrl+J jump pin. Overlapping picks are
 refused on the row, and stale rows (reordered, re-indented, or edited
 duplicates while the card is open) refuse as `req_close_stale`. With no flags,
-Pending reqs are Met with no write. Esc dismisses the card without changing
-req bytes.
+Pending reqs are Met with no write. Only changes inside the owner block count
+as stale; edits elsewhere in the note, such as frontmatter count refreshes,
+never refuse. Esc dismisses the card without changing req bytes.
 
 Applied Drop, Carry, and ordinary offer-close writes show receipts and one
 guarded Undo. Undo restores the requirement writes and ordinary offer-close
