@@ -2551,3 +2551,377 @@ fn post_recovery_replan_failure_keeps_direct_output() {
         "intent is cleared by serialized recovery"
     );
 }
+
+#[test]
+fn lock_window_failed_recovery_needs_second_refresh() {
+    // Sole-PDF lock-window Failed-to-recovered convergence: a sidecar edit at
+    // `after_prepare` selects the PDF, corruption at `before_refresh` makes
+    // the subset plan fail, and restoration at `before_refresh_evidence`
+    // requires a second subset pass. The old lock branch discarded the
+    // returned change and reported no-work; the converged loop imports the
+    // current sidecar without an abandoned draft and never plans under locks.
+    let temp = TempDir::new("bob-cli-scan-interleave-lock-failed-recovery");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/recover.pdf");
+    write_textbundle(
+        &pdf,
+        "Recover",
+        b"recover-asset",
+        "text.md",
+        Some("#task Old follow up"),
+    );
+    let original_pdf = fs::read(&pdf).expect("original PDF");
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "after_prepare,before_refresh,before_refresh_evidence",
+        true,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    let body = fs::read_to_string(&sidecar).expect("sidecar");
+    fs::write(
+        &sidecar,
+        same_length_replace(&body, "Old follow up", "New follow up"),
+    )
+    .expect("edit sidecar between prepare and lock");
+    resume(&hs, 1);
+
+    wait_pause(&hs, 2);
+    fs::write(&pdf, b"not a PDF").expect("corrupt PDF before refresh");
+    resume(&hs, 2);
+
+    wait_pause(&hs, 3);
+    fs::write(&pdf, &original_pdf).expect("restore PDF before evidence");
+    resume(&hs, 3);
+
+    // The converged loop needs one more subset pass that observes the Failed
+    // outcome and recovers it. Drain the remaining pauses without further
+    // edits so the second pass sees stable bytes.
+    wait_pause(&hs, 4);
+    resume(&hs, 4);
+    wait_pause(&hs, 5);
+    resume(&hs, 5);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let note = env.vault.join("ref/chat/recover.md");
+    let note_body = fs::read_to_string(&note).expect("recovered ref note");
+    assert!(
+        note_body.contains("#task New follow up"),
+        "converged refresh must import the current sidecar: {note_body}"
+    );
+    assert!(
+        !note_body.contains("#task Old follow up"),
+        "abandoned Failed draft must not survive: {note_body}"
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert!(
+        lines.len() >= 3,
+        "initial plus Failed plus recovery subsets: {plan_log}"
+    );
+    assert!(
+        lines.iter().all(|line| line.starts_with("locked=0")),
+        "every planning pass stays outside writer locks:\n{plan_log}"
+    );
+}
+
+#[test]
+fn lock_stable_no_work_has_single_plan_line() {
+    // Stable no-work control: with no edits between preparation and locks,
+    // the lock window validates once and returns without reacquiring or
+    // planning again.
+    let temp = TempDir::new("bob-cli-scan-interleave-lock-stable-no-work");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/stable.pdf");
+    write_textbundle(&pdf, "Stable", b"stable-asset", "text.md", None);
+    assert_success(&run_scan(&env, &[]));
+    let plan_log = temp.path().join("plan.log");
+    let hs = Handshake::new(temp.path(), "hs2");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "after_prepare",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        1,
+        "stable no-work plans once and never refreshes: {plan_log}"
+    );
+    assert!(
+        lines[0].starts_with("locked=0 count=1 "),
+        "initial planning stays unlocked: {plan_log}"
+    );
+}
+
+#[test]
+fn lock_global_change_is_not_discarded_as_no_work() {
+    // A global membership change arriving between preparation and locks must
+    // rebuild instead of returning no-work. The old branch discarded global
+    // results before its no-work check.
+    let temp = TempDir::new("bob-cli-scan-interleave-lock-global-no-work");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/solo.pdf");
+    write_textbundle(&pdf, "Solo", b"solo-asset", "text.md", Some("Old task"));
+    assert_success(&run_scan(&env, &[]));
+    // Leave pending work so the second scan enters the lock window instead
+    // of taking the lock-free no-work fast path.
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+    let body = fs::read_to_string(&sidecar).expect("sidecar");
+    fs::write(&sidecar, same_length_replace(&body, "Old task", "New task"))
+        .expect("stage work before the global change");
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "after_prepare",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    write_marker_pdf(&env.vault.join("lib/chat/added.pdf"), "Added");
+    let lib_entries = entry_names(&env.vault.join("lib/chat"));
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    assert!(
+        env.vault.join("ref/chat/added.md").is_file(),
+        "added note missing, lib entries {lib_entries:?}:\n{}",
+        format_output(&output)
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert!(
+        lines.len() >= 2,
+        "global change must rebuild, never return no-work: {plan_log}"
+    );
+    assert!(
+        lines.iter().all(|line| line.starts_with("locked=0")),
+        "rebuild stays outside writer locks:\n{plan_log}"
+    );
+}
+
+#[test]
+fn preparation_and_lock_churn_share_one_budget() {
+    // Combined preparation + lock churn shares one invocation budget: two
+    // subset passes before the first lock, two more afterward, then the one
+    // full rebuild, exhausting to `inputs_changed` without an intermediate
+    // receipt. A maintenance writer can acquire its lock during a refresh.
+    let temp = TempDir::new("bob-cli-scan-interleave-combined-budget");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/churn.pdf");
+    write_textbundle(&pdf, "Churn", b"churn-asset", "text.md", Some("Old"));
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "planning,before_evidence,before_refresh,after_prepare,before_lock",
+        true,
+        Some(&plan_log),
+    );
+
+    let mut current = "New".to_string();
+    let flip = |current: &mut String| {
+        let next = if current.as_str() == "New" {
+            "Old"
+        } else {
+            "New"
+        };
+        let body = fs::read_to_string(&sidecar).expect("sidecar");
+        fs::write(&sidecar, same_length_replace(&body, current, next))
+            .expect("churn sidecar");
+        *current = next.to_string();
+    };
+
+    // Initial planning and the first preparation mismatch.
+    wait_pause(&hs, 1);
+    resume(&hs, 1);
+    wait_pause(&hs, 2);
+    let body = fs::read_to_string(&sidecar).expect("sidecar");
+    fs::write(&sidecar, same_length_replace(&body, "Old", "New"))
+        .expect("initial sidecar edit");
+    resume(&hs, 2);
+
+    // Two preparation subset passes with churn, proving a maintenance
+    // writer can enter during the first refresh.
+    for pass in 0..2 {
+        let seq_refresh = 3 + pass * 2;
+        let stage = wait_pause(&hs, seq_refresh);
+        assert!(
+            stage.ends_with(":before_refresh"),
+            "prep pass {pass} pre-snapshot: {stage}"
+        );
+        if pass == 0 {
+            let _held = hold_vault_maintenance_lock(&env.lock);
+        }
+        resume(&hs, seq_refresh);
+        let seq_plan = seq_refresh + 1;
+        let stage = wait_pause(&hs, seq_plan);
+        assert!(
+            stage.ends_with(":planning"),
+            "prep pass {pass} subset planning: {stage}"
+        );
+        flip(&mut current);
+        resume(&hs, seq_plan);
+    }
+
+    // Third preparation pass converges without further edits.
+    let stage = wait_pause(&hs, 7);
+    assert!(
+        stage.ends_with(":before_refresh"),
+        "prep pass 2 pre-snapshot: {stage}"
+    );
+    {
+        let _held = hold_vault_maintenance_lock(&env.lock);
+    }
+    resume(&hs, 7);
+    let stage = wait_pause(&hs, 8);
+    assert!(
+        stage.ends_with(":planning"),
+        "prep pass 2 planning: {stage}"
+    );
+    // No edit here: let preparation converge with three subsets used.
+    resume(&hs, 8);
+
+    // After preparation converges, the after_prepare gate triggers lock churn.
+    let stage = wait_pause(&hs, 9);
+    assert!(stage.ends_with(":after_prepare"), "lock gate: {stage}");
+    flip(&mut current);
+    resume(&hs, 9);
+
+    // First lock acquisition sees the gate edit.
+    let stage = wait_pause(&hs, 10);
+    assert!(stage.ends_with(":before_lock"), "first lock: {stage}");
+    resume(&hs, 10);
+
+    // Lock subset refresh consumes the last subset allowance.
+    let stage = wait_pause(&hs, 11);
+    assert!(
+        stage.ends_with(":before_refresh"),
+        "lock refresh pre-snapshot: {stage}"
+    );
+    resume(&hs, 11);
+    let stage = wait_pause(&hs, 12);
+    assert!(
+        stage.ends_with(":planning"),
+        "lock refresh planning: {stage}"
+    );
+    flip(&mut current);
+    resume(&hs, 12);
+
+    // Exhausted subsets trigger the one full rebuild. Churn during the
+    // rebuild planning leaves a persistent mismatch with no budget left.
+    let stage = wait_pause(&hs, 13);
+    assert!(
+        stage.ends_with(":planning"),
+        "bounded fallback rebuild planning: {stage}"
+    );
+    flip(&mut current);
+    resume(&hs, 13);
+    let stage = wait_pause(&hs, 14);
+    assert!(
+        stage.ends_with(":before_evidence"),
+        "rebuild pre-evidence: {stage}"
+    );
+    resume(&hs, 14);
+    let output = child.wait();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "sustained churn must exhaust the shared budget:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["error"]["code"], "inputs_changed");
+    assert!(
+        !scan_receipt_path(&env.state).exists(),
+        "abandoned retry must not publish an intermediate receipt"
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        6,
+        "initial + four subsets + one rebuild across preparation and locks:\n{plan_log}"
+    );
+    assert!(
+        lines.iter().all(|line| line.starts_with("locked=0")),
+        "every refresh plans outside writer locks:\n{plan_log}"
+    );
+}
+
+#[test]
+fn lock_destination_change_fails_closed_not_no_work() {
+    // A destination-asset edit between preparation and locks must fail
+    // closed with `scan_failed`, never return no-work.
+    let temp = TempDir::new("bob-cli-scan-interleave-lock-dest-no-work");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/live.pdf");
+    write_textbundle(&pdf, "Live", b"asset-v1", "text.md", Some("Old task"));
+    assert_success(&run_scan(&env, &[]));
+    // Stage pending work so the scan enters the lock window; otherwise the
+    // lock-free no-work fast path would ignore the later vandalism.
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+    let body = fs::read_to_string(&sidecar).expect("sidecar");
+    fs::write(&sidecar, same_length_replace(&body, "Old task", "New task"))
+        .expect("stage work before vandalism");
+    let assets = env.vault.join("ref/chat/live.assets");
+    let dest = first_asset_path(&assets);
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let child =
+        spawn_scan(&env, &["-f", "json"], &hs, "after_prepare", false, None);
+    wait_pause(&hs, 1);
+    fs::write(&dest, b"asset-vX").expect("vandalize dest between prepare/lock");
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["error"]["code"], "scan_failed");
+}

@@ -352,27 +352,23 @@ fn lock_validate_intake_and_execute(
             }
             Ok(ScanChange::Refresh { pdfs, reason }) => {
                 drop(locks);
-                if prepared.refresh_budget.refreshes_remaining == 0 {
-                    prepared = match full_rebuild_prepared(
-                        prepared, options, jobs, &reason,
-                    ) {
-                        Ok(rebuilt) => rebuilt,
-                        Err(error) => return Err(ApplyError::prelock(error)),
-                    };
-                } else {
-                    let (updated, _) = match refresh_prepared_once(
-                        prepared, &pdfs, options, jobs,
-                    ) {
-                        Ok(refreshed) => refreshed,
-                        // Hard finalization/I/O/collision errors are not
-                        // retries; locks are already dropped so this stays
-                        // a prelock failure with no receipt.
-                        Err(error) => return Err(ApplyError::prelock(error)),
-                    };
-                    prepared = updated;
-                }
-                // A refresh that eliminates all work uses the existing
-                // lock-free no-work return below.
+                // Converge outside the locks on the shared budget, consuming
+                // every returned change (including empty-subset, global, and
+                // destination results) before any no-work return. Hard
+                // finalization/I/O/collision errors are not retries; locks are
+                // already dropped so they stay prelock failures with no
+                // receipt.
+                prepared = match settle_prepared_scan(
+                    prepared,
+                    ScanChange::Refresh { pdfs, reason },
+                    options,
+                    jobs,
+                ) {
+                    Ok(converged) => converged,
+                    Err(error) => return Err(ApplyError::prelock(error)),
+                };
+                // A genuinely stable no-work result returns without
+                // reacquiring; any remaining work revalidates under locks.
                 if !prepared_scan_needs_mutation(&prepared) {
                     return Ok(no_work_applied(prepared, hook));
                 }
@@ -380,10 +376,13 @@ fn lock_validate_intake_and_execute(
             }
             Ok(ScanChange::Rebuild { reason }) => {
                 drop(locks);
-                prepared = match full_rebuild_prepared(
-                    prepared, options, jobs, &reason,
+                prepared = match settle_prepared_scan(
+                    prepared,
+                    ScanChange::Rebuild { reason },
+                    options,
+                    jobs,
                 ) {
-                    Ok(rebuilt) => rebuilt,
+                    Ok(converged) => converged,
                     Err(error) => return Err(ApplyError::prelock(error)),
                 };
                 if !prepared_scan_needs_mutation(&prepared) {

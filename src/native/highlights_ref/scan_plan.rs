@@ -420,36 +420,9 @@ pub(super) fn reset_prepared_finalization(prepared: &mut PreparedFullScan) {
     }
 }
 
-/// Validation of a prepared result against current disk: `Unchanged` means
-/// the evidence still matches (the prepared plans remain usable);
-/// `Stale` names the first mismatch (created/deleted/renamed or edited
-/// inputs, including shared locator changes); `Failed` carries a hard
-/// revalidation error. Unit tests assert the typed classifier still maps to
-/// these legacy stale reasons; production lock validation uses the typed
-/// [`ScanChange`] directly so subset refreshes keep their PDF set.
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(super) enum PreparedValidation {
-    Unchanged,
-    Stale { reason: String },
-    Failed(CommandError),
-}
-
-/// Recompute evidence and compare with the prepared snapshot.
-#[allow(dead_code)]
-pub(super) fn validate_prepared_scan(
-    prepared: &PreparedFullScan,
-) -> PreparedValidation {
-    match classify_prepared_scan(prepared) {
-        Ok(ScanChange::Unchanged) => PreparedValidation::Unchanged,
-        Ok(change) => scan_change_to_validation(change),
-        Err(error) => PreparedValidation::Failed(error),
-    }
-}
-
 /// Return the complete typed change classification for a prepared scan.
-/// Unlike `PreparedValidation`, this retains the PDF subset so unlocked
-/// callers can refresh only the plans whose inputs changed.
+/// The PDF subset lets unlocked and lock-window callers refresh only the
+/// plans whose inputs changed.
 pub(super) fn classify_prepared_scan(
     prepared: &PreparedFullScan,
 ) -> Result<ScanChange> {
@@ -485,18 +458,6 @@ pub(super) fn classify_prepared_scan(
         false,
         &prepared.plan_outcomes,
     ))
-}
-
-#[allow(dead_code)]
-fn scan_change_to_validation(change: ScanChange) -> PreparedValidation {
-    match change {
-        ScanChange::Unchanged => PreparedValidation::Unchanged,
-        ScanChange::Refresh { reason, .. }
-        | ScanChange::Rebuild { reason }
-        | ScanChange::DestinationAsset { reason } => {
-            PreparedValidation::Stale { reason }
-        }
-    }
 }
 
 fn dest_asset_roots(config: &Config, pdfs: &[PathBuf]) -> Vec<PathBuf> {
@@ -1260,6 +1221,36 @@ fn complete_comparison_evidence(
     Ok(())
 }
 
+/// Union live outcome dependencies into a pre-snapshot copy so its bytes are
+/// compared with the flags/owners actually used by retained and newly
+/// produced outcomes. Prior dependencies are preserved (never narrowed) so
+/// removed inputs, destination edits, and Planned-to-Failed/Held transitions
+/// stay visible; per-PDF granularity is kept instead of assigning every
+/// Markdown file to every PDF.
+fn merge_live_dependencies_into_comparison_old(
+    old: &mut ScanInputEvidence,
+    live: &ScanInputEvidence,
+) {
+    for (path, owners) in &live.owners {
+        old.owners
+            .entry(path.clone())
+            .or_default()
+            .extend(owners.iter().cloned());
+    }
+    for (pdf, live_obs) in &live.observations {
+        old.observations
+            .entry(pdf.clone())
+            .and_modify(|old_obs| {
+                old_obs.consulted_vault_links |= live_obs.consulted_vault_links;
+                old_obs.consulted_parent_targets |=
+                    live_obs.consulted_parent_targets;
+                old_obs.consulted_lineage |= live_obs.consulted_lineage;
+                old_obs.complete &= live_obs.complete;
+            })
+            .or_insert_with(|| live_obs.clone());
+    }
+}
+
 fn validate_prepared_asset_collisions(
     prepared: &PreparedFullScan,
 ) -> Result<()> {
@@ -1298,7 +1289,7 @@ pub(super) fn full_rebuild_prepared(
 
 /// Converge a provisional or freshly prepared scan using the invocation's
 /// shared four-pass subset refresh budget and one full rebuild allowance.
-fn settle_prepared_scan(
+pub(super) fn settle_prepared_scan(
     mut prepared: PreparedFullScan,
     mut change: ScanChange,
     options: SyncOptions,
@@ -1338,8 +1329,9 @@ fn settle_prepared_scan(
 /// Refresh one ordered subset outside writer locks. The last trusted
 /// evidence is compared to a fresh pre-snapshot before any plan is
 /// replaced, so edits arriving between detection and refresh join the same
-/// pass. A stable result adopts the post-snapshot; a stale result retains
-/// the fresh pre-snapshot as the next trusted baseline.
+/// pass. A stable result adopts the clean post-snapshot (live outcomes
+/// only); a stale result retains the pre bytes with the union of prior and
+/// live dependencies as the next trusted baseline.
 pub(super) fn refresh_prepared_once(
     mut prepared: PreparedFullScan,
     pending_pdfs: &BTreeSet<PathBuf>,
@@ -1489,10 +1481,21 @@ pub(super) fn refresh_prepared_once(
         &post.xlib_members,
     )?;
     refresh_evidence_pdf_hashes(&mut post)?;
-    complete_comparison_evidence(&pre, &mut post)?;
+    // Live outcome evidence (retained plus newly produced) drives the
+    // pre/post comparison; comparison-only owners must not leak into the
+    // stored baseline. Keep a clean copy for stable adoption, then compare
+    // the pre bytes against the live dependencies.
+    let clean_post = post.clone();
+    let mut comparison_old = pre.clone();
+    merge_live_dependencies_into_comparison_old(
+        &mut comparison_old,
+        &clean_post,
+    );
+    let mut comparison_new = clean_post.clone();
+    complete_comparison_evidence(&comparison_old, &mut comparison_new)?;
     let change = classify_scan_change_with_plan_hashes(
-        &pre,
-        &post,
+        &comparison_old,
+        &comparison_new,
         &prepared.config,
         &dest_roots,
         &prepared.intake,
@@ -1500,7 +1503,11 @@ pub(super) fn refresh_prepared_once(
         &prepared.plan_outcomes,
     );
     if change == ScanChange::Unchanged {
-        prepared.evidence = post;
+        prepared.evidence = clean_post;
+    } else {
+        // Retain the pre bytes with the union of prior and live dependencies
+        // so the next pass classifies the new drafts correctly.
+        prepared.evidence = comparison_old;
     }
     Ok((prepared, change))
 }
@@ -1542,18 +1549,13 @@ pub(super) fn prepare_full_scan_with_retry(
     prepare_full_scan_with_retry_date(config, options, jobs, None)
 }
 
-#[allow(dead_code)]
-pub(super) fn is_destination_asset_stale(reason: &str) -> bool {
-    reason.contains("destination asset changed")
-}
-
 #[cfg(test)]
 fn is_inputs_changed_during_planning(error: &CommandError) -> bool {
     error.code == Some("inputs_changed")
         && error
             .message
             .contains("scan inputs changed during planning")
-        && !is_destination_asset_stale(&error.message)
+        && !error.message.contains("destination asset changed")
 }
 
 pub(super) fn prepare_full_scan_with_retry_date(
@@ -2564,24 +2566,26 @@ mod tests {
             draft_rendered: BTreeMap::new(),
         };
         assert!(matches!(
-            validate_prepared_scan(&prepared),
-            PreparedValidation::Unchanged
+            classify_prepared_scan(&prepared).expect("classify"),
+            ScanChange::Unchanged
         ));
         // Same length, different bytes must still invalidate.
         fs::write(&note, "# B\n").expect("edit note same length");
         assert!(matches!(
-            validate_prepared_scan(&prepared),
-            PreparedValidation::Stale { .. }
+            classify_prepared_scan(&prepared).expect("classify"),
+            ScanChange::Refresh { .. } | ScanChange::Rebuild { .. }
         ));
         fs::write(&note, "# A\n").expect("restore note");
         assert!(matches!(
-            validate_prepared_scan(&prepared),
-            PreparedValidation::Unchanged
+            classify_prepared_scan(&prepared).expect("classify"),
+            ScanChange::Unchanged
         ));
         fs::remove_file(&note).expect("remove note");
         assert!(matches!(
-            validate_prepared_scan(&prepared),
-            PreparedValidation::Stale { .. }
+            classify_prepared_scan(&prepared).expect("classify"),
+            ScanChange::Refresh { .. }
+                | ScanChange::Rebuild { .. }
+                | ScanChange::DestinationAsset { .. }
         ));
     }
 
@@ -2633,17 +2637,19 @@ mod tests {
             draft_rendered: BTreeMap::new(),
         };
         assert!(matches!(
-            validate_prepared_scan(&prepared),
-            PreparedValidation::Unchanged
+            classify_prepared_scan(&prepared).expect("classify"),
+            ScanChange::Unchanged
         ));
         // Add an orphan ref task in the unrelated note: the plan's own
         // files are untouched, so only the shared locator fingerprint can
         // turn this stale.
         fs::write(&other, "# B\n\n- [ ] orphan #ref ^abc123\n")
             .expect("mutate other note with orphan");
+        // The orphan lives under `ref_dir`, so the conservative global rule
+        // wins over the shared locator fingerprint.
         assert!(matches!(
-            validate_prepared_scan(&prepared),
-            PreparedValidation::Stale { .. }
+            classify_prepared_scan(&prepared).expect("classify"),
+            ScanChange::Rebuild { .. }
         ));
     }
 
@@ -3656,28 +3662,239 @@ mod tests {
     }
 
     #[test]
-    fn refresh_and_rebuild_still_translate_to_stale() {
-        assert!(matches!(
-            scan_change_to_validation(ScanChange::Refresh {
-                pdfs: BTreeSet::new(),
-                reason: "input changed: day.md".to_string(),
-            }),
-            PreparedValidation::Stale { .. }
-        ));
-        assert!(matches!(
-            scan_change_to_validation(ScanChange::Rebuild {
-                reason: "library membership changed".to_string(),
-            }),
-            PreparedValidation::Stale { .. }
-        ));
-        let dest = scan_change_to_validation(ScanChange::DestinationAsset {
-            reason: "destination asset changed: fig.png".to_string(),
-        });
-        match dest {
-            PreparedValidation::Stale { reason } => {
-                assert!(is_destination_asset_stale(&reason));
+    fn live_union_preserves_prior_and_new_dependencies() {
+        let pdf_a = PathBuf::from("/tmp/a.pdf");
+        let pdf_b = PathBuf::from("/tmp/b.pdf");
+        let shared = PathBuf::from("/tmp/shared.md");
+        let mut old = ScanInputEvidence {
+            pdf_hashes: BTreeMap::new(),
+            file_states: BTreeMap::new(),
+            lib_pdfs: Vec::new(),
+            xlib_members: Vec::new(),
+            intake_destinations: Vec::new(),
+            owners: BTreeMap::from([(
+                shared.clone(),
+                BTreeSet::from([pdf_a.clone()]),
+            )]),
+            markdown_paths: BTreeSet::new(),
+            source_store_paths: BTreeSet::new(),
+            candidates: BTreeMap::new(),
+            observations: BTreeMap::from([(
+                pdf_a.clone(),
+                PlanDependencyObservations {
+                    consulted_vault_links: false,
+                    consulted_parent_targets: false,
+                    consulted_lineage: false,
+                    complete: false,
+                },
+            )]),
+            index_rest_fingerprint: String::new(),
+            planned_pdfs: Vec::new(),
+        };
+        let live = ScanInputEvidence {
+            pdf_hashes: BTreeMap::new(),
+            file_states: BTreeMap::new(),
+            lib_pdfs: Vec::new(),
+            xlib_members: Vec::new(),
+            intake_destinations: Vec::new(),
+            owners: BTreeMap::from([(
+                shared.clone(),
+                BTreeSet::from([pdf_b.clone()]),
+            )]),
+            markdown_paths: BTreeSet::new(),
+            source_store_paths: BTreeSet::new(),
+            candidates: BTreeMap::new(),
+            observations: BTreeMap::from([(
+                pdf_a.clone(),
+                PlanDependencyObservations {
+                    consulted_vault_links: true,
+                    consulted_parent_targets: true,
+                    consulted_lineage: true,
+                    complete: true,
+                },
+            )]),
+            index_rest_fingerprint: String::new(),
+            planned_pdfs: Vec::new(),
+        };
+        merge_live_dependencies_into_comparison_old(&mut old, &live);
+        let owners = old.owners.get(&shared).expect("shared owners");
+        assert!(owners.contains(&pdf_a));
+        assert!(owners.contains(&pdf_b));
+        let obs = old.observations.get(&pdf_a).expect("obs");
+        assert!(obs.consulted_vault_links);
+        assert!(obs.consulted_parent_targets);
+        assert!(obs.consulted_lineage);
+        assert!(
+            !obs.complete,
+            "prior incomplete stays conservative over a complete replacement"
+        );
+    }
+
+    #[test]
+    fn live_vault_link_acquisition_selects_unowned_markdown() {
+        // A sidecar edit that makes a plan start consulting vault links must
+        // select an unowned Markdown edit arriving during its refresh. Old
+        // evidence has no vault-link consumer; live evidence does; the union
+        // drives the pre/post comparison.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let daily = bob_dir.join("2026/day.md");
+        fs::create_dir_all(daily.parent().expect("parent")).expect("day dir");
+        fs::write(&daily, "# day\n").expect("daily");
+        let mut old = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        old.markdown_paths.insert(daily.clone());
+        old.file_states.insert(
+            daily.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("daily-old".to_string()),
+            },
+        );
+        old.observations
+            .insert(pdf_a.clone(), PlanDependencyObservations::default());
+        old.observations
+            .insert(pdf_b.clone(), PlanDependencyObservations::default());
+        let mut live = old.clone();
+        live.observations.insert(
+            pdf_a.clone(),
+            PlanDependencyObservations {
+                consulted_vault_links: true,
+                ..PlanDependencyObservations::default()
+            },
+        );
+        let mut comparison_old = old.clone();
+        merge_live_dependencies_into_comparison_old(&mut comparison_old, &live);
+        let mut new = comparison_old.clone();
+        new.file_states.insert(
+            daily.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("daily-new".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b],
+            &comparison_old,
+            &new,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a]));
             }
-            other => panic!("expected dest-asset stale, got {other:?}"),
+            other => {
+                panic!("live vault-link must select its PDF, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn clean_baseline_drops_obsolete_owners() {
+        // After convergence only live owners remain: editing a former target
+        // must not replan the PDF.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bob_dir = temp.path();
+        let (config, pdf_a, pdf_b) = write_two_pdfs(bob_dir);
+        let former = bob_dir.join("former.md");
+        let current = bob_dir.join("current.md");
+        fs::write(&former, "# former\n").expect("former");
+        fs::write(&current, "# current\n").expect("current");
+        let mut clean = capture_pre_scan_evidence(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &[],
+        )
+        .expect("pre");
+        for path in [&former.clone(), &current.clone()] {
+            clean.markdown_paths.insert(path.clone());
+            clean.file_states.insert(
+                path.clone(),
+                EvidenceFileState {
+                    exists: true,
+                    sha256: Some("v1".to_string()),
+                },
+            );
+        }
+        clean
+            .owners
+            .entry(current.clone())
+            .or_default()
+            .insert(pdf_a.clone());
+        clean
+            .observations
+            .insert(pdf_a.clone(), PlanDependencyObservations::default());
+        clean
+            .observations
+            .insert(pdf_b.clone(), PlanDependencyObservations::default());
+        let mut edited_former = clean.clone();
+        edited_former.file_states.insert(
+            former.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("v2".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &clean,
+            &edited_former,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert!(
+                    pdfs.is_empty(),
+                    "former target must not replan after ownership replacement"
+                );
+            }
+            other => panic!("expected finalization-only, got {other:?}"),
+        }
+        let mut edited_current = clean.clone();
+        edited_current.file_states.insert(
+            current.clone(),
+            EvidenceFileState {
+                exists: true,
+                sha256: Some("v2".to_string()),
+            },
+        );
+        match classify_pair(
+            &config,
+            &[pdf_a.clone(), pdf_b.clone()],
+            &clean,
+            &edited_current,
+        ) {
+            ScanChange::Refresh { pdfs, .. } => {
+                assert_eq!(pdfs, BTreeSet::from([pdf_a]));
+            }
+            other => panic!("current target must replan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typed_changes_carry_stale_reasons() {
+        let refresh = ScanChange::Refresh {
+            pdfs: BTreeSet::new(),
+            reason: "input changed: day.md".to_string(),
+        };
+        assert!(matches!(refresh, ScanChange::Refresh { .. }));
+        let rebuild = ScanChange::Rebuild {
+            reason: "library membership changed".to_string(),
+        };
+        assert!(matches!(rebuild, ScanChange::Rebuild { .. }));
+        let dest = ScanChange::DestinationAsset {
+            reason: "destination asset changed: fig.png".to_string(),
+        };
+        match dest {
+            ScanChange::DestinationAsset { reason } => {
+                assert!(reason.contains("destination asset changed"));
+                let error = destination_asset_changed_error(&reason);
+                assert_eq!(error.code, Some("scan_failed"));
+            }
+            other => panic!("expected dest-asset change, got {other:?}"),
         }
     }
 }
