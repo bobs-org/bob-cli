@@ -681,11 +681,15 @@ fn run_inner(args: &SyncArgs) -> Result<SyncReport, GmailError> {
         if !deferred_empty {
             // Deferred archive fetches fail the run without losing filings.
             report.ok = false;
+            report.failure_kinds.insert("deferred".to_string());
         }
     }
     if let Some(warning) = archive_skip_warning {
         report.warnings.push(warning);
         report.ok = false;
+        if report.failure_kinds.is_empty() {
+            report.failure_kinds.insert("failed".to_string());
+        }
     }
     if let Some(error) = archive_error {
         report.attach_archive_error(error);

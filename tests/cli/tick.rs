@@ -1167,3 +1167,226 @@ fn destination_asset_scan_failed_still_fails() {
     assert_eq!(refs["outcome"], "failed");
     assert_eq!(refs["reason"], "exit_nonzero");
 }
+
+#[test]
+fn gcal_network_waits_offline_without_consuming_interval() {
+    let network = serde_json::json!({
+        "ok": false,
+        "error": {
+            "kind": "network",
+            "message": "gog could not reach Google",
+            "hint": "check your network connection",
+        },
+    })
+    .to_string();
+    let f = Fixture::new();
+    let out = f
+        .command(T0)
+        .args(["gcal", "-f", "json"])
+        .env("FAKE_JSON_GCAL", &network)
+        .env("FAKE_EXIT_GCAL", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let gcal = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "gcal")
+        .unwrap();
+    assert_eq!(gcal["outcome"], "waiting");
+    assert_eq!(gcal["reason"], "offline");
+    assert_eq!(gcal["summary"], "offline · retrying next tick");
+}
+
+#[test]
+fn projects_network_waits_but_untyped_still_fails_with_message() {
+    let network = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "sync_failed",
+            "kind": "network",
+            "message": "pre-sync failed: git ls-remote failed: Could not resolve host",
+            "hint": "the vault remote is unreachable; the next run retries",
+        },
+    })
+    .to_string();
+    let f = Fixture::new();
+    let out = f
+        .command(T0)
+        .args(["projects", "-f", "json"])
+        .env("FAKE_JSON_PROJECTS", &network)
+        .env("FAKE_EXIT_PROJECTS", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let projects = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "projects")
+        .unwrap();
+    assert_eq!(projects["outcome"], "waiting");
+    assert_eq!(projects["reason"], "offline");
+
+    let untyped = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "sync_failed",
+            "message": "pre-sync failed: vault sync conflict in a.md",
+            "hint": "run bob vault-sync, resolve the problem, then retry",
+        },
+    })
+    .to_string();
+    let f2 = Fixture::new();
+    let out = f2
+        .command(T0)
+        .args(["projects", "-f", "json"])
+        .env("FAKE_JSON_PROJECTS", &untyped)
+        .env("FAKE_EXIT_PROJECTS", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let projects = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "projects")
+        .unwrap();
+    assert_eq!(projects["outcome"], "failed");
+    assert!(projects["detail"].as_str().unwrap().contains("conflict"));
+}
+
+#[test]
+fn gmail_network_waits_but_mixed_kinds_still_fail() {
+    let network = serde_json::json!({
+        "ok": false,
+        "failure_kinds": ["network"],
+        "warnings": ["skipped Gmail thread aa01: network: down"],
+    })
+    .to_string();
+    let f = Fixture::new();
+    let out = f
+        .command(T0)
+        .args(["gmail", "-f", "json"])
+        .env("FAKE_JSON_GMAIL", &network)
+        .env("FAKE_EXIT_GMAIL", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let gmail = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "gmail")
+        .unwrap();
+    assert_eq!(gmail["outcome"], "waiting");
+    assert_eq!(gmail["reason"], "offline");
+
+    let mixed = serde_json::json!({
+        "ok": false,
+        "failure_kinds": ["network", "route_problem"],
+        "warnings": ["skipped Gmail thread aa01: network: down"],
+    })
+    .to_string();
+    let f2 = Fixture::new();
+    let out = f2
+        .command(T0)
+        .args(["gmail", "-f", "json"])
+        .env("FAKE_JSON_GMAIL", &mixed)
+        .env("FAKE_EXIT_GMAIL", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn offline_wait_seeded_two_hours_ago_stalls() {
+    let network = serde_json::json!({
+        "ok": false,
+        "error": {"kind": "network", "message": "gog could not reach Google"},
+    })
+    .to_string();
+    let f = Fixture::new();
+    f.json(T0, &["gcal"]);
+    let path = f.path("state/bob-cli/tick/state.json");
+    let mut state: Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state["steps"]["gcal"]["last_outcome"] = Value::from("waiting");
+    state["steps"]["gcal"]["last_reason"] = Value::from("offline");
+    state["steps"]["gcal"]["waiting_since"] =
+        Value::from("2026-11-18T08:00:00Z");
+    fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+    let out = f
+        .command("2026-11-18T11:00:00Z")
+        .args(["gcal", "-f", "json"])
+        .env("FAKE_JSON_GCAL", &network)
+        .env("FAKE_EXIT_GCAL", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let gcal = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "gcal")
+        .unwrap();
+    assert_eq!(gcal["outcome"], "failed");
+    assert_eq!(gcal["reason"], "stalled");
+}
+
+#[test]
+fn vault_busy_followed_by_offline_keeps_original_waiting_since() {
+    let lock_busy = serde_json::json!({
+        "ok": false,
+        "error": {"code": "lock_busy", "message": "busy"},
+    })
+    .to_string();
+    let network = serde_json::json!({
+        "ok": false,
+        "error": {"kind": "network", "message": "down"},
+    })
+    .to_string();
+    let f = Fixture::new();
+    let out = f
+        .command(T0)
+        .args(["gcal", "-f", "json"])
+        .env("FAKE_JSON_GCAL", &lock_busy)
+        .env("FAKE_EXIT_GCAL", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let before: Value = serde_json::from_slice(
+        &fs::read(f.path("state/bob-cli/tick/state.json")).unwrap(),
+    )
+    .unwrap();
+    let since = before["steps"]["gcal"]["waiting_since"].clone();
+    assert!(!since.is_null());
+    let out = f
+        .command("2026-11-18T10:05:00Z")
+        .args(["gcal", "-f", "json"])
+        .env("FAKE_JSON_GCAL", &network)
+        .env("FAKE_EXIT_GCAL", "1")
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let after: Value = serde_json::from_slice(
+        &fs::read(f.path("state/bob-cli/tick/state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(after["steps"]["gcal"]["waiting_since"], since);
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let gcal = r["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "gcal")
+        .unwrap();
+    assert_eq!(gcal["outcome"], "waiting");
+    assert_eq!(gcal["reason"], "offline");
+}

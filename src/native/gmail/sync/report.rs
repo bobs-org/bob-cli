@@ -235,6 +235,11 @@ pub(crate) struct SyncReport {
     pub(crate) watching: usize,
     pub(crate) awaiting: usize,
     pub(crate) first_seen: bool,
+    /// Sorted, deduplicated machine-readable failure kinds. Present in JSON
+    /// only when `ok` is false. Every cause that sets `ok: false` must
+    /// contribute its kind here so tick can tell transient network blips
+    /// from real problems.
+    pub(crate) failure_kinds: BTreeSet<String>,
     /// Guard or vault lock was busy: exit 0 with no human output.
     pub(crate) busy: bool,
     /// Archive rows: preview rows on dry-run, live outcomes on live runs.
@@ -272,6 +277,7 @@ impl SyncReport {
             watching: 0,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: true,
             archive: Vec::new(),
             archive_digest: None,
@@ -307,6 +313,7 @@ impl SyncReport {
         self.archive_digest = plan.digest.clone();
         if plan.gate.is_paused() {
             self.ok = false;
+            self.failure_kinds.insert("failed".to_string());
         }
     }
 
@@ -316,6 +323,7 @@ impl SyncReport {
             if row.action == ACTION_REVIEW && row.first_seen {
                 self.ok = false;
                 self.first_seen = true;
+                self.failure_kinds.insert("failed".to_string());
                 let mut warning = format!(
                     "held Gmail thread {} for review: {}",
                     row.thread_id, row.reason
@@ -374,11 +382,18 @@ impl SyncReport {
         }
         if failed || paused || !deferred_empty || review_first_seen {
             self.ok = false;
+            if self.failure_kinds.is_empty() {
+                self.failure_kinds.insert("failed".to_string());
+            }
+            if !deferred_empty {
+                self.failure_kinds.insert("deferred".to_string());
+            }
         }
     }
 
     pub(crate) fn attach_archive_error(&mut self, error: GmailError) {
         self.warnings.extend(error.warnings().iter().cloned());
+        let kind = error.kind().to_string();
         let mut warning = format!(
             "Gmail archive phase failed: {}: {}",
             error.kind(),
@@ -388,6 +403,7 @@ impl SyncReport {
             warning.push_str(&format!("; hint: {hint}"));
         }
         self.warnings.push(warning);
+        self.failure_kinds.insert(kind);
         self.archive_error = Some(error);
         self.ok = false;
     }
@@ -490,8 +506,18 @@ pub(crate) fn from_outcome(
     let watching = watching_count(&outcome, snapshot, account, enrollment);
     let awaiting = awaiting_count(&outcome, snapshot, account, enrollment);
 
+    let ok = !failed && !first_seen;
+    let failure_kinds = failure_kinds_for(
+        &outcome,
+        &warnings,
+        &problems,
+        extra_failed,
+        outcome.failed,
+        first_seen,
+    );
+
     SyncReport {
-        ok: !failed && !first_seen,
+        ok,
         dry_run,
         pulled,
         results,
@@ -502,6 +528,7 @@ pub(crate) fn from_outcome(
         watching,
         awaiting,
         first_seen,
+        failure_kinds,
         busy: outcome.busy,
         archive: Vec::new(),
         archive_digest: None,
@@ -511,6 +538,142 @@ pub(crate) fn from_outcome(
         archive_error: None,
         recent_archive: None,
     }
+}
+
+/// Sorted, deduplicated machine-readable failure kinds for `ok: false`.
+///
+/// Names every cause that sets `ok: false`:
+/// - each `FilingFailure.kind`;
+/// - deferral: budget-exhausted transient retries contribute the transient
+///   kind (or `transient` when the budget gave up without a kept kind);
+///   any other deferral contributes `deferred`;
+/// - first-seen route problems contribute `route_problem`;
+/// - watch, reopen, and discovery failures contribute their `GmailError`
+///   kind, parsed from the body-free warnings when the typed row is lost;
+/// - anything else contributes `failed` so an untyped cause never reads as
+///   transient.
+fn failure_kinds_for(
+    outcome: &FilingOutcome,
+    warnings: &[String],
+    problems: &[SyncProblem],
+    extra_failed: bool,
+    failed_flag: bool,
+    first_seen: bool,
+) -> BTreeSet<String> {
+    let mut kinds = BTreeSet::new();
+    for failure in &outcome.failures {
+        kinds.insert(failure.kind.clone());
+    }
+    for kind in warning_kinds(warnings) {
+        kinds.insert(kind);
+    }
+    if problems.iter().any(|problem| problem.first_seen) || first_seen {
+        // First-seen route problems surface as tick-non-transient holds.
+        // The per-row `kind` (unknown_note, ambiguous_route, ...) is a
+        // routing taxonomy, not a transport signal, so the document uses
+        // one stable label.
+        kinds.insert("route_problem".to_string());
+    }
+    if !outcome.deferred.is_empty() {
+        if !deferred_is_transient_budget(warnings) {
+            kinds.insert("deferred".to_string());
+        } else if !kinds.iter().any(|kind| {
+            matches!(
+                kind.as_str(),
+                "network" | "timeout" | "rate_limited" | "transient"
+            )
+        }) {
+            // Budget gave up without a kept transient kind.
+            kinds.insert("transient".to_string());
+        }
+    }
+    if extra_failed && kinds.is_empty() {
+        kinds.insert("failed".to_string());
+    }
+    if failed_flag && kinds.is_empty() && outcome.failures.is_empty() {
+        kinds.insert("failed".to_string());
+    }
+    kinds
+}
+
+/// Extract typed `GmailError` kinds from body-free warning lines.
+///
+/// Warning shapes (all `"<prefix>: <kind>: <message>"`):
+/// - `skipped Gmail thread <id>: <kind>: ...`
+/// - `skipped Gmail watch refresh for <id>: <kind>: ...`
+/// - `could not prepare Gmail reply reopening for <id>: <kind>: ...`
+/// - `deferred remaining Gmail ... when the retry budget ran out: <kind>: ...`
+/// - `Gmail search failed: <kind>: ...`
+/// - `Gmail label list failed: <kind>: ...`
+fn warning_kinds(warnings: &[String]) -> Vec<String> {
+    let mut kinds = Vec::new();
+    for warning in warnings {
+        if let Some(kind) = parse_warning_kind(warning) {
+            kinds.push(kind);
+        }
+    }
+    kinds
+}
+
+fn parse_warning_kind(warning: &str) -> Option<String> {
+    let prefixes = [
+        "skipped Gmail thread ",
+        "skipped Gmail watch refresh for ",
+        "could not prepare Gmail reply reopening for ",
+        "deferred remaining Gmail fetches when the retry budget ran out: ",
+        "deferred remaining Gmail search pages when the retry budget ran out: ",
+        "deferred remaining Gmail watch reads when the retry budget ran out: ",
+        "Gmail search failed: ",
+        "Gmail label list failed: ",
+    ];
+    for prefix in prefixes {
+        if let Some(rest) = warning.strip_prefix(prefix) {
+            // Rest is `"<thread-id>: <kind>: <message>"` (three parts) or
+            // `"<kind>: <message>"` (two parts). Thread ids and kinds never
+            // contain spaces or colons; the message does.
+            let parts: Vec<&str> = rest.splitn(3, ": ").collect();
+            let candidate = match parts.as_slice() {
+                [_, kind, _] => *kind,
+                [kind, _] => *kind,
+                _ => continue,
+            };
+            let candidate = candidate.trim();
+            if !candidate.is_empty()
+                && candidate
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// True when deferred keys come from a transient budget exhaustion rather
+/// than another deferral reason. Any budget-runout warning with a transient
+/// kind proves it; without one the deferral stays `deferred`.
+fn deferred_is_transient_budget(warnings: &[String]) -> bool {
+    for warning in warnings {
+        if warning.contains("when the retry budget ran out")
+            && let Some(kind) = parse_warning_kind(warning)
+            && matches!(
+                kind.as_str(),
+                "network" | "timeout" | "rate_limited" | "transient"
+            )
+        {
+            return true;
+        }
+        // A `deferred` budget give-up without a kept kind still counts
+        // as transient budget exhaustion (caller inserts `transient`).
+        if warning.contains("when the retry budget ran out")
+            && (warning.contains(": deferred:")
+                || warning.ends_with(": deferred"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn print(args: &SyncArgs, report: &SyncReport) {
@@ -819,6 +982,14 @@ fn json_document(report: &SyncReport) -> Value {
         }),
         "warnings": report.warnings,
     });
+    if !report.ok {
+        let mut kinds: Vec<String> =
+            report.failure_kinds.iter().cloned().collect();
+        if kinds.is_empty() {
+            kinds.push("failed".to_string());
+        }
+        document["failure_kinds"] = json!(kinds);
+    }
     // The digest is only meaningful for dry-run and paused runs. A quiet
     // live run whose rows are silent must not leak it.
     let show_digest = report.dry_run
@@ -1221,6 +1392,7 @@ mod tests {
             watching: 1,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
@@ -1258,6 +1430,7 @@ mod tests {
             watching: 0,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: vec![ArchiveRow {
                 thread_id: "aa01".into(),
@@ -1348,6 +1521,7 @@ mod tests {
             watching: 0,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: vec![ArchiveRow {
                 action: "let_go",
@@ -1408,6 +1582,7 @@ mod tests {
             watching: 0,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: Vec::new(),
             archive_digest: Some("abcd".into()),
@@ -1608,6 +1783,7 @@ mod tests {
             watching: 1,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
@@ -1648,6 +1824,7 @@ mod tests {
             watching: 0,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
@@ -1686,6 +1863,7 @@ mod tests {
             watching: 1,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: Vec::new(),
             archive_digest: None,
@@ -2002,6 +2180,123 @@ mod tests {
     }
 
     #[test]
+    fn all_network_failures_give_network_failure_kinds() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.failures.push(FilingFailure {
+            key: filing_key("aa01"),
+            kind: "network".into(),
+            message: "gog could not reach Google".into(),
+        });
+        outcome.failures.push(FilingFailure {
+            key: filing_key("bb02"),
+            kind: "network".into(),
+            message: "gog could not reach Google".into(),
+        });
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert!(!report.ok);
+        assert_eq!(
+            report.failure_kinds.iter().cloned().collect::<Vec<_>>(),
+            vec!["network".to_string()]
+        );
+        let value = json_document(&report);
+        assert_eq!(value["failure_kinds"], serde_json::json!(["network"]));
+    }
+
+    #[test]
+    fn budget_exhausted_deferral_gives_transient_kind() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.failed = true;
+        outcome.deferred.push(filing_key("aa01"));
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            vec![
+                "deferred remaining Gmail fetches when the retry budget ran out: network: gog could not reach Google"
+                    .to_string(),
+            ],
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert!(!report.ok);
+        assert!(
+            report.failure_kinds.contains("network"),
+            "{:?}",
+            report.failure_kinds
+        );
+        assert!(
+            !report.failure_kinds.contains("deferred"),
+            "{:?}",
+            report.failure_kinds
+        );
+    }
+
+    #[test]
+    fn network_plus_route_problem_gives_both_kinds() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.failures.push(FilingFailure {
+            key: filing_key("aa01"),
+            kind: "network".into(),
+            message: "gog could not reach Google".into(),
+        });
+        outcome.results.push(FilingResult {
+            problem: Some(RouteProblem {
+                kind:
+                    crate::native::gmail::route::RouteProblemKind::UnknownNote,
+                label: "#/missing".into(),
+                message: "unknown note".into(),
+                hint: "create the note".into(),
+            }),
+            first_seen: true,
+            ..filed_result("bb02")
+        });
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert!(!report.ok);
+        assert!(report.failure_kinds.contains("network"));
+        assert!(report.failure_kinds.contains("route_problem"));
+    }
+
+    #[test]
+    fn ok_reports_have_no_failure_kinds_key() {
+        let fold = empty_fold();
+        let mut outcome = FilingOutcome::default();
+        outcome.results.push(filed_result("aa01"));
+        let report = from_outcome(
+            false,
+            outcome,
+            Vec::new(),
+            Vec::new(),
+            &WatchScan::default(),
+            "me@example.com",
+            &fold,
+        );
+        assert!(report.ok);
+        assert!(report.failure_kinds.is_empty());
+        let value = json_document(&report);
+        assert!(value.get("failure_kinds").is_none());
+    }
+
+    #[test]
     fn dry_run_and_live_counts_match_on_the_same_projected_row() {
         let fold = empty_fold();
         let mut live = FilingOutcome::default();
@@ -2077,6 +2372,7 @@ mod tests {
             watching: 0,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: rows,
             archive_digest: digest,

@@ -382,11 +382,15 @@ impl TidyReport {
             "io_errors": context.io_errors,
         });
         if let Some(failure) = &self.failure {
-            payload["error"] = json!({
+            let mut error = json!({
                 "code": failure.code,
                 "message": failure.message,
                 "hint": failure.hint,
             });
+            if let Some(kind) = failure.kind {
+                error["kind"] = serde_json::Value::String(kind.to_string());
+            }
+            payload["error"] = error;
         }
         payload
     }

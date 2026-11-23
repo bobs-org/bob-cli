@@ -8,7 +8,7 @@ use super::{
     render,
     schedule::{self, Trigger},
     signals,
-    state::{is_contention_wait, State, StepState, CONTENTION_STALL_AFTER},
+    state::{is_escalating_wait, State, StepState, CONTENTION_STALL_AFTER},
     Options,
 };
 use crate::native::{
@@ -462,19 +462,19 @@ pub(super) fn execute(mut options: Options) -> Result<i32, Error> {
                 }
             };
             let finished = now().map_err(|e| (2, e))?;
-            // Escalate persistent contention: a contention wait that arrives
+            // Escalate persistent waits: an escalating wait that arrives
             // at least CONTENTION_STALL_AFTER after the first consecutive
-            // wait becomes a stalled failure so it alerts. Gate waits never
-            // escalate.
+            // escalating wait becomes a stalled failure so it alerts. Gate waits
+            // never escalate.
             if row.outcome == Outcome::Waiting
-                && is_contention_wait(&row.reason)
+                && is_escalating_wait(&row.reason)
             {
                 let consecutive =
                     matches!(prior.last_outcome, Some(Outcome::Waiting))
                         && prior
                             .last_reason
                             .as_deref()
-                            .is_some_and(is_contention_wait);
+                            .is_some_and(is_escalating_wait);
                 let since = if consecutive {
                     prior.waiting_since.unwrap_or(at)
                 } else {
@@ -576,11 +576,11 @@ fn record_result(
 ) {
     let entry: &mut StepState =
         state.steps.entry(row.name.clone()).or_default();
-    // Track the first consecutive contention wait for stall escalation.
+    // Track the first consecutive escalating wait for stall escalation.
     // Gate waits and every other outcome clear it, so they never escalate.
-    if row.outcome == Outcome::Waiting && is_contention_wait(&row.reason) {
+    if row.outcome == Outcome::Waiting && is_escalating_wait(&row.reason) {
         let consecutive = matches!(entry.last_outcome, Some(Outcome::Waiting))
-            && entry.last_reason.as_deref().is_some_and(is_contention_wait);
+            && entry.last_reason.as_deref().is_some_and(is_escalating_wait);
         if !consecutive {
             entry.waiting_since = row.started_at.or(Some(finished));
         } else if entry.waiting_since.is_none() {

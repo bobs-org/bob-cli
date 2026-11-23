@@ -116,7 +116,10 @@ bob vault-sync status --json
 ```
 
 Unhandled conflicts leave the merge aborted and the status record's `last_error` set. Do
-not use `reset --hard`, force-push, or `-X ours/theirs` to clear the vault.
+not use `reset --hard`, force-push, or `-X ours/theirs` to clear the vault. When the
+remote is unreachable (`git ls-remote`, `fetch`, or `push` fails with a transport
+error), the status record also sets `last_error_kind: "network"`; `bob vault-sync`'s
+own exit code and output are unchanged.
 
 ### Lost content after a conflict
 

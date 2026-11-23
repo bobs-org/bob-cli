@@ -25,19 +25,19 @@ pub(super) struct StepState {
     pub waiting_since: Option<DateTime<Utc>>,
 }
 
-/// How long a step may keep reporting contention (`vault_busy`,
-/// `inputs_changed`, including Gmail's `busy` wait) before tick escalates
-/// it to a `stalled` failure. From the `stall_after = two_hours` decision:
-/// about 8 refs retries, so real churn surfaces the same morning.
+/// How long a step may keep reporting an escalating wait (`vault_busy`,
+/// `inputs_changed`, `offline`, including Gmail's `busy` wait) before tick
+/// escalates it to a `stalled` failure. From the `stall_after = two_hours`
+/// decision: about 8 refs retries, so real churn surfaces the same morning.
 /// Gate waits (`note_missing`, `note_unrendered`, `pomodoros_missing`) never
 /// escalate.
 pub(super) const CONTENTION_STALL_AFTER: chrono::TimeDelta =
     chrono::TimeDelta::hours(2);
 
-/// True for contention waits that feed `waiting_since` and can escalate to
+/// True for escalating waits that feed `waiting_since` and can escalate to
 /// `stalled`. Gate waits never escalate.
-pub(super) fn is_contention_wait(reason: &str) -> bool {
-    reason == "vault_busy" || reason == "inputs_changed"
+pub(super) fn is_escalating_wait(reason: &str) -> bool {
+    reason == "vault_busy" || reason == "inputs_changed" || reason == "offline"
 }
 #[derive(Serialize, Deserialize)]
 pub(super) struct State {

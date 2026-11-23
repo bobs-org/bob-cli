@@ -175,6 +175,8 @@ struct ScanErrorBody {
     code: String,
     message: String,
     hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
     paths: Vec<String>,
 }
 
@@ -947,7 +949,7 @@ pub(super) fn render_scan_error_envelope(
     error: &CommandError,
     intake_only: bool,
 ) -> String {
-    let (code, message, hint, paths) = scan_error_parts(config, error);
+    let (code, message, hint, kind, paths) = scan_error_parts(config, error);
     let envelope = ScanErrorEnvelope {
         ok: false,
         schema_version: REF_SCHEMA_VERSION,
@@ -960,6 +962,7 @@ pub(super) fn render_scan_error_envelope(
             code,
             message,
             hint,
+            kind,
             paths,
         },
         intake_only,
@@ -988,13 +991,14 @@ pub(super) fn intake_moves(
 fn scan_error_parts(
     config: &Config,
     error: &CommandError,
-) -> (String, String, Option<String>, Vec<String>) {
+) -> (String, String, Option<String>, Option<String>, Vec<String>) {
     let code = error.code.unwrap_or("scan_failed").to_string();
     let paths = error
         .paths
         .iter()
         .map(|path| scan_vault_relative(config, path))
         .collect::<Vec<_>>();
+    let kind = error.kind.map(str::to_string);
     let (message, hint) = match error.code.unwrap_or("scan_failed") {
         "lock_busy" => (
             error.message.clone(),
@@ -1010,8 +1014,13 @@ fn scan_error_parts(
         "pre_sync_failed" => (
             error.message.clone(),
             Some(
-                "the vault could not pull from or push to its remote; fix the sync problem (see bob vault-sync), then rerun"
-                    .to_string(),
+                if error.kind == Some("network") {
+                    "the vault remote is unreachable; the next run retries"
+                        .to_string()
+                } else {
+                    "the vault could not pull from or push to its remote; fix the sync problem (see bob vault-sync), then rerun"
+                        .to_string()
+                },
             ),
         ),
         "dirty_targets" => (
@@ -1037,7 +1046,7 @@ fn scan_error_parts(
         ),
         _ => (error.message.clone(), None),
     };
-    (code, message, hint, paths)
+    (code, message, hint, kind, paths)
 }
 
 /// Run `scan --intake-only --format json`: print exactly one envelope line

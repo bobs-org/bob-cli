@@ -149,11 +149,15 @@ pub(super) fn sync_json(
 }
 
 pub(super) fn failure_json(failure: &TxnFailure) -> Value {
-    json!({
+    let mut value = json!({
         "code": failure.code,
         "message": failure.message,
         "hint": failure.hint,
-    })
+    });
+    if let Some(kind) = failure.kind {
+        value["kind"] = Value::String(kind.to_string());
+    }
+    value
 }
 
 /// Load the vault and refuse a partial view: an unreadable file must never

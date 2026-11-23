@@ -181,11 +181,16 @@ impl ImportReport {
         });
         let error = self.failure.as_ref().or(self.delete_error.as_ref());
         if let Some(failure) = error {
-            payload["error"] = json!({
+            let mut error_value = json!({
                 "code": failure.code,
                 "message": failure.message,
                 "hint": failure.hint,
             });
+            if let Some(kind) = failure.kind {
+                error_value["kind"] =
+                    serde_json::Value::String(kind.to_string());
+            }
+            payload["error"] = error_value;
         }
         payload
     }

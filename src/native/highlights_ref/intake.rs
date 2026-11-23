@@ -109,6 +109,7 @@ impl QueueReason {
 struct QueueFailure {
     reason: QueueReason,
     detail: String,
+    kind: Option<&'static str>,
 }
 
 impl QueueFailure {
@@ -116,7 +117,13 @@ impl QueueFailure {
         Self {
             reason,
             detail: detail.into(),
+            kind: None,
         }
+    }
+
+    fn with_kind(mut self, kind: &'static str) -> Self {
+        self.kind = Some(kind);
+        self
     }
 }
 
@@ -367,6 +374,8 @@ impl IntakeSession {
         if report.ok && report.conflicts.is_empty() {
             return Ok(());
         }
+        let is_network =
+            report.conflicts.is_empty() && report.error_kind == Some("network");
         let detail = if report.conflicts.is_empty() {
             report
                 .error
@@ -374,7 +383,12 @@ impl IntakeSession {
         } else {
             format!("vault sync conflict in {}", report.conflicts.join(", "))
         };
-        Err(QueueFailure::new(QueueReason::PreSyncFailed, detail))
+        let failure = QueueFailure::new(QueueReason::PreSyncFailed, detail);
+        if is_network {
+            Err(failure.with_kind("network"))
+        } else {
+            Err(failure)
+        }
     }
 
     fn post_sync(&self) -> String {
@@ -1275,8 +1289,17 @@ pub(super) fn preview_queue(
 }
 
 fn session_error(failure: QueueFailure) -> CommandError {
-    CommandError::new(format!("{}: {}", failure.reason.label(), failure.detail))
-        .with_code(failure.reason.as_str())
+    let error = CommandError::new(format!(
+        "{}: {}",
+        failure.reason.label(),
+        failure.detail
+    ))
+    .with_code(failure.reason.as_str());
+    if let Some(kind) = failure.kind {
+        error.with_kind(kind)
+    } else {
+        error
+    }
 }
 
 /// Drain the local `xlib/` queue for `bob ref scan --intake-only`.

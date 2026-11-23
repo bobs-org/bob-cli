@@ -500,3 +500,34 @@ fn projects_sync_vault_mismatch_and_lock_contention_fail_closed() {
     drop(lock);
     assert_eq!(fs::read_to_string(vault.join("Parent.md")).unwrap(), before);
 }
+
+#[test]
+fn unreachable_remote_yields_sync_failed_with_network_kind() {
+    let temp = TempDir::new("bob-cli-projects-offline");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    git_in(
+        &vault,
+        [
+            "remote",
+            "set-url",
+            "origin",
+            "https://nonexistent.invalid/test.git",
+        ],
+    );
+    let output = sync_cmd(&vault, &temp, &["-f", "json"], NOW)
+        .output()
+        .expect("offline projects sync");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let payload = json_output(&output);
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["code"], "sync_failed");
+    assert_eq!(payload["error"]["kind"], "network");
+    assert!(
+        payload["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("the vault remote is unreachable"),
+        "{}",
+        payload["error"]
+    );
+}

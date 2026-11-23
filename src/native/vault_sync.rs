@@ -199,6 +199,10 @@ struct StatusRecord {
     push_retries: usize,
     duration_ms: u64,
     conflicts: Vec<String>,
+    /// Machine-readable kind of `last_error` (`"network"` when the remote
+    /// was unreachable). Additive: absent or null means no typed kind.
+    #[serde(default)]
+    last_error_kind: Option<String>,
     /// Markdown paths whose conflict was resolved by a same-point insertion
     /// union in this cycle (no conflict copy).
     #[serde(default)]
@@ -292,6 +296,9 @@ pub(crate) struct CycleReport {
     #[allow(dead_code)]
     pub exit_code: i32,
     pub error: Option<String>,
+    /// Machine-readable failure kind (`Some("network")` when the remote
+    /// was unreachable). Additive; `None` preserves the old untyped shape.
+    pub error_kind: Option<&'static str>,
     pub files_committed: usize,
     pub conflicts: Vec<String>,
     pub pushed: bool,
@@ -347,6 +354,7 @@ fn run_cycle_with_env_report(
     status.halted_merge_head = None;
     status.interrupted_fast_forward_recovered = false;
     status.last_error = None;
+    status.last_error_kind = None;
 
     let outcome =
         run_cycle_inner(&vault, child_env, &options, &styler, &mut status);
@@ -355,10 +363,14 @@ fn run_cycle_with_env_report(
     refresh_status_shas(&vault, child_env, &mut status);
 
     let report_of =
-        |ok: bool, exit_code: i32, error: Option<String>| CycleReport {
+        |ok: bool,
+         exit_code: i32,
+         error: Option<String>,
+         error_kind: Option<&'static str>| CycleReport {
             ok,
             exit_code,
             error,
+            error_kind,
             files_committed: status.files_committed,
             conflicts: status.conflicts.clone(),
             pushed: ok && !options.dry_run,
@@ -369,11 +381,12 @@ fn run_cycle_with_env_report(
         Ok(()) => {
             if options.dry_run {
                 print_log(&options, "dry-run complete; status file unchanged");
-                return (0, report_of(true, 0, None));
+                return (0, report_of(true, 0, None, None));
             }
             status.aborted_merge_head = None;
             status.last_success_at = status.last_attempt_at.clone();
             status.last_error = None;
+            status.last_error_kind = None;
             if let Err(error) = write_status_record(&state_file, &status) {
                 eprintln!(
                     "{COMMAND_NAME}: failed to write status file {}: {error}",
@@ -388,6 +401,7 @@ fn run_cycle_with_env_report(
                             "failed to write status file {}: {error}",
                             state_file.display()
                         )),
+                        None,
                     ),
                 );
             }
@@ -395,10 +409,12 @@ fn run_cycle_with_env_report(
                 &options,
                 &format!("wrote status record {}", state_file.display()),
             );
-            (0, report_of(true, 0, None))
+            (0, report_of(true, 0, None, None))
         }
         Err(error) => {
             status.last_error = Some(error.message.clone());
+            status.last_error_kind =
+                error.is_network().then(|| "network".to_string());
             if !options.dry_run
                 && let Err(write_error) =
                     write_status_record(&state_file, &status)
@@ -412,8 +428,9 @@ fn run_cycle_with_env_report(
                 eprintln!("{}: {}", styler.red("error"), error.message);
             }
             let code = error.code;
+            let error_kind = error.error_kind();
             let message = error.message;
-            (code, report_of(false, code, Some(message)))
+            (code, report_of(false, code, Some(message), error_kind))
         }
     }
 }
@@ -2452,10 +2469,37 @@ fn refresh_status_shas(
     status.remote_sha = ls_remote_master(vault, child_env).ok().flatten();
 }
 
+/// Transport signatures that prove a remote git command failed because
+/// the network or the remote host was unreachable. Checked
+/// case-insensitively against the combined stdout/stderr of a failed
+/// `git ls-remote`, `git fetch`, or `git push`. Wording follows
+/// `google/gog.rs` and `gkeep/adapter.rs` where it overlaps.
+const NETWORK_ERROR_SIGNATURES: &[&str] = &[
+    "could not resolve host",
+    "could not resolve hostname",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "no route to host",
+    "connection timed out",
+    "operation timed out",
+    "connection refused",
+    "connection reset",
+    "connection closed by remote host",
+    "ssh: connect to host",
+    "kex_exchange_identification",
+    "failed to connect to",
+    "early eof",
+    "no such host",
+    "i/o timeout",
+    "tls handshake",
+    "dial tcp",
+];
+
 #[derive(Debug, Clone)]
 struct CycleError {
     code: i32,
     message: String,
+    is_network: bool,
 }
 
 impl CycleError {
@@ -2463,16 +2507,42 @@ impl CycleError {
         Self {
             code: 1,
             message: message.into(),
+            is_network: false,
+        }
+    }
+
+    fn network(code: i32, message: String) -> Self {
+        Self {
+            code,
+            message,
+            is_network: true,
         }
     }
 
     fn from_output(command: &str, output: Output) -> Self {
         let details = command_output_details(&output);
         let code = bob_env::exit_code(output.status);
+        let message = format!("{command} failed{details}");
+        if is_remote_transport_command(command)
+            && is_network_transport_failure(&message)
+        {
+            return Self::network(code, message);
+        }
         Self {
             code,
-            message: format!("{command} failed{details}"),
+            message,
+            is_network: false,
         }
+    }
+
+    /// Machine-readable kind for programmatic callers.
+    fn error_kind(&self) -> Option<&'static str> {
+        self.is_network.then_some("network")
+    }
+
+    /// True when the remote was unreachable (transport failure).
+    fn is_network(&self) -> bool {
+        self.is_network
     }
 
     fn is_non_fast_forward(&self) -> bool {
@@ -2487,6 +2557,91 @@ impl CycleError {
         lower.contains("cannot lock ref")
             || lower.contains(".lock': file exists")
     }
+}
+
+/// True for the remote transport commands whose stderr proves an offline
+/// remote: `git ls-remote`, `git fetch`, and `git push`.
+fn is_remote_transport_command(command: &str) -> bool {
+    let command = command.strip_prefix("git ").unwrap_or(command);
+    command.starts_with("ls-remote")
+        || command.starts_with("fetch")
+        || command.starts_with("push")
+}
+
+/// True when `message` proves a transport failure. Local git failures,
+/// auth failures, and bare remote-repository errors never count.
+fn is_network_transport_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    // Never network: conflicts, lock contention, auth/setup, local git.
+    if lower.contains("non-fast-forward")
+        || lower.contains("fetch first")
+        || lower.contains("cannot lock ref")
+        || lower.contains(".lock': file exists")
+        || lower.contains("permission denied (publickey)")
+        || lower.contains("permission denied (public key)")
+        || lower.contains("authentication failed")
+        || lower.contains("repository not found")
+        || lower.contains("could not read username")
+    {
+        return false;
+    }
+    // `unable to access` and `the remote end hung up unexpectedly` only
+    // count combined with another transport signature: SSH auth failures
+    // print the bare `Could not read from remote repository` too.
+    let mut matched_plain = false;
+    for signature in NETWORK_ERROR_SIGNATURES {
+        if lower.contains(signature) {
+            matched_plain = true;
+            break;
+        }
+    }
+    if matched_plain {
+        return true;
+    }
+    // HTTP 5xx over Smart HTTP: `http` plus a 5xx status token.
+    if lower.contains("http") && contains_http_5xx(&lower) {
+        return true;
+    }
+    // Combined forms: `unable to access ...` plus a transport line, or
+    // `the remote end hung up unexpectedly` plus a transport line.
+    let combined_anchor = lower.contains("unable to access")
+        || lower.contains("the remote end hung up unexpectedly");
+    if combined_anchor {
+        // Re-check with the anchor stripped: any other signature still
+        // present means the anchor rides a real transport failure.
+        // (The plain loop above already failed, so look for the looser
+        // `could not read from remote repository` + transport pairing
+        // via the 5xx check, which the plain loop missed.)
+        return contains_http_5xx(&lower);
+    }
+    false
+}
+
+/// True when `lower` holds an HTTP `5xx` status token that is not part of
+/// an identifier.
+fn contains_http_5xx(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    let mut index = 0;
+    while index + 3 <= lower.len() {
+        if bytes[index] == b'5'
+            && bytes[index + 1].is_ascii_digit()
+            && bytes[index + 2].is_ascii_digit()
+        {
+            let prev = index.checked_sub(1).map(|i| bytes[i]).unwrap_or(b' ');
+            let next = bytes.get(index + 3).copied().unwrap_or(b' ');
+            let prev_ok = !(prev.is_ascii_alphanumeric()
+                || matches!(prev, b'-' | b'_' | b'.' | b'@'));
+            let next_ok = !(next.is_ascii_alphanumeric()
+                || matches!(next, b'-' | b'_' | b'.' | b'@'));
+            if prev_ok && next_ok {
+                return true;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    false
 }
 
 impl From<String> for CycleError {
@@ -2642,6 +2797,113 @@ mod tests {
         .is_lock_contention());
         assert!(!fatal("git push failed: rejected non-fast-forward update")
             .is_lock_contention());
+    }
+
+    #[test]
+    fn network_classifier_marks_remote_transport_failures() {
+        for command in [
+            "git ls-remote",
+            "git fetch --no-tags origin master",
+            "git push origin HEAD:master",
+        ] {
+            assert!(
+                is_remote_transport_command(command),
+                "{command} is remote"
+            );
+        }
+        for command in [
+            "git status",
+            "git diff --cached",
+            "git rev-parse --verify --quiet HEAD",
+            "git commit",
+            "git add -A .",
+        ] {
+            assert!(
+                !is_remote_transport_command(command),
+                "{command} is local"
+            );
+        }
+        for message in [
+            "git ls-remote failed: Could not resolve host github.com",
+            "git fetch failed: Could not resolve hostname github.com",
+            "git push failed: temporary failure in name resolution",
+            "git ls-remote failed: Network is unreachable",
+            "git fetch failed: No route to host",
+            "git push failed: Connection timed out",
+            "git ls-remote failed: Operation timed out",
+            "git fetch failed: Connection refused",
+            "git ls-remote failed: Connection reset by peer",
+            "git fetch failed: ssh: connect to host github.com port 22: Connection timed out",
+            "git push failed: kex_exchange_identification: Connection closed by remote host",
+            "git ls-remote failed: failed to connect to github.com",
+            "git fetch failed: early EOF",
+            "git push failed: the remote end hung up unexpectedly: early EOF",
+        ] {
+            assert!(
+                is_network_transport_failure(message),
+                "network: {message}"
+            );
+        }
+        for message in [
+            "git push failed: rejected non-fast-forward update",
+            "git push failed: Permission denied (publickey)",
+            "git fetch failed: Authentication failed",
+            "git ls-remote failed: Repository not found",
+            "git ls-remote failed: could not read Username",
+            "git status failed: fatal: cannot lock ref",
+            "git ls-remote failed: Could not read from remote repository",
+        ] {
+            assert!(
+                !is_network_transport_failure(message),
+                "not network: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_from_output_needs_remote_command_and_signature() {
+        use std::process::Command as ProcCommand;
+        let status = ProcCommand::new("sh")
+            .arg("-c")
+            .arg("exit 128")
+            .status()
+            .expect("sh runs");
+        let output = std::process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr:
+                b"ssh: connect to host github.com port 22: Connection timed out"
+                    .to_vec(),
+        };
+        let error = CycleError::from_output("git ls-remote", output);
+        assert!(error.is_network());
+        assert_eq!(error.error_kind(), Some("network"));
+
+        let status = ProcCommand::new("sh")
+            .arg("-c")
+            .arg("exit 128")
+            .status()
+            .expect("sh runs");
+        let output = std::process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr: b"Repository not found.".to_vec(),
+        };
+        let error = CycleError::from_output("git ls-remote", output);
+        assert!(!error.is_network());
+
+        let status = ProcCommand::new("sh")
+            .arg("-c")
+            .arg("exit 1")
+            .status()
+            .expect("sh runs");
+        let output = std::process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr: b"Could not resolve host github.com".to_vec(),
+        };
+        let error = CycleError::from_output("git status", output);
+        assert!(!error.is_network());
     }
 
     #[test]

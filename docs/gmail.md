@@ -1263,7 +1263,12 @@ Every `-f json` output carries `schema_version: 1` and `ok`. Errors are typed
 `dry_run`, `pulled`, `results`, `warnings`, `watch`, `problems`, and
 `summary`) plus additive `busy` (true when a busy guard or vault lock skipped
 the run), `archive[]`, `archive_hints[]`, `archive_enabled`,
-`archive_label`, `archive_max`, and `archive_skipped`. Archive rows carry
+`archive_label`, `archive_max`, and `archive_skipped`, plus additive
+`failure_kinds` (present only when `ok` is false: the sorted, deduplicated
+kinds of every cause that set `ok: false` — each filing `kind`, the archive
+`kind`, watch/reopen/discovery `GmailError` kinds, budget-exhausted transient
+kinds or `transient`, other deferrals as `deferred`, first-seen route
+problems as `route_problem`, and anything untyped as `failed`). Archive rows carry
 `thread_id`, `note`, `action`, `reason`, `decision`, exact sorted message IDs,
 and task path/line/block-ID locators, never task text. Review rows also carry
 `first_seen` and a typed `hint`. Only dry-run and paused

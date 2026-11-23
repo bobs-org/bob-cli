@@ -84,25 +84,39 @@ on the next tick.
 
 Each step reports `ok`, `failed`, `waiting`, or `skipped`, with a reason and a
 short summary. Waiting covers unmet preconditions such as a missing daily
-note, a busy vault, or notes edited mid-scan. Exit status is 0 when steps
-succeeded, waited, or were not due; 1 when a step failed; and 2 for
-usage/configuration errors or a writer-host mismatch. A step timeout fails
-that step and the later steps continue after its process group is stopped. A
-handled signal exits with `128 + signal number` (for example, 143 for
-`SIGTERM`).
+note, a busy vault, notes edited mid-scan, or an unreachable network. Exit
+status is 0 when steps succeeded, waited, or were not due; 1 when a step
+failed; and 2 for usage/configuration errors or a writer-host mismatch. A
+step timeout fails that step and the later steps continue after its process
+group is stopped. A handled signal exits with `128 + signal number` (for
+example, 143 for `SIGTERM`).
 
-Contention waits escalate: when a step keeps reporting `vault_busy` or
-`inputs_changed` for 2 hours without a success, the next contention wait
+A step that fails only because the network or a Google/Git remote is
+unreachable waits as `offline` with `offline · retrying next tick` and exits
+0: `error.kind` or top-level `kind` in
+`network | timeout | rate_limited | transient`, a Gmail `failure_kinds` made
+only of those kinds, or a vault-sync remote failure surfaced as
+`kind: network` (projects `sync_failed`, refs `pre_sync_failed`). The step
+reruns on the next tick without consuming its interval.
+
+Contention waits escalate: when a step keeps reporting `vault_busy`,
+`inputs_changed`, or `offline` for 2 hours without a success, the next wait
 reports `failed` with reason `stalled` and a summary like
-`still waiting after 2h · vault busy · retrying next tick`. The stalled
+`still waiting after 2h · vault busy · retrying next tick` (or
+`still waiting after 2h · offline · retrying next tick`). The stalled
 failure consumes the interval, so a stuck lock mails once per interval
 instead of every 5 minutes. Gate waits (`note_missing`,
 `note_unrendered`, `pomodoros_missing`) never escalate.
 
+Failures name their cause: the row `detail` carries the child's message on
+the first line and its hint on the second line when they differ. A Gmail
+failure carries the first `failure_kinds` entry plus the first warnings
+line.
+
 Reasons are stable codes: `due`, `never_ran`, `follows_intake`, `follow_up`,
 `named`, and `all` explain a run; `not_due`, `manual`, `off`, and `unchanged`
 explain a skip; `note_missing`, `note_unrendered`, `pomodoros_missing`,
-`vault_busy`, and `inputs_changed` explain a wait; `exit_nonzero`,
+`vault_busy`, `inputs_changed`, and `offline` explain a wait; `exit_nonzero`,
 `timeout`, `spawn_failed`, `interrupted`, and `stalled` explain a failure.
 
 Only one run proceeds at a time. A second non-interactive run prints

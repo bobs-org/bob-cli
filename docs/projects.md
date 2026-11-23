@@ -64,9 +64,11 @@ host-catalog transaction. It prints lifecycle and catalog events, one colored
 unified diff per changed path on dry runs, then a summary. `-f json` prints one
 JSON document (`schema_version: 1`, `ok`, `command: "sync"`, `dry_run`,
 `changed`, `changes` with dry-run diffs, `events`, `catalogs`, `findings`,
-`commit`, `sync`, `warnings`, plus `error` on failure). Per-file errors are
-reported without stopping healthy hosts, and the command exits 1 on scan
-errors, damaged catalogs, or transaction failures.
+`commit`, `sync`, `warnings`, plus `error` on failure). The `error` object
+carries additive `kind: "network"` when the vault remote was unreachable (the
+hint then reads `the vault remote is unreachable; the next run retries`).
+Per-file errors are reported without stopping healthy hosts, and the command
+exits 1 on scan errors, damaged catalogs, or transaction failures.
 
 ## JSON report
 

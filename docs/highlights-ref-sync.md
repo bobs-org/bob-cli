@@ -1211,7 +1211,7 @@ contract migration.
 | --- | --- |
 | `lock_busy` | The vault-maintenance lock stayed held past the wait (see below) |
 | `scan_busy` | The writer lock stayed held past the wait (see below) |
-| `pre_sync_failed` | `scan --intake-only` could not pull from the remote, or the pull left conflicts |
+| `pre_sync_failed` | `scan --intake-only` could not pull from the remote, or the pull left conflicts. Carries additive `kind: "network"` with hint `the vault remote is unreachable; the next run retries` when the remote was unreachable |
 | `not_a_worktree`, `other_vault`, `outside_vault` | `scan --intake-only` refused the vault: it is not a Git worktree, differs from `BOB_DIR`, or has a configured directory outside it |
 | `hook_failed` | The pre-scan hook failed to spawn or exited non-zero |
 | `intake_collision` | An intake destination already exists (`paths`: the colliding destinations). Discovered during unlocked planning this is a prelock failure and leaves the receipt untouched; discovered after the writer lock is held it writes the error receipt |

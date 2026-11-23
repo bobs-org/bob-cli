@@ -61,6 +61,9 @@ pub(crate) struct CommandError {
     /// `output_collision`, `dirty_targets`, `inputs_changed`);
     /// `None` means `scan_failed`. Human rendering ignores it.
     pub(super) code: Option<&'static str>,
+    /// Additive machine-readable failure kind (`"network"` when the vault
+    /// remote was unreachable). `None` preserves the old untyped shape.
+    pub(super) kind: Option<&'static str>,
     /// Vault paths the failure site knows (colliding destinations,
     /// colliding targets, dirty files); human rendering ignores them.
     pub(super) paths: Vec<PathBuf>,
@@ -74,9 +77,15 @@ impl CommandError {
             message: message.into(),
             exit_code: None,
             code: None,
+            kind: None,
             paths: Vec::new(),
             ref_task_claimants: Vec::new(),
         }
+    }
+
+    pub(super) fn with_kind(mut self, kind: &'static str) -> Self {
+        self.kind = Some(kind);
+        self
     }
 
     pub(super) fn with_exit_code(mut self, code: i32) -> Self {

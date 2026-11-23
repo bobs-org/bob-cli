@@ -923,18 +923,26 @@ pub(crate) fn apply_and_commit<T>(
     Ok((Some(CommitInfo { sha, subject }), context))
 }
 
-fn sync_cycle(child_env: &ChildEnv) -> Result<(), String> {
+fn sync_cycle(
+    child_env: &ChildEnv,
+) -> Result<(), (String, Option<&'static str>)> {
     let cycle =
         vault_sync::run_cycle_with_existing_lock_report(child_env, true);
     if cycle.ok && cycle.conflicts.is_empty() {
         return Ok(());
     }
     Err(if cycle.conflicts.is_empty() {
-        cycle
-            .error
-            .unwrap_or_else(|| "vault sync reported failure".to_string())
+        (
+            cycle
+                .error
+                .unwrap_or_else(|| "vault sync reported failure".to_string()),
+            cycle.error_kind,
+        )
     } else {
-        format!("vault sync conflict in {}", cycle.conflicts.join(", "))
+        (
+            format!("vault sync conflict in {}", cycle.conflicts.join(", ")),
+            None,
+        )
     })
 }
 
@@ -1001,12 +1009,20 @@ pub(crate) fn run_locked<T>(
             ));
         }
     }
-    if let Err(detail) = sync_cycle(child_env) {
-        return Err(failure(
+    if let Err((detail, kind)) = sync_cycle(child_env) {
+        let mut failure = failure(
             "sync_failed",
             format!("pre-sync failed: {detail}"),
-            "run bob vault-sync, resolve the problem, then retry",
-        ));
+            if kind == Some("network") {
+                "the vault remote is unreachable; the next run retries"
+            } else {
+                "run bob vault-sync, resolve the problem, then retry"
+            },
+        );
+        if let Some(kind) = kind {
+            failure = failure.with_kind(kind);
+        }
+        return Err(failure);
     }
 
     let planned = plan()?;
@@ -1016,7 +1032,7 @@ pub(crate) fn run_locked<T>(
     } else {
         match sync_cycle(child_env) {
             Ok(()) => ("ok", None),
-            Err(detail) => (
+            Err((detail, _)) => (
                 "failed",
                 Some(format!(
                     "the change is committed locally; post-sync failed ({detail}); run bob vault-sync"

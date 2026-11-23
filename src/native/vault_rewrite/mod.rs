@@ -42,11 +42,15 @@ const LOCK_WAIT: Duration = Duration::from_secs(3);
 /// message, and an optional retry hint. Codes are the rename contract
 /// (`vault_mismatch`, `lock_busy`, `not_a_worktree`, `sync_failed`, `stale_note`,
 /// `dirty_paths`, `verify_failed`, plus `io` for the Git status read).
+/// `kind` is an additive machine-readable failure kind (`"network"` when
+/// the vault remote was unreachable); `None` preserves the old untyped
+/// shape.
 #[derive(Debug, Clone)]
 pub(crate) struct TxnFailure {
     pub(crate) code: &'static str,
     pub(crate) message: String,
     pub(crate) hint: Option<String>,
+    pub(crate) kind: Option<&'static str>,
 }
 
 impl TxnFailure {
@@ -59,7 +63,14 @@ impl TxnFailure {
             code,
             message: message.into(),
             hint: hint.map(Into::into),
+            kind: None,
         }
+    }
+
+    /// Attach a machine-readable kind (for example `"network"`).
+    pub(crate) fn with_kind(mut self, kind: &'static str) -> Self {
+        self.kind = Some(kind);
+        self
     }
 }
 

@@ -12,25 +12,32 @@ fn stdout_value(output: &RawRunOutput) -> Option<Value> {
     serde_json::from_str(trimmed).ok()
 }
 
-fn child_hint(value: &Value) -> Option<String> {
-    for key in ["hint", "message"] {
-        if let Some(s) = value.get(key).and_then(Value::as_str)
-            && !s.trim().is_empty()
-        {
-            return Some(s.trim().to_string());
-        }
+fn child_message(value: &Value) -> Option<String> {
+    if let Some(s) = value.get("message").and_then(Value::as_str)
+        && !s.trim().is_empty()
+    {
+        return Some(s.trim().to_string());
     }
-    if let Some(err) = value.get("error") {
-        if let Some(hint) = err.get("hint").and_then(Value::as_str)
-            && !hint.trim().is_empty()
-        {
-            return Some(hint.trim().to_string());
-        }
-        if let Some(msg) = err.get("message").and_then(Value::as_str)
-            && !msg.trim().is_empty()
-        {
-            return Some(msg.trim().to_string());
-        }
+    if let Some(err) = value.get("error")
+        && let Some(msg) = err.get("message").and_then(Value::as_str)
+        && !msg.trim().is_empty()
+    {
+        return Some(msg.trim().to_string());
+    }
+    None
+}
+
+fn child_hint(value: &Value) -> Option<String> {
+    if let Some(s) = value.get("hint").and_then(Value::as_str)
+        && !s.trim().is_empty()
+    {
+        return Some(s.trim().to_string());
+    }
+    if let Some(err) = value.get("error")
+        && let Some(hint) = err.get("hint").and_then(Value::as_str)
+        && !hint.trim().is_empty()
+    {
+        return Some(hint.trim().to_string());
     }
     if let Some(waiting) = value.get("waiting")
         && let Some(detail) = waiting.get("detail").and_then(Value::as_str)
@@ -38,6 +45,46 @@ fn child_hint(value: &Value) -> Option<String> {
         return Some(detail.to_string());
     }
     None
+}
+
+/// Combined message + hint detail for failed steps: the child's message on
+/// the first line, followed by its hint on the second line when they differ.
+/// For Gmail's `ok: false` document (no `error`, no top-level message), uses
+/// the first `failure_kinds` entry plus the first warnings line. `run.rs`
+/// already shows the first two detail lines under `│`.
+fn child_detail(value: &Value) -> String {
+    if let Some(message) = child_message(value)
+        && let Some(hint) = child_hint(value)
+        && hint != message
+        && !hint.is_empty()
+    {
+        return format!("{message}\n{hint}");
+    }
+    if let Some(message) = child_message(value) {
+        return message;
+    }
+    if let Some(hint) = child_hint(value) {
+        return hint;
+    }
+    // Gmail's `ok: false` shape: no `error`, no top-level message/hint.
+    let kind = value
+        .get("failure_kinds")
+        .and_then(Value::as_array)
+        .and_then(|kinds| kinds.first())
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let warning = value
+        .get("warnings")
+        .and_then(Value::as_array)
+        .and_then(|warnings| warnings.first())
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match (kind.is_empty(), warning.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => kind.to_string(),
+        (true, false) => warning.to_string(),
+        (false, false) => format!("{kind}\n{warning}"),
+    }
 }
 
 fn child_code(value: &Value) -> Option<String> {
@@ -56,6 +103,35 @@ fn child_code(value: &Value) -> Option<String> {
     }
     None
 }
+
+/// All machine-readable failure kinds on a child document: `error.kind`,
+/// top-level `kind`, and every `failure_kinds` entry.
+fn transient_kinds(value: &Value) -> std::collections::BTreeSet<String> {
+    let mut kinds = std::collections::BTreeSet::new();
+    if let Some(kind) = value.get("kind").and_then(Value::as_str)
+        && !kind.trim().is_empty()
+    {
+        kinds.insert(kind.trim().to_string());
+    }
+    if let Some(err) = value.get("error")
+        && let Some(kind) = err.get("kind").and_then(Value::as_str)
+        && !kind.trim().is_empty()
+    {
+        kinds.insert(kind.trim().to_string());
+    }
+    if let Some(list) = value.get("failure_kinds").and_then(Value::as_array) {
+        for kind in list.iter().filter_map(Value::as_str) {
+            if !kind.trim().is_empty() {
+                kinds.insert(kind.trim().to_string());
+            }
+        }
+    }
+    kinds
+}
+
+/// Transient network kinds that map to an `offline` wait.
+const TRANSIENT_KINDS: &[&str] =
+    &["network", "timeout", "rate_limited", "transient"];
 
 /// Shared contention mapping every adapter's nonzero path consults before
 /// falling back to `Failed`: vault/scan lock timeouts report `vault_busy`
@@ -90,6 +166,40 @@ fn contention_wait(output: &RawRunOutput) -> Option<Adapted> {
     }
 }
 
+/// Shared offline mapping every adapter's nonzero path consults after
+/// `contention_wait`: when the child's typed kinds are non-empty and every
+/// member is transient (`network`, `timeout`, `rate_limited`, `transient`),
+/// the step waits as `offline` without consuming its interval (the
+/// `offline_retry = next_tick` branch). `lock_busy` keeps precedence via
+/// `contention_wait`; interrupts, tick's own child timeouts, and any
+/// non-transient member still fail.
+fn offline_wait(output: &RawRunOutput) -> Option<Adapted> {
+    if output.interrupted || output.timed_out {
+        return None;
+    }
+    if output.status == Some(0) {
+        return None;
+    }
+    let value = stdout_value(output)?;
+    let kinds = transient_kinds(&value);
+    if kinds.is_empty() {
+        return None;
+    }
+    if kinds
+        .iter()
+        .all(|kind| TRANSIENT_KINDS.contains(&kind.as_str()))
+    {
+        return Some(Adapted {
+            outcome: Outcome::Waiting,
+            reason: "offline".into(),
+            summary: "offline · retrying next tick".into(),
+            detail: "offline · retrying next tick".into(),
+            consumes_interval: false,
+        });
+    }
+    None
+}
+
 fn generic_ok(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted {
         return Adapted {
@@ -113,6 +223,9 @@ fn generic_ok(output: &RawRunOutput, reason: &str) -> Adapted {
         if let Some(wait) = contention_wait(output) {
             return wait;
         }
+        if let Some(wait) = offline_wait(output) {
+            return wait;
+        }
         let summary = format!(
             "exit {}",
             output
@@ -120,15 +233,16 @@ fn generic_ok(output: &RawRunOutput, reason: &str) -> Adapted {
                 .map_or_else(|| "signal".into(), |n| n.to_string())
         );
         if let Some(value) = stdout_value(output) {
-            let hint = child_hint(&value).unwrap_or_default();
             let code = child_code(&value).unwrap_or_default();
             let mut summary = summary;
             if !code.is_empty() {
                 summary = format!("{summary} · {code}");
             }
-            let detail = hint.clone();
+            let detail = child_detail(&value);
             if !detail.is_empty() {
-                eprintln!("bob tick: warning: {detail}");
+                for line in detail.lines().take(2) {
+                    eprintln!("bob tick: warning: {line}");
+                }
             }
             return Adapted {
                 outcome: Outcome::Failed,
@@ -211,6 +325,9 @@ fn get_u64(value: &Value, path: &[&str]) -> usize {
 pub(super) fn gcal(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted || output.timed_out || output.status != Some(0) {
         if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
+        if let Some(wait) = offline_wait(output) {
             return wait;
         }
         return generic_ok(output, reason);
@@ -359,6 +476,9 @@ pub(super) fn gmail(output: &RawRunOutput, reason: &str) -> Adapted {
         if let Some(wait) = contention_wait(output) {
             return wait;
         }
+        if let Some(wait) = offline_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -424,6 +544,9 @@ pub(super) fn gkeep(output: &RawRunOutput, reason: &str) -> Adapted {
         if let Some(wait) = contention_wait(output) {
             return wait;
         }
+        if let Some(wait) = offline_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -468,6 +591,9 @@ pub(super) fn gkeep(output: &RawRunOutput, reason: &str) -> Adapted {
 pub(super) fn refs(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted || output.timed_out || output.status != Some(0) {
         if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
+        if let Some(wait) = offline_wait(output) {
             return wait;
         }
         return generic_ok(output, reason);
@@ -541,6 +667,9 @@ pub(super) fn projects(output: &RawRunOutput, reason: &str) -> Adapted {
         if let Some(wait) = contention_wait(output) {
             return wait;
         }
+        if let Some(wait) = offline_wait(output) {
+            return wait;
+        }
         return generic_ok(output, reason);
     }
     let Some(value) = stdout_value(output) else {
@@ -589,6 +718,9 @@ pub(super) fn projects(output: &RawRunOutput, reason: &str) -> Adapted {
 pub(super) fn tasks(output: &RawRunOutput, reason: &str) -> Adapted {
     if output.interrupted || output.timed_out || output.status != Some(0) {
         if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
+        if let Some(wait) = offline_wait(output) {
             return wait;
         }
         return generic_ok(output, reason);
@@ -801,5 +933,196 @@ mod tests {
         let adapted = generic_ok(&output, "due");
         assert_eq!(adapted.outcome, Outcome::Failed);
         assert_eq!(adapted.reason, "exit_nonzero");
+    }
+
+    fn failed_with_kind(kind: &str) -> RawRunOutput {
+        RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "sync_failed",
+                    "kind": kind,
+                    "message": format!("remote unreachable: {kind}"),
+                    "hint": "the vault remote is unreachable; the next run retries",
+                },
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        }
+    }
+
+    #[test]
+    fn each_transient_kind_maps_to_offline_without_consuming_interval() {
+        for kind in ["network", "timeout", "rate_limited", "transient"] {
+            let output = failed_with_kind(kind);
+            for adapted in [
+                generic_ok(&output, "due"),
+                gcal(&output, "due"),
+                gmail(&output, "due"),
+                gkeep(&output, "due"),
+                refs(&output, "due"),
+                projects(&output, "due"),
+                tasks(&output, "due"),
+            ] {
+                assert_eq!(adapted.outcome, Outcome::Waiting, "{kind}");
+                assert_eq!(adapted.reason, "offline", "{kind}");
+                assert_eq!(
+                    adapted.summary, "offline · retrying next tick",
+                    "{kind}"
+                );
+                assert!(!adapted.consumes_interval, "{kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_and_untyped_kinds_still_fail() {
+        let mixed = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "failure_kinds": ["network", "route_problem"],
+                "warnings": ["skipped Gmail thread aa01: network: down"],
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        assert_eq!(generic_ok(&mixed, "due").outcome, Outcome::Failed);
+        let untyped = failed_with("sync_failed");
+        assert_eq!(generic_ok(&untyped, "due").outcome, Outcome::Failed);
+    }
+
+    #[test]
+    fn offline_yields_to_interrupts_timeouts_and_lock_busy() {
+        let with_timeout = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "error": {"code": "sync_failed", "kind": "network", "message": "down"},
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: true,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        assert_eq!(generic_ok(&with_timeout, "due").outcome, Outcome::Failed);
+        let with_interrupt = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "error": {"code": "sync_failed", "kind": "network", "message": "down"},
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: true,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        assert_eq!(generic_ok(&with_interrupt, "due").outcome, Outcome::Failed);
+        let both = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "code": "lock_busy",
+                "error": {"kind": "network", "message": "down"},
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        let adapted = generic_ok(&both, "due");
+        assert_eq!(adapted.outcome, Outcome::Waiting);
+        assert_eq!(adapted.reason, "vault_busy");
+    }
+
+    #[test]
+    fn failure_detail_carries_message_and_hint() {
+        let output = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "sync_failed",
+                    "kind": "auth",
+                    "message": "remote unreachable: auth",
+                    "hint": "run bob login again",
+                },
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        let adapted = generic_ok(&output, "due");
+        assert_eq!(adapted.outcome, Outcome::Failed);
+        assert!(
+            adapted.detail.contains("remote unreachable"),
+            "{}",
+            adapted.detail
+        );
+        assert!(
+            adapted.detail.contains("run bob login again"),
+            "{}",
+            adapted.detail
+        );
+        let gmail_like = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "failure_kinds": ["network"],
+                "warnings": ["skipped Gmail thread aa01: network: gog could not reach Google"],
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        // Gmail network documents wait, but a mixed Gmail failure names its
+        // cause through the same detail path when it fails.
+        let mixed = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "failure_kinds": ["network", "route_problem"],
+                "warnings": ["skipped Gmail thread aa01: network: gog could not reach Google"],
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        let failed = generic_ok(&mixed, "due");
+        assert_eq!(failed.outcome, Outcome::Failed);
+        assert!(failed.detail.contains("network"), "{}", failed.detail);
+        let _ = generic_ok(&gmail_like, "due");
     }
 }

@@ -104,6 +104,7 @@ mod tests {
         ArchiveConfigSummary, ArchiveHint, ArchiveRow, SyncReport,
     };
     use super::*;
+    use std::collections::BTreeSet;
 
     fn report_with_actions(actions: &[&'static str]) -> SyncReport {
         SyncReport {
@@ -118,6 +119,7 @@ mod tests {
             watching: 0,
             awaiting: 0,
             first_seen: false,
+            failure_kinds: BTreeSet::new(),
             busy: false,
             archive: actions
                 .iter()
