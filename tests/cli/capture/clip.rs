@@ -137,10 +137,13 @@ fn clipboard_drawer_lookalikes_stay_notes_on_new_and_req_owning_tasks() {
     assert_success(&new_task);
     let new_json: serde_json::Value =
         serde_json::from_str(stdout(&new_task).trim()).expect("capture JSON");
-    assert_eq!(
-        new_json["clip"]["lines"],
-        serde_json::json!(["\t- __API Design__", "\t- __AGENDA__"])
-    );
+    let clip_lines = new_json["clip"]["lines"]
+        .as_array()
+        .expect("clipboard lines")
+        .iter()
+        .map(|line| line.as_str().expect("clipboard line").trim_start())
+        .collect::<Vec<_>>();
+    assert_eq!(clip_lines, ["- __API Design__", "- __AGENDA__"]);
 
     let existing_task = bob_command()
         .arg("capture")

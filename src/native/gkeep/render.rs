@@ -760,8 +760,8 @@ mod tests {
             "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
              \t- \\[ ] wood screws\n\
              \t- 📎 1 image stays in Google Keep\n\
-             \t\t- RECEIPT\n\
-             \t\t- TOTAL 12.99",
+             \t\t- __RECEIPT__\n\
+             \t\t- __TOTAL 12.99__",
         );
         assert!(!block.markdown.contains("%%gkeep:"));
     }

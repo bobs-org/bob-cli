@@ -457,6 +457,7 @@ mod tests {
             ("AGENDA", "__AGENDA__"),
             ("**Agenda**", "__Agenda__"),
             ("  **API Design**  ", "  __API Design__  "),
+            ("NOTES", "__NOTES__"),
         ] {
             let escaped = defuse_drawer_header(input);
             assert_eq!(escaped, expected);
@@ -474,7 +475,7 @@ mod tests {
         ] {
             assert_eq!(defuse_drawer_header(body), body);
         }
-        for reserved in ["NOTES", "**Tasks**"] {
+        for reserved in ["TASKS", "**Tasks**"] {
             assert_eq!(defuse_drawer_header(reserved), reserved);
         }
         assert_eq!(escape_child_text("AGENDA"), "__AGENDA__");

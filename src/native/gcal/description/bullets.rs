@@ -382,8 +382,8 @@ mod tests {
     }
 
     #[test]
-    fn punctuated_drawer_shaped_lines_render_bold() {
-        // `punctuation = sentence`: `WHY?` reads as a drawer, like `TBD`.
+    fn punctuated_drawer_shaped_lines_are_defused() {
+        // Drawer punctuation still makes this imported text inert.
         let parsed = parse("WHY?");
         let rendered = render_bullets(&parsed, 8, None);
         let bodies: Vec<&str> = rendered
@@ -391,7 +391,7 @@ mod tests {
             .iter()
             .map(|bullet| bullet.body.as_str())
             .collect();
-        assert_eq!(bodies, ["- **WHY?**"]);
+        assert_eq!(bodies, ["- __WHY?__"]);
     }
 
     #[test]

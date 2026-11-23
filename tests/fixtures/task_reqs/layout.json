@@ -1232,13 +1232,14 @@
       "title": "a req-owning task reuses a bold Notes drawer",
       "source_lines": [
         "- [ ] #task A ^a",
+        "  - [ ] a req",
         "  - **Notes**",
-        "    - [ ] a req"
+        "    - existing note"
       ],
       "task": 1,
       "expect": {
         "home": "notes",
-        "line": 2
+        "line": 3
       }
     }
   ]

@@ -126,20 +126,19 @@ pub(crate) fn classify_task_child_with_filter(
         return TaskChildKind::Requirement { mark };
     }
 
-    if let Some(body) = list_item_body(line) {
-        if let Some((title, _)) =
+    if let Some(body) = list_item_body(line)
+        && let Some((title, _)) =
             super::capture_drawers::drawer_body_title(body)
-            && !super::capture_drawers::is_reserved_drawer_key(
-                &super::capture_drawers::drawer_key(title),
-            )
-            && !super::capture_drawers::is_structural_h2_key(
-                &super::capture_drawers::drawer_key(title),
-            )
-        {
-            return TaskChildKind::Drawer {
-                title: title.to_string(),
-            };
-        }
+        && !super::capture_drawers::is_reserved_drawer_key(
+            &super::capture_drawers::drawer_key(title),
+        )
+        && !super::capture_drawers::is_structural_h2_key(
+            &super::capture_drawers::drawer_key(title),
+        )
+    {
+        return TaskChildKind::Drawer {
+            title: title.to_string(),
+        };
     }
 
     TaskChildKind::Authored

@@ -26,8 +26,7 @@ use super::{
         first_child_indentation, first_direct_managed_log_start, insert_at,
         insertion_text_preserving_line_endings, leading_spaces_or_tabs_len,
         leading_whitespace, line_spans, list_item_body,
-        nearest_shallower_list_item_parent, parse_managed_task_log_marker,
-        LineSpan,
+        parse_managed_task_log_marker, LineSpan,
     },
     capture_language,
     capture_project_note::format_project_section_title,
@@ -1783,7 +1782,16 @@ pub(crate) fn recognize_drawer_header(
     }
     let (title, marker) = drawer_body_title(body)?;
     let key = drawer_key(title);
-    if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
+    // Keep the old plain ALL-CAPS spellings of task log labels readable as
+    // drawers. The rendered, managed log rows are excluded above; only a
+    // bold header would collide with the managed label's reserved key.
+    let legacy_log_label = marker == DrawerMarker::LegacyCaps
+        && crate::native::capture::MANAGED_TASK_LOG_LABELS
+            .iter()
+            .any(|(label, _)| drawer_key(label) == key);
+    if (is_reserved_drawer_key(&key) && !legacy_log_label)
+        || is_structural_h2_key(&key)
+    {
         return None;
     }
     let line_offset = line_start(&lines, line_index);
@@ -1921,16 +1929,16 @@ fn direct_child_list_indexes(
     parent_index: usize,
     block_end: usize,
 ) -> Vec<usize> {
-    let parent_indent = leading_spaces_or_tabs_len(lines[parent_index].text);
+    let parent_indent = drawer_indent_columns(lines[parent_index].text);
     let mut indexes = Vec::new();
     for (offset, line) in lines[parent_index + 1..].iter().enumerate() {
         if line.end > block_end {
             break;
         }
         let line_index = parent_index + 1 + offset;
-        if leading_spaces_or_tabs_len(line.text) <= parent_indent
+        if drawer_indent_columns(line.text) <= parent_indent
             || list_item_body(line.text).is_none()
-            || nearest_shallower_list_item_parent(lines, line_index)
+            || drawer_nearest_shallower_list_parent(lines, line_index)
                 != Some(parent_index)
         {
             continue;
@@ -1938,6 +1946,37 @@ fn direct_child_list_indexes(
         indexes.push(line_index);
     }
     indexes
+}
+
+/// Bob task lists use one tab or two spaces for one nesting unit. Normalize
+/// tabs to two columns for drawer ancestry so mixed-indentation siblings keep
+/// the same direct-child relationship.
+fn drawer_indent_columns(line: &str) -> usize {
+    let mut columns = 0;
+    for character in line.chars() {
+        match character {
+            ' ' => columns += 1,
+            '\t' => columns += 2,
+            _ => break,
+        }
+    }
+    columns
+}
+
+fn drawer_nearest_shallower_list_parent(
+    lines: &[LineSpan<'_>],
+    child_index: usize,
+) -> Option<usize> {
+    if child_index == 0 {
+        return None;
+    }
+    let child_indent = drawer_indent_columns(lines[child_index].text);
+    (0..child_index).rev().find(|&index| {
+        let text = lines[index].text;
+        !text.trim().is_empty()
+            && drawer_indent_columns(text) < child_indent
+            && list_item_body(text).is_some()
+    })
 }
 
 fn line_start(lines: &[LineSpan<'_>], index: usize) -> usize {

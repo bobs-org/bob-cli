@@ -316,15 +316,16 @@ pub(crate) fn checkbox_mark_without_filter(
 /// Lines that can never be a req or a req parent by shape: drawer titles and
 /// managed link/log lines.
 fn is_structural_container(line: &str) -> bool {
-    if let Some(body) = list_item_body(line) {
-        if let Some((title, _)) = capture_drawers::drawer_body_title(body) {
-            let key = capture_drawers::drawer_key(title);
-            if !capture_drawers::is_reserved_drawer_key(&key)
-                && !capture_drawers::is_structural_h2_key(&key)
-            {
-                return true;
-            }
-        }
+    if let Some(body) = list_item_body(line)
+        && let Some((title, _)) = capture_drawers::drawer_body_title(body)
+        && !capture_drawers::is_reserved_drawer_key(
+            &capture_drawers::drawer_key(title),
+        )
+        && !capture_drawers::is_structural_h2_key(&capture_drawers::drawer_key(
+            title,
+        ))
+    {
+        return true;
     }
     if task_relations::parse::is_subprojects_line(line)
         || task_dependencies::is_managed_link_line(line)

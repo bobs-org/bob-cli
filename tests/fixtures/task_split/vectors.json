@@ -2455,13 +2455,33 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": ""
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **API Design**\n    - [[#^nested|Nested note]]\n- [ ] #task **Nested note** [created:: 2026-11-03] ^nested\n  - endpoint details\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
         },
-        "tasks": [],
-        "stubs": [],
-        "cursor": {},
-        "notice": "",
-        "placement": {}
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "nested",
+            "title": "**Nested note**",
+            "anchor_reused": false,
+            "child_lines": 1
+          }
+        ],
+        "stubs": [
+          {
+            "path": "db.md",
+            "line": 3,
+            "text": "- [[#^nested|Nested note]]"
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ **Nested note**",
+        "placement": {
+          "kind": "below_owner",
+          "path": "db.md"
+        }
       }
     }
   ]

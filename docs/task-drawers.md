@@ -22,9 +22,10 @@ Bob reads both the existing ALL-CAPS form and the new whole-bold form:
 ```
 
 A drawer header must be a direct list-item child of a real task. It must be
-outside fences and quotes, have no checkbox, and not be a managed task row or a
-reserved name. Its body must be exactly one title: `**title**` for a bold drawer,
-or a title accepted by the preserved legacy ALL-CAPS grammar. Children are
+outside fences and quotes, have no checkbox, and not be a managed task row. A
+bold title must also avoid reserved names. Legacy ALL-CAPS titles keep their
+existing grammar and remain readable, including unadorned Schedule, Work, and
+Rotten Log titles; the rendered managed log rows are excluded. Children are
 optional for recognition, so a hand-written empty header can be filled. Capture
 creation still requires content.
 

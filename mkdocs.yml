@@ -120,6 +120,7 @@ plugins:
           - stats.md
           - task-dependencies.md
           - task-requirements.md
+          - task-drawers.md
           - task-relations.md
           - task-move.md
           - task-archive.md

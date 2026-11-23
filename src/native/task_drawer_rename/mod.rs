@@ -945,7 +945,10 @@ fn header_kind(line: &str, spec: &RenameSpec) -> Option<bool> {
         None => {
             let (title, _) = drawer_body_title(list_item_body(line)?)?;
             let key = drawer_key(title);
-            if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
+            // Project H2 validation handles structural names separately. A
+            // task drawer rename may target one of those spellings, so the
+            // content-preservation check must still recognize its output.
+            if is_reserved_drawer_key(&key) {
                 return None;
             }
             title
