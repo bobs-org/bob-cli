@@ -539,6 +539,12 @@ links](task-dependencies.md#1225-requirements-on-the-successor-card)
 §12.25, with [shared vectors](task-dependencies.md#1226-rv-requirement-close-vectors)
 §12.26 and the fixture roster in §10.)
 
+Bob Mac Capture presents these as requirement rows ahead of ordinary offers.
+An untouched Return defaults each row to Met, and Shift-Return downgrades a
+staged Carry-and-pull to Carry. The app submits the complete draft in one
+guarded capture and renders Bob's receipts. See the [Mac keyboard reference](reference/mac-capture/keyboard.md#successor-choices);
+the flags, response shape, and refusal contract remain defined in §12.25.
+
 ## 8. Promotion moves the boundary one level
 
 Ctrl+Shift+Alt+N seeds the new project note from the task's direct
