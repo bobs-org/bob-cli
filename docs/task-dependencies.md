@@ -1535,8 +1535,8 @@ Req-only close:
 ```
 
 Clients treat `owner.key` and `row.offer.key` as opaque. The navigation
-picker v6 consumes these requirement rows when available; older picker
-versions continue without the requirement card.
+picker v6 and the Bob Mac Capture Pull-In card consume these requirement
+rows when available; older clients continue without the requirement card.
 
 **Project-created rows (`project_note.successors`)**
 
@@ -4048,8 +4048,9 @@ requirements](task-requirements.md) §§1–6; carry bytes follow that
 document's Task Split rules (§6 there) and the RW/SP vectors — there is
 no second carry or Cancel Log writer. Defaults never stamp requirement
 completion: no `[fresh::]` or `[unblocked::]` is ever written for a
-requirement verdict. Navigation picker v6 consumes this protocol when
-available; older picker versions continue with the defaults.
+requirement verdict. Navigation picker v6 and the Bob Mac Capture
+Pull-In card consume this protocol when available; older clients continue
+with the defaults.
 
 **Eligibility and collection.** Only a managed Done closing set is
 audited: the root and the actual embedded or nested real tasks closed
