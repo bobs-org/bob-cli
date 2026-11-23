@@ -1542,6 +1542,550 @@ fn sidecar_edit_replans_only_its_pdf() {
 }
 
 #[test]
+fn refresh_that_acquires_vault_link_dependency_replans_its_pdf() {
+    // The first plan has no section declaration and does not consult vault
+    // links. Its replacement absorbs a published sticky note, which makes
+    // the link lookup a live dependency. A daily-note link added after that
+    // lookup must select the replacement PDF again and leave a redirect.
+    let temp = TempDir::new("bob-cli-scan-interleave-link-acquisition");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let first = env.vault.join("lib/chat/first.pdf");
+    let second = env.vault.join("lib/chat/second.pdf");
+    write_marker_pdf(&first, "First");
+    write_file(
+        &first.with_extension("md"),
+        "#### [Page 1](highlights://first#page=1)\n\nA keeper\n",
+    );
+    write_marker_pdf(&second, "Second");
+    let daily = env.vault.join("2026/day.md");
+    write_file(&daily, "No reference links yet.\n");
+    assert_success(&run_scan(&env, &[]));
+
+    let first_note = env.vault.join("ref/chat/first.md");
+    let published = fs::read_to_string(&first_note).expect("published note");
+    // Seed the real sync fixture with the published sticky-note shape used
+    // by the renderer's reversible-declaration regression.
+    let old_id = "h-oldabc123";
+    let frontmatter = published
+        .split_once("\n---\n")
+        .expect("reference frontmatter")
+        .0;
+    write_file(
+        &first_note,
+        &format!(
+            "{frontmatter}\n---\n\n# First\n\n![[obsidian#^ref-first]]\n\n## Highlights\n\n<!-- highlights:begin -->\n\n### Page 1\n\n> [!note] A keeper\n\n^{old_id}\n\n<!-- highlights:end -->\n"
+        ),
+    );
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let mut child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_evidence,before_refresh,before_refresh_evidence",
+        true,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    write_file(
+        &first.with_extension("md"),
+        "#### [Page 1](highlights://first#page=1)\n\n# Memory\n\nA keeper\n",
+    );
+    resume(&hs, 1);
+
+    let stage = child.wait_pause(&hs, 2);
+    assert!(stage.ends_with(":before_refresh"), "{stage}");
+    resume(&hs, 2);
+
+    let stage = child.wait_pause(&hs, 3);
+    assert!(stage.ends_with(":before_refresh_evidence"), "{stage}");
+    write_file(
+        &daily,
+        &format!("See [[ref/chat/first#^{old_id}|the old block]].\n"),
+    );
+    resume(&hs, 3);
+
+    let stage = child.wait_pause(&hs, 4);
+    assert!(stage.ends_with(":before_refresh"), "{stage}");
+    resume(&hs, 4);
+    let stage = child.wait_pause(&hs, 5);
+    assert!(stage.ends_with(":before_refresh_evidence"), "{stage}");
+    resume(&hs, 5);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let updated = fs::read_to_string(&first_note).expect("updated note");
+    assert!(updated.contains("[!info] Section declaration"), "{updated}");
+    assert!(
+        updated.contains("Now the card of [[#^s-memory|Memory]]"),
+        "the old block must redirect to the declared section:\n{updated}"
+    );
+    assert!(updated.contains(&format!("^{old_id}")), "{updated}");
+
+    let lines = fs::read_to_string(&plan_log)
+        .expect("plan log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 3, "initial and two targeted passes: {lines:?}");
+    assert!(lines[0].starts_with("locked=0 count=2 "), "{lines:?}");
+    assert_eq!(lines[1], format!("locked=0 count=1 {}", first.display()));
+    assert_eq!(lines[2], format!("locked=0 count=1 {}", first.display()));
+}
+
+#[test]
+fn root_parent_refresh_selects_owner_and_resolver_consumer_only() {
+    // The owner PDF has a pending reading-task line edit in obsidian.md. A
+    // new PDF resolves the `ob` alias to that root note. Moving the alias
+    // after planning must refresh both plans, and the replacement birth
+    // must use the new canonical route. The settled control PDF has no such
+    // dependency and stays out of the subset.
+    let temp = TempDir::new("bob-cli-scan-interleave-parent-resolver");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    let obsidian = env.vault.join("obsidian.md");
+    write_file(
+        &obsidian,
+        "---\ntype: \"[[area]]\"\nproject_name_aliases: [\"ob\"]\n---\n\n# Obsidian\n",
+    );
+    let newroot = env.vault.join("newroot.md");
+    write_area_note(&newroot, "New Root");
+    let owner = env.vault.join("lib/chat/owner.pdf");
+    let control = env.vault.join("lib/chat/control.pdf");
+    write_highlights_pdf(
+        &owner,
+        "- status: ready\n- parent: obsidian\n- title: Owner\n",
+    );
+    write_marker_pdf(&control, "Control");
+    let control_note = env.vault.join("ref/chat/control.md");
+    seed_v1_ref_note(
+        &control_note,
+        "- [/] #task #ref [[lib/chat/control.pdf]] #hide ^ref",
+    );
+    assert_success(&run_scan(&env, &[]));
+
+    let root_before = fs::read_to_string(&obsidian).expect("obsidian");
+    let control_note_before =
+        fs::read_to_string(&control_note).expect("control note");
+    let owner_task = root_before
+        .lines()
+        .find(|line| line.contains("[[ref/chat/owner|"))
+        .expect("owner task");
+    assert!(owner_task.starts_with("- [ ]"), "{owner_task}");
+    let owner_note = env.vault.join("ref/chat/owner.md");
+    let owner_note_before =
+        fs::read_to_string(&owner_note).expect("owner note");
+    assert!(
+        owner_note_before.contains("status: ready"),
+        "{owner_note_before}"
+    );
+    fs::write(
+        &owner_note,
+        owner_note_before.replace("status: ready", "status: wip"),
+    )
+    .expect("make owner status drive a parent task update");
+
+    let consumer = env.vault.join("lib/chat/consumer.pdf");
+    write_highlights_pdf(
+        &consumer,
+        "- status: wip\n- parent: ob\n- title: Consumer\n",
+    );
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json", "--write-pdfs"],
+        &hs,
+        "before_evidence",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    let old_root = fs::read_to_string(&obsidian).expect("old root");
+    let new_root = fs::read_to_string(&newroot).expect("new root");
+    fs::write(
+        &obsidian,
+        old_root.replace("project_name_aliases: [\"ob\"]\n", ""),
+    )
+    .expect("remove old alias");
+    fs::write(
+        &newroot,
+        new_root.replace(
+            "type: \"[[area]]\"\n",
+            "type: \"[[area]]\"\nproject_name_aliases: [\"ob\"]\n",
+        ),
+    )
+    .expect("add alias to new root");
+    resume(&hs, 1);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let consumer_note =
+        fs::read_to_string(env.vault.join("ref/chat/consumer.md"))
+            .expect("consumer note");
+    assert!(
+        consumer_note.contains("parent: \"[[newroot]]\""),
+        "birth must use the current alias target:\n{consumer_note}"
+    );
+    assert!(
+        consumer_note.contains("![[newroot#^ref-consumer]]"),
+        "managed embed must use the current route:\n{consumer_note}"
+    );
+    let root_after = fs::read_to_string(&obsidian).expect("root after");
+    assert!(
+        root_after.contains(&owner_task.replacen("- [ ]", "- [/]", 1)),
+        "the owner write must replan against current root bytes:\n{root_after}"
+    );
+    assert_eq!(
+        fs::read_to_string(&control_note).expect("control note after"),
+        control_note_before,
+        "the control PDF stays outside the parent refresh subset"
+    );
+
+    let lines = fs::read_to_string(&plan_log)
+        .expect("plan log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "one targeted parent refresh: {lines:?}");
+    assert!(lines[0].starts_with("locked=0 count=3 "), "{lines:?}");
+    assert_eq!(
+        lines[1],
+        format!("locked=0 count=2 {} {}", consumer.display(), owner.display()),
+        "the parent consumer and the root write owner refresh; control stays retained"
+    );
+}
+
+fn routed_task_sidecar(route: &str) -> String {
+    format!(
+        "#### [Page 1](highlights://routed#page=1)\n\n> A routed annotation.\n\n- #task Carry this follow-up @{route}\n"
+    )
+}
+
+#[test]
+fn refresh_replacement_drops_former_routed_note_owner() {
+    // An existing reference plan changes its routed task target. Once the
+    // replacement is adopted, editing only the former target at the lock
+    // boundary must not select the PDF again.
+    let temp = TempDir::new("bob-cli-scan-interleave-owner-replacement");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let former = env.vault.join("former.md");
+    let newer = env.vault.join("newer.md");
+    write_area_note(&former, "Former");
+    write_area_note(&newer, "Newer");
+    let pdf = env.vault.join("lib/chat/routed.pdf");
+    write_marker_pdf(&pdf, "Routed");
+    write_file(
+        &pdf.with_extension("md"),
+        "#### [Page 1](highlights://routed#page=1)\n\n> A routed annotation.\n",
+    );
+    assert_success(&run_scan(&env, &[]));
+    write_file(&pdf.with_extension("md"), &routed_task_sidecar("former"));
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_evidence,before_lock",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    write_file(&pdf.with_extension("md"), &routed_task_sidecar("newer"));
+    resume(&hs, 1);
+
+    let stage = wait_pause(&hs, 2);
+    assert!(stage.ends_with(":before_lock"), "{stage}");
+    let former_before = fs::read_to_string(&former).expect("former route");
+    fs::write(
+        &former,
+        format!("{former_before}\nLocal former-note edit.\n"),
+    )
+    .expect("edit former route after replacement adoption");
+    resume(&hs, 2);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let former_after = fs::read_to_string(&former).expect("former after");
+    let newer_after = fs::read_to_string(&newer).expect("newer after");
+    assert!(
+        former_after.contains("Local former-note edit."),
+        "{former_after}"
+    );
+    assert!(
+        !former_after.contains("Carry this follow-up"),
+        "{former_after}"
+    );
+    assert!(
+        newer_after.contains("Carry this follow-up"),
+        "{newer_after}"
+    );
+
+    let lines = fs::read_to_string(&plan_log)
+        .expect("plan log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the former owner must not cause another PDF parse: {lines:?}"
+    );
+    assert!(lines
+        .iter()
+        .all(|line| line == &format!("locked=0 count=1 {}", pdf.display())));
+}
+
+#[test]
+fn current_routed_target_edit_replans_and_preserves_note_content() {
+    // The replacement's current target remains a real owner. A target edit
+    // after planning must replan its PDF and preserve that concurrent text
+    // when the routed task is finally inserted.
+    let temp = TempDir::new("bob-cli-scan-interleave-current-owner");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let newer = env.vault.join("newer.md");
+    write_area_note(&newer, "Newer");
+    let pdf = env.vault.join("lib/chat/current.pdf");
+    write_marker_pdf(&pdf, "Current");
+    write_file(
+        &pdf.with_extension("md"),
+        "#### [Page 1](highlights://current#page=1)\n\n> A routed annotation.\n",
+    );
+    assert_success(&run_scan(&env, &[]));
+    write_file(&pdf.with_extension("md"), &routed_task_sidecar("newer"));
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_lock",
+        false,
+        Some(&plan_log),
+    );
+    let stage = wait_pause(&hs, 1);
+    assert!(stage.ends_with(":before_lock"), "{stage}");
+    let current_before = fs::read_to_string(&newer).expect("new route");
+    fs::write(
+        &newer,
+        format!("{current_before}\nConcurrent new-note text.\n"),
+    )
+    .expect("edit current target after planning");
+    resume(&hs, 1);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let current_after = fs::read_to_string(&newer).expect("new route after");
+    assert!(
+        current_after.contains("Concurrent new-note text."),
+        "{current_after}"
+    );
+    assert!(
+        current_after.contains("Carry this follow-up"),
+        "{current_after}"
+    );
+    let lines = fs::read_to_string(&plan_log)
+        .expect("plan log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        2,
+        "current target must trigger one PDF refresh: {lines:?}"
+    );
+    assert!(lines
+        .iter()
+        .all(|line| line == &format!("locked=0 count=1 {}", pdf.display())));
+}
+
+#[test]
+fn moved_reading_locator_replans_only_its_pdf() {
+    // The reading-task locator follows its line within existing Markdown.
+    // Moving just one PDF's task and changing its mark must select that PDF,
+    // then edit the current line while retaining the unrelated task.
+    let temp = TempDir::new("bob-cli-scan-interleave-locator-move");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    let parent = env.vault.join("obsidian.md");
+    write_area_note(&parent, "Obsidian");
+    let target = env.vault.join("lib/chat/target.pdf");
+    let control = env.vault.join("lib/chat/control.pdf");
+    write_highlights_pdf(
+        &target,
+        "- status: ready\n- parent: obsidian\n- title: Target\n",
+    );
+    write_marker_pdf(&control, "Control");
+    assert_success(&run_scan(&env, &[]));
+    let target_note = env.vault.join("ref/chat/target.md");
+    let target_note_before =
+        fs::read_to_string(&target_note).expect("target note");
+    assert!(
+        target_note_before.contains("status: ready"),
+        "{target_note_before}"
+    );
+    fs::write(
+        &target_note,
+        target_note_before.replace("status: ready", "status: wip"),
+    )
+    .expect("make the located task require a current-line status edit");
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json", "--write-pdfs"],
+        &hs,
+        "before_evidence",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    let before = fs::read_to_string(&parent).expect("parent before");
+    let target_line = before
+        .lines()
+        .find(|line| line.contains("[[ref/chat/target|"))
+        .expect("target reading task");
+    let control_line = before
+        .lines()
+        .find(|line| line.contains("[[ref/chat/control|"))
+        .expect("control reading task")
+        .to_string();
+    assert!(target_line.starts_with("- [ ]"), "{target_line}");
+    let mut edited = String::new();
+    for line in before.lines() {
+        if line == target_line {
+            edited.push_str(
+                "A note before the moved task.\nAnother inserted line.\n",
+            );
+            edited.push_str(target_line);
+        } else {
+            edited.push_str(line);
+        }
+        edited.push('\n');
+    }
+    fs::write(&parent, edited)
+        .expect("move the target task and change its mark");
+    resume(&hs, 1);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let after = fs::read_to_string(&parent).expect("parent after");
+    let target_after = after
+        .lines()
+        .find(|line| line.contains("[[ref/chat/target|"))
+        .expect("target task after refresh");
+    assert!(
+        target_after.starts_with("- [/]"),
+        "current task line was not updated:\n{after}"
+    );
+    assert!(after.contains("A note before the moved task."), "{after}");
+    assert!(
+        after.contains(&control_line),
+        "control task changed:\n{after}"
+    );
+
+    let lines = fs::read_to_string(&plan_log)
+        .expect("plan log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "one PDF's locator refresh: {lines:?}");
+    assert!(lines[0].starts_with("locked=0 count=2 "), "{lines:?}");
+    assert_eq!(lines[1], format!("locked=0 count=1 {}", target.display()));
+}
+
+#[test]
+fn archive_id_occupancy_refreshes_preview_without_reparsing() {
+    // A stable archive note gains the default preview ID while planning.
+    // Finalization must rerun the production reservation path and choose a
+    // collision-free ID without parsing the PDF again.
+    let temp = TempDir::new("bob-cli-scan-interleave-archive-occupancy");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    let parent = env.vault.join("obsidian.md");
+    write_file(
+        &parent,
+        "---\ntype: \"[[area]]\"\ndone_tasks: \"[[done/obsidian_done]]\"\n---\n\n# Obsidian\n",
+    );
+    let archive = env.vault.join("done/obsidian_done.md");
+    write_file(&archive, "---\nparent: \"[[obsidian]]\"\n---\n\n# Done\n");
+    let pdf = env.vault.join("lib/archive.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Archive\n",
+    );
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_evidence",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    let archive_before = fs::read_to_string(&archive).expect("archive before");
+    fs::write(
+        &archive,
+        format!("{archive_before}- [x] #task Historical ^ref-archive\n"),
+    )
+    .expect("occupy initial preview ID");
+    resume(&hs, 1);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let archive_after = fs::read_to_string(&archive).expect("archive after");
+    let parent_after = fs::read_to_string(&parent).expect("parent after");
+    let note = fs::read_to_string(env.vault.join("ref/archive.md"))
+        .expect("reference note");
+    assert!(archive_after.contains("^ref-archive\n"), "{archive_after}");
+    assert!(parent_after.contains("^ref-archive-2"), "{parent_after}");
+    assert!(note.contains("![[obsidian#^ref-archive-2]]"), "{note}");
+
+    let lines = fs::read_to_string(&plan_log)
+        .expect("plan log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines,
+        vec![format!("locked=0 count=1 {}", pdf.display())],
+        "archive occupancy refreshes shared finalization only"
+    );
+}
+
+#[test]
 fn second_edit_before_refresh_joins_the_selected_subset() {
     let temp = TempDir::new("bob-cli-scan-interleave-refresh-union");
     let env = ScanEnv {
