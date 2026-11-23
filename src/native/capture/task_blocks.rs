@@ -611,104 +611,124 @@ impl TaskBlockTracker {
                 let final_depths =
                     block_depths(&final_lines, final_line, final_range.clone());
                 // Map the final task line back to the original.
-                let (before_block, created) = if let Some(origin) =
-                    tracked.origin.as_ref()
-                {
-                    let original = origin_texts
-                        .entry(origin.target.clone())
-                        .or_insert_with(|| {
-                            planner
-                                .loaded_texts(&origin.target)
-                                .map(|(original, _)| original)
-                                .unwrap_or_default()
-                        });
-                    let scan = origin_scans
-                        .entry(origin.target.clone())
-                        .or_insert_with(|| {
-                            note_tasks::scan(original, &settings)
-                        });
-                    let before = match scan.by_block_id(&origin.block_id) {
-                        BlockIdLookup::Found(task) => {
-                            task_block_line_range(original, task).map(|range| {
-                                original
-                                    .lines()
-                                    .skip(range.start)
-                                    .take(range.len())
-                                    .map(str::to_string)
-                                    .collect::<Vec<_>>()
+                let (before_block, before_start, created, before_note) =
+                    if let Some(origin) = tracked.origin.as_ref() {
+                        let origin_note = origin_texts
+                            .entry(origin.target.clone())
+                            .or_insert_with(|| {
+                                planner
+                                    .loaded_texts(&origin.target)
+                                    .map(|(original, _)| original)
+                                    .unwrap_or_default()
                             })
-                        }
-                        _ => None,
-                    }
-                    .unwrap_or_default();
-                    (before, false)
-                } else {
-                    match new_to_old.get(&final_line) {
-                        Some(mapped) => {
-                            match orig_scan.task_at(*mapped) {
-                                Some(orig_task) => {
-                                    match task_block_line_range(
-                                        &original, orig_task,
-                                    ) {
-                                        Some(range) => {
-                                            let before = range
-                                                .map(|index| {
-                                                    orig_lines
-                                                        .get(index)
-                                                        .copied()
-                                                        .unwrap_or("")
-                                                        .to_string()
-                                                })
+                            .clone();
+                        let scan = origin_scans
+                            .entry(origin.target.clone())
+                            .or_insert_with(|| {
+                                note_tasks::scan(&origin_note, &settings)
+                            });
+                        let (before, start) =
+                            match scan.by_block_id(&origin.block_id) {
+                                BlockIdLookup::Found(task) => {
+                                    task_block_line_range(&origin_note, task)
+                                        .map(|range| {
+                                            let start = range.start;
+                                            let lines = origin_note
+                                                .lines()
+                                                .skip(range.start)
+                                                .take(range.len())
+                                                .map(str::to_string)
                                                 .collect::<Vec<_>>();
-                                            (before, false)
-                                        }
-                                        None => {
-                                            debug_assert!(
+                                            (lines, start)
+                                        })
+                                }
+                                _ => None,
+                            }
+                            .unwrap_or_else(|| (Vec::new(), 0));
+                        (before, start, false, origin_note)
+                    } else {
+                        match new_to_old.get(&final_line) {
+                            Some(mapped) => {
+                                match orig_scan.task_at(*mapped) {
+                                    Some(orig_task) => {
+                                        match task_block_line_range(
+                                            &original, orig_task,
+                                        ) {
+                                            Some(range) => {
+                                                let start = range.start;
+                                                let before = range
+                                                    .map(|index| {
+                                                        orig_lines
+                                                            .get(index)
+                                                            .copied()
+                                                            .unwrap_or("")
+                                                            .to_string()
+                                                    })
+                                                    .collect::<Vec<_>>();
+                                                (
+                                                    before,
+                                                    start,
+                                                    false,
+                                                    original.clone(),
+                                                )
+                                            }
+                                            None => {
+                                                debug_assert!(
                                             false,
                                             "original task block range missing"
                                         );
-                                            continue;
+                                                continue;
+                                            }
                                         }
                                     }
-                                }
-                                None => {
-                                    // Mapped to a non-task line: try the
-                                    // block-ID / identical fallbacks below.
-                                    match resolve_unmapped_before(
-                                        &original,
-                                        &orig_lines,
-                                        &orig_scan,
-                                        &final_lines,
-                                        final_line,
-                                        tracked.block_id.as_deref(),
-                                    ) {
-                                        Some(result) => result,
-                                        None => {
-                                            debug_assert!(
+                                    None => {
+                                        // Mapped to a non-task line: try the
+                                        // block-ID / identical fallbacks below.
+                                        match resolve_unmapped_before(
+                                            &original,
+                                            &orig_lines,
+                                            &orig_scan,
+                                            &final_lines,
+                                            final_line,
+                                            tracked.block_id.as_deref(),
+                                        ) {
+                                            Some((before, start, created)) => (
+                                                before,
+                                                start,
+                                                created,
+                                                original.clone(),
+                                            ),
+                                            None => {
+                                                debug_assert!(
                                             false,
                                             "mapped task line is not a task"
                                         );
-                                            continue;
+                                                continue;
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                        None => {
-                            match resolve_unmapped_before(
-                                &original,
-                                &orig_lines,
-                                &orig_scan,
-                                &final_lines,
-                                final_line,
-                                tracked.block_id.as_deref(),
-                            ) {
-                                Some(result) => result,
-                                None => continue,
+                            None => {
+                                match resolve_unmapped_before(
+                                    &original,
+                                    &orig_lines,
+                                    &orig_scan,
+                                    &final_lines,
+                                    final_line,
+                                    tracked.block_id.as_deref(),
+                                ) {
+                                    Some((before, start, created)) => (
+                                        before,
+                                        start,
+                                        created,
+                                        original.clone(),
+                                    ),
+                                    None => continue,
+                                }
                             }
                         }
-                    }
-                };
+                    };
                 let before_refs =
                     before_block.iter().map(String::as_str).collect::<Vec<_>>();
                 let before_depths = if created || before_block.is_empty() {
@@ -745,6 +765,21 @@ impl TaskBlockTracker {
                         final_index += 1;
                     }
                 }
+                let before_snapshot = (!created && !before_block.is_empty())
+                    .then_some(ReqSnapshot {
+                        contents: &before_note,
+                        start: before_start,
+                        settings: &settings,
+                    });
+                annotate_req_lines(
+                    &mut lines,
+                    before_snapshot,
+                    Some(ReqSnapshot {
+                        contents: &final_text,
+                        start: final_start,
+                        settings: &settings,
+                    }),
+                );
                 ordered.push((
                     ordinal,
                     TaskBlockJson {
@@ -784,21 +819,22 @@ fn resolve_unmapped_before(
     final_lines: &[&str],
     final_line: usize,
     block_id: Option<&str>,
-) -> Option<(Vec<String>, bool)> {
+) -> Option<(Vec<String>, usize, bool)> {
     if let Some(id) = block_id {
         match orig_scan.by_block_id(id) {
-            BlockIdLookup::Missing => return Some((Vec::new(), true)),
+            BlockIdLookup::Missing => return Some((Vec::new(), 0, true)),
             BlockIdLookup::Found(task) => {
                 let Some(range) = task_block_line_range(original, task) else {
                     debug_assert!(false, "original task block range missing");
                     return None;
                 };
+                let start = range.start;
                 let before = range
                     .map(|index| {
                         orig_lines.get(index).copied().unwrap_or("").to_string()
                     })
                     .collect::<Vec<_>>();
-                return Some((before, false));
+                return Some((before, start, false));
             }
             BlockIdLookup::Duplicate(_) | BlockIdLookup::NotATask { .. } => {
                 // Fall through to the identical-bytes search.
@@ -813,7 +849,7 @@ fn resolve_unmapped_before(
         // created (dependency captures report new dependents without a
         // user-authored ID): empty before, created after.
         if block_id.is_none() {
-            return Some((Vec::new(), true));
+            return Some((Vec::new(), 0, true));
         }
         debug_assert!(false, "task block has no before match");
         return None;
@@ -826,10 +862,11 @@ fn resolve_unmapped_before(
         debug_assert!(false, "original task block range missing");
         return None;
     };
+    let start = range.start;
     let before = range
         .map(|index| orig_lines.get(index).copied().unwrap_or("").to_string())
         .collect::<Vec<_>>();
-    Some((before, false))
+    Some((before, start, false))
 }
 
 /// Exact-text fallback for a task line Myers left unmapped: search the
@@ -917,12 +954,14 @@ struct TrackedSectionBlock {
 /// Batch-scoped tracker for H2 sections used as merge destinations.
 pub(super) struct SectionBlockTracker {
     tracked: Vec<TrackedSectionBlock>,
+    settings: note_tasks::NoteTaskSettings,
 }
 
 impl SectionBlockTracker {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(settings: note_tasks::NoteTaskSettings) -> Self {
         Self {
             tracked: Vec::new(),
+            settings,
         }
     }
 
@@ -1021,12 +1060,14 @@ impl SectionBlockTracker {
                             .to_string()
                     })
                     .collect::<Vec<_>>();
+                let final_start = final_range.start;
                 let final_depths =
-                    block_depths(&final_lines, final_range.start, final_range);
+                    block_depths(&final_lines, final_start, final_range);
                 let before_drawer = original_drawers
                     .iter()
                     .find(|drawer| drawer.title == tracked.heading);
-                let (before_block, created) = match before_drawer {
+                let (before_block, before_start, created) = match before_drawer
+                {
                     Some(drawer) => {
                         let Some(range) = section_line_range(&original, drawer)
                         else {
@@ -1036,6 +1077,7 @@ impl SectionBlockTracker {
                             );
                             continue;
                         };
+                        let start = range.start;
                         let before = range
                             .map(|index| {
                                 original_lines
@@ -1045,9 +1087,9 @@ impl SectionBlockTracker {
                                     .to_string()
                             })
                             .collect::<Vec<_>>();
-                        (before, false)
+                        (before, start, false)
                     }
-                    None => (Vec::new(), true),
+                    None => (Vec::new(), 0, true),
                 };
                 let before_refs =
                     before_block.iter().map(String::as_str).collect::<Vec<_>>();
@@ -1056,6 +1098,27 @@ impl SectionBlockTracker {
                 } else {
                     block_depths(&before_refs, 0, 0..before_block.len())
                 };
+                let mut lines = pair_lines(
+                    &before_block,
+                    &before_depths,
+                    &final_block,
+                    &final_depths,
+                    created,
+                );
+                let before_snapshot = (!created).then_some(ReqSnapshot {
+                    contents: &original,
+                    start: before_start,
+                    settings: &self.settings,
+                });
+                annotate_req_lines(
+                    &mut lines,
+                    before_snapshot,
+                    Some(ReqSnapshot {
+                        contents: &final_text,
+                        start: final_start,
+                        settings: &self.settings,
+                    }),
+                );
                 ordered.push((
                     tracked.ordinal,
                     SectionBlockJson {
@@ -1065,13 +1128,7 @@ impl SectionBlockTracker {
                         heading: tracked.heading,
                         created,
                         roles: vec![TaskBlockRole::MergeTarget],
-                        lines: pair_lines(
-                            &before_block,
-                            &before_depths,
-                            &final_block,
-                            &final_depths,
-                            created,
-                        ),
+                        lines,
                     },
                 ));
             }

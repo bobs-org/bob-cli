@@ -477,5 +477,19 @@ fn req_glyph_depends_on_state_never_depth() {
         for _depth in 1..=16 {
             assert_eq!(req_glyph(state), expected, "{state:?}");
         }
+        assert_eq!(state.as_str(), state.name(), "{state:?}");
     }
+    assert_eq!(EffectiveReqState::Pending.as_str(), "pending");
+    assert_eq!(EffectiveReqState::Met.as_str(), "met");
+    assert_eq!(EffectiveReqState::Moot.as_str(), "moot");
+    assert_eq!(EffectiveReqState::Dropped.as_str(), "dropped");
+    assert_eq!(EffectiveReqState::Carried.as_str(), "carried");
+    assert_eq!(
+        EffectiveReqState::Excluded {
+            by: 0,
+            because: ReqExcludeCause::Dropped,
+        }
+        .as_str(),
+        "excluded"
+    );
 }

@@ -232,13 +232,13 @@ impl PomodoroBlockTracker {
             let lines = before_block
                 .into_iter()
                 .zip(depths)
-                .map(|(text, depth)| PomodoroBlockLineJson {
-                    text,
-                    depth,
-                    change: PomodoroBlockChange::Removed,
-                    before: None,
-                    reason: None,
-                    origin: None,
+                .map(|(text, depth)| {
+                    PomodoroBlockLineJson::new(
+                        text,
+                        depth,
+                        PomodoroBlockChange::Removed,
+                        None,
+                    )
                 })
                 .collect();
             self.removed.push(PomodoroBlockJson {
@@ -488,13 +488,13 @@ impl PomodoroBlockTracker {
                 final_block
                     .iter()
                     .zip(final_depths.iter().copied())
-                    .map(|(text, depth)| PomodoroBlockLineJson {
-                        text: text.clone(),
-                        depth,
-                        change: PomodoroBlockChange::Unchanged,
-                        before: None,
-                        reason: None,
-                        origin: None,
+                    .map(|(text, depth)| {
+                        PomodoroBlockLineJson::new(
+                            text.clone(),
+                            depth,
+                            PomodoroBlockChange::Unchanged,
+                            None,
+                        )
                     })
                     .collect()
             } else {

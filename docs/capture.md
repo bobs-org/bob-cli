@@ -8566,7 +8566,16 @@ Field rules:
   (verbatim, no terminator), `depth` (relative to the task line, computed
   by the same helper), `change` (`unchanged` / `added` / `removed` /
   `changed`), and `before` (old text on `changed` rows only). Removed
-  lines are interleaved where they used to be.
+  lines are interleaved where they used to be. Requirement head lines
+  add `req: {depth, state}` from the recognizer (`depth` 1 is a direct
+  child of the owner; `state` is `pending`, `met`, `moot`, `dropped`,
+  `carried`, or `excluded`). Unchanged, added, and changed rows use the
+  after-write snapshot; removed rows use the before-write snapshot, so
+  owner-done → `met` and owner-cancelled → `moot` follow automatically.
+  Notes, drawers, and the task line itself omit `req`. The same object
+  appears on `section_blocks[].lines[]` and `note_files[].lines[]` when
+  those lines are requirements. Clients draw the diamond from `req` and
+  never infer it from `[ ]`.
 - The diff is cumulative against the note before the capture. If the same
   draft also rewrites the parent's task line (for example, a task toggle
   of the same task), the task line shows as `changed` with its `before`
@@ -11006,6 +11015,11 @@ lines use the clean description, bullets the body after the list marker, other
 lines the line without indentation), relative `depth`, `kind` (`bullet`,
 `task`, `text`, `code`, or `log_marker`), `status_symbol` on task lines, and a
 `work`/`schedule`/`rotten` `log` tag on managed log markers and their subtrees.
+Requirement rows add the same optional `req: {depth, state}` object as
+capture preview block lines (`depth` is the recognizer depth; `state` is
+`pending` / `met` / `moot` / `dropped` / `carried` / `excluded`). `kind`
+and `text` stay unchanged for older clients. The idle agenda draws the
+diamond from this annotation and never infers a requirement from `[ ]`.
 
 An item linked to an Event Task in today's daily note also carries `event` with
 its `time_range`, naive `starts_at`/`ends_at`, `off_clock` and deprecated

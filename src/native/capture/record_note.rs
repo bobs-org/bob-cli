@@ -336,14 +336,12 @@ pub(super) fn refresh_record_markdown(
         record.markdown = markdown.clone();
         record.note_file.markdown = markdown;
         if !had_walk_line {
-            record.note_file.lines.push(BlockLineJson {
-                text: line,
-                depth: 0,
-                change: BlockLineChange::Added,
-                before: None,
-                reason: None,
-                origin: None,
-            });
+            record.note_file.lines.push(BlockLineJson::new(
+                line,
+                0,
+                BlockLineChange::Added,
+                None,
+            ));
         }
     }
 }
@@ -456,7 +454,8 @@ fn plan_record_update_item(
     let note_count =
         ordinary_note_count(&intent) + usize::from(!intent.title.is_empty());
     let body = plan.body.clone().unwrap_or_default();
-    let lines = record_update_lines(&original, &markdown);
+    let settings = note_tasks::read_settings(&request.bob_dir);
+    let lines = record_update_lines(&original, &markdown, &settings);
     let album_json = album.as_ref().map(|album| {
         crate::native::capture::output::RecordAlbumJson {
             stem: album.stem.clone(),
@@ -559,14 +558,33 @@ fn staged_update_snapshot(
     ))
 }
 
-fn record_update_lines(original: &str, updated: &str) -> Vec<BlockLineJson> {
+fn record_update_lines(
+    original: &str,
+    updated: &str,
+    settings: &note_tasks::NoteTaskSettings,
+) -> Vec<BlockLineJson> {
     let before: Vec<String> = original.lines().map(str::to_owned).collect();
     let after: Vec<String> = updated.lines().map(str::to_owned).collect();
     let before_refs: Vec<&str> = before.iter().map(String::as_str).collect();
     let after_refs: Vec<&str> = after.iter().map(String::as_str).collect();
     let before_depths = block_depths(&before_refs, 0, 0..before.len());
     let after_depths = block_depths(&after_refs, 0, 0..after.len());
-    pair_lines(&before, &before_depths, &after, &after_depths, false)
+    let mut lines =
+        pair_lines(&before, &before_depths, &after, &after_depths, false);
+    annotate_req_lines(
+        &mut lines,
+        Some(ReqSnapshot {
+            contents: original,
+            start: 0,
+            settings,
+        }),
+        Some(ReqSnapshot {
+            contents: updated,
+            start: 0,
+            settings,
+        }),
+    );
+    lines
 }
 
 fn existing_record_warning(warning: &RecordDiagnostic) -> String {

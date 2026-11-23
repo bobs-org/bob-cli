@@ -97,6 +97,10 @@ pub(crate) struct AgendaLine {
     pub(crate) kind: AgendaLineKind,
     pub(crate) status_symbol: Option<char>,
     pub(crate) log: Option<AgendaLog>,
+    /// Requirement annotation from the recognizer. Omitted on
+    /// non-requirement rows so older clients keep today's look.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) req: Option<super::task_reqs::ReqLineJson>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -638,6 +642,8 @@ impl<'a> AgendaNotes<'a> {
         let fenced = markdown::fenced_lines(&line_text, 0..line_text.len());
         let depths = block_depths(&line_text, task.line_index, range.clone());
         let global_filter = self.global_filter_for(filter_cleared);
+        let reqs =
+            super::task_reqs::req_line_map(target_contents, &self.settings);
         let mut lines = build_lines(
             &line_text,
             &fenced,
@@ -646,6 +652,7 @@ impl<'a> AgendaNotes<'a> {
             global_filter,
             &self.settings.global_filter,
             filter_cleared,
+            &reqs,
         );
         let mut truncated = 0;
         if lines.len() > MAX_TASK_BLOCK_LINES {
@@ -716,6 +723,7 @@ impl<'a> AgendaNotes<'a> {
                 &self.settings.global_filter,
                 &self.settings.global_filter,
                 false,
+                None,
             ) {
                 lines.push(line);
             }
@@ -1537,6 +1545,7 @@ fn entry_notes_for(
             global_filter,
             global_filter,
             false,
+            None,
         ) {
             lines.push(note);
         }
@@ -1570,6 +1579,7 @@ fn build_lines(
     global_filter: &str,
     task_filter: &str,
     filter_cleared: bool,
+    reqs: &BTreeMap<usize, super::task_reqs::ReqLineJson>,
 ) -> Vec<AgendaLine> {
     let mut lines = Vec::new();
     for index in range.clone() {
@@ -1594,6 +1604,7 @@ fn build_lines(
             global_filter,
             task_filter,
             filter_cleared,
+            reqs.get(&index).cloned(),
         ) {
             lines.push(built);
         }
@@ -1616,6 +1627,7 @@ fn build_one_line(
     global_filter: &str,
     task_filter: &str,
     filter_cleared: bool,
+    req: Option<super::task_reqs::ReqLineJson>,
 ) -> Option<AgendaLine> {
     if line.trim().is_empty() {
         return None;
@@ -1627,6 +1639,7 @@ fn build_one_line(
             kind: AgendaLineKind::Code,
             status_symbol: None,
             log: None,
+            req: None,
         });
     }
     if let Some(marker_kind) = parse_managed_task_log_marker(line) {
@@ -1639,6 +1652,7 @@ fn build_one_line(
             kind: AgendaLineKind::LogMarker,
             status_symbol: None,
             log: Some(AgendaLog::from_kind(marker_kind)),
+            req: None,
         });
     }
     if let Some(body) = list_item_body(line) {
@@ -1652,6 +1666,7 @@ fn build_one_line(
                     kind: AgendaLineKind::Bullet,
                     status_symbol: None,
                     log: None,
+                    req,
                 });
             }
             let block_id = trailing_block_id_in_line(line);
@@ -1669,6 +1684,7 @@ fn build_one_line(
                 kind: AgendaLineKind::Task,
                 status_symbol: Some(symbol),
                 log: None,
+                req: None,
             });
         }
         return Some(AgendaLine {
@@ -1677,6 +1693,7 @@ fn build_one_line(
             kind: AgendaLineKind::Bullet,
             status_symbol: None,
             log: None,
+            req: None,
         });
     }
     Some(AgendaLine {
@@ -1685,6 +1702,7 @@ fn build_one_line(
         kind: AgendaLineKind::Text,
         status_symbol: None,
         log: None,
+        req: None,
     })
 }
 

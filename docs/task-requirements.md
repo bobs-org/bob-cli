@@ -485,7 +485,8 @@ the key name is historical). `copy.scope` reads `1 requirement`,
 `{n} requirements`, or `{n} requirements in {b} branches`. The human met
 line equals the met receipt (`✓ {n} requirements met with “{S}”`). The
 teaching line is `Met when this task closes. Drop it or make it a task if
-the scope changes.`
+the scope changes.` Capture preview block lines and idle-agenda lines add
+optional `req: {depth, state}` on requirement rows, omitted otherwise.
 
 ## 5. Authoring
 

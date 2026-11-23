@@ -27,6 +27,33 @@ pub(super) struct BlockLineJson {
     /// Omitted everywhere else. Additive and byte-identical when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) origin: Option<String>,
+    /// Requirement annotation from the recognizer: `depth` (1 is a
+    /// direct child of the owner) and `state`
+    /// ([`EffectiveReqState::as_str`](crate::native::task_reqs::EffectiveReqState::as_str)).
+    /// Present only on requirement head lines, so unrelated output stays
+    /// byte-identical. Clients draw the diamond from this object and
+    /// never infer it from `[ ]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) req: Option<crate::native::task_reqs::ReqLineJson>,
+}
+
+impl BlockLineJson {
+    pub(super) fn new(
+        text: String,
+        depth: usize,
+        change: BlockLineChange,
+        before: Option<String>,
+    ) -> Self {
+        Self {
+            text,
+            depth,
+            change,
+            before,
+            reason: None,
+            origin: None,
+            req: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -139,13 +166,13 @@ pub(super) fn pair_lines(
         return final_block
             .iter()
             .zip(final_depths.iter().copied())
-            .map(|(text, depth)| BlockLineJson {
-                text: text.clone(),
-                depth,
-                change: BlockLineChange::Added,
-                before: None,
-                reason: None,
-                origin: None,
+            .map(|(text, depth)| {
+                BlockLineJson::new(
+                    text.clone(),
+                    depth,
+                    BlockLineChange::Added,
+                    None,
+                )
             })
             .collect();
     }
@@ -164,34 +191,28 @@ pub(super) fn pair_lines(
         for offset in 0..shared {
             let (old_text, _) = &pending_old[offset];
             let (new_text, new_depth) = &pending_new[offset];
-            rows.push(BlockLineJson {
-                text: new_text.clone(),
-                depth: *new_depth,
-                change: BlockLineChange::Changed,
-                before: Some(old_text.clone()),
-                reason: None,
-                origin: None,
-            });
+            rows.push(BlockLineJson::new(
+                new_text.clone(),
+                *new_depth,
+                BlockLineChange::Changed,
+                Some(old_text.clone()),
+            ));
         }
         for (old_text, old_depth) in pending_old.drain(..).skip(shared) {
-            rows.push(BlockLineJson {
-                text: old_text,
-                depth: old_depth,
-                change: BlockLineChange::Removed,
-                before: None,
-                reason: None,
-                origin: None,
-            });
+            rows.push(BlockLineJson::new(
+                old_text,
+                old_depth,
+                BlockLineChange::Removed,
+                None,
+            ));
         }
         for (new_text, new_depth) in pending_new.drain(..).skip(shared) {
-            rows.push(BlockLineJson {
-                text: new_text,
-                depth: new_depth,
-                change: BlockLineChange::Added,
-                before: None,
-                reason: None,
-                origin: None,
-            });
+            rows.push(BlockLineJson::new(
+                new_text,
+                new_depth,
+                BlockLineChange::Added,
+                None,
+            ));
         }
     };
     for op in ops {
@@ -199,14 +220,12 @@ pub(super) fn pair_lines(
             similar::DiffOp::Equal { new_index, len, .. } => {
                 flush(&mut rows, &mut pending_old, &mut pending_new);
                 for offset in 0..len {
-                    rows.push(BlockLineJson {
-                        text: final_block[new_index + offset].clone(),
-                        depth: final_depths[new_index + offset],
-                        change: BlockLineChange::Unchanged,
-                        before: None,
-                        reason: None,
-                        origin: None,
-                    });
+                    rows.push(BlockLineJson::new(
+                        final_block[new_index + offset].clone(),
+                        final_depths[new_index + offset],
+                        BlockLineChange::Unchanged,
+                        None,
+                    ));
                 }
             }
             similar::DiffOp::Delete {
@@ -238,38 +257,254 @@ pub(super) fn pair_lines(
                 flush(&mut rows, &mut pending_old, &mut pending_new);
                 let shared = old_len.min(new_len);
                 for offset in 0..shared {
-                    rows.push(BlockLineJson {
-                        text: final_block[new_index + offset].clone(),
-                        depth: final_depths[new_index + offset],
-                        change: BlockLineChange::Changed,
-                        before: Some(before[old_index + offset].clone()),
-                        reason: None,
-                        origin: None,
-                    });
+                    rows.push(BlockLineJson::new(
+                        final_block[new_index + offset].clone(),
+                        final_depths[new_index + offset],
+                        BlockLineChange::Changed,
+                        Some(before[old_index + offset].clone()),
+                    ));
                 }
                 for offset in shared..old_len {
-                    rows.push(BlockLineJson {
-                        text: before[old_index + offset].clone(),
-                        depth: before_depths[old_index + offset],
-                        change: BlockLineChange::Removed,
-                        before: None,
-                        reason: None,
-                        origin: None,
-                    });
+                    rows.push(BlockLineJson::new(
+                        before[old_index + offset].clone(),
+                        before_depths[old_index + offset],
+                        BlockLineChange::Removed,
+                        None,
+                    ));
                 }
                 for offset in shared..new_len {
-                    rows.push(BlockLineJson {
-                        text: final_block[new_index + offset].clone(),
-                        depth: final_depths[new_index + offset],
-                        change: BlockLineChange::Added,
-                        before: None,
-                        reason: None,
-                        origin: None,
-                    });
+                    rows.push(BlockLineJson::new(
+                        final_block[new_index + offset].clone(),
+                        final_depths[new_index + offset],
+                        BlockLineChange::Added,
+                        None,
+                    ));
                 }
             }
         }
     }
     flush(&mut rows, &mut pending_old, &mut pending_new);
     rows
+}
+
+/// Snapshot the recognizer uses for one side of a block diff: the whole
+/// note text plus the 0-based start of this block inside it.
+pub(super) struct ReqSnapshot<'a> {
+    pub(super) contents: &'a str,
+    pub(super) start: usize,
+    pub(super) settings: &'a note_tasks::NoteTaskSettings,
+}
+
+/// Fill `req` from the recognizer. Unchanged, added, and changed rows
+/// use the after snapshot; removed rows use the before snapshot. Owner
+/// done → met and owner cancelled → moot follow from those snapshots.
+pub(super) fn annotate_req_lines(
+    lines: &mut [BlockLineJson],
+    before: Option<ReqSnapshot<'_>>,
+    after: Option<ReqSnapshot<'_>>,
+) {
+    let before_map = before.as_ref().map(|snapshot| {
+        crate::native::task_reqs::req_line_map(
+            snapshot.contents,
+            snapshot.settings,
+        )
+    });
+    let after_map = after.as_ref().map(|snapshot| {
+        crate::native::task_reqs::req_line_map(
+            snapshot.contents,
+            snapshot.settings,
+        )
+    });
+    let before_start =
+        before.as_ref().map(|snapshot| snapshot.start).unwrap_or(0);
+    let after_start =
+        after.as_ref().map(|snapshot| snapshot.start).unwrap_or(0);
+    let mut before_index = 0usize;
+    let mut after_index = 0usize;
+    for row in lines {
+        match row.change {
+            BlockLineChange::Removed => {
+                if let Some(map) = before_map.as_ref() {
+                    row.req = map.get(&(before_start + before_index)).cloned();
+                }
+                before_index += 1;
+            }
+            BlockLineChange::Added => {
+                if let Some(map) = after_map.as_ref() {
+                    row.req = map.get(&(after_start + after_index)).cloned();
+                }
+                after_index += 1;
+            }
+            BlockLineChange::Unchanged | BlockLineChange::Changed => {
+                if let Some(map) = after_map.as_ref() {
+                    row.req = map.get(&(after_start + after_index)).cloned();
+                }
+                before_index += 1;
+                after_index += 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::task_reqs::ReqLineJson;
+    use std::path::Path;
+
+    fn settings() -> note_tasks::NoteTaskSettings {
+        note_tasks::read_settings(Path::new("/no-bob-vault"))
+    }
+
+    fn req(depth: usize, state: &'static str) -> ReqLineJson {
+        ReqLineJson { depth, state }
+    }
+
+    #[test]
+    fn annotate_req_lines_uses_after_snapshot_except_removed() {
+        let settings = settings();
+        let before = concat!(
+            "- [ ] #task Owner ^ex\n",
+            "\t- [ ] Keep\n",
+            "\t- [ ] Nested parent\n",
+            "\t\t- [ ] Nested child\n",
+            "\t- [ ] Dropped later\n",
+        );
+        let after = concat!(
+            "- [x] #task Owner [completion:: 2026-06-15] ^ex\n",
+            "\t- [ ] Keep\n",
+            "\t- [ ] Nested parent\n",
+            "\t\t- [ ] Nested child\n",
+            "\t- [ ] Added\n",
+        );
+        let mut lines = vec![
+            BlockLineJson::new(
+                after.lines().next().unwrap().to_string(),
+                0,
+                BlockLineChange::Changed,
+                Some(before.lines().next().unwrap().to_string()),
+            ),
+            BlockLineJson::new(
+                "\t- [ ] Keep".into(),
+                1,
+                BlockLineChange::Unchanged,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t- [ ] Nested parent".into(),
+                1,
+                BlockLineChange::Unchanged,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t\t- [ ] Nested child".into(),
+                2,
+                BlockLineChange::Unchanged,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t- [ ] Dropped later".into(),
+                1,
+                BlockLineChange::Removed,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t- [ ] Added".into(),
+                1,
+                BlockLineChange::Added,
+                None,
+            ),
+        ];
+        annotate_req_lines(
+            &mut lines,
+            Some(ReqSnapshot {
+                contents: before,
+                start: 0,
+                settings: &settings,
+            }),
+            Some(ReqSnapshot {
+                contents: after,
+                start: 0,
+                settings: &settings,
+            }),
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|row| (row.change, row.req.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (BlockLineChange::Changed, None),
+                (BlockLineChange::Unchanged, Some(req(1, "met"))),
+                (BlockLineChange::Unchanged, Some(req(1, "met"))),
+                (BlockLineChange::Unchanged, Some(req(2, "met"))),
+                (BlockLineChange::Removed, Some(req(1, "pending"))),
+                (BlockLineChange::Added, Some(req(1, "met"))),
+            ]
+        );
+    }
+
+    #[test]
+    fn annotate_req_lines_omits_notes_and_drawers() {
+        let settings = settings();
+        let after = concat!(
+            "- [ ] #task Owner ^ex\n",
+            "\t- [ ] A req\n",
+            "\t\t- attached note\n",
+            "\t- NOTES\n",
+            "\t\t- drawer note\n",
+        );
+        let after_block: Vec<String> =
+            after.lines().map(str::to_owned).collect();
+        let after_depths = vec![0, 1, 2, 1, 2];
+        let mut lines = pair_lines(&[], &[], &after_block, &after_depths, true);
+        annotate_req_lines(
+            &mut lines,
+            None,
+            Some(ReqSnapshot {
+                contents: after,
+                start: 0,
+                settings: &settings,
+            }),
+        );
+        assert_eq!(
+            lines.iter().map(|row| row.req.clone()).collect::<Vec<_>>(),
+            vec![None, Some(req(1, "pending")), None, None, None]
+        );
+    }
+
+    #[test]
+    fn annotate_req_lines_reads_dropped_carried_excluded_and_moot() {
+        let settings = settings();
+        let after = concat!(
+            "- [-] #task Owner ^ex\n",
+            "\t- [ ] open under cancelled\n",
+            "\t- [-] dropped req\n",
+            "\t\t- [ ] excluded child\n",
+            "\t- [>] [[#^own|carried req]]\n",
+        );
+        let after_block: Vec<String> =
+            after.lines().map(str::to_owned).collect();
+        let after_depths = vec![0, 1, 1, 2, 1];
+        let mut lines = pair_lines(&[], &[], &after_block, &after_depths, true);
+        annotate_req_lines(
+            &mut lines,
+            None,
+            Some(ReqSnapshot {
+                contents: after,
+                start: 0,
+                settings: &settings,
+            }),
+        );
+        assert_eq!(
+            lines.iter().map(|row| row.req.clone()).collect::<Vec<_>>(),
+            vec![
+                None,
+                Some(req(1, "moot")),
+                Some(req(1, "dropped")),
+                Some(req(2, "excluded")),
+                Some(req(1, "carried")),
+            ]
+        );
+    }
 }

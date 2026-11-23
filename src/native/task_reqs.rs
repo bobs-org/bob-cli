@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -166,6 +167,43 @@ impl EffectiveReqState {
             Self::Excluded { .. } => "excluded",
         }
     }
+
+    /// Wire `state` for the additive `req` annotation on preview and
+    /// idle-agenda lines. Same bytes as [`Self::name`].
+    pub(crate) fn as_str(self) -> &'static str {
+        self.name()
+    }
+}
+
+/// Additive `req: {depth, state}` on a preview or idle-agenda line.
+///
+/// `depth` is the recognizer depth (1 is a direct child of the owner).
+/// `state` is [`EffectiveReqState::as_str`]. Omitted on non-requirement
+/// lines so unrelated JSON stays byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ReqLineJson {
+    pub(crate) depth: usize,
+    pub(crate) state: &'static str,
+}
+
+/// Map of 0-based note line index → requirement annotation, built from
+/// one recognizer pass.
+pub(crate) fn req_line_map(
+    contents: &str,
+    settings: &NoteTaskSettings,
+) -> BTreeMap<usize, ReqLineJson> {
+    note_req_forest(contents, settings)
+        .into_iter()
+        .map(|node| {
+            (
+                node.line_index,
+                ReqLineJson {
+                    depth: node.depth,
+                    state: node.state.as_str(),
+                },
+            )
+        })
+        .collect()
 }
 
 /// One recognized requirement.

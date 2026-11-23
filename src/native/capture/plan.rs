@@ -429,7 +429,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     let tasks_plugin_settings =
         crate::native::task_status_hooks::read_tasks_settings(&request.bob_dir);
     let mut task_tracker = TaskBlockTracker::new(task_settings.clone());
-    let mut section_tracker = SectionBlockTracker::new();
+    let mut section_tracker = SectionBlockTracker::new(task_settings.clone());
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
     let mut task_theme_context =
         CaptureTaskThemeContext::new(&request.bob_dir, today, now, config_path);
