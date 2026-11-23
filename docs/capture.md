@@ -7997,7 +7997,7 @@ notes_filed, notes_created, summary}`, omitted when empty. `owner` is the
 task description; `added` counts the requirements this item wrote, nested
 ones included, on a new block and on an existing task alike;
 `notes_filed` / `notes_created` describe the `NOTES` filing; `summary` is
-the human line (`⌗⌗ added {k} requirement(s) to “{S}”`, plus
+the human line (`◇ added {k} requirement(s) to “{S}”`, plus
 ` · filed {n} note(s) under NOTES` when notes moved; dry runs use `adds` /
 `files`). Human output prints each `summary` after the authored children.
 

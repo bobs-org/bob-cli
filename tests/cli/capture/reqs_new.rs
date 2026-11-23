@@ -108,7 +108,7 @@ fn assert_req_entry(
         "requirements"
     };
     let mut expected =
-        format!("⌗⌗ {added_verb} {added} {req_word} to “{owner}”");
+        format!("◇ {added_verb} {added} {req_word} to “{owner}”");
     if notes_filed > 0 {
         let filed_verb = if dry_run { "files" } else { "filed" };
         let note_word = if notes_filed == 1 { "note" } else { "notes" };
@@ -434,7 +434,7 @@ fn a_single_requirement_uses_singular_copy() {
     assert_success(&human);
     let text = stdout(&human);
     assert!(
-        text.contains("⌗⌗ adds 1 requirement to “Fix export”"),
+        text.contains("◇ adds 1 requirement to “Fix export”"),
         "{text}"
     );
     assert!(!text.contains("under NOTES"), "{text}");

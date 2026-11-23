@@ -15,7 +15,7 @@ use super::super::{
     capture::line_spans,
     note_tasks::{self, stable_task_key, NoteTask, NoteTaskSettings},
     task_reqs::{
-        self, req_path, req_row_key, req_run, EffectiveReqState, ReqNode,
+        self, req_glyph, req_path, req_row_key, EffectiveReqState, ReqNode,
         MAX_REQ_DEPTH,
     },
 };
@@ -23,7 +23,6 @@ use super::is_recurring_task_line;
 
 /// Canonical copy frozen by the RV vectors.
 pub(crate) mod copy {
-    use super::req_run;
 
     /// Group caption under the title.
     pub(crate) const WHY: &str = "Met when it closes, unless you say otherwise";
@@ -43,7 +42,7 @@ pub(crate) mod copy {
     /// Teaching line shared with the contract page.
     #[cfg(test)]
     pub(crate) const TEACHING: &str =
-        "Part of this task's scope. Met when the task closes. Drop it or make it a task";
+        "Met when this task closes. Drop it or make it a task if the scope changes.";
 
     pub(crate) fn quoted(text: &str) -> String {
         format!("“{text}”")
@@ -53,13 +52,17 @@ pub(crate) mod copy {
         format!("Requirements · {}", quoted(owner_text))
     }
 
-    /// `{n} reqs` when there is one pending branch; otherwise
-    /// `{n} reqs in {b} branches`.
+    /// `1 requirement`, `{n} requirements`, or
+    /// `{n} requirements in {b} branches`.
     pub(crate) fn scope(pending: usize, branches: usize) -> String {
         if branches <= 1 {
-            format!("{pending} reqs")
+            if pending == 1 {
+                "1 requirement".to_string()
+            } else {
+                format!("{pending} requirements")
+            }
         } else {
-            format!("{pending} reqs in {branches} branches")
+            format!("{pending} requirements in {branches} branches")
         }
     }
 
@@ -100,11 +103,7 @@ pub(crate) mod copy {
     }
 
     pub(crate) fn human_met_line(count: usize, owner_text: &str) -> String {
-        format!(
-            "{} {count} requirements met with {}",
-            req_run(1),
-            quoted(owner_text)
-        )
+        met_receipt(count, owner_text)
     }
 
     pub(crate) fn drop_receipt(text: &str, reason: Option<&str>) -> String {
@@ -336,7 +335,7 @@ impl ReqCloseOwner {
                 state: node.state,
                 pending_descendants: node.pending_descendants,
                 depth_exceeded: node.depth_exceeded,
-                run: req_run(node.depth),
+                run: req_glyph(EffectiveReqState::Pending),
                 accessibility: copy::accessibility(node.depth, "will be met"),
                 consequences: ReqConsequences::for_text(&node.text),
             })
@@ -350,7 +349,7 @@ impl ReqCloseOwner {
                 scope: copy::scope(pending.len(), self.pending_branches()),
                 why: copy::WHY,
                 history: copy::history(folds.dropped, folds.carried, folds.met),
-                glyph: req_run(1),
+                glyph: "requirement",
                 footer: copy::FOOTER,
                 hint: copy::HINT,
             },

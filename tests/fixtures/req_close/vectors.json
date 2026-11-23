@@ -8,11 +8,11 @@
     "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
     "jump_hint": "↗ jumps to the requirement — ⌃⇧T makes it a task",
     "hint": "-k N own task · -X N[=why] drop · -p N pull in",
-    "teaching": "Part of this task's scope. Met when the task closes. Drop it or make it a task",
+    "teaching": "Met when this task closes. Drop it or make it a task if the scope changes.",
     "overlap": "“{ancestor}” already takes this branch — restage it as met to choose here",
     "nested_go_with_it": "· {k} nested go with it",
     "met_receipt": "✓ {n} requirements met with “{S}”",
-    "human_met": "⌗⌗ {n} requirements met with “{S}”",
+    "human_met": "✓ {n} requirements met with “{S}”",
     "drop_receipt": "⊘ Dropped “{T}”",
     "carry_receipt": "→ “{T}” is its own task now",
     "carry_pulled_receipt": "→ “{T}” is its own task now · pulled in",
@@ -68,9 +68,9 @@
             },
             "copy": {
               "title": "Requirements · “Ship the exporter”",
-              "scope": "4 reqs",
+              "scope": "4 requirements",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -100,7 +100,7 @@
                   "carry": "→ “Handles supported inputs” is its own task now",
                   "carry_pulled": "→ “Handles supported inputs” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               },
               {
@@ -126,7 +126,7 @@
                   "carry": "→ “Handles Windows files” is its own task now",
                   "carry_pulled": "→ “Handles Windows files” is its own task now · pulled in"
                 },
-                "run": "⌗⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 2, will be met"
               },
               {
@@ -152,7 +152,7 @@
                   "carry": "→ “Preserves CRLF” is its own task now",
                   "carry_pulled": "→ “Preserves CRLF” is its own task now · pulled in"
                 },
-                "run": "⌗⌗⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 3, will be met"
               },
               {
@@ -178,7 +178,7 @@
                   "carry": "→ “Handles empty input” is its own task now",
                   "carry_pulled": "→ “Handles empty input” is its own task now · pulled in"
                 },
-                "run": "⌗⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 2, will be met"
               }
             ]
@@ -232,9 +232,9 @@
             },
             "copy": {
               "title": "Requirements · “Mixed indent”",
-              "scope": "2 reqs in 2 branches",
+              "scope": "2 requirements in 2 branches",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -264,7 +264,7 @@
                   "carry": "→ “Two-space req” is its own task now",
                   "carry_pulled": "→ “Two-space req” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               },
               {
@@ -290,7 +290,7 @@
                   "carry": "→ “Tab req” is its own task now",
                   "carry_pulled": "→ “Tab req” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -346,9 +346,9 @@
             },
             "copy": {
               "title": "Requirements · “Owner”",
-              "scope": "2 reqs in 2 branches",
+              "scope": "2 requirements in 2 branches",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -378,7 +378,7 @@
                   "carry": "→ “Real req” is its own task now",
                   "carry_pulled": "→ “Real req” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               },
               {
@@ -404,7 +404,7 @@
                   "carry": "→ “Another req” is its own task now",
                   "carry_pulled": "→ “Another req” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -472,9 +472,9 @@
             },
             "copy": {
               "title": "Requirements · “Child”",
-              "scope": "1 reqs",
+              "scope": "1 requirement",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -504,7 +504,7 @@
                   "carry": "→ “Child req” is its own task now",
                   "carry_pulled": "→ “Child req” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -522,9 +522,9 @@
             },
             "copy": {
               "title": "Requirements · “Parent”",
-              "scope": "1 reqs",
+              "scope": "1 requirement",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -554,7 +554,7 @@
                   "carry": "→ “Parent req” is its own task now",
                   "carry_pulled": "→ “Parent req” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -634,9 +634,9 @@
             },
             "copy": {
               "title": "Requirements · “Owner”",
-              "scope": "1 reqs",
+              "scope": "1 requirement",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": "· 1 dropped earlier · 1 carried earlier · 1 met earlier"
@@ -670,7 +670,7 @@
                   "carry": "→ “Live” is its own task now",
                   "carry_pulled": "→ “Live” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -724,9 +724,9 @@
             },
             "copy": {
               "title": "Requirements · “Owner”",
-              "scope": "2 reqs in 2 branches",
+              "scope": "2 requirements in 2 branches",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -756,7 +756,7 @@
                   "carry": "→ “Flagged” is its own task now",
                   "carry_pulled": "→ “Flagged” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               },
               {
@@ -782,7 +782,7 @@
                   "carry": "→ “Starred” is its own task now",
                   "carry_pulled": "→ “Starred” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -885,9 +885,9 @@
             },
             "copy": {
               "title": "Requirements · “First”",
-              "scope": "1 reqs",
+              "scope": "1 requirement",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -917,7 +917,7 @@
                   "carry": "→ “Req A” is its own task now",
                   "carry_pulled": "→ “Req A” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -935,9 +935,9 @@
             },
             "copy": {
               "title": "Requirements · “Second”",
-              "scope": "1 reqs",
+              "scope": "1 requirement",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -967,7 +967,7 @@
                   "carry": "→ “Req B” is its own task now",
                   "carry_pulled": "→ “Req B” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -1023,9 +1023,9 @@
             },
             "copy": {
               "title": "Requirements · “Owner”",
-              "scope": "4 reqs in 2 branches",
+              "scope": "4 requirements in 2 branches",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -1055,7 +1055,7 @@
                   "carry": "→ “Same” is its own task now",
                   "carry_pulled": "→ “Same” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               },
               {
@@ -1081,7 +1081,7 @@
                   "carry": "→ “Left child” is its own task now",
                   "carry_pulled": "→ “Left child” is its own task now · pulled in"
                 },
-                "run": "⌗⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 2, will be met"
               },
               {
@@ -1107,7 +1107,7 @@
                   "carry": "→ “Same” is its own task now",
                   "carry_pulled": "→ “Same” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               },
               {
@@ -1133,7 +1133,7 @@
                   "carry": "→ “Right child” is its own task now",
                   "carry_pulled": "→ “Right child” is its own task now · pulled in"
                 },
-                "run": "⌗⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 2, will be met"
               }
             ]
@@ -1208,9 +1208,9 @@
             },
             "copy": {
               "title": "Requirements · “Same”",
-              "scope": "1 reqs",
+              "scope": "1 requirement",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -1240,7 +1240,7 @@
                   "carry": "→ “Shared” is its own task now",
                   "carry_pulled": "→ “Shared” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]
@@ -1258,9 +1258,9 @@
             },
             "copy": {
               "title": "Requirements · “Same”",
-              "scope": "1 reqs",
+              "scope": "1 requirement",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in",
               "history": null
@@ -1290,7 +1290,7 @@
                   "carry": "→ “Shared” is its own task now",
                   "carry_pulled": "→ “Shared” is its own task now · pulled in"
                 },
-                "run": "⌗⌗",
+                "run": "◇",
                 "accessibility": "requirement, level 1, will be met"
               }
             ]

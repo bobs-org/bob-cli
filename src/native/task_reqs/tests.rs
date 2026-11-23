@@ -448,3 +448,34 @@ fn reqs_are_invisible_to_task_readers() {
         );
     }
 }
+
+#[test]
+fn req_glyph_depends_on_state_never_depth() {
+    // One text glyph per state; depth takes no part, so the same state
+    // reads the same at depths 1 through 16.
+    for (state, expected) in [
+        (EffectiveReqState::Pending, "◇"),
+        (EffectiveReqState::Met, "◆"),
+        (EffectiveReqState::Moot, "◇"),
+        (EffectiveReqState::Dropped, "⊘"),
+        (EffectiveReqState::Carried, "→"),
+        (
+            EffectiveReqState::Excluded {
+                by: 0,
+                because: ReqExcludeCause::Dropped,
+            },
+            "◇",
+        ),
+        (
+            EffectiveReqState::Excluded {
+                by: 3,
+                because: ReqExcludeCause::Carried,
+            },
+            "◇",
+        ),
+    ] {
+        for _depth in 1..=16 {
+            assert_eq!(req_glyph(state), expected, "{state:?}");
+        }
+    }
+}

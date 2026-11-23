@@ -667,7 +667,9 @@ fn print_report(report: &Report) {
                     format!(
                         "{}{} {}{state}",
                         "  ".repeat(req.depth.saturating_sub(1)),
-                        styler.cyan(task_reqs::req_run(req.depth)),
+                        styler.cyan(task_reqs::req_glyph(
+                            task_reqs::EffectiveReqState::Pending
+                        )),
                         candidate.title
                     )
                 }

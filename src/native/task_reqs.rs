@@ -779,13 +779,19 @@ pub(crate) fn note_req_forest(
     forest_for_note(contents, settings)
 }
 
-/// The hash run drawn in place of a req's checkbox: `⌗⌗` at depth 1, one
-/// more hash per level, capped at four so it fills the four cells of `[ ] `.
-pub(crate) fn req_run(depth: usize) -> &'static str {
-    match depth {
-        0 | 1 => "⌗⌗",
-        2 => "⌗⌗⌗",
-        _ => "⌗⌗⌗⌗",
+/// The text glyph drawn in place of a req's checkbox, by state.
+///
+/// Depth never changes the glyph: indentation alone shows nesting, so a
+/// requirement reads the same at every depth. Graphical surfaces draw the
+/// matching diamond mask; plain text falls back to these characters.
+pub(crate) fn req_glyph(state: EffectiveReqState) -> &'static str {
+    match state {
+        EffectiveReqState::Pending => "◇",
+        EffectiveReqState::Met => "◆",
+        EffectiveReqState::Moot => "◇",
+        EffectiveReqState::Dropped => "⊘",
+        EffectiveReqState::Carried => "→",
+        EffectiveReqState::Excluded { .. } => "◇",
     }
 }
 

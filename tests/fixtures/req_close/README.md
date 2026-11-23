@@ -74,6 +74,11 @@ identity (not label) landing between same-labelled carried branches.
   descendants are never Pending. Manual `[x]` is Met for that row
   only and counts as `met` in `folded`, never as a listed row.
 
+`copy.glyph` is the semantic token `"requirement"` (like `relation`
+and `note_pull`), never a drawn mark. A row's `run` is the
+plain-text fallback mark (`req_glyph`): `"◇"` on every listed row,
+since only Pending rows are listed. The `run` key name is historical.
+
 Row keys are opaque: `owner.key` + `/req/` + sibling path + `~` +
 the first eight hex characters of sha256(clean text). Clients compare
 the complete supplied key to a freshly enumerated forest.

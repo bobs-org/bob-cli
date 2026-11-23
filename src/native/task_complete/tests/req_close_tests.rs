@@ -330,8 +330,9 @@ fn copy_catalog_matches_shared_fixture() {
         copy::group_title("Ship the exporter"),
         "Requirements · “Ship the exporter”"
     );
-    assert_eq!(copy::scope(4, 1), "4 reqs");
-    assert_eq!(copy::scope(2, 2), "2 reqs in 2 branches");
+    assert_eq!(copy::scope(1, 1), "1 requirement");
+    assert_eq!(copy::scope(4, 1), "4 requirements");
+    assert_eq!(copy::scope(2, 2), "2 requirements in 2 branches");
     assert_eq!(copy::history(0, 0, 0), None);
     assert_eq!(
         copy::history(1, 0, 0).as_deref(),
@@ -504,7 +505,7 @@ fn tree_close_binds_the_open_preimage_before_mutation() {
     let groups = groups_from_owners(&outcome.req_owners);
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].rows.len(), 2);
-    assert_eq!(groups[0].copy.scope, "2 reqs");
+    assert_eq!(groups[0].copy.scope, "2 requirements");
 }
 
 #[test]

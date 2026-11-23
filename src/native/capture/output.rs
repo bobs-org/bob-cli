@@ -1131,7 +1131,7 @@ pub(super) fn requirement_write_summary(
     } else {
         "requirements"
     };
-    let mut line = format!("⌗⌗ {added_verb} {added} {req_word} to “{owner}”");
+    let mut line = format!("◇ {added_verb} {added} {req_word} to “{owner}”");
     if notes_filed > 0 {
         let filed_verb = if dry_run { "files" } else { "filed" };
         let note_word = if notes_filed == 1 { "note" } else { "notes" };

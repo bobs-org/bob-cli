@@ -1493,7 +1493,7 @@ actionable card rows; `picked_count` counts actual pull-in links.
 Human copy prints the requirement group first. The CLI hint is
 `-k N own task · -X N[=why] drop · -p N pull in`. Receipts:
 
-- `✓ n requirements met with “S”` (human `⌗⌗ n requirements met with “S”`)
+- `✓ n requirements met with “S”` (the human line and the receipt are the same line)
 - `⊘ Dropped “T”` with optional ` · “why”`
 - `→ “T” is its own task now` with optional ` · pulled in`
 
@@ -1627,8 +1627,9 @@ Held already-planned rows are JSON-only.
 has one entry for each offered group of every kind, with bob-authored
 `copy: {title, why?, tag?, fold?, glyph}`. The `glyph` is one of
 `hand_off`, `project`, `project_created`, `project_finished`,
-`keep_moving`, `relation`, `note_pull`, or `requirements` (the last with
-glyph `⌗⌗`). A `note_pull` group also carries
+`keep_moving`, `relation`, `note_pull`, or `requirements` (a
+requirements group carries the semantic glyph token `"requirement"`,
+never a drawn mark). A `note_pull` group also carries
 its vault-relative `note` path and the `folded` counts in §12.20. Existing
 project and keep-moving groups keep their keys and add `copy`; hand-off and
 project-finished groups have no `folded`. Requirement groups carry
@@ -2718,7 +2719,7 @@ per eligible closing owner, placed first on the card before every
 task-offer group, with the normative wire shape in §12.25: `group:
 "requirements"`, the `kind: "requirements"` discriminator, the opaque
 snapshot-bound `owner` (including `key`), canonical `copy` (`title`,
-`scope`, `why`, `history`, `footer`, `hint`, `glyph: "⌗⌗"`), and one row
+`scope`, `why`, `history`, `footer`, `hint`, `glyph: "requirement"`), and one row
 per Pending req in document order carrying the `offer` envelope, `req`,
 and bob-authored `consequences`. The card resolves the §12.25 verdict
 model on those rows — Met (the default, writes nothing), Drop, Carry,
@@ -4091,7 +4092,8 @@ pin. A two-process preview/edit/submit scenario is pinned in RV.
 order. Each owner with Pending rows gets one `requirements` group,
 placed first on the card before every task-offer group. Rows list every
 Pending req in document order at their actual depth, drawn with the
-capped glyph run `⌗⌗`, `⌗⌗⌗`, then `⌗⌗⌗⌗` for depth 3+. A normal CLI
+diamond (`◇` — depth never changes the glyph; indentation alone shows
+depth). A normal CLI
 preview and every `--req-choice` client share one number space with
 requirements first; `-p all` never selects a requirement row. The legacy
 handshake (`--require-pull-in-choice` without `--req-choice`) keeps
@@ -4129,12 +4131,12 @@ Group discriminator: `group: "requirements"` with
 | `owner.line` | integer | 1-based pre-close source line |
 | `owner.text` | string | display text |
 | `copy.title` | string | `Requirements · “S”` |
-| `copy.scope` | string | `{n} reqs`, or `{n} reqs in {b} branches` when more than one pending branch |
+| `copy.scope` | string | `1 requirement`, `{n} requirements`, or `{n} requirements in {b} branches` when more than one pending branch |
 | `copy.why` | string | `Met when it closes, unless you say otherwise` |
 | `copy.history` | string, omitted when all zero | `· {d} dropped earlier · {c} carried earlier · {m} met earlier`, zero segments omitted; counts explicit historical states, never excluded descendants |
 | `copy.footer` | string | `⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump` |
 | `copy.hint` | string | `-k N own task · -X N[=why] drop · -p N pull in` |
-| `copy.glyph` | string const | `⌗⌗` |
+| `copy.glyph` | string const | `"requirement"` (a semantic token like `relation` and `note_pull`, never a drawn mark) |
 | `folded` | object, omitted when empty | `hidden` counts dropped+carried+met history; remaining counts are `0` |
 | `offer.key` | string | opaque row key |
 | `offer.n` | integer | 1-based card number in this probe |
@@ -4205,7 +4207,7 @@ as real runs and differ only in `dry_run` and preview wording):
 
 | Where | Text |
 | --- | --- |
-| Receipt, Met | `✓ {n} requirements met with “S”` (human `⌗⌗ {n} requirements met with “S”`; dry run `would meet {n} requirements with “S”`) |
+| Receipt, Met | `✓ {n} requirements met with “S”` (the human line and the receipt are the same line; dry run `would meet {n} requirements with “S”`) |
 | Receipt, Drop | `⊘ Dropped “T”`, plus `· “reason”` when nonblank (dry run `would drop “T”` plus reason) |
 | Receipt, Carry | `→ “T” is its own task now` (dry run `would make “T” its own task`) |
 | Receipt, Carry plus pull-in | `→ “T” is its own task now · pulled in` |
@@ -4259,9 +4261,9 @@ A mixed card with one carried branch reports both families side by side:
      "owner": {"task_key": "sase.md#^ship", "key": "sase.md#^ship@…",
                "path": "sase.md", "block_id": "ship", "line": 1,
                "text": "Ship parser"},
-     "copy": {"title": "Requirements · “Ship parser”", "scope": "2 reqs",
+     "copy": {"title": "Requirements · “Ship parser”", "scope": "2 requirements",
               "why": "Met when it closes, unless you say otherwise",
-              "glyph": "⌗⌗",
+              "glyph": "requirement",
               "footer": "⌃X met · ⌃⇧X drop · ⌃⇧T own task · space pull in · ⌃J jump",
               "hint": "-k N own task · -X N[=why] drop · -p N pull in"},
      "rows": [

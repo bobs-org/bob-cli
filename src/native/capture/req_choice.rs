@@ -915,7 +915,10 @@ pub(super) fn print_human_req_card(
         }
         for row in &group.rows {
             let indent = "  ".repeat(row.req.depth.max(1));
-            let run = crate::native::task_reqs::req_run(row.req.depth);
+            // Card rows are pending by construction; depth never changes the glyph.
+            let run = crate::native::task_reqs::req_glyph(
+                crate::native::task_reqs::EffectiveReqState::Pending,
+            );
             println!(
                 "{indent}{run} {} {}",
                 styler.cyan(&row.offer.n.to_string()),

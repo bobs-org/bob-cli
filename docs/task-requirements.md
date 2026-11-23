@@ -1,10 +1,10 @@
 # Task requirements
 
 A task can carry **requirements** ("reqs" in compact UI): checkbox children
-without `#task`, nested as deep as the work needs, drawn as a quiet `⌗⌗` run
-in the task's ink. They are met when the task closes and can never be ticked
-early. They can be dropped with a reason or carried into their own task, and
-the close card audits them once.
+without `#task`, nested as deep as the work needs, drawn as one quiet
+diamond in the owner's ink. They are met when the task closes and can never
+be ticked early. They can be dropped with a reason or carried into their own
+task, and the close card audits them once.
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_reqs.rs` (pure recognizer), surfaced through the task block
@@ -13,7 +13,7 @@ JavaScript twins port the recognizer, layout, and writers against the copied
 vectors. If an implementation disagrees with a vector, fix this doc first in
 the same change.
 
-> Part of this task's scope. Met when the task closes. Drop it or make it a task.
+> Met when this task closes. Drop it or make it a task if the scope changes.
 
 ## 1. What a requirement is
 
@@ -371,39 +371,121 @@ one approved run of it; it is not a one-off script.
 
 ## 4. Rendering
 
-**Glyph.** The run reuses the tag-mark hash mask, tightly kerned: depth 1
-draws `⌗⌗`, depth 2 `⌗⌗⌗`, and depth 3 or more `⌗⌗⌗⌗`. A `#task` draws `⌗`,
-so a req is the same family one step down.
+**Mark.** A requirement wears one diamond where its checkbox was, at every
+depth. Indentation alone shows depth: the mark sits in a constant **1em**
+slot with the existing `0.24em` trailing margin, so depth-1 text does not
+move and deeper requirements come back into line. The diamond is drawn at
+**0.92em**, centered in the slot. Plain-text surfaces print the `req_glyph`
+fallback for the row's state: `◇` for pending, moot, excluded, and
+flagged; `◆` for met; `⊘` for dropped; `→` for carried. Listed rows are
+Pending, so the human card prints `◇`; met rows are reported through the
+`✓` receipt, never listed.
 
-**Ink.** The run uses the owner's hash ink: the owner's type hue, or the
-default teal. Ink never encodes state.
+**Ink.** The diamond uses the owner's `#task`-mark ink: its type hue
+through the same per-hue and per-state rules (including `inherited`,
+`explicit`, `muted`, `unconfigured`, and `repair`), or the identity teal.
+Bob Mac Capture uses the identity teal everywhere. Ink never encodes
+state.
+
+**Shape grammar.** Identity by shape, state by fill: a square for a task,
+a ring for a Task Link, a **diamond** for a requirement, a tray for a
+drawer, a dot for a note.
 
 **State styling.** All of these rules are scoped to `[data-bob-req]`:
 
-| State      | Look                                                                                                                                                                            |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pending    | Full ink.                                                                                                                                                                       |
-| Met / Moot | The owner's done or cancelled line treatment, with the run faded.                                                                                                               |
-| Dropped    | Muted, struck text. Its Cancel Log shows beneath. An explicit override stops the vault's `task-statuses.css` from painting its full-width grey `data-task="-"` bar on req rows. |
-| Carried    | The run plus a small `→`. The stub's wikilink keeps its live Task-Link status mark, so the carried task's lane shows in place.                                                  |
-| Excluded   | Muted and not struck. The tooltip says `goes with “{ancestor}”`.                                                                                                                |
+| State | Mark | Mark opacity | Text |
+| ----- | ---- | ------------ | ---- |
+| Pending (`[ ]` under an open owner) | hollow, owner ink | 0.9 at rest, 1 on hover | normal |
+| Met (owner done, or a hand-ticked `[x]` / `[X]`) | filled | 0.62 | muted, **never struck** |
+| Moot (owner cancelled) | hollow | 0.42 | muted |
+| Dropped (`[-]`) | slashed | 0.55 | muted and struck; Cancel Log beneath |
+| Carried (`[>]` stub) | arrow, in the slot | 0.9 | normal; the stub's wikilink keeps its live Task Link ring |
+| Excluded (an ancestor is dropped or carried) | hollow | 0.42 | muted, not struck |
+| Flagged (pending, with any other hand mark such as `[?]`) | hollow, repair orange | 0.9 | normal |
 
-**Mechanics (Obsidian).** Live Preview uses `Decoration.line` attributes,
-following the Blocked-Marks pattern. Reading view uses an attribute-only
-post-processor. Neither creates DOM nodes. The checkbox `input` gets
-`appearance: none`, `pointer-events: none`, and the run as its mask, so it
-cannot be clicked. Moving the cursor onto the marker reveals the raw
-`- [ ] `. The tag-marks session toggle restores native checkboxes. The
-tooltip and accessible label read
-`Requirement · level {d} of “{Owner}” · {state}`, followed by the teaching
-line. (Shipped in the `ledger-marks` phase.)
+Derived-met and hand-ticked-met rows look identical. No requirement row
+ever wears a lane tint, rail, or gradient from the vault's
+`task-statuses.css`: a requirement has no lane. There is no progress
+fraction and no "Requirements" container.
 
-**Mac.** `capture-parse` emits a `req_marker` span over the `[ ] ` bytes,
-carrying a `depth`. The Mac hides those bytes and draws the run in their
-four cells, using the record-route overlay pattern. Caret adjacency reveals
-the raw bytes. (Shipped in the `mac-authoring` phase.)
+**Labels.** The tooltip and accessible label are identical strings, never
+containing `::`:
 
-**Cards.** Successor cards draw the same run before each req row's text.
+```text
+Requirement of “{Owner}” · {State}[ · level {d} when d ≥ 2][ · goes with “{Ancestor}” when Excluded]
+Met when this task closes. Drop it or make it a task if the scope changes.
+[Alt+[ drop · Ctrl+Shift+T own task]   ← pending only
+[Alt+] restore]                         ← dropped only
+```
+
+`{State}` is one of `Pending`, `Met`, `Moot`, `Dropped`, `Carried`,
+`Excluded`, or `Flagged [{c}]`.
+
+**Click guard (Obsidian).** A click, tap, or mousedown on a requirement
+mark never toggles it and never writes. It shows one Notice:
+
+| State | Notice |
+| ----- | ------ |
+| Pending, Flagged | `Requirements are met when “{Owner}” closes — Ctrl+Enter on the task` |
+| Met | `Met with “{Owner}”` |
+| Moot | `Moot — “{Owner}” was cancelled` |
+| Dropped | `Dropped — Alt+] restores it` |
+| Carried | `Carried — open the linked task` |
+| Excluded | `Goes with “{Ancestor}”` |
+
+Unchanged interaction: the Live Preview cursor reveal of the raw `- [ ] `,
+and the tag-marks session toggle that restores native checkboxes.
+
+**Mechanics (Obsidian).** Four mask variables live on `body` (pending,
+met, dropped, carried); the old 32×16 run mask and the sixteen
+depth→count rules are gone. The checkbox `input` is the 1em slot and the
+hover-halo host (`appearance: none`, `border-radius: 999px`,
+`pointer-events: auto`, `cursor: default`); the glyph lives in
+`input::before` in `var(--bob-req-ink)`, centered at 0.92em, with
+`print-color-adjust: exact`. `input::after` (including `:checked::after`)
+is suppressed on requirement rows, so theme or snippet check, dash, and
+arrow glyphs never bleed through. `[data-bob-req-state]` picks the mask
+and opacity; flagged is
+`[data-bob-req-state="pending"]:not([data-task=" "])`. The carried
+line/`li` `::after` arrow is gone, and excluded rows fade their mark.
+Lane backgrounds, gradients, and rails are reset on every
+`[data-bob-req="true"][data-task]` line and `li`, with
+`--checklist-done-decoration: none` and no line-through on `[x]` / `[X]`
+rows. Hover brings opacity to 1 with a 14% ink halo over 120ms;
+`prefers-reduced-motion` removes the transition. Under
+`@media (forced-colors: active)` the glyph draws in `CanvasText`
+(`GrayText` for faded states) with `forced-color-adjust: none`. Labels
+(`aria-label`, `data-tooltip-position="top"`, `aria-readonly="true"`) sit
+on the input; no `title` anywhere, so no OS tooltip leaks over the prose.
+Turning tag marks off clears rendered rows' `data-bob-req*` attributes,
+labels, and saved originals. The shared `span.bob-req-mark[data-state]`
+falls back to the Unicode character with ledger-tools styles off.
+Everything stays gated by `body.bob-task-tag-marks`.
+
+**Mac.** The draft editor keeps the real `[ ]` bytes visible as a teal
+chip (a `.requirementMarker` palette wash at the record-route levels);
+nothing is ever hidden, and caret moves never repaint. The live preview,
+the idle agenda, and the Pull-In card draw one requirement mark from the
+`req` annotation bob reports on each line — never by sniffing `[ ]` — in
+a SwiftUI `Shape` per §2 with the §4 opacities. A pre-annotation `bob`
+keeps its old look; nothing fails to decode.
+
+**Cards.** Each successor-card row starts with the staged-outcome mark
+(`◇` by default and for Met, slashed for Drop, `→` for Own task or Pull
+in); rows indent by depth, which is now the only depth cue, and the group
+heading starts with a pending mark. A requirements-only card uses the
+Lucide `diamond` icon. The human CLI card prints `◇` before each row's
+card number and text, indented by depth. The footer summary
+`reqs ✓{met} ⊘{dropped} →{carried}` is unchanged.
+
+**Wire values.** `pull_in.groups[].copy.glyph` is the semantic token
+`"requirement"` (like `relation` and `note_pull`), never a drawn mark. A
+row's `run` is the plain-text fallback mark (`"◇"` on every listed row;
+the key name is historical). `copy.scope` reads `1 requirement`,
+`{n} requirements`, or `{n} requirements in {b} branches`. The human met
+line equals the met receipt (`✓ {n} requirements met with “{S}”`). The
+teaching line is `Met when this task closes. Drop it or make it a task if
+the scope changes.`
 
 ## 5. Authoring
 
@@ -465,7 +547,7 @@ as one undo step; a refusal writes nothing and shows its copy:
 
 | Gesture | On a req line |
 | ------- | ------------- |
-| Ctrl+] | Toggles the req back into a note (at depth 1, filed into `NOTES`) or a note into the reqs zone; the first req of a task scoops loose notes into `NOTES` and reports `⌗⌗ First requirement` (plus `· filed {n} note(s) under NOTES`) |
+| Ctrl+] | Toggles the req back into a note (at depth 1, filed into `NOTES`) or a note into the reqs zone; the first req of a task scoops loose notes into `NOTES` and reports `◇ First requirement` (plus `· filed {n} note(s) under NOTES`) |
 | Alt+[ | Opens a reason prompt (`Why drop it? (optional)`) and drops the req with its nested branch; reports `⊘ Dropped “{T}”` (plus `· {k} nested go with it` when `k > 0`) |
 | Alt+] | Restores a dropped req (`↺ Restored “{T}”`); on a pending req refuses with the owner copy below |
 | Ctrl+Enter | Refuses — `Requirements are met when “{Owner}” closes — Ctrl+Enter on the task` |
@@ -546,7 +628,7 @@ with an older or missing picker the close still succeeds and req bytes stay
 untouched.
 
 One `requirements` group per owner, placed first, lists every Pending req in
-document order, indented by depth, with the run, text, and consequence strip.
+document order, indented by depth, with the diamond, text, and consequence strip.
 A branch folds only when its root gets drop or carry. Keys: Ctrl+X met,
 Ctrl+Shift+X drop with an inline reason, Ctrl+Shift+T carry into its own task,
 Space/Tab carry plus pull-in, and Ctrl+J jump pin. Overlapping picks are

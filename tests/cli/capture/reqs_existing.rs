@@ -51,7 +51,7 @@ fn assert_requirement(
     } else {
         "requirements"
     };
-    let mut summary = format!("⌗⌗ {verb} {added} {req} to “{owner}”");
+    let mut summary = format!("◇ {verb} {added} {req} to “{owner}”");
     if notes_filed > 0 {
         let filed = if dry_run { "files" } else { "filed" };
         let note = if notes_filed == 1 { "note" } else { "notes" };
@@ -124,7 +124,7 @@ fn first_req_scoops_only_preexisting_notes_before_planning_new_notes() {
     assert_success(&human);
     assert!(
         stdout(&human).contains(
-            "⌗⌗ adds 2 requirements to “Existing” · files 2 notes under NOTES"
+            "◇ adds 2 requirements to “Existing” · files 2 notes under NOTES"
         ),
         "{}",
         format_output(&human)

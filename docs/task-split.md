@@ -192,13 +192,13 @@ text.
   ◯ Write the rollback runbook (+1)       ^write-rollback · db.md:9
 ```
 
-The candidate list draws a requirement with its hash run (`⌗⌗` at depth
-1, one more per level, capped at four), indented by depth, and marks a row
+The candidate list draws a requirement with the diamond (`◇` at every
+depth — indentation alone shows depth), indented by depth, and marks a row
 that refuses (`· dropped`, `· carried`, `· checked`, `· excluded`):
 
 ```text
-1  ⌗⌗ Handles supported inputs (+3)
-2    ⌗⌗⌗ Handles Windows files · dropped (+1)
+1  ◇ Handles supported inputs (+3)
+2    ◇ Handles Windows files · dropped (+1)
 3  Morgan reported the original issue.
 ```
 
