@@ -327,7 +327,7 @@ pub(super) fn parse_sub_bullet_route_token(
             let Some(lex) = lex_exact_name_after_hash(selector, selector.len())
             else {
                 return Err(
-                    "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                    "invalid drawer: use `#slug` (`#notes`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
                         .to_string(),
                 );
             };
@@ -344,7 +344,7 @@ pub(super) fn parse_sub_bullet_route_token(
                     );
                 let Some(canonical) = canonical else {
                     return Err(
-                        "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                        "invalid drawer: use `#slug` (`#notes`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
                             .to_string(),
                     );
                 };
@@ -352,7 +352,7 @@ pub(super) fn parse_sub_bullet_route_token(
                 // after the closing quote are invalid.
                 if selector.len() != lex.literal_len {
                     return Err(
-                        "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                        "invalid drawer: use `#slug` (`#notes`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
                             .to_string(),
                     );
                 }
@@ -365,7 +365,7 @@ pub(super) fn parse_sub_bullet_route_token(
         Some(selector) => {
             if !crate::native::capture_drawers::is_drawer_slug(selector) {
                 return Err(
-                    "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                    "invalid drawer: use `#slug` (`#notes`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
                         .to_string(),
                 );
             }

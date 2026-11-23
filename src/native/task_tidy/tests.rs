@@ -207,6 +207,47 @@ fn a_nested_subtask_is_repaired_after_its_parent_moves_it() {
 }
 
 #[test]
+fn a_req_owning_prj_files_loose_notes_under_the_notes_section() {
+    let contents = note(&[
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "\t- loose",
+        "\t\t- nested",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a",
+    ]);
+    let pass = tidied(&contents);
+    assert_eq!(
+        pass.updated.as_deref(),
+        Some(
+            note(&[
+                "---",
+                "type: \"[[project]]\"",
+                "---",
+                "- [ ] #task #prj Pk root ^prj",
+                "\t- [ ] hand req",
+                "",
+                "## Tasks",
+                "- [ ] #task Row a",
+                "",
+                "## Notes",
+                "",
+                "- loose",
+                "\t- nested",
+            ])
+            .as_str()
+        )
+    );
+    assert_eq!(pass.repairs.len(), 1);
+    assert_eq!(pass.repairs[0].notes_filed, 1);
+    assert!(pass.repairs[0].notes_created);
+}
+
+#[test]
 fn crlf_notes_keep_their_endings() {
     let contents = "- [ ] #task Crlf\r\n\t- a note\r\n\t- [ ] a req\r\n";
     let pass = tidied(contents);
@@ -232,6 +273,23 @@ fn content_check_refuses_dropped_or_invented_lines() {
         note(&["- [ ] #task T", "\t- NOTES", "\t\t- a", "\t\t- b"]);
     assert!(content_preserved(&before, &with_notes, 1).is_ok());
     assert!(content_preserved(&before, &with_notes, 0).is_err());
+    let with_section = note(&[
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] a req",
+        "",
+        "## Notes",
+        "",
+        "- a",
+        "- b",
+    ]);
+    let before_prj = note(&[
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] a req",
+        "\t- a",
+        "\t- b",
+    ]);
+    assert!(content_preserved(&before_prj, &with_section, 1).is_ok());
+    assert!(content_preserved(&before_prj, &with_section, 0).is_err());
 }
 
 #[test]

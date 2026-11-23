@@ -159,6 +159,15 @@ one note, or a note is being written. A req-owning task with no notes has no
 `NOTES` header. This keeps the Task Drawer contract: a drawer is nonempty by
 construction. Reviewer decision `notes_drawer_birth = with_first_note`.
 
+On a project note's `^prj` task, `NOTES` is the note's `## Notes` section
+rather than a task-child drawer. An existing `## Notes` or `## NOTES`
+heading matches and keeps its authored spelling; a missing section is
+created in Title Case (`## Notes`) with the same placement as an explicit
+`@route+prj#notes` capture. Notes land as column-zero bullets. The
+first-req scoop and `bob task tidy` move each loose direct note of the
+`^prj` task (whole subtree) into that section, dedenting each line by the
+task's child indent unit.
+
 **Zero-req tasks keep today's placement.** A task with no reqs files a loose
 note at the tail, before its first Schedule, Work, or Rotten Log (else at the
 end of the block), and its authored notes and drawers may interleave: capture
@@ -277,7 +286,8 @@ at any depth.
 `bob task tidy [ROUTE...]` is the explicit, on-request repair of layout drift.
 It runs `plan_tidy` (§3.2) over every **open** `#task` block in the vault, so
 whole subtrees move into their zones and a req-owning task's loose notes are
-filed into `NOTES`. Nothing else ever reorders a block: no writer, no
+filed into `NOTES`. On a `^prj` owner that home is the note's `## Notes`
+section (§3). Nothing else ever reorders a block: no writer, no
 `bob task reconcile`, and no background pass.
 
 - **Scope.** Every note except archive history under `done/`, plus the
@@ -593,10 +603,11 @@ and `vault-migration` phases.)
   keys, subtree ends, and note ranges.
 - **RL** (`tests/fixtures/task_reqs/layout.json`): insertion slots,
   violations, tidy before/after, and note homes (§3.1–§3.2): Cancel Log,
-  nested tasks, mixed indentation, drawers, and fenced lookalikes.
+  nested tasks, mixed indentation, drawers, fenced lookalikes, and a
+  req-owning `^prj` task's `## Notes` home (`RL53`–`RL60`).
 - **RW** (`tests/fixtures/task_reqs/writes.json`): drop, restore, toggle,
   insert, the first-req scoop, the `with_first_note` NOTES birth, CRLF notes,
-  and every refusal code (§3.3).
+  every refusal code (§3.3), and the `^prj` `## Notes` writers (`RW54`–`RW57`).
 - **SP32–SP50** (`tests/fixtures/task_split/vectors.json`): carry — `[>]`
   stubs, whole-branch moves with rebased depth, the NOTES rule on the new
   task, move maps, daily-note owners, and the carry refusals (§6).

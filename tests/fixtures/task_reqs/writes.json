@@ -1118,6 +1118,169 @@
       "expect": {
         "refused": "req_stale"
       }
+    },
+    {
+      "id": "RW54",
+      "title": "insert the first req on a ^prj scoops into a new ## Notes",
+      "op": "insert",
+      "blocks": [
+        "- [ ] only req"
+      ],
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- loose",
+        "\t\t- nested",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "task": 4,
+      "expect": {
+        "first_line": 5,
+        "line_count": 1,
+        "lines": [
+          "---",
+          "type: \"[[project]]\"",
+          "---",
+          "- [ ] #task #prj Pk root ^prj",
+          "\t- [ ] only req",
+          "",
+          "## Tasks",
+          "- [ ] #task Row a",
+          "",
+          "## Notes",
+          "",
+          "- loose",
+          "\t- nested"
+        ],
+        "notes_created": true,
+        "scooped": 1
+      }
+    },
+    {
+      "id": "RW55",
+      "title": "insert the first req on a ^prj appends under existing ## Notes",
+      "op": "insert",
+      "blocks": [
+        "- [ ] only req"
+      ],
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- loose",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a",
+        "",
+        "## Notes",
+        "",
+        "- already"
+      ],
+      "task": 4,
+      "expect": {
+        "first_line": 5,
+        "line_count": 1,
+        "lines": [
+          "---",
+          "type: \"[[project]]\"",
+          "---",
+          "- [ ] #task #prj Pk root ^prj",
+          "\t- [ ] only req",
+          "",
+          "## Tasks",
+          "- [ ] #task Row a",
+          "",
+          "## Notes",
+          "",
+          "- already",
+          "- loose"
+        ],
+        "notes_created": false,
+        "scooped": 1
+      }
+    },
+    {
+      "id": "RW56",
+      "title": "a depth-1 ^prj req moves into ## Notes and keeps a sibling req",
+      "op": "toggle",
+      "line": 6,
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] keep this req",
+        "\t- [ ] convert me",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "expect": {
+        "depth": 1,
+        "direction": "req-to-note",
+        "line": 12,
+        "lines": [
+          "---",
+          "type: \"[[project]]\"",
+          "---",
+          "- [ ] #task #prj Pk root ^prj",
+          "\t- [ ] keep this req",
+          "",
+          "## Tasks",
+          "- [ ] #task Row a",
+          "",
+          "## Notes",
+          "",
+          "- convert me"
+        ],
+        "notes_created": true,
+        "scooped": 0
+      }
+    },
+    {
+      "id": "RW57",
+      "title": "insert the first req on a CRLF ^prj scoops into ## Notes",
+      "op": "insert",
+      "blocks": [
+        "- [ ] only req"
+      ],
+      "eol": "crlf",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- loose",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "task": 4,
+      "expect": {
+        "first_line": 5,
+        "line_count": 1,
+        "lines": [
+          "---",
+          "type: \"[[project]]\"",
+          "---",
+          "- [ ] #task #prj Pk root ^prj",
+          "\t- [ ] only req",
+          "",
+          "## Tasks",
+          "- [ ] #task Row a",
+          "",
+          "## Notes",
+          "",
+          "- loose"
+        ],
+        "notes_created": true,
+        "scooped": 1
+      }
     }
   ]
 }

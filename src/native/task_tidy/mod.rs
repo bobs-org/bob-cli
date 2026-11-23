@@ -4,11 +4,13 @@
 //! [`tidy_note`] is the pure per-note pass. It walks a note's tasks top to
 //! bottom and asks `task_block_layout::plan_tidy` for each **open** task:
 //! whole child subtrees move into their zones, and a req-owning task's loose
-//! notes are filed into `NOTES`. A repair only rewrites lines inside its own
-//! block, so every task above it keeps its line; the pass rescans after each
-//! repair and resumes just below the repaired task line, which keeps nested
-//! subtasks (moved with their parent) in reach. Done and cancelled tasks are
-//! never touched: history is never rewritten.
+//! notes are filed into `NOTES` (the project `## Notes` section on a `^prj`
+//! owner). A repair rewrites that task's block, and on a `^prj` owner may
+//! also write the note's `## Notes` section; every task above it keeps its
+//! line. The pass rescans after each repair and resumes just below the
+//! repaired task line, which keeps nested subtasks (moved with their parent)
+//! in reach. Done and cancelled tasks are never touched: history is never
+//! rewritten.
 //!
 //! The command shell (scope, the dry-run report, and the one-commit apply)
 //! lives in [`command`].
@@ -19,7 +21,8 @@ use super::{
     capture::line_spans,
     note_tasks::{self, NoteTask, NoteTaskSettings},
     task_block_layout::{
-        block_last_line, find_task, plan_tidy, TidyPolicy, NOTES_TITLE,
+        block_last_line, find_task, plan_tidy, TidyPolicy, NOTES_SECTION_TITLE,
+        NOTES_TITLE,
     },
 };
 
@@ -138,14 +141,24 @@ fn block_excerpt(contents: &str, task: &NoteTask) -> Vec<String> {
     excerpt
 }
 
-/// The created `NOTES` header line, trimmed.
+/// The created task-child `NOTES` header line, trimmed.
 fn notes_header() -> String {
     format!("- {NOTES_TITLE}")
 }
 
+/// The created `^prj` `## Notes` heading, trimmed.
+fn notes_section_header() -> String {
+    format!("## {NOTES_SECTION_TITLE}")
+}
+
+fn is_created_notes_header(line: &str) -> bool {
+    line == notes_header() || line == notes_section_header()
+}
+
 /// Check that a tidy only moved, re-indented, and filed lines: every
 /// nonblank line of `before` survives exactly once (indentation aside), and
-/// the only new lines are the `drawers_created` `NOTES` headers.
+/// the only new lines are the `drawers_created` `NOTES` headers (`- NOTES`
+/// or, on a `^prj` owner, `## Notes`). Blank separator lines are ignored.
 pub(crate) fn content_preserved(
     before: &str,
     after: &str,
@@ -162,15 +175,10 @@ pub(crate) fn content_preserved(
     for line in after.lines().map(str::trim).filter(|line| !line.is_empty()) {
         *balance.entry(line).or_default() -= 1;
     }
-    let header = notes_header();
+    let mut headers_added = 0isize;
     for (line, count) in balance {
-        if line == header {
-            let added = -count;
-            if added != drawers_created as isize {
-                return Err(format!(
-                    "it would add {added} NOTES headers, not {drawers_created}"
-                ));
-            }
+        if is_created_notes_header(line) {
+            headers_added += -count;
             continue;
         }
         if count > 0 {
@@ -180,8 +188,15 @@ pub(crate) fn content_preserved(
             return Err(format!("it would add the line {line:?}"));
         }
     }
+    if headers_added != drawers_created as isize {
+        return Err(format!(
+            "it would add {headers_added} NOTES headers, not {drawers_created}"
+        ));
+    }
     if drawers_created > 0
-        && !after.lines().any(|line| line.trim() == header.as_str())
+        && !after
+            .lines()
+            .any(|line| is_created_notes_header(line.trim()))
     {
         return Err("it reports a NOTES drawer it never wrote".to_string());
     }

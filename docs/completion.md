@@ -484,7 +484,7 @@ another thin client of that service (see `docs/capture.md`
   searches the whole catalog by key or slug, prefix before substring), and one
   `new` row for a nonempty typed name no other row claims. Bob authors each
   row's `detail` (`2 notes`, `empty`, `used in 12 notes · 3 days ago`) and
-  `consequence` (`Adds after "2 GB RAM" in REQUIREMENTS`, `Creates FUTURE WORK
+  `consequence` (`Adds after "2 GB RAM" in NOTES`, `Creates FUTURE WORK
   under ^bar`). A row's `replacement` is `#slug` only when the slug resolves
   back to exactly that drawer on the whole target, else `#"TITLE"`. `refused` is
   the commit's own reason for a reserved, near-duplicate, or ambiguous choice,

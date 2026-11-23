@@ -287,6 +287,62 @@ fn forced_task_and_task_ref_targets_write_same_line_requirements() {
 }
 
 #[test]
+fn implicit_notes_on_a_req_owner_reports_the_drawer() {
+    let temp = TempDir::new("bob-cli-capture-reqs-implicit-notes");
+    let vault = temp.path().join("vault");
+    let target = vault.join("work.md");
+    let before =
+        "- [ ] #task Existing [created::2026-01-01] ^ex\n\t- [ ] a req\n";
+    write_file(&target, before);
+    let draft = "@work+ex\n- first note";
+
+    let dry = capture(&vault, &["--dry-run"], draft, true);
+    assert_success(&dry);
+    let mut dry_json: Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("dry-run JSON");
+    assert_eq!(dry_json["dry_run"], true, "{dry_json}");
+    assert_eq!(dry_json["drawer"]["title"], "NOTES", "{dry_json}");
+    assert_eq!(dry_json["drawer"]["key"], "NOTES", "{dry_json}");
+    assert_eq!(dry_json["drawer"]["created"], true, "{dry_json}");
+    assert_eq!(
+        dry_json["notes"][0]["drawer"]["title"], "NOTES",
+        "{dry_json}"
+    );
+    assert_eq!(
+        dry_json["notes"][0]["drawer"]["created"], true,
+        "{dry_json}"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("read after dry run"),
+        before,
+        "dry run must not write"
+    );
+
+    let human = capture(&vault, &["--dry-run"], draft, false);
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("NOTES"), "{text}");
+    assert!(text.contains("new drawer"), "{text}");
+    assert!(text.contains("first note"), "{text}");
+
+    let committed = capture_json(&vault, &[], draft);
+    dry_json["dry_run"] = Value::Bool(false);
+    normalize_dry_run(&mut dry_json);
+    let mut committed_cmp = committed.clone();
+    normalize_dry_run(&mut committed_cmp);
+    assert_eq!(dry_json, committed_cmp, "dry run equals commit");
+    assert_eq!(
+        fs::read_to_string(&target).expect("read after commit"),
+        concat!(
+            "- [ ] #task Existing [created::2026-01-01] ^ex\n",
+            "\t- [ ] a req\n",
+            "\t- NOTES\n",
+            "\t\t- first note\n",
+        )
+    );
+}
+
+#[test]
 fn project_root_task_accepts_existing_requirement_groups() {
     let temp = TempDir::new("bob-cli-capture-reqs-existing-project");
     let vault = temp.path().join("vault");

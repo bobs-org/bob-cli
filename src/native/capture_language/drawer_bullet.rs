@@ -214,8 +214,8 @@ pub(crate) fn lexical_title_for_slug(slug: &str) -> String {
 }
 
 pub(crate) fn drawer_bullet_text_error() -> String {
-    "`- #requirements` names a drawer, so it takes no text: nest \
-`Postgres 17` beneath it (`- REQUIREMENTS` / `  - Postgres 17`); a task \
+    "`- #notes` names a drawer, so it takes no text: nest \
+`Postgres 17` beneath it (`- NOTES` / `  - Postgres 17`); a task \
 type goes at the end of a line (`… #fix`)"
         .to_string()
 }
@@ -258,9 +258,9 @@ pub(crate) fn drawer_bullet_position_error(
         }
         CaptureKind::SubBullet { .. } if !parent_body.trim().is_empty() => {
             format!(
-                "`- #requirements` names a drawer, but these bullets nest \
+                "`- #notes` names a drawer, but these bullets nest \
 under `{parent_body}`; file the note into it with \
-`@foo+bar#requirements {parent_body}`, or put the note on its own bullet"
+`@foo+bar#notes {parent_body}`, or put the note on its own bullet"
             )
         }
         _ => "only bullets that land directly under a task can name a \
@@ -291,9 +291,9 @@ pub(crate) fn editor_drawer_bullet_position_error(
     }
     if matches!(mode, EditorMode::SubBullet) && !parent_body.trim().is_empty() {
         return format!(
-            "`- #requirements` names a drawer, but these bullets nest \
+            "`- #notes` names a drawer, but these bullets nest \
 under `{parent_body}`; file the note into it with \
-`@foo+bar#requirements {parent_body}`, or put the note on its own bullet"
+`@foo+bar#notes {parent_body}`, or put the note on its own bullet"
         );
     }
     "only bullets that land directly under a task can name a drawer; \

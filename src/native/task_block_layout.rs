@@ -19,7 +19,10 @@
 //! its first req files the task's loose direct notes into `NOTES` in the same
 //! write (the "first-req scoop"); later Bob-written notes file there too.
 //! `NOTES` is created only when a note lands in it (`notes_drawer_birth =
-//! with_first_note`), so a drawer is nonempty by construction.
+//! with_first_note`), so a drawer is nonempty by construction. On a `^prj`
+//! owner the home is the project note's `## Notes` section (Title Case when
+//! created; an existing `## NOTES` spelling is kept), with column-zero
+//! bullets.
 //!
 //! **Zero-req tasks keep today's placement.** A task with no reqs files a
 //! loose note at the tail, before its first managed log, and authored notes
@@ -60,8 +63,11 @@ pub(crate) use writers::{
     ReqTarget, ReqWrite, ToggleDirection, ToggleWrite, WriteRefusal,
 };
 
-/// Drawer key and title of the notes drawer a req-owning task keeps.
+/// Drawer key of the notes drawer a req-owning task keeps.
 pub(crate) const NOTES_TITLE: &str = "NOTES";
+
+/// Title Case heading created for a `^prj` task's `## Notes` section.
+pub(crate) const NOTES_SECTION_TITLE: &str = "Notes";
 
 /// The global filter default; zone detection only needs it to tell a nested
 /// `#task` from a requirement, and drawer slots need neither.
@@ -359,7 +365,7 @@ pub(crate) fn drawer_header_offset(
     line_offset(&lines, slot_line(&lines, &block, kind))
 }
 
-/// The resolution that creates a `NOTES` drawer.
+/// The resolution that creates a task-child `NOTES` drawer.
 fn create_notes() -> DrawerResolved {
     DrawerResolved {
         outcome: DrawerResolveOutcome::Create {
@@ -372,14 +378,66 @@ fn create_notes() -> DrawerResolved {
     }
 }
 
+/// The resolution that creates a project note's Title Case `## Notes` section.
+fn create_prj_notes() -> DrawerResolved {
+    DrawerResolved {
+        outcome: DrawerResolveOutcome::Create {
+            title: NOTES_SECTION_TITLE.to_string(),
+            key: NOTES_TITLE.to_string(),
+            slug: "notes".to_string(),
+        },
+        created: true,
+        warning: None,
+    }
+}
+
 /// Create the task's `NOTES` drawer (first among the drawers) and return the
 /// note with it, the drawer, and `true`. Callers use this only when
-/// [`note_home`] answered [`NoteHome::NewNotes`].
+/// [`note_home`] answered [`NoteHome::NewNotes`]. On a `^prj` owner this is
+/// the note's Title Case `## Notes` section, not a task-child bullet.
 pub(crate) fn ensure_notes_drawer(
     contents: &str,
     task: &NoteTask,
 ) -> Result<(String, Drawer, bool), String> {
-    capture_drawers::ensure_drawer(contents, task, &create_notes())
+    let resolved = if capture_drawers::is_prj_parent(contents, task) {
+        create_prj_notes()
+    } else {
+        create_notes()
+    };
+    capture_drawers::ensure_drawer(contents, task, &resolved)
+}
+
+/// The project note's `## Notes` (or `## NOTES`) H2 section, if any.
+/// Mirrors `taskBlockProjectNotesDrawer`.
+pub(crate) fn project_notes_drawer(contents: &str) -> Option<Drawer> {
+    capture_drawers::project_h2_drawers(contents)
+        .into_iter()
+        .find(|drawer| drawer.key == NOTES_TITLE)
+}
+
+/// The NOTES home of `task`: the project `## Notes` section on a `^prj`
+/// owner, else the task-child `NOTES` drawer.
+pub(crate) fn notes_drawer(contents: &str, task: &NoteTask) -> Option<Drawer> {
+    if capture_drawers::is_prj_parent(contents, task) {
+        project_notes_drawer(contents)
+    } else {
+        capture_drawers::drawers(contents, task)
+            .into_iter()
+            .find(|drawer| drawer.key == NOTES_TITLE)
+    }
+}
+
+/// Title written when NOTES is created for `task`: Title Case `Notes` on a
+/// `^prj` owner, else ALL-CAPS `NOTES`.
+pub(crate) fn notes_create_title(
+    contents: &str,
+    task: &NoteTask,
+) -> &'static str {
+    if capture_drawers::is_prj_parent(contents, task) {
+        NOTES_SECTION_TITLE
+    } else {
+        NOTES_TITLE
+    }
 }
 
 /// Where a Bob-written loose note on `task` files, following the NOTES rule.
@@ -407,10 +465,7 @@ pub(crate) fn note_home(
             settings,
         ));
     }
-    capture_drawers::drawers(contents, task)
-        .into_iter()
-        .find(|drawer| drawer.key == NOTES_TITLE)
-        .map_or(NoteHome::NewNotes, NoteHome::Notes)
+    notes_drawer(contents, task).map_or(NoteHome::NewNotes, NoteHome::Notes)
 }
 
 /// Why a child is out of place.

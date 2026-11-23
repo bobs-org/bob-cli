@@ -132,8 +132,8 @@ fn capture_help_lists_options_alphabetically() {
         help.contains("@<route>+<block-id>")
             && help.contains("@<route>+<block-id>#<drawer>")
             && help.contains("bob capture '@cash+goog-exit'")
-            && help.contains("bob capture 'Postgres 17 minimum @foo+bar#requirements'")
-            && help.contains("--drawer REQUIREMENTS")
+            && help.contains("bob capture 'Postgres 17 minimum @foo+bar#notes'")
+            && help.contains("--drawer NOTES")
             && help.contains("first direct-child Schedule Log or Work Log")
             && help.contains("@<route>^<block-id>")
             && help.contains("bob capture '@dev^foobar'")
@@ -469,7 +469,7 @@ fn capture_parse_help_lists_options_alphabetically() {
             && help.contains("@route+id#")
             && help.contains("drawer")
             && help.contains("pomodoro_name")
-            && help.contains("@foo+bar#req"),
+            && help.contains("@foo+bar#notes"),
         "expected capture-parse long help:\n{help}"
     );
     assert_text_order(&help, &["-f, --format", "-h, --help"]);

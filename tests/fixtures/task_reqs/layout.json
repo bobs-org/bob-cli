@@ -423,6 +423,46 @@
         "indent": "  ",
         "line": 2
       }
+    },
+    {
+      "id": "RL53",
+      "title": "a ^prj req still inserts under the project task",
+      "kind": "req",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "task": 4,
+      "expect": {
+        "indent": "\t",
+        "line": 6
+      }
+    },
+    {
+      "id": "RL54",
+      "title": "a ^prj notes-drawer slot stays a task-child slot",
+      "kind": "notes-drawer",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "task": 4,
+      "expect": {
+        "indent": "\t",
+        "line": 6
+      }
     }
   ],
   "violations": [
@@ -944,6 +984,103 @@
         "notes_created": true,
         "notes_filed": 1
       }
+    },
+    {
+      "id": "RL55",
+      "title": "a ^prj loose note scoops into a new ## Notes section",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "\t- loose",
+        "\t\t- nested",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "task": 4,
+      "expect": {
+        "lines": [
+          "---",
+          "type: \"[[project]]\"",
+          "---",
+          "- [ ] #task #prj Pk root ^prj",
+          "\t- [ ] hand req",
+          "",
+          "## Tasks",
+          "- [ ] #task Row a",
+          "",
+          "## Notes",
+          "",
+          "- loose",
+          "\t- nested"
+        ],
+        "moves": 0,
+        "notes_created": true,
+        "notes_filed": 1
+      }
+    },
+    {
+      "id": "RL56",
+      "title": "a ^prj loose note appends under an existing ## Notes",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "\t- loose",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a",
+        "",
+        "## Notes",
+        "",
+        "- already"
+      ],
+      "task": 4,
+      "expect": {
+        "lines": [
+          "---",
+          "type: \"[[project]]\"",
+          "---",
+          "- [ ] #task #prj Pk root ^prj",
+          "\t- [ ] hand req",
+          "",
+          "## Tasks",
+          "- [ ] #task Row a",
+          "",
+          "## Notes",
+          "",
+          "- already",
+          "- loose"
+        ],
+        "moves": 0,
+        "notes_created": false,
+        "notes_filed": 1
+      }
+    },
+    {
+      "id": "RL57",
+      "title": "an already-canonical ^prj note tidies to nothing",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a",
+        "",
+        "## Notes",
+        "",
+        "- first note"
+      ],
+      "task": 4,
+      "expect": null
     }
   ],
   "note_homes": [
@@ -1027,6 +1164,67 @@
         "home": "loose",
         "indent": "\t",
         "line": 4
+      }
+    },
+    {
+      "id": "RL58",
+      "title": "a req-owning ^prj with ## Notes files into that section",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a",
+        "",
+        "## Notes",
+        "",
+        "- already"
+      ],
+      "task": 4,
+      "expect": {
+        "home": "notes",
+        "line": 10
+      }
+    },
+    {
+      "id": "RL59",
+      "title": "a req-owning ^prj with ## NOTES keeps that spelling",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "",
+        "## NOTES",
+        "",
+        "- already"
+      ],
+      "task": 4,
+      "expect": {
+        "home": "notes",
+        "line": 7
+      }
+    },
+    {
+      "id": "RL60",
+      "title": "a req-owning ^prj without Notes creates the section",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "\t- [ ] hand req",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "task": 4,
+      "expect": {
+        "home": "new-notes"
       }
     }
   ]

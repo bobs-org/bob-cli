@@ -56,7 +56,7 @@ Examples:
   bob capture-parse --format json -- 'Call bank @cash+'
   bob capture-parse 'Call bank @Cash+'
   bob capture-parse -f json -- 'jot idea @notes#Ideas'
-  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'
+  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#notes'
   bob capture-parse -f json -- '@cash+goog-exit'
   bob capture-parse -f json -- '+5'
   bob capture-parse -f json -- '-2'

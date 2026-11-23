@@ -11,7 +11,7 @@ use super::{
         insert_lines, physical_lines, pull_ranges, rebased,
         restore_final_newline, with_ending, Pulled,
     },
-    ensure_notes_drawer, find_task, TaskBlock, NOTES_TITLE,
+    ensure_notes_drawer, find_task, notes_drawer, TaskBlock,
 };
 
 /// What `plan_tidy` may assume about the vault.
@@ -232,7 +232,9 @@ pub(super) struct Filed {
 
 /// Append `pulled` ranges to the end of the task's `NOTES` drawer entries
 /// (before the drawer's own managed logs), creating the drawer first among
-/// the drawers when the task has none.
+/// the drawers when the task has none. On a `^prj` owner the home is the
+/// note's `## Notes` section: bullets land at column zero, each pulled line
+/// dedented by the task's child indent unit.
 pub(super) fn file_into_notes(
     contents: &str,
     task_line: usize,
@@ -240,13 +242,30 @@ pub(super) fn file_into_notes(
     settings: &NoteTaskSettings,
 ) -> Option<Filed> {
     let task = find_task(contents, task_line, settings)?;
-    let existing = capture_drawers::drawers(contents, &task)
-        .into_iter()
-        .find(|drawer| drawer.key == NOTES_TITLE);
+    let project = capture_drawers::is_prj_parent(contents, &task);
+    let existing = notes_drawer(contents, &task);
     let (staged, drawer, created): (String, Drawer, bool) = match existing {
         Some(drawer) => (contents.to_string(), drawer, false),
         None => ensure_notes_drawer(contents, &task).ok()?,
     };
+    if project {
+        let (offset, empty) =
+            capture_drawers::h2_insert_position(&staged, &drawer);
+        let mut entries: Vec<String> =
+            pulled.iter().flat_map(|range| rebased(range, "")).collect();
+        if empty {
+            entries.insert(0, String::new());
+        }
+        let before = &staged[..offset];
+        let first_line = before.matches('\n').count()
+            + usize::from(!before.is_empty() && !before.ends_with('\n'))
+            + usize::from(empty);
+        return Some(Filed {
+            updated: insert_lines(&staged, offset, &entries),
+            created,
+            first_line,
+        });
+    }
     let insertion = capture_drawers::drawer_insertion(&staged, &drawer);
     let entries: Vec<String> = pulled
         .iter()

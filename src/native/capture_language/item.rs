@@ -693,7 +693,7 @@ pub(super) fn parse_capture_item<'a>(
                 ));
             }
             if error
-                == "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
+                == "add the note text (`Postgres 17 minimum @foo+bar#notes`)"
             {
                 return Err(CaptureItemParseError::coded("drawer_text", error));
             }
@@ -3391,7 +3391,7 @@ pub(super) fn resolve_sub_bullet_kind(
             && drawer.text.is_empty()
         {
             return Err(
-                "`#` is incomplete: add a drawer (`#requirements`), or write `\\#` to keep a literal `#`"
+                "`#` is incomplete: add a drawer (`#future-work`), or write `\\#` to keep a literal `#`"
                     .to_string(),
             );
         }
@@ -3408,14 +3408,14 @@ pub(super) fn resolve_sub_bullet_kind(
     if let Some(drawer) = section {
         if drawer.text.is_empty() {
             return Err(
-                "`#` is incomplete: add a drawer (`#requirements`), or write `\\#` to keep a literal `#`"
+                "`#` is incomplete: add a drawer (`#future-work`), or write `\\#` to keep a literal `#`"
                     .to_string(),
             );
         }
         if parent_body_is_empty {
             if sub_bullets_is_empty {
                 return Err(
-                    "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
+                    "add the note text (`Postgres 17 minimum @foo+bar#notes`)"
                         .to_string(),
                 );
             }

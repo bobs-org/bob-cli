@@ -1354,12 +1354,12 @@ deliberate creation near an existing name. On a project's `^prj`, drawers
 are eligible `##` sections. Managed logs and structural headings are reserved.
 
 ```bash
-bob capture 'Need a parser @work+prep#requirements'
+bob capture 'Need a parser @work+prep#notes'
 ```
 
 ```text { .no-copy title="Output" }
 ✓ captured  work.md
-  under [ ] Prep the intake  ^prep  REQUIREMENTS
+  under [ ] Prep the intake  ^prep  NOTES
   - Need a parser
 ```
 
@@ -1367,7 +1367,7 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### Drawer bullets and several notes {#drawer-bullets}
 
-A task's first-level `- #requirements` with nested notes names a drawer;
+A task's first-level `- #notes` with nested notes names a drawer;
 ALL-CAPS works too. Empty `- #drawer` fails; empty ALL-CAPS stays a note.
 Under a route-only notebook `@nb` or `@parent^id@ %n`, `- #Section` selects
 a `##` heading; nest notes or escape `\#git`.

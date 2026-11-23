@@ -240,7 +240,7 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
     let drawer_err = execute("@dev+id#fix").expect_err("glued drawer");
     assert_eq!(
         drawer_err,
-        "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
+        "add the note text (`Postgres 17 minimum @foo+bar#notes`)"
     );
 
     let bang = execute("@dev+id!").expect("explicit toggle");

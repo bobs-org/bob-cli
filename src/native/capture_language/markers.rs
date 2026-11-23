@@ -282,7 +282,7 @@ pub(super) const SUB_BULLET_BLOCK_ID_ERROR: &str =
     "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
 
 pub(super) const INVALID_DRAWER_ERROR: &str =
-    "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)";
+    "invalid drawer: use `#slug` (`#notes`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)";
 
 pub(super) const TASK_BLOCK_ID_ROUTE_ERROR: &str =
     "task block-ID capture route must contain only A-Z, a-z, 0-9, '_' or '-'";

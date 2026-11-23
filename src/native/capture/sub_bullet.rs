@@ -118,6 +118,17 @@ pub(super) fn plan_sub_bullet_capture(
                     (contents, slot.offset, slot.indent, None)
                 }
                 task_block_layout::NoteHome::Notes(drawer) => {
+                    if capture_drawers::is_prj_parent(&contents, parent) {
+                        return prj_section_write_plan(
+                            planner,
+                            target,
+                            &contents,
+                            parent,
+                            drawer,
+                            false,
+                            capture_block,
+                        );
+                    }
                     let insertion =
                         capture_drawers::drawer_insertion(&contents, &drawer);
                     (
@@ -137,6 +148,17 @@ pub(super) fn plan_sub_bullet_capture(
                             &contents, parent,
                         )
                         .map_err(CaptureError::io)?;
+                    if capture_drawers::is_prj_parent(&contents, parent) {
+                        return prj_section_write_plan(
+                            planner,
+                            target,
+                            &contents,
+                            parent,
+                            drawer,
+                            created,
+                            capture_block,
+                        );
+                    }
                     let insertion =
                         capture_drawers::drawer_insertion(&contents, &drawer);
                     (
@@ -318,6 +340,62 @@ fn resolve_sub_bullet_parent<'a>(
     }
 }
 
+/// Insert a column-zero capture block into a project `##` section. Shared by
+/// explicit `#drawer` routing and implicit NOTES filing on a `^prj` owner.
+fn insert_into_prj_section(
+    contents: &str,
+    drawer: &capture_drawers::Drawer,
+    capture_block: &str,
+) -> (String, Placement) {
+    let (offset, empty) = capture_drawers::h2_insert_position(contents, drawer);
+    let addition = if empty {
+        empty_section_insertion_text(contents, offset, capture_block)
+    } else {
+        insertion_text_preserving_line_endings(contents, offset, capture_block)
+    };
+    let placement = if offset >= contents.len() {
+        Placement::Appended
+    } else {
+        Placement::Inserted
+    };
+    (insert_at(contents, offset, &addition), placement)
+}
+
+fn prj_section_write_plan(
+    planner: &mut CaptureBatchPlanner,
+    target: &Path,
+    contents: &str,
+    parent: &note_tasks::NoteTask,
+    drawer: capture_drawers::Drawer,
+    created: bool,
+    capture_block: &str,
+) -> Result<CaptureWritePlan, CaptureError> {
+    let (updated_target, placement) =
+        insert_into_prj_section(contents, &drawer, capture_block);
+    let details = SubBulletCaptureDetails {
+        block_id: parent.block_id.clone(),
+        parent_line: parent.line_index + 1,
+        parent_text: parent.description.clone(),
+        drawer: Some(DrawerJson {
+            title: drawer.title,
+            key: drawer.key,
+            created,
+        }),
+        parent_status_symbol: parent.status_symbol,
+        parent_status_name: parent.status_name.clone(),
+    };
+    planner.stage(target, updated_target)?;
+    Ok(CaptureWritePlan {
+        placement,
+        pomodoro: None,
+        sub_bullet: Some(details),
+        pomodoro_note: None,
+        toggle: None,
+        pomodoro_link: None,
+        pomodoro_refs: Vec::new(),
+    })
+}
+
 /// Capture into a project note's `##` section for a `^prj` parent: the
 /// `#drawer` selector resolves against the note's eligible H2s by the drawer
 /// key rules. A match appends the block after the section's last nonblank
@@ -366,44 +444,15 @@ fn plan_prj_section_capture(
     let (contents, drawer, created) =
         capture_drawers::ensure_drawer(contents, parent, &resolved)
             .map_err(CaptureError::io)?;
-    let (offset, empty) =
-        capture_drawers::h2_insert_position(&contents, &drawer);
-    let addition = if empty {
-        empty_section_insertion_text(&contents, offset, capture_block)
-    } else {
-        insertion_text_preserving_line_endings(&contents, offset, capture_block)
-    };
-    let placement = if offset >= contents.len() {
-        Placement::Appended
-    } else {
-        Placement::Inserted
-    };
-    let updated_target = insert_at(&contents, offset, &addition);
-    let drawer = Some(DrawerJson {
-        title: drawer.title,
-        key: drawer.key,
-        created,
-    });
-    let details = SubBulletCaptureDetails {
-        block_id: parent.block_id.clone(),
-        parent_line: parent.line_index + 1,
-        parent_text: parent.description.clone(),
+    prj_section_write_plan(
+        planner,
+        target,
+        &contents,
+        parent,
         drawer,
-        parent_status_symbol: parent.status_symbol,
-        parent_status_name: parent.status_name.clone(),
-    };
-
-    planner.stage(target, updated_target)?;
-
-    Ok(CaptureWritePlan {
-        placement,
-        pomodoro: None,
-        sub_bullet: Some(details),
-        pomodoro_note: None,
-        toggle: None,
-        pomodoro_link: None,
-        pomodoro_refs: Vec::new(),
-    })
+        created,
+        capture_block,
+    )
 }
 
 pub(crate) fn first_child_indentation(

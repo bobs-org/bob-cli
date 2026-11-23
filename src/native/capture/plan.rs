@@ -3613,10 +3613,19 @@ pub(super) fn plan_capture_item(
                         (None, slot.offset)
                     }
                     task_block_layout::NoteHome::Notes(drawer) => {
-                        let offset = capture_drawers::drawer_insertion(
-                            &contents, &drawer,
-                        )
-                        .offset;
+                        let offset = if capture_drawers::is_prj_parent(
+                            &contents, parent,
+                        ) {
+                            capture_drawers::h2_insert_position(
+                                &contents, &drawer,
+                            )
+                            .0
+                        } else {
+                            capture_drawers::drawer_insertion(
+                                &contents, &drawer,
+                            )
+                            .offset
+                        };
                         (
                             Some(DrawerJson {
                                 title: drawer.title,
@@ -3626,16 +3635,28 @@ pub(super) fn plan_capture_item(
                             offset,
                         )
                     }
-                    task_block_layout::NoteHome::NewNotes => (
-                        Some(DrawerJson {
-                            title: task_block_layout::NOTES_TITLE.to_string(),
-                            key: task_block_layout::NOTES_TITLE.to_string(),
-                            created: true,
-                        }),
-                        task_block_layout::drawer_header_offset(
-                            &contents, parent, true,
-                        ),
-                    ),
+                    task_block_layout::NoteHome::NewNotes => {
+                        let title = task_block_layout::notes_create_title(
+                            &contents, parent,
+                        );
+                        let offset = if capture_drawers::is_prj_parent(
+                            &contents, parent,
+                        ) {
+                            contents.len()
+                        } else {
+                            task_block_layout::drawer_header_offset(
+                                &contents, parent, true,
+                            )
+                        };
+                        (
+                            Some(DrawerJson {
+                                title: title.to_string(),
+                                key: task_block_layout::NOTES_TITLE.to_string(),
+                                created: true,
+                            }),
+                            offset,
+                        )
+                    }
                 };
                 let placement = if offset >= contents.len() {
                     Placement::Appended
@@ -5759,11 +5780,19 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                     first_block_id = details.block_id.clone();
                     first_placement = Some(plan.placement);
                 }
+                let drawer =
+                    plan.sub_bullet.as_ref().and_then(|d| d.drawer.clone());
+                if let Some(ref drawer_info) = drawer {
+                    let key = drawer_info.key.clone();
+                    if seen_drawer_keys.insert(key) {
+                        drawers.push(drawer_info.clone());
+                    }
+                }
                 notes.push(crate::native::capture::SubBulletNoteJson {
                     text: header_text.clone(),
                     task_line,
                     sub_bullets: sub_json,
-                    drawer: None,
+                    drawer,
                 });
             }
         }

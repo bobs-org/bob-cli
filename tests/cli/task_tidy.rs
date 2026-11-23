@@ -352,6 +352,72 @@ fn routes_narrow_the_scope_and_bad_routes_exit_2() {
 }
 
 #[test]
+fn a_req_owning_prj_files_loose_notes_under_the_notes_section() {
+    let temp = TempDir::new("task-tidy-prj-notes");
+    let vault = fixture(&temp);
+    write(
+        &vault,
+        "pk.md",
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "---\n",
+            "- [ ] #task #prj Pk root ^prj\n",
+            "\t- [ ] hand req\n",
+            "\t- loose\n",
+            "\n",
+            "## Tasks\n",
+            "- [ ] #task Row a\n",
+        ),
+    );
+    git_in(&vault, ["add", "pk.md"]);
+    git_in(&vault, ["commit", "-q", "-m", "add pk"]);
+    git_in(&vault, ["push", "-q"]);
+
+    let output = run(&vault, &temp, &["@pk", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json_of(&output);
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["counts"]["notes_changed"], 1);
+    assert_eq!(payload["counts"]["notes_filed"], 1);
+    assert_eq!(payload["counts"]["notes_drawers_created"], 1);
+    let task = &payload["changes"][0]["tasks"][0];
+    assert_eq!(task["notes_filed"], 1, "{payload}");
+    assert_eq!(task["notes_created"], true, "{payload}");
+    assert_eq!(
+        task["after"],
+        json!(["- [ ] #task #prj Pk root ^prj", "\t- [ ] hand req"]),
+        "{payload}"
+    );
+
+    let apply = run(&vault, &temp, &["@pk", "-a", "-f", "json"]);
+    assert_eq!(apply.status.code(), Some(0), "{}", format_output(&apply));
+    assert_eq!(
+        read(&vault, "pk.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "---\n",
+            "- [ ] #task #prj Pk root ^prj\n",
+            "\t- [ ] hand req\n",
+            "\n",
+            "## Tasks\n",
+            "- [ ] #task Row a\n",
+            "\n",
+            "## Notes\n",
+            "\n",
+            "- loose\n",
+        )
+    );
+
+    let rerun = run(&vault, &temp, &["@pk", "-f", "json"]);
+    assert_eq!(rerun.status.code(), Some(0), "{}", format_output(&rerun));
+    let payload = json_of(&rerun);
+    assert_eq!(payload["counts"]["notes_changed"], 0, "{payload}");
+    assert_eq!(payload["changes"], json!([]));
+}
+
+#[test]
 fn a_clean_route_writes_and_commits_nothing() {
     let temp = TempDir::new("task-tidy-clean-noop");
     let vault = fixture(&temp);

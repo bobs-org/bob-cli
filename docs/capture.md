@@ -226,7 +226,7 @@ apply to each member.
 | Between prose words | The markers stay literal text. |
 
 Each member has the same meaning it would have if its marker stood alone.
-Suffixes stay local: `@a+x#req @b+y note` puts the note in ^x's REQUIREMENTS
+Suffixes stay local: `@a+x#notes @b+y note` puts the note in ^x's NOTES
 drawer and as a plain child of ^y; `@a+x! @b+y` toggles ^x and Ensures Next
 for ^y. Note-less child bullets, clipboard notes, `#type`, `s:<N>`/`$<N>`,
 `&`/`*`/`~`, drawers, Ensure Next, and `!` toggle keep their existing
@@ -287,8 +287,8 @@ Bob refuses two cases before planning writes:
 | `remembered the timeout %n` | Pomodoro note |
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
-| `- #requirements` | First-level drawer shortcut: names the `REQUIREMENTS` drawer |
-| `@cash+id#requirements <text>` | Child under that task's `REQUIREMENTS` section |
+| `- #future-work` | First-level drawer shortcut: names the `FUTURE WORK` drawer |
+| `@cash+id#notes <text>` | Child under that task's `NOTES` section |
 | `@cash+id#coding` with no other text | Ensure Next and retype that existing task to `CODING` |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
 | `@sase:deep-fix#"SASE V18"`, `=#"DEEP WORK"` | Exact-name literal: the quoted spelling is the name, matched by key equality, never by slug or prefix; straight `"…"` and curly `“…”` both lex, `\"` and `\\` are the only escapes, and the token runs through the closing quote |
@@ -7164,7 +7164,7 @@ Missing IDs include a close-match suggestion when possible and direct callers
 to `bob capture-tasks -r <route>`.
 
 The same marker accepts an optional trailing `#<drawer>` selector, as in
-`@cash+goog-exit#requirements` or `@foo+bar#future-work`. The selector names an
+`@cash+goog-exit#notes` or `@foo+bar#future-work`. The selector names an
 ALL-CAPS child drawer of that task: a slug (`#future-work`) or a quoted
 literal (`#"FUTURE WORK"`). Matching is exact by key, with reserved,
 near-duplicate, and ambiguous refusals, and a missing drawer is created using
@@ -7181,21 +7181,21 @@ incomplete and reports need `drawer`; it does not mean "any drawer". A second
 `#`, or `#` before `+`, is not this family (`@foo#bar+baz` remains a
 note-bullet).
 
-For example, `bob capture 'Postgres 17 minimum @foo+bar#requirements'` against
+For example, `bob capture 'Postgres 17 minimum @foo+bar#notes'` against
 
 ```markdown
 - [ ] #task Upgrade Postgres [created::2026-07-31] ^bar
-	- REQUIREMENTS
+	- NOTES
 		- existing
 	- FUTURE WORK
 ```
 
-appends the new bullet inside `REQUIREMENTS` rather than at the end of the
+appends the new bullet inside `NOTES` rather than at the end of the
 task:
 
 ```markdown
 - [ ] #task Upgrade Postgres [created::2026-07-31] ^bar
-	- REQUIREMENTS
+	- NOTES
 		- existing
 		- Postgres 17 minimum
 	- FUTURE WORK
@@ -7211,7 +7211,7 @@ that task's drawers. For example,
 ```text
 @foo+bar
 - Ping Alice about the cutover
-- REQUIREMENTS
+- NOTES
   - Postgres 17 minimum
 - FUTURE WORK
   - Try logical replication
@@ -7223,7 +7223,7 @@ writes
 
 ```markdown
 - [ ] #task Upgrade Postgres [created::2026-07-31] ^bar
-  - REQUIREMENTS
+  - NOTES
     - 2 GB RAM
     - Postgres 17 minimum
   - Ping Alice about the cutover
@@ -8521,7 +8521,7 @@ item or inside `captures[]`, and it is omitted when empty:
     "roles": ["sub_bullet"],
     "lines": [
       {"text": "- [/] #task Port capture to PIW sase-core [created:: 2026-09-30] ^capture", "depth": 0, "change": "unchanged"},
-      {"text": "\t- REQUIREMENTS", "depth": 1, "change": "unchanged"},
+      {"text": "\t- NOTES", "depth": 1, "change": "unchanged"},
       {"text": "\t\t- existing", "depth": 2, "change": "unchanged"},
       {"text": "\t- Should reuse as much of PIW sase-core code as possible!", "depth": 1, "change": "added"},
       {"text": "\t- 🗓️ **SCHEDULE LOG**", "depth": 1, "change": "unchanged"},
@@ -10775,7 +10775,7 @@ section candidate has `title` and `level`. A drawer candidate has
 `note_count` and `last_seen` (recent rows), `refused`, `consequence`, and
 `cursor_after`. `detail` and `consequence` are Bob-authored with correct
 singular and plural (`1 note`, `used in 12 notes · 3 days ago`, `Adds after
-"2 GB RAM" in REQUIREMENTS`, `Creates FUTURE WORK under ^bar`); `creates` is
+"2 GB RAM" in NOTES`, `Creates FUTURE WORK under ^bar`); `creates` is
 true on `recent` and `new` rows; `refused` is the commit resolver's reason for
 a reserved, near-duplicate, or ambiguous choice. `replacement` is `#slug`,
 or a quoted `#"TITLE"` when the slug does not resolve back to exactly that

@@ -181,7 +181,7 @@ Obsidian renders `#prj` and `#hide` as icon marks per
 [`docs/task-tag-marks.md`](task-tag-marks.md).
 
 Capture into the project note through its `^prj` task with a `#drawer`
-selector (`note text @proj+prj#requirements`): the selector resolves against
+selector (`note text @proj+prj#notes`): the selector resolves against
 the note's eligible `##` sections by the task-drawer key rules, appending the
 entry after the section's last nonblank line and creating a missing section as
 `## Title Case` at the end of the note. Structural headings (Tasks, the
