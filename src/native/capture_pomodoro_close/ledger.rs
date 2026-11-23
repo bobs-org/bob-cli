@@ -16,7 +16,7 @@ use super::super::{
 use super::links::{move_only_destination, rewrite_completed_markers};
 use super::names::CloseNames;
 use super::{
-    bare_plain_link, dropped_plain_link, range_is_struck,
+    bare_plain_link, dedicated_task_link, dropped_plain_link, range_is_struck,
     strikethrough_inner_spans, strip_pomodoro_markers, wikilink_tokens,
     WikiToken,
 };
@@ -369,10 +369,9 @@ fn plan_record_ledger_close(
     }
 
     let mut carried_lines = Vec::new();
-    for bullet in classified
-        .iter()
-        .filter(|bullet| bullet.kind == BulletKind::WorkedOn)
-    {
+    for bullet in classified.iter().filter(|bullet| {
+        bullet.kind == BulletKind::WorkedOn && bullet.startable
+    }) {
         if parked_lines.contains(&(bullet.line + 1)) {
             continue;
         }
@@ -575,10 +574,9 @@ pub(crate) fn plan_ledger_close_with_parked(
     }
 
     let mut carried_lines = Vec::new();
-    for bullet in classified
-        .iter()
-        .filter(|bullet| bullet.kind == BulletKind::WorkedOn)
-    {
+    for bullet in classified.iter().filter(|bullet| {
+        bullet.kind == BulletKind::WorkedOn && bullet.startable
+    }) {
         // Parked worked lines are recorded in history but never carried.
         if parked_lines.contains(&(bullet.line + 1)) {
             continue;
@@ -1062,7 +1060,7 @@ fn collect_links_from_bullet(
                     pre_image_line,
                     token,
                     role,
-                    true,
+                    bullet.startable,
                 ));
                 if bullet.startable {
                     startable_targets
@@ -1113,65 +1111,6 @@ pub(crate) fn target_from_token(
         block_id: token.block_id.clone(),
         wikilink: token.token.clone(),
     }
-}
-
-fn work_log_task_link_target(line: &str) -> Option<WikiToken> {
-    let stripped = strip_pomodoro_markers(line);
-    let indent = leading_spaces_or_tabs_len(&stripped);
-    let after_indent = &stripped[indent..];
-    let marker_len = list_marker_len(after_indent)?;
-    let after_marker = &after_indent[marker_len..];
-    let whitespace = leading_spaces_or_tabs_len(after_marker);
-    if whitespace == 0 {
-        return None;
-    }
-    let mut start = indent + marker_len + whitespace;
-    let mut end = stripped.len();
-    while end > start && matches!(stripped.as_bytes()[end - 1], b' ' | b'\t') {
-        end -= 1;
-    }
-    while start < end && matches!(stripped.as_bytes()[start], b' ' | b'\t') {
-        start += 1;
-    }
-    if start >= end {
-        return None;
-    }
-    if stripped.as_bytes()[end - 1] == b'#' {
-        end -= 1;
-        while end > start
-            && matches!(stripped.as_bytes()[end - 1], b' ' | b'\t')
-        {
-            end -= 1;
-        }
-    }
-    if start >= end {
-        return None;
-    }
-    if end - start >= 4
-        && stripped[start..].starts_with("~~")
-        && stripped[..end].ends_with("~~")
-    {
-        start += 2;
-        end -= 2;
-        while end > start
-            && matches!(stripped.as_bytes()[end - 1], b' ' | b'\t')
-        {
-            end -= 1;
-        }
-        while start < end && matches!(stripped.as_bytes()[start], b' ' | b'\t')
-        {
-            start += 1;
-        }
-    }
-    if start >= end {
-        return None;
-    }
-    let mut tokens = wikilink_tokens(&stripped);
-    if tokens.len() != 1 {
-        return None;
-    }
-    let token = tokens.pop()?;
-    (token.start == start && token.end == end).then_some(token)
 }
 
 fn child_block_end_line(lines: &[&str], parent: usize) -> usize {
@@ -1281,7 +1220,7 @@ fn collect_work_log_note_groups(
         {
             continue;
         }
-        let Some(target) = work_log_task_link_target(lines[index]) else {
+        let Some(target) = dedicated_task_link(lines[index]) else {
             continue;
         };
         let end_line = child_block_end_line(&lines, index);

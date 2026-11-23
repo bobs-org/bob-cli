@@ -45,9 +45,9 @@ pub(crate) use linked_tasks::{
     PomodoroClosePlanError,
 };
 pub(crate) use links::{
-    bare_embedded_link, bare_plain_link, dropped_plain_link, range_is_struck,
-    strikethrough_inner_spans, strip_pomodoro_markers, wikilink_tokens,
-    WikiToken,
+    bare_embedded_link, bare_plain_link, dedicated_task_link,
+    dropped_plain_link, range_is_struck, strikethrough_inner_spans,
+    strip_pomodoro_markers, wikilink_tokens, WikiToken,
 };
 pub(crate) use names::{close_names, CloseNaming};
 #[allow(unused_imports)]

@@ -415,12 +415,12 @@ fn repairs_completed_pomodoro_links_in_place_and_is_idempotent() {
         updated,
         concat!(
             "- [x] Historical (0800-0830)\r\n",
-            "  - ~~[[dev#^done|Embedded]]~~ and 🍅 ~~[[dev#^done|Plain]]~~\r\n",
+            "  - ~~[[dev#^done|Embedded]]~~ and ~~[[dev#^done|Plain]]~~\r\n",
             "  - ~~[[dev#^done|Stale]]~~ and ~~[[dev#^done|Canonical]]~~\r\n",
             "- [ ] Current (0900-0930)\r\n",
         )
     );
-    assert_eq!(plan.marker_added.len(), 1);
+    assert!(plan.marker_added.is_empty());
     assert_eq!(plan.marker_removed.len(), 2);
     let updated_lines = logical_lines(&updated);
     let updated_model = scan_pomodoros(&updated_lines, 0..updated_lines.len());
@@ -470,14 +470,14 @@ fn repairs_markers_by_owner_and_marks_completed_fallback_moves() {
         &BTreeSet::new(),
         false,
     );
-    assert_eq!(plan.marker_added.len(), 2);
+    assert_eq!(plan.marker_added.len(), 1);
     assert_eq!(plan.marker_removed.len(), 2);
     let updated = apply_structural_plan(contents, &model, &plan);
     assert_eq!(
         updated,
         concat!(
             "- [x] Done\n",
-            "  - 🍅 [[dev#^live]] and 🍅 ~~[[dev#^done]]~~\n",
+            "  - [[dev#^live]] and ~~[[dev#^done]]~~\n",
             "  - 🍅 ~~[[dev#^done]]~~\n",
             "- [ ] Future\n",
             "  - [[dev#^open]]\n",
@@ -485,6 +485,63 @@ fn repairs_markers_by_owner_and_marks_completed_fallback_moves() {
             "  - 🍅 🍅 [[dev#^cancelled]]\n",
         )
     );
+}
+
+#[test]
+fn completed_mentions_strip_markers_and_dedicated_links_keep_them() {
+    let contents = concat!(
+        "- [x] Historical (0800-0830)\n",
+        "  - Planned 🍅 [[20261122#^rahway-station-ucpac]]!\n",
+        "  - Planned [[20261122#^rahway-station-ucpac]]!\n",
+        "  - [[dev#^live]]\n",
+        "  - 🍅 ~~[[dev#^done]]~~\n",
+        "- [ ] Current (0900-0930)\n",
+    );
+    let lines = logical_lines(contents);
+    let model = scan_pomodoros(&lines, 0..lines.len());
+    let plan = plan_structural_changes(
+        &model,
+        &resolved(&[
+            ("20261122", "rahway-station-ucpac", vec![' ']),
+            ("dev", "live", vec![' ']),
+            ("dev", "done", vec!['x']),
+        ]),
+        &BTreeSet::from(['x', 'X']),
+        &test_settings().status_types,
+        &BTreeSet::new(),
+        false,
+    );
+    let updated = apply_structural_plan(contents, &model, &plan);
+    assert_eq!(
+        updated,
+        concat!(
+            "- [x] Historical (0800-0830)\n",
+            "  - Planned [[20261122#^rahway-station-ucpac]]!\n",
+            "  - Planned [[20261122#^rahway-station-ucpac]]!\n",
+            "  - 🍅 [[dev#^live]]\n",
+            "  - 🍅 ~~[[dev#^done]]~~\n",
+            "- [ ] Current (0900-0930)\n",
+        )
+    );
+    assert_eq!(plan.marker_removed.len(), 1);
+    assert_eq!(plan.marker_added.len(), 1);
+    let updated_lines = logical_lines(&updated);
+    let updated_model = scan_pomodoros(&updated_lines, 0..updated_lines.len());
+    let second = plan_structural_changes(
+        &updated_model,
+        &resolved(&[
+            ("20261122", "rahway-station-ucpac", vec![' ']),
+            ("dev", "live", vec![' ']),
+            ("dev", "done", vec!['x']),
+        ]),
+        &BTreeSet::from(['x', 'X']),
+        &test_settings().status_types,
+        &BTreeSet::new(),
+        false,
+    );
+    assert!(second.token_edits.is_empty());
+    assert!(second.marker_added.is_empty());
+    assert!(second.marker_removed.is_empty());
 }
 
 #[test]
@@ -680,7 +737,7 @@ fn canceled_subtrees_compose_with_nested_and_moving_bullets() {
         concat!(
             "- [x] Completed\r\n",
             "  - existing completed child\r\n",
-            "  - moving parent 🍅 ~~[[tasks#^done]]~~\r\n",
+            "  - moving parent ~~[[tasks#^done]]~~\r\n",
             "- [ ] Future\r\n",
             "  - surviving [[tasks#^live]]\r\n",
             "    - surviving child [[tasks#^other]]\r\n",

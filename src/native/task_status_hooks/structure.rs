@@ -303,6 +303,7 @@ pub(crate) fn plan_structural_changes(
                 .any(|completed| std::ptr::eq(*completed, link));
             let marker_expected = marker_expected_for_occurrence(
                 &model.entries[final_entry],
+                bullet,
                 link,
             );
             let replacement = desired_link_token(link, retire, marker_expected);

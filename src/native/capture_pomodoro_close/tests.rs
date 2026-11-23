@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{NaiveDate, NaiveDateTime};
 
 use super::super::capture::parse_adjustment_range;
@@ -345,9 +347,10 @@ fn struck_markers_collapse_and_embedded_drop() {
     assert!(plan.contents.contains("\t- 🍅 ~~[[bob#^marked]]~~"));
     assert!(plan.contents.contains("\t- 🍅 [[bob#^collapse]]"));
     assert!(!plan.contents.contains("🍅 🍅 [[bob#^collapse]]"));
-    // No space between the pair: only the last 🍅 counts as a marker,
-    // so the line is already canonical and keeps its bytes.
-    assert!(plan.contents.contains("\t- 🍅🍅 [[bob#^nospace]]"));
+    // Glued tomatoes leave a leftover 🍅 after the spaced marker is
+    // stripped, so the line is a mention: not carried, marker gone.
+    assert!(plan.contents.contains("\t- 🍅[[bob#^nospace]]"));
+    assert!(!plan.contents.contains("🍅🍅 [[bob#^nospace]]"));
     assert!(plan.contents.contains("\t- ![[bob#^embed]]"));
     assert!(!plan.contents.contains("🍅 ![[bob#^embed]]"));
     assert_eq!(
@@ -359,9 +362,108 @@ fn struck_markers_collapse_and_embedded_drop() {
             (LedgerLinkRole::Struck, "unmarked", false),
             (LedgerLinkRole::Struck, "marked", false),
             (LedgerLinkRole::Worked, "collapse", true),
-            (LedgerLinkRole::Mentioned, "nospace", true),
+            (LedgerLinkRole::Mentioned, "nospace", false),
             (LedgerLinkRole::Embedded, "embed", false),
         ]
+    );
+}
+
+fn mention_history_fixture() -> String {
+    note(&[
+        "## Pomodoros",
+        "- [ ] (**1750-1755** [t:: 5m]) — PLAN",
+        "\t- Planned [[20261122#^rahway-station-ucpac]]!",
+        "- [ ] () — PLAN",
+        "\t- [[job#^calendar-event-dan]]",
+    ])
+}
+
+#[test]
+fn mention_stays_in_closed_session_and_is_not_carried() {
+    let plan = close_at(&mention_history_fixture(), 17, 55);
+    assert!(plan
+        .contents
+        .contains("\t- Planned [[20261122#^rahway-station-ucpac]]!"));
+    assert!(!plan.contents.contains("🍅"));
+    assert!(plan.carried_lines.is_empty());
+    assert!(plan
+        .contents
+        .contains("- [ ] () — PLAN\n\t- [[job#^calendar-event-dan]]"));
+    assert!(!plan.contents.contains("- [ ] () — PLAN\n\t- Planned"));
+    let next = plan.next_pomodoro.expect("later PLAN stays");
+    assert!(!next.created);
+    assert_eq!(next.name.as_deref(), Some("PLAN"));
+    assert_eq!(
+        plan.classified_links
+            .iter()
+            .map(|link| (link.role, link.block_id.as_str(), link.carried))
+            .collect::<Vec<_>>(),
+        vec![(LedgerLinkRole::Mentioned, "rahway-station-ucpac", false)]
+    );
+}
+
+#[test]
+fn dedicated_link_carries_and_is_marked_while_mention_stays() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**1750-1755** [t:: 5m]) — PLAN",
+        "\t- Planned [[20261122#^rahway-station-ucpac]]!",
+        "\t- [[bob#^x]]",
+        "- [ ] () — PLAN",
+        "\t- [[job#^calendar-event-dan]]",
+    ]);
+    let plan = close_at(&contents, 17, 55);
+    assert!(plan
+        .contents
+        .contains("\t- Planned [[20261122#^rahway-station-ucpac]]!"));
+    assert!(!plan
+        .contents
+        .contains("Planned 🍅 [[20261122#^rahway-station-ucpac]]"));
+    assert!(plan.contents.contains("\t- 🍅 [[bob#^x]]"));
+    assert_eq!(plan.carried_lines, vec!["\t- [[bob#^x]]".to_string()]);
+    let next = plan.next_pomodoro.expect("continuation");
+    assert!(next.created);
+    assert_eq!(next.name.as_deref(), Some("PLAN"));
+    assert_eq!(
+        plan.classified_links
+            .iter()
+            .map(|link| (link.role, link.block_id.as_str(), link.carried))
+            .collect::<Vec<_>>(),
+        vec![
+            (LedgerLinkRole::Mentioned, "rahway-station-ucpac", false),
+            (LedgerLinkRole::Worked, "x", true),
+        ]
+    );
+}
+
+#[test]
+fn record_close_also_leaves_mentions_uncarried() {
+    let contents = mention_history_fixture();
+    let entry = find_running_pomodoro(&contents).expect("running pomodoro");
+    let plan = plan_ledger_close_with_policy(
+        &contents,
+        &entry,
+        at(17, 55),
+        &BTreeSet::new(),
+        None,
+        LedgerClosePolicy::Record,
+    );
+    assert!(plan
+        .contents
+        .contains("\t- Planned [[20261122#^rahway-station-ucpac]]!"));
+    assert!(!plan.contents.contains("🍅"));
+    assert!(plan.carried_lines.is_empty());
+    assert!(plan
+        .contents
+        .contains("- [ ] () — PLAN\n\t- [[job#^calendar-event-dan]]"));
+    let next = plan.next_pomodoro.expect("later PLAN stays");
+    assert!(!next.created);
+    assert_eq!(
+        plan.classified_links
+            .iter()
+            .map(|link| (link.role, link.block_id.as_str(), link.carried))
+            .collect::<Vec<_>>(),
+        vec![(LedgerLinkRole::Mentioned, "rahway-station-ucpac", false)]
     );
 }
 

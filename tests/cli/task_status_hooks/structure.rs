@@ -309,7 +309,10 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
         json["moved_completed_references"].as_array().unwrap().len(),
         1
     );
-    assert_eq!(json["marker_added_references"].as_array().unwrap().len(), 1);
+    assert!(json["marker_added_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert!(json["marker_removed_references"]
         .as_array()
         .unwrap()
@@ -320,7 +323,7 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
             "## Pomodoros\n\n",
             "- [x] Last completed\n",
             "  - existing completed child\n",
-            "  - Review 🍅 ~~[[tasks#^custom|custom done]]~~\n",
+            "  - Review ~~[[tasks#^custom|custom done]]~~\n",
             "- [ ] Future\n",
             "    - keep future entry\n",
         )

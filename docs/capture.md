@@ -5099,10 +5099,11 @@ untouched notes; `![[…#^id]]` embeds are closed recursively — except Depends
 lines, which are never tree-closed, so closing a dependent never closes its
 prerequisites — and retired to `~~[[…]]~~`; a body that is exactly one plain block link plus `#` is
 deferred (removed from the session, carried without the `#`, target not
-started); other plain block links are worked-on (kept, given exactly one
-`🍅 `, carried); a worked-on line that is exactly one bare link is
-startable (`[ ]`/`[*]` → `[/]`, stamping `[fresh:: TODAY]` in the same write;
-see `docs/freshness.md`); everything else stays as an uncarried note. Completing
+started); a body that is exactly one plain block link is worked-on (kept, one
+`🍅 `, carried, startable: `[ ]`/`[*]` → `[/]`, stamping `[fresh:: TODAY]` in
+the same write; see `docs/freshness.md`); a line mixing a link with other text
+is a mention: kept as history in the closed entry, never marked, never carried,
+never started; everything else stays as an uncarried note. Completing
 a task (`!` selection → `[x]`) never stamps.
 Carried lines (worked-on then deferred, in source order, at original
 indentation) move into a new `- [ ] ()` (or `- [ ] () — NAME`) placeholder
@@ -5403,8 +5404,8 @@ numbered in ledger order starting at 1, at any depth:
 | `![[T]]#` | embedded (the `#` is inert, as today) | complete |
 
 Struck links (`~~[[T]]~~`, already done), lines that mix a link with other
-text (the "mentioned" role, never started), notes, and fenced lines are
-never numbered. `T` is any `path#^id` block link with an optional `|alias`,
+text (the "mentioned" role: never carried, never marked, never started), notes,
+and fenced lines are never numbered. `T` is any `path#^id` block link with an optional `|alias`,
 copied verbatim. On link forms (`@route:block-id=x…`,
 `^route:block-id=x…`, `<text> @route:block-id=x…`) the numbering is taken
 after the link step: a newly linked or created task lands last and gets the

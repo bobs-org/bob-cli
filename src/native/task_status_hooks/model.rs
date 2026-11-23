@@ -556,6 +556,7 @@ pub(crate) struct LinkBullet {
     pub(crate) line_index: usize,
     pub(crate) end_line: usize,
     pub(crate) indentation: String,
+    pub(crate) dedicated: bool,
     pub(crate) links: Vec<LinkOccurrence>,
 }
 

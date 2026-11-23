@@ -100,6 +100,11 @@ pub(crate) fn scan_pomodoros(
                     indentation.len(),
                 ),
                 indentation,
+                dedicated:
+                    crate::native::capture_pomodoro_close::dedicated_task_link(
+                        lines[line_index],
+                    )
+                    .is_some(),
                 links,
             });
         }
@@ -279,9 +284,12 @@ pub(super) fn completed_pomodoro_marker_expected(
 
 pub(super) fn marker_expected_for_occurrence(
     entry: &PomodoroEntry,
+    bullet: &LinkBullet,
     link: &LinkOccurrence,
 ) -> bool {
-    entry.completed && completed_pomodoro_marker_expected(link)
+    entry.completed
+        && bullet.dedicated
+        && completed_pomodoro_marker_expected(link)
 }
 
 #[cfg(test)]

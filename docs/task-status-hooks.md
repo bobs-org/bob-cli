@@ -43,9 +43,9 @@ The latest existing earlier daily note is a read-only recent-activity source:
 it supplies the rank an otherwise-unblocked Blocked task recovers to and the
 grace that keeps a directly referenced daily-note Next task, but it never
 promotes a Ready task and is never written. Completed-task references are retired as struck,
-non-embedded links. Live non-transcluded links beneath completed Pomodoros
-carry the machine-owned `🍅` marker; embedded and provenance-unknown retired
-links do not. Links beneath open Pomodoros are unmarked. A link to an
+non-embedded links. Live non-transcluded links on dedicated Task Link bullets beneath completed
+Pomodoros carry the machine-owned `🍅` marker; mentions, embedded links, and
+provenance-unknown retired links do not. Links beneath open Pomodoros are unmarked. A link to an
 unambiguously canceled Tasks task removes its complete Markdown list-item
 subtree from an open Pomodoro without changing the canceled task itself.
 
@@ -896,9 +896,14 @@ complete are changed. Canonical struck links are unchanged.
 
 ## Pomodoro Marker
 
-The marker records that a non-transcluded link participated in a completed
-Pomodoro. It belongs to the individual link, not the bullet, and is normalized
-from each occurrence's syntax before retirement:
+The marker records that a dedicated Task Link bullet participated in a
+completed Pomodoro. A dedicated bullet's body is exactly one `[[path#^id]]` or
+`![[path#^id]]` block link (alias allowed) after stripping 🍅 markers, one
+trailing `#`, and one enclosing `~~…~~` pair. On those bullets the marker still
+belongs to the individual link and is normalized from each occurrence's syntax
+before retirement. Every other line under a completed entry — prose that
+mentions a task, or two links on one line — has an expected marker count of
+zero; close and reconcile strip any 🍅 they find there.
 
 | Link state | Canonical grammar |
 | --- | --- |
@@ -906,17 +911,17 @@ from each occurrence's syntax before retirement:
 | completed, embedded | `![[dev#^reference]]` |
 | retired with recorded participation | `🍅 ~~[[dev#^write-tests|alias]]~~` |
 | retired with unknown/embed provenance | `~~[[dev#^reference]]~~` |
-| mixed content | `Work on 🍅 [[a#^x]] and ~~[[b#^y]]~~` |
+| mixed content | `Work on [[a#^x]] and ~~[[b#^y]]~~` |
 
-The sync adds or canonicalizes markers on live non-transcluded links beneath
-completed Pomodoros and removes markers from embedded links. For an already
-struck non-embedded link, it preserves whether a marker exists: an existing
-marker is canonicalized, but a missing marker is not backfilled because the
-strike may be the only surviving evidence that the link was retired from a
-transclusion. Open Pomodoros are unmarked. Cancelled (`[-]`) Pomodoros, fenced
-code, the top-level Pomodoro line, and links outside `## Pomodoros` are
-untouched. Marker repair is decoration-only and never changes Next/dependency
-selection.
+The sync adds or canonicalizes markers on live non-transcluded links on
+dedicated Task Link bullets beneath completed Pomodoros and removes markers
+from mentions and embedded links. For an already struck non-embedded link on a
+dedicated bullet, it preserves whether a marker exists: an existing marker is
+canonicalized, but a missing marker is not backfilled because the strike may
+be the only surviving evidence that the link was retired from a transclusion.
+Open Pomodoros are unmarked. Cancelled (`[-]`) Pomodoros, fenced code, the
+top-level Pomodoro line, and links outside `## Pomodoros` are untouched.
+Marker repair is decoration-only and never changes Next/dependency selection.
 
 The containing bullet is relocated according to this order:
 
@@ -932,10 +937,10 @@ parent, multiple moved bullets retain their document order, and the root
 indentation is normalized to the destination's child indentation. When the
 current Pomodoro is already the owner, only retirement is needed. A repair
 found beneath a completed Pomodoro is always normalized in place and is never
-moved into a newer session. On a bullet moved to the completed fallback, a
+moved into a newer session. On a dedicated bullet moved to the completed fallback, a
 completed embedded link becomes unmarked `~~[[...]]~~`, while a completed live
-non-transcluded link becomes `🍅 ~~[[...]]~~`. A bullet moved to the current
-open Pomodoro remains unmarked.
+non-transcluded link becomes `🍅 ~~[[...]]~~`. Mentions moved there stay
+unmarked. A bullet moved to the current open Pomodoro remains unmarked.
 
 For example, a completed task under a future Pomodoro is moved to the current
 timed entry:
