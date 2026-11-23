@@ -45,6 +45,36 @@ impl SpawnedScan {
             .wait_with_output()
             .expect("wait for scan")
     }
+
+    fn wait_pause(&mut self, hs: &Handshake, seq: usize) -> String {
+        let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+        loop {
+            if let Ok(body) = fs::read_to_string(&hs.ready)
+                && body.starts_with(&format!("{seq}:"))
+            {
+                return body;
+            }
+            if let Some(child) = self.child.as_mut()
+                && child.try_wait().expect("poll scan child").is_some()
+            {
+                let output = self
+                    .child
+                    .take()
+                    .expect("exited scan child")
+                    .wait_with_output()
+                    .expect("collect exited scan output");
+                panic!(
+                    "scan exited before handshake sequence {seq}:\n{}",
+                    format_output(&output)
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for scan handshake sequence {seq}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 impl Drop for SpawnedScan {
@@ -74,11 +104,15 @@ fn wait_until(timeout: Duration, what: &str, mut ready: impl FnMut() -> bool) {
 }
 
 fn wait_pause(hs: &Handshake, seq: usize) -> String {
-    wait_until(HANDSHAKE_TIMEOUT, "scan handshake", || {
-        fs::read_to_string(&hs.ready)
-            .ok()
-            .is_some_and(|body| body.starts_with(&format!("{seq}:")))
-    });
+    wait_until(
+        HANDSHAKE_TIMEOUT,
+        &format!("scan handshake sequence {seq}"),
+        || {
+            fs::read_to_string(&hs.ready)
+                .ok()
+                .is_some_and(|body| body.starts_with(&format!("{seq}:")))
+        },
+    );
     fs::read_to_string(&hs.ready).expect("read ready")
 }
 
@@ -1207,6 +1241,388 @@ fn human_post_lock_intake_collision_writes_error_receipt() {
 }
 
 // --- Landing repairs: coherent evidence, combined collisions, receipts ---
+
+#[test]
+fn unrelated_daily_edit_finalizes_without_reparsing_pdfs() {
+    let temp = TempDir::new("bob-cli-scan-interleave-finalization-only");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let first = env.vault.join("lib/chat/first.pdf");
+    write_textbundle(
+        &first,
+        "First",
+        b"first-asset",
+        "text.md",
+        Some("#task New follow up"),
+    );
+    write_marker_pdf(&env.vault.join("lib/chat/second.pdf"), "Second");
+    let daily = env.vault.join("2026/day.md");
+    write_file(&daily, "before\n");
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_evidence",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    fs::write(&daily, "after!\n\n- [ ] #task New follow up\n")
+        .expect("edit existing daily note with a matching task");
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["summary"]["created"], 2);
+    let first_note = fs::read_to_string(env.vault.join("ref/chat/first.md"))
+        .expect("first ref note");
+    assert!(
+        !first_note
+            .lines()
+            .any(|line| line.starts_with("- [ ] #task New follow up")),
+        "shared finalization must see the new daily task and skip its duplicate:\n{first_note}"
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        1,
+        "finalization-only refresh parses no PDFs: {plan_log}"
+    );
+    assert!(
+        lines[0].starts_with("locked=0 count=2 "),
+        "only the initial full pass should plan PDFs:\n{plan_log}"
+    );
+}
+
+#[test]
+fn sidecar_edit_replans_only_its_pdf() {
+    let temp = TempDir::new("bob-cli-scan-interleave-subset-refresh");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let first = env.vault.join("lib/chat/first.pdf");
+    let second = env.vault.join("lib/chat/second.pdf");
+    write_textbundle(
+        &first,
+        "First",
+        b"first-asset",
+        "text.md",
+        Some("Old first"),
+    );
+    write_textbundle(
+        &second,
+        "Second",
+        b"second-asset",
+        "text.md",
+        Some("Stable second"),
+    );
+    assert_success(&run_scan(&env, &[]));
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_evidence",
+        false,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    let sidecar = first.with_extension("textbundle").join("text.md");
+    let body = fs::read_to_string(&sidecar).expect("first sidecar");
+    fs::write(
+        &sidecar,
+        same_length_replace(&body, "Old first", "New first"),
+    )
+    .expect("edit first sidecar");
+    resume(&hs, 1);
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let note = env.vault.join("ref/chat/first.md");
+    assert!(
+        fs::read_to_string(&note)
+            .expect("first ref note")
+            .contains("New first"),
+        "subset refresh must import the latest sidecar text"
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        2,
+        "one initial and one subset plan: {plan_log}"
+    );
+    assert!(lines[0].starts_with("locked=0 count=2 "), "{plan_log}");
+    assert_eq!(
+        lines[1],
+        format!("locked=0 count=1 {}", first.display()),
+        "only the changed PDF is reparsed outside the locks"
+    );
+    assert!(!fs::read_to_string(env.vault.join("ref/chat/second.md"))
+        .expect("second ref note")
+        .contains("New first"));
+}
+
+#[test]
+fn second_edit_before_refresh_joins_the_selected_subset() {
+    let temp = TempDir::new("bob-cli-scan-interleave-refresh-union");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let first = env.vault.join("lib/chat/first.pdf");
+    let second = env.vault.join("lib/chat/second.pdf");
+    write_textbundle(
+        &first,
+        "First",
+        b"first-asset",
+        "text.md",
+        Some("Old first"),
+    );
+    write_textbundle(
+        &second,
+        "Second",
+        b"second-asset",
+        "text.md",
+        Some("Old second"),
+    );
+    assert_success(&run_scan(&env, &[]));
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_evidence,before_refresh",
+        true,
+        Some(&plan_log),
+    );
+    wait_pause(&hs, 1);
+    let first_sidecar = first.with_extension("textbundle").join("text.md");
+    let first_body = fs::read_to_string(&first_sidecar).expect("first sidecar");
+    fs::write(
+        &first_sidecar,
+        same_length_replace(&first_body, "Old first", "New first"),
+    )
+    .expect("edit first sidecar after planning");
+    resume(&hs, 1);
+
+    wait_pause(&hs, 2);
+    let second_sidecar = second.with_extension("textbundle").join("text.md");
+    let second_body =
+        fs::read_to_string(&second_sidecar).expect("second sidecar");
+    fs::write(
+        &second_sidecar,
+        same_length_replace(&second_body, "Old second", "New second"),
+    )
+    .expect("edit second sidecar before refresh snapshot");
+    resume(&hs, 2);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    for (path, expected) in [
+        (env.vault.join("ref/chat/first.md"), "New first"),
+        (env.vault.join("ref/chat/second.md"), "New second"),
+    ] {
+        assert!(
+            fs::read_to_string(path)
+                .expect("ref note")
+                .contains(expected),
+            "refresh must include edits observed after initial stale detection"
+        );
+    }
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        2,
+        "one initial and one combined subset plan: {plan_log}"
+    );
+    assert!(lines[0].starts_with("locked=0 count=2 "), "{plan_log}");
+    assert!(lines[1].starts_with("locked=0 count=2 "), "{plan_log}");
+    assert!(
+        lines.iter().all(|line| line.starts_with("locked=0")),
+        "every planning pass stays outside writer locks:\n{plan_log}"
+    );
+}
+
+#[test]
+fn failed_subset_plan_is_replaced_by_later_recovery_without_stale_drafts() {
+    let temp = TempDir::new("bob-cli-scan-interleave-refresh-recovery");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/recover.pdf");
+    write_textbundle(
+        &pdf,
+        "Recover",
+        b"recover-asset",
+        "text.md",
+        Some("#task Old follow up"),
+    );
+    let original_pdf = fs::read(&pdf).expect("original PDF");
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+
+    let hs = Handshake::new(temp.path(), "hs");
+    let mut child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "before_evidence,before_refresh,before_refresh_evidence",
+        true,
+        None,
+    );
+    wait_pause(&hs, 1);
+    let body = fs::read_to_string(&sidecar).expect("sidecar");
+    fs::write(
+        &sidecar,
+        same_length_replace(&body, "Old follow up", "New follow up"),
+    )
+    .expect("edit task candidate");
+    resume(&hs, 1);
+
+    wait_pause(&hs, 2);
+    fs::write(&pdf, b"not a PDF").expect("make subset plan fail");
+    resume(&hs, 2);
+
+    wait_pause(&hs, 3);
+    fs::write(&pdf, &original_pdf).expect("restore PDF before evidence");
+    resume(&hs, 3);
+
+    child.wait_pause(&hs, 4);
+    resume(&hs, 4);
+    child.wait_pause(&hs, 5);
+    resume(&hs, 5);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let note = env.vault.join("ref/chat/recover.md");
+    let note = fs::read_to_string(&note).expect("recovered ref note");
+    assert!(note.contains("#task New follow up"), "{note}");
+    assert!(
+        !note.contains("#task Old follow up"),
+        "the abandoned draft's candidate must not survive the Failed outcome:\n{note}"
+    );
+}
+
+#[test]
+fn preparation_churn_uses_four_subset_passes_and_one_rebuild() {
+    let temp = TempDir::new("bob-cli-scan-interleave-preparation-budget");
+    let env = ScanEnv {
+        vault: temp.path().join("vault"),
+        state: temp.path().join("state"),
+        lock: temp.path().join("bob_sync.lock"),
+    };
+    write_area_note(&env.vault.join("obsidian.md"), "Obsidian");
+    let pdf = env.vault.join("lib/chat/churn.pdf");
+    write_textbundle(&pdf, "Churn", b"churn-asset", "text.md", Some("Old"));
+    let sidecar = pdf.with_extension("textbundle").join("text.md");
+    let hs = Handshake::new(temp.path(), "hs");
+    let plan_log = temp.path().join("plan.log");
+    let child = spawn_scan(
+        &env,
+        &["-f", "json"],
+        &hs,
+        "planning,before_evidence,before_refresh",
+        true,
+        Some(&plan_log),
+    );
+
+    wait_pause(&hs, 1);
+    resume(&hs, 1);
+    wait_pause(&hs, 2);
+    let body = fs::read_to_string(&sidecar).expect("sidecar");
+    fs::write(&sidecar, same_length_replace(&body, "Old", "New"))
+        .expect("initial sidecar edit");
+    resume(&hs, 2);
+
+    let mut seq = 3;
+    let mut current = "New";
+    for pass in 0..4 {
+        wait_pause(&hs, seq);
+        assert!(
+            fs::read_to_string(&hs.ready)
+                .expect("ready stage")
+                .ends_with(":before_refresh"),
+            "refresh pass {pass} should pause before its fresh snapshot"
+        );
+        resume(&hs, seq);
+        seq += 1;
+
+        wait_pause(&hs, seq);
+        assert!(
+            fs::read_to_string(&hs.ready)
+                .expect("ready stage")
+                .ends_with(":planning"),
+            "refresh pass {pass} should pause before subset planning"
+        );
+        let next = if current == "New" { "Old" } else { "New" };
+        let body = fs::read_to_string(&sidecar).expect("sidecar");
+        fs::write(&sidecar, same_length_replace(&body, current, next))
+            .expect("churn sidecar during refresh planning");
+        current = next;
+        resume(&hs, seq);
+        seq += 1;
+    }
+
+    // The sixth planning call is the one permitted full rebuild. Its
+    // initial pre-evidence seam also pauses because this test repeats every
+    // requested stage; neither pause changes the final input.
+    wait_pause(&hs, seq);
+    assert!(
+        fs::read_to_string(&hs.ready)
+            .expect("ready stage")
+            .ends_with(":planning"),
+        "the bounded fallback should be one full rebuild"
+    );
+    resume(&hs, seq);
+    seq += 1;
+    wait_pause(&hs, seq);
+    assert!(fs::read_to_string(&hs.ready)
+        .expect("ready stage")
+        .ends_with(":before_evidence"));
+    resume(&hs, seq);
+
+    let output = child.wait();
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let note = fs::read_to_string(env.vault.join("ref/chat/churn.md"))
+        .expect("churn ref note");
+    assert!(
+        note.contains(current),
+        "latest stable content must win: {note}"
+    );
+    let plan_log = fs::read_to_string(&plan_log).expect("plan log");
+    let lines = plan_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        6,
+        "initial plan + four subset passes + one full rebuild:\n{plan_log}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.starts_with("locked=0 count=1 ")),
+        "all bounded preparation parses stay unlocked:\n{plan_log}"
+    );
+}
 
 #[test]
 fn pdf_created_during_planning_replans_with_both() {

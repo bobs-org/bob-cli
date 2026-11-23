@@ -150,6 +150,23 @@ pub(super) enum ScanChange {
     },
 }
 
+/// One invocation-wide coherence allowance, carried with the prepared scan
+/// so lock-window validation can continue the same bounded policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ScanRefreshBudget {
+    pub(super) refreshes_remaining: u8,
+    pub(super) full_rebuild_available: bool,
+}
+
+impl Default for ScanRefreshBudget {
+    fn default() -> Self {
+        Self {
+            refreshes_remaining: 4,
+            full_rebuild_available: true,
+        }
+    }
+}
+
 /// Owned shared preparation result for one full scan.
 pub(super) struct PreparedFullScan {
     pub(super) config: Config,
@@ -158,6 +175,7 @@ pub(super) struct PreparedFullScan {
     pub(super) pdfs: Vec<PathBuf>,
     pub(super) plan_outcomes: Vec<ScanPlanOutcome>,
     pub(super) evidence: ScanInputEvidence,
+    pub(super) refresh_budget: ScanRefreshBudget,
     /// Raw annotation candidates per PDF, retained before finalization so a
     /// later combined intake/library finalization can reset without
     /// duplicating intentions or retaining stale reservations.
@@ -417,6 +435,19 @@ pub(super) enum PreparedValidation {
 pub(super) fn validate_prepared_scan(
     prepared: &PreparedFullScan,
 ) -> PreparedValidation {
+    match classify_prepared_scan(prepared) {
+        Ok(ScanChange::Unchanged) => PreparedValidation::Unchanged,
+        Ok(change) => scan_change_to_validation(change),
+        Err(error) => PreparedValidation::Failed(error),
+    }
+}
+
+/// Return the complete typed change classification for a prepared scan.
+/// Unlike `PreparedValidation`, this retains the PDF subset so unlocked
+/// callers can refresh only the plans whose inputs changed.
+pub(super) fn classify_prepared_scan(
+    prepared: &PreparedFullScan,
+) -> Result<ScanChange> {
     let fresh_index = crate::native::ref_tasks::RefTaskIndex::build(
         &prepared.config.bob_dir,
         &prepared.config.ref_dir,
@@ -425,37 +456,29 @@ pub(super) fn validate_prepared_scan(
         index: fresh_index,
         invocation_date: prepared.invocation_date.clone(),
     };
-    let mut current = match capture_scan_evidence(
+    let mut current = capture_scan_evidence(
         &prepared.config,
         &prepared.pdfs,
         &prepared.intake,
         &prepared.plan_outcomes,
         &fresh_ctx,
-    ) {
-        Ok(current) => current,
-        Err(error) => return PreparedValidation::Failed(error),
-    };
+    )?;
     // Real comparison against the bytes used by each plan: the stored
     // `pdf_hashes` are the planner's read-time hashes (what each plan was
     // built from), while `current.pdf_hashes` would naively repopulate the
     // same old planner hashes for Planned outcomes. Re-hash the current
     // bytes on disk so a PDF edit after preparation invalidates instead of
     // comparing old hashes to themselves.
-    let mut fresh_pdf_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
-    for pdf in prepared.evidence.pdf_hashes.keys() {
-        if let Ok(hash) = super::io::sha256_file(pdf) {
-            fresh_pdf_hashes.insert(pdf.clone(), hash);
-        }
-    }
-    current.pdf_hashes = fresh_pdf_hashes;
+    refresh_evidence_pdf_hashes(&mut current)?;
     let dest_roots = dest_asset_roots(&prepared.config, &prepared.pdfs);
-    scan_change_to_validation(classify_scan_change(
+    Ok(classify_scan_change_with_plan_hashes(
         &prepared.evidence,
         &current,
         &prepared.config,
         &dest_roots,
         &[],
         false,
+        &prepared.plan_outcomes,
     ))
 }
 
@@ -841,6 +864,72 @@ fn classify_scan_change(
     ScanChange::Unchanged
 }
 
+/// Add a plan whose parsed PDF bytes no longer match the current disk hash.
+/// This catches an edit that happened during parsing even if the bytes later
+/// returned to the pre-planning snapshot; destination and global precedence
+/// from the ordinary classifier remains authoritative.
+fn classify_scan_change_with_plan_hashes(
+    old: &ScanInputEvidence,
+    new: &ScanInputEvidence,
+    config: &Config,
+    dest_roots: &[PathBuf],
+    intake: &[IntakeMove],
+    allow_intake_dest_adds: bool,
+    outcomes: &[ScanPlanOutcome],
+) -> ScanChange {
+    let change = classify_scan_change(
+        old,
+        new,
+        config,
+        dest_roots,
+        intake,
+        allow_intake_dest_adds,
+    );
+    let stale_plans = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Planned(plan)
+                if new.pdf_hashes.get(&plan.pdf)
+                    != Some(&plan.marker.source_pdf_sha256) =>
+            {
+                Some(plan.pdf.clone())
+            }
+            ScanPlanOutcome::Planned(_)
+            | ScanPlanOutcome::Held(_)
+            | ScanPlanOutcome::Failed(_) => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if stale_plans.is_empty() {
+        return change;
+    }
+    let reason = format!(
+        "PDF changed while planning: {}",
+        stale_plans
+            .iter()
+            .map(|pdf| pdf.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    match change {
+        ScanChange::Unchanged => ScanChange::Refresh {
+            pdfs: stale_plans,
+            reason,
+        },
+        ScanChange::Refresh {
+            mut pdfs,
+            reason: existing_reason,
+        } => {
+            pdfs.extend(stale_plans);
+            ScanChange::Refresh {
+                pdfs,
+                reason: reason.min(existing_reason),
+            }
+        }
+        change @ (ScanChange::Rebuild { .. }
+        | ScanChange::DestinationAsset { .. }) => change,
+    }
+}
+
 /// Compare a pre-planning snapshot to post-planning evidence.
 ///
 /// Post evidence tracks additional absent (`exists: false`) paths the
@@ -945,7 +1034,43 @@ pub(super) fn prepare_from_inputs(
     jobs: usize,
     intake: Vec<IntakeMove>,
     invocation_date: Option<String>,
+    refresh_budget: ScanRefreshBudget,
 ) -> Result<PreparedFullScan> {
+    let attempt = prepare_from_inputs_once(
+        config,
+        options,
+        jobs,
+        intake,
+        invocation_date,
+        refresh_budget,
+    )?;
+    let PreparationAttempt {
+        mut prepared,
+        observed,
+        change,
+    } = attempt;
+    if change == ScanChange::Unchanged {
+        prepared.evidence = observed;
+    }
+    settle_prepared_scan(prepared, change, options, jobs)
+}
+
+struct PreparationAttempt {
+    prepared: PreparedFullScan,
+    observed: ScanInputEvidence,
+    change: ScanChange,
+}
+
+/// One full initial plan. Coherence mismatches are returned alongside the
+/// provisional drafts so the caller can refresh just affected PDFs.
+fn prepare_from_inputs_once(
+    config: &Config,
+    options: SyncOptions,
+    jobs: usize,
+    intake: Vec<IntakeMove>,
+    invocation_date: Option<String>,
+    refresh_budget: ScanRefreshBudget,
+) -> Result<PreparationAttempt> {
     // Membership snapshot is discovery. A PDF that arrives after this
     // enumeration cannot sit in both pre/post snapshots while missing
     // from the planned list.
@@ -1028,14 +1153,6 @@ pub(super) fn prepare_from_inputs(
         finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)?;
         reserve_preview_ids(config, &mut plans_to_finalize, &ctx)?;
     }
-    let plans = plan_outcomes
-        .iter()
-        .filter_map(|outcome| match outcome {
-            ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
-            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
-        })
-        .collect::<Vec<_>>();
-    validate_planned_asset_collisions(&plans)?;
     // Private test seam: mutate sidecar/ref/config/parent inputs after
     // their reads but before evidence capture. Production builds compile
     // this into a no-op; tests use the handshake to plant same-length
@@ -1043,88 +1160,343 @@ pub(super) fn prepare_from_inputs(
     scan_test::pause("before_evidence");
     let mut evidence =
         capture_scan_evidence(config, &pdfs, &intake, &plan_outcomes, &ctx)?;
-    // During-preparation coherence: the pure planning pass must not attach
-    // newer evidence to an older plan. Compare the pre-planning snapshot
-    // to the post-planning evidence with the typed classifier, then
-    // translate Refresh/Rebuild back to the existing stale/rebuild path.
-    {
-        let expected_pdfs = planned_pdfs_from_membership(
-            config,
-            options,
-            &intake,
-            &evidence.lib_pdfs,
-            &evidence.xlib_members,
-        )?;
-        evidence.planned_pdfs = expected_pdfs.clone();
-        let fresh_index = crate::native::ref_tasks::RefTaskIndex::build(
+    let fresh_ctx = ScanContext {
+        index: crate::native::ref_tasks::RefTaskIndex::build(
             &config.bob_dir,
             &config.ref_dir,
-        );
-        let fresh_ctx = ScanContext {
-            index: fresh_index,
-            invocation_date: invocation_date.clone(),
-        };
-        evidence.candidates = candidates_by_pdf(config, &pdfs, &fresh_ctx);
-        evidence.index_rest_fingerprint = index_rest_fingerprint(&fresh_ctx);
-        let dest_roots = dest_asset_roots(config, &pdfs);
-        match classify_scan_change(
-            &pre_evidence,
-            &evidence,
-            config,
-            &dest_roots,
-            &intake,
-            true,
-        ) {
-            ScanChange::Unchanged => {}
+        ),
+        invocation_date: invocation_date.clone(),
+    };
+    evidence.candidates = candidates_by_pdf(config, &pdfs, &fresh_ctx);
+    evidence.index_rest_fingerprint = index_rest_fingerprint(&fresh_ctx);
+    evidence.planned_pdfs = planned_pdfs_from_membership(
+        config,
+        options,
+        &intake,
+        &evidence.lib_pdfs,
+        &evidence.xlib_members,
+    )?;
+    refresh_evidence_pdf_hashes(&mut evidence)?;
+    complete_comparison_evidence(&pre_evidence, &mut evidence)?;
+    // Planning can discover routed targets, parent/link reads, and lineage
+    // consumers that the conservative pre-plan snapshot could not name.
+    // Keep those owners and observations attached to the old byte baseline
+    // so a concurrent Markdown edit selects every affected plan.
+    for (path, owners) in &evidence.owners {
+        pre_evidence
+            .owners
+            .entry(path.clone())
+            .or_default()
+            .extend(owners.iter().cloned());
+    }
+    pre_evidence.observations = evidence.observations.clone();
+    let change = classify_scan_change_with_plan_hashes(
+        &pre_evidence,
+        &evidence,
+        config,
+        &dest_asset_roots(config, &pdfs),
+        &intake,
+        true,
+        &plan_outcomes,
+    );
+    Ok(PreparationAttempt {
+        prepared: PreparedFullScan {
+            config: config.clone(),
+            invocation_date,
+            intake,
+            pdfs,
+            plan_outcomes,
+            // Keep the pre-plan snapshot as the last trusted baseline when
+            // this pass is stale. Stable attempts adopt `evidence` above.
+            evidence: pre_evidence,
+            refresh_budget,
+            draft_annotation_candidates: drafts_candidates,
+            draft_rendered: drafts_rendered,
+        },
+        observed: evidence,
+        change,
+    })
+}
+
+fn refresh_evidence_pdf_hashes(evidence: &mut ScanInputEvidence) -> Result<()> {
+    let pdfs = evidence.pdf_hashes.keys().cloned().collect::<Vec<_>>();
+    for pdf in pdfs {
+        let state = fingerprint_file(&pdf)?;
+        if let Some(hash) = state.sha256 {
+            evidence.pdf_hashes.insert(pdf, hash);
+        } else {
+            evidence.pdf_hashes.remove(&pdf);
+        }
+    }
+    Ok(())
+}
+
+/// Keep prior dependencies in the comparison snapshot for this pass, even
+/// when a replacement outcome is Held or Failed and no longer reports them.
+/// Re-read the bytes so a removed or edited destination remains visible;
+/// stable prepared evidence still adopts only the new outcomes.
+fn complete_comparison_evidence(
+    previous: &ScanInputEvidence,
+    current: &mut ScanInputEvidence,
+) -> Result<()> {
+    for path in previous.file_states.keys() {
+        current
+            .file_states
+            .insert(path.clone(), fingerprint_file(path)?);
+    }
+    for (path, owners) in &previous.owners {
+        current
+            .owners
+            .entry(path.clone())
+            .or_default()
+            .extend(owners.iter().cloned());
+    }
+    Ok(())
+}
+
+fn validate_prepared_asset_collisions(
+    prepared: &PreparedFullScan,
+) -> Result<()> {
+    let plans = prepared
+        .plan_outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
+        })
+        .collect::<Vec<_>>();
+    validate_planned_asset_collisions(&plans)
+}
+
+fn full_rebuild_prepared(
+    prepared: PreparedFullScan,
+    options: SyncOptions,
+    jobs: usize,
+    reason: &str,
+) -> Result<PreparedFullScan> {
+    if !prepared.refresh_budget.full_rebuild_available {
+        return Err(scan_inputs_changed_error(reason));
+    }
+    let budget = ScanRefreshBudget {
+        full_rebuild_available: false,
+        ..prepared.refresh_budget
+    };
+    prepare_full_scan(
+        &prepared.config,
+        options,
+        jobs,
+        Some(prepared.invocation_date.clone()),
+        budget,
+    )
+}
+
+/// Converge a provisional or freshly prepared scan using the invocation's
+/// shared four-pass subset refresh budget and one full rebuild allowance.
+fn settle_prepared_scan(
+    mut prepared: PreparedFullScan,
+    mut change: ScanChange,
+    options: SyncOptions,
+    jobs: usize,
+) -> Result<PreparedFullScan> {
+    loop {
+        match change {
+            ScanChange::Unchanged => {
+                validate_prepared_asset_collisions(&prepared)?;
+                return Ok(prepared);
+            }
             ScanChange::DestinationAsset { reason } => {
-                return Err(destination_asset_changed_error(&format!(
-                    "{reason} during planning"
-                )));
+                return Err(destination_asset_changed_error(&reason));
             }
-            ScanChange::Refresh { reason, .. }
-            | ScanChange::Rebuild { reason } => {
-                return Err(scan_inputs_changed_error(&format!(
-                    "{reason} during planning"
-                )));
+            ScanChange::Rebuild { reason } => {
+                prepared =
+                    full_rebuild_prepared(prepared, options, jobs, &reason)?;
+                change = classify_prepared_scan(&prepared)?;
             }
-        }
-        if expected_pdfs != pdfs {
-            return Err(scan_inputs_changed_error(
-                "planned PDF list does not match snapshot membership",
-            ));
-        }
-        // Planner PDF hashes must match the post-planning bytes actually on
-        // disk; otherwise the planner read older bytes than the evidence
-        // attaches. Retain a real comparison against the bytes used by
-        // each plan instead of repopulating both sides from the old plans.
-        for outcome in &plan_outcomes {
-            if let ScanPlanOutcome::Planned(plan) = outcome {
-                let post_hash =
-                    super::io::sha256_file(&plan.pdf).map_err(|error| {
-                        scan_inputs_changed_error(&format!(
-                            "PDF changed during planning: {}: {error}",
-                            plan.pdf.display()
-                        ))
-                    })?;
-                if post_hash != plan.marker.source_pdf_sha256 {
-                    return Err(scan_inputs_changed_error(&format!(
-                        "PDF contents changed during planning: {}",
-                        plan.pdf.display()
-                    )));
+            ScanChange::Refresh { pdfs, reason } => {
+                if prepared.refresh_budget.refreshes_remaining == 0 {
+                    prepared = full_rebuild_prepared(
+                        prepared, options, jobs, &reason,
+                    )?;
+                    change = classify_prepared_scan(&prepared)?;
+                    continue;
                 }
+                let (updated, next_change) =
+                    refresh_prepared_once(prepared, &pdfs, options, jobs)?;
+                prepared = updated;
+                change = next_change;
             }
         }
     }
-    Ok(PreparedFullScan {
-        config: config.clone(),
-        invocation_date,
-        intake,
-        pdfs,
-        plan_outcomes,
-        evidence,
-        draft_annotation_candidates: drafts_candidates,
-        draft_rendered: drafts_rendered,
-    })
+}
+
+/// Refresh one ordered subset outside writer locks. The last trusted
+/// evidence is compared to a fresh pre-snapshot before any plan is
+/// replaced, so edits arriving between detection and refresh join the same
+/// pass. A stable result adopts the post-snapshot; a stale result retains
+/// the fresh pre-snapshot as the next trusted baseline.
+fn refresh_prepared_once(
+    mut prepared: PreparedFullScan,
+    pending_pdfs: &BTreeSet<PathBuf>,
+    options: SyncOptions,
+    jobs: usize,
+) -> Result<(PreparedFullScan, ScanChange)> {
+    // Let adversarial tests place a second edit after stale detection but
+    // before this pass captures its fresh input baseline.
+    scan_test::pause("before_refresh");
+    let ctx = ScanContext {
+        index: crate::native::ref_tasks::RefTaskIndex::build(
+            &prepared.config.bob_dir,
+            &prepared.config.ref_dir,
+        ),
+        invocation_date: prepared.invocation_date.clone(),
+    };
+    let mut pre = capture_scan_evidence(
+        &prepared.config,
+        &prepared.pdfs,
+        &prepared.intake,
+        &prepared.plan_outcomes,
+        &ctx,
+    )?;
+    pre.planned_pdfs = planned_pdfs_from_membership(
+        &prepared.config,
+        options,
+        &prepared.intake,
+        &pre.lib_pdfs,
+        &pre.xlib_members,
+    )?;
+    refresh_evidence_pdf_hashes(&mut pre)?;
+    complete_comparison_evidence(&prepared.evidence, &mut pre)?;
+    let dest_roots = dest_asset_roots(&prepared.config, &prepared.pdfs);
+    let latest = classify_scan_change_with_plan_hashes(
+        &prepared.evidence,
+        &pre,
+        &prepared.config,
+        &dest_roots,
+        &prepared.intake,
+        false,
+        &prepared.plan_outcomes,
+    );
+    match &latest {
+        change @ (ScanChange::DestinationAsset { .. }
+        | ScanChange::Rebuild { .. }) => {
+            return Ok((prepared, (*change).clone()));
+        }
+        ScanChange::Unchanged | ScanChange::Refresh { .. } => {}
+    }
+
+    let mut selected = pending_pdfs.clone();
+    if let ScanChange::Refresh { pdfs, .. } = &latest {
+        selected.extend(pdfs.iter().cloned());
+    }
+    prepared.refresh_budget.refreshes_remaining -= 1;
+    let selected = prepared
+        .pdfs
+        .iter()
+        .filter(|pdf| selected.contains(*pdf))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // This pre-snapshot is the baseline for plans retained from the
+    // previous pass and every replacement produced below.
+    prepared.evidence = pre.clone();
+    reset_prepared_finalization(&mut prepared);
+    let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
+    prepared
+        .draft_annotation_candidates
+        .retain(|pdf, _| !selected_set.contains(pdf));
+    prepared
+        .draft_rendered
+        .retain(|pdf, _| !selected_set.contains(pdf));
+    prepared
+        .plan_outcomes
+        .retain(|outcome| !selected_set.contains(plan_outcome_pdf(outcome)));
+
+    let replacements = if selected.is_empty() {
+        Vec::new()
+    } else {
+        plan_pdfs(&prepared.config, &selected, options, jobs, &ctx)
+    };
+    for outcome in &replacements {
+        if let ScanPlanOutcome::Planned(plan) = outcome {
+            prepared.draft_annotation_candidates.insert(
+                plan.pdf.clone(),
+                plan.annotation_task_candidates.clone(),
+            );
+            prepared.draft_rendered.insert(
+                plan.pdf.clone(),
+                (
+                    plan.rendered_body.clone(),
+                    plan.stable_rendered_note.clone(),
+                    plan.stable_note_action,
+                ),
+            );
+        }
+    }
+    prepared.plan_outcomes.extend(replacements);
+    prepared.plan_outcomes.sort_by_key(|outcome| {
+        prepared
+            .pdfs
+            .iter()
+            .position(|pdf| pdf == plan_outcome_pdf(outcome))
+            .unwrap_or(usize::MAX)
+    });
+    {
+        let mut plans_to_finalize = prepared
+            .plan_outcomes
+            .iter_mut()
+            .filter_map(|outcome| match outcome {
+                ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
+                ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
+            })
+            .collect::<Vec<_>>();
+        finalize_annotation_task_plans(
+            &prepared.config,
+            &mut plans_to_finalize,
+            &ctx,
+        )?;
+        reserve_preview_ids(&prepared.config, &mut plans_to_finalize, &ctx)?;
+    }
+
+    scan_test::pause("before_refresh_evidence");
+    // Read the shared index again after finalization. If it changed while
+    // drafts were being refreshed, the next pass will re-finalize against
+    // the current index without accepting stale reservations.
+    let post_ctx = ScanContext {
+        index: crate::native::ref_tasks::RefTaskIndex::build(
+            &prepared.config.bob_dir,
+            &prepared.config.ref_dir,
+        ),
+        invocation_date: prepared.invocation_date.clone(),
+    };
+    let mut post = capture_scan_evidence(
+        &prepared.config,
+        &prepared.pdfs,
+        &prepared.intake,
+        &prepared.plan_outcomes,
+        &post_ctx,
+    )?;
+    post.planned_pdfs = planned_pdfs_from_membership(
+        &prepared.config,
+        options,
+        &prepared.intake,
+        &post.lib_pdfs,
+        &post.xlib_members,
+    )?;
+    refresh_evidence_pdf_hashes(&mut post)?;
+    complete_comparison_evidence(&pre, &mut post)?;
+    let change = classify_scan_change_with_plan_hashes(
+        &pre,
+        &post,
+        &prepared.config,
+        &dest_roots,
+        &prepared.intake,
+        false,
+        &prepared.plan_outcomes,
+    );
+    if change == ScanChange::Unchanged {
+        prepared.evidence = post;
+    }
+    Ok((prepared, change))
 }
 
 /// Convenience read-only preparation: discover intake, then snapshot
@@ -1137,20 +1509,25 @@ pub(super) fn prepare_full_scan(
     options: SyncOptions,
     jobs: usize,
     invocation_date: Option<String>,
+    refresh_budget: ScanRefreshBudget,
 ) -> Result<PreparedFullScan> {
     let intake = plan_xlib_intake(config)?;
-    prepare_from_inputs(config, options, jobs, intake, invocation_date)
+    prepare_from_inputs(
+        config,
+        options,
+        jobs,
+        intake,
+        invocation_date,
+        refresh_budget,
+    )
 }
 
-/// Bounded preparation retry: on an immediately stale validation (a source
-/// changing during the pure planning pass), rebuild once outside any new
-/// locks under the same invocation date. Destination-asset existence or
-/// bytes changing during that pass fail closed without a retry: overwrite
-/// protection cannot restore dest from source, and a retry would treat the
-/// vandalized dest as the new baseline then collide at write. Persistent
-/// churn returns the `inputs_changed` envelope with a rerun hint (destination
-/// assets stay `scan_failed`); it never spins and never parses the whole
-/// library while locked.
+/// Bounded unlocked preparation convergence. Ordinary changes refresh only
+/// the affected PDFs (or just shared finalization); global changes and an
+/// exhausted subset budget use the one full rebuild allowance. Destination
+/// asset changes fail closed because overwrite protection cannot safely
+/// adopt those bytes as a new baseline. Sustained churn returns
+/// `inputs_changed` with a rerun hint, and no refresh runs under writer locks.
 pub(super) fn prepare_full_scan_with_retry(
     config: &Config,
     options: SyncOptions,
@@ -1163,6 +1540,7 @@ pub(super) fn is_destination_asset_stale(reason: &str) -> bool {
     reason.contains("destination asset changed")
 }
 
+#[cfg(test)]
 fn is_inputs_changed_during_planning(error: &CommandError) -> bool {
     error.code == Some("inputs_changed")
         && error
@@ -1177,57 +1555,19 @@ pub(super) fn prepare_full_scan_with_retry_date(
     jobs: usize,
     invocation_date: Option<String>,
 ) -> Result<PreparedFullScan> {
-    // Resolve the clock once. Every retry, rebuild, and recovery path
-    // reuses this exact value so a None call cannot pick a second date
-    // across midnight. The finite retry budget stays one coherence retry
-    // here plus the mutation-window rebuild in scan_apply; no retry runs
-    // after an owned intake move.
+    // Resolve the clock once. Every subset refresh and rebuild reuses this
+    // value. The budget is attached to the prepared scan for continuation
+    // during lock revalidation; intake execution itself never retries.
     let invocation_date = pin_invocation_date(invocation_date);
-    let first =
-        prepare_full_scan(config, options, jobs, Some(invocation_date.clone()));
-    let mut prepared = match first {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            // During-preparation coherence failure (a source changing during
-            // the pure planning pass) rebuilds once outside any new locks
-            // under the same invocation date. Destination-asset changes and
-            // other errors (output collisions, intake collisions, hard
-            // snapshot failures) fail immediately without a retry.
-            if !is_inputs_changed_during_planning(&error) {
-                return Err(error);
-            }
-            prepare_full_scan(config, options, jobs, Some(invocation_date))?
-        }
-    };
-    match validate_prepared_scan(&prepared) {
-        PreparedValidation::Unchanged => Ok(prepared),
-        PreparedValidation::Failed(error) => Err(error),
-        PreparedValidation::Stale { reason }
-            if is_destination_asset_stale(&reason) =>
-        {
-            Err(destination_asset_changed_error(&reason))
-        }
-        PreparedValidation::Stale { .. } => {
-            // Clear stale reservations before the single rebuild so a
-            // combined intake/library finalization later cannot duplicate
-            // intentions or retain stale preview IDs.
-            reset_prepared_finalization(&mut prepared);
-            let date = prepared.invocation_date.clone();
-            let rebuilt = prepare_full_scan(config, options, jobs, Some(date))?;
-            match validate_prepared_scan(&rebuilt) {
-                PreparedValidation::Unchanged => Ok(rebuilt),
-                PreparedValidation::Stale { reason }
-                    if is_destination_asset_stale(&reason) =>
-                {
-                    Err(destination_asset_changed_error(&reason))
-                }
-                PreparedValidation::Stale { reason } => {
-                    Err(scan_inputs_changed_error(&reason))
-                }
-                PreparedValidation::Failed(error) => Err(error),
-            }
-        }
-    }
+    let prepared = prepare_full_scan(
+        config,
+        options,
+        jobs,
+        Some(invocation_date),
+        ScanRefreshBudget::default(),
+    )?;
+    let change = classify_prepared_scan(&prepared)?;
+    settle_prepared_scan(prepared, change, options, jobs)
 }
 
 fn plan_outcome_pdf(outcome: &ScanPlanOutcome) -> &Path {
@@ -2212,6 +2552,7 @@ mod tests {
             pdfs: vec![pdf.clone()],
             plan_outcomes: outcomes,
             evidence,
+            refresh_budget: ScanRefreshBudget::default(),
             draft_annotation_candidates: BTreeMap::new(),
             draft_rendered: BTreeMap::new(),
         };
@@ -2280,6 +2621,7 @@ mod tests {
             pdfs: vec![pdf.clone()],
             plan_outcomes: outcomes,
             evidence,
+            refresh_budget: ScanRefreshBudget::default(),
             draft_annotation_candidates: BTreeMap::new(),
             draft_rendered: BTreeMap::new(),
         };
@@ -2351,6 +2693,7 @@ mod tests {
                 },
             )
             .expect("capture evidence"),
+            refresh_budget: ScanRefreshBudget::default(),
             draft_annotation_candidates: drafts_candidates,
             draft_rendered: drafts_rendered,
         };
@@ -2409,6 +2752,7 @@ mod tests {
                 index_rest_fingerprint: String::new(),
                 planned_pdfs: Vec::new(),
             },
+            refresh_budget: ScanRefreshBudget::default(),
             draft_annotation_candidates: BTreeMap::new(),
             draft_rendered: BTreeMap::new(),
         };
