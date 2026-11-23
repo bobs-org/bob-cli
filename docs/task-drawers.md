@@ -5,9 +5,11 @@ description: The dual-read contract for task drawer headers in Bob vault notes.
 
 # Task drawers
 
-This page defines the bob-cli reader contract during the dual-read window. A
-task drawer groups ordinary notes below a direct child of a `#task` row. Drawers
-hold notes; they do not hold requirements or define task status.
+This page defines the bob-cli and Obsidian plugin reader contract during the
+dual-read window. The four plugin readers share one JavaScript twin and the
+Rust-owned vectors below. A task drawer groups ordinary notes below a direct
+child of a `#task` row. Drawers hold notes; they do not hold requirements or
+define task status.
 
 ## Recognized headers
 
@@ -55,8 +57,9 @@ Notes` section remains the notes home.
 
 ## Dual-read window and outside text
 
-Readers accept bold and legacy headers. Writers, capture drafts, completion
-rows, and header creation stay on the legacy contract in this phase. In
+Readers in bob-cli, task-status-cycler, bob-navigation-hotkeys, block-id-prompt,
+and bob-ledger-tools accept bold and legacy headers. Writers, capture drafts,
+completion rows, and header creation stay on the legacy contract in this phase. In
 particular, this page does not add `- **Title**` as capture draft syntax.
 
 Imported or pasted child text that would become either kind of drawer is
