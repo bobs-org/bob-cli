@@ -455,20 +455,23 @@ missing, and invalid dates do not receive a chip. The compact `🗓️` in the
 generated parent ledger represents the same future-only state without the
 picker's labeled date chip.
 
-A direct child bullet under the source task becomes a project-note **section**
-instead of a task when it has no checkbox, its trimmed body is an ALL-CAPS
-title (letters, digits, spaces, and a small set of punctuation), and it has at
-least one nested list item of its own; a bare ALL-CAPS bullet with no nested
-list items, or one written with a checkbox, still converts to a task as
-usual. A qualifying bullet's body is lowercased and then title-cased —
-`FUTURE WORK` becomes `Future Work`, `NON-GOALS` becomes `Non-Goals` — without
-preserving acronyms, so `API DESIGN` becomes `Api Design`. The title reuses a
-matching `##` header already on the note, case-insensitively and without
-touching the header's own casing, appending the notes after that section's
-existing content; with no match, a new `## Title` section is appended at the
-end of the note. Either way the bullet's descendants are copied in verbatim,
-re-indented but otherwise untouched — no `#task` token and no `[created::]`
-field — so they read as reference notes rather than tasks.
+Promotion moves the boundary one level. An outer pending requirement becomes
+an open `## Tasks` row (`- [ ] #task … [created:: …]`); its descendant
+requirements stay requirements and its direct notes follow the `NOTES` rule
+(filed into a `NOTES` drawer when the new row owns child requirements, kept
+loose otherwise). A dropped requirement becomes a `[-]` row keeping its Cancel
+Log, a legacy `[x]` requirement becomes an `[x]` row, and a carried `[>]`
+stub becomes a `## Notes` line verbatim. Loose notes and the `NOTES` drawer
+merge into one `## Notes` section, even on requirement-less tasks; any other
+drawer becomes a `## Title Case` section as before (a qualifying bullet's body
+is lowercased then title-cased — `FUTURE WORK` becomes `Future Work` — and
+reuses a matching `##` header when one exists). Unmarked children — images and
+Gmail links included — become `## Notes`, never `#task` rows. A task with no
+requirements promotes to an empty `## Tasks` with the notice `No requirements
+to promote — Ctrl+] marks one`. The receipt reads `Promoted “{S}” · {t} tasks
+· {n} notes`, and content the seed cannot convert still refuses losslessly.
+See the [task requirements contract](task-requirements.md#8-promotion-moves-the-boundary-one-level)
+for the full rule.
 
 The same hotkey on a project note's `^prj` task restores that project as a
 single task in the parent note's `## Tasks` section. Its inline `scheduled`
