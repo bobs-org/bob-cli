@@ -816,6 +816,11 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG22 | Ctrl+Shift+B / Ctrl+Shift+Alt+B on a LINKS / LINKED FROM line | opens the owner's Depends on / Blocks stage |
 | LG23 | ⇧↵ in a Links / Linked-from stage | no-op: nothing links, unlinks, or opens |
 | LG24 | Links stage query that a closed task matches best | the closed row ranks by score inside RESULTS; CLOSED appears only on an empty filter |
+| LG25 | a Links query matches an Event Task in a daily note | it ranks in RESULTS as `HHMM-HHMM Title`, and ↵ links it with the cross-note mirror follow-up |
+| LG26 | a daily-note task that is not an Event Task (`^gtd`, ledger rows) | never listed |
+| LG27 | ↵ on an Event Task in the previous daily note | linked with no mirror, plus the suffix `· previous daily note: 🪢 LINKED FROM follows after rollover`; an id-less row is disabled |
+| LG28 | empty filter or equal scores | closed Event Tasks outside the owner's note are not listed; equal-score Event Tasks list newest day first |
+| LG29 | Linked-from stage | never offers a daily-note source |
 
 ### LC — chips
 
