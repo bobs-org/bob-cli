@@ -6,7 +6,7 @@ file; bob-plugins copies it byte-for-byte. The Rust engine cases are SV1–SV10
 plus SV17–SV25 (new-log Cancel, plural scope and recovery, WRITE skips, joint
 recovery, row-specific tickler attribution, and open reqs that are not open
 subtasks). SV11–SV13 pin capture selection and stale-batch behavior,
-while SV14–SV16 pin Obsidian and review-walk behavior. Surface-only cases are
+while SV14–SV16 and SV26 pin Obsidian and review-walk behavior. Surface-only cases are
 marked `ui_only`.
 
 The vectors pin exact source-note bytes, the pre-write offer identity, root-only

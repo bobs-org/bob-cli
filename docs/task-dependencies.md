@@ -3909,9 +3909,14 @@ predecessor does not reopen resolved rows.
 target is stale, the batch writes nothing and the card can reopen with its
 staged choices. Obsidian remains best-effort: a changed row is refused alone,
 other valid rows may apply, and the predecessor close is not rolled back.
-Both bind the verdict to the preimage shown in the card. A review-walk
-gesture advances once for its original landing and never lands on a row
-resolved by the same commit.
+Both bind the verdict to the preimage shown in the card. Obsidian treats Bob's
+ordinary recovery of the row as the same preimage: a Blocked `[?]` to Ready
+`[ ]` flip, an added (or restamped) `[unblocked:: <date>]` field, a removed
+`#prj_is_blocked` tag, or a move to another line of the same note such as a
+reconcile regroup. So a `bob task reconcile` that runs while the card is open
+never refuses a staged verdict. Any other change to the row is still refused
+alone. A review-walk gesture advances once for its original landing and never
+lands on a row resolved by the same commit.
 
 ### 12.23 SV — successor verdict vectors
 
@@ -3938,7 +3943,8 @@ surface that owns them and are marked UI-only in the fixture.
 | SV11 | A verdict key is also selected by `-p` or the other verdict flag | `offer_verdict_conflict`; write-free refusal lists current eligibility |
 | SV12 | `-p all` with one resolved row and one unmarked row | Only the unmarked selectable row is pulled in |
 | SV13 | Capture verdict target changes before apply | Entire capture batch aborts without writes |
-| SV14 | One Obsidian verdict target changes before apply | That row is refused; unchanged rows may apply; predecessor stays closed |
+| SV14 | One Obsidian verdict target changes before apply (other than Bob's ordinary recovery) | That row is refused; unchanged rows may apply; predecessor stays closed |
+| SV26 | Bob recovers an Obsidian verdict target before apply (status flip, `[unblocked::]` stamp, regroup) | The verdict applies to the recovered row. The receipt reports its current status. A row that also changed otherwise is still refused |
 | SV15 | A review-walk landing resolves a row that would otherwise be next | The original gesture advances once and skips the resolved row |
 | SV16 | Same initial vault, verdicts, and picks in dry-run and real capture | Planned JSON is identical apart from `dry_run` and preview wording |
 | SV17 | Cancel with an authored reason and no Cancel Log | Root becomes `[-]`; a new Cancel Log is created with the dated reason |

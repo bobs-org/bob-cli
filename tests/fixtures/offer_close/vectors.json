@@ -367,6 +367,19 @@
       "expected": {
         "source": "- [x] #task Owner  [completion:: 2026-11-05] ^owner\n  - [ ] Open req\n    - [ ] Nested req\n"
       }
+    },
+    {
+      "id": "SV26",
+      "kind": "ui_only",
+      "surface": "obsidian",
+      "expected": {
+        "recovery_drift_applies": true,
+        "status_flip": true,
+        "unblocked_stamp": true,
+        "prj_tag_removed": true,
+        "line_move": true,
+        "other_change_refused": true
+      }
     }
   ]
 }
