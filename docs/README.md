@@ -88,6 +88,7 @@ queued intake; full scans also synchronize annotations. The
 | [log-recall.md](log-recall.md) | Vault-derived phrase history from Schedule, Work, Rotten, and Cancel Logs, including `bob logs list` and shared client behavior |
 | [task-requirements.md](task-requirements.md) | Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors |
 | [props.md](props.md) | Note properties: ordered frontmatter inventory, ownership roles, guarded `bob props show` / `update`, undo, and JSON |
+| [task-drawers.md](task-drawers.md) | Task drawer headers: dual recognition, identity, Notes home, outside-text escape, source ranges, and marker JSON |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and

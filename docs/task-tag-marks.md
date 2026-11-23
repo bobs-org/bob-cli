@@ -27,7 +27,7 @@ before: - [ ] #task Rename the queue input  ▮▮▮  + Sep 29  ⧗ today
 after:  - [ ] ⌗ Rename the queue input  ▮▮▮  + Sep 29  ⧗ today      (⌗ ≈ the teal identity hash glyph)
         - [ ] #FIX Significantly speed up sase commits               (explicit FIX in FIX ink)
         - [ ] ⌗ Restart athena                                       (inherited BUILD: hash only)
-        - [ ] ⌗⌗ Pack charger                                         (requirement at depth 1)
+        - ◇ Pack charger                                         (requirement at depth 1)
 - [ ] Pack charger                                                   (plain checklist outside a task)
 dash.md Tasks results:  - [ ] Rename the queue input  ▮▮▮  + Sep 29   (tasks_results = hide: tag dropped)
 ```
@@ -270,27 +270,41 @@ The full recognition and state contract is
 [Task requirements](task-requirements.md) §1–§4; the plugin copies the
 canonical RQ vectors from bob-cli.
 
-Live Preview and Reading view draw a tightly kerned `⌗` run in the
-owner's task-type ink, or teal when the owner has no type. Depth 1 uses
-two hashes, depth 2 uses three, and depth 3 or greater uses four. The
-run's ink does not encode state:
+Live Preview and Reading view draw one criterion diamond in a **1em** checkbox
+slot with a **0.24em** trailing margin, at every depth. Its **0.92em** mask uses the
+owner's task-mark ink, including inherited/explicit type hues and muted,
+unconfigured, and repair states. Indentation alone shows depth; shape and opacity
+show state:
 
-| State | Rendering |
+| State | Mark and text |
 | --- | --- |
-| Pending | Full owner ink. |
-| Met / Moot | The owner's done or cancelled line treatment, with a faded run. |
-| Dropped | Muted, struck text; its Cancel Log remains visible below. |
-| Carried | The run gains a small arrow; its link keeps the live Task-Link mark. |
-| Excluded | Muted without strike-through; the tooltip names the excluding ancestor. |
+| Pending | Hollow diamond, 0.9 opacity; normal text. |
+| Met (derived or hand-ticked) | Filled diamond, 0.62 opacity; muted, never struck. |
+| Moot / Excluded | Hollow diamond, 0.42 opacity; muted, never struck. |
+| Dropped | Slashed diamond, 0.55 opacity; muted and struck; Cancel Log stays below. |
+| Carried | Arrow in the same slot, 0.9 opacity; its link keeps its live Task-Link mark. |
+| Flagged (unknown hand mark) | Hollow diamond in repair orange; normal text. |
 
-The checkbox remains in the document but is replaced by the glyph and
-cannot be clicked while task tag marks are on. Touching the marker in
-Live Preview restores the raw `- [ ] ` bytes. The existing task-tag
-session toggle restores native checkboxes. Tooltips and checkbox
-accessible labels read `Requirement · level {d} of “{Owner}” · {state}`
-followed by: `Part of this task's scope. Met when the task closes. Drop
-it or make it a task.` The renderer adds attributes only; it creates no
-DOM nodes and never changes Markdown.
+Requirements never wear lane backgrounds, rails, or gradients. Hover brings the
+mark to full opacity with a quiet halo. Reduced motion removes transitions; forced
+colors uses system ink. Cards can reuse `span.bob-req-mark[data-state]` with a
+Unicode text fallback when ledger-tools styles or task tag marks are off.
+
+The input remains in the document. Pointer, mouse, touch, and click events are
+refused before they can tick it or write the note, showing one state-aware Notice
+(e.g. `Requirements are met when “{Owner}” closes — Ctrl+Enter on the task`).
+Touching the marker with the Live Preview cursor reveals raw `- [ ] ` bytes. The
+task-tag session toggle restores native checkboxes and their original labels on
+both surfaces, clearing requirement attributes in Reading view.
+
+The input alone carries a positioned tooltip and identical accessible label:
+`Requirement of “{Owner}” · {State}`, adding ` · level {d}` from depth 2 and
+` · goes with “{Ancestor}”` for Excluded. Unknown hand marks say `Flagged [{c}]`.
+The next line is `Met when this task closes. Drop it or make it a task if the scope
+changes.` Pending rows add `Alt+[ drop · Ctrl+Shift+T own task`; dropped rows add
+`Alt+] restore`. Inputs are read-only; rows and inputs have no native `title`
+tooltip, and labels never contain `::`. The renderer adds attributes only; it
+creates no DOM nodes and never changes Markdown.
 
 ## Tasks query results
 

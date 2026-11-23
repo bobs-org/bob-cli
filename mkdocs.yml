@@ -372,6 +372,7 @@ nav:
               - "Mail link marks": mail-link-marks.md
               - "Log Recall": log-recall.md
               - "Task requirements": task-requirements.md
+              - "Task drawers": task-drawers.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md
