@@ -394,6 +394,17 @@ state.
 a ring for a Task Link, a **diamond** for a requirement, a tray for a
 drawer, a dot for a note.
 
+**Geometry.** Every mark uses a 16×16 viewBox, `fill="none"` unless
+stated, `stroke="black"`, `stroke-width="1.75"`, and round caps and joins,
+the stroke family of the `⌗`, the book, and the rings:
+
+| Mark | Path |
+| ---- | ---- |
+| Hollow | `M8 1.7 14.3 8 8 14.3 1.7 8Z` |
+| Filled | the hollow path with `fill="black"` and the same stroke |
+| Slashed | the hollow path plus `M4.4 11.6 11.6 4.4` |
+| Arrow | `M2.4 8h10.4M9.2 4.3 12.9 8 9.2 11.7` |
+
 **State styling.** All of these rules are scoped to `[data-bob-req]`:
 
 | State | Mark | Mark opacity | Text |
@@ -469,9 +480,9 @@ Everything stays gated by `body.bob-task-tag-marks`.
 chip (a `.requirementMarker` palette wash at the record-route levels);
 nothing is ever hidden, and caret moves never repaint. The live preview,
 the idle agenda, and the Pull-In card draw one requirement mark from the
-`req` annotation bob reports on each line — never by sniffing `[ ]` — in
-a SwiftUI `Shape` per §2 with the §4 opacities. A pre-annotation `bob`
-keeps its old look; nothing fails to decode.
+`req` annotation bob reports on each line — never by sniffing `[ ]` — as
+a teal SwiftUI `Shape` with the geometry and state opacities above. A
+pre-annotation `bob` keeps its old look; nothing fails to decode.
 
 **Cards.** Each successor-card row starts with the staged-outcome mark
 (`◇` by default and for Met, slashed for Drop, `→` for Own task or Pull
