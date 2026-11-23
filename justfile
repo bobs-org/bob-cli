@@ -93,7 +93,7 @@ _banner color icon label:
     fi
 
 check-scripts:
-    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/lib/install_ui.sh scripts/install_all scripts/test_install_migration scripts/dev/note_snapshot_corpus_gate scripts/dev/note_snapshot_corpus_gate_test scripts/dev/capture_related_calibrate scripts/dev/capture_related_calibrate_test scripts/dev/highlights_coordination_acceptance
+    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/lib/install_ui.sh scripts/install_all scripts/test_install_migration scripts/dev/note_snapshot_corpus_gate scripts/dev/note_snapshot_corpus_gate_test scripts/dev/capture_related_calibrate scripts/dev/capture_related_calibrate_test scripts/dev/highlights_coordination_acceptance scripts/dev/bob-host-currency
     bash scripts/test_install_migration
     bash scripts/dev/note_snapshot_corpus_gate_test
     bash scripts/dev/capture_related_calibrate_test

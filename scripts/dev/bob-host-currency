@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: bob-host-currency --commit <sha>... --plugin <id>=<marker>...
+
+Check that every Bob host has a release containing all requested commits and that
+each host's deployed vault plugins contain the requested markers.
+
+Options:
+  --commit <sha>       Commit that must be present in the installed release (repeatable)
+  --plugin <id>=<mark> Deployed plugin bundle marker to require (repeatable)
+  -h, --help           Show this help
+
+Hosts are queried through the configured Tailscale SSH aliases athena, apollo,
+and mac. Each SSH attempt is limited to 10 seconds. An unreachable host is
+reported as unknown and causes a nonzero exit.
+EOF
+}
+
+commits=()
+plugins=()
+while (($#)); do
+    case "$1" in
+        --commit)
+            (($# >= 2)) || { usage >&2; exit 2; }
+            commits+=("$2")
+            shift 2
+            ;;
+        --plugin)
+            (($# >= 2)) || { usage >&2; exit 2; }
+            plugins+=("$2")
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            printf 'Unknown argument: %s\n' "$1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if ((${#commits[@]} == 0 || ${#plugins[@]} == 0)); then
+    usage >&2
+    exit 2
+fi
+
+for commit in "${commits[@]}"; do
+    if ! git cat-file -e "${commit}^{commit}" 2>/dev/null; then
+        printf 'Unknown commit: %s\n' "$commit" >&2
+        exit 2
+    fi
+done
+
+for plugin in "${plugins[@]}"; do
+    if [[ ! $plugin =~ ^[A-Za-z0-9._-]+=[A-Za-z0-9._-]+$ ]]; then
+        printf 'Invalid plugin marker: %s (expected id=marker with letters, digits, ., _, or -)\n' "$plugin" >&2
+        exit 2
+    fi
+done
+
+required_tag=
+mapfile -t release_tags < <(
+    while IFS= read -r tag; do
+        if [[ $tag =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            printf '%012d.%012d.%012d %s\n' \
+                "$((10#${BASH_REMATCH[1]}))" \
+                "$((10#${BASH_REMATCH[2]}))" \
+                "$((10#${BASH_REMATCH[3]}))" "$tag"
+        fi
+    done < <(git tag --list 'v*') | sort | cut -d' ' -f2
+)
+
+for tag in "${release_tags[@]}"; do
+    contains_all=true
+    for commit in "${commits[@]}"; do
+        if ! git merge-base --is-ancestor "$commit" "${tag}^{commit}"; then
+            contains_all=false
+            break
+        fi
+    done
+    if $contains_all; then
+        required_tag=$tag
+        break
+    fi
+done
+
+required_version=${required_tag#v}
+if [[ -z $required_tag ]]; then
+    required_version='no release tag contains all requested commits'
+fi
+
+if [[ -t 1 ]]; then
+    green=$'\033[32m'
+    yellow=$'\033[33m'
+    red=$'\033[31m'
+    reset=$'\033[0m'
+else
+    green=
+    yellow=
+    red=
+    reset=
+fi
+
+printf 'Required release: %s\n' "$required_version"
+printf '%-10s %-12s %-18s %s\n' HOST CHECK RESULT DETAIL
+printf '%-10s %-12s %-18s %s\n' '----------' '------------' '------------------' '------------------------------'
+
+overall_ok=true
+hosts=(athena apollo mac)
+
+version_at_least() {
+    local required=$1 installed=$2
+    local -a required_parts installed_parts
+    [[ $required =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    required_parts=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+    [[ $installed =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    installed_parts=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+    for index in 0 1 2; do
+        local wanted=$((10#${required_parts[index]})) actual=$((10#${installed_parts[index]}))
+        ((actual > wanted)) && return 0
+        ((actual < wanted)) && return 1
+    done
+    return 0
+}
+
+for host in "${hosts[@]}"; do
+    remote_script='version=$(bob --version 2>/dev/null) || version=; printf "VERSION=%s\\n" "$version";'
+    for plugin in "${plugins[@]}"; do
+        plugin_id=${plugin%%=*}
+        marker=${plugin#*=}
+        remote_script+=" if grep -Fq -- '$marker' \"\$HOME/bob/.obsidian/plugins/$plugin_id/main.js\"; then printf 'PLUGIN_OK=$plugin_id\\n'; else printf 'PLUGIN_MISSING=$plugin_id\\n'; fi;"
+    done
+
+    if output=$(timeout 10 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "$remote_script" 2>/dev/null); then
+        host_version=$(sed -n 's/^VERSION=bob \([0-9][0-9.]*\)$/\1/p' <<<"$output")
+        if [[ -z $host_version ]]; then
+            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$yellow" unknown "$reset" 'bob --version unavailable'
+            overall_ok=false
+        elif [[ -z $required_tag ]]; then
+            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$red" behind "$reset" "installed=$host_version; $required_version"
+            overall_ok=false
+        elif version_at_least "$required_version" "$host_version"; then
+            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$green" current "$reset" "installed=$host_version; required>=$required_version"
+        else
+            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$red" behind "$reset" "installed=$host_version; required>=$required_version"
+            overall_ok=false
+        fi
+
+        for plugin in "${plugins[@]}"; do
+            plugin_id=${plugin%%=*}
+            if grep -Fxq "PLUGIN_OK=$plugin_id" <<<"$output"; then
+                printf '%-10s %-12s %b%-18s%b %s\n' "$host" "$plugin_id" "$green" current "$reset" "marker=${plugin#*=}"
+            else
+                printf '%-10s %-12s %b%-18s%b %s\n' "$host" "$plugin_id" "$red" missing "$reset" "marker=${plugin#*=}"
+                overall_ok=false
+            fi
+        done
+    else
+        printf '%-10s %-12s %b%-18s%b %s\n' "$host" all "$yellow" unknown "$reset" 'SSH unavailable within 10 seconds'
+        overall_ok=false
+    fi
+done
+
+if $overall_ok; then
+    exit 0
+fi
+exit 1
