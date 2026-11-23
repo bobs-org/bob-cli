@@ -8,6 +8,7 @@
 //! its lock. Context discovery stays in [`roles::resolve_note_context`] so it
 //! can be rerun after locking.
 
+pub(crate) mod cli;
 pub(crate) mod document;
 pub(crate) mod emit;
 pub(crate) mod fingerprint;

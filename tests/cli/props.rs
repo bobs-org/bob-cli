@@ -1,0 +1,547 @@
+//! Guarded `bob props show` and `bob props update` contract.
+
+use crate::support::*;
+use serde_json::{json, Value};
+use std::fs;
+use std::path::Path;
+
+const NOTE: &str =
+    "---\ntitle: Groceries\ncount: 3\ndone: false\n---\n\n# Groceries\n";
+
+fn vault(tag: &str) -> TempDir {
+    TempDir::new(&format!("bob-cli-props-{tag}"))
+}
+
+fn write_note(vault: &Path, rel: &str, contents: &str) {
+    let path = vault.join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent");
+    }
+    fs::write(&path, contents).expect("write note");
+}
+
+fn show(vault: &Path, note: &str, extra: &[&str]) -> std::process::Output {
+    let mut command = bob_command();
+    command
+        .args(["props", "show", note, "-f", "json"])
+        .env("BOB_DIR", vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault.join("vault.lock"))
+        .env("NO_COLOR", "1")
+        .args(extra);
+    command.output().expect("run bob props show")
+}
+
+fn update(
+    vault: &Path,
+    note: &str,
+    envelope: &str,
+    extra: &[&str],
+) -> std::process::Output {
+    let input = vault.join("update-envelope.json");
+    fs::write(&input, envelope).expect("write envelope");
+    let mut command = bob_command();
+    command
+        .args(["props", "update", note, "-i"])
+        .arg(&input)
+        .env("BOB_DIR", vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault.join("vault.lock"))
+        .env("NO_COLOR", "1")
+        .args(extra);
+    command.output().expect("run bob props update")
+}
+
+fn report(output: &std::process::Output) -> Value {
+    serde_json::from_str(&stdout(output)).unwrap_or_else(|error| {
+        panic!("invalid JSON ({error}):\n{}", format_output(output))
+    })
+}
+
+fn fingerprint(vault: &Path, note: &str) -> String {
+    let output = show(vault, note, &[]);
+    assert_success(&output);
+    report(&output)["fingerprint"]
+        .as_str()
+        .expect("fingerprint")
+        .to_owned()
+}
+
+fn hold_lock(vault: &Path) -> fs::File {
+    let path = vault.join("vault.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open lock");
+    fs2::FileExt::lock_exclusive(&file).expect("hold lock");
+    file
+}
+
+fn mtime(path: &Path) -> std::time::SystemTime {
+    fs::metadata(path).expect("stat").modified().expect("mtime")
+}
+
+#[test]
+fn show_reports_ordered_properties_with_capability_and_fingerprint() {
+    let vault = vault("show");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+
+    let output = show(vault.path(), "notes/groceries", &[]);
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["schema_version"], 1);
+    assert_eq!(body["path"], "notes/groceries.md");
+    assert_eq!(body["note_kind"], "note");
+    assert_eq!(body["capabilities"], json!(["props_v1"]));
+    assert!(
+        body["fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")),
+        "fingerprint:\n{}",
+        format_output(&output)
+    );
+    let keys: Vec<&str> = body["properties"]
+        .as_array()
+        .expect("properties")
+        .iter()
+        .map(|property| property["key"].as_str().expect("key"))
+        .collect();
+    assert_eq!(keys, vec!["title", "count", "done"]);
+    assert_eq!(body["properties"][0]["line"], 2);
+    assert_eq!(body["properties"][0]["kind"], "text");
+    assert_eq!(body["properties"][1]["kind"], "number");
+    assert_eq!(body["properties"][2]["kind"], "checkbox");
+    assert_eq!(body["frontmatter"]["state"], "ok");
+
+    // The stem form and the absolute vault path resolve to the same note.
+    let stem = show(vault.path(), "notes/groceries.md", &[]);
+    assert_success(&stem);
+    assert_eq!(report(&stem)["path"], "notes/groceries.md");
+    let absolute = vault
+        .path()
+        .join("notes/groceries.md")
+        .display()
+        .to_string();
+    let via_absolute = show(vault.path(), &absolute, &[]);
+    assert_success(&via_absolute);
+    assert_eq!(report(&via_absolute)["path"], "notes/groceries.md");
+}
+
+#[test]
+fn help_lists_options_alphabetically_with_short_aliases() {
+    for (command, options) in [
+        ("show", vec!["-b, --bob-dir", "-f, --format", "-h, --help"]),
+        (
+            "update",
+            vec![
+                "-b, --bob-dir",
+                "-d, --dry-run",
+                "-f, --format",
+                "-h, --help",
+                "-i, --input",
+            ],
+        ),
+    ] {
+        let output = bob_command()
+            .args(["props", command, "--help"])
+            .output()
+            .expect("run bob props help");
+        assert_success(&output);
+        let help = stdout(&output);
+        assert_text_order(&help, &options);
+        assert_stdout_has_no_ansi(&output);
+    }
+    let output = bob_command()
+        .arg("props")
+        .arg("--help")
+        .output()
+        .expect("run bob props --help");
+    assert_success(&output);
+    assert_text_order(&stdout(&output), &["\n  show ", "\n  update "]);
+}
+
+#[test]
+fn show_human_lists_properties_and_key_roles() {
+    let vault = vault("human");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+
+    let output = bob_command()
+        .args(["props", "show", "notes/groceries.md"])
+        .env("BOB_DIR", vault.path())
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault.path().join("vault.lock"))
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob props show");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("notes/groceries.md"), "text:\n{text}");
+    assert!(text.contains("title"), "text:\n{text}");
+    assert!(text.contains("Groceries"), "text:\n{text}");
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn show_absent_frontmatter_has_no_properties_and_empty_fingerprint() {
+    let vault = vault("absent");
+    write_note(vault.path(), "notes/plain.md", "# Plain\n");
+
+    let output = show(vault.path(), "notes/plain.md", &[]);
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["frontmatter"]["state"], "absent");
+    assert_eq!(body["properties"], json!([]));
+    assert!(
+        body["fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")),
+        "empty mapping still fingerprints:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn show_damaged_yaml_reports_recovery_while_update_refuses() {
+    let vault = vault("damaged");
+    write_note(vault.path(), "notes/broken.md", "---\nname: [\n---\nbody\n");
+
+    let output = show(vault.path(), "notes/broken.md", &[]);
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["frontmatter"]["state"], "invalid");
+    assert_eq!(body["fingerprint"], Value::Null);
+
+    let expect = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let output = update(
+        vault.path(),
+        "notes/broken.md",
+        &json!({
+            "schema_version": 1,
+            "expect": expect,
+            "ops": [{"op": "prop.set", "key": "name", "value": "fixed"}],
+        })
+        .to_string(),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let body = report(&output);
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"]["code"], "prop_invalid_yaml");
+    assert_eq!(
+        fs::read_to_string(vault.path().join("notes/broken.md")).unwrap(),
+        "---\nname: [\n---\nbody\n",
+        "refused batch leaves bytes unchanged"
+    );
+}
+
+#[test]
+fn dry_run_previews_without_writing_and_apply_writes_atomically() {
+    let vault = vault("dry-run");
+    let note = vault.path().join("notes/groceries.md");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let before_mtime = mtime(&note);
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+
+    let envelope = json!({
+        "schema_version": 1,
+        "expect": expect,
+        "ops": [
+            {"op": "prop.set", "key": "count", "value": 4},
+            {"op": "prop.set", "key": "aisle", "value": "produce", "after": "count"},
+        ],
+    })
+    .to_string();
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &envelope,
+        &["-n", "-f", "json"],
+    );
+    // `-n` is not the props dry-run flag (`-d`), so clap must refuse it.
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &envelope,
+        &["-d", "-f", "json"],
+    );
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["dry_run"], true);
+    assert_eq!(body["changed"], true);
+    assert_eq!(body["path"], "notes/groceries.md");
+    assert!(!body["inverse_ops"].as_array().expect("inverses").is_empty());
+    assert!(!body["changes"].as_array().expect("changes").is_empty());
+    assert_eq!(
+        fs::read_to_string(&note).unwrap(),
+        NOTE,
+        "dry run writes nothing"
+    );
+    assert_eq!(mtime(&note), before_mtime, "dry run keeps mtime");
+
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &envelope,
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["dry_run"], false);
+    assert_eq!(body["changed"], true);
+    let after = fs::read_to_string(&note).unwrap();
+    assert!(after.contains("count: 4"), "applied:\n{after}");
+    assert!(after.contains("aisle: produce"), "applied:\n{after}");
+    assert!(after.ends_with("# Groceries\n"), "body kept:\n{after}");
+
+    // The returned inverse ops replay to the exact original bytes.
+    let inverses = body["inverse_ops"].clone();
+    let reverted = update(
+        vault.path(),
+        "notes/groceries.md",
+        &json!({
+            "schema_version": 1,
+            "expect": body["fingerprint_after"],
+            "ops": inverses,
+        })
+        .to_string(),
+        &["-f", "json"],
+    );
+    assert_success(&reverted);
+    assert_eq!(
+        fs::read_to_string(&note).unwrap(),
+        NOTE,
+        "inverse ops restore exact bytes"
+    );
+}
+
+#[test]
+fn noop_update_writes_nothing_and_keeps_mtime() {
+    let vault = vault("noop");
+    let note = vault.path().join("notes/groceries.md");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let before_mtime = mtime(&note);
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &json!({"schema_version": 1, "expect": expect, "ops": []}).to_string(),
+        &["-f", "json"],
+    );
+    assert_success(&output);
+    let body = report(&output);
+    assert_eq!(body["changed"], false);
+    assert_eq!(body["inverse_ops"], json!([]));
+    assert_eq!(body["changes"], json!([]));
+    assert_eq!(mtime(&note), before_mtime, "no-op keeps mtime");
+}
+
+#[test]
+fn path_safety_rejects_traversal_outside_and_non_markdown() {
+    let vault = vault("paths");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    write_note(vault.path(), "data.txt", "not markdown\n");
+    let outside = vault.path().join("outside.md");
+    fs::write(&outside, NOTE).expect("outside note");
+
+    let nearby = vault
+        .path()
+        .join("outside.md")
+        .display()
+        .to_string()
+        .replace("bob-cli-props-paths", "bob-cli-props-other");
+    for note in ["../outside.md", "notes/../../outside.md", nearby.as_str()] {
+        let output = show(vault.path(), note, &[]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "note {note}:\n{}",
+            format_output(&output)
+        );
+    }
+    let output = show(vault.path(), "data.txt", &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(
+        report(&output)["error"]["code"],
+        "prop_not_markdown",
+        "{}",
+        format_output(&output)
+    );
+
+    let output = show(vault.path(), "notes/missing.md", &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(
+        report(&output)["error"]["code"],
+        "prop_missing",
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn symlink_escape_is_refused() {
+    let vault = vault("symlink");
+    let elsewhere = TempDir::new("bob-cli-props-symlink-elsewhere");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let outside = elsewhere.path().join("outside-real.md");
+    fs::write(&outside, NOTE).expect("outside note");
+    std::os::unix::fs::symlink(&outside, vault.path().join("notes/link.md"))
+        .expect("symlink");
+
+    let output = show(vault.path(), "notes/link.md", &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(
+        report(&output)["error"]["code"],
+        "prop_symlink_escape",
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn typed_refusals_keep_bytes_and_report_op_index() {
+    let vault = vault("refusals");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+
+    // Malformed envelope.
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        "not json",
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(
+        report(&output)["error"]["code"],
+        "envelope_malformed",
+        "{}",
+        format_output(&output)
+    );
+
+    // Stale fingerprint.
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &json!({
+            "schema_version": 1,
+            "expect": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "ops": [{"op": "prop.set", "key": "count", "value": 9}],
+        })
+        .to_string(),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(
+        report(&output)["error"]["code"],
+        "prop_stale",
+        "{}",
+        format_output(&output)
+    );
+
+    // Protected identity key reports its op index.
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &json!({
+            "schema_version": 1,
+            "expect": expect,
+            "ops": [
+                {"op": "prop.set", "key": "count", "value": 9},
+                {"op": "prop.set", "key": "type", "value": "other"},
+            ],
+        })
+        .to_string(),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let body = report(&output);
+    assert_eq!(body["error"]["code"], "prop_identity");
+    assert_eq!(body["error"]["op_index"], 1);
+    assert_eq!(
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap(),
+        NOTE,
+        "refused batch leaves bytes unchanged"
+    );
+}
+
+#[test]
+fn lock_contention_reports_busy_without_writing() {
+    let vault = vault("lock-busy");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let _held = hold_lock(vault.path());
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+
+    let output = update(
+        vault.path(),
+        "notes/groceries.md",
+        &json!({
+            "schema_version": 1,
+            "expect": expect,
+            "ops": [{"op": "prop.set", "key": "count", "value": 9}],
+        })
+        .to_string(),
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert_eq!(
+        report(&output)["error"]["code"],
+        "lock_busy",
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap(),
+        NOTE,
+        "busy lock writes nothing"
+    );
+}
+
+#[test]
+fn apply_replans_fresh_and_preserves_concurrent_body_edit() {
+    let vault = vault("replan");
+    write_note(vault.path(), "notes/groceries.md", NOTE);
+    let expect = fingerprint(vault.path(), "notes/groceries.md");
+    let envelope = json!({
+        "schema_version": 1,
+        "expect": expect,
+        "ops": [{"op": "prop.set", "key": "count", "value": 7}],
+    })
+    .to_string();
+    let input = vault.path().join("update-envelope.json");
+    fs::write(&input, &envelope).expect("write envelope");
+
+    let held = hold_lock(vault.path());
+    let vault_path = vault.path().to_owned();
+    let input_path = input.clone();
+    let child = std::thread::spawn(move || {
+        bob_command()
+            .args(["props", "update", "notes/groceries.md", "-i"])
+            .arg(&input_path)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DIR", &vault_path)
+            .env("BOB_VAULT_SYNC_LOCK_FILE", vault_path.join("vault.lock"))
+            .env("NO_COLOR", "1")
+            .output()
+            .expect("run bob props update")
+    });
+    // Let the child block on the held lock, then change only the body.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let concurrent =
+        "---\ntitle: Groceries\ncount: 3\ndone: false\n---\n\n# Groceries\n\nBuy milk.\n";
+    fs::write(vault.path().join("notes/groceries.md"), concurrent)
+        .expect("concurrent body edit");
+    drop(held);
+    let output = child.join().expect("child");
+    assert_success(&output);
+    let final_note =
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap();
+    assert!(final_note.contains("count: 7"), "replanned:\n{final_note}");
+    assert!(final_note.contains("Buy milk."), "body kept:\n{final_note}");
+}

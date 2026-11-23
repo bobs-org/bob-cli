@@ -416,7 +416,7 @@ fn document_shape() {
     assert_eq!(catalog.bob_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(
         catalog.features,
-        vec!["clicolor-force", "progress-env", "run-receipt"]
+        vec!["clicolor-force", "progress-env", "props_v1", "run-receipt"]
     );
     assert_eq!(
         catalog
@@ -426,8 +426,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 107);
-    assert_eq!(ENTRIES.len(), 107);
+    assert_eq!(catalog.entries.len(), 108);
+    assert_eq!(ENTRIES.len(), 108);
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "bank-config-show"
             && entry.path == ["bank", "config", "show"]

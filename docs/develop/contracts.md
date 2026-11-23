@@ -74,3 +74,4 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Areas](../areas.md) — `bob areas` list and check, nested `## Areas` catalogs, JSON, and findings
 - [Notebooks](../notebooks.md) — `bob notebooks` list, check, sync, and create, the generated Notebooks catalog, JSON, and teaching refusals
 - [Bank](../bank.md) — Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON
+- [Note properties](../props.md) — Note properties: ordered frontmatter inventory, ownership roles, guarded `bob props show` / `update`, undo, and JSON

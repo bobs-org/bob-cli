@@ -146,6 +146,7 @@ plugins:
           - areas.md
           - notebooks.md
           - bank.md
+          - props.md
 
 markdown_extensions:
   - admonition
@@ -259,6 +260,7 @@ nav:
               - "bob nightly": reference/cli/nightly.md
               - "bob notebooks": reference/cli/notebooks.md
               - "bob periods": reference/cli/periods.md
+              - "bob props": reference/cli/props.md
               - "bob query": reference/cli/query.md
               - "bob records": reference/cli/records.md
               - "bob ref": reference/cli/ref.md
@@ -382,4 +384,5 @@ nav:
               - "Areas": areas.md
               - "Notebooks": notebooks.md
               - "Bank": bank.md
+              - "Note properties": props.md
           # END GENERATED: contracts nav

@@ -410,6 +410,22 @@ const TABLE: &[Entry] = &[
         arg: "input",
         kind: Kind::Files(None),
     },
+    Entry {
+        path: &["props", "show"],
+        arg: "note",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["props", "update"],
+        arg: "note",
+        kind: Kind::VaultNote,
+    },
+    // A guarded JSON envelope file, or `-` for stdin.
+    Entry {
+        path: &["props", "update"],
+        arg: "input",
+        kind: Kind::Files(None),
+    },
     // Directories.
     Entry {
         path: &[],

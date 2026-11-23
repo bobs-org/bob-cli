@@ -994,6 +994,18 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        fixed: JSON,
+        slots: &[("NOTE", "text"), ("note", "text")],
+        ..reads(
+            "props-show",
+            &["props", "show"],
+            "Show note properties",
+            &["props", "show", "properties", "frontmatter", "note"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
         fixed: &["--source"],
         extra_args: &[StaticArg {
             name: "SOURCE",
@@ -1658,6 +1670,11 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason:
             "JSON-input intention edit owned by the Intention Card; run it \
                  from a terminal",
+    },
+    Excluded {
+        path: &["props", "update"],
+        reason: "JSON-input property edit owned by the Property Editor; run \
+                 it from a terminal",
     },
     Excluded {
         path: &["pomodoro", "notify"],

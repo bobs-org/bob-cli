@@ -193,3 +193,6 @@ groups:
         summary: "Bank hub, month notes, row grammar, reports, acknowledgements, guarded OFX/CSV imports, journal, and JSON"
         order: 52
         reader: guides/acknowledge-bank-transactions.md
+      - stem: props
+        summary: "Note properties: ordered frontmatter inventory, ownership roles, guarded `bob props show` / `update`, undo, and JSON"
+        order: 56

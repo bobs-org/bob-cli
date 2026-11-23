@@ -36,10 +36,15 @@ fn protocol_1_parses_with_schema_version_one() {
     assert_eq!(json["bob_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(
         json["features"],
-        serde_json::json!(["clicolor-force", "progress-env", "run-receipt"])
+        serde_json::json!([
+            "clicolor-force",
+            "progress-env",
+            "props_v1",
+            "run-receipt"
+        ])
     );
     let entries = json["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 107);
+    assert_eq!(entries.len(), 108);
     assert!(entries.iter().any(|entry| {
         entry["id"] == "bank-config-show"
             && entry["path"] == serde_json::json!(["bank", "config", "show"])
@@ -168,6 +173,19 @@ fn protocol_1_parses_with_schema_version_one() {
     assert!(entries.iter().any(|entry| {
         entry["id"] == "periods-migrate"
             && entry["path"] == serde_json::json!(["periods", "migrate"])
+    }));
+    assert!(entries.iter().any(|entry| {
+        entry["id"] == "props-show"
+            && entry["path"] == serde_json::json!(["props", "show"])
+            && entry["effect"] == "reads"
+    }));
+    let excluded = json["excluded"].as_array().expect("excluded");
+    assert!(excluded.iter().any(|row| {
+        row["path"] == serde_json::json!(["props", "update"])
+            && row["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Property Editor")
     }));
     for (id, command) in [
         ("records-check", "check"),

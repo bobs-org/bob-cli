@@ -175,6 +175,12 @@ impl NativeCommand {
                 crate::native::pomodoro::completion_descriptor()
             }
             NativeCommand::Projects => crate::native::projects::build_cli(),
+            NativeCommand::PropsShow => {
+                crate::native::props::cli::show_command()
+            }
+            NativeCommand::PropsUpdate => {
+                crate::native::props::cli::update_command()
+            }
             NativeCommand::RelationsHide => {
                 crate::native::relation_labels::write::build_cli_hide()
             }

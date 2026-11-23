@@ -99,8 +99,7 @@ mod pomodoro_themes;
 mod pref_journal;
 mod project_dependencies;
 mod projects;
-#[cfg(test)]
-mod props;
+pub(crate) mod props;
 mod randomize;
 mod randomize_plan;
 pub(crate) mod records;
@@ -237,6 +236,8 @@ pub(crate) enum NativeCommand {
     Plugins,
     Pomodoro,
     Projects,
+    PropsShow,
+    PropsUpdate,
     Randomize,
     Stats,
     StatsMetrics,
@@ -361,6 +362,8 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Plugins => plugins::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Projects => projects::run(args),
+        NativeCommand::PropsShow => props::cli::run_show(args),
+        NativeCommand::PropsUpdate => props::cli::run_update(args),
         NativeCommand::Randomize => randomize::run(args),
         NativeCommand::Stats => stats::cli::run_overview(args),
         NativeCommand::StatsMetrics => stats::cli::run_metrics(args),

@@ -923,6 +923,37 @@ Examples:
 See docs/periods.md for the calendar, scaffolds, reports, and JSON.
 Run 'bob periods <command> --help' for more information on a command.";
 
+const PROPS_MEMBERS: &[Member] = &[
+    Member {
+        name: "show",
+        about: "Show ordered frontmatter properties for one note",
+        leaf: Leaf {
+            native_command: NativeCommand::PropsShow,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "update",
+        about: "Apply a guarded property edit to one note",
+        leaf: Leaf {
+            native_command: NativeCommand::PropsUpdate,
+            script_command: None,
+        },
+    },
+];
+
+const PROPS_AFTER_HELP: &str = "\
+Bare `bob props` prints this help. show reads one note's ordered properties. update applies a fingerprinted property envelope under the vault lock.
+
+Examples:
+  bob props show notes/groceries.md
+  bob props show eat/ninja -f json
+  bob props update notes/groceries.md -i update.json -f json
+  bob props update eat/ninja -i - -n -f json < preview.json
+
+See docs/props.md for the envelope, operations, Undo, and JSON.
+Run 'bob props <command> --help' for more information on a command.";
+
 const GROUP_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -1246,6 +1277,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
             ),
             after_help: PERIODS_AFTER_HELP,
             usage: "bob periods [COMMAND]",
+        }),
+    },
+    Subcommand {
+        name: "props",
+        about: "Show and edit frontmatter properties for one note",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: PROPS_MEMBERS,
+            default: None,
+            extra_about: Some(
+                "Bare `bob props` prints this help. show reads one note's ordered properties. update applies a fingerprinted property envelope under the vault lock.",
+            ),
+            after_help: PROPS_AFTER_HELP,
+            usage: "bob props <COMMAND>",
         }),
     },
     Subcommand {
@@ -2813,6 +2858,8 @@ mod tests {
             NativeCommand::Plugins,
             NativeCommand::Pomodoro,
             NativeCommand::Projects,
+            NativeCommand::PropsShow,
+            NativeCommand::PropsUpdate,
             NativeCommand::Randomize,
             NativeCommand::RelationsHide,
             NativeCommand::RelationsList,

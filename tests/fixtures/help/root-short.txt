@@ -32,6 +32,7 @@ Vault:
                vault-sync
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
+  props        Show and edit frontmatter properties for one note
   query        Run Dataview or Tasks queries against the vault
   records      List, inspect, check, create, update, and tidy Record Notes
   ref          Find, list, read, rename, and plan references for today; sync

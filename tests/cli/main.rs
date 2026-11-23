@@ -34,6 +34,7 @@ mod plan_off_clock;
 mod plugins;
 mod pomodoro;
 mod projects;
+mod props;
 mod ready;
 mod records;
 mod ref_library;

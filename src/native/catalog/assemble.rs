@@ -110,6 +110,7 @@ pub(crate) fn document() -> Catalog {
         features: vec![
             "clicolor-force".to_string(),
             "progress-env".to_string(),
+            "props_v1".to_string(),
             "run-receipt".to_string(),
         ],
         sections: catalog_sections(),
