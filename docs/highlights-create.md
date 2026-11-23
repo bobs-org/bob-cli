@@ -295,14 +295,14 @@ full reference-import toolchain.
 | --- | --- |
 | Local PDF | No external renderer; Bob stamps the PDF directly |
 | PDF URL or arXiv | `curl` for downloads |
-| Spotify episode | `curl` for metadata, cover, and optional publisher material; `uv` and a discovered browser for the web-clip adapter's offline PDF render. No Spotify login is required |
+| Spotify episode | `curl` fetches metadata, cover, and optional publisher material; then `uv` runs the web-clip adapter with a supported browser (see Web article below) to print the episode PDF offline. No Spotify login is required |
 | Web article | `curl` for initial URL classification (skipped with `--html`), `uv` for the pinned Python adapter, and a browser: Google Chrome at `/opt/google/chrome/chrome`, `/usr/bin/google-chrome`, `/usr/bin/google-chrome-stable`, or the macOS Google Chrome app, then Playwright's bundled Chromium. Set `BOB_CHROME` for any other executable, including a system Chromium package. Headed retries use Xvfb on Linux and an off-screen window on macOS |
 | Markdown | `pandoc`, `xelatex`, the LaTeX packages below, and DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono (`mainfont`, `sansfont`, and `monofont`) |
 | Markdown with Mermaid | `uv` and a discovered browser are optional; without them Mermaid blocks print as source with a visible note |
 | Any target with `--listen` | A configured `highlights.listen_command` (`sase listen render ...`) that writes the requested MP3. Installing Bob does not install a narration frontend: the SASE plugin (`sase plugin install listen`) provides `sase listen` |
 
-Saving a web article, collection, or episode dossier's Markdown source and code/link catalog
-also uses `pandoc` (`BOB_PANDOC_COMMAND` can override it), without XeLaTeX.
+Saving Markdown source and a code/link catalog for a web article, collection,
+or episode dossier also uses `pandoc` (`BOB_PANDOC_COMMAND` can override it), without XeLaTeX.
 Missing Pandoc skips that source store with a warning; the PDF can still file.
 
 Run `bob ref doctor` to inspect the current host. Its `pandoc`, `xelatex`, and

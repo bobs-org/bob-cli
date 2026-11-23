@@ -208,11 +208,11 @@ values warn and fall back to `true`. See
 The source owns the LINKS entry; the target is the task it names. Parking
 leaves the target In Progress (Pending) with no live Task Link today.
 
-Effect lists treat missing, `null`, and `[]` as empty. Non-lists warn and
-disable that list; invalid entries warn and are skipped; duplicates collapse.
-Warnings do not change `linked_from_lines`. Labels shared by effect lists
-warn and are removed from all conflicting lists. Hiding a label (including
-capture's `||`) changes suggestions, while its configured effect still applies.
+All four label lists treat missing, `null`, and `[]` as empty. Non-lists warn
+and disable that list; invalid entries warn and are skipped; duplicate keys collapse.
+Warnings leave `linked_from_lines` unchanged. Shared label keys warn and are removed
+from conflicting lists. Hiding a label (capture's `||`) affects suggestions only;
+its configured effect still applies.
 
 ### `freshness`
 
@@ -252,7 +252,7 @@ sections. See [freshness fields and configuration](../freshness.md#2-fields-over
 | `highlights.audio_library` | Path | `$XDG_DATA_HOME/sase-listen/library`, else `~/.local/share/sase-listen/library` | SASE Listen library searched for companion audio. |
 | `highlights.listen_command` | String command template | Unset | Optional `bob ref create --listen` command. It must be a direct `sase listen render {target} ... -o {audio}` invocation; Bob does not run a shell. |
 | `highlights.ingest_on_create` | Boolean | `true` | Whether create-time intake files the PDF and reference note immediately when safe. `BOB_HIGHLIGHTS_INGEST_ON_CREATE` overrides it. |
-| `highlights.podcasts.enrich` | `auto` or `off` | `auto` | Fetch publisher notes, chapters, and transcripts for Spotify episodes. `off` skips iTunes and feed requests. Enrichment failures warn without blocking capture; invalid settings are refused. See [Publisher feed](../highlights-create.md#publisher-feed). |
+| `highlights.podcasts.enrich` | `auto` or `off` | `auto` | After Spotify metadata, optionally add publisher notes, chapters, and transcripts. `off` skips iTunes and feed requests. Enrichment failures do not block capture; invalid settings are refused. See [Publisher feed](../highlights-create.md#publisher-feed). |
 | `highlights.coordinate_pdf_writes` | Boolean | `false` | When on, wrap each PDF marker write in a bounded macOS `.forMerging` coordination and hold when Highlights is in use or uncertain. Stays off until the Mac acceptance test passes. On Linux the key is accepted and inert for OS coordination. See [PDFs open in Highlights](../highlights-ref-sync.md#pdfs-open-in-highlights). |
 | `highlights.table_layout` | `auto`, `records`, or `grid` | `auto` | Global table default for `bob ref create` PDFs: prose tables print as single-column records, other tables stay grids. Per-table `bob-records`/`bob-grid` Divs and frontmatter `bob-tables` override it. See [Tables](../highlights-create.md#tables). |
 | `highlights.table_prose_words` | Integer 1–200 | `12` | Word threshold for the auto prose rule: a table is prose when some body-row cell in column 2 or later holds at least this many words. See [Tables](../highlights-create.md#tables). |

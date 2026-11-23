@@ -20,7 +20,7 @@ decision pages that stay in lockstep with the tools.
 - [Vault format](vault-format.md) for task lines, lanes, fields, and notes.
 - [Note properties](../props.md) for frontmatter inspection, ownership, and guarded edits.
 - [Task requirements](../task-requirements.md) for task scope, close choices,
-  task-block tidy, and drawer renaming.
+  ordering task contents, and renaming drawers (named groups of task notes).
 - [Task log recall](../log-recall.md) for reusable Schedule, Work, Rotten, and Cancel Log phrases.
 - [Day and period notes](../periods.md) for intentions, summaries, reflection, and agent briefs.
 - [Areas](../areas.md) for the area tree, nested catalogs, and `bob areas` list/check.
