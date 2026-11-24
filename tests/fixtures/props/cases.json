@@ -210,6 +210,14 @@
     "contains": ["cfg: {a: 1, b: 2}", "created: 2026-11-22"]
   },
   {
+    "id": "set-yaml-replace-block-map-keeps-framing",
+    "note": "---\ndetails:\n  city: Springfield\n  zip: \"12345\"\ncount: 3\n---\nbody\n",
+    "kind": "note",
+    "ops": [{ "op": "prop.set_yaml", "key": "details", "yaml": "\n  city: Shelbyville\n  zip: \"12345\"\n" }],
+    "candidate": "---\ndetails:\n  city: Shelbyville\n  zip: \"12345\"\ncount: 3\n---\nbody\n",
+    "untouched": ["count"]
+  },
+  {
     "id": "set-yaml-rejects-fence",
     "note": "---\ncreated: 2026-11-22\n---\n",
     "kind": "note",

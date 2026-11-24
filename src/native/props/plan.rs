@@ -544,7 +544,20 @@ fn rebuild_entry_with_value(
         let (first, rest) = split_once_ending(emitted, newline);
         let (eol, extra) = split_once_ending(trailing, newline);
         let eol = if eol.is_empty() { newline } else { eol };
-        format!("{leading}{key}:{gap}{first}{comment}{eol}{rest}{extra}")
+        // The entry's source range usually ends with its final line ending.
+        // Splitting `trailing` keeps only the remainder after that ending, so
+        // re-append it unless `extra` already carries one; otherwise the next
+        // entry's first line glues onto the new value's last line.
+        let end = if trailing.ends_with('\n') || trailing.ends_with('\r') {
+            if extra.ends_with('\n') || extra.ends_with('\r') {
+                ""
+            } else {
+                eol
+            }
+        } else {
+            ""
+        };
+        format!("{leading}{key}:{gap}{first}{comment}{eol}{rest}{extra}{end}")
     } else {
         format!("{leading}{key}:{gap}{emitted}{comment}{trailing}")
     }
