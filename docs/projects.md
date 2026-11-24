@@ -218,8 +218,9 @@ project's completion criteria.
 - `[x]` or `[X]` on the `^prj` task sets frontmatter `status: done`.
 - `[-]` on the `^prj` task sets frontmatter `status: canceled`.
 - An open `^prj` task on a terminal project, `status: done` or
-  `status: canceled`, reopens it to `status: wip`. Open `^prj` tasks on `wip`,
-  `waiting`, or other non-terminal projects leave the status unchanged.
+  `status: canceled`, reopens it to `status: wip`. Open `^prj` tasks on `wip` or
+  other non-terminal projects leave the status unchanged. `status: waiting` is
+  retired; use the `^prj` task's schedule or dependencies to hold a project.
 - Active projects with zero non-hidden open tasks and no open sub-projects
   have `#hide` removed from their open `^prj` task so they surface in
   `dash.md`'s Tasks section.

@@ -71,6 +71,54 @@ fn fingerprint(vault: &Path, note: &str) -> String {
         .to_owned()
 }
 
+#[test]
+fn props_retired_project_counts_are_deletable_without_changing_other_bytes() {
+    let vault = vault("retired-counts");
+    for note in ["project.md", "area.md", "done/archived.md"] {
+        let kind = if note == "area.md" { "area" } else { "project" };
+        let before = format!(
+            "---\r\ntype: '[[{kind}]]'\r\nparent: '[[dev]]' # keep\r\nstatus: wip\r\ntask_count: 3\r\nopen_task_count: 1\r\ncustom: [a, b]\r\n---\r\nBody\r\n"
+        );
+        write_note(vault.path(), note, &before);
+        let envelope = json!({
+            "schema_version": 1,
+            "expect": fingerprint(vault.path(), note),
+            "ops": [
+                {"op": "prop.unset", "key": "task_count"},
+                {"op": "prop.unset", "key": "open_task_count"}
+            ]
+        })
+        .to_string();
+        let preview =
+            update(vault.path(), note, &envelope, &["-d", "-f", "json"]);
+        assert_success(&preview);
+        assert_eq!(
+            fs::read_to_string(vault.path().join(note)).unwrap(),
+            before
+        );
+        let applied = update(vault.path(), note, &envelope, &["-f", "json"]);
+        assert_success(&applied);
+        assert_eq!(
+            fs::read_to_string(vault.path().join(note)).unwrap(),
+            before
+                .replace("task_count: 3\r\n", "")
+                .replace("open_task_count: 1\r\n", "")
+        );
+        let after = report(&applied);
+        let undo = json!({
+            "schema_version": 1,
+            "expect": after["fingerprint_after"],
+            "ops": after["inverse_ops"]
+        })
+        .to_string();
+        assert_success(&update(vault.path(), note, &undo, &[]));
+        assert_eq!(
+            fs::read_to_string(vault.path().join(note)).unwrap(),
+            before
+        );
+    }
+}
+
 fn hold_lock(vault: &Path) -> fs::File {
     let path = vault.join("vault.lock");
     let file = fs::OpenOptions::new()

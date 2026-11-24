@@ -163,6 +163,10 @@ fails, the note does not silently downgrade a potentially owned field to
 loose: `show` carries the diagnostic and `update` refuses dependent edits
 until ownership resolves.
 
+Retired `task_count` and `open_task_count` keys stay loose so the property
+editor and cleanup script can delete them. Live project counts come from
+`bob projects list`.
+
 Protected keys are refused for `set`, `unset`, `rename`, `set_yaml`, and
 `restore`. Rename checks both the original and the prospective name; new-key
 insertion checks the prospective role. Position references may name protected
