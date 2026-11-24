@@ -796,7 +796,59 @@ fn absolute_note_with_relative_bob_dir_stays_confined() {
     assert_eq!(report(&output)["path"], "notes/groceries.md");
 }
 
+#[test]
 #[cfg(unix)]
+fn absolute_note_and_vault_accept_symlink_aliases_but_stay_confined() {
+    let root = vault("aliases");
+    let real = root.path().join("vault");
+    let alias = root.path().join("alias");
+    write_note(&real, "notes/groceries.md", NOTE);
+    write_note(root.path(), "outside.md", NOTE);
+    write_note(root.path(), "sibling/outside.md", NOTE);
+    std::os::unix::fs::symlink(&real, &alias).expect("vault alias");
+    std::os::unix::fs::symlink(
+        root.path().join("outside.md"),
+        real.join("notes/link.md"),
+    )
+    .expect("outside link");
+
+    for (bob_dir, note_root) in [(&real, &alias), (&alias, &real)] {
+        let note = note_root.join("notes/groceries.md");
+        let extra = ["-b", bob_dir.to_str().expect("utf8")];
+        let output = show(&real, note.to_str().expect("utf8"), &extra);
+        assert_success(&output);
+        assert_eq!(report(&output)["path"], "notes/groceries.md");
+
+        for (note, code) in [
+            (note_root.join("../outside.md"), "prop_traversal"),
+            (note_root.join("../missing.md"), "prop_traversal"),
+            (root.path().join("sibling/outside.md"), "prop_traversal"),
+            (
+                root.path().join("sibling/missing/note.md"),
+                "prop_traversal",
+            ),
+            (note_root.join("notes/missing/note.md"), "prop_missing"),
+            (note_root.join("notes/link.md"), "prop_symlink_escape"),
+        ] {
+            let output = show(&real, note.to_str().expect("utf8"), &extra);
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{}",
+                format_output(&output)
+            );
+            assert_eq!(
+                report(&output)["error"]["code"],
+                code,
+                "note {}:\n{}",
+                note.display(),
+                format_output(&output)
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn wait_until_child_opens_lock(pid: u32, lock: &Path) {
     use std::os::unix::fs::MetadataExt;
     let want = fs::metadata(lock).ok();
@@ -816,6 +868,48 @@ fn wait_until_child_opens_lock(pid: u32, lock: &Path) {
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("child {pid} never opened {}", lock.display());
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn wait_until_child_opens_lock(pid: u32, lock: &Path) {
+    use std::os::unix::fs::MetadataExt;
+
+    let want = fs::metadata(lock).expect("stat held lock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_probe = None;
+    while Instant::now() < deadline {
+        let output = std::process::Command::new("lsof")
+            .args(["-n", "-P", "-a", "-p", &pid.to_string(), "-Fn"])
+            .output()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "lsof is required to probe child {pid}'s lock on this \
+                     platform, but could not be run: {error}"
+                )
+            });
+        // lsof can report /private/var where the fixture uses /var.
+        // File identity, rather than spelling, establishes readiness.
+        if String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix('n'))
+            .any(|path| {
+                fs::metadata(path).ok().is_some_and(|meta| {
+                    meta.dev() == want.dev() && meta.ino() == want.ino()
+                })
+            })
+        {
+            return;
+        }
+        last_probe = Some(output);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let last_probe = last_probe.expect("lsof probe ran");
+    panic!(
+        "child {pid} never opened {}; last lsof status: {}; stderr: {}",
+        lock.display(),
+        last_probe.status,
+        String::from_utf8_lossy(&last_probe.stderr)
+    );
 }
 
 #[cfg(unix)]

@@ -386,7 +386,16 @@ fn resolve_target(
     })?;
     let lexical = lexical_normalize(&joined);
     let lexical_vault = lexical_normalize(vault);
-    if !lexical.starts_with(&lexical_vault) {
+    // Vault and NOTE may spell a symlinked ancestor differently (notably
+    // /var and /private/var on macOS). Check the nearest existing parent
+    // in that case, leaving file symlink checks and their errors below.
+    if !lexical.starts_with(&lexical_vault)
+        && !lexical
+            .ancestors()
+            .skip(1)
+            .find_map(|ancestor| fs::canonicalize(ancestor).ok())
+            .is_some_and(|ancestor| ancestor.starts_with(&vault_canonical))
+    {
         return Err(CliError::refusal(
             "prop_traversal",
             format!("note path escapes the vault: {note}"),
