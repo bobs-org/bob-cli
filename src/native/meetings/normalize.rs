@@ -239,7 +239,7 @@ fn push_wispr_item(
             .map(str::trim)
             .filter(|line| !line.is_empty())
         {
-            notes.next_steps.push(parse_next_step(line.to_string()));
+            notes.next_steps.push(parse_next_step(line.to_owned()));
         }
     } else {
         let index = active_section.unwrap_or_else(|| {

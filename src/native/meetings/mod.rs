@@ -46,13 +46,19 @@ mod tests;
 
 // The agenda surface: the only consumer outside this module so far.
 pub(crate) use agenda::{agenda_meetings, MeetingNotesState};
+
+// These crate-facing APIs are staged for the meeting-reference integration phases.
+#[allow(unused_imports)]
 pub(crate) use dossier::{
     parse_dossier, render_dossier, DossierDocument, DossierError,
 };
+#[allow(unused_imports)]
 pub(crate) use intake::{
     read_notes, NotesError, NotesInput, NotesSource, MAX_NOTES_BYTES,
 };
+#[allow(unused_imports)]
 pub(crate) use normalize::normalize;
+#[allow(unused_imports)]
 pub(crate) use recap::{
     recap_state, render_recap, replace_recap, RecapState, ReplaceRecapError,
 };
