@@ -58,6 +58,8 @@ pub(crate) struct AreaEntry {
     pub(crate) projects: Rollup,
     pub(crate) today: Rollup,
     pub(crate) issues: Vec<AreaIssue>,
+    pub(crate) contract_issues:
+        Vec<crate::native::props::contract::issues::ContractIssue>,
 }
 
 impl AreaEntry {
@@ -83,6 +85,7 @@ impl AreaEntry {
             "projects": self.projects.to_json(),
             "today": self.today.to_json(),
             "issues": self.issues.iter().map(AreaIssue::to_json).collect::<Vec<_>>(),
+            "contract_issues": self.contract_issues,
         })
     }
 }
@@ -199,10 +202,18 @@ pub(crate) fn build_report(
     let mut resolver = HomeResolver::new(DiskHomeSource::new(bob_dir));
     let project_direct = project_directs(snapshot, &mut resolver);
     let today_direct = today_directs(bob_dir, &mut resolver);
-    assemble(&graph, &plan, &mut resolver, &project_direct, &today_direct)
+    assemble(
+        snapshot,
+        &graph,
+        &plan,
+        &mut resolver,
+        &project_direct,
+        &today_direct,
+    )
 }
 
 fn assemble(
+    snapshot: &VaultSnapshot,
     graph: &AreaGraph,
     plan: &CatalogPlan,
     resolver: &mut HomeResolver<DiskHomeSource>,
@@ -217,6 +228,7 @@ fn assemble(
     let mut areas = Vec::new();
     for path in &graph.root_children {
         push_tree(
+            snapshot,
             graph,
             path,
             resolver,
@@ -239,6 +251,7 @@ fn assemble(
     });
     for node in unplaced {
         areas.push(entry_from(
+            snapshot,
             graph,
             node,
             resolver,
@@ -303,6 +316,7 @@ fn assemble(
 }
 
 fn push_tree(
+    snapshot: &VaultSnapshot,
     graph: &AreaGraph,
     path: &Path,
     resolver: &mut HomeResolver<DiskHomeSource>,
@@ -318,6 +332,7 @@ fn push_tree(
         return;
     };
     areas.push(entry_from(
+        snapshot,
         graph,
         node,
         resolver,
@@ -326,6 +341,7 @@ fn push_tree(
     ));
     for child in &node.children {
         push_tree(
+            snapshot,
             graph,
             child,
             resolver,
@@ -338,6 +354,7 @@ fn push_tree(
 }
 
 fn entry_from(
+    snapshot: &VaultSnapshot,
     graph: &AreaGraph,
     node: &super::AreaNode,
     resolver: &mut HomeResolver<DiskHomeSource>,
@@ -370,7 +387,31 @@ fn entry_from(
             subtree: subtree_count(graph, &node.path, today_direct),
         },
         issues: node.issues.clone(),
+        contract_issues: contract_issues_for(snapshot, node),
     }
+}
+
+fn contract_issues_for(
+    snapshot: &VaultSnapshot,
+    node: &super::AreaNode,
+) -> Vec<crate::native::props::contract::issues::ContractIssue> {
+    use crate::native::props::contract::issues;
+    let mut found = Vec::new();
+    if let Some(file) = snapshot.files.get(&node.path) {
+        let contents = file.contents.as_deref().unwrap_or(&file.header);
+        found.extend(issues::from_contents(contents));
+    }
+    for issue in &node.issues {
+        if let Some(mapped) = issues::from_area_codes(
+            issue.code,
+            issue.severity.as_str(),
+            issue.line,
+            &issue.message,
+        ) {
+            found.push(mapped);
+        }
+    }
+    issues::merge(found)
 }
 
 fn subtree_count(

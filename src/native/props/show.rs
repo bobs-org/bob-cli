@@ -10,6 +10,7 @@ use super::{
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 pub(crate) const CAPABILITY: &str = "props_v1";
+pub(crate) const CONTRACT_CAPABILITY: &str = "props_contract_v1";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct ShowReport {
@@ -23,6 +24,8 @@ pub(crate) struct ShowReport {
     pub(crate) fingerprint: Option<String>,
     pub(crate) frontmatter: FrontmatterReport,
     pub(crate) properties: Vec<ShowProperty>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) contract: Option<super::contract::read::ContractBlock>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) ownership_diagnostics: Vec<String>,
 }
@@ -121,6 +124,7 @@ pub(crate) fn build_report(
             end_line: document.end_line,
         },
         properties,
+        contract: None,
         ownership_diagnostics: roles.diagnostics.clone(),
     }
 }

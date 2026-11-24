@@ -52,11 +52,13 @@ pub(crate) fn show_command() -> ClapCommand {
             "Show the ordered frontmatter properties for one vault note: \
              source order, line numbers, typed values, kinds, styles, and \
              the owning card or writer for each key, plus the semantic \
-             fingerprint. NOTE is a vault-relative Markdown path (the \
-             `.md` suffix is optional) or an absolute Markdown path inside \
-             the vault. Damaged YAML still reports its recovery state. The \
-             command is read-only. See docs/props.md for the report \
-             contract and kind/style rules.",
+             fingerprint. Area, project, and bank notes also report the \
+             settings contract (stage, choices, declared and effective \
+             values, and ^prj facts). NOTE is a vault-relative Markdown \
+             path (the `.md` suffix is optional) or an absolute Markdown \
+             path inside the vault. Damaged YAML still reports its \
+             recovery state. The command is read-only. See docs/props.md \
+             for the report contract and kind/style rules.",
         )
         .after_help(
             "Examples:\n  \
@@ -92,8 +94,8 @@ pub(crate) fn update_command() -> ClapCommand {
              note under the vault lock and replans against those fresh \
              bytes, preserving unrelated body and formatting edits. Use \
              --dry-run to preview the candidate, fingerprints, inverse ops, \
-             and frontmatter diff without writing. Owned keys stay \
-             read-only here. See docs/props.md for the envelope, \
+             frontmatter diff, and setting effects without writing. Owned \
+             keys stay read-only here. See docs/props.md for the envelope, \
              operations, undo, and JSON.",
         )
         .after_help(
@@ -484,11 +486,12 @@ fn inspect_note(
     relative: &str,
     contents: &str,
 ) -> (InspectContext, super::PropsInspection) {
-    let context = InspectContext {
+    let mut context = InspectContext {
         contract: None,
         normalized_path: relative.to_owned(),
         roles: load_roles(vault, relative, contents),
     };
+    load_contract(vault, &mut context);
     let inspection = inspect(contents, &context);
     (context, inspection)
 }
@@ -620,6 +623,55 @@ fn show_human(report: &ShowReport, styler: &Styler) -> String {
             }
         }
     }
+    if let Some(contract) = &report.contract {
+        lines.push(String::new());
+        lines.push(format!("{}  {}", styler.bold("Settings"), contract.kind));
+        let label_width = contract
+            .settings
+            .iter()
+            .map(|setting| setting.label.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(16);
+        for setting in &contract.settings {
+            let value = if setting.disabled {
+                format!("{}  (disabled)", setting.effective.label)
+            } else {
+                setting.effective.label.clone()
+            };
+            let row = format!(
+                "  {}  {}",
+                styler.cyan(&crate::native::style::pad_right(
+                    setting.label,
+                    label_width
+                )),
+                value,
+            );
+            if setting.declared {
+                lines.push(row);
+            } else {
+                lines.push(styler.dim(&row));
+            }
+            for issue in &setting.issues {
+                lines.push(format!(
+                    "    {} {}",
+                    styler.yellow(&issue.code),
+                    issue.message
+                ));
+            }
+        }
+        if let Some(prj) = &contract.prj {
+            if let Some(line) = &prj.line {
+                lines.push(format!(
+                    "  {}  {line}",
+                    styler.cyan(&crate::native::style::pad_right(
+                        "Goal",
+                        label_width,
+                    ))
+                ));
+            }
+        }
+    }
     for diagnostic in &report.ownership_diagnostics {
         lines.push(format!("  {} {diagnostic}", styler.yellow("warning:")));
     }
@@ -698,8 +750,7 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             );
         }
     };
-    let (mut context, _) = inspect_note(&vault, &relative, &current);
-    load_contract(&vault, &mut context);
+    let (context, _) = inspect_note(&vault, &relative, &current);
     let preview = match plan(&current, &context, &envelope) {
         Ok(preview) => preview,
         Err(error) => {
@@ -770,8 +821,7 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             );
         }
     };
-    let (mut fresh_context, _) = inspect_note(&vault, &relative, &fresh);
-    load_contract(&vault, &mut fresh_context);
+    let (fresh_context, _) = inspect_note(&vault, &relative, &fresh);
     let planned = match plan(&fresh, &fresh_context, &envelope) {
         Ok(planned) => planned,
         Err(error) => {
@@ -902,6 +952,7 @@ fn print_update_report(
                 "inverse_ops": view.inverse_ops.iter().map(Op::to_json).collect::<Vec<_>>(),
                 "changes": changes,
                 "warnings": preview.warnings,
+                "effects": preview.effects,
                 "properties": serde_json::to_value(&view.report.properties).unwrap_or(Value::Null),
             })
         );
@@ -911,7 +962,14 @@ fn print_update_report(
         }
         print!(
             "{}",
-            update_human(relative, dry_run, &view, &changes, &Styler::detect())
+            update_human(
+                relative,
+                dry_run,
+                &view,
+                &changes,
+                &preview.effects,
+                &Styler::detect(),
+            )
         );
     }
 }
@@ -921,6 +979,7 @@ fn update_human(
     dry_run: bool,
     view: &PlannedView<'_>,
     changes: &[String],
+    effects: &[super::contract::effects::Effect],
     styler: &Styler,
 ) -> String {
     let action = if dry_run {
@@ -944,6 +1003,9 @@ fn update_human(
         for change in changes {
             lines.push(format!("  {change}"));
         }
+    }
+    for effect in effects {
+        lines.push(format!("  {}", styler.dim(&effect.message)));
     }
     lines.push(format!(
         "  {} inverse op(s) available for undo",

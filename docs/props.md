@@ -61,7 +61,7 @@ report with exit 0; `update` refuses that document.
   "ok": true,
   "path": "notes/groceries.md",
   "note_kind": "note",
-  "capabilities": ["props_v1"],
+  "capabilities": ["props_v1"]
   "fingerprint": "sha256:…",
   "frontmatter": {"state": "ok", "start_line": 1, "end_line": 5},
   "properties": [
@@ -93,7 +93,9 @@ safely. Values that cannot be represented safely are opaque, with a diagnostic
 rather than invented values.
 
 Text `show` is a colored aligned key/value/kind/role table with the path, note
-kind, fingerprint, frontmatter state, and readable diagnostics.
+kind, fingerprint, frontmatter state, and readable diagnostics. Area, project,
+and bank notes add a compact Settings section of effective values; undeclared
+settings render as dim ghost rows.
 
 ## Kinds, styles, and null conventions
 
@@ -284,6 +286,62 @@ Refusals are `prop_bad_value` (with allowed values in the hint),
 snapshot), `prop_required`, and `prop_setting_disabled`. Every refused batch
 leaves the note unchanged.
 
+### Settings contract
+
+`bob props show -f json` on an area, project, or bank note adds a `contract`
+block and the `props_contract_v1` capability. Ordinary notes omit both.
+
+```json
+{
+  "kind": "area",
+  "settings": [
+    {
+      "id": "color",
+      "label": "Hue",
+      "keys": ["color"],
+      "stage": "hue",
+      "declared": false,
+      "value": null,
+      "effective": {
+        "value": "blue",
+        "source": "inherited",
+        "from": "dev.md",
+        "label": "● blue · from dev"
+      },
+      "choices": [
+        {"id": "blue", "label": "blue", "hue": "blue", "used_by": ["dev"]}
+      ],
+      "help": "Palette hue or grey. Clear to inherit.",
+      "disabled": false
+    }
+  ]
+}
+```
+
+`settings[]` follows the contract order for the note's kind. Each row reports:
+
+- `declared` and `value` from this note's own keys (`value` is null when the
+  setting is a ghost).
+- `effective {value, source, from, label}` from bob's resolvers.
+  `source` is `self`, `inherited`, `config`, `hash`, or `none`. `from` is the
+  vault-relative path that supplied an inherited value.
+- `choices` for hue (palette plus grey, each with the top-level areas using
+  that hue in `used_by`) and for configured types (with their hue).
+- `issues[]` of `{code, severity, line?, message}` for that setting.
+- `help` and `disabled` (Stats root is disabled on a top-level project).
+
+Projects also report `prj`: `{line, criterion, scheduled, depends_on[],
+blocks[]}` from the first `^prj` line before the first H2.
+
+Dry-run and apply responses for setting writes add `effects[]`. Each effect
+has `setting`, `kind`, `message`, and optional `from`, `to`, `count`, and
+`syncs`. Parent changes name hue, root parent, inherited type, inherited
+clock, blocking gained or lost, and which of `areas`, `projects`, `albums`,
+and `notebooks` catalogs gain or lose a row. Inherited hue, type, and clock
+report how many descendant notes pick up the new value. Ready cap and Review
+report that they apply to tasks living in this note only. Text update output
+prints the same messages.
+
 ## Update envelope and operations
 
 `bob props update` takes a strict JSON envelope on `-i FILE` (`-` reads
@@ -382,8 +440,9 @@ write or change mtime.
 
 Update output includes `ok`, `schema_version`, `path`, `dry_run`, `changed`,
 `fingerprint_before`, `fingerprint_after`, `inverse_ops`, `changes` as a
-frontmatter-only line diff, and the post-image `properties`. Invalid input
-reports the shared typed error, including the failing operation where known.
+frontmatter-only line diff, `warnings`, `effects` from setting writes, and the
+post-image `properties`. Invalid input reports the shared typed error,
+including the failing operation where known.
 
 Exit codes: 0 for success (including recovery `show` and no-op updates);
 2 for usage, protocol, semantic, and ownership refusals; 1 for vault I/O,
@@ -391,13 +450,14 @@ lock contention, and stale guarded writes that fail under the lock.
 
 ## Capability probe
 
-`props_v1` appears in the `show` capability array and in the
-vault-independent `__catalog` feature handshake, so plugins probe once
-without selecting a note:
+`props_v1` appears in every `show` capability array. Area, project, and bank
+notes also report `props_contract_v1` once the settings contract is present.
+Both names appear in the vault-independent `__catalog` feature handshake, so
+plugins probe once without selecting a note:
 
 ```sh
 bob __catalog --protocol 1 | jq '.features'
-# ["clicolor-force", "progress-env", "props_v1", "run-receipt"]
+# ["clicolor-force", "progress-env", "props_contract_v1", "props_v1", "run-receipt"]
 ```
 
 `props show` is a read catalog row; `props update` is excluded from command

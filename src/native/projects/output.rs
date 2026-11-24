@@ -66,6 +66,8 @@ pub(super) struct ProjectListRow<'a> {
     pub(super) parent: Option<String>,
     pub(super) children: Vec<String>,
     pub(super) today: Option<usize>,
+    pub(super) contract_issues:
+        Vec<crate::native::props::contract::issues::ContractIssue>,
 }
 
 pub(super) fn project_list_json(
@@ -196,6 +198,7 @@ fn project_to_json(row: &ProjectListRow<'_>) -> Value {
             "scheduled": prj_valid.then(|| detail.and_then(|detail| detail.effective_scheduled.map(|date| date.to_string()))).flatten(),
         },
         "blocked": blocked,
+        "contract_issues": row.contract_issues,
         "tasks": {
             "open": project.open_task_count,
             "shown": project.dash_visible_count,

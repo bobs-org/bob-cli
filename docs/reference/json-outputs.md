@@ -184,7 +184,7 @@ sets `one_off: true`.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob areas list` | `-f json` | Area tree, catalogs, findings, counts | `schema_version: 1` | [Areas](../areas.md#json) |
+| `bob areas list` | `-f json` | Area tree, catalogs, findings, `contract_issues`, counts | `schema_version: 1` | [Areas](../areas.md#json) |
 | `bob areas check` | `-f json` | Same as list | `schema_version: 1` | [Areas](../areas.md#json) |
 | `bob areas sync` | `-f json` | Sync envelope | `schema_version: 1` | [Areas](../areas.md#sync) |
 
@@ -200,7 +200,7 @@ sets `one_off: true`.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob projects list` | `-f json` | Projects, catalogs, findings, and counts | `schema_version: 1` | [Projects](../projects.md#json-report) |
+| `bob projects list` | `-f json` | Projects, catalogs, findings, `contract_issues`, counts | `schema_version: 1` | [Projects](../projects.md#json-report) |
 | `bob projects sync` | `-f json` | Lifecycle/catalog events, changes, findings, commit, sync, warnings; dry runs add diffs | `schema_version: 1` | [Projects](../projects.md#commands) |
 
 ### Task log reports {#task-log-reports}
@@ -431,8 +431,8 @@ vault-relative Markdown path (optional `.md`) or an absolute path inside the vau
 
 | Command | Flag | Shape | Contract |
 | --- | --- | --- | --- |
-| `bob props show NOTE` | `-f json` | Path, note kind, `props_v1` capability, semantic fingerprint, frontmatter state, ordered properties with values, kinds, styles, ownership roles, diagnostics | [Show report](../props.md#show-report) |
-| `bob props update NOTE` | `-i FILE` (`-` for stdin), `-f json`; `-d` previews | Path, dry-run/changed flags, before/after fingerprints, inverse operations, frontmatter diff, resulting properties | [Update envelope](../props.md#update-envelope-and-operations) |
+| `bob props show NOTE` | `-f json` | Path, note kind, `props_v1`/`props_contract_v1`, semantic fingerprint, frontmatter state, ordered properties with values, kinds, styles, ownership roles, diagnostics, settings `contract` | [Show report](../props.md#show-report), [Settings contract](../props.md#settings-contract) |
+| `bob props update NOTE` | `-i FILE` (`-` for stdin), `-f json`; `-d` previews | Path, dry-run/changed flags, before/after fingerprints, inverse operations, frontmatter diff, warnings, `effects`, resulting properties | [Update envelope](../props.md#update-envelope-and-operations), [Settings contract](../props.md#settings-contract) |
 
 `show` may succeed with damaged YAML; frontmatter state and diagnostics identify
 repairs needed. An update's `expect` comes from `show`'s fingerprint, identifying

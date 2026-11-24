@@ -39,6 +39,7 @@ fn protocol_1_parses_with_schema_version_one() {
         serde_json::json!([
             "clicolor-force",
             "progress-env",
+            "props_contract_v1",
             "props_v1",
             "run-receipt"
         ])

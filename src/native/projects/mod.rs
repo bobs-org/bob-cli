@@ -279,6 +279,14 @@ fn run_list(matches: &ArgMatches) -> i32 {
                     today: today_counts.as_ref().map(|counts| {
                         counts.get(&display_slash(path)).copied().unwrap_or(0)
                     }),
+                    contract_issues: note_contents
+                        .get(path)
+                        .map(|contents| {
+                            crate::native::props::contract::issues::from_contents(
+                                contents,
+                            )
+                        })
+                        .unwrap_or_default(),
                 }
             })
             .collect::<Vec<_>>();

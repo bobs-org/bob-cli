@@ -65,8 +65,21 @@ pub(crate) fn inspect(
     context: &InspectContext,
 ) -> PropsInspection {
     let document = PropsDocument::parse(contents);
-    let report =
+    let mut report =
         build_report(&context.normalized_path, &document, &context.roles);
+    if let Some(contract) = &context.contract {
+        report.contract = contract::read::build(
+            contract,
+            &context.normalized_path,
+            contents,
+            context.roles.note_kind,
+            &document,
+        );
+        if report.contract.is_some() {
+            report.capabilities =
+                contract::read::capabilities(context.roles.note_kind);
+        }
+    }
     let mut diagnostics = Vec::new();
     if let Some(error) = &document.error {
         diagnostics.push(error.clone());

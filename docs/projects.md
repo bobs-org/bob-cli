@@ -78,12 +78,16 @@ and `counts`.
 
 Each project reports its frontmatter `status`, effective catalog `state`,
 cleaned `criterion`, resolved `parent`, direct `children`, `closed_on`, `prj`
-line details, nullable `blocked` reason, and `tasks` counts (`open`, `shown`,
-`today`). The state is `open`, `scheduled`, `blocked`, `warning`, `done`, or
-`canceled`. A scheduled reason is `{kind: "scheduled", date}`; dependency
-blocking is `{kind: "dependency", waits_on}`; inherited blocking is
+line details, nullable `blocked` reason, additive `contract_issues`, and
+`tasks` counts (`open`, `shown`, `today`). The state is `open`, `scheduled`,
+`blocked`, `warning`, `done`, or `canceled`. A scheduled reason is
+`{kind: "scheduled", date}`; dependency blocking is
+`{kind: "dependency", waits_on}`; inherited blocking is
 `{kind: "inherited"}`. Other projects report `blocked: null`. `tasks.today` is
-null when today's daily note is missing or unreadable.
+null when today's daily note is missing or unreadable. `contract_issues[]`
+carries setting lint (`note_offclock_shadowed`, `area_color_invalid`, …) for
+the Project Card foot; catalog codes stay on `findings`. See
+[Settings contract](props.md#settings-contract).
 
 Catalogs report host identity, `kind`, `state` (`current`, `missing`, `stale`,
 or `damaged`), expected row counts, and per-host `issues`. `findings` combines

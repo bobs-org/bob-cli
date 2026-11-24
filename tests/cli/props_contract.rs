@@ -139,3 +139,227 @@ fn parent_validation_reloads_the_destination_and_ancestry_under_lock() {
         );
     }
 }
+
+fn setting<'a>(shown: &'a Value, id: &str) -> &'a Value {
+    shown["contract"]["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap_or_else(|| panic!("missing setting {id} in {shown}"))
+}
+
+#[test]
+fn show_contract_covers_inherited_hue_shadowed_clock_inbox_and_bank() {
+    let vault = vault("contract-show");
+    homes(vault.path());
+    write_note(
+        vault.path(),
+        "dev.md",
+        "---\ntype: '[[area]]'\nparent: '[[area]]'\ncolor: blue\n---\n",
+    );
+    write_note(
+        vault.path(),
+        "child.md",
+        "---\ntype: '[[area]]'\nparent: '[[dev]]'\n---\n# Child\n",
+    );
+    let mut text = bob_command();
+    text.args(["props", "show", "child.md"])
+        .env("BOB_DIR", vault.path())
+        .env("NO_COLOR", "1");
+    let text = text.output().expect("text show");
+    assert_success(&text);
+    let shown_text = stdout(&text);
+    assert!(
+        shown_text.contains("Settings") && shown_text.contains("Hue"),
+        "{shown_text}"
+    );
+
+    let child = report(&show(vault.path(), "child.md", &[]));
+    assert_eq!(
+        child["capabilities"],
+        json!(["props_v1", "props_contract_v1"])
+    );
+    assert_eq!(child["contract"]["kind"], "area");
+    let color = setting(&child, "color");
+    assert_eq!(color["declared"], false);
+    assert_eq!(color["effective"]["source"], "inherited");
+    assert_eq!(color["effective"]["value"], "blue");
+    assert_eq!(color["effective"]["from"], "dev.md");
+    assert!(color["choices"].as_array().unwrap().len() >= 9);
+
+    let inbox = report(&show(vault.path(), "mac_inbox.md", &[]));
+    let clock = setting(&inbox, "clock");
+    assert_eq!(clock["declared"], true);
+    assert!(clock["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "note_offclock_shadowed"));
+    let cap = setting(&inbox, "ready_cap");
+    assert_eq!(cap["effective"]["value"], "off");
+    assert_eq!(cap["effective"]["source"], "self");
+
+    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
+    write_note(vault.path(), "bank.md", bank);
+    let shown = report(&show(vault.path(), "bank.md", &[]));
+    assert_eq!(shown["note_kind"], "bank");
+    assert_eq!(
+        shown["capabilities"],
+        json!(["props_v1", "props_contract_v1"])
+    );
+    assert_eq!(shown["contract"]["kind"], "bank");
+    assert_eq!(setting(&shown, "summary")["effective"]["value"], "Bank");
+}
+
+#[test]
+fn show_contract_covers_root_blocked_and_terminal_projects() {
+    let vault = vault("contract-projects");
+    homes(vault.path());
+    write_note(
+        vault.path(),
+        "sase.md",
+        "---\ntype: '[[project]]'\nparent: '[[dev]]'\nstatus: wip\n---\n- [?] #task #prj Parent work ^prj\n  - ⛓️ **DEPENDS ON:** [[need#^need]]\n",
+    );
+    write_note(
+        vault.path(),
+        "need.md",
+        "---\ntype: '[[area]]'\nparent: '[[area]]'\n---\n- [ ] #task Prerequisite ^need\n",
+    );
+    write_note(
+        vault.path(),
+        "root.md",
+        "---\ntype: '[[project]]'\nparent: '[[sase]]'\nroot: true\nstatus: wip\n---\n- [ ] #task #prj Root work ^prj\n",
+    );
+    write_note(
+        vault.path(),
+        "child.md",
+        "---\ntype: '[[project]]'\nparent: '[[sase]]'\nstatus: wip\n---\n- [?] #task #prj Child work ^prj\n  - ⛓️ **DEPENDS ON:** [[need#^need]]\n",
+    );
+    write_note(
+        vault.path(),
+        "done.md",
+        "---\ntype: '[[project]]'\nparent: '[[dev]]'\nstatus: done\n---\n- [x] #task #prj Shipped [completion:: 2026-11-22] ^prj\n",
+    );
+    let root = report(&show(vault.path(), "root.md", &[]));
+    assert_eq!(setting(&root, "root")["effective"]["value"], true);
+    assert_eq!(setting(&root, "root")["disabled"], false);
+    assert_eq!(root["contract"]["prj"]["criterion"], "Root work");
+    let child = report(&show(vault.path(), "child.md", &[]));
+    assert_eq!(
+        child["contract"]["prj"]["depends_on"],
+        json!(["need#^need"])
+    );
+    let done = report(&show(vault.path(), "done.md", &[]));
+    assert_eq!(done["contract"]["prj"]["criterion"], "Shipped");
+}
+
+#[test]
+fn parent_rehome_dry_run_names_catalog_syncs() {
+    let vault = vault("contract-effects");
+    homes(vault.path());
+    write_note(
+        vault.path(),
+        "body.md",
+        "---\ntype: '[[area]]'\nparent: '[[area]]'\ncolor: red\n---\n",
+    );
+    write_note(
+        vault.path(),
+        "sase.md",
+        "---\ntype: '[[project]]'\nparent: '[[dev]]'\nstatus: wip\n---\n- [ ] #task #prj Work ^prj\n",
+    );
+    let input = envelope(
+        vault.path(),
+        "sase.md",
+        json!([{"op":"setting.set","setting":"parent","value":"[[body]]"}]),
+    );
+    let preview = report(&update(
+        vault.path(),
+        "sase.md",
+        &input,
+        &["-d", "-f", "json"],
+    ));
+    let effects = preview["effects"].as_array().unwrap();
+    assert!(
+        effects.iter().any(|effect| {
+            effect["kind"] == "syncs"
+                && effect["syncs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|name| name == "projects")
+        }),
+        "{effects:?}"
+    );
+    assert!(
+        fs::read_to_string(vault.path().join("sase.md"))
+            .unwrap()
+            .contains("parent: '[[dev]]'"),
+        "dry-run must not write"
+    );
+    let text = update(vault.path(), "sase.md", &input, &["-d"]);
+    assert_success(&text);
+    let shown = stdout(&text);
+    assert!(
+        shown.contains("Syncs") && shown.contains("projects"),
+        "{shown}"
+    );
+}
+
+#[test]
+fn areas_and_projects_list_include_contract_issues() {
+    let vault = vault("contract-list");
+    homes(vault.path());
+    write_note(
+        vault.path(),
+        "stained.md",
+        "---\ntype: '[[area]]'\nparent: '[[area]]'\ncolor: puce\noffclock: true\noffclock_types: [MEET]\n---\n# Stained\n",
+    );
+    write_note(
+        vault.path(),
+        "sase.md",
+        "---\ntype: '[[project]]'\nparent: '[[dev]]'\nstatus: wip\noffclock: true\noffclock_types: [MEET]\n---\n- [ ] #task #prj Work ^prj\n",
+    );
+    let mut areas = bob_command();
+    areas
+        .args(["areas", "list", "-f", "json"])
+        .env("BOB_DIR", vault.path())
+        .env("NO_COLOR", "1");
+    let areas = areas.output().expect("areas list");
+    assert_success(&areas);
+    let areas = report(&areas);
+    let stained = areas["areas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["stem"] == "stained")
+        .unwrap();
+    let codes: Vec<&str> = stained["contract_issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|issue| issue["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"area_color_invalid"), "{codes:?}");
+    assert!(codes.contains(&"note_offclock_shadowed"), "{codes:?}");
+    assert!(stained["issues"].is_array());
+
+    let mut projects = bob_command();
+    projects
+        .args(["projects", "list", "-f", "json"])
+        .env("BOB_DIR", vault.path())
+        .env("NO_COLOR", "1");
+    let projects = projects.output().expect("projects list");
+    let projects = report(&projects);
+    let sase = projects["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["stem"] == "sase")
+        .unwrap();
+    assert!(sase["contract_issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "note_offclock_shadowed"));
+}

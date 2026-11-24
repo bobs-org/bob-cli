@@ -224,7 +224,8 @@ human preamble. List and check share one report shape; `check` uses
       "children": ["bank.md"],
       "projects": { "direct": 2, "subtree": 2 },
       "today": { "direct": 0, "subtree": 1 },
-      "issues": []
+      "issues": [],
+      "contract_issues": []
     }
   ],
   "catalogs": [
@@ -263,6 +264,10 @@ human preamble. List and check share one report shape; `check` uses
 - `hue` and `hue_source` come from Pomodoro home resolution.
   `hue_source` is `color`, `muted`, or `hash`. Clients render the hue bob
   reports. The root has no hue.
+- `contract_issues[]` is additive setting lint for the Area Card foot
+  (`note_offclock_shadowed`, `area_color_invalid`, parent/summary codes, …).
+  Catalog stale or damaged codes stay on `issues` and `findings`. See
+  [Settings contract](props.md#settings-contract).
 - `projects.direct` counts non-terminal project notes whose nearest area
   on their parent walk is this area (through projects, notebooks, and
   albums, 16-hop cap). `subtree` adds descendant areas.

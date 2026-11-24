@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use super::Context;
 use crate::native::{
-    config::themes::ThemeSources,
+    config::{themes::ThemeSources, FreshnessConfig, PlanConfig},
     notebooks::snapshot::VaultSnapshot,
     props::{
         document::PropsDocument,
@@ -19,7 +19,10 @@ use crate::native::{
 fn context(kind: NoteKind, note: &str) -> InspectContext {
     let files: BTreeMap<PathBuf, String> = [
         ("area.md", "# Areas\n"),
-        ("dev.md", "---\ntype: '[[area]]'\nparent: '[[area]]'\n---\n"),
+        (
+            "dev.md",
+            "---\ntype: '[[area]]'\nparent: '[[area]]'\ncolor: blue\n---\n",
+        ),
         (
             "body.md",
             "---\ntype: '[[area]]'\nparent: '[[area]]'\n---\n",
@@ -66,6 +69,8 @@ fn context(kind: NoteKind, note: &str) -> InspectContext {
                 themes: None,
                 warning: None,
             },
+            plan: PlanConfig::default(),
+            freshness: FreshnessConfig::default(),
         }),
     }
 }
@@ -448,5 +453,143 @@ fn home_and_bank_roles_match_the_editor_contract() {
         .unwrap_err()
         .code,
         "prop_owned"
+    );
+}
+
+fn setting<'a>(
+    report: &'a crate::native::props::show::ShowReport,
+    id: &str,
+) -> &'a super::read::SettingReport {
+    report
+        .contract
+        .as_ref()
+        .expect("contract")
+        .settings
+        .iter()
+        .find(|setting| setting.id == id)
+        .unwrap_or_else(|| panic!("missing setting {id}"))
+}
+
+#[test]
+fn show_contract_reports_inherited_hue_shadowed_clock_and_cap() {
+    let note = "---\ntype: '[[area]]'\nparent: '[[dev]]'\noffclock: true\noffclock_types: [MEET]\nready_cap: off\n---\n# Inbox\n";
+    let report = inspect(note, &context(NoteKind::Area, note)).report;
+    assert_eq!(report.capabilities, vec!["props_v1", "props_contract_v1"]);
+    let color = setting(&report, "color");
+    assert!(!color.declared);
+    assert_eq!(color.effective.source, "inherited");
+    assert_eq!(color.effective.value, json!("blue"));
+    assert_eq!(color.effective.from.as_deref(), Some("dev.md"));
+    let clock = setting(&report, "clock");
+    assert!(clock.declared);
+    assert_eq!(clock.effective.source, "self");
+    assert!(clock
+        .issues
+        .iter()
+        .any(|issue| issue.code == "note_offclock_shadowed"));
+    let cap = setting(&report, "ready_cap");
+    assert_eq!(cap.effective.value, json!("off"));
+    assert_eq!(cap.effective.source, "self");
+}
+
+#[test]
+fn show_contract_reports_root_blocked_and_terminal_projects() {
+    let root = "---\ntype: '[[project]]'\nparent: '[[sase]]'\nroot: true\nstatus: wip\n---\n- [ ] #task #prj Root work ^prj\n";
+    let report = inspect(root, &context(NoteKind::Project, root)).report;
+    let root_setting = setting(&report, "root");
+    assert!(root_setting.declared);
+    assert_eq!(root_setting.effective.value, json!(true));
+    assert!(!root_setting.disabled);
+    assert_eq!(
+        report
+            .contract
+            .as_ref()
+            .unwrap()
+            .prj
+            .as_ref()
+            .unwrap()
+            .criterion
+            .as_deref(),
+        Some("Root work")
+    );
+
+    let blocked = "---\ntype: '[[project]]'\nparent: '[[sase]]'\nstatus: wip\n---\n- [?] #task #prj Child ^prj\n  - ⛓️ **DEPENDS ON:** [[sase#^need]]\n";
+    let blocked_report =
+        inspect(blocked, &context(NoteKind::Project, blocked)).report;
+    assert_eq!(
+        blocked_report
+            .contract
+            .as_ref()
+            .unwrap()
+            .prj
+            .as_ref()
+            .unwrap()
+            .depends_on,
+        vec!["sase#^need"]
+    );
+
+    let terminal = "---\ntype: '[[project]]'\nparent: '[[dev]]'\nstatus: done\n---\n- [x] #task #prj Shipped [completion:: 2026-11-22] ^prj\n";
+    let terminal_report =
+        inspect(terminal, &context(NoteKind::Project, terminal)).report;
+    assert_eq!(terminal_report.contract.as_ref().unwrap().kind, "project");
+    assert_eq!(
+        terminal_report
+            .contract
+            .as_ref()
+            .unwrap()
+            .prj
+            .as_ref()
+            .unwrap()
+            .criterion
+            .as_deref(),
+        Some("Shipped")
+    );
+}
+
+#[test]
+fn parent_rehome_names_syncs_and_inherited_settings_name_scope() {
+    let note = "---\ntype: '[[project]]'\nparent: '[[dev]]'\nstatus: wip\n---\n- [ ] #task #prj Work ^prj\n";
+    let moved = run(
+        note,
+        NoteKind::Project,
+        json!([{"op":"setting.set","setting":"parent","value":"[[body]]"}]),
+    )
+    .unwrap();
+    assert!(moved.effects.iter().any(|effect| {
+        effect.kind == "syncs"
+            && effect.syncs.iter().any(|name| name == "projects")
+    }));
+    let colored = run(
+        note,
+        NoteKind::Project,
+        json!([{"op":"setting.set","setting":"color","value":"red"}]),
+    )
+    .unwrap();
+    assert!(colored.effects.iter().any(|effect| {
+        effect.setting == "color"
+            && effect.kind == "inherited"
+            && effect.message.contains("notes below")
+    }));
+    let cap = run(
+        note,
+        NoteKind::Project,
+        json!([{"op":"setting.set","setting":"ready_cap","value":"off"}]),
+    )
+    .unwrap();
+    assert!(cap.effects.iter().any(|effect| {
+        effect.setting == "ready_cap" && effect.kind == "residence"
+    }));
+}
+
+#[test]
+fn bank_show_uses_the_area_contract() {
+    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Banking\nbank: {currency: USD}\n---\n# Bank\n";
+    let report = inspect(bank, &context(NoteKind::Bank, bank)).report;
+    assert_eq!(report.note_kind, "bank");
+    assert_eq!(report.capabilities, vec!["props_v1", "props_contract_v1"]);
+    assert_eq!(report.contract.as_ref().unwrap().kind, "bank");
+    assert_eq!(
+        setting(&report, "summary").effective.value,
+        json!("Banking")
     );
 }

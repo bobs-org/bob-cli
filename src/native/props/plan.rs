@@ -37,6 +37,7 @@ pub(crate) struct PlanOutcome {
     pub(crate) changed: bool,
     pub(crate) inverse_ops: Vec<Op>,
     pub(crate) warnings: Vec<PropsError>,
+    pub(crate) effects: Vec<super::contract::effects::Effect>,
 }
 
 /// Plan ordered operations against `contents` without writing files.
@@ -85,6 +86,7 @@ pub(crate) fn plan(
             changed: false,
             inverse_ops: Vec::new(),
             warnings: Vec::new(),
+            effects: Vec::new(),
         });
     }
     if !context.roles.writes_are_safe() {
@@ -134,6 +136,19 @@ pub(crate) fn plan(
         after.document.fingerprint.clone().ok_or_else(|| {
             verify_failed("candidate fingerprint is unavailable", None, None)
         })?;
+    let effects = context
+        .contract
+        .as_ref()
+        .map(|contract| {
+            super::contract::effects::collect(
+                contract,
+                &context.normalized_path,
+                contents,
+                &current,
+                context.roles.note_kind,
+            )
+        })
+        .unwrap_or_default();
     Ok(PlanOutcome {
         changed: current != contents,
         candidate: current,
@@ -142,6 +157,7 @@ pub(crate) fn plan(
         fingerprint_after,
         inverse_ops: inverses,
         warnings,
+        effects,
     })
 }
 

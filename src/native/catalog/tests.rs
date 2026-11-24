@@ -416,7 +416,13 @@ fn document_shape() {
     assert_eq!(catalog.bob_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(
         catalog.features,
-        vec!["clicolor-force", "progress-env", "props_v1", "run-receipt"]
+        vec![
+            "clicolor-force",
+            "progress-env",
+            "props_contract_v1",
+            "props_v1",
+            "run-receipt",
+        ]
     );
     assert_eq!(
         catalog
