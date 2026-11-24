@@ -25,24 +25,17 @@
 
 mod agenda;
 mod birth;
-#[cfg_attr(not(test), allow(dead_code))]
 mod dossier;
-#[cfg_attr(not(test), allow(dead_code))]
 mod intake;
-#[cfg_attr(not(test), allow(dead_code))]
 mod matching;
 mod model;
-#[cfg_attr(not(test), allow(dead_code))]
 mod normalize;
-#[cfg_attr(not(test), allow(dead_code))]
 mod parent;
 #[cfg_attr(not(test), allow(dead_code))]
 mod profile;
 #[cfg_attr(not(test), allow(dead_code))]
 mod recap;
-#[cfg_attr(not(test), allow(dead_code))]
 mod resolve;
-#[cfg_attr(not(test), allow(dead_code))]
 mod token;
 
 #[cfg(test)]
@@ -59,20 +52,29 @@ pub(crate) use birth::{
 pub(crate) use dossier::{
     parse_dossier, render_dossier, DossierDocument, DossierError,
 };
-#[allow(unused_imports)]
 pub(crate) use intake::{
     read_notes, NotesError, NotesInput, NotesSource, MAX_NOTES_BYTES,
 };
-#[allow(unused_imports)]
-pub(crate) use model::{parse_event_link, vault_index};
-#[allow(unused_imports)]
+pub(crate) use matching::{
+    auto_match, content_words, AutoMatch, ScoredCandidate,
+};
+pub(crate) use model::{
+    collect_window_rows, event_ref_for, filed_index_for, filed_notes_index,
+    parse_event_link, vault_index, FiledNotes, FiledNotesIndex, MeetingRow,
+};
 pub(crate) use normalize::normalize;
+pub(crate) use parent::{meeting_parent, MeetingParent};
 #[allow(unused_imports)]
 pub(crate) use profile::{render_meeting_pdf, MeetingMeta};
 #[allow(unused_imports)]
 pub(crate) use recap::{
     recap_state, render_recap, replace_recap, RecapState, ReplaceRecapError,
 };
+pub(crate) use resolve::{
+    recent_meetings, resolve_event, AmbiguousCandidate, RecentMeeting,
+    ResolveError,
+};
+pub(crate) use token::{parse_event_token, EventToken};
 
 use serde::{Deserialize, Serialize};
 

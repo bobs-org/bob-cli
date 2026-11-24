@@ -222,9 +222,13 @@ fn resolve_url(
             return Ok(row);
         }
     }
+    // The `eid` is the occurrence identity. Sharing/copying a Calendar
+    // URL can add different display or tracking parameters without naming
+    // another event, so the vault fallback compares decoded identities,
+    // never the complete URL bytes.
     if let Some(row) = collect_window_rows(vault, window_days, day)
         .into_iter()
-        .find(|row| row.calendar_url.as_deref() == Some(url))
+        .find(|row| row.event_id.as_deref() == Some(event_id.as_str()))
     {
         return Ok(row);
     }

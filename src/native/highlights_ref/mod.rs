@@ -62,6 +62,8 @@ mod listen;
 mod listen_feed;
 mod marker;
 mod marker_write;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) mod meet;
 mod meeting_birth;
 #[allow(dead_code)]
 pub(crate) mod meeting_profile;

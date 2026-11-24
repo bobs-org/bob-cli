@@ -149,6 +149,16 @@ pub(super) struct OverwriteSelection {
     pub defaults: FamilyDefaults,
 }
 
+/// Exact live meeting reference selected for in-place replacement. Meeting
+/// identity is resolved by the meetings index first; this preflight then
+/// routes the selected note through the same family and overwrite model used
+/// by ordinary reference captures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MeetingOverwritePreflight {
+    pub selection: OverwriteSelection,
+    pub source_pdf: Option<String>,
+}
+
 /// Typed capture outcome for ordinary create, reread, and overwrite.
 /// Routes branch on this instead of inferring overwrite from error
 /// strings or stacking booleans.
@@ -268,6 +278,30 @@ pub(super) fn family_readings_for(config: &Config) -> BTreeMap<String, u32> {
         .iter()
         .filter_map(|row| row.reading.map(|number| (row.path.clone(), number)))
         .collect()
+}
+
+/// Select the exact live `meetings` note found by meeting identity, then
+/// reuse the ordinary overwrite selection and defaults. This deliberately
+/// does not choose by title: recurring occurrences can share a title while
+/// remaining distinct references.
+pub(super) fn preflight_for_meeting_note(
+    config: &Config,
+    note_path: &str,
+) -> Option<MeetingOverwritePreflight> {
+    let rows = index_rows(config);
+    let row = rows.iter().find(|row| {
+        row.path == note_path
+            && row.ref_type.as_deref() == Some("meetings")
+            && row.superseded_by.is_none()
+    })?;
+    let stem = stem_of_path(&row.path);
+    let mut family = family_for_root(&rows, &row.family, &config.bob_dir)?;
+    family.selected = family.member_named(&stem)?;
+    let defaults = family_defaults(family.selected_member());
+    Some(MeetingOverwritePreflight {
+        selection: OverwriteSelection { family, defaults },
+        source_pdf: row.source_pdf.clone(),
+    })
 }
 
 /// Follow a single-source attach hit to the newest reading in its family.
