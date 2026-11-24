@@ -535,8 +535,9 @@ pub(crate) fn parse_task_row(line: &str) -> Option<TaskRow> {
 }
 
 /// Inner text of every non-embedded wikilink on a line, skipping inline
-/// code spans.
-fn line_wikilinks(line: &str) -> impl Iterator<Item = &str> {
+/// code spans. Shared with the mail close guard so both scans agree on
+/// what a task links.
+pub(crate) fn line_wikilinks(line: &str) -> impl Iterator<Item = &str> {
     raw_wikilink_spans(line)
         .into_iter()
         .filter(|span| !line[..span.open].ends_with('!'))
@@ -547,7 +548,8 @@ fn line_wikilinks(line: &str) -> impl Iterator<Item = &str> {
 /// task's block with no other list item of the block between them and the
 /// task. Blank lines stay in the block while the next non-blank line is
 /// indented deeper than the task; hidden (fenced) lines never count.
-fn direct_children(
+/// Shared with the mail close guard.
+pub(crate) fn direct_children(
     lines: &[&str],
     task_index: usize,
     task_width: usize,
@@ -588,7 +590,8 @@ fn direct_children(
 }
 
 /// The inner text of a bullet that holds exactly one wikilink.
-fn link_only_bullet(line: &str) -> Option<&str> {
+/// Shared with the mail close guard.
+pub(crate) fn link_only_bullet(line: &str) -> Option<&str> {
     let content = bullet_content(line)?.trim();
     let inner = content.strip_prefix("[[")?.strip_suffix("]]")?;
     (!inner.contains("[[") && !inner.contains("]]")).then_some(inner)
@@ -628,7 +631,8 @@ fn indent_width(line: &str) -> usize {
 /// The note a wikilink's inner text points at: the alias, any `#heading`
 /// or `#^block` subpath, a table-escaped pipe, and a vault-root `/` are
 /// dropped. Same-note links (`[[#heading]]`) name no other note.
-fn link_target(inner: &str) -> Option<&str> {
+/// Shared with the mail close guard.
+pub(crate) fn link_target(inner: &str) -> Option<&str> {
     let before_alias = inner.split('|').next().unwrap_or("");
     let before_alias = before_alias.strip_suffix('\\').unwrap_or(before_alias);
     let target = before_alias.split('#').next().unwrap_or("").trim();

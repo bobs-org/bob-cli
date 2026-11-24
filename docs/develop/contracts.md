@@ -59,6 +59,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Log Recall](../log-recall.md) — Vault-derived phrase history from Schedule, Work, Rotten, and Cancel Logs, including `bob logs list` and shared client behavior
 - [Task requirements](../task-requirements.md) — Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors
 - [Task drawers](../task-drawers.md) — Task drawer headers: dual recognition, identity, Notes home, outside-text escape, source ranges, and marker JSON
+- [Mail Close Card](../mail-close-card.md) — Mail Close Card: the shared Gmail Task close model, copy, digest vectors, and per-surface confirmation contract
 
 ## References
 

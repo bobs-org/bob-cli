@@ -1,0 +1,1028 @@
+{
+  "schema": 1,
+  "doc": "Shared Mail Close Card conformance vectors for bob-cli (Rust close_guard) and bob-plugins (JS model twin). bob-plugins copies this file byte for byte. Predicate cases pin the Gmail Task verdict and the ordered mail-note paths; copy cases pin the card strings and the 12-hex digest over canonical sorted (path, line, before, after, mail note paths) rows. now is 2026-11-07T16:00:00 wherever an age or date is asserted.",
+  "vectors": [
+    {
+      "id": "P-own-line",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261107_lease|✉️ Lease renewal · Ada]]",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": true,
+      "expect_notes": ["mail/2026/261107_lease.md"]
+    },
+    {
+      "id": "P-child-bullet",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply to Yogi",
+      "children": ["  - [[mail/2026/261107_lease]]"],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": true,
+      "expect_notes": ["mail/2026/261107_lease.md"]
+    },
+    {
+      "id": "P-nested-note-bullets",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply",
+      "children": ["  - notes", "    - [[mail/2026/261107_lease]]"],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-prose-child",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply",
+      "children": ["  - see [[mail/2026/261107_lease]] for context"],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-embed",
+      "kind": "predicate",
+      "line": "- [ ] #task Read ![[mail/2026/261107_lease]]",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-struck-child",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply",
+      "children": ["  - ~~[[mail/2026/261107_lease]]~~"],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-inline-code",
+      "kind": "predicate",
+      "line": "- [ ] #task Read `[[mail/2026/261107_lease]]` first",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-loose-thread-id",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261107_lease]]",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "gmail_thread_id": "abc123",
+          "title": "Lease",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": true,
+      "expect_notes": ["mail/2026/261107_lease.md"]
+    },
+    {
+      "id": "P-loose-type-without-strict-fields",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261107_lease]]",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": true,
+      "expect_notes": ["mail/2026/261107_lease.md"]
+    },
+    {
+      "id": "P-strict-fields-without-loose",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261107_lease]]",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "content": "untrusted-email",
+          "title": "Lease",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-unresolved",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261199_missing]]",
+      "children": [],
+      "link_to_path": {},
+      "notes": {},
+      "vault_files": ["job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-ambiguous-basename",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[lease]]",
+      "children": [],
+      "link_to_path": {},
+      "notes": {
+        "mail/a/lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease A",
+          "who": "Ada"
+        },
+        "mail/b/lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease B",
+          "who": "Bo"
+        }
+      },
+      "vault_files": ["mail/a/lease.md", "mail/b/lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-basename-fallback",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[261107_lease]]",
+      "children": [],
+      "link_to_path": {},
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": true,
+      "expect_notes": ["mail/2026/261107_lease.md"]
+    },
+    {
+      "id": "P-multi-order-dedup",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261108_oak]] then [[mail/2026/261107_lease]]",
+      "children": ["  - [[mail/2026/261108_oak]]"],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md",
+        "mail/2026/261108_oak": "mail/2026/261108_oak.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        },
+        "mail/2026/261108_oak.md": {
+          "type": "[[mail]]",
+          "title": "Oak offer",
+          "who": "Bo"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "mail/2026/261108_oak.md", "job.md"],
+      "expect_gmail_task": true,
+      "expect_notes": ["mail/2026/261108_oak.md", "mail/2026/261107_lease.md"]
+    },
+    {
+      "id": "P-alias-and-heading",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261107_lease#summary|Lease]]",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": true,
+      "expect_notes": ["mail/2026/261107_lease.md"]
+    },
+    {
+      "id": "P-non-task-row",
+      "kind": "predicate",
+      "line": "- [ ] Reply [[mail/2026/261107_lease]]",
+      "children": [],
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "P-hidden-task-row",
+      "kind": "predicate",
+      "line": "- [ ] #task Reply [[mail/2026/261107_lease]]",
+      "children": [],
+      "task_hidden": true,
+      "link_to_path": {
+        "mail/2026/261107_lease": "mail/2026/261107_lease.md"
+      },
+      "notes": {
+        "mail/2026/261107_lease.md": {
+          "type": "[[mail]]",
+          "title": "Lease renewal",
+          "who": "Ada"
+        }
+      },
+      "vault_files": ["mail/2026/261107_lease.md", "job.md"],
+      "expect_gmail_task": false,
+      "expect_notes": []
+    },
+    {
+      "id": "C-single-yours-orphaned-archive",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 42,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply to Yogi [[mail/2026/261107_lease|✉️ Lease renewal · Ada]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": "https://mail.google.com/mail/u/0/#inbox/abc123"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "job.md · Ready → Done",
+        "tone": "warning",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 42,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "Ada is waiting on your reply, and nothing reopens this task until they write again. Bob's archive-on-close can then clear it from your Gmail inbox.",
+        "digest": "d287f43ac8a2"
+      }
+    },
+    {
+      "id": "C-single-cancel-theirs-orphaned",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 42,
+          "before": " ",
+          "after": "-",
+          "line_text": "- [ ] #task Drop the thread [[mail/2026/261107_lease|✉️ Lease renewal · Ada]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "theirs",
+              "turn_since": "2026-11-04T09:00:00",
+              "gmail_url": "https://mail.google.com/mail/u/0/#inbox/abc123"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Cancel this email task?",
+        "subtitle": "job.md · Ready → Cancelled",
+        "tone": "calm",
+        "verb": "cancel",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 42,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "✈ You wrote Wed, Nov 4 — waiting on Ada",
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "A reply from Ada reopens it. Bob's archive-on-close can then clear it from your Gmail inbox.",
+        "digest": "6ef18360957f"
+      }
+    },
+    {
+      "id": "C-single-unknown-turn",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "home.md",
+          "line": 3,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": null,
+              "turn_since": null,
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "home.md · Ready → Done",
+        "tone": "calm",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "home.md",
+            "line": 3,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": null,
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "Bob stops watching this thread. Bob's archive-on-close can then clear it from your Gmail inbox.",
+        "digest": "eea45e53026d"
+      }
+    },
+    {
+      "id": "C-next-yours-missing-who",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 9,
+          "before": "*",
+          "after": "x",
+          "line_text": "- [*] #task Reply [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "job.md · Next → Done",
+        "tone": "warning",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 9,
+            "label": "✉️ Lease renewal",
+            "turn_line": "↩ 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "They are waiting on your reply, and nothing reopens this task until they write again. Bob's archive-on-close can then clear it from your Gmail inbox.",
+        "digest": "256222007156"
+      }
+    },
+    {
+      "id": "C-missing-title-fallback",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "home.md",
+          "line": 5,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply to Yogi about the screen [[mail/2026/261110_screen]]",
+          "mails": [
+            {
+              "note": "mail/2026/261110_screen.md",
+              "title": "",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "home.md · Ready → Done",
+        "tone": "warning",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "home.md",
+            "line": 5,
+            "label": "Reply to Yogi about the screen [[mail/2026/261110_screen]] · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261110_screen.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "Ada is waiting on your reply, and nothing reopens this task until they write again. Bob's archive-on-close can then clear it from your Gmail inbox.",
+        "digest": "f2efc6e0299b"
+      }
+    },
+    {
+      "id": "C-multi-mail-first-yours-wins",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 42,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply [[mail/2026/261108_oak]] [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261108_oak.md",
+              "title": "Oak offer",
+              "who": "Bo",
+              "turn": "theirs",
+              "turn_since": "2026-11-06T10:00:00",
+              "gmail_url": ""
+            },
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": "https://mail.google.com/mail/u/0/#inbox/abc123"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "job.md · Ready → Done",
+        "tone": "warning",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 42,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "2 threads are waiting on your reply, and nothing reopens these tasks until they write again. Bob's archive-on-close can then clear them from your Gmail inbox.",
+        "digest": "289fb86d1cc9"
+      }
+    },
+    {
+      "id": "C-mixed-verbs-batch",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 42,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply to Yogi [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": "https://mail.google.com/mail/u/0/#inbox/abc123"
+            }
+          ]
+        },
+        {
+          "path": "home.md",
+          "line": 3,
+          "before": " ",
+          "after": "-",
+          "line_text": "- [ ] #task Drop the thread [[mail/2026/261108_oak]]",
+          "mails": [
+            {
+              "note": "mail/2026/261108_oak.md",
+              "title": "Oak offer",
+              "who": "Bo",
+              "turn": "theirs",
+              "turn_since": "2026-11-06T10:00:00",
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Close 2 tasks?",
+        "subtitle": "2 tasks · 2 wired to email",
+        "tone": "warning",
+        "verb": "close",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 42,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          },
+          {
+            "path": "home.md",
+            "line": 3,
+            "label": "✉️ Oak offer · Bo",
+            "turn_line": "✈ You wrote Fri, Nov 6 — waiting on Bo",
+            "note": "mail/2026/261108_oak.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "2 threads are waiting on your reply, and nothing reopens these tasks until they write again. Bob's archive-on-close can then clear them from your Gmail inbox.",
+        "digest": "509116d12441"
+      }
+    },
+    {
+      "id": "C-batch-six-more",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 1,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply one [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        },
+        {
+          "path": "job.md",
+          "line": 2,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply two [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        },
+        {
+          "path": "job.md",
+          "line": 3,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply three [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        },
+        {
+          "path": "job.md",
+          "line": 4,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply four [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        },
+        {
+          "path": "job.md",
+          "line": 5,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply five [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        },
+        {
+          "path": "job.md",
+          "line": 6,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply six [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete 6 tasks?",
+        "subtitle": "6 tasks · 1 wired to email",
+        "tone": "warning",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 1,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          },
+          {
+            "path": "job.md",
+            "line": 2,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          },
+          {
+            "path": "job.md",
+            "line": 3,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          },
+          {
+            "path": "job.md",
+            "line": 4,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          },
+          {
+            "path": "job.md",
+            "line": 5,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 1,
+        "consequence": "Ada is waiting on your reply, and nothing reopens this task until they write again. Bob's archive-on-close can then clear it from your Gmail inbox.",
+        "digest": "275e1498f369"
+      }
+    },
+    {
+      "id": "C-not-orphaned",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": true,
+      "other_open_linkers": {
+        "mail/2026/261107_lease.md": 2
+      },
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 42,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Reply to Yogi [[mail/2026/261107_lease|✉️ Lease renewal · Ada]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": "https://mail.google.com/mail/u/0/#inbox/abc123"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "job.md · Ready → Done",
+        "tone": "calm",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 42,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "Another open task still watches this thread.",
+        "digest": "d287f43ac8a2"
+      }
+    },
+    {
+      "id": "C-in-progress-archive-off",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": false,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 42,
+          "before": "/",
+          "after": "x",
+          "line_text": "- [/] #task Reply to Yogi [[mail/2026/261107_lease]]",
+          "mails": [
+            {
+              "note": "mail/2026/261107_lease.md",
+              "title": "Lease renewal",
+              "who": "Ada",
+              "turn": "yours",
+              "turn_since": "2026-11-07T14:00:00",
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "job.md · In Progress → Done",
+        "tone": "warning",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 42,
+            "label": "✉️ Lease renewal · Ada",
+            "turn_line": "↩ Ada · 2h — waiting on your reply",
+            "note": "mail/2026/261107_lease.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "Ada is waiting on your reply, and nothing reopens this task until they write again.",
+        "digest": "2ed426f13fdb"
+      }
+    },
+    {
+      "id": "C-theirs-plural",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": false,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "job.md",
+          "line": 42,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Sign the offer [[mail/2026/261108_oak]]",
+          "mails": [
+            {
+              "note": "mail/2026/261108_oak.md",
+              "title": "Oak offer",
+              "who": "Bo",
+              "turn": "theirs",
+              "turn_since": "2026-11-06T10:00:00",
+              "gmail_url": ""
+            }
+          ]
+        },
+        {
+          "path": "home.md",
+          "line": 3,
+          "before": " ",
+          "after": "x",
+          "line_text": "- [ ] #task Pay the invoice [[mail/2026/261109_elm]]",
+          "mails": [
+            {
+              "note": "mail/2026/261109_elm.md",
+              "title": "Elm invoice",
+              "who": "Cy",
+              "turn": "theirs",
+              "turn_since": "2026-11-05T08:00:00",
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete 2 tasks?",
+        "subtitle": "2 tasks · 2 wired to email",
+        "tone": "calm",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "job.md",
+            "line": 42,
+            "label": "✉️ Oak offer · Bo",
+            "turn_line": "✈ You wrote Fri, Nov 6 — waiting on Bo",
+            "note": "mail/2026/261108_oak.md"
+          },
+          {
+            "path": "home.md",
+            "line": 3,
+            "label": "✉️ Elm invoice · Cy",
+            "turn_line": "✈ You wrote Thu, Nov 5 — waiting on Cy",
+            "note": "mail/2026/261109_elm.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "A reply reopens them.",
+        "digest": "369c015acdb0"
+      }
+    },
+    {
+      "id": "C-next-to-done-capital",
+      "kind": "copy",
+      "now": "2026-11-07T16:00:00",
+      "archive": false,
+      "other_open_linkers": {},
+      "targets": [
+        {
+          "path": "tasks.md",
+          "line": 7,
+          "before": "*",
+          "after": "X",
+          "line_text": "- [*] #task Sign the offer [[mail/2026/261108_oak]]",
+          "mails": [
+            {
+              "note": "mail/2026/261108_oak.md",
+              "title": "Oak offer",
+              "who": "Bo",
+              "turn": "theirs",
+              "turn_since": "2026-11-06T10:00:00",
+              "gmail_url": ""
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "title": "Complete this email task?",
+        "subtitle": "tasks.md · Next → Done",
+        "tone": "calm",
+        "verb": "complete",
+        "rows": [
+          {
+            "path": "tasks.md",
+            "line": 7,
+            "label": "✉️ Oak offer · Bo",
+            "turn_line": "✈ You wrote Fri, Nov 6 — waiting on Bo",
+            "note": "mail/2026/261108_oak.md"
+          }
+        ],
+        "more": 0,
+        "consequence": "A reply from Bo reopens it.",
+        "digest": "84bbc12da564"
+      }
+    }
+  ]
+}

@@ -138,6 +138,9 @@ groups:
       - stem: mail-link-marks
         summary: "Mail link marks: the display-only reply badge, no-reply pill, and Also-replied tooltip pip on Gmail-watched tasks"
         order: 48
+      - stem: mail-close-card
+        summary: "Mail Close Card: the shared Gmail Task close model, copy, digest vectors, and per-surface confirmation contract"
+        order: 58
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
         order: 39

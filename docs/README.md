@@ -89,6 +89,7 @@ queued intake; full scans also synchronize annotations. The
 | [task-requirements.md](task-requirements.md) | Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors |
 | [props.md](props.md) | Note properties: ordered frontmatter inventory, ownership roles, guarded `bob props show` / `update`, undo, and JSON |
 | [task-drawers.md](task-drawers.md) | Task drawer headers: dual recognition, identity, Notes home, outside-text escape, source ranges, and marker JSON |
+| [mail-close-card.md](mail-close-card.md) | Mail Close Card: the shared Gmail Task close model, copy, digest vectors, and per-surface confirmation contract |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and

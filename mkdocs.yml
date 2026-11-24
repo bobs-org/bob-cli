@@ -131,6 +131,7 @@ plugins:
           - task-link-marks.md
           - task-tag-marks.md
           - mail-link-marks.md
+          - mail-close-card.md
           - today-marks.md
           - frees-marks.md
           - keep-moving-marks.md
@@ -374,6 +375,7 @@ nav:
               - "Log Recall": log-recall.md
               - "Task requirements": task-requirements.md
               - "Task drawers": task-drawers.md
+              - "Mail Close Card": mail-close-card.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md
