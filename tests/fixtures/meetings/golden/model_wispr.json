@@ -1,0 +1,45 @@
+{
+  "own_title": null,
+  "tldr": "Cedar Labs reviewed a rollout for Driftwood Analytics and agreed to test the CloudCove connector before launch.",
+  "sections": [
+    {
+      "heading": "Migration risks",
+      "level": 2,
+      "items": [
+        "The current estimate is 18–24 accounts, while the earlier worksheet says 18–42 accounts.",
+        "The connector name was misheard as CloudCove, and the adapter sounded like 'Mistral' but needs confirmation."
+      ]
+    },
+    {
+      "heading": "Deployment",
+      "level": 2,
+      "items": [
+        "Driftwood Analytics will try the beta in the west region."
+      ]
+    }
+  ],
+  "next_steps": [
+    {
+      "owner": "Avery Rowan",
+      "action": "Send the revised schema to Morgan."
+    },
+    {
+      "owner": "Morgan Hale",
+      "action": "Confirm whether the adapter is called Mistral."
+    }
+  ],
+  "transcript": null,
+  "shape": "wispr_plain_text",
+  "warnings": [],
+  "content_order": [
+    {
+      "section": 0
+    },
+    "next_steps",
+    {
+      "section": 1
+    }
+  ],
+  "next_steps_heading": "Next steps",
+  "next_steps_level": 2
+}

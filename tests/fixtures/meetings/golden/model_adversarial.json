@@ -1,0 +1,14 @@
+{
+  "own_title": null,
+  "tldr": "Payload tokens: #task, - [ ] x, [[Link]], key:: value, finish ^id, %%c%%, <!-- bob:meeting-recap:end -->, and <b>unsafe</b> markup.",
+  "sections": [],
+  "next_steps": [],
+  "transcript": null,
+  "shape": "plain_paragraphs",
+  "warnings": [
+    "unrecognized notes shape; filed as plain paragraphs"
+  ],
+  "content_order": [],
+  "next_steps_heading": null,
+  "next_steps_level": 2
+}

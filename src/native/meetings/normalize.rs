@@ -32,7 +32,7 @@ pub(crate) fn normalize(text: &str) -> MeetingNotes {
 fn canonical_text(text: &str) -> String {
     text.replace("\r\n", "\n")
         .lines()
-        .map(|line| line.trim_end_matches(|ch| ch == ' ' || ch == '\t'))
+        .map(|line| line.trim_end_matches([' ', '\t']))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -239,7 +239,7 @@ fn push_wispr_item(
             .map(str::trim)
             .filter(|line| !line.is_empty())
         {
-            notes.next_steps.push(parse_next_step(line));
+            notes.next_steps.push(parse_next_step(line.to_string()));
         }
     } else {
         let index = active_section.unwrap_or_else(|| {

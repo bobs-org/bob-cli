@@ -2,7 +2,7 @@ use std::{error::Error as StdError, fmt, ops::Range};
 
 use super::{ContentRef, MeetingNotes, RecapMeta};
 
-const BEGIN_PREFIX: &str = "<!-- bob:meeting-recap:begin v1 sha256:";
+const BEGIN_PREFIX: &str = "<!-- bob:meeting-recap:begin v1 ";
 const END_MARKER: &str = "<!-- bob:meeting-recap:end -->";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

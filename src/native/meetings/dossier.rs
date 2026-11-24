@@ -238,30 +238,28 @@ fn parse_body(
             index += 1;
             continue;
         }
-        if let Some((level, heading)) = atx_heading(line) {
-            if (2..=3).contains(&level) {
-                if heading.eq_ignore_ascii_case("transcript") {
-                    active = BodySection::Transcript;
-                } else if is_next_steps_heading(heading) {
-                    notes.next_steps_heading = Some(heading.to_string());
-                    notes.next_steps_level = level;
-                    notes.content_order.push(ContentRef::NextSteps);
-                    active = BodySection::NextSteps;
-                } else {
-                    let section_index = notes.sections.len();
-                    notes.sections.push(MeetingSection {
-                        heading: Some(heading.to_string()),
-                        level,
-                        items: Vec::new(),
-                    });
-                    notes
-                        .content_order
-                        .push(ContentRef::Section(section_index));
-                    active = BodySection::Section(section_index);
-                }
-                index += 1;
-                continue;
+        if let Some((level, heading)) = atx_heading(line)
+            && (2..=3).contains(&level)
+        {
+            if heading.eq_ignore_ascii_case("transcript") {
+                active = BodySection::Transcript;
+            } else if is_next_steps_heading(heading) {
+                notes.next_steps_heading = Some(heading.to_string());
+                notes.next_steps_level = level;
+                notes.content_order.push(ContentRef::NextSteps);
+                active = BodySection::NextSteps;
+            } else {
+                let section_index = notes.sections.len();
+                notes.sections.push(MeetingSection {
+                    heading: Some(heading.to_string()),
+                    level,
+                    items: Vec::new(),
+                });
+                notes.content_order.push(ContentRef::Section(section_index));
+                active = BodySection::Section(section_index);
             }
+            index += 1;
+            continue;
         }
 
         if line.starts_with("- ") {
@@ -345,7 +343,7 @@ fn tldr_fence(line: &str) -> Option<&str> {
     class_fence(line, "meeting-tldr")
 }
 
-fn class_fence(line: &str, class_name: &str) -> Option<&str> {
+fn class_fence<'a>(line: &'a str, class_name: &str) -> Option<&'a str> {
     let (fence, class) = line.trim().split_once(' ')?;
     if class != format!("{{.{class_name}}}")
         || fence.len() < 3

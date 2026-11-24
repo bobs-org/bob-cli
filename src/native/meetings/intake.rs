@@ -104,7 +104,7 @@ pub(crate) fn read_notes(
     let normalized = without_bom
         .replace("\r\n", "\n")
         .lines()
-        .map(|line| line.trim_end_matches(|ch| ch == ' ' || ch == '\t'))
+        .map(|line| line.trim_end_matches([' ', '\t']))
         .collect::<Vec<_>>()
         .join("\n");
     if normalized.trim().is_empty() {

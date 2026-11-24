@@ -1,0 +1,35 @@
+{
+  "own_title": "Project Seaglass planning",
+  "tldr": "The team reviewed the latest HarborDesk rollout and selected a smaller pilot.",
+  "sections": [
+    {
+      "heading": "Decisions",
+      "level": 2,
+      "items": [
+        "Keep the pilot to twelve shops.",
+        "Preserve the current account migration window."
+      ]
+    }
+  ],
+  "next_steps": [
+    {
+      "owner": "Morgan Vale",
+      "action": "Confirm the revised HarborDesk schedule."
+    },
+    {
+      "owner": null,
+      "action": "Send the checklist to Cedar Labs."
+    }
+  ],
+  "transcript": "Morgan: The schedule sounded like late June, though the worksheet says July.\nAvery: I will confirm the date after the deployment review.",
+  "shape": "markdown",
+  "warnings": [],
+  "content_order": [
+    {
+      "section": 0
+    },
+    "next_steps"
+  ],
+  "next_steps_heading": "Next steps",
+  "next_steps_level": 2
+}

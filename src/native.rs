@@ -83,7 +83,7 @@ mod ledger_place;
 mod log_history;
 mod markdown;
 // Implemented as a pure notes layer first; later meeting phases wire production callers.
-#[allow(dead_code)]
+#[allow(dead_code, unused_imports)]
 pub(crate) mod meetings;
 mod nightly;
 pub(crate) mod note_catalog;
