@@ -66,6 +66,9 @@ pub(super) struct ReadingInsertInputs<'a> {
     pub mark: char,
     /// Already-formatted warning text, indented as a child bullet here.
     pub warning_child: Option<String>,
+    /// Already-formatted extra child lines in birth order after any warning
+    /// (for example a meeting LINKS line then meeting warnings).
+    pub extra_children: Vec<String>,
     /// A reopen's old (possibly user-renamed) address, reused when free.
     pub prefer_block_id: Option<&'a str>,
 }
@@ -89,11 +92,12 @@ pub(super) fn execute_reading_insert(
         &birth_preview_id(inputs.ref_stem, inputs.reading.as_ref()),
         reading_number,
     );
-    let children = inputs
+    let mut children = inputs
         .warning_child
         .map(|warning| format!("  - {warning}"))
         .into_iter()
         .collect::<Vec<_>>();
+    children.extend(inputs.extra_children);
     let inserted = insert_ref_task_with_preferred_id(
         inputs.bob_dir,
         &destination,

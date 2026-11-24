@@ -22,6 +22,7 @@ fn insert_inputs<'a>(
         created: "2026-10-09",
         mark,
         warning_child: None,
+        extra_children: Vec::new(),
         prefer_block_id: prefer,
     }
 }

@@ -14,6 +14,7 @@ pub(crate) mod dependencies;
 pub(crate) mod freshness;
 pub(crate) mod gcal;
 pub(crate) mod gmail;
+pub(crate) mod meetings;
 pub(crate) mod plan;
 pub(crate) mod plugins;
 pub(crate) mod relations;
@@ -40,6 +41,10 @@ pub(crate) use gmail::{
 };
 #[cfg(test)]
 pub(crate) use gmail::{GmailPullSettings, GmailSyncSettings};
+#[allow(unused_imports)]
+pub(crate) use meetings::{
+    load_meetings_config, parse_meetings_config, MeetingsConfig,
+};
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
 #[allow(unused_imports)]
 pub(crate) use plugins::{
@@ -505,6 +510,8 @@ pub(crate) struct RawConfig {
     properties: Vec<RawProperty>,
     #[serde(default)]
     highlights: Option<RawHighlights>,
+    #[serde(default)]
+    pub(crate) meetings: Option<serde_yaml::Value>,
     #[serde(default)]
     gkeep: Option<RawGkeep>,
     #[serde(default)]

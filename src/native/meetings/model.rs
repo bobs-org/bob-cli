@@ -427,7 +427,7 @@ pub(crate) fn filed_index_for(vault: &Path) -> Option<FiledNotesIndex> {
 }
 
 /// Parse an `event` frontmatter wikilink into `(note, block id)`.
-fn parse_event_link(value: &str) -> Option<(String, String)> {
+pub(crate) fn parse_event_link(value: &str) -> Option<(String, String)> {
     let value = value.trim().trim_matches('"').trim();
     let inner = value
         .strip_prefix("[[")

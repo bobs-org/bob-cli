@@ -23,6 +23,7 @@
 //! caller wires it.
 
 mod agenda;
+mod birth;
 #[cfg_attr(not(test), allow(dead_code))]
 mod dossier;
 #[cfg_attr(not(test), allow(dead_code))]
@@ -48,6 +49,9 @@ mod tests;
 pub(crate) use agenda::{agenda_meetings, MeetingNotesState};
 
 // These crate-facing APIs are staged for the meeting-reference integration phases.
+pub(crate) use birth::{
+    meeting_links_child, render_birth_recap, render_empty_recap,
+};
 #[allow(unused_imports)]
 pub(crate) use dossier::{
     parse_dossier, render_dossier, DossierDocument, DossierError,
@@ -56,6 +60,8 @@ pub(crate) use dossier::{
 pub(crate) use intake::{
     read_notes, NotesError, NotesInput, NotesSource, MAX_NOTES_BYTES,
 };
+#[allow(unused_imports)]
+pub(crate) use model::{parse_event_link, vault_index};
 #[allow(unused_imports)]
 pub(crate) use normalize::normalize;
 #[allow(unused_imports)]

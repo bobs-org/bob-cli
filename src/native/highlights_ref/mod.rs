@@ -62,6 +62,7 @@ mod listen;
 mod listen_feed;
 mod marker;
 mod marker_write;
+mod meeting_birth;
 mod model;
 mod note;
 // Model and serializer are intentionally defined before their production callers;

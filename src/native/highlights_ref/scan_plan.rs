@@ -2383,6 +2383,7 @@ mod tests {
             },
             status_normalization: StatusNormalization::default(),
             observations: PlanDependencyObservations::default(),
+            meeting_birth: None,
         }
     }
 

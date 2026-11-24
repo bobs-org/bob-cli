@@ -730,6 +730,7 @@ pub(super) fn plan_pdf_sync(
             consulted_vault_links,
             ..PlanDependencyObservations::default()
         },
+        meeting_birth: None,
     })
 }
 
@@ -1103,48 +1104,104 @@ fn plan_pdf_sync_v2(
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("ref");
+    // Meeting birth: a `meetings` PDF whose marker carries `event` births
+    // one LINKS child and the recap region, identically inline and on the
+    // queued drain. Validation failures are config errors; missing events
+    // or stores birth with warnings instead of failing.
+    let meeting_birth = if !note.exists() {
+        meeting_birth::plan_meeting_birth(
+            config,
+            pdf,
+            &marker_projection,
+            &marker.source_pdf_sha256,
+            pdf_stem,
+            stable_metadata.ref_type.as_deref(),
+            residence.as_deref(),
+        )?
+    } else {
+        None
+    };
     // Render the body: births use the managed-embed anatomy (no in-note
     // tracker); existing notes heal the embed slot and keep highlights
     // rendering; missing/refused notes never invent a target.
+    // Meeting births carry the recap between the embed and Highlights.
     let rendered_body = if !note.exists() {
         match &reading_plan.action {
             ReadingTaskAction::Insert { .. } => {
                 let route = residence.as_deref().unwrap_or("mac_inbox");
-                v2_birth_body(
-                    &note_title(pdf, &synced_pf),
-                    route,
-                    &ref_tasks_mod::birth_preview_id(
-                        pdf_stem,
-                        insert_reading.as_ref(),
-                    ),
-                    highlights_content,
-                    stable_metadata.audio.as_deref(),
-                )
-            }
-            _ => {
-                if let Some(embed) = reading_plan.embed.as_ref() {
-                    v2_birth_body(
-                        &note_title(pdf, &synced_pf),
-                        &embed.target,
-                        &embed.block_id,
+                let title = note_title(pdf, &synced_pf);
+                let preview_id = ref_tasks_mod::birth_preview_id(
+                    pdf_stem,
+                    insert_reading.as_ref(),
+                );
+                if let Some(birth) = meeting_birth.as_ref() {
+                    meeting_birth::meeting_birth_body(
+                        &title,
+                        route,
+                        &preview_id,
+                        &birth.recap,
                         highlights_content,
                         stable_metadata.audio.as_deref(),
                     )
                 } else {
                     v2_birth_body(
-                        &note_title(pdf, &synced_pf),
-                        birth_route.as_deref().unwrap_or("mac_inbox"),
-                        &format!(
-                            "ref-{}",
-                            ref_tasks_mod::slug_ref_stem(
-                                pdf.file_stem()
-                                    .and_then(|stem| stem.to_str())
-                                    .unwrap_or("ref"),
-                            )
-                        ),
+                        &title,
+                        route,
+                        &preview_id,
                         highlights_content,
                         stable_metadata.audio.as_deref(),
                     )
+                }
+            }
+            _ => {
+                if let Some(embed) = reading_plan.embed.as_ref() {
+                    let title = note_title(pdf, &synced_pf);
+                    if let Some(birth) = meeting_birth.as_ref() {
+                        meeting_birth::meeting_birth_body(
+                            &title,
+                            &embed.target,
+                            &embed.block_id,
+                            &birth.recap,
+                            highlights_content,
+                            stable_metadata.audio.as_deref(),
+                        )
+                    } else {
+                        v2_birth_body(
+                            &title,
+                            &embed.target,
+                            &embed.block_id,
+                            highlights_content,
+                            stable_metadata.audio.as_deref(),
+                        )
+                    }
+                } else {
+                    let title = note_title(pdf, &synced_pf);
+                    let fallback_id = format!(
+                        "ref-{}",
+                        ref_tasks_mod::slug_ref_stem(
+                            pdf.file_stem()
+                                .and_then(|stem| stem.to_str())
+                                .unwrap_or("ref"),
+                        )
+                    );
+                    if let Some(birth) = meeting_birth.as_ref() {
+                        meeting_birth::meeting_birth_body(
+                            &title,
+                            birth_route.as_deref().unwrap_or("mac_inbox"),
+                            &fallback_id,
+                            &birth.recap,
+                            highlights_content,
+                            stable_metadata.audio.as_deref(),
+                        )
+                    } else {
+                        v2_birth_body(
+                            &title,
+                            birth_route.as_deref().unwrap_or("mac_inbox"),
+                            &fallback_id,
+                            highlights_content,
+                            stable_metadata.audio.as_deref(),
+                        )
+                    }
                 }
             }
         }
@@ -1283,6 +1340,7 @@ fn plan_pdf_sync_v2(
             consulted_lineage,
             complete: true,
         },
+        meeting_birth,
     })
 }
 
@@ -2592,6 +2650,14 @@ fn execute_v2_reading_action(
                 .date()
                 .format("%Y-%m-%d")
                 .to_string();
+            let extra_children =
+                plan.meeting_birth.as_ref().map_or_else(Vec::new, |birth| {
+                    meeting_birth::meeting_birth_children(
+                        &birth.relation_label,
+                        birth.event_link.as_deref(),
+                        &birth.warnings,
+                    )
+                });
             let execution = execute_reading_insert(ReadingInsertInputs {
                 bob_dir: &config.bob_dir,
                 destination_route,
@@ -2602,6 +2668,7 @@ fn execute_v2_reading_action(
                 created: &created,
                 mark: *mark,
                 warning_child: warning_child.clone(),
+                extra_children,
                 prefer_block_id: prefer_block_id.as_deref(),
             })?;
             let target = execution

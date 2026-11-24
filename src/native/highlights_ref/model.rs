@@ -693,6 +693,7 @@ pub(super) struct PdfSyncPlan {
     pub(super) pdf_task_signal: PdfTaskStatusSignal,
     pub(super) status_normalization: StatusNormalization,
     pub(super) observations: PlanDependencyObservations,
+    pub(super) meeting_birth: Option<super::meeting_birth::MeetingBirth>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
