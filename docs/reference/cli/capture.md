@@ -127,6 +127,9 @@ Options:
   -j, --jump-offer <N|KEY>
           Focus this offer or requirement after the capture (any verdict); one pick
 
+  -C, --mail-close <DIGEST>
+          Confirm closing Gmail Tasks; DIGEST is the 12-hex value from a dry-run's mail_close.digest
+
   -m, --move-in <PICKS>
           Answer a - ^^ move choice: none, all, or a comma list of row numbers and keys; a leading : also links; repeatable
 

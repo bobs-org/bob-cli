@@ -576,6 +576,9 @@ pub(super) struct CaptureResult {
     /// Additive and omitted when empty; dry-run and commit share these bytes.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) walk_files: Vec<WalkFileJson>,
+    /// Guarded Gmail Task closes. Absent when nothing is guarded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) mail_close: Option<MailCloseReport>,
 }
 
 /// One Pomodoro name agreement applied to today's daily note.
@@ -660,6 +663,7 @@ impl CaptureResult {
             note_files,
             album_files,
             walk_files,
+            mail_close: None,
         }
     }
 }
@@ -2658,6 +2662,9 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         print_album_files(result);
         print_walk_files(result);
         print_jump_receipt(result);
+        if let Some(report) = result.mail_close.as_ref() {
+            print_mail_close_block(report, false);
+        }
         return;
     }
 
@@ -2703,6 +2710,9 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     print_album_files(result);
     print_walk_files(result);
     print_jump_receipt(result);
+    if let Some(report) = result.mail_close.as_ref() {
+        print_mail_close_block(report, false);
+    }
 }
 
 fn print_jump_receipt(result: &CaptureResult) {
@@ -7857,6 +7867,12 @@ pub(super) fn print_capture_error(
         OutputFormat::Human => {
             eprintln!("{COMMAND_NAME}: {}", error.message);
             if let Some(extra) = &error.extra {
+                if let Some(value) = extra.get("mail_close")
+                    && let Ok(report) =
+                        serde_json::from_value::<MailCloseReport>(value.clone())
+                {
+                    print_mail_close_block(&report, true);
+                }
                 if let Some(draft) =
                     extra.get("draft").and_then(|value| value.as_str())
                 {

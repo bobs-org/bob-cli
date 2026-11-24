@@ -123,6 +123,7 @@ pub(crate) fn link_existing_task(
             req_jump: None,
             req_aware: false,
             req_outcomes: Vec::new(),
+            mail_close: None,
         };
         commit_capture_batch(&mut batch, bob_dir)?;
     }

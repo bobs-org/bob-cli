@@ -39,6 +39,7 @@ mod inbox_route;
 mod keep_moving;
 mod link_guard;
 mod lists;
+mod mail_close;
 mod meet_continuation_last;
 mod meet_event_default;
 mod meet_event_run;

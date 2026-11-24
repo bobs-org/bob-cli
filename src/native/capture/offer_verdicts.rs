@@ -1162,6 +1162,7 @@ mod disk_guard_tests {
             forced_drawer: None,
             inbox_routes: Vec::new(),
             move_in: None,
+            mail_close: None,
             no_clip: true,
             no_ref: true,
             pull_in: None,

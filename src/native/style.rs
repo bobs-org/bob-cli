@@ -93,6 +93,11 @@ impl Styler {
         self.paint("33;1", text)
     }
 
+    /// 256-color orange for warning-tone Mail Close Card copy.
+    pub(crate) fn orange(&self, text: &str) -> String {
+        self.paint("38;5;208;1", text)
+    }
+
     pub(crate) fn blue(&self, text: &str) -> String {
         self.paint("34;1", text)
     }

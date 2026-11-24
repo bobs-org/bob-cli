@@ -46,7 +46,7 @@ bob plan -f json -b /path/to/synthetic-vault
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, the selected provider and entry ages on success, or a refusal `code` and message. Clipboard and history text are never included | `schema_version: 1` | [Capture](../capture.md#clipboard) |
-| `bob capture` | `-f json` | Capture effects, notebook/record results, file previews, and attachment warnings/refusals. Optional `requirements[]` reports owner, added count (including nested requirements), note filing, and summary. Preview lines add optional `req: {depth, state}`. Record creates report changed neighbours in `walk_files[]` | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [task requirements](../task-requirements.md#5-authoring) |
+| `bob capture` | `-f json` | Capture effects, notebook/record results, file previews, and attachment warnings/refusals. Optional `requirements[]` reports owner, added count (including nested requirements), note filing, and summary. Preview lines add optional `req: {depth, state}`. Record creates report changed neighbours in `walk_files[]` | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [task requirements](../task-requirements.md#5-authoring), [Mail-close results](#mail-close-results) |
 | `bob capture-parse` | `-f json` | Per-item modes, spans, diagnostics, and needs (`grammar: 29`). Requirement markers carry `depth`; refusals include `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`. Notebook modes carry `notebook: true` spans | `schema_version: 1` | [Capture parse](../capture.md#bob-capture-parse) |
 | `bob capture-complete` | `-f json` | Contexts, candidates, replacement ranges, pickers, effects, and creation choices. `work_log` recalls Work Log phrases. `-L` completes prose wikilinks; `-T` adds `((` task links and `-S PATH` supplies same-note context (both require `-L`). `-n` offers the first missing required record field; `-F KEY` offers values for a named field. Neither edits the draft | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
@@ -326,15 +326,12 @@ in `copy`; `then` is a string or `null`. Example:
 }
 ```
 
-Rows follow shared movable-root eligibility in parent order. Every field is
-present (`null` when inapplicable).
-
-Repeatable `-m, --move-in` values union selections: bare numbers or keys mean
-move (`^`), and a leading `:` means move and link. `all` moves every enabled,
-unlocked row; `none` moves none.
-
-These write-free refusals follow Pomodoro-override, lexical, and move-bullet
-refusals, before `pull_in_choice_required` and `inbox_route_choice_required`:
+Rows follow shared movable-root eligibility in parent order; every field is
+present (`null` when inapplicable). Repeatable `-m, --move-in` values union
+selections: numbers or keys move (`^`); a leading `:` also links; `all` /
+`none` select every enabled unlocked row or none. These write-free refusals
+follow Pomodoro-override, lexical, and move-bullet refusals, before
+`pull_in_choice_required` and `inbox_route_choice_required`:
 
 | Code | Trigger |
 | --- | --- |
@@ -352,15 +349,18 @@ Exit codes match the pull-in and inbox-route refusals.
 
 Successful captures, including dry runs, return `inbox_route` with
 `supported: true`, `candidate_count`, `routed_count`, `kept_count`, and
-`candidates`. Each candidate is an existing top-level inbox task block whose
-root or nested task changes status; new tasks are excluded. Each has an opaque
-`key`, a 1-based `n`, the root's before/after status, an `answer` (initially
-`null`), and an `outcome` (`pending`, `kept`, or `moved`).
-`destinations` is present only when candidates exist.
+`candidates` (existing top-level inbox task blocks whose status changes;
+new tasks excluded). Each has `key`, 1-based `n`, before/after status,
+`answer`, and `outcome` (`pending`, `kept`, or `moved`).
+`destinations` is present only when candidates exist. See the
+[inbox-routing contract](../capture.md#routing-inbox-tasks-out).
 
-See the
-[inbox-routing contract](../capture.md#routing-inbox-tasks-out) for answer
-syntax, guard errors, and atomic-write guarantees.
+### Mail-close results
+
+Guarded Gmail Task closes add `mail_close` (`digest`, `verb`, card copy,
+`confirm`, uncapped `tasks[]`). Real runs refuse unless
+`-C, --mail-close DIGEST` matches. See
+[Confirming email-task closes](../capture.md#confirming-email-task-closes).
 
 ### Similar-task draft results
 

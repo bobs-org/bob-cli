@@ -539,6 +539,7 @@ mod tests {
             req_jump: None,
             req_aware: false,
             req_outcomes: Vec::new(),
+            mail_close: None,
         }
     }
 

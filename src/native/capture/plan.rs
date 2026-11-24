@@ -103,6 +103,9 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) req_aware: bool,
     /// Applied requirement receipts, filled after the final plan.
     pub(super) req_outcomes: Vec<super::req_choice::ReqOutcomeJson>,
+    /// Guarded Gmail Task closes in the final plan. Absent when nothing
+    /// is guarded.
+    pub(super) mail_close: Option<MailCloseReport>,
 }
 
 /// One reference item's staged ref job plus its position in the
@@ -1269,6 +1272,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         }
     }
     album_files.sort_by(|left, right| left.path.cmp(&right.path));
+    let mail_close = detect_mail_close(&planner, request, &task_settings);
     Ok(PlannedCaptureBatch {
         items,
         read_guards: std::mem::take(&mut planner.read_guards),
@@ -1302,6 +1306,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         req_jump,
         req_aware: super::req_choice::is_req_aware(request),
         req_outcomes: Vec::new(),
+        mail_close,
     })
 }
 

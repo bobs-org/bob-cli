@@ -902,6 +902,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "mail-close",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "jobs",
         kind: Kind::FreeText,
     },

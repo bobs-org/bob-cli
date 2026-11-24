@@ -96,6 +96,7 @@ fn capture_help_lists_options_alphabetically() {
             "-h, --help",
             "-i, --inbox-route",
             "-j, --jump-offer",
+            "-C, --mail-close",
             "-m, --move-in",
             "-n, --no-clip",
             "-R, --no-ref",

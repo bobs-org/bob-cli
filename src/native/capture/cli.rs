@@ -626,6 +626,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(help_arg())
         .arg(inbox_route_arg())
         .arg(jump_offer_arg())
+        .arg(mail_close_arg())
         .arg(move_in_arg())
         .arg(no_clip_arg())
         .arg(no_ref_arg())
@@ -742,6 +743,16 @@ pub(super) fn jump_offer_arg() -> Arg {
         .short('j')
         .value_name("N|KEY")
         .help("Focus this offer or requirement after the capture (any verdict); one pick")
+}
+
+pub(super) fn mail_close_arg() -> Arg {
+    Arg::new("mail-close")
+        .long("mail-close")
+        .short('C')
+        .value_name("DIGEST")
+        .help(
+            "Confirm closing Gmail Tasks; DIGEST is the 12-hex value from a dry-run's mail_close.digest",
+        )
 }
 
 pub(super) fn move_in_arg() -> Arg {
@@ -942,6 +953,9 @@ pub(super) struct CaptureRequest {
     pub(super) forced_drawer: Option<String>,
     pub(super) inbox_routes: Vec<InboxRoutePick>,
     pub(super) move_in: Option<super::move_choice::MoveInPicks>,
+    /// `--mail-close DIGEST` from the caller. `None` when the flag was
+    /// omitted; a digest with nothing to guard is ignored.
+    pub(super) mail_close: Option<String>,
     pub(super) no_clip: bool,
     pub(super) no_ref: bool,
     pub(super) pull_in: Option<PullInPicks>,
@@ -1039,6 +1053,7 @@ impl CaptureRequest {
                     .unwrap_or_default();
                 super::move_choice::merge_move_in_picks(values)
             },
+            mail_close: matches.get_one::<String>("mail-close").cloned(),
             no_clip: matches.get_flag("no-clip"),
             no_ref: matches.get_flag("no-ref"),
             pull_in: matches

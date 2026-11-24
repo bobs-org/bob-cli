@@ -98,7 +98,7 @@ and is never guarded.
 | Surface | Refusal / card | Confirm | Open thread | Keep |
 | ------- | -------------- | ------- | ----------- | ---- |
 | Obsidian (every nav- and cycler-owned close, incl. checkbox clicks in Live Preview and Reading view of the task's own note) | Mail Close Card modal | `y` | ⌘↵ / Ctrl+↵ opens the first row's `gmail_url` and keeps the task | any other key, Esc, `q`, Ctrl+[, click outside |
-| `bob capture` | refuses the real run unless `-m`/`--mail-close DIGEST` equals the computed digest; dry-run and human output carry the `mail_close` payload | rerun with `-m DIGEST` | the payload's `confirm` prints the exact rerun command | refusal writes nothing, exit 1 (`mail_close_confirmation_required` without a digest, `mail_close_confirmation_mismatch` when it differs) |
+| `bob capture` | refuses the real run unless `-C`/`--mail-close DIGEST` equals the computed digest; dry-run and human output carry the `mail_close` payload | rerun with `--mail-close DIGEST` | the payload's `confirm` prints the exact rerun command | refusal writes nothing, exit 1 (`mail_close_confirmation_required` without a digest, `mail_close_confirmation_mismatch` when it differs) |
 | Bob Mac Capture | preview banner plus a Mail Close card built from bob's refusal payload | `Y` re-dispatches with `--mail-close DIGEST` | ⌘↩ opens the first row's `gmail_url` and keeps the card | Return hints and stays, Escape / `q` / Ctrl+[ return to the unchanged draft |
 
 Keeping inside a modal leaves the modal open with its input: the Task
@@ -167,7 +167,7 @@ and filter later.
 ## Prompt-once and fail-closed
 
 A gesture prompts at most once. In Obsidian the confirmation travels as
-`context.mailCloseConfirmed`; in `bob capture` it is the `-m DIGEST`
+`context.mailCloseConfirmed`; in `bob capture` it is the `--mail-close DIGEST`
 rerun; on the Mac it is the `--mail-close DIGEST` re-dispatch. A digest
 with nothing to guard is ignored.
 

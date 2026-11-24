@@ -3267,6 +3267,7 @@ mod tests {
             forced_drawer: None,
             inbox_routes: Vec::new(),
             move_in: None,
+            mail_close: None,
             no_clip: false,
             no_ref: false,
             pull_in: None,

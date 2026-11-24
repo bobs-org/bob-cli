@@ -902,7 +902,7 @@ fn blame_by_task_candidate(
     }
 }
 
-fn pair_task_lines(
+pub(super) fn pair_task_lines(
     original: &str,
     current: &str,
     original_scan: &note_tasks::NoteTaskScan,
@@ -1245,6 +1245,7 @@ mod tests {
                 destination: Some("health".to_string()),
             }],
             move_in: None,
+            mail_close: None,
             no_clip: true,
             no_ref: false,
             pull_in: None,

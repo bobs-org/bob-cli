@@ -42,6 +42,7 @@ workflow guide.
   - [Relating existing tasks with '&' and '*'](#relating-existing-tasks)
   - [Linking tasks with '~' and '~~'](#linking-tasks)
   - [Completing tasks with '!'](#completing-tasks-with)
+  - [Confirming email-task closes](#confirming-email-task-closes)
   - [Routing inbox tasks out](#routing-inbox-tasks-out)
   - [Plan budget](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
@@ -3352,7 +3353,8 @@ use `!foo:bar`, nested notes use `!projects/foo:bar`, and notes with
 whitespace or reserved punctuation use a quoted component such as
 `!"Shopping List":milk` (inside quotes only `\"` and `\\` are escapes).
 Single-quote the draft on shells that history-expand `!`:
-`bob capture '!sase:fix-flaky'`.
+`bob capture '!sase:fix-flaky'`. Completing a Gmail Task asks first; see
+[Confirming email-task closes](#confirming-email-task-closes).
 
 A complete token must be the entire capture item: no body text, children,
 `%`, `s:`, `$<N>`, `#name`, `=…`, `@@`, or forced destination flags.
@@ -3598,6 +3600,33 @@ exit 2 and I/O-class errors exit 1:
 | Missing ID (with a close-match suggestion when one is close) | 1 | `no task with block ID ^missing in sase.md (run 'bob capture-tasks -r sase.md' to list task block IDs)` |
 | Duplicate ID | 1 | `block ID ^dup appears 2 times in sase.md; make it unique before capturing` |
 | Non-task line | 1 | `^nt1 in sase.md is not a task (line 6: plain line ^nt1)` |
+
+### Confirming email-task closes
+
+Closing a [Gmail Task](mail-close-card.md#what-a-gmail-task-is) asks first.
+After every item and post-pass, `bob capture` diffs the staged plan and
+collects open→closed transitions whose original block is a Gmail Task
+(`!` completes, successor `-x`/`-X`, relation complete and cancel, and
+Pomodoro `x!` embedded closes included). Reopens, merge-retirement
+tombstones, automation, requirement lines, and tasks this capture created
+are not guarded; see [Mail Close Card](mail-close-card.md#exemptions).
+
+A dry run reports a top-level `mail_close` object (`digest`, `verb`,
+`title`, `subtitle`, `tone`, `consequence`, `confirm`, and uncapped
+`tasks[]`) and writes nothing. A real run with guarded rows refuses
+unless `-C, --mail-close DIGEST` equals that digest. Codes:
+
+| Code | Trigger |
+| --- | --- |
+| `mail_close_confirmation_required` | The plan would close a Gmail Task and no digest was given |
+| `mail_close_confirmation_mismatch` | `--mail-close` was given but does not match this plan |
+
+Both return exit 1, write nothing, and flatten `mail_close` into the
+error JSON (`{ok:false, error, code, mail_close}`). A digest with
+nothing to guard is ignored. `confirm` is the exact rerun command,
+quoted like `bob gmail send`. Human output prints the same card strings,
+then `Nothing was written.` and `Confirm with:`. The shared copy, digest,
+and orphaned-thread rules live in [mail-close-card.md](mail-close-card.md).
 
 ### Routing inbox tasks out
 
@@ -7888,6 +7917,10 @@ Useful options:
 - `-x, --complete-offer PICKS`: mark successor offer(s) Done
   (`PICKS` is a comma list of offer numbers and/or keys); repeatable.
   See [task-dependencies.md §12.14](task-dependencies.md#1214-cli-selection)
+- `-C, --mail-close DIGEST`: confirm closing Gmail Tasks; `DIGEST` is the
+  12-hex value from a dry-run's `mail_close.digest`. A real run that would
+  close a Gmail Task refuses without a matching digest. See
+  [Confirming email-task closes](#confirming-email-task-closes)
 - `-m, --move-in PICKS`: answer a `- ^^` move choice with `none`, `all`, or a
   comma list of row numbers and keys; a leading `:` also links the row;
   repeatable. See [Choosing parent tasks in](#choosing-parent-tasks-in)
@@ -7942,9 +7975,11 @@ call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`,
 `placement`, `open_notes`, `jump` (when `-j` is used), `pull_in`,
-`inbox_route`, and `move_choice`
+`inbox_route`, `move_choice`
 (`supported: true` on every success; see [Routing inbox tasks out](#routing-inbox-tasks-out)
-and [Choosing parent tasks in](#choosing-parent-tasks-in)).
+and [Choosing parent tasks in](#choosing-parent-tasks-in)),
+and `mail_close` when the plan would close a Gmail Task
+(see [Confirming email-task closes](#confirming-email-task-closes)).
 `open_notes` is a batch-level array on every success (dry-run and real run
 alike); see [Open notes](#open-notes). The
 template path additionally returns `template: {line, field_count, row_count}`
@@ -7970,8 +8005,9 @@ when empty); see [Record notes](#record-notes). On JSON-mode failures, stdout is
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on
 `pull_in_choice_required`, `offer_jump_stale`,
-`inbox_route_choice_required`, `inbox_route_stale`, `inbox_route_refused`, and
-move-choice refusal codes.
+`inbox_route_choice_required`, `inbox_route_stale`, `inbox_route_refused`,
+move-choice refusal codes, `mail_close_confirmation_required`, and
+`mail_close_confirmation_mismatch`.
 
 A reference item (`kind: "ref"`) uses `placement: "queued"` or
 `"unchanged"`, leaves `task_line` empty, and carries the additive `ref`

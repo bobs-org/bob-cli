@@ -9,11 +9,9 @@ mod attach;
 pub(crate) mod body;
 pub(crate) mod capture;
 pub(crate) mod cli;
-/// Wired by the capture phase; covered by unit and vector tests until then.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod close_guard;
 mod compose;
-mod config;
+pub(crate) mod config;
 mod doctor;
 mod gog;
 pub(crate) mod ids;

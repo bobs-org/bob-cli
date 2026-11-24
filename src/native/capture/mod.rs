@@ -69,6 +69,7 @@ mod inbox_route;
 mod jump;
 mod keep_moving_net;
 mod link_guard;
+mod mail_close;
 mod meet_event_run;
 mod merge_in;
 mod merge_in_pending;
@@ -134,6 +135,7 @@ use ensure_next::*;
 use event_conflict::*;
 use inbox_route::*;
 use link_guard::*;
+use mail_close::*;
 use meet_event_run::*;
 use note_pull::*;
 use open_notes::*;
@@ -428,6 +430,11 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             &batch.move_choice,
         ));
     }
+    if !request.dry_run
+        && let Some(report) = batch.mail_close.as_ref()
+    {
+        refuse_unconfirmed(&request, report)?;
+    }
     append_plan_budget(&request, &mut batch)?;
     let theme_refs = append_theme_refs(&request, &mut batch);
     append_unconfigured_theme_warnings(&request, &mut batch);
@@ -524,6 +531,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.album_files,
         batch.walk_files,
     );
+    result.mail_close = batch.mail_close;
     result.warnings.extend(hide_failures);
     result.warnings.extend(origin_failures);
     result.theme_refs = theme_refs;
