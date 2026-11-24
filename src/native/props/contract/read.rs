@@ -153,7 +153,7 @@ impl<'a> View<'a> {
         let mut seen = std::collections::BTreeSet::new();
         seen.insert(start.to_path_buf());
         while let Some(current) = stack.pop() {
-            for (path, _) in &self.snapshot.files {
+            for path in self.snapshot.files.keys() {
                 if seen.contains(path) {
                     continue;
                 }
@@ -502,15 +502,15 @@ fn color_slot(view: &View<'_>, path: &Path) -> Option<(String, String)> {
         if !seen.insert(node.clone()) {
             break;
         }
-        if let Some(facts) = view.facts(&node) {
-            if matches!(
+        if let Some(facts) = view.facts(&node)
+            && matches!(
                 facts.kind,
                 crate::native::pomodoro_homes::NoteKind::Area
                     | crate::native::pomodoro_homes::NoteKind::Project
-            ) && facts.color.is_some()
-            {
-                return Some((View::slash(&node), View::stem(&node)));
-            }
+            )
+            && facts.color.is_some()
+        {
+            return Some((View::slash(&node), View::stem(&node)));
         }
         current = view.parent_of(&node);
     }
@@ -599,20 +599,15 @@ fn type_slot(
         if !seen.insert(node.clone()) {
             break;
         }
-        if let Some(facts) = view.facts(&node) {
-            if matches!(
+        if let Some(facts) = view.facts(&node)
+            && matches!(
                 facts.kind,
                 crate::native::pomodoro_homes::NoteKind::Area
                     | crate::native::pomodoro_homes::NoteKind::Project
-            ) {
-                if let Some(theme) = facts.theme.clone() {
-                    return Some((
-                        View::slash(&node),
-                        View::stem(&node),
-                        theme,
-                    ));
-                }
-            }
+            )
+            && let Some(theme) = facts.theme.clone()
+        {
+            return Some((View::slash(&node), View::stem(&node), theme));
         }
         current = view.parent_of(&node);
     }
@@ -691,15 +686,15 @@ fn clock_slot(
         if !seen.insert(node.clone()) {
             break;
         }
-        if let Some(facts) = view.facts(&node) {
-            if matches!(
+        if let Some(facts) = view.facts(&node)
+            && matches!(
                 facts.kind,
                 crate::native::pomodoro_homes::NoteKind::Area
                     | crate::native::pomodoro_homes::NoteKind::Project
-            ) && (facts.offclock.is_some() || facts.offclock_types.is_some())
-            {
-                return Some((View::slash(&node), View::stem(&node), facts));
-            }
+            )
+            && (facts.offclock.is_some() || facts.offclock_types.is_some())
+        {
+            return Some((View::slash(&node), View::stem(&node), facts));
         }
         current = view.parent_of(&node);
     }
@@ -1101,18 +1096,16 @@ fn first_prj_line(contents: &str) -> Option<(usize, String)> {
 }
 
 fn criterion_of(line: &str) -> Option<String> {
-    let text = line
-        .trim_start()
-        .trim_start_matches(|ch| ch == '>' || ch == ' ' || ch == '\t');
+    let text = line.trim_start().trim_start_matches(['>', ' ', '\t']);
     let after = text.split_once("] ")?.1;
     let mut out = String::new();
     let mut rest = after;
     while !rest.is_empty() {
-        if rest.starts_with('[') {
-            if let Some(end) = rest.find(']') {
-                rest = &rest[end + 1..];
-                continue;
-            }
+        if rest.starts_with('[')
+            && let Some(end) = rest.find(']')
+        {
+            rest = &rest[end + 1..];
+            continue;
         }
         if rest.starts_with('#') || rest.starts_with('^') {
             if let Some((token, tail)) = rest.split_once(' ') {
@@ -1122,10 +1115,7 @@ fn criterion_of(line: &str) -> Option<String> {
             }
             break;
         }
-        let (token, tail) = rest
-            .split_once(' ')
-            .map(|(token, tail)| (token, tail))
-            .unwrap_or((rest, ""));
+        let (token, tail) = rest.split_once(' ').unwrap_or((rest, ""));
         if !out.is_empty() {
             out.push(' ');
         }

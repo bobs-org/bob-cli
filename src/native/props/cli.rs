@@ -669,16 +669,16 @@ fn show_human(report: &ShowReport, styler: &Styler) -> String {
                 ));
             }
         }
-        if let Some(prj) = &contract.prj {
-            if let Some(line) = &prj.line {
-                lines.push(format!(
-                    "  {}  {line}",
-                    styler.cyan(&crate::native::style::pad_right(
-                        "Goal",
-                        label_width,
-                    ))
-                ));
-            }
+        if let Some(prj) = &contract.prj
+            && let Some(line) = &prj.line
+        {
+            lines.push(format!(
+                "  {}  {line}",
+                styler.cyan(&crate::native::style::pad_right(
+                    "Goal",
+                    label_width,
+                ))
+            ));
         }
     }
     for diagnostic in &report.ownership_diagnostics {
