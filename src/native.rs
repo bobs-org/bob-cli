@@ -82,7 +82,9 @@ pub(crate) mod human_bytes;
 mod ledger_place;
 mod log_history;
 mod markdown;
-// Implemented as a pure notes layer first; later meeting phases wire production callers.
+// Meeting layers land independently; only the agenda surface has a production
+// caller so far, so the remaining layers stay warning-free behind this gate
+// (finer `cfg_attr` gates inside `meetings` take over as phases wire up).
 #[allow(dead_code, unused_imports)]
 pub(crate) mod meetings;
 mod nightly;

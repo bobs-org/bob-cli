@@ -32,11 +32,15 @@
         "clock_source": "default",
         "duration_minutes": 25,
         "ends_at": "2026-08-28T08:55",
+        "event_ref": "20260828#^past-standup",
         "home": null,
         "join_url": null,
         "kind": "task",
         "line": 3,
         "location": null,
+        "meeting_notes": {
+          "state": "missing"
+        },
         "off_clock": false,
         "phase": "ended",
         "pomodoro": null,

@@ -37,7 +37,9 @@ use super::{
     collect_done::trailing_block_id_in_line,
     env as bob_env,
     event_task::{self, EventKind, EventNoteRow},
-    markdown, note_tasks, pomodoro,
+    markdown,
+    meetings::{agenda_meetings, MeetingNotesState},
+    note_tasks, pomodoro,
     pomodoro_homes::{ClockSource, DiskHomeSource, HomeResolver, Hue},
     task_root::{self, TaskRootState},
     vault_links::{LinkResolution, VaultLinkResolver},
@@ -228,6 +230,13 @@ pub(crate) struct AgendaEventRow {
     pub(crate) calendar_url: Option<String>,
     pub(crate) location: Option<String>,
     pub(crate) pomodoro: Option<AgendaEventPomodoro>,
+    /// The exact EVENT token, for example `20261123#^standup`. Present on
+    /// started Event Task rows with a `^id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) event_ref: Option<String>,
+    /// Filed-notes state for the meeting. Present on the same rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) meeting_notes: Option<MeetingNotesState>,
 }
 
 /// Occupied time widened by a calendar event's pre/post buffers.
@@ -874,6 +883,14 @@ pub(crate) fn agenda_events_payload(
         &mut note_rows,
         &mut home_resolver,
     );
+    let meeting_fields = agenda_meetings(
+        bob_dir,
+        &day_relative,
+        contents,
+        &note_rows,
+        date,
+        now,
+    );
     let mut all_day = Vec::new();
     let mut rows = Vec::new();
 
@@ -966,6 +983,12 @@ pub(crate) fn agenda_events_payload(
             calendar_url: markdown_link_target(raw_line, "📅"),
             location: event_location(raw_line),
             pomodoro: None,
+            event_ref: meeting_fields
+                .get(&event.line_index)
+                .map(|(event_ref, _)| event_ref.clone()),
+            meeting_notes: meeting_fields
+                .get(&event.line_index)
+                .map(|(_, notes)| notes.clone()),
         });
     }
 

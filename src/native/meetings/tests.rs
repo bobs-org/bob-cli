@@ -1,10 +1,34 @@
-use std::{fs, path::PathBuf};
+//! Vault-level flows: explicit, URL, and query resolution, the
+//! auto-match gate, recent meetings, parents, the filed scan, and agenda
+//! fields, plus meeting-note normalization, dossier, and recap goldens.
+//! Fixtures use invented people and companies, never real meeting content.
 
+use std::{
+    ffi::OsStr,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{NaiveDate, NaiveDateTime};
 use proptest::prelude::*;
 use sha2::Digest;
 
 use super::*;
-
+use super::{
+    agenda::agenda_meetings,
+    matching::{auto_match, AutoMatch},
+    model::{
+        collect_window_rows, event_ref_for, filed_notes_index, MeetingRow,
+    },
+    parent::{meeting_parent, MeetingParent},
+    resolve::{recent_meetings, resolve_event, ResolveError},
+    token::{parse_event_token, EventToken},
+};
+use crate::native::{
+    env::TestEnvGuard,
+    gcal::journal::{append_row, DescriptionState, NewRow},
+};
 fn fixture(name: &str) -> String {
     fs::read_to_string(fixture_path(name)).expect("fixture reads")
 }
@@ -318,4 +342,577 @@ fn decode_entities(text: &str) -> String {
     .fold(text.to_string(), |text, (entity, character)| {
         text.replace(entity, character)
     })
+}
+const PINNED_NOW: &str = "2026-11-23 16:00";
+
+fn guard_now() -> TestEnvGuard {
+    TestEnvGuard::set(&[("BOB_NOW", Some(OsStr::new(PINNED_NOW)))])
+}
+
+fn pinned_now() -> NaiveDateTime {
+    NaiveDateTime::parse_from_str(PINNED_NOW, "%Y-%m-%d %H:%M")
+        .expect("pinned now")
+}
+
+fn pinned_day() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 11, 23).expect("pinned day")
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent");
+    }
+    fs::write(path, contents).expect("write file");
+}
+
+/// Calendar URL whose `eid=` decodes to `event_id`.
+fn calendar_url(event_id: &str) -> String {
+    let payload = URL_SAFE_NO_PAD.encode(format!("{event_id} calendar-id"));
+    format!("https://calendar.google.com/event?eid={payload}")
+}
+
+fn fixture_day(qbr_url: &str) -> String {
+    format!(
+        concat!(
+            "# Day\n",
+            "## Events\n",
+            "- [*] #task **1500-1530** Acme Corp QBR [📅]({} \"Open in Google Calendar\") [root:: job] ^acme-qbr\n",
+            "- [ ] #task **1600-1630** Acme Corp QBR follow-up [root:: job] ^acme-followup\n",
+            "- [-] #task **1000-1030** Cancelled standup [root:: job] ^cancelled-standup\n",
+            "- [ ] #task **1400-1430** Ad-hoc sync [root:: job]\n",
+            "- [ ] #task **1430-1500** Inbox triage [root:: meet_inbox] ^inbox-triage\n",
+            "- [ ] #task **1700-1730** Future planning [root:: job] ^future-planning\n",
+            "## Pomodoros\n",
+        ),
+        qbr_url,
+    )
+}
+
+fn fixture_vault() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("vault");
+    let vault = dir.path();
+    write_file(&vault.join("work.md"), "---\ntype: [[area]]\n---\n# Work\n");
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[work]]\n---\n",
+            "# Job\n",
+            "## Tasks\n",
+            "- [*] #task Read Acme QBR notes ^ref-acme-qbr\n",
+            "- [ ] #task Read follow-up notes ^ref-acme-followup\n",
+        ),
+    );
+    write_file(
+        &vault.join("inbox.md"),
+        "---\ntype: [[area]]\n---\n# Inbox\n",
+    );
+    write_file(
+        &vault.join("meet_inbox.md"),
+        "---\ntype: [[area]]\nparent: [[inbox]]\n---\n# Meetings\n",
+    );
+    let qbr_url = calendar_url("e1-google");
+    write_file(&vault.join("2026/20261123.md"), &fixture_day(&qbr_url));
+    write_file(
+        &vault.join("2026/20261124.md"),
+        concat!(
+            "# Day\n",
+            "## Events\n",
+            "- [ ] #task **0900-0930** Acme Corp QBR retrospective [root:: job] ^acme-retro\n",
+            "## Pomodoros\n",
+        ),
+    );
+    // Journal identity for the QBR row (path, block id) and a URL-less
+    // row, proving the row-key path works without a 📅 badge.
+    append_row(
+        vault,
+        "test-host",
+        &NewRow {
+            calendar_id: "primary".to_string(),
+            event_id: "e1-google".to_string(),
+            ical_uid: None,
+            series_id: Some("series-9".to_string()),
+            day: "2026-11-23".to_string(),
+            path: "2026/20261123.md".to_string(),
+            block_id: "acme-qbr".to_string(),
+            row_kind: "task".to_string(),
+            spans: std::collections::BTreeMap::new(),
+            root: Some("job".to_string()),
+            source: None,
+            url: Some(qbr_url),
+            description: DescriptionState::Absent,
+            note: None,
+            unacked: false,
+        },
+    )
+    .expect("journal row");
+    append_row(
+        vault,
+        "test-host",
+        &NewRow {
+            calendar_id: "primary".to_string(),
+            event_id: "e2-google".to_string(),
+            ical_uid: None,
+            series_id: None,
+            day: "2026-11-23".to_string(),
+            path: "2026/20261123.md".to_string(),
+            block_id: "acme-followup".to_string(),
+            row_kind: "task".to_string(),
+            spans: std::collections::BTreeMap::new(),
+            root: Some("job".to_string()),
+            source: None,
+            url: None,
+            description: DescriptionState::Absent,
+            note: None,
+            unacked: false,
+        },
+    )
+    .expect("journal row");
+    dir
+}
+
+fn fixture_notes(vault: &Path) {
+    write_file(
+        &vault.join("ref/meetings/261123_acme_corp_qbr.md"),
+        concat!(
+            "---\n",
+            "title: \"Acme Corp QBR — Meeting Notes\"\n",
+            "event: \"[[2026/20261123#^acme-qbr]]\"\n",
+            "event_id: \"e1-google\"\n",
+            "---\n",
+            "# Acme Corp QBR — Meeting Notes\n",
+            "\n",
+            "![[job#^ref-acme-qbr]]\n",
+            "\n",
+            "## Notes\n",
+            "\n",
+            "- discussed the widget launch\n",
+        ),
+    );
+    write_file(
+        &vault.join("ref/meetings/261123_acme_followup.md"),
+        concat!(
+            "---\n",
+            "title: \"Acme Corp QBR follow-up — Meeting Notes\"\n",
+            "event: \"[[2026/20261123#^acme-followup]]\"\n",
+            "---\n",
+            "# Acme Corp QBR follow-up — Meeting Notes\n",
+            "\n",
+            "![[job#^ref-acme-followup]]\n",
+            "\n",
+            "## Notes\n",
+            "\n",
+            "- parking lot items\n",
+        ),
+    );
+}
+
+fn test_row(title: &str) -> MeetingRow {
+    let date = pinned_day();
+    let starts_at = date.and_hms_opt(12, 0, 0).expect("noon");
+    MeetingRow {
+        path: Path::new("2026/20261123.md").to_path_buf(),
+        line: 3,
+        block_id: Some("test-row".to_string()),
+        date,
+        time_range: "1200-1230".to_string(),
+        starts_at,
+        ends_at: date.and_hms_opt(12, 30, 0).expect("end"),
+        title: title.to_string(),
+        status: ' ',
+        root: None,
+        root_is_inbox: false,
+        calendar_url: None,
+        event_id: None,
+        series_id: None,
+        calendar_id: None,
+    }
+}
+
+#[test]
+fn every_explicit_spelling_resolves_to_the_same_row() {
+    let dir = fixture_vault();
+    let vault = dir.path();
+    let mut refs = Vec::new();
+    for raw in [
+        "20261123#^acme-qbr",
+        "2026/20261123#^acme-qbr",
+        "[[20261123#^acme-qbr|Acme Corp QBR]]",
+        "[[2026/20261123#^acme-qbr]]",
+        "20261123:acme-qbr",
+        "20261123:^acme-qbr",
+        "~20261123#^acme-qbr",
+        "~20261123:acme-qbr",
+    ] {
+        let token = parse_event_token(raw);
+        assert!(
+            matches!(token, EventToken::Explicit { .. }),
+            "{raw} parsed as {token:?}"
+        );
+        let row = resolve_event(vault, &token, 7, None)
+            .unwrap_or_else(|error| panic!("{raw}: {}", error.message()));
+        assert_eq!(row.title, "Acme Corp QBR", "{raw}");
+        assert_eq!(row.event_id.as_deref(), Some("e1-google"), "{raw}");
+        assert_eq!(row.calendar_id.as_deref(), Some("primary"), "{raw}");
+        assert_eq!(row.series_id.as_deref(), Some("series-9"), "{raw}");
+        assert_eq!(row.root.as_deref(), Some("job"), "{raw}");
+        assert!(!row.root_is_inbox, "{raw}");
+        refs.push(event_ref_for(&row.path, row.block_id.as_deref().unwrap()));
+    }
+    assert!(refs
+        .iter()
+        .all(|event_ref| event_ref.as_deref() == Some("20261123#^acme-qbr")));
+}
+
+#[test]
+fn note_paths_resolve_stems_and_full_paths() {
+    let dir = fixture_vault();
+    let vault = dir.path();
+    let index = crate::native::meetings::model::vault_index(vault);
+    use crate::native::meetings::model::resolve_note_path as resolve_meeting_note;
+    assert_eq!(
+        resolve_meeting_note(&index, "20261123").expect("stem resolves"),
+        Path::new("2026/20261123.md")
+    );
+    assert_eq!(
+        resolve_meeting_note(&index, "2026/20261123").expect("path resolves"),
+        Path::new("2026/20261123.md")
+    );
+    assert!(resolve_meeting_note(&index, "20261199").is_err());
+}
+
+#[test]
+fn explicit_misses_are_typed() {
+    let dir = fixture_vault();
+    let vault = dir.path();
+    let missing_note = resolve_event(
+        vault,
+        &parse_event_token(
+            "20261123#^acme-qbr"
+                .replace("20261123", "20261199")
+                .as_str(),
+        ),
+        7,
+        None,
+    );
+    assert!(matches!(missing_note, Err(ResolveError::NoMeeting { .. })));
+    let missing_id =
+        resolve_event(vault, &parse_event_token("20261123#^nope"), 7, None);
+    assert!(matches!(missing_id, Err(ResolveError::NoMeeting { .. })));
+    // A task id outside any daily note is not a meeting.
+    let not_daily =
+        resolve_event(vault, &parse_event_token("job#^ref-acme-qbr"), 7, None);
+    assert!(matches!(not_daily, Err(ResolveError::NoMeeting { .. })));
+}
+
+#[test]
+fn url_resolves_through_the_journal() {
+    let dir = fixture_vault();
+    let vault = dir.path();
+    let url = calendar_url("e1-google");
+    let row = resolve_event(vault, &parse_event_token(&url), 7, None)
+        .expect("journal url resolves");
+    assert_eq!(row.title, "Acme Corp QBR");
+    assert_eq!(row.event_id.as_deref(), Some("e1-google"));
+    assert_eq!(row.calendar_id.as_deref(), Some("primary"));
+    // An unknown event id is a miss, not a guess.
+    let unknown = calendar_url("no-such-event");
+    assert!(matches!(
+        resolve_event(vault, &parse_event_token(&unknown), 7, None),
+        Err(ResolveError::NoMeeting { .. })
+    ));
+}
+
+#[test]
+fn journal_identity_applies_without_a_calendar_badge() {
+    let dir = fixture_vault();
+    let vault = dir.path();
+    let row = resolve_event(
+        vault,
+        &parse_event_token("20261123#^acme-followup"),
+        7,
+        None,
+    )
+    .expect("follow-up resolves");
+    assert!(row.calendar_url.is_none());
+    assert_eq!(row.event_id.as_deref(), Some("e2-google"));
+}
+
+#[test]
+fn row_badge_decodes_without_a_journal_entry() {
+    let dir = tempfile::tempdir().expect("vault");
+    let vault = dir.path();
+    let url = calendar_url("badge-only");
+    write_file(
+        &vault.join("2026/20261123.md"),
+        &format!(
+            "# Day\n## Events\n- [ ] #task **1500-1530** Badge sync [📅]({url} \"Open\") ^badge-sync\n## Pomodoros\n"
+        ),
+    );
+    let row = resolve_event(
+        vault,
+        &parse_event_token("20261123#^badge-sync"),
+        7,
+        None,
+    )
+    .expect("badge row resolves");
+    assert_eq!(row.event_id.as_deref(), Some("badge-only"));
+    assert!(row.calendar_id.is_none());
+    // The same URL resolves through the badge with no journal at all.
+    let via_url = resolve_event(vault, &parse_event_token(&url), 7, None)
+        .expect("badge url resolves");
+    assert_eq!(via_url.title, "Badge sync");
+}
+
+#[test]
+fn query_words_match_and_ambiguity_carries_candidates() {
+    let _now = guard_now();
+    let dir = fixture_vault();
+    let vault = dir.path();
+    let single = resolve_event(vault, &parse_event_token("follow-up"), 7, None)
+        .expect("follow-up query resolves");
+    assert_eq!(single.block_id.as_deref(), Some("acme-followup"));
+    let ambiguous =
+        resolve_event(vault, &parse_event_token("Acme Corp"), 7, None);
+    match ambiguous {
+        Err(ResolveError::Ambiguous { candidates, .. }) => {
+            assert_eq!(candidates.len(), 2);
+            assert!(candidates.iter().all(|candidate| candidate
+                .meeting
+                .title
+                .to_ascii_lowercase()
+                .contains("acme corp")));
+            assert!(candidates
+                .iter()
+                .all(|candidate| !candidate.detail.is_empty()));
+        }
+        other => panic!("expected ambiguity, got {other:?}"),
+    }
+    let missing =
+        resolve_event(vault, &parse_event_token("企画 zzz-no-match"), 7, None);
+    assert!(matches!(missing, Err(ResolveError::NoMeeting { .. })));
+    // A single day scopes the scan to that note.
+    let retro = resolve_event(
+        vault,
+        &parse_event_token("retrospective"),
+        7,
+        NaiveDate::from_ymd_opt(2026, 11, 24),
+    )
+    .expect("day-scoped query resolves");
+    assert_eq!(retro.block_id.as_deref(), Some("acme-retro"));
+}
+
+#[test]
+fn rows_without_an_id_refuse_with_a_hint() {
+    let _now = guard_now();
+    let dir = fixture_vault();
+    let vault = dir.path();
+    match resolve_event(vault, &parse_event_token("Ad-hoc sync"), 7, None) {
+        Err(ResolveError::MissingId { hint, .. }) => {
+            assert!(hint.contains("^id"), "{hint}");
+        }
+        other => panic!("expected MissingId, got {other:?}"),
+    }
+}
+
+#[test]
+fn auto_match_selects_one_strong_candidate_with_evidence() {
+    let candidates =
+        vec![test_row("Acme Corp QBR"), test_row("Weekly standup")];
+    let notes =
+        "Notes from the Acme Corp QBR: the widget launch stays on track.";
+    match auto_match(notes, &candidates) {
+        AutoMatch::Selected {
+            row_index,
+            score,
+            evidence,
+        } => {
+            assert_eq!(row_index, 0);
+            assert!(score >= 0.75, "{score}");
+            assert!(evidence.contains("acme"), "{evidence}");
+        }
+        AutoMatch::Unresolved { .. } => panic!("expected a selection"),
+    }
+}
+
+#[test]
+fn recurring_title_tie_never_auto_selects() {
+    let candidates = vec![
+        test_row("Acme Corp QBR"),
+        MeetingRow {
+            title: "Acme Corp QBR".to_string(),
+            date: NaiveDate::from_ymd_opt(2026, 11, 24).expect("next day"),
+            ..test_row("Acme Corp QBR")
+        },
+    ];
+    let notes = "Notes from the Acme Corp QBR.";
+    match auto_match(notes, &candidates) {
+        AutoMatch::Unresolved { ranked } => {
+            assert_eq!(ranked.len(), 2);
+            assert!(ranked.iter().all(|candidate| candidate.score >= 0.75));
+            assert!(ranked[0].evidence.contains("title words in notes"));
+        }
+        selected => panic!("a tie must not select: {selected:?}"),
+    }
+}
+
+#[test]
+fn weak_fields_stay_unresolved() {
+    let candidates = vec![test_row("Acme Corp QBR")];
+    match auto_match("unrelated notes about lunch", &candidates) {
+        AutoMatch::Unresolved { ranked } => {
+            assert_eq!(ranked.len(), 1);
+            assert!(ranked[0].score < 0.75);
+        }
+        selected => panic!("weak match must not select: {selected:?}"),
+    }
+}
+
+#[test]
+fn recent_meetings_are_newest_first_with_filed_state() {
+    let _now = guard_now();
+    let dir = fixture_vault();
+    let vault = dir.path();
+    fixture_notes(vault);
+    let meetings = recent_meetings(vault, 7, pinned_now());
+    let titles: Vec<&str> = meetings
+        .iter()
+        .map(|meeting| meeting.meeting.title.as_str())
+        .collect();
+    // Newest first; cancelled and unstarted rows never walk.
+    assert_eq!(
+        titles,
+        vec![
+            "Acme Corp QBR follow-up",
+            "Acme Corp QBR",
+            "Inbox triage",
+            "Ad-hoc sync"
+        ]
+    );
+    for meeting in &meetings {
+        assert!(meeting.meeting.status != '-');
+        assert!(meeting.meeting.starts_at <= pinned_now());
+        assert!(meeting.meeting.ends_at > meeting.meeting.starts_at);
+    }
+    let by_title = |title: &str| {
+        meetings
+            .iter()
+            .find(|meeting| meeting.meeting.title == title)
+            .unwrap_or_else(|| panic!("missing {title}"))
+    };
+    // Journal event id keys the QBR filing; the follow-up files by link.
+    let qbr = by_title("Acme Corp QBR");
+    let qbr_notes = qbr.notes.as_ref().expect("qbr filed");
+    assert_eq!(qbr_notes.note, "ref/meetings/261123_acme_corp_qbr.md");
+    assert_eq!(qbr_notes.task, "job#^ref-acme-qbr");
+    assert_eq!(qbr_notes.status, "*");
+    assert_eq!(qbr.event_ref.as_deref(), Some("20261123#^acme-qbr"));
+    let followup = by_title("Acme Corp QBR follow-up");
+    let followup_notes = followup.notes.as_ref().expect("follow-up filed");
+    assert_eq!(followup_notes.task, "job#^ref-acme-followup");
+    assert_eq!(
+        followup.event_ref.as_deref(),
+        Some("20261123#^acme-followup")
+    );
+    // No notes filed yet for these rows.
+    assert!(by_title("Inbox triage").notes.is_none());
+    let adhoc = by_title("Ad-hoc sync");
+    assert!(adhoc.notes.is_none());
+    assert!(adhoc.event_ref.is_none());
+}
+
+#[test]
+fn filed_index_prefers_neither_key_when_both_are_absent() {
+    let dir = fixture_vault();
+    // No ref/meetings dir yet: the index is empty, not an error.
+    let index = filed_notes_index(dir.path());
+    assert!(index.by_event_id.is_empty());
+    assert!(index.by_target.is_empty());
+}
+
+#[test]
+fn meeting_parent_resolves_ready_and_needs() {
+    let _now = guard_now();
+    let dir = fixture_vault();
+    let vault = dir.path();
+    let qbr =
+        resolve_event(vault, &parse_event_token("20261123#^acme-qbr"), 7, None)
+            .expect("qbr resolves");
+    match meeting_parent(vault, &qbr, None).expect("parent resolves") {
+        MeetingParent::Ready(resolved) => assert_eq!(resolved.route, "job"),
+        MeetingParent::NeedsParent { .. } => panic!("job is a usable parent"),
+    }
+    // An explicit parent wins over the row root.
+    match meeting_parent(vault, &qbr, Some("work")).expect("explicit resolves")
+    {
+        MeetingParent::Ready(resolved) => assert_eq!(resolved.route, "work"),
+        MeetingParent::NeedsParent { .. } => panic!("work is a usable parent"),
+    }
+    assert!(meeting_parent(vault, &qbr, Some("no-such-note")).is_err());
+    // The meet_inbox root needs a parent, with the root named.
+    let triage = resolve_event(
+        vault,
+        &parse_event_token("20261123#^inbox-triage"),
+        7,
+        None,
+    )
+    .expect("triage resolves");
+    assert!(triage.root_is_inbox);
+    match meeting_parent(vault, &triage, None).expect("inbox needs") {
+        MeetingParent::NeedsParent { root, candidates } => {
+            assert_eq!(root.as_deref(), Some("meet_inbox"));
+            assert!(!candidates.is_empty());
+        }
+        MeetingParent::Ready(_) => panic!("meet_inbox must need a parent"),
+    }
+    // A missing root needs a parent with no root named.
+    let mut rootless = qbr.clone();
+    rootless.root = None;
+    match meeting_parent(vault, &rootless, None).expect("missing needs") {
+        MeetingParent::NeedsParent { root, .. } => assert!(root.is_none()),
+        MeetingParent::Ready(_) => panic!("a missing root must need a parent"),
+    }
+}
+
+#[test]
+fn collect_window_rows_collects_one_day() {
+    let dir = fixture_vault();
+    let rows = collect_window_rows(dir.path(), 7, Some(pinned_day()));
+    // Six task rows: the cancelled row still parses (filtering is the
+    // caller's job), context-free.
+    assert_eq!(rows.len(), 6);
+    assert!(rows.iter().all(|row| row.date == pinned_day()));
+}
+
+#[test]
+fn agenda_meetings_cover_started_rows_with_ids() {
+    let _now = guard_now();
+    let dir = fixture_vault();
+    let vault = dir.path();
+    fixture_notes(vault);
+    let relative = Path::new("2026/20261123.md");
+    let contents = fs::read_to_string(vault.join(relative)).expect("day");
+    let events =
+        crate::native::event_task::events_in_note(&contents, pinned_day());
+    let fields = agenda_meetings(
+        vault,
+        relative,
+        &contents,
+        &events,
+        pinned_day(),
+        pinned_now(),
+    );
+    // Started rows with ids: qbr, follow-up, inbox triage. The ad-hoc
+    // row has no id and future planning has not started.
+    assert_eq!(fields.len(), 3);
+    let qbr_line = events
+        .iter()
+        .find(|event| event.block_id.as_deref() == Some("acme-qbr"))
+        .expect("qbr row")
+        .line_index;
+    let (event_ref, notes) = fields.get(&qbr_line).expect("qbr fields");
+    assert_eq!(event_ref, "20261123#^acme-qbr");
+    assert_eq!(
+        notes.note.as_deref(),
+        Some("ref/meetings/261123_acme_corp_qbr.md")
+    );
 }

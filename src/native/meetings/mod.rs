@@ -1,20 +1,51 @@
-//! Pure meeting-note intake, normalization, dossier, and recap rendering.
+//! Meeting notes and read-only meeting resolution.
 //!
-//! Dossiers use Pandoc `commonmark_x` syntax. Their YAML front matter carries the
-//! resolved meeting metadata and normalized model for exact round trips; the visible
-//! body uses a fenced div with the `meeting-tldr` class, followed by the next-step and
-//! section headings. Transcript text is rendered only when `DossierMeta` opts in.
+//! The notes layer handles pure meeting-note intake, normalization, dossier,
+//! and recap rendering. Dossiers use Pandoc `commonmark_x` syntax. Their YAML
+//! front matter carries the resolved meeting metadata and normalized model for
+//! exact round trips; the visible body uses a fenced div with the
+//! `meeting-tldr` class, followed by the next-step and section headings.
+//! Transcript text is rendered only when `DossierMeta` opts in.
+//!
+//! The resolution layer resolves EVENT tokens to Event Task rows for
+//! `bob ref meet`, scores automatic matches with evidence, lists recent
+//! meetings with their filed-notes state, looks up Google identity, resolves
+//! the filing parent, and adds the additive notes state to the capture
+//! agenda's event rows. It never writes the vault: every function here reads
+//! files and folds journals.
+//!
+//! Token parsing, matching, parent resolution, and event resolution are
+//! shared with the `ref meet` CLI phase; only the agenda surface has a
+//! caller yet, so the not-yet-wired modules stay warning-free behind
+//! `cfg_attr(not(test), ...)` until their phases land, exactly like the
+//! task merge/split helpers in [`super::task_locator`]. The notes layer
+//! stays behind the top-level gate on [`super::meetings`] until a production
+//! caller wires it.
 
+mod agenda;
+#[cfg_attr(not(test), allow(dead_code))]
 mod dossier;
+#[cfg_attr(not(test), allow(dead_code))]
 mod intake;
+#[cfg_attr(not(test), allow(dead_code))]
+mod matching;
+mod model;
+#[cfg_attr(not(test), allow(dead_code))]
 mod normalize;
+#[cfg_attr(not(test), allow(dead_code))]
+mod parent;
+#[cfg_attr(not(test), allow(dead_code))]
 mod recap;
+#[cfg_attr(not(test), allow(dead_code))]
+mod resolve;
+#[cfg_attr(not(test), allow(dead_code))]
+mod token;
 
 #[cfg(test)]
 mod tests;
 
-use serde::{Deserialize, Serialize};
-
+// The agenda surface: the only consumer outside this module so far.
+pub(crate) use agenda::{agenda_meetings, MeetingNotesState};
 pub(crate) use dossier::{
     parse_dossier, render_dossier, DossierDocument, DossierError,
 };
@@ -25,6 +56,8 @@ pub(crate) use normalize::normalize;
 pub(crate) use recap::{
     recap_state, render_recap, replace_recap, RecapState, ReplaceRecapError,
 };
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct MeetingNotes {

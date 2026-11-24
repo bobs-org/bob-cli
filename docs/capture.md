@@ -11037,7 +11037,12 @@ The top-level `events` object has `synced_at` (the Events stamp time or `null`),
 `duration_minutes`, `phase` (`ended`, `running`, or `upcoming`), nullable task
 `status_symbol`/`status_type`, `off_clock` and deprecated `untracked`, nullable `root`/`home`, nullable
 `join_url`, `calendar_url`, and `location`, and nullable `pomodoro` attribution
-(`line`, `role`, and lineup `index`). Timed context rows use
+(`line`, `role`, and lineup `index`). Every started, non-cancelled Event Task
+row with a `^id` also carries `event_ref` (the exact EVENT token, for example
+`20261123#^standup`) and `meeting_notes` (`{"state": "missing"}`, or
+`{"state": "filed", "note", "task"}` with the vault-relative reference note
+and the reading task as `<note>#^<id>`). Unstarted rows, rows without a `^id`,
+cancelled rows, and context rows omit both fields. Timed context rows use
 `kind: "timed_context"` and have no task status or Pomodoro attribution.
 Buffered Event Tasks add `buffer` with `before_minutes`, `after_minutes`, the
 buffered `time_range`, and buffered naive `starts_at`/`ends_at`; rows without a

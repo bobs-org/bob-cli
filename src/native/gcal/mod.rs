@@ -46,6 +46,9 @@ pub(crate) use cli::{
     AckArgs, CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs,
     NoteArgs, SyncArgs,
 };
+// Meeting resolution (`native::meetings`) matches titles and decodes
+// Calendar URLs with the same rules as `gcal note`.
+pub(crate) use note::{decode_calendar_eid, matches_query};
 
 const COMMAND_NAME: &str = "bob gcal";
 
