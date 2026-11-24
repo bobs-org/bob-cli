@@ -915,7 +915,9 @@ fn interval_for(
 }
 
 /// Parse a note's raw `task_refresh` frontmatter value.
-fn parse_note_refresh(raw: Option<&str>) -> (Option<u16>, Option<String>) {
+pub(crate) fn parse_note_refresh(
+    raw: Option<&str>,
+) -> (Option<u16>, Option<String>) {
     let Some(raw) = raw else {
         return (None, None);
     };

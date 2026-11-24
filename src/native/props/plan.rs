@@ -9,6 +9,7 @@ use std::ops::Range;
 use serde_yaml::Value as YamlValue;
 
 use super::{
+    contract::{expand, validate},
     document::{
         datetime_parts, is_datetime, FrontmatterState, PropertyEntry,
         PropertyKind, PropsDocument,
@@ -35,6 +36,7 @@ pub(crate) struct PlanOutcome {
     pub(crate) fingerprint_after: String,
     pub(crate) changed: bool,
     pub(crate) inverse_ops: Vec<Op>,
+    pub(crate) warnings: Vec<PropsError>,
 }
 
 /// Plan ordered operations against `contents` without writing files.
@@ -82,6 +84,7 @@ pub(crate) fn plan(
             fingerprint_after: fingerprint_before,
             changed: false,
             inverse_ops: Vec::new(),
+            warnings: Vec::new(),
         });
     }
     if !context.roles.writes_are_safe() {
@@ -100,21 +103,33 @@ pub(crate) fn plan(
     }
 
     let mut current = contents.to_owned();
-    let mut inverse_groups = Vec::with_capacity(envelope.ops.len());
+    let mut inverse_groups = Vec::new();
+    let mut expanded_ops = Vec::new();
+    let mut warnings = Vec::new();
     for (index, op) in envelope.ops.iter().enumerate() {
-        let before_op = PropsDocument::parse(&current);
-        let (next, inverse) = apply_one(&current, context, op, index)?;
-        let after_op = PropsDocument::parse(&next);
-        verify_op(&before_op, &after_op, op, index)?;
-        current = next;
-        inverse_groups.push(inverse);
+        let setting =
+            matches!(op, Op::SettingSet { .. } | Op::SettingClear { .. });
+        let document = PropsDocument::parse(&current);
+        for primitive in expand::expand(context, &document, op, index)? {
+            let before_op = PropsDocument::parse(&current);
+            let (next, inverse) =
+                apply_one(&current, context, &primitive, index, setting)?;
+            let after_op = PropsDocument::parse(&next);
+            verify_op(&before_op, &after_op, &primitive, index)?;
+            warnings.extend(validate::operation(
+                context, &after_op, &primitive, index,
+            )?);
+            current = next;
+            inverse_groups.push(inverse);
+            expanded_ops.push(primitive);
+        }
     }
     inverse_groups.reverse();
     let inverses = inverse_groups.into_iter().flatten().collect();
 
     let after = inspect(&current, context);
     refuse_unwritable(&after.document, None)?;
-    verify(&before.document, &after.document, &envelope.ops)?;
+    verify(&before.document, &after.document, &expanded_ops)?;
     let fingerprint_after =
         after.document.fingerprint.clone().ok_or_else(|| {
             verify_failed("candidate fingerprint is unavailable", None, None)
@@ -126,6 +141,7 @@ pub(crate) fn plan(
         fingerprint_before,
         fingerprint_after,
         inverse_ops: inverses,
+        warnings,
     })
 }
 
@@ -134,10 +150,14 @@ fn apply_one(
     context: &InspectContext,
     op: &Op,
     index: usize,
+    setting: bool,
 ) -> Result<(String, Vec<Op>), PropsError> {
     let document = PropsDocument::parse(contents);
     refuse_unwritable(&document, Some(index))?;
     match op {
+        Op::SettingSet { .. } | Op::SettingClear { .. } => {
+            unreachable!("settings expand before span planning")
+        }
         Op::Set {
             key,
             value,
@@ -174,6 +194,7 @@ fn apply_one(
             yaml,
             position.as_ref(),
             index,
+            setting && key == "offclock_types",
         ),
         Op::Restore {
             key,
@@ -207,6 +228,13 @@ fn apply_set(
     refuse_protected(context, key, index)?;
     refuse_merge_siblings(document, key, index)?;
     let typed = typed_from_json(key, value, kind, index)?;
+    super::contract::validate::input(
+        context,
+        contents,
+        key,
+        &typed.yaml,
+        index,
+    )?;
     if let Some(entry) = find_entry(document, key) {
         refuse_opaque(entry, index)?;
         let inverse = restore_full(contents, document, entry);
@@ -267,18 +295,21 @@ fn apply_set_yaml(
     yaml: &str,
     position: Option<&Position>,
     index: usize,
+    canonical_block: bool,
 ) -> Result<(String, Vec<Op>), PropsError> {
     validate_key(key, index)?;
     refuse_protected(context, key, index)?;
     refuse_merge_siblings(document, key, index)?;
     let parsed = parse_yaml_fragment(yaml, key, index)?;
+    super::contract::validate::input(context, contents, key, &parsed, index)?;
     if let Some(entry) = find_entry(document, key) {
         refuse_opaque(entry, index)?;
         let inverse = restore_full(contents, document, entry);
-        if entry
-            .raw_value
-            .as_ref()
-            .is_some_and(|existing| yaml_eq(existing, &parsed))
+        if !canonical_block
+            && entry
+                .raw_value
+                .as_ref()
+                .is_some_and(|existing| yaml_eq(existing, &parsed))
         {
             return Ok((contents.to_owned(), vec![inverse]));
         }
@@ -1133,6 +1164,9 @@ fn verify_op(
     index: usize,
 ) -> Result<(), PropsError> {
     match op {
+        Op::SettingSet { .. } | Op::SettingClear { .. } => {
+            unreachable!("settings expand before span planning")
+        }
         Op::Set {
             key,
             value,
@@ -1702,6 +1736,7 @@ mod tests {
 
     fn context(note_kind: NoteKind) -> InspectContext {
         InspectContext {
+            contract: None,
             normalized_path: "notes/example.md".to_owned(),
             roles: RoleContext {
                 note_kind,

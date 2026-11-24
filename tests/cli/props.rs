@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 const NOTE: &str =
     "---\ntitle: Groceries\ncount: 3\ndone: false\n---\n\n# Groceries\n";
 
+#[path = "props_contract.rs"]
+mod contract;
+
 fn vault(tag: &str) -> TempDir {
     TempDir::new(&format!("bob-cli-props-{tag}"))
 }

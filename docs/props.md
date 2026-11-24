@@ -10,7 +10,7 @@ is the terminal surface for reading that list and for editing it through a
 guarded, reversible protocol that preserves unrelated bytes and enforces one
 writer per key. The [`bob props` CLI reference](reference/cli/props.md) indexes
 the commands. This page specifies the behavior contract: note resolution, the
-show report, the semantic fingerprint, the ownership roles, the six update
+show report, the semantic fingerprint, the ownership roles, the property and setting update
 operations with their byte rules, undo, exit codes, and the capability probe.
 
 ## Commands
@@ -146,12 +146,12 @@ kind names are `day`, `week`, `quarter`, `year`, `all_time`, `record`,
 | Role     | Keys/context                                                                                                            | Owner or action           |
 | -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | identity | `type`; record/album `parent`; album `title`                                                                            | locked with reason        |
-| derived  | `*_digest`, `*_drafted`, `review_*`, `zorg_*`, `generated_from_zorg*`; day/period `parent`; reference `source_markdown`; `done_tasks`; `task_count`; `open_task_count`; project `status`/`scheduled` | writer name and reason    |
+| derived  | `*_digest`, `*_drafted`, `review_*`, `zorg_*`, `generated_from_zorg*`; day/period `parent`; reference `source_markdown`; `done_tasks`; project `status`/`scheduled` | writer name and reason    |
 | card     | record schema fields                                                                                                    | `record`, editor `==`     |
 | card     | day/period `intentions`, `summary`, `reflection`                                                                        | `intentions`, editor `==` |
 | card     | album `record`                                                                                                          | `album`, editor `==`      |
 | card     | bank hub `bank`                                                                                                         | `bank`, editor `==`       |
-| loose    | remaining keys, including `created` and `template`                                                                      | editable here             |
+| loose    | area/project settings, retired `task_count`/`open_task_count`, and remaining keys including `created` and `template`                                                                      | editable here             |
 
 Audit sources for the derived list: intention writers under
 `intentions/` and `periods/`, record and album writers under `records/` and
@@ -169,7 +169,116 @@ insertion checks the prospective role. Position references may name protected
 neighbors without mutating their values. Refusals are `prop_owned` with the
 `==` hint, `prop_derived`, and `prop_identity` with the teaching reason.
 Roles are recomputed from fresh note/schema context under the write lock, not
-from client-supplied metadata.
+from client-supplied metadata. Retired count keys are deletable loose properties
+with `legacy: true`. Project `scheduled` is also marked legacy, but stays
+derived. `legacy` is a boolean on every property row; contract keys additionally
+carry a `setting` id (`theme` maps to `task_type`, and both clock keys map
+to `clock`). Project `status` and `scheduled` name owner `projects`;
+`done_tasks` names owner `task archive`.
+
+## Area and project settings
+
+Area and project contract keys stay `loose`, so the Property Editor (`+`)
+can edit them through the same guarded writer. They carry domain validation
+for generic value edits, YAML fragments, rename destinations, and typed
+setting gestures. Validation examines the addressed value, so unrelated
+legacy values do not prevent another property from being edited.
+
+`bank.md` is a hybrid: its `note_kind` remains `bank`, its `bank` key stays
+card-owned with editor `==`, and its other keys use the area contract.
+
+Settings have this stable order (bank uses the area order):
+
+- Area: Summary, Lives under, Hue, Default type, Clock, Ready cap, Review,
+  Capture names.
+- Project: Lives under, Hue, Default type, Clock, Stats root, Ready cap,
+  Review, Capture names.
+
+| Setting id | Keys | Valid values |
+| --- | --- | --- |
+| `summary` (area) | `summary` | One line of text; over 140 characters warns. |
+| `parent` | `parent` | One scalar wikilink to an existing home. Areas allow the `area` root or another area; projects allow an area or a non-terminal project. Required. |
+| `color` | `color` | blue, orange, aqua, yellow, magenta, green, violet, red, grey/gray. Grey is an explicit mute. |
+| `task_type` | `task_type`, legacy `theme` | One valid type name or `off` (Stop parent defaults). Unconfigured names warn. |
+| `clock` | `offclock`, `offclock_types` | Boolean `offclock`, or a nonempty type name/list for `offclock_types`. Typed clock gestures use the modes below. |
+| `root` (project) | `root` | `true` or absence; setting it on a top-level project is disabled. |
+| `ready_cap` | `ready_cap` | 1–999 or `off`. Existing YAML `false` still reads as off; new writes use `off`. |
+| `task_refresh` | `task_refresh` | 1–365 days. |
+| `project_name_aliases` | `project_name_aliases` | A list of nonblank, distinct strings; duplicates are case-insensitive. Cross-note collisions and stem shadows warn. |
+
+Clearing a setting removes its local key(s). Ready cap and Review use Bob's
+configuration by residence; they never inherit from a parent. Other inherited
+policies resume their existing parent/default resolution. Clearing `parent`,
+or renaming it away, refuses with `prop_required`. Parent changes also refuse
+self-links, cycles/descendants, missing or ambiguous targets, wrong kinds,
+terminal projects, and `done/` or `_conflicts/` targets. Bob resolves links and
+reloads the destination and ancestry under the write lock.
+
+`prop.restore` deliberately skips domain validation to recover exact legacy
+values during undo. Ownership, structural safety, and byte verification still
+apply. Move likewise preserves existing value bytes. Restore is an explicit
+raw replay operation, not a value-edit validation route.
+
+### Typed setting operations
+
+These operations share the schema-version-1 envelope with `prop.*`:
+
+- `setting.set {setting, value}` sets a typed setting.
+- `setting.clear {setting}` removes every key belonging to that setting;
+  clearing an already absent setting is a no-op.
+
+Unknown setting ids and invalid value shapes refuse. A setting unavailable on
+the note's kind refuses with `prop_setting_disabled`. `setting.set task_type`
+writes the canonical `task_type` and removes legacy `theme` in the same batch;
+clear removes both. Hue saves lowercase names and normalizes `gray` to `grey`.
+Parent saves one quoted scalar link, with a path qualification when needed.
+Stats root sets `true`; clear removes it.
+
+Clock values are strict objects:
+
+| `setting.set clock` value | Exact resulting policy |
+| --- | --- |
+| `{"mode":"inherit"}` | Remove both clock keys. |
+| `{"mode":"on"}` | Write `offclock: false`, remove `offclock_types`. |
+| `{"mode":"off"}` | Write `offclock: true`, remove `offclock_types`. |
+| `{"mode":"types","types":["MEET","CALL"]}` | Write a canonical nonempty block list in `offclock_types`, remove `offclock`. |
+
+`setting.clear clock` is equivalent to Inherit. Type names canonicalize and
+deduplicate through Bob's clock parser. Saving explicitly cleans shadowed
+pairs; reading never does. Unknown clock fields, missing types, scalar types
+in this object, and empty lists refuse.
+
+For example, one atomic write changes the clock and the cap:
+
+```json
+{
+  "schema_version": 1,
+  "expect": "sha256:…",
+  "ops": [
+    {"op": "setting.set", "setting": "clock", "value": {"mode": "types", "types": ["MEET"]}},
+    {"op": "setting.set", "setting": "ready_cap", "value": "off"}
+  ]
+}
+```
+
+Bob expands settings into its ordinary span edits. Unrelated frontmatter and
+body bytes stay intact, and `inverse_ops` contains ordinary `prop.restore`
+operations that recover the exact original bytes, including shadowed keys,
+legacy values, comments, order, and line endings. Error `op_index` refers to
+the original submitted operation, including when one setting expands into
+several edits.
+
+Dry-run and apply include `warnings[]`, using the shared diagnostic shape
+(`code`, `message`, `hint`, `key`, `op_index`, and optional `line`). Current
+warnings include `area_summary_long`, `note_theme_unconfigured`,
+`type_config_unavailable`, and `project_name_aliases_conflict`. Text output
+prints warnings too. Warnings allow the write and do not mutate other notes.
+
+Refusals are `prop_bad_value` (with allowed values in the hint),
+`area_summary_multiline`, `prop_parent_kind`, `prop_parent_cycle`,
+`prop_parent_missing` (also ambiguous resolution or an incomplete parent
+snapshot), `prop_required`, and `prop_setting_disabled`. Every refused batch
+leaves the note unchanged.
 
 ## Update envelope and operations
 

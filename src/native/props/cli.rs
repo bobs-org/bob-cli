@@ -85,7 +85,8 @@ pub(crate) fn update_command() -> ClapCommand {
         .about("Apply a guarded property edit to one note")
         .long_about(
             "Apply a guarded JSON envelope of prop.set, prop.unset, \
-             prop.rename, prop.move, prop.set_yaml, and prop.restore \
+             prop.rename, prop.move, prop.set_yaml, prop.restore, \
+             setting.set, and setting.clear \
              operations to one vault note's frontmatter. The envelope \
              carries a semantic fingerprint in `expect`; Bob re-reads the \
              note under the vault lock and replans against those fresh \
@@ -484,11 +485,19 @@ fn inspect_note(
     contents: &str,
 ) -> (InspectContext, super::PropsInspection) {
     let context = InspectContext {
+        contract: None,
         normalized_path: relative.to_owned(),
         roles: load_roles(vault, relative, contents),
     };
     let inspection = inspect(contents, &context);
     (context, inspection)
+}
+
+fn load_contract(vault: &Path, context: &mut InspectContext) {
+    if !super::contract::settings::for_kind(context.roles.note_kind).is_empty()
+    {
+        context.contract = Some(super::contract::Context::load(vault));
+    }
 }
 
 fn execute_show(matches: &ArgMatches) -> i32 {
@@ -689,7 +698,8 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             );
         }
     };
-    let (context, _) = inspect_note(&vault, &relative, &current);
+    let (mut context, _) = inspect_note(&vault, &relative, &current);
+    load_contract(&vault, &mut context);
     let preview = match plan(&current, &context, &envelope) {
         Ok(preview) => preview,
         Err(error) => {
@@ -760,7 +770,8 @@ fn execute_update(matches: &ArgMatches) -> i32 {
             );
         }
     };
-    let (fresh_context, _) = inspect_note(&vault, &relative, &fresh);
+    let (mut fresh_context, _) = inspect_note(&vault, &relative, &fresh);
+    load_contract(&vault, &mut fresh_context);
     let planned = match plan(&fresh, &fresh_context, &envelope) {
         Ok(planned) => planned,
         Err(error) => {
@@ -890,10 +901,14 @@ fn print_update_report(
                 "fingerprint_after": view.fingerprint_after,
                 "inverse_ops": view.inverse_ops.iter().map(Op::to_json).collect::<Vec<_>>(),
                 "changes": changes,
+                "warnings": preview.warnings,
                 "properties": serde_json::to_value(&view.report.properties).unwrap_or(Value::Null),
             })
         );
     } else {
+        for warning in &preview.warnings {
+            println!("Warning [{}]: {}", warning.code, warning.message);
+        }
         print!(
             "{}",
             update_human(relative, dry_run, &view, &changes, &Styler::detect())

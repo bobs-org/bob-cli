@@ -33,9 +33,16 @@ pub(crate) struct Framing {
     pub(crate) prior: String,
 }
 
-/// The six v1 property operations.
+/// Property span operations and typed setting gestures.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
+    SettingSet {
+        setting: String,
+        value: JsonValue,
+    },
+    SettingClear {
+        setting: String,
+    },
     Set {
         key: String,
         value: JsonValue,
@@ -69,6 +76,8 @@ pub(crate) enum Op {
 impl Op {
     pub(crate) fn name(&self) -> &'static str {
         match self {
+            Self::SettingSet { .. } => "setting.set",
+            Self::SettingClear { .. } => "setting.clear",
             Self::Set { .. } => "prop.set",
             Self::Unset { .. } => "prop.unset",
             Self::Rename { .. } => "prop.rename",
@@ -80,7 +89,9 @@ impl Op {
 
     pub(crate) fn key(&self) -> &str {
         match self {
-            Self::Set { key, .. }
+            Self::SettingSet { setting: key, .. }
+            | Self::SettingClear { setting: key }
+            | Self::Set { key, .. }
             | Self::Unset { key }
             | Self::Rename { key, .. }
             | Self::Move { key, .. }
@@ -93,6 +104,19 @@ impl Op {
         let mut mapping = serde_json::Map::new();
         mapping.insert("op".to_owned(), JsonValue::String(self.name().into()));
         match self {
+            Self::SettingSet { setting, value } => {
+                mapping.insert(
+                    "setting".to_owned(),
+                    JsonValue::String(setting.clone()),
+                );
+                mapping.insert("value".to_owned(), value.clone());
+            }
+            Self::SettingClear { setting } => {
+                mapping.insert(
+                    "setting".to_owned(),
+                    JsonValue::String(setting.clone()),
+                );
+            }
             Self::Set {
                 key,
                 value,
@@ -280,6 +304,7 @@ fn parse_op(raw: &JsonValue, index: usize) -> Result<Op, PropsError> {
         op_error("envelope_wrong_type", index, "op must be a string")
     })?;
     match op_name {
+        "setting.set" | "setting.clear" => parse_setting(mapping, index, op_name == "setting.set"),
         "prop.set" => parse_set(mapping, index),
         "prop.unset" => parse_unset(mapping, index),
         "prop.rename" => parse_rename(mapping, index),
@@ -291,7 +316,39 @@ fn parse_op(raw: &JsonValue, index: usize) -> Result<Op, PropsError> {
             index,
             format!("unknown op {op_name:?}"),
         )
-        .with_hint("expected one of prop.set, prop.unset, prop.rename, prop.move, prop.set_yaml, prop.restore")),
+        .with_hint("expected one of prop.set, prop.unset, prop.rename, prop.move, prop.set_yaml, prop.restore, setting.set, setting.clear")),
+    }
+}
+
+fn parse_setting(
+    mapping: &serde_json::Map<String, JsonValue>,
+    index: usize,
+    set: bool,
+) -> Result<Op, PropsError> {
+    reject_unknown_op_keys(
+        mapping,
+        if set {
+            &["op", "setting", "value"]
+        } else {
+            &["op", "setting"]
+        },
+        index,
+    )?;
+    let setting = required_string(mapping, index, "setting")?;
+    if !super::contract::settings::known_id(&setting) {
+        return Err(super::contract::error("prop_bad_value", &setting, index, format!("unknown setting {setting:?}"), "Use summary, parent, color, task_type, clock, root, ready_cap, task_refresh, or project_name_aliases."));
+    }
+    if set {
+        let value = mapping.get("value").cloned().ok_or_else(|| {
+            op_error(
+                "envelope_missing_key",
+                index,
+                "setting.set requires value",
+            )
+        })?;
+        Ok(Op::SettingSet { setting, value })
+    } else {
+        Ok(Op::SettingClear { setting })
     }
 }
 

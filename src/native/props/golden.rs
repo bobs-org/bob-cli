@@ -147,6 +147,7 @@ mod tests {
 
     fn context(kind: NoteKind) -> InspectContext {
         InspectContext {
+            contract: None,
             normalized_path: "notes/example.md".to_owned(),
             roles: RoleContext {
                 note_kind: kind,

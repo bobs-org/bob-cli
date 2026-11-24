@@ -1,0 +1,606 @@
+[
+  {
+    "id": "inherit-to-inherit",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "inherit"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "inherit-to-on",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "on"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "inherit-to-off",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "off"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "inherit-to-types",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "types",
+          "types": [
+            "meet",
+            "CALL",
+            "Meet"
+          ]
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types:\n  - MEET\n  - CALL\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "on-to-inherit",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "inherit"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "on-to-on",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "on"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "on-to-off",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "off"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "on-to-types",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "types",
+          "types": [
+            "meet",
+            "CALL",
+            "Meet"
+          ]
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types:\n  - MEET\n  - CALL\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "off-to-inherit",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "inherit"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "off-to-on",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "on"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "off-to-off",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "off"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "off-to-types",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "types",
+          "types": [
+            "meet",
+            "CALL",
+            "Meet"
+          ]
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types:\n  - MEET\n  - CALL\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "types-to-inherit",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "inherit"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "types-to-on",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "on"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "types-to-off",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "off"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "types-to-types",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "types",
+          "types": [
+            "meet",
+            "CALL",
+            "Meet"
+          ]
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types:\n  - MEET\n  - CALL\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "love-shadowed-to-inherit",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "inherit"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "love-shadowed-to-on",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "on"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "love-shadowed-to-off",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "off"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "love-shadowed-to-types",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\noffclock_types: [MEET]\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "types",
+          "types": [
+            "meet",
+            "CALL",
+            "Meet"
+          ]
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types:\n  - MEET\n  - CALL\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "body-shadowed-to-inherit",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET, CALL]\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "inherit"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "body-shadowed-to-on",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET, CALL]\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "on"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: false\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "body-shadowed-to-off",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET, CALL]\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "off"
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock: true\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "body-shadowed-to-types",
+    "note": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types: [MEET, CALL]\noffclock: false\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "types",
+          "types": [
+            "meet",
+            "CALL",
+            "Meet"
+          ]
+        }
+      }
+    ],
+    "candidate": "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\noffclock_types:\n  - MEET\n  - CALL\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "crlf-inline-comments-unrelated-bytes",
+    "note": "﻿---\r\ntype: \"[[area]]\"\r\ncolor: BLUE # hue\r\noffclock_types: [MEET] # clock\r\nunknown: {a:  2} # untouched\r\n---\r\nbody",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "color",
+        "value": "gray"
+      },
+      {
+        "op": "setting.set",
+        "setting": "clock",
+        "value": {
+          "mode": "types",
+          "types": [
+            "call"
+          ]
+        }
+      }
+    ],
+    "candidate": "﻿---\r\ntype: \"[[area]]\"\r\ncolor: grey # hue\r\noffclock_types: # clock\r\n  - CALL\r\nunknown: {a:  2} # untouched\r\n---\r\nbody"
+  },
+  {
+    "id": "theme-migration",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntheme: WRITE # legacy\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "task_type",
+        "value": "build"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntask_type: BUILD\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "theme-shadow-cleanup",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntheme: WRITE # legacy\ntask_type: FIX # preferred\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "task_type",
+        "value": "build"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntask_type: BUILD # preferred\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "theme-clear-both",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntheme: WRITE # legacy\ntask_type: FIX # preferred\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.clear",
+        "setting": "task_type"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "hue-canonical",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ncolor: GRAY # ink\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "color",
+        "value": "gray"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ncolor: grey # ink\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "cap-canonical",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nready_cap: false # legacy\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "ready_cap",
+        "value": "OFF"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nready_cap: \"off\" # legacy\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "review-days",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntask_refresh: 1 # residence\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "task_refresh",
+        "value": 365
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntask_refresh: 365 # residence\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "summary-text",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Before # catalog\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "summary",
+        "value": "After"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: After # catalog\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "capture-names",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nproject_name_aliases: [one] # capture\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "project_name_aliases",
+        "value": [
+          "two"
+        ]
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nproject_name_aliases: [two] # capture\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "clear-color",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ncolor: red # setting\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.clear",
+        "setting": "color"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "clear-ready_cap",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nready_cap: 1 # setting\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.clear",
+        "setting": "ready_cap"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "clear-task_refresh",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\ntask_refresh: 1 # setting\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.clear",
+        "setting": "task_refresh"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "clear-summary",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Home # setting\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.clear",
+        "setting": "summary"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "clear-project_name_aliases",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]'\nproject_name_aliases: [one] # setting\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.clear",
+        "setting": "project_name_aliases"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: '[[dev]]'\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "parent-quoted",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: '[[dev]]' # home\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "parent",
+        "value": "[[body]]"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: \"[[body]]\" # home\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "parent-bare",
+    "kind": "area",
+    "note": "---\ntype: '[[area]]'\nparent: [[dev]] # home\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "parent",
+        "value": "[[body]]"
+      }
+    ],
+    "candidate": "---\ntype: '[[area]]'\nparent: \"[[body]]\" # home\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "stats-root-set",
+    "kind": "project",
+    "note": "---\ntype: '[[project]]'\nparent: '[[sase]]' # home\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.set",
+        "setting": "root",
+        "value": true
+      }
+    ],
+    "candidate": "---\ntype: '[[project]]'\nparent: '[[sase]]' # home\nroot: true\n---\n# Area\n\nbody stays  \n"
+  },
+  {
+    "id": "stats-root-clear",
+    "kind": "project",
+    "note": "---\ntype: '[[project]]'\nparent: '[[sase]]' # home\nroot: true # stats\n---\n# Area\n\nbody stays  \n",
+    "ops": [
+      {
+        "op": "setting.clear",
+        "setting": "root"
+      }
+    ],
+    "candidate": "---\ntype: '[[project]]'\nparent: '[[sase]]' # home\n---\n# Area\n\nbody stays  \n"
+  }
+]

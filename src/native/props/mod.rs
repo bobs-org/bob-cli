@@ -9,6 +9,7 @@
 //! can be rerun after locking.
 
 pub(crate) mod cli;
+pub(crate) mod contract;
 pub(crate) mod document;
 pub(crate) mod emit;
 pub(crate) mod fingerprint;
@@ -43,10 +44,11 @@ pub(crate) struct PropsError {
 
 /// Per-note inputs already resolved by the caller. `roles` carries the note
 /// kind and any discovered record schema; this pure seam performs no I/O.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct InspectContext {
     pub(crate) normalized_path: String,
     pub(crate) roles: RoleContext,
+    pub(crate) contract: Option<contract::Context>,
 }
 
 /// Shared source, semantic, report, and diagnostic view for one inspection.
@@ -119,6 +121,7 @@ mod tests {
 
     fn context(note_kind: NoteKind) -> InspectContext {
         InspectContext {
+            contract: None,
             normalized_path: "notes/example.md".to_owned(),
             roles: RoleContext {
                 note_kind,

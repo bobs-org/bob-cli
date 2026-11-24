@@ -394,7 +394,9 @@ fn scan_capture_targets_inner(bob_dir: &Path) -> CaptureTargetsReport {
 
 /// Cross-note alias problems: two notes claiming one alias, and an alias
 /// equal to another candidate's stem (the stem wins at resolve time).
-fn alias_conflict_warnings(targets: &[CaptureTarget]) -> Vec<ScanNote> {
+pub(crate) fn alias_conflict_warnings(
+    targets: &[CaptureTarget],
+) -> Vec<ScanNote> {
     use std::collections::BTreeMap;
 
     let mut warnings = Vec::new();

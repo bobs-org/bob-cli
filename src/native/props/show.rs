@@ -50,6 +50,9 @@ pub(crate) struct ShowProperty {
     pub(crate) reason: Option<String>,
     pub(crate) duplicate: bool,
     pub(crate) opaque: bool,
+    pub(crate) legacy: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) setting: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) diagnostic: Option<String>,
 }
@@ -83,6 +86,23 @@ pub(crate) fn build_report(
                 reason,
                 duplicate: entry.duplicate,
                 opaque: entry.opaque,
+                legacy: matches!(
+                    entry.key.as_str(),
+                    "task_count" | "open_task_count"
+                ) || (roles.note_kind
+                    == super::roles::NoteKind::Project
+                    && entry.key == "scheduled")
+                    || (super::contract::settings::for_key(
+                        roles.note_kind,
+                        &entry.key,
+                    )
+                    .is_some()
+                        && entry.key == "theme"),
+                setting: super::contract::settings::for_key(
+                    roles.note_kind,
+                    &entry.key,
+                )
+                .map(|setting| setting.id),
                 diagnostic: entry.diagnostic.clone().or(role_diagnostic),
             }
         })

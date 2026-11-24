@@ -112,7 +112,7 @@ impl RoleContext {
         if key == "type" {
             return locked(
                 Role::Identity,
-                "`type` identifies the note's property-card species and cannot be changed here.",
+                "Defines the note's kind; change it in YAML (y).",
             );
         }
         if matches!(self.note_kind, NoteKind::Record | NoteKind::Album)
@@ -140,6 +140,14 @@ impl RoleContext {
                 ),
                 diagnostic: None,
             };
+        }
+        if matches!(key, "task_count" | "open_task_count") {
+            let mut role = loose();
+            role.reason = Some(
+                "Retired count — nothing maintains it; Ctrl+D removes it"
+                    .to_owned(),
+            );
+            return role;
         }
         if is_derived_key(key)
             || (self.note_kind == NoteKind::Reference
@@ -468,7 +476,7 @@ fn potential_record_folder(path: &Path, album_paths: &[String]) -> bool {
 /// rewrites; the Zorg migration and Gmail archive paths own `zorg_*` and
 /// `generated_from_zorg*`; reference sync/attach/overwrite own the write-once
 /// `source_markdown` pointer; `bob task archive` owns `done_tasks`; the
-/// project-tasks plugin owns `task_count`/`open_task_count`; `bob projects
+/// retired `task_count`/`open_task_count` keys stay loose; `bob projects
 /// sync` owns project `status`/`scheduled`. `created` and `template` stay
 /// loose: a creation default alone does not make a field derived.
 fn is_derived_key(key: &str) -> bool {
@@ -478,8 +486,6 @@ fn is_derived_key(key: &str) -> bool {
         || key.starts_with("zorg_")
         || key.starts_with("generated_from_zorg")
         || key == "done_tasks"
-        || key == "task_count"
-        || key == "open_task_count"
 }
 
 fn derived_role(key: &str, note_kind: NoteKind) -> PropertyRole {
@@ -498,20 +504,19 @@ fn derived_role(key: &str, note_kind: NoteKind) -> PropertyRole {
         )
     } else if key == "done_tasks" {
         (
-            "bob task archive",
-            "bob task archive owns the done_tasks archive link.",
-        )
-    } else if key == "task_count" || key == "open_task_count" {
-        (
-            "bob-project-tasks",
-            "the project-tasks plugin derives these counts from the note's tasks.",
+            "task archive",
+            "Pairs this note with its done/ archive — managed by bob task archive",
         )
     } else if note_kind == NoteKind::Project
         && matches!(key, "status" | "scheduled")
     {
         (
-            "bob projects sync",
-            "bob projects sync owns project status and scheduled dates.",
+            "projects",
+            if key == "status" {
+                "Mirrors the ^prj checkbox — close, cancel, or reopen ^prj."
+            } else {
+                "Belongs on the ^prj line; bob projects sync moves it for open projects"
+            },
         )
     } else if key.ends_with("_digest")
         || key.ends_with("_drafted")
@@ -695,19 +700,16 @@ mod tests {
         assert_eq!(project.classify("status").role, Some(Role::Derived));
         assert_eq!(
             project.classify("status").owner.as_deref(),
-            Some("bob projects sync")
+            Some("projects")
         );
         assert_eq!(project.classify("scheduled").role, Some(Role::Derived));
         assert_eq!(project.classify("done_tasks").role, Some(Role::Derived));
         assert_eq!(
             project.classify("done_tasks").owner.as_deref(),
-            Some("bob task archive")
+            Some("task archive")
         );
-        assert_eq!(project.classify("task_count").role, Some(Role::Derived));
-        assert_eq!(
-            project.classify("open_task_count").role,
-            Some(Role::Derived)
-        );
+        assert_eq!(project.classify("task_count").role, Some(Role::Loose));
+        assert_eq!(project.classify("open_task_count").role, Some(Role::Loose));
         assert_eq!(notebook.classify("created").role, Some(Role::Loose));
         assert_eq!(
             reference.classify("source_markdown").role,
@@ -841,7 +843,7 @@ mod tests {
         assert_eq!(area.note_kind, NoteKind::Area);
         assert_eq!(area.classify("done_tasks").role, Some(Role::Derived));
         assert_eq!(area.classify("status").role, Some(Role::Loose));
-        assert_eq!(area.classify("task_count").role, Some(Role::Derived));
+        assert_eq!(area.classify("task_count").role, Some(Role::Loose));
         assert_eq!(area.classify("template").role, Some(Role::Loose));
 
         let bom_area = resolve_note_context(
