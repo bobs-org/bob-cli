@@ -432,7 +432,7 @@ vault-relative Markdown path (optional `.md`) or an absolute path inside the vau
 | Command | Flag | Shape | Contract |
 | --- | --- | --- | --- |
 | `bob props show NOTE` | `-f json` | Path, note kind, `props_v1`/`props_contract_v1`, semantic fingerprint, frontmatter state, ordered properties with values, kinds, styles, ownership roles, diagnostics, settings `contract` | [Show report](../props.md#show-report), [Settings contract](../props.md#settings-contract) |
-| `bob props update NOTE` | `-i FILE` (`-` for stdin), `-f json`; `-d` previews | Path, dry-run/changed flags, before/after fingerprints, inverse operations, frontmatter diff, warnings, `effects`, resulting properties | [Update envelope](../props.md#update-envelope-and-operations), [Settings contract](../props.md#settings-contract) |
+| `bob props update NOTE` | `-i FILE` (`-` for stdin), `-f json`; `-d` previews | Path, dry-run/changed flags, before/after fingerprints, inverse operations, frontmatter diff, warnings, `effects`, resulting properties, settings `contract` on area/project/bank notes | [Update envelope](../props.md#update-envelope-and-operations), [Settings contract](../props.md#settings-contract) |
 
 `show` may succeed with damaged YAML; frontmatter state and diagnostics identify
 repairs needed. An update's `expect` comes from `show`'s fingerprint, identifying

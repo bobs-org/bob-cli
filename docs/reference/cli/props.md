@@ -82,7 +82,7 @@ See docs/props.md for the report contract and kind/style rules.
 Apply a guarded property edit to one note
 
 ```text title="bob props update --help"
-Apply a guarded JSON envelope of prop.set, prop.unset, prop.rename, prop.move, prop.set_yaml, prop.restore, setting.set, and setting.clear operations to one vault note's frontmatter. The envelope carries a semantic fingerprint in `expect`; Bob re-reads the note under the vault lock and replans against those fresh bytes, preserving unrelated body and formatting edits. Use --dry-run to preview the candidate, fingerprints, inverse ops, frontmatter diff, and setting effects without writing. Owned keys stay read-only here. See docs/props.md for the envelope, operations, undo, and JSON.
+Apply a guarded JSON envelope of prop.set, prop.unset, prop.rename, prop.move, prop.set_yaml, prop.restore, setting.set, and setting.clear operations to one vault note's frontmatter. The envelope carries a semantic fingerprint in `expect`; Bob re-reads the note under the vault lock and replans against those fresh bytes, preserving unrelated body and formatting edits. Use --dry-run to preview the candidate, fingerprints, inverse ops, frontmatter diff, setting effects, and the candidate settings contract without writing. Owned keys stay read-only here. See docs/props.md for the envelope, operations, undo, and JSON.
 
 Usage: bob props update [OPTIONS] --input <FILE> <NOTE>
 

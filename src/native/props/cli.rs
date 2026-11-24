@@ -94,9 +94,9 @@ pub(crate) fn update_command() -> ClapCommand {
              note under the vault lock and replans against those fresh \
              bytes, preserving unrelated body and formatting edits. Use \
              --dry-run to preview the candidate, fingerprints, inverse ops, \
-             frontmatter diff, and setting effects without writing. Owned \
-             keys stay read-only here. See docs/props.md for the envelope, \
-             operations, undo, and JSON.",
+             frontmatter diff, setting effects, and the candidate settings \
+             contract without writing. Owned keys stay read-only here. See \
+             docs/props.md for the envelope, operations, undo, and JSON.",
         )
         .after_help(
             "Examples:\n  \
@@ -950,20 +950,7 @@ fn print_update_report(
     if format == OutputFormat::Json {
         println!(
             "{}",
-            json!({
-                "ok": true,
-                "schema_version": super::show::SCHEMA_VERSION,
-                "path": relative,
-                "dry_run": dry_run,
-                "changed": view.changed,
-                "fingerprint_before": view.fingerprint_before,
-                "fingerprint_after": view.fingerprint_after,
-                "inverse_ops": view.inverse_ops.iter().map(Op::to_json).collect::<Vec<_>>(),
-                "changes": changes,
-                "warnings": preview.warnings,
-                "effects": preview.effects,
-                "properties": serde_json::to_value(&view.report.properties).unwrap_or(Value::Null),
-            })
+            update_report_json(relative, dry_run, &view, &changes, preview)
         );
     } else {
         for warning in &preview.warnings {
@@ -1022,6 +1009,34 @@ fn update_human(
     ));
     lines.push(String::new());
     lines.join("\n")
+}
+
+fn update_report_json(
+    relative: &str,
+    dry_run: bool,
+    view: &PlannedView<'_>,
+    changes: &[String],
+    preview: &super::plan::PlanOutcome,
+) -> Value {
+    let mut payload = json!({
+        "ok": true,
+        "schema_version": super::show::SCHEMA_VERSION,
+        "path": relative,
+        "dry_run": dry_run,
+        "changed": view.changed,
+        "fingerprint_before": view.fingerprint_before,
+        "fingerprint_after": view.fingerprint_after,
+        "inverse_ops": view.inverse_ops.iter().map(Op::to_json).collect::<Vec<_>>(),
+        "changes": changes,
+        "warnings": preview.warnings,
+        "effects": preview.effects,
+        "properties": serde_json::to_value(&view.report.properties).unwrap_or(Value::Null),
+    });
+    if let Some(contract) = &view.report.contract {
+        payload["contract"] =
+            serde_json::to_value(contract).unwrap_or(Value::Null);
+    }
+    payload
 }
 
 /// Minimal frontmatter-only line diff between two note images.

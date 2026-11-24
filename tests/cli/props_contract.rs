@@ -255,6 +255,145 @@ fn show_contract_covers_root_blocked_and_terminal_projects() {
 }
 
 #[test]
+fn update_json_returns_candidate_contract_after_clear_apply_and_undo() {
+    let vault = vault("update-contract");
+    homes(vault.path());
+    write_note(
+        vault.path(),
+        "dev.md",
+        "---\ntype: '[[area]]'\nparent: '[[area]]'\ncolor: blue\n---\n",
+    );
+    let child = "---\ntype: '[[area]]'\nparent: '[[dev]]'\ncolor: red\nready_cap: 3\ntask_refresh: 2\n---\n# Child\n";
+    write_note(vault.path(), "child.md", child);
+    let groceries = "---\ntitle: Groceries\ncount: 3\n---\n\n# Groceries\n";
+    write_note(vault.path(), "notes/groceries.md", groceries);
+    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
+    write_note(vault.path(), "bank.md", bank);
+
+    let noop = envelope(vault.path(), "child.md", json!([]));
+    let noop_preview = report(&update(
+        vault.path(),
+        "child.md",
+        &noop,
+        &["-d", "-f", "json"],
+    ));
+    assert_eq!(
+        fs::read_to_string(vault.path().join("child.md")).unwrap(),
+        child
+    );
+    assert_eq!(noop_preview["contract"]["kind"], "area");
+    assert_eq!(setting(&noop_preview, "color")["declared"], true);
+    assert_eq!(
+        setting(&noop_preview, "color")["effective"]["source"],
+        "self"
+    );
+
+    let input = envelope(
+        vault.path(),
+        "child.md",
+        json!([
+            {"op":"setting.clear","setting":"color"},
+            {"op":"setting.clear","setting":"ready_cap"},
+            {"op":"setting.clear","setting":"task_refresh"}
+        ]),
+    );
+    let before_mtime = mtime(&vault.path().join("child.md"));
+    let preview_output =
+        update(vault.path(), "child.md", &input, &["-d", "-f", "json"]);
+    assert_success(&preview_output);
+    let preview = report(&preview_output);
+    assert_eq!(
+        fs::read_to_string(vault.path().join("child.md")).unwrap(),
+        child
+    );
+    assert_eq!(mtime(&vault.path().join("child.md")), before_mtime);
+    let color = setting(&preview, "color");
+    assert_eq!(color["declared"], false);
+    assert_eq!(color["value"], json!(null));
+    assert_eq!(color["effective"]["source"], "inherited");
+    assert_eq!(color["effective"]["value"], "blue");
+    assert_eq!(color["effective"]["from"], "dev.md");
+    assert_eq!(color["effective"]["label"], "● blue · from dev");
+    let cap = setting(&preview, "ready_cap");
+    assert_eq!(cap["declared"], false);
+    assert_eq!(cap["effective"]["source"], "config");
+    assert_eq!(
+        cap["effective"]["label"],
+        "5 · Bob setting (plan.max_ready_per_note)"
+    );
+    let review = setting(&preview, "task_refresh");
+    assert_eq!(review["declared"], false);
+    assert_eq!(review["effective"]["source"], "config");
+    assert_eq!(
+        review["effective"]["label"],
+        "7 days · Bob setting (freshness.interval)"
+    );
+
+    let applied_output =
+        update(vault.path(), "child.md", &input, &["-f", "json"]);
+    assert_success(&applied_output);
+    let applied = report(&applied_output);
+    assert_eq!(applied["contract"], preview["contract"]);
+    let shown = report(&show(vault.path(), "child.md", &[]));
+    assert_eq!(applied["contract"], shown["contract"]);
+
+    let undo = json!({
+        "schema_version": 1,
+        "expect": applied["fingerprint_after"],
+        "ops": applied["inverse_ops"]
+    });
+    let restored_output =
+        update(vault.path(), "child.md", &undo.to_string(), &["-f", "json"]);
+    assert_success(&restored_output);
+    let restored = report(&restored_output);
+    assert_eq!(
+        fs::read_to_string(vault.path().join("child.md")).unwrap(),
+        child
+    );
+    assert_eq!(setting(&restored, "color")["declared"], true);
+    assert_eq!(setting(&restored, "color")["effective"]["source"], "self");
+    assert_eq!(setting(&restored, "ready_cap")["declared"], true);
+    assert_eq!(setting(&restored, "task_refresh")["declared"], true);
+
+    let bank_input = envelope(vault.path(), "bank.md", json!([]));
+    let bank_preview = report(&update(
+        vault.path(),
+        "bank.md",
+        &bank_input,
+        &["-d", "-f", "json"],
+    ));
+    assert_eq!(
+        fs::read_to_string(vault.path().join("bank.md")).unwrap(),
+        bank
+    );
+    assert_eq!(bank_preview["contract"]["kind"], "bank");
+    assert_eq!(
+        setting(&bank_preview, "summary")["effective"]["value"],
+        "Bank"
+    );
+
+    let ordinary = envelope(
+        vault.path(),
+        "notes/groceries.md",
+        json!([{"op":"prop.set","key":"count","value":4}]),
+    );
+    let ordinary_preview = report(&update(
+        vault.path(),
+        "notes/groceries.md",
+        &ordinary,
+        &["-d", "-f", "json"],
+    ));
+    assert!(
+        ordinary_preview.get("contract").is_none(),
+        "{ordinary_preview}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.path().join("notes/groceries.md")).unwrap(),
+        groceries
+    );
+}
+
+#[test]
 fn parent_rehome_dry_run_names_catalog_syncs() {
     let vault = vault("contract-effects");
     homes(vault.path());

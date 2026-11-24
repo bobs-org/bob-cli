@@ -547,6 +547,47 @@ fn show_contract_reports_root_blocked_and_terminal_projects() {
 }
 
 #[test]
+fn plan_clear_reports_ghost_color_and_residence_from_inherited_and_config() {
+    let note = "---\ntype: '[[area]]'\nparent: '[[dev]]'\ncolor: red\nready_cap: 3\ntask_refresh: 2\n---\n";
+    let noop = run(note, NoteKind::Area, json!([])).unwrap();
+    assert!(!noop.changed);
+    assert_eq!(setting(&noop.report, "color").effective.source, "self");
+    assert_eq!(setting(&noop.report, "ready_cap").effective.source, "self");
+
+    let result = roundtrip(
+        note,
+        NoteKind::Area,
+        json!([
+            {"op":"setting.clear","setting":"color"},
+            {"op":"setting.clear","setting":"ready_cap"},
+            {"op":"setting.clear","setting":"task_refresh"}
+        ]),
+    );
+    let color = setting(&result.report, "color");
+    assert!(!color.declared);
+    assert_eq!(color.value, json!(null));
+    assert_eq!(color.effective.source, "inherited");
+    assert_eq!(color.effective.value, json!("blue"));
+    assert_eq!(color.effective.from.as_deref(), Some("dev.md"));
+    assert_eq!(color.effective.label, "● blue · from dev");
+    let cap = setting(&result.report, "ready_cap");
+    assert!(!cap.declared);
+    assert_eq!(cap.effective.source, "config");
+    assert_eq!(cap.effective.value, json!(5));
+    assert_eq!(
+        cap.effective.label,
+        "5 · Bob setting (plan.max_ready_per_note)"
+    );
+    let review = setting(&result.report, "task_refresh");
+    assert!(!review.declared);
+    assert_eq!(review.effective.source, "config");
+    assert_eq!(
+        review.effective.label,
+        "7 days · Bob setting (freshness.interval)"
+    );
+}
+
+#[test]
 fn parent_rehome_names_syncs_and_inherited_settings_name_scope() {
     let note = "---\ntype: '[[project]]'\nparent: '[[dev]]'\nstatus: wip\n---\n- [ ] #task #prj Work ^prj\n";
     let moved = run(

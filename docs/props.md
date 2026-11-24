@@ -342,6 +342,12 @@ report how many descendant notes pick up the new value. Ready cap and Review
 report that they apply to tasks living in this note only. Text update output
 prints the same messages.
 
+Successful `bob props update -f json` also returns the planned post-image
+`contract` on area, project, and bank notes, using the same shape as
+`props show`. Preview reports the candidate; apply and restore report the
+confirmed result. Semantic no-ops include it too. Ordinary notes omit the
+field. The schema version stays `1`.
+
 ## Update envelope and operations
 
 `bob props update` takes a strict JSON envelope on `-i FILE` (`-` reads
@@ -440,9 +446,10 @@ write or change mtime.
 
 Update output includes `ok`, `schema_version`, `path`, `dry_run`, `changed`,
 `fingerprint_before`, `fingerprint_after`, `inverse_ops`, `changes` as a
-frontmatter-only line diff, `warnings`, `effects` from setting writes, and the
-post-image `properties`. Invalid input reports the shared typed error,
-including the failing operation where known.
+frontmatter-only line diff, `warnings`, `effects` from setting writes, the
+post-image `properties`, and the post-image `contract` on area, project, and
+bank notes. Invalid input reports the shared typed error, including the
+failing operation where known.
 
 Exit codes: 0 for success (including recovery `show` and no-op updates);
 2 for usage, protocol, semantic, and ownership refusals; 1 for vault I/O,
