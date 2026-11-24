@@ -808,7 +808,13 @@ existing backlog `-d` / `-c` path. The baseline needs a live run on the
 writer that has the modify grant: the first such run after enabling records
 enablement and open observations; only a later observed open-to-closed
 transition archives automatically. A thread already closed at the baseline is
-historical backlog and needs a matching preview digest. Reopening and closing
+historical backlog and needs a matching preview digest. A live sync records
+an open observation for every thread it files in that same run, so closing a
+freshly filed task before the next sync still archives automatically.
+Historical backlog then means only threads that were already closed when the
+archive phase first saw them, for example after first enablement, an
+`archive_label` rename, or a manual `bob gmail save` whose task closed
+before any live sync ran. Reopening and closing
 entirely between sync observations cannot be detected. An `archive_label`
 rename re-baselines: the next live run records a new enablement, old-epoch
 closes project as backlog and need `-c`, and owned receipts keep their old
@@ -899,8 +905,10 @@ Use `-d` to preview without writing, `-c DIGEST` to confirm the exact
 historical backlog or a batch above `archive_max`, and `-n` to skip archive
 planning for one run. A pause shows every candidate thread, its `decision`
 (`would_archive` or `kept:<reason>`), and the digest, archives none, and
-exits 1. A supplied digest that no longer matches the current saved IDs,
-labels, or tasks makes no archive writes. Archive failures do not undo
+exits 1. A pause also emits one warning naming the gate reason, the
+paused-thread count, and the confirm command with the digest. A supplied
+digest that no longer matches the current saved IDs, labels, or tasks makes
+no archive writes. Archive failures do not undo
 completed filing or watch work; `invalid_grant` stops remaining Gmail
 mutations. `-q` still shows archive and let-go rows because those changes
 matter to the Inbox, and it prints a first-seen `review` hold the same way,
@@ -1270,7 +1278,8 @@ the run), `archive[]`, `archive_hints[]`, `archive_enabled`,
 kinds of every cause that set `ok: false` — each filing `kind`, the archive
 `kind`, watch/reopen/discovery `GmailError` kinds, budget-exhausted transient
 kinds or `transient`, other deferrals as `deferred`, first-seen route
-problems as `route_problem`, and anything untyped as `failed`). Archive rows carry
+problems as `route_problem`, any paused archive gate as `archive_paused`,
+and anything untyped as `failed`). Archive rows carry
 `thread_id`, `note`, `action`, `reason`, `decision`, exact sorted message IDs,
 and task path/line/block-ID locators, never task text. Review rows also carry
 `first_seen` and a typed `hint`. Only dry-run and paused

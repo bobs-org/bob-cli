@@ -314,6 +314,19 @@ fn dry_run_pauses_backlog_and_confirms_with_the_digest() {
         .to_string();
     assert_eq!(digest.len(), 64);
     assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_eq!(value["failure_kinds"], json!(["archive_paused"]));
+    let expected = format!(
+        "Gmail archive paused (backlog_unconfirmed): 1 closed thread needs confirmation; preview with `bob gmail sync -d`, then confirm with `bob gmail sync -c {digest}`"
+    );
+    assert!(
+        value["warnings"].as_array().is_some_and(|warnings| {
+            warnings
+                .iter()
+                .any(|warning| warning.as_str() == Some(expected.as_str()))
+        }),
+        "dry-run pause names the gate, count, and digest:\n{}",
+        serde_json::to_string_pretty(&value).unwrap()
+    );
     assert!(
         !stderr(&paused).contains("skipped archive preview"),
         "the enablement fixture must parse:\n{}",

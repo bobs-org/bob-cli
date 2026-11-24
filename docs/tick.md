@@ -111,7 +111,8 @@ instead of every 5 minutes. Gate waits (`note_missing`,
 Failures name their cause: the row `detail` carries the child's message on
 the first line and its hint on the second line when they differ. A Gmail
 failure carries the first `failure_kinds` entry plus the first warnings
-line.
+line. A paused archive gate reads `archive_paused` and the pause warning
+with the confirm command.
 
 Reasons are stable codes: `due`, `never_ran`, `follows_intake`, `follow_up`,
 `named`, and `all` explain a run; `not_due`, `manual`, `off`, and `unchanged`

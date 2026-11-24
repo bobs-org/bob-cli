@@ -1125,4 +1125,28 @@ mod tests {
         assert!(failed.detail.contains("network"), "{}", failed.detail);
         let _ = generic_ok(&gmail_like, "due");
     }
+
+    #[test]
+    fn gmail_archive_paused_fails_with_kind_and_warning_detail() {
+        let warning = "Gmail archive paused (backlog_unconfirmed): 1 closed thread needs confirmation; preview with `bob gmail sync -d`, then confirm with `bob gmail sync -c abcd`";
+        let output = RawRunOutput {
+            status: Some(1),
+            stdout: serde_json::json!({
+                "ok": false,
+                "failure_kinds": ["archive_paused"],
+                "warnings": [warning],
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        };
+        let adapted = gmail(&output, "due");
+        assert_eq!(adapted.outcome, Outcome::Failed);
+        assert_eq!(adapted.reason, "exit_nonzero");
+        assert_eq!(adapted.detail, format!("archive_paused\n{warning}"));
+    }
 }

@@ -270,7 +270,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 return Ok(());
             }
         };
-        let mut scan = match scan_archive_evidence(
+        let raw_scan = match scan_archive_evidence(
             vault,
             Path::new(config.folder()),
             &index,
@@ -287,7 +287,7 @@ pub(crate) fn apply_live<R: GmailRead>(
                 return Ok(());
             }
         };
-        scan = scan.with_saved_id_snapshot(saved_id_snapshot);
+        let mut scan = raw_scan.with_saved_id_snapshot(saved_id_snapshot);
         let mut journal = match ArchiveJournal::load(vault) {
             Ok(journal) => journal,
             Err(error) => {
@@ -391,28 +391,12 @@ pub(crate) fn apply_live<R: GmailRead>(
                 return Ok(());
             }
             if preview.plan.gate.is_paused() {
-                for row in &preview.plan.rows {
-                    outcome.rows.push(ArchiveRow {
-                        thread_id: row.key.thread_id().to_string(),
-                        note: row.note.clone(),
-                        action: ACTION_PAUSED_LIVE,
-                        reason: gate_reason(&preview.plan.gate),
-                        decision: planned_decision(&row.decision),
-                        messages: row.messages(),
-                        tasks: row
-                            .tasks
-                            .iter()
-                            .map(|task| ArchiveTaskRef {
-                                path: task.path.clone(),
-                                line: task.line,
-                                block_id: task.block_id.clone(),
-                            })
-                            .collect(),
-                        first_seen: false,
-                        hint: None,
-                    });
+                if let Some(warning) =
+                    archive_preview::paused_gate_warning(&preview.plan)
+                {
+                    outcome.warnings.push(warning);
                 }
-                outcome.failed = true;
+                append_paused_rows(&preview.plan, &mut outcome);
                 outcome.hints =
                     super::report::archive_restore_hints(&scan, &journal);
                 return Ok(());
@@ -421,14 +405,17 @@ pub(crate) fn apply_live<R: GmailRead>(
         }
 
         // Baseline: enablement plus open observations. Transitions only; an
-        // unchanged hourly run appends nothing.
+        // unchanged hourly run appends nothing. Open observations carry no
+        // saved IDs, so pass the unfrozen post-filing scan: threads filed in
+        // this run are observed open at birth. Without this, a task closed
+        // before the next sync would be misread as historical backlog.
         if ensure_baseline(
             vault,
             &host,
             config,
             account,
             &initial_labels,
-            &scan,
+            &raw_scan,
             &mut journal,
         )? {
             enrollment = match EnrollmentFold::load(vault) {
@@ -632,28 +619,12 @@ pub(crate) fn apply_live<R: GmailRead>(
         // still runs on every enabled live run with the modify grant, including
         // paused runs; `invalid_grant` still aborts.
         if preview.plan.gate.is_paused() {
-            for row in &preview.plan.rows {
-                outcome.rows.push(ArchiveRow {
-                    thread_id: row.key.thread_id().to_string(),
-                    note: row.note.clone(),
-                    action: ACTION_PAUSED_LIVE,
-                    reason: gate_reason(&preview.plan.gate),
-                    decision: planned_decision(&row.decision),
-                    messages: row.messages(),
-                    tasks: row
-                        .tasks
-                        .iter()
-                        .map(|task| ArchiveTaskRef {
-                            path: task.path.clone(),
-                            line: task.line,
-                            block_id: task.block_id.clone(),
-                        })
-                        .collect(),
-                    first_seen: false,
-                    hint: None,
-                });
+            if let Some(warning) =
+                archive_preview::paused_gate_warning(&preview.plan)
+            {
+                outcome.warnings.push(warning);
             }
-            outcome.failed = true;
+            append_paused_rows(&preview.plan, &mut outcome);
             let owned_before = owned_before_snapshot.clone();
             release_owned(
                 vault,

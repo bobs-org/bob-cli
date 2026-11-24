@@ -180,6 +180,33 @@ pub(crate) struct ArchivePlan {
     pub gate: ArchiveGate,
 }
 
+/// Body-free warning for a paused confirmation gate. `confirm_mismatch`
+/// already has its own warning; this covers `backlog_unconfirmed` and
+/// `over_limit`. Journals and reports stay free of subjects and task text.
+pub(crate) fn paused_gate_warning(plan: &ArchivePlan) -> Option<String> {
+    let ArchiveGate::Paused { reason } = &plan.gate else {
+        return None;
+    };
+    if *reason == GATE_MISMATCH {
+        return None;
+    }
+    let count = plan.rows.len();
+    let (noun, verb) = if count == 1 {
+        ("thread", "needs")
+    } else {
+        ("threads", "need")
+    };
+    let mut warning = format!(
+        "Gmail archive paused ({reason}): {count} closed {noun} {verb} confirmation; preview with `bob gmail sync -d`"
+    );
+    if let Some(digest) = &plan.digest {
+        warning.push_str(&format!(
+            ", then confirm with `bob gmail sync -c {digest}`"
+        ));
+    }
+    Some(warning)
+}
+
 /// One non-actionable hold that needs Bryan's review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArchiveReview {
@@ -2158,6 +2185,59 @@ mod tests {
                 reason: GATE_MISMATCH
             }
         );
+    }
+
+    #[test]
+    fn paused_gate_warning_names_reason_count_and_digest() {
+        let row = |historical: bool| ArchivePreviewRow {
+            key: key("aa11"),
+            note: "mail/a.md".to_string(),
+            tasks: Vec::new(),
+            saved_ids: vec!["aa01".to_string()],
+            note_fingerprint: String::new(),
+            enable_epoch: String::new(),
+            generation: None,
+            opened_by: None,
+            after_generation: None,
+            historical,
+            decision: PreviewDecision::Archive {
+                archive_ids: vec!["aa01".to_string()],
+            },
+        };
+        let backlog = ArchivePlan {
+            rows: vec![row(true)],
+            digest: Some("abcd".to_string()),
+            gate: ArchiveGate::Paused {
+                reason: GATE_BACKLOG,
+            },
+        };
+        assert_eq!(
+            paused_gate_warning(&backlog).as_deref(),
+            Some(
+                "Gmail archive paused (backlog_unconfirmed): 1 closed thread needs confirmation; preview with `bob gmail sync -d`, then confirm with `bob gmail sync -c abcd`"
+            )
+        );
+        let over_limit = ArchivePlan {
+            rows: (0..11).map(|_| row(false)).collect(),
+            digest: Some("ef01".to_string()),
+            gate: ArchiveGate::Paused {
+                reason: GATE_OVER_LIMIT,
+            },
+        };
+        assert_eq!(
+            paused_gate_warning(&over_limit).as_deref(),
+            Some(
+                "Gmail archive paused (over_limit): 11 closed threads need confirmation; preview with `bob gmail sync -d`, then confirm with `bob gmail sync -c ef01`"
+            )
+        );
+        let mismatch = ArchivePlan {
+            rows: vec![row(true)],
+            digest: Some("abcd".to_string()),
+            gate: ArchiveGate::Paused {
+                reason: GATE_MISMATCH,
+            },
+        };
+        assert_eq!(paused_gate_warning(&mismatch), None);
     }
 
     #[test]

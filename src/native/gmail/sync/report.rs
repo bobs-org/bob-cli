@@ -10,10 +10,10 @@ use std::collections::BTreeSet;
 use serde_json::{json, Value};
 
 use super::archive_preview::{
-    review_sight_key, ArchiveGate, ArchivePlan, ArchivePreviewRow,
-    ArchiveReview, PreviewDecision, ACTION_KEPT, ACTION_PAUSED, ACTION_REVIEW,
-    ACTION_WOULD_ARCHIVE, KEPT_CONSENT_REMOVED, KEPT_MANUAL, REASON_BACKLOG,
-    REASON_ELIGIBLE,
+    paused_gate_warning, review_sight_key, ArchiveGate, ArchivePlan,
+    ArchivePreviewRow, ArchiveReview, PreviewDecision, ACTION_KEPT,
+    ACTION_PAUSED, ACTION_REVIEW, ACTION_WOULD_ARCHIVE, KEPT_CONSENT_REMOVED,
+    KEPT_MANUAL, REASON_BACKLOG, REASON_ELIGIBLE,
 };
 use super::archive_projection::RecentArchiveSnapshot;
 use super::archive_scan::ArchiveScan;
@@ -303,7 +303,8 @@ impl SyncReport {
     }
 
     /// Attach a read-only dry-run archive preview. A paused gate fails the
-    /// run (exit 1) with its rows and digest, and never mutates.
+    /// run (exit 1) with its rows, digest, and a body-free pause warning,
+    /// and never mutates.
     pub(crate) fn attach_archive_preview(&mut self, plan: &ArchivePlan) {
         self.archive = plan
             .rows
@@ -313,7 +314,10 @@ impl SyncReport {
         self.archive_digest = plan.digest.clone();
         if plan.gate.is_paused() {
             self.ok = false;
-            self.failure_kinds.insert("failed".to_string());
+            self.failure_kinds.insert("archive_paused".to_string());
+            if let Some(warning) = paused_gate_warning(plan) {
+                self.warnings.push(warning);
+            }
         }
     }
 
@@ -382,6 +386,9 @@ impl SyncReport {
         }
         if failed || paused || !deferred_empty || review_first_seen {
             self.ok = false;
+            if paused {
+                self.failure_kinds.insert("archive_paused".to_string());
+            }
             if self.failure_kinds.is_empty() {
                 self.failure_kinds.insert("failed".to_string());
             }
@@ -2467,5 +2474,91 @@ mod tests {
         report.archive_skipped = true;
         let value = json_document(&report);
         assert_eq!(value["archive_skipped"], true);
+    }
+
+    fn paused_plan(reason: &'static str, digest: &str) -> ArchivePlan {
+        ArchivePlan {
+            rows: vec![ArchivePreviewRow {
+                key: ThreadKey::new("me@example.com", "aa01").unwrap(),
+                note: "mail/2026/aa01.md".into(),
+                tasks: Vec::new(),
+                saved_ids: vec!["00000000000000a0".into()],
+                note_fingerprint: String::new(),
+                enable_epoch: String::new(),
+                generation: None,
+                opened_by: None,
+                after_generation: None,
+                historical: reason == "backlog_unconfirmed",
+                decision: PreviewDecision::Archive {
+                    archive_ids: vec!["00000000000000a0".into()],
+                },
+            }],
+            digest: Some(digest.to_string()),
+            gate: ArchiveGate::Paused { reason },
+        }
+    }
+
+    #[test]
+    fn attach_archive_preview_names_a_paused_gate() {
+        let mut report = surfaces_report(true, Vec::new(), None);
+        let plan = paused_plan("backlog_unconfirmed", "abcd");
+        report.attach_archive_preview(&plan);
+        assert!(!report.ok);
+        assert!(report.failure_kinds.contains("archive_paused"));
+        assert_eq!(report.failure_kinds.len(), 1);
+        let warning = paused_gate_warning(&plan).expect("pause warning");
+        assert_eq!(report.warnings, vec![warning.clone()]);
+        assert!(warning.contains("backlog_unconfirmed"));
+        assert!(warning.contains("1 closed thread"));
+        assert!(warning.contains("bob gmail sync -c abcd"));
+        assert_eq!(parse_warning_kind(&warning), None);
+    }
+
+    #[test]
+    fn attach_live_archive_names_a_paused_gate_and_keeps_other_kinds() {
+        let mut paused = surfaces_report(false, Vec::new(), None);
+        paused.attach_live_archive(
+            vec![surfaces_row(
+                "paused",
+                "backlog_unconfirmed",
+                "would_archive",
+            )],
+            Some("abcd".into()),
+            vec![paused_gate_warning(&paused_plan(
+                "backlog_unconfirmed",
+                "abcd",
+            ))
+            .expect("pause warning")],
+            true,
+            true,
+            Vec::new(),
+        );
+        assert!(!paused.ok);
+        assert!(paused.failure_kinds.contains("archive_paused"));
+        assert_eq!(paused.failure_kinds.len(), 1);
+
+        let mut untyped = surfaces_report(false, Vec::new(), None);
+        untyped.attach_live_archive(
+            vec![surfaces_row("archived", "eligible", "would_archive")],
+            None,
+            Vec::new(),
+            true,
+            true,
+            Vec::new(),
+        );
+        assert!(untyped.failure_kinds.contains("failed"));
+        assert_eq!(untyped.failure_kinds.len(), 1);
+
+        let mut deferred = surfaces_report(false, Vec::new(), None);
+        deferred.attach_live_archive(
+            Vec::new(),
+            None,
+            Vec::new(),
+            false,
+            false,
+            Vec::new(),
+        );
+        assert!(deferred.failure_kinds.contains("deferred"));
+        assert!(!deferred.failure_kinds.contains("archive_paused"));
     }
 }

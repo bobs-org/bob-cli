@@ -222,6 +222,50 @@ fn journal_has(env: &GmailEnv, kind: &str) -> bool {
     journal_text(env).contains(kind)
 }
 
+fn journal_events(env: &GmailEnv) -> Vec<Value> {
+    journal_text(env)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+fn assert_paused_gate(value: &Value, reason: &str, count: usize) {
+    assert_eq!(value["failure_kinds"], json!(["archive_paused"]));
+    let digest = value["archive_digest"]
+        .as_str()
+        .expect("paused gate keeps a digest");
+    let (noun, verb) = if count == 1 {
+        ("thread", "needs")
+    } else {
+        ("threads", "need")
+    };
+    let expected = format!(
+        "Gmail archive paused ({reason}): {count} closed {noun} {verb} confirmation; preview with `bob gmail sync -d`, then confirm with `bob gmail sync -c {digest}`"
+    );
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str() == Some(expected.as_str())),
+        "missing pause warning {expected}:\n{}",
+        serde_json::to_string_pretty(value).unwrap()
+    );
+}
+
+fn seed_discovered_thread(fake: &FakeGog) {
+    seed_labels(fake, true);
+    seed_thread_and_messages(
+        fake,
+        vec![thread_message(MESSAGE_A, &["INBOX", ENROLLMENT_ID])],
+    );
+    fake.set_search_pages(json!([{
+        "threads": [{"id": THREAD_A}],
+        "nextPageToken": null,
+        "resultSizeEstimate": 1
+    }]));
+}
+
 fn remote_write_calls(fake: &FakeGog) -> Vec<Vec<String>> {
     fake.calls()
         .into_iter()
@@ -738,6 +782,66 @@ fn question_mark_linker_can_be_observed_open_and_archived_after_closing() {
 }
 
 #[test]
+fn same_run_filing_is_observed_open_and_a_quick_close_archives() {
+    for status in ['x', '-'] {
+        let env = GmailEnv::new(&format!(
+            "bob-cli-gmail-archive-same-run-file-{status}"
+        ));
+        write_archive_config(&env);
+        write_task_settings(&env);
+        let fake = FakeGog::new(&env, "gog").scenario("modify_grant");
+        seed_discovered_thread(&fake);
+
+        let filed = run_gmail(&env, &fake, &["sync", "-r", "0", "-f", "json"]);
+        assert_exit(&filed, 0, "filing run observes the new thread open");
+        let filed_json = json_stdout(&filed);
+        assert_eq!(filed_json["ok"], true);
+        assert_eq!(filed_json["results"][0]["status"], "filed");
+        assert_eq!(filed_json["results"][0]["thread_id"], THREAD_A);
+        assert!(
+            filed_json["archive"]
+                .as_array()
+                .is_some_and(|rows| rows.is_empty()),
+            "open filing is a watching hold, not an archive row: {filed_json}"
+        );
+        assert!(filed_json.get("archive_digest").is_none());
+        let events = journal_events(&env);
+        assert!(
+            events.iter().any(|event| event["kind"] == "gmail.filed"
+                && event["value"]["thread_id"] == THREAD_A),
+            "filing journals the new thread:\n{}",
+            journal_text(&env)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event["kind"] == "gmail.archive_observed"
+                    && event["value"]["thread_id"] == THREAD_A
+                    && event["value"]["state"] == "open"),
+            "filing observes the thread open at birth:\n{}",
+            journal_text(&env)
+        );
+
+        set_inbox_task_status(&env, status);
+        let archived = run_gmail(
+            &env,
+            &fake,
+            &["sync", "-l", "0", "-r", "0", "-f", "json"],
+        );
+        assert_exit(&archived, 0, "quick close archives without a pause");
+        let archived_json = json_stdout(&archived);
+        assert_eq!(archived_json["archive"][0]["action"], "archived");
+        assert!(
+            archived_json["archive"].as_array().is_some_and(|rows| rows
+                .iter()
+                .all(|row| row["action"] != "paused")),
+            "quick close must not pause: {archived_json}"
+        );
+        assert!(archived_json.get("archive_digest").is_none());
+    }
+}
+
+#[test]
 fn live_pauses_backlog_without_confirm_and_creates_no_labels() {
     let env = GmailEnv::new("bob-cli-gmail-archive-apply-backlog");
     write_archive_config(&env);
@@ -758,6 +862,7 @@ fn live_pauses_backlog_without_confirm_and_creates_no_labels() {
     let value = json_stdout(&paused);
     assert_eq!(value["archive"][0]["action"], "paused");
     assert_eq!(value["archive"][0]["reason"], "backlog_unconfirmed");
+    assert_paused_gate(&value, "backlog_unconfirmed", 1);
     let digest = value["archive_digest"]
         .as_str()
         .expect("digest")
