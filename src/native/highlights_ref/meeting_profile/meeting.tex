@@ -1,0 +1,128 @@
+% Bob meeting dossier print profile (see plan:202611/meeting_notes_event_refs.md).
+% Loaded after pandoc's LaTeX template plus the shared code-break, return-link,
+% and table-layout headers. It must not reload geometry, fontspec, xcolor,
+% hyperref, graphicx, needspace, tikz, fvextra, or upquote. Only the six
+% packages below are new, and every one is declared in render_tex::RENDER_TEX_PACKAGES.
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{refcount}
+\usepackage{xurl}
+\definecolor{BobInk}{HTML}{1F2328}
+\definecolor{BobMuted}{HTML}{6E7781}
+\definecolor{BobRule}{HTML}{D0D7DE}
+\definecolor{BobNextWip}{HTML}{3B6EA8}
+\definecolor{BobAccent}{HTML}{3B6EA8}
+\definecolor{BobTldrFill}{HTML}{EEF3F8}
+\definecolor{BobHairline}{HTML}{D0D7DE}
+% Body and UI faces by relative Path=fonts/ with common ligatures off.
+\setmainfont{SourceSerif4SmText-Regular.otf}[Path=fonts/,BoldFont=SourceSerif4SmText-Semibold.otf,ItalicFont=SourceSerif4SmText-It.otf,BoldItalicFont=SourceSerif4SmText-SemiboldIt.otf,Ligatures=NoCommon,Scale=1.0]
+\setsansfont{Inter-Regular.otf}[Path=fonts/,BoldFont=Inter-SemiBold.otf,ItalicFont=Inter-Italic.otf,BoldItalicFont=Inter-SemiBoldItalic.otf,Ligatures=NoCommon,Scale=1.0]
+\setmonofont{JetBrainsMono-Regular.ttf}[Path=fonts/,BoldFont=JetBrainsMono-Bold.ttf,ItalicFont=JetBrainsMono-Regular.ttf,BoldItalicFont=JetBrainsMono-Bold.ttf,Ligatures=NoCommon,Scale=0.86]
+\newfontfamily\BobDisplayFont{InterDisplay-SemiBold.otf}[Path=fonts/,Ligatures=NoCommon]
+\newfontfamily\BobLabelFont{Inter-SemiBold.otf}[Path=fonts/,Ligatures=NoCommon]
+\newfontfamily\BobFallbackFont{NotoEmoji-Regular.ttf}[Path=fonts/,Ligatures=NoCommon,Scale=1.0]
+\renewcommand{\normalsize}{\fontsize{10.75pt}{14.75pt}\selectfont}
+\setlength{\parskip}{5pt}
+\setlength{\parindent}{0pt}
+\AtBeginDocument{\raggedright\hyphenpenalty=10000\exhyphenpenalty=10000\emergencystretch=1.5em\color{BobInk}\normalsize}
+\renewcommand{\maketitle}{}
+\widowpenalty=10000
+\clubpenalty=10000
+% Headings stay unnumbered so the PDF has no TOC and no section numbers.
+\titleformat{\section}{\sffamily\bfseries\fontsize{15pt}{18pt}\selectfont\color{BobInk}}{}{0pt}{}[\vspace{2pt}\textcolor{BobRule}{\rule{\linewidth}{0.6pt}}]
+\titleformat{\subsection}{\sffamily\bfseries\fontsize{11.5pt}{14pt}\selectfont\color{BobInk}}{}{0pt}{}
+\titleformat{\subsubsection}{\sffamily\bfseries\fontsize{10.5pt}{13pt}\selectfont\color{BobMuted}}{}{0pt}{}
+\titlespacing*{\section}{0pt}{10pt}{4pt}
+\titlespacing*{\subsection}{0pt}{8pt}{3pt}
+\titlespacing*{\subsubsection}{0pt}{6pt}{3pt}
+\setlist[itemize]{leftmargin=1.6em,labelsep=0.5em,itemsep=2.5pt,parsep=0pt,topsep=3pt}
+\renewcommand{\labelitemi}{\textcolor{BobMuted}{\textbullet}}
+\renewcommand{\labelitemii}{\textcolor{BobMuted}{\textendash}}
+\renewcommand{\labelitemiii}{\textcolor{BobMuted}{\textperiodcentered}}
+% Glyph fallbacks wrap AST content; Lua never stringifies user notes into TeX.
+\newcommand{\BobFallbackBegin}{\bgroup\BobFallbackFont}
+\newcommand{\BobFallbackEnd}{\egroup}
+\newcommand{\BobMonoGlyphBegin}{\bgroup\ttfamily}
+\newcommand{\BobMonoGlyphEnd}{\egroup}
+\newcommand{\BobSansGlyphBegin}{\bgroup\sffamily}
+\newcommand{\BobSansGlyphEnd}{\egroup}
+\newcommand{\BobSerifGlyphBegin}{\bgroup\rmfamily}
+\newcommand{\BobSerifGlyphEnd}{\egroup}
+\newcommand{\BobMutedBegin}{\bgroup\color{BobMuted}}
+\newcommand{\BobMutedEnd}{\egroup}
+% Title card.
+\newcommand{\BobMeetingKicker}{%
+  \par\noindent{\BobLabelFont\fontsize{8pt}{10pt}\selectfont\addfontfeature{LetterSpace=12.0}\color{BobAccent}MEETING NOTES}\par\vspace{8pt}%
+}
+\newcommand{\BobMeetingTitleBegin}{\par\noindent\bgroup\BobDisplayFont\fontsize{22pt}{26pt}\selectfont\color{BobInk}}
+\newcommand{\BobMeetingTitleEnd}{\egroup\par\vspace{6pt}}
+\newcommand{\BobMeetingDekBegin}{\par\noindent\bgroup\itshape\fontsize{12pt}{16pt}\selectfont\color{BobInk}}
+\newcommand{\BobMeetingDekEnd}{\egroup\par\vspace{4pt}}
+\newcommand{\BobMeetingMetaBegin}{\par\noindent\bgroup\sffamily\fontsize{8.5pt}{11.5pt}\selectfont\color{BobMuted}}
+\newcommand{\BobMeetingMetaEnd}{\egroup\par\vspace{8pt}}
+\newcommand{\BobMeetingRule}{\par\noindent\textcolor{BobAccent}{\rule{2.2em}{2.5pt}}\textcolor{BobRule}{\rule{\dimexpr\linewidth-2.2em\relax}{0.6pt}}\par\vspace{12pt}}
+% Tinted TL;DR box with an accent bar. Capture the body in an lrbox so the
+% colorbox argument stays a complete group (same pattern as BobImageBegin).
+\newsavebox{\BobTldrBox}
+\newlength{\BobTldrInner}
+\newcommand{\BobMeetingTldrBegin}{%
+  \par\medskip\noindent
+  \begingroup
+  \setlength{\fboxsep}{10pt}%
+  \setlength{\BobTldrInner}{\dimexpr\linewidth-20pt-3pt-10pt\relax}%
+  \begin{lrbox}{\BobTldrBox}%
+  \begin{minipage}{\BobTldrInner}%
+  {\BobLabelFont\fontsize{7.5pt}{10pt}\selectfont\color{BobAccent}TL;DR\par\vspace{4pt}}%
+}
+\newcommand{\BobMeetingTldrEnd}{%
+  \end{minipage}%
+  \end{lrbox}%
+  \colorbox{BobTldrFill}{%
+    \textcolor{BobAccent}{\vrule width 3pt}%
+    \hspace{10pt}%
+    \usebox{\BobTldrBox}%
+  }%
+  \endgroup
+  \par\medskip
+}
+% Next-steps owner/action rows as paired minipages so owner and action stay AST.
+% \leavevmode before \color keeps the color whatsit on the first text line so a
+% [t] minipage does not grow an empty first line.
+\newcommand{\BobMeetingStepsBegin}{\par\vspace{2pt}}
+\newcommand{\BobMeetingStepsEnd}{\par\vspace{4pt}}
+\newcommand{\BobMeetingStepsHeader}{%
+  \par\nobreak\noindent
+  {\BobLabelFont\fontsize{7.5pt}{9pt}\selectfont\color{BobMuted}\makebox[0.28\linewidth][l]{Owner}}%
+  {\BobLabelFont\fontsize{7.5pt}{9pt}\selectfont\color{BobMuted}Action}\par\nobreak\vspace{2pt}%
+  \noindent\textcolor{BobRule}{\rule{\linewidth}{0.4pt}}\par\nobreak\vspace{-\parskip}\vspace{4pt}%
+}
+\newcommand{\BobMeetingOwnerBegin}{%
+  \par\nobreak\vspace{-\parskip}\noindent
+  \begin{minipage}[t]{0.28\linewidth}\raggedright\sffamily\fontsize{9.5pt}{12.5pt}\selectfont\leavevmode\color{BobInk}%
+}
+\newcommand{\BobMeetingOwnerEnd}{\end{minipage}\hspace{0.04\linewidth}}
+\newcommand{\BobMeetingActionBegin}{%
+  \begin{minipage}[t]{0.68\linewidth}\raggedright\fontsize{9.5pt}{12.5pt}\selectfont\leavevmode\color{BobInk}%
+}
+\newcommand{\BobMeetingActionEnd}{\end{minipage}\par\vspace{4pt}}
+% Transcript appendix: new page, smaller type. Speaker labels stay Strong AST.
+\newenvironment{BobMeetingTranscript}{\par\small\setlength{\parskip}{4pt}}{\par}
+\newcommand{\BobMeetingAppendixBegin}{\clearpage\begin{BobMeetingTranscript}}
+\newcommand{\BobMeetingAppendixEnd}{\end{BobMeetingTranscript}}
+% Last-page provenance sits at the bottom of the final page.
+\newcommand{\BobMeetingProvenanceBegin}{\par\vspace{0pt plus 1fil}\noindent\bgroup\sffamily\fontsize{7pt}{9pt}\selectfont\color{BobMuted}}
+\newcommand{\BobMeetingProvenanceEnd}{\egroup\par}
+% Running header: event title left, page X of Y right. The left mark is a
+% short, already-escaped event title defined by the Lua filter.
+\newcommand{\BobMeetingHeadLeft}{}
+\makeatletter
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\sffamily\fontsize{7.5pt}{9pt}\selectfont\color{BobMuted}\BobMeetingHeadLeft}
+\fancyhead[R]{\sffamily\fontsize{7.5pt}{9pt}\selectfont\color{BobMuted}\thepage\ of \pageref*{LastPage}}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\makeatother

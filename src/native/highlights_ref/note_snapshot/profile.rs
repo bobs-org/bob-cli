@@ -9,7 +9,8 @@
 //! caller-owned scratch directory, runs pandoc then xelatex with cwd=scratch,
 //! and returns the scratch PDF path, typed warnings, and the return-link
 //! report. It never stamps, installs, or creates the scratch directory; the
-//! caller's `ScratchDir` keeps cleanup/debug ownership.
+//! caller's `ScratchDir` keeps cleanup/debug ownership. The meeting dossier
+//! profile reuses the same engine through [`render_profile_pdf`].
 use std::{
     ffi::{OsStr, OsString},
     fs,
@@ -104,19 +105,37 @@ pub(crate) struct RenderOutcome {
     pub(crate) table_layout: super::super::table_layout::ReportOutcome,
 }
 
+/// Shared print-profile inputs for the pandoc-then-xelatex engine.
+///
+/// Snapshot and meeting profiles pass their own header, contract filter,
+/// reader, and PDF Info strings; fonts, glyph coverage, xelatex, and
+/// warning parsing stay here so the two profiles cannot drift.
+pub(crate) struct PdfProfile<'a> {
+    pub header: &'a str,
+    pub header_name: &'a str,
+    pub filter: &'a str,
+    pub filter_name: &'a str,
+    pub reader: &'a str,
+    pub title: &'a str,
+    pub subject: &'a str,
+    pub keywords: &'a str,
+    pub creator: &'a str,
+    pub extra_metadata: &'a [(&'a str, String)],
+}
+
 /// Render projected Markdown to PDF via pandoc then xelatex.
 ///
 /// `scratch` is the caller-owned work directory (already created). This
-/// writes `projected.md`, `note-profile.tex`, `note.lua`, `fonts/`, and
+/// writes `projected.md`, the profile header and Lua filter, `fonts/`, and
 /// `glyphs.lua`, runs pandoc in scratch to `note.tex`, then xelatex (twice,
 /// plus a bounded third pass when the second log requests `Rerun`) to
 /// `note.pdf`. It returns the PDF path, typed warnings, and the return-link
 /// report without stamping or installing.
-pub(crate) fn render_note_pdf(
+pub(crate) fn render_profile_pdf(
     projected_md: &str,
     scratch: &Path,
     filters: &super::super::create::RenderFilters,
-    meta: &NoteMeta,
+    profile: &PdfProfile<'_>,
 ) -> Result<RenderOutcome> {
     let projected_path = scratch.join(PROJECTED_NAME);
     fs::write(&projected_path, projected_md).map_err(|error| {
@@ -125,12 +144,12 @@ pub(crate) fn render_note_pdf(
             projected_path.display()
         ))
     })?;
-    let header_path = scratch.join(HEADER_NAME);
-    fs::write(&header_path, NOTE_HEADER).map_err(|error| {
+    let header_path = scratch.join(profile.header_name);
+    fs::write(&header_path, profile.header).map_err(|error| {
         CommandError::new(format!("write {}: {error}", header_path.display()))
     })?;
-    let note_filter_path = scratch.join(FILTER_NAME);
-    fs::write(&note_filter_path, NOTE_FILTER).map_err(|error| {
+    let note_filter_path = scratch.join(profile.filter_name);
+    fs::write(&note_filter_path, profile.filter).map_err(|error| {
         CommandError::new(format!(
             "write {}: {error}",
             note_filter_path.display()
@@ -181,7 +200,7 @@ pub(crate) fn render_note_pdf(
     pandoc_cmd
         .arg(&projected_path)
         .arg("-f")
-        .arg(SNAPSHOT_PANDOC_READER)
+        .arg(profile.reader)
         .arg("-t")
         .arg("latex")
         .arg("-s")
@@ -233,13 +252,13 @@ pub(crate) fn render_note_pdf(
             super::super::table_layout::HEADER_INCLUDES
         ))
         .arg("--metadata")
-        .arg(format!("title={}", meta.identity_title))
+        .arg(format!("title={}", profile.title))
         .arg("--metadata")
-        .arg(format!("subject=Snapshot of {}", meta.source_path))
+        .arg(format!("subject={}", profile.subject))
         .arg("--metadata")
-        .arg(format!("keywords=bob,snapshot,{}", meta.kind))
+        .arg(format!("keywords={}", profile.keywords))
         .arg("--metadata")
-        .arg("creator=bob ref create (note snapshot)")
+        .arg(format!("creator={}", profile.creator))
         .arg("--metadata")
         .arg(format!(
             "{}={}",
@@ -278,10 +297,8 @@ pub(crate) fn render_note_pdf(
         ))
         .arg("--metadata")
         .arg(format!("bob-glyph-table={GLYPHS_NAME}"));
-    if let Some(uri) = &meta.listen_uri {
-        pandoc_cmd
-            .arg("--metadata")
-            .arg(format!("bob-listen-uri={uri}"));
+    for (key, value) in profile.extra_metadata {
+        pandoc_cmd.arg("--metadata").arg(format!("{key}={value}"));
     }
     pandoc_cmd.current_dir(scratch);
     let pandoc_out = pandoc_cmd.output().map_err(|error| {
@@ -382,6 +399,38 @@ pub(crate) fn render_note_pdf(
         code_catalog: code_catalog_outcome,
         table_layout: table_layout_outcome,
     })
+}
+
+/// Render a note snapshot through the shared print engine.
+pub(crate) fn render_note_pdf(
+    projected_md: &str,
+    scratch: &Path,
+    filters: &super::super::create::RenderFilters,
+    meta: &NoteMeta,
+) -> Result<RenderOutcome> {
+    let mut extra = Vec::new();
+    if let Some(uri) = &meta.listen_uri {
+        extra.push(("bob-listen-uri", uri.clone()));
+    }
+    let subject = format!("Snapshot of {}", meta.source_path);
+    let keywords = format!("bob,snapshot,{}", meta.kind);
+    render_profile_pdf(
+        projected_md,
+        scratch,
+        filters,
+        &PdfProfile {
+            header: NOTE_HEADER,
+            header_name: HEADER_NAME,
+            filter: NOTE_FILTER,
+            filter_name: FILTER_NAME,
+            reader: SNAPSHOT_PANDOC_READER,
+            title: &meta.identity_title,
+            subject: &subject,
+            keywords: &keywords,
+            creator: "bob ref create (note snapshot)",
+            extra_metadata: &extra,
+        },
+    )
 }
 
 /// Discover xelatex through `BOB_XELATEX_COMMAND` then PATH, mirroring the

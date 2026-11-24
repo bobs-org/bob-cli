@@ -5,7 +5,8 @@
 //! front matter carries the resolved meeting metadata and normalized model for
 //! exact round trips; the visible body uses a fenced div with the
 //! `meeting-tldr` class, followed by the next-step and section headings.
-//! Transcript text is rendered only when `DossierMeta` opts in.
+//! Transcript text is rendered only when `DossierMeta` opts in. The meeting
+//! print profile renders that dossier Markdown to a one-to-two-page PDF.
 //!
 //! The resolution layer resolves EVENT tokens to Event Task rows for
 //! `bob ref meet`, scores automatic matches with evidence, lists recent
@@ -36,6 +37,8 @@ mod normalize;
 #[cfg_attr(not(test), allow(dead_code))]
 mod parent;
 #[cfg_attr(not(test), allow(dead_code))]
+mod profile;
+#[cfg_attr(not(test), allow(dead_code))]
 mod recap;
 #[cfg_attr(not(test), allow(dead_code))]
 mod resolve;
@@ -64,6 +67,8 @@ pub(crate) use intake::{
 pub(crate) use model::{parse_event_link, vault_index};
 #[allow(unused_imports)]
 pub(crate) use normalize::normalize;
+#[allow(unused_imports)]
+pub(crate) use profile::{render_meeting_pdf, MeetingMeta};
 #[allow(unused_imports)]
 pub(crate) use recap::{
     recap_state, render_recap, replace_recap, RecapState, ReplaceRecapError,

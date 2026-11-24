@@ -10,15 +10,15 @@ use std::path::Path;
 use std::process::Command;
 
 /// One LaTeX file the render may load, and the TeX Live package that ships it.
-pub(super) struct TexPackage {
-    pub(super) file: &'static str,
+pub(crate) struct TexPackage {
+    pub(crate) file: &'static str,
     pub(super) tlmgr: &'static str,
 }
 
 /// Every `.sty` file the Markdown render can load.
 ///
 /// File names were verified with `tlmgr search --file`.
-pub(super) const RENDER_TEX_PACKAGES: &[TexPackage] = &[
+pub(crate) const RENDER_TEX_PACKAGES: &[TexPackage] = &[
     // Bob's own headers (`PANDOC_HEADER_INCLUDES`, `return_links.tex`,
     // `table_layout.tex`).
     TexPackage {
@@ -288,6 +288,7 @@ fn missing_tex_file(detail: &str) -> Option<&str> {
 mod tests {
     use super::super::create::PANDOC_HEADER_INCLUDES;
     use super::super::diagrams::HEADER_INCLUDES as DIAGRAMS_HEADER_INCLUDES;
+    use super::super::meeting_profile::MEETING_HEADER;
     use super::super::note_snapshot::profile::NOTE_HEADER;
     use super::super::return_links::HEADER_INCLUDES;
     use super::super::table_layout::HEADER_INCLUDES as TABLE_LAYOUT_HEADER_INCLUDES;
@@ -305,6 +306,7 @@ mod tests {
             HEADER_INCLUDES,
             DIAGRAMS_HEADER_INCLUDES,
             NOTE_HEADER,
+            MEETING_HEADER,
             TABLE_LAYOUT_HEADER_INCLUDES,
         ] {
             names.extend(tex_packages_in(header));

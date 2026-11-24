@@ -1558,7 +1558,7 @@ fn check_pdf_stamp_before_parent(
     }
 }
 
-pub(super) fn pandoc_command() -> Option<OsString> {
+pub(crate) fn pandoc_command() -> Option<OsString> {
     if let Some(command) =
         bob_env::var_os(ENV_PANDOC_COMMAND).filter(|value| !value.is_empty())
     {

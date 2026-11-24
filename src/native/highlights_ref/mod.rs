@@ -63,6 +63,8 @@ mod listen_feed;
 mod marker;
 mod marker_write;
 mod meeting_birth;
+#[allow(dead_code)]
+pub(crate) mod meeting_profile;
 mod model;
 mod note;
 // Model and serializer are intentionally defined before their production callers;
@@ -210,7 +212,7 @@ pub(crate) use marker::{
     is_known_ref_task_mark, normalize_deprecated_status_str,
     ref_task_mark_status, ref_task_mark_target_status,
 };
-pub(crate) use model::{Config, UnresolvedImageNoteState};
+pub(crate) use model::{Config, Result, UnresolvedImageNoteState};
 pub(crate) use note::configured_path;
 pub(crate) use reading_plan::apply_v2_migration_note;
 pub(crate) use region::{
