@@ -82,6 +82,9 @@ pub(crate) mod human_bytes;
 mod ledger_place;
 mod log_history;
 mod markdown;
+// Implemented as a pure notes layer first; later meeting phases wire production callers.
+#[allow(dead_code)]
+pub(crate) mod meetings;
 mod nightly;
 pub(crate) mod note_catalog;
 mod note_ready;
