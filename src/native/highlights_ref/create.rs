@@ -1916,6 +1916,8 @@ fn overwrite_request(
         dry_run: options.dry_run,
         planned_source_store: None,
         clear_source_markdown: false,
+        producer: None,
+        meeting_recap: None,
     }
 }
 

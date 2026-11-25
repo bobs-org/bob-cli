@@ -64,6 +64,13 @@ pub(super) struct OverwriteRequest {
     /// PDF URL, arXiv, local PDF, or web fallback: drop `source_markdown`
     /// from the live note.
     pub(super) clear_source_markdown: bool,
+    /// Command that owns this overwrite. Commit subjects and receipts use
+    /// this producer; `None` keeps `bob ref create`.
+    pub(super) producer: Option<String>,
+    /// Newly rendered owned recap region. When set, overwrite treats the
+    /// live meeting recap as managed: it stays off `ref_history/`, and the
+    /// executor applies this replacement from the checked preimage.
+    pub(super) meeting_recap: Option<String>,
 }
 
 /// A path and its observed preimage. `sha256: None` means it was absent.
@@ -459,7 +466,8 @@ pub(super) fn prepare(
         &body,
         &index.ref_tasks,
     )?;
-    let open_tasks = open_note_tasks(&body, Some(&task));
+    let open_tasks =
+        open_note_tasks(&body, Some(&task), request.meeting_recap.is_some());
     if !open_tasks.is_empty() {
         return Err(OverwriteRefusal::new(
             "open_note_tasks",
@@ -580,6 +588,11 @@ pub(super) fn prepare(
                     )
                 })?
                 .contents;
+        let annotated_source = if request.meeting_recap.is_some() {
+            note_without_meeting_recap(&note_contents)
+        } else {
+            note_contents.clone()
+        };
         let plan = plan_annotated_archive(
             config,
             &row.path,
@@ -590,7 +603,7 @@ pub(super) fn prepare(
             &status,
             &title,
             member.highlights.unwrap_or(0),
-            &note_contents,
+            &annotated_source,
             &pdf_relative,
             &sha256(&pdf_bytes),
             &sha256(marker_contents.as_bytes()),
@@ -685,8 +698,13 @@ pub(super) fn prepare(
         &title,
         audio_path.as_deref(),
     );
+    let compare_body = if request.meeting_recap.is_some() {
+        crate::native::meetings::strip_recap(&body)
+    } else {
+        body.clone()
+    };
     let authored_prose = body_has_authored_prose(
-        &body,
+        &compare_body,
         &fresh_body,
         audio_frontmatter_path(&note_parsed),
     )
@@ -698,10 +716,15 @@ pub(super) fn prepare(
             2,
         )
     })?;
+    let archive_source = if request.meeting_recap.is_some() {
+        note_without_meeting_recap(&note_contents)
+    } else {
+        note_contents.clone()
+    };
     let frozen_note = if authored_prose {
         let path = allocate_archive_path(config, &ref_type, stem, date);
         let archive_contents = render_frozen_note(
-            &note_contents,
+            &archive_source,
             &row.path,
             date,
             row.captured.as_deref(),
@@ -1120,11 +1143,36 @@ fn task_subtree_end(lines: &[&str], start: usize) -> usize {
     end
 }
 
+fn recap_line_indices(body: &str) -> Option<std::ops::RangeInclusive<usize>> {
+    let span = crate::native::meetings::recap_preservation_span(body)?;
+    let start = body[..span.start]
+        .bytes()
+        .filter(|&byte| byte == b'\n')
+        .count();
+    let end = body[..span.end]
+        .bytes()
+        .filter(|&byte| byte == b'\n')
+        .count();
+    Some(start..=end)
+}
+
+fn note_without_meeting_recap(contents: &str) -> String {
+    let Some((front, body)) = super::split_frontmatter(contents) else {
+        return crate::native::meetings::strip_recap(contents);
+    };
+    let stripped = crate::native::meetings::strip_recap(&body);
+    format!("---\n{}\n---\n{stripped}", front.join("\n"))
+}
+
 fn open_note_tasks(
     body: &str,
     selected: Option<&TaskFingerprint>,
+    skip_meeting_recap: bool,
 ) -> Vec<String> {
     let lines = body.lines().collect::<Vec<_>>();
+    let recap_lines = skip_meeting_recap
+        .then(|| recap_line_indices(body))
+        .flatten();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
     // The comment scanner operates on the supplied lines without parsing
     // Markdown fences, so hide fenced lines before asking it for comment
@@ -1149,6 +1197,12 @@ fn open_note_tasks(
     let mut open = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         if fenced.contains(&index) || comments.contains(&index) {
+            continue;
+        }
+        if recap_lines
+            .as_ref()
+            .is_some_and(|span| span.contains(&index))
+        {
             continue;
         }
         let stripped = ref_tasks::strip_blockquote_prefix(line);
@@ -2167,7 +2221,7 @@ mod tests {
     fn open_note_tasks_ignores_comments_and_fenced_examples() {
         let body = "# Paper\n\n<!--\n- [ ] hidden HTML task\n-->\n\n%%\n- [ ] hidden Obsidian task\n%%\n\n```markdown\n<!--\n- [ ] hidden fenced task\n-->\n```\n\n- [ ] real open task\n";
         assert_eq!(
-            open_note_tasks(body, None),
+            open_note_tasks(body, None, false),
             vec!["17:- [ ] real open task".to_string()]
         );
     }
@@ -2218,7 +2272,7 @@ mod tests {
     fn open_annotation_task_in_highlights_region_is_refused() {
         let body = "# Paper\n\n<!-- highlights:begin -->\n- [ ] follow up [h:: abc] #task\n<!-- highlights:end -->\n";
         assert_eq!(
-            open_note_tasks(body, None),
+            open_note_tasks(body, None, false),
             vec!["4:- [ ] follow up [h:: abc] #task".to_string()]
         );
     }

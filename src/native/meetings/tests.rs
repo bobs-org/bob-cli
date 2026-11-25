@@ -206,6 +206,74 @@ fn recap_inserts_and_replaces_without_touching_surrounding_note_text() {
 }
 
 #[test]
+fn overwrite_recap_reseeds_owned_and_keeps_edited_bytes() {
+    let notes = normalize(&fixture("wispr_plain.txt"));
+    let recap = render_recap(&notes, &test_recap_meta());
+    let skeleton = "# Meeting\n\n![[job#^ref-meeting]]\n\n## Highlights\n";
+    let live = replace_recap(skeleton, &recap).expect("seed owned recap");
+    let next = render_recap(
+        &notes,
+        &RecapMeta {
+            producer: None,
+            ..test_recap_meta()
+        },
+    );
+    let applied =
+        apply_overwrite_recap(&live, skeleton, &next).expect("owned reseed");
+    assert!(applied.warning.is_none());
+    assert_eq!(recap_state(&applied.body), RecapState::Owned);
+    assert!(applied.body.contains(&next));
+
+    let absent = apply_overwrite_recap(skeleton, skeleton, &next)
+        .expect("absent inserts");
+    assert!(absent.warning.is_none());
+    assert_eq!(recap_state(&absent.body), RecapState::Owned);
+    assert!(absent.body.contains(&next));
+
+    let mut edited_live = live.clone();
+    if let Some(inner_start) = edited_live.find(" -->\n") {
+        edited_live.insert_str(inner_start + 5, "edited ");
+    }
+    assert_eq!(recap_state(&edited_live), RecapState::Edited);
+    let kept = apply_overwrite_recap(&edited_live, skeleton, &next)
+        .expect("edited recap stays");
+    assert_eq!(kept.warning.as_deref(), Some(EDITED_RECAP_WARNING));
+    assert!(
+        kept.body.contains("edited "),
+        "edited recap bytes stay on the live note:\n{}",
+        kept.body
+    );
+}
+
+#[test]
+fn strip_recap_does_not_count_as_authored_prose_gap() {
+    let notes = normalize(&fixture("wispr_plain.txt"));
+    let recap = render_recap(&notes, &test_recap_meta());
+    let skeleton = "# Meeting\n\n![[job#^ref-meeting]]\n\n## Highlights\n";
+    let live = replace_recap(skeleton, &recap).expect("seed");
+    let stripped = strip_recap(&live);
+    assert!(!stripped.contains("bob:meeting-recap:begin"));
+    assert_eq!(stripped, skeleton);
+}
+
+#[test]
+fn malformed_recap_markers_are_not_deleted_on_overwrite() {
+    let skeleton = "# Meeting\n\n![[job#^ref-meeting]]\n\n## Highlights\n";
+    let live = "# Meeting\n\n![[job#^ref-meeting]]\n\n<!-- bob:meeting-recap:begin v1 broken -->\nuser prose that must stay\n<!-- bob:meeting-recap:end -->\n\n## Highlights\n";
+    assert_eq!(recap_state(live), RecapState::Edited);
+    let notes = normalize(&fixture("wispr_plain.txt"));
+    let next = render_recap(&notes, &test_recap_meta());
+    let kept = apply_overwrite_recap(live, skeleton, &next)
+        .expect("malformed recap stays");
+    assert_eq!(kept.warning.as_deref(), Some(EDITED_RECAP_WARNING));
+    assert!(
+        kept.body.contains("user prose that must stay"),
+        "malformed recap must not authorize deletion:\n{}",
+        kept.body
+    );
+}
+
+#[test]
 fn intake_normalizes_bom_crlf_and_trailing_spaces_but_hashes_original_bytes() {
     let raw = fs::read(fixture_path("intake_sample.txt"))
         .expect("fixture bytes read");

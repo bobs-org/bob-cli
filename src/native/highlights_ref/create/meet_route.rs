@@ -1,15 +1,15 @@
-//! First filing for `bob ref meet`: ingest a prepared meeting dossier
-//! and its event re-root in one locked intake commit.
+//! First filing and in-place replacement for `bob ref meet`.
 //!
-//! The route mirrors `podcast_route`'s stamping/store/intake integration:
-//! render the prepared dossier through the meeting PDF profile, stamp the
-//! marker, install into `xlib/`, persist the write-once source store, then
-//! file through shared intake with producer `bob ref meet`. A checked
-//! in-place event-root edit rides the same locked transaction; queued or
-//! refused ingest leaves the daily note untouched.
+//! Fresh filings ingest a prepared meeting dossier and its event re-root
+//! in one locked intake commit. Replacements render and stage the new
+//! PDF/source privately, then reuse the overwrite executor so recap
+//! ownership, task identity, LINKS, and recovery stay inside that
+//! transaction.
 
 use super::super::intake::{EventRootEdit, IntakeOutcome, IntakeRequest};
 use super::super::meet::{GuardedRootEdit, PreparedFiling};
+use super::super::overwrite::execute::{OverwriteResult, StagedOverwrite};
+use super::super::overwrite::OverwriteRequest;
 use super::*;
 
 /// Route origin recorded in the write-once source store.
@@ -33,6 +33,22 @@ pub(super) struct MeetFileResult {
     pub(super) source_pointer: Option<String>,
     /// Rendered PDF page count.
     pub(super) pages: usize,
+}
+
+/// Structured result for an in-place meeting replacement.
+#[derive(Debug)]
+pub(super) struct MeetReplaceResult {
+    pub(super) overwrite: OverwriteResult,
+    pub(super) warnings: Vec<String>,
+    pub(super) source_pointer: Option<String>,
+    pub(super) pages: usize,
+}
+
+/// Fresh ingest or in-place replacement of a prepared meeting dossier.
+#[derive(Debug)]
+pub(super) enum MeetWriteResult {
+    Filed(MeetFileResult),
+    Replaced(MeetReplaceResult),
 }
 
 /// File one prepared meeting dossier.
@@ -190,6 +206,167 @@ pub(super) fn file_meeting(
     })
 }
 
+/// File a new meeting or replace the selected occurrence.
+///
+/// `--overwrite` with no existing occurrence follows ordinary create-force
+/// semantics and files a fresh reference instead of targeting an unrelated
+/// note. Dedupe without overwrite is refused by preparation before this
+/// route renders.
+pub(super) fn file_or_replace_meeting(
+    config: &Config,
+    prepared: &PreparedFiling,
+    scratch: &mut super::super::ScratchDir,
+) -> Result<MeetWriteResult> {
+    if prepared.existing.is_some() {
+        Ok(MeetWriteResult::Replaced(replace_meeting(
+            config, prepared, scratch,
+        )?))
+    } else {
+        Ok(MeetWriteResult::Filed(file_meeting(
+            config, prepared, scratch,
+        )?))
+    }
+}
+
+/// Replace a filed meeting's notes in place, preserving identity, LINKS,
+/// and recap ownership inside the overwrite transaction.
+pub(super) fn replace_meeting(
+    config: &Config,
+    prepared: &PreparedFiling,
+    scratch: &mut super::super::ScratchDir,
+) -> Result<MeetReplaceResult> {
+    let existing = prepared.existing.as_ref().ok_or_else(|| {
+        CommandError::new(
+            "overwrite requires a filed meeting occurrence; file it first",
+        )
+    })?;
+    let mut warnings = prepared.warnings.clone();
+    let dossier_meta = dossier_meta_for(prepared);
+    let dossier_md =
+        crate::native::meetings::render_dossier(&prepared.notes, &dossier_meta);
+    let recap = crate::native::meetings::render_birth_recap(
+        &prepared.notes,
+        &recap_meta_for(prepared),
+    );
+    let member = existing
+        .overwrite
+        .selection
+        .family
+        .selected_member()
+        .clone();
+    let date = super::super::note::capture_clock().date;
+    let request = OverwriteRequest {
+        explicit_status: prepared
+            .status_explicit
+            .then(|| prepared.status.clone()),
+        resolved_parent: prepared
+            .parent
+            .explicit
+            .then(|| prepared.parent.route.clone()),
+        producer: Some(MEETING_PRODUCER.to_string()),
+        meeting_recap: Some(recap),
+        planned_source_store: Some(
+            super::super::source_store::PlannedSourceStore::for_bytes(
+                "meetings",
+                &prepared.stem,
+                dossier_md.as_bytes(),
+            ),
+        ),
+        ..OverwriteRequest::default()
+    };
+    let plan =
+        super::super::overwrite::prepare(config, &member, &request, &date)
+            .map_err(|refusal| refusal.command_error())?;
+
+    let (layout, prose_words) = table_layout_settings()?;
+    let filters = write_render_filters(scratch.path(), &layout, prose_words)?;
+    let block_id = prepared.meeting.block_id.clone().ok_or_else(|| {
+        CommandError::new(
+            "selected meeting has no `^id`; add one to file notes",
+        )
+    })?;
+    let event_ref = crate::native::meetings::event_ref_for(
+        &prepared.meeting.path,
+        &block_id,
+    )
+    .ok_or_else(|| {
+        CommandError::new("selected meeting has no EVENT token; add a `^id`")
+    })?;
+    let meeting_meta = crate::native::meetings::MeetingMeta {
+        title: prepared.title.clone(),
+        event_ref: event_ref.clone(),
+        accent: None,
+    };
+    let rendered = crate::native::meetings::render_meeting_pdf(
+        &dossier_md,
+        scratch.path(),
+        &filters,
+        &meeting_meta,
+    )?;
+    for warning in &rendered.warnings {
+        warnings.push(warning.message());
+    }
+
+    let marker = compose_meeting_marker(prepared, &event_ref)?;
+    let info = PdfInfo {
+        title: Some(prepared.title.clone()),
+        author: prepared.effective_config.producer.clone(),
+    };
+    let (stamped, page_count) = super::super::pdf_target::stamp_pdf_to_scratch(
+        &rendered.pdf,
+        scratch,
+        &marker,
+        &info,
+    )?;
+    let source_store = super::stage_overwrite_source_store(
+        config,
+        &plan,
+        scratch.path(),
+        dossier_md.as_bytes(),
+        MEETING_STORE_ROUTE,
+        event_ref,
+        None,
+        None,
+        &stamped,
+        &rendered.code_catalog,
+    )?;
+    let source_pointer = Some(source_store.planned.pointer.clone());
+    let marker = super::super::overwrite::local::marker_from_pdf(&stamped)?;
+    let overwrite = super::super::overwrite::execute::execute(
+        config,
+        &plan,
+        &request,
+        StagedOverwrite {
+            private_pdf: stamped,
+            audio: None,
+            marker,
+            source_store: Some(source_store),
+        },
+    )?;
+    warnings.extend(overwrite.warnings.iter().cloned());
+    Ok(MeetReplaceResult {
+        overwrite,
+        warnings,
+        source_pointer,
+        pages: page_count,
+    })
+}
+
+fn recap_meta_for(
+    prepared: &PreparedFiling,
+) -> crate::native::meetings::RecapMeta {
+    crate::native::meetings::RecapMeta {
+        date: prepared.meeting.date.format("%Y-%m-%d").to_string(),
+        span: format!(
+            "{}–{}",
+            prepared.meeting.starts_at.format("%H:%M"),
+            prepared.meeting.ends_at.format("%H:%M")
+        ),
+        event_link: prepared.relation_target.clone(),
+        producer: prepared.effective_config.producer.clone(),
+    }
+}
+
 fn dossier_meta_for(
     prepared: &PreparedFiling,
 ) -> crate::native::meetings::DossierMeta {
@@ -250,6 +427,10 @@ fn compose_meeting_marker(
                 .to_string(),
         ),
     ));
+    extras.push((
+        "captured",
+        MarkerValue::String(super::super::note::capture_clock().stamp),
+    ));
     if let Some(producer) = prepared.effective_config.producer.as_deref() {
         extras.push((
             "notes_producer",
@@ -293,7 +474,10 @@ mod tests {
 
     use crate::native::{
         env::TestEnvGuard,
-        meetings::{read_notes, NotesSource},
+        meetings::{
+            read_notes, recap_state, NotesSource, RecapState,
+            EDITED_RECAP_WARNING,
+        },
     };
 
     use super::super::super::meet::{
@@ -429,6 +613,27 @@ mod tests {
                     .expect("scratch");
             file_meeting(&self.config, prepared, &mut scratch)
                 .expect("file meeting")
+        }
+
+        fn write(
+            &self,
+            prepared: &super::super::super::meet::PreparedFiling,
+        ) -> MeetWriteResult {
+            let mut scratch =
+                super::super::super::ScratchDir::create("meet-test")
+                    .expect("scratch");
+            file_or_replace_meeting(&self.config, prepared, &mut scratch)
+                .expect("write meeting")
+        }
+
+        fn replace(
+            &self,
+            prepared: &super::super::super::meet::PreparedFiling,
+        ) -> MeetReplaceResult {
+            match self.write(prepared) {
+                MeetWriteResult::Replaced(result) => result,
+                other => panic!("expected replacement, got {other:?}"),
+            }
         }
     }
 
@@ -964,6 +1169,311 @@ mod tests {
         assert!(
             prepared.note_path.is_file(),
             "drained filing writes the note"
+        );
+    }
+
+    fn live_note_body(path: &std::path::Path) -> String {
+        let contents = fs::read_to_string(path).expect("note");
+        crate::native::highlights_ref::split_frontmatter(&contents)
+            .map(|(_, body)| body)
+            .unwrap_or(contents)
+    }
+
+    fn parent_task_block(
+        vault: &std::path::Path,
+        parent: &str,
+        block_id: &str,
+    ) -> String {
+        let body = fs::read_to_string(vault.join(format!("{parent}.md")))
+            .expect("parent note");
+        let lines: Vec<&str> = body.lines().collect();
+        let start = lines
+            .iter()
+            .position(|line| line.contains(&format!("^{block_id}")))
+            .unwrap_or_else(|| panic!("missing task ^{block_id} in {body}"));
+        let indent = lines[start]
+            .chars()
+            .take_while(|ch| matches!(ch, ' ' | '\t'))
+            .count();
+        let mut end = start + 1;
+        while end < lines.len() {
+            let line = lines[end];
+            if line.trim().is_empty() {
+                end += 1;
+                continue;
+            }
+            let child = line
+                .chars()
+                .take_while(|ch| matches!(ch, ' ' | '\t'))
+                .count();
+            if child <= indent {
+                break;
+            }
+            end += 1;
+        }
+        lines[start..end].join("\n")
+    }
+
+    fn cedar_options(overwrite: bool) -> MeetingPrepareOptions {
+        MeetingPrepareOptions {
+            selection: MeetingSelection::Token(
+                "20261124#^cedar-review".to_string(),
+            ),
+            overwrite,
+            ..MeetingPrepareOptions::default()
+        }
+    }
+
+    #[test]
+    fn overwrite_reseeds_owned_recap_and_preserves_identity() {
+        let fixture = RouteFixture::new(default_config());
+        let url = "https://calendar.google.com/event?eid=cedar-event";
+        fixture.day(&cedar_row("[root:: job]", url));
+        fixture.commit_seed(&[], "seed");
+        let first = fixture.prepare(
+            "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship it",
+            cedar_options(false),
+        );
+        let filed = fixture.file(&first);
+        assert!(matches!(&filed.outcome, IntakeOutcome::Ingested { .. }));
+        let old_pointer = filed.source_pointer.clone().expect("old pointer");
+        let old_links =
+            parent_task_block(&fixture.vault, "job", &first.task_block_id);
+        assert!(
+            old_links.contains("LINKS"),
+            "birth writes a LINKS child:\n{old_links}"
+        );
+        let already = prepare_filing(
+            &fixture.config,
+            &fixture.notes_input(
+                "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship v2",
+            ),
+            &cedar_options(false),
+        )
+        .expect_err("google identity refuses without overwrite");
+        assert_eq!(already.code, "already_filed");
+
+        let prepared = fixture.prepare(
+            "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship v2",
+            cedar_options(true),
+        );
+        assert_eq!(prepared.stem, first.stem);
+        assert_eq!(prepared.task_block_id, first.task_block_id);
+        assert_eq!(prepared.status, first.status);
+        assert!(!prepared.status_explicit);
+        let replaced = fixture.replace(&prepared);
+        assert!(replaced.pages > 0, "replacement still renders a PDF");
+        assert_eq!(
+            replaced.overwrite.task_block_id,
+            Some(first.task_block_id.clone())
+        );
+        assert_eq!(replaced.overwrite.task_status, first.status);
+        assert!(
+            replaced.overwrite.warnings.is_empty(),
+            "{:?}",
+            replaced.warnings
+        );
+        let subjects = commit_subjects(&fixture.vault);
+        let overwrite_subject =
+            format!("bob ref meet: overwrite meetings/{}", prepared.stem);
+        assert!(
+            subjects.iter().any(|subject| subject == &overwrite_subject),
+            "meeting overwrite subject: {subjects:?}"
+        );
+        let body = live_note_body(&prepared.note_path);
+        assert_eq!(recap_state(&body), RecapState::Owned);
+        assert!(body.contains("Ship v2"), "owned recap reseeds:\n{body}");
+        assert!(
+            !body.contains("Ship it"),
+            "old owned recap leaves the live note:\n{body}"
+        );
+        let history = fixture.vault.join("ref_history");
+        if history.exists() {
+            let frozen = fs::read_to_string(
+                fs::read_dir(&history)
+                    .expect("history")
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .find(|path| {
+                        path.extension().is_some_and(|ext| ext == "md")
+                    })
+                    .unwrap_or_else(|| history.join("missing.md")),
+            )
+            .unwrap_or_default();
+            assert!(
+                !frozen.contains("bob:meeting-recap:begin"),
+                "recap must stay off ref_history:\n{frozen}"
+            );
+        }
+        let new_links =
+            parent_task_block(&fixture.vault, "job", &first.task_block_id);
+        assert_eq!(new_links, old_links, "LINKS and task identity stay");
+        let new_pointer = replaced.source_pointer.expect("new pointer");
+        assert_ne!(new_pointer, old_pointer, "source store grows a new object");
+        let old_store = crate::native::highlights_ref::source_store::read_store(
+            &fixture.vault,
+            &old_pointer,
+        );
+        assert!(old_store.bytes.is_some(), "old source remains as history");
+        let new_store = crate::native::highlights_ref::source_store::read_store(
+            &fixture.vault,
+            &new_pointer,
+        );
+        let new_bytes = new_store.bytes.expect("new bytes");
+        let new_text = String::from_utf8_lossy(&new_bytes);
+        assert!(new_text.contains("Ship v2"), "replacement source saved");
+    }
+
+    #[test]
+    fn overwrite_keeps_edited_recap_and_explicit_status() {
+        let fixture = RouteFixture::new(default_config());
+        fixture.day(&cedar_row("[root:: job]", "https://example.com/e"));
+        fixture.commit_seed(&[], "seed");
+        let first = fixture.prepare(
+            "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship it",
+            cedar_options(false),
+        );
+        fixture.file(&first);
+        let mut note = fs::read_to_string(&first.note_path).expect("note");
+        if let Some(inner) = note.find(" -->\n") {
+            note.insert_str(inner + 5, "edited ");
+        } else {
+            panic!("filed note must carry an owned recap:\n{note}");
+        }
+        fs::write(&first.note_path, note).expect("edit recap");
+        fixture.commit_seed(&[], "edit recap");
+        let prepared = fixture.prepare(
+            "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship v2",
+            MeetingPrepareOptions {
+                selection: MeetingSelection::Token(
+                    "20261124#^cedar-review".to_string(),
+                ),
+                overwrite: true,
+                status: Some("read".into()),
+                ..MeetingPrepareOptions::default()
+            },
+        );
+        assert!(prepared.status_explicit);
+        assert_eq!(prepared.status, "read");
+        let replaced = fixture.replace(&prepared);
+        assert_eq!(replaced.overwrite.task_status, "read");
+        assert!(
+            replaced
+                .warnings
+                .iter()
+                .any(|warning| warning == EDITED_RECAP_WARNING),
+            "edited recap warns: {:?}",
+            replaced.warnings
+        );
+        let body = live_note_body(&prepared.note_path);
+        assert!(body.contains("edited "), "edited recap bytes stay:\n{body}");
+        assert!(
+            body.contains("Ship it"),
+            "edited recap keeps the old inner text:\n{body}"
+        );
+        assert!(
+            !body.contains("Ship v2"),
+            "replacement must not clobber an edited recap:\n{body}"
+        );
+    }
+
+    #[test]
+    fn overwrite_without_existing_files_as_new() {
+        let fixture = RouteFixture::new(default_config());
+        fixture.day(&cedar_row("[root:: job]", "https://example.com/e"));
+        fixture.commit_seed(&[], "seed");
+        let prepared = fixture.prepare(
+            "Cedar Labs quarterly review\n\n- note",
+            cedar_options(true),
+        );
+        assert!(
+            prepared.existing.is_none(),
+            "force with no occurrence is a first filing"
+        );
+        match fixture.write(&prepared) {
+            MeetWriteResult::Filed(result) => {
+                assert!(matches!(
+                    result.outcome,
+                    IntakeOutcome::Ingested { .. }
+                ));
+            }
+            MeetWriteResult::Replaced(_) => {
+                panic!("-O with no existing files as new, not as an overwrite")
+            }
+        }
+        assert!(prepared.note_path.is_file());
+    }
+
+    #[test]
+    fn overwrite_prepare_follows_a_renamed_reference() {
+        let fixture = RouteFixture::new(default_config());
+        fixture.day(&cedar_row("[root:: job]", "https://example.com/e"));
+        fixture.commit_seed(&[], "seed");
+        let first = fixture.prepare(
+            "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship it",
+            cedar_options(false),
+        );
+        fixture.file(&first);
+        let new_stem = format!("{}_renamed", first.stem);
+        let old_rel = format!("ref/meetings/{}.md", first.stem);
+        let new_rel = format!("ref/meetings/{new_stem}.md");
+        git(&fixture.vault, &["mv", &old_rel, &new_rel]);
+        fixture.commit_seed(&[], "rename meeting note");
+        let prepared = fixture.prepare(
+            "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship v2",
+            cedar_options(true),
+        );
+        assert_eq!(prepared.stem, new_stem);
+        assert_eq!(prepared.task_block_id, first.task_block_id);
+        assert_eq!(
+            prepared
+                .existing
+                .as_ref()
+                .map(|existing| existing.filed.note.as_str()),
+            Some(new_rel.as_str()),
+            "overwrite keeps the live renamed path"
+        );
+        assert!(
+            !first.note_path.exists(),
+            "the old note path is no longer the live member"
+        );
+    }
+
+    #[test]
+    fn manual_event_dedupes_by_target_then_overwrites() {
+        let fixture = RouteFixture::new(default_config());
+        fixture.day(
+            "- [*] #task **1400-1430** Cedar Labs quarterly review [root:: job] ^cedar-review",
+        );
+        fixture.commit_seed(&[], "seed");
+        let first = fixture.prepare(
+            "Cedar Labs quarterly review\n\n- first notes",
+            cedar_options(false),
+        );
+        assert!(
+            first.meeting.event_id.is_none(),
+            "manual event has no Google id"
+        );
+        fixture.file(&first);
+        let already = prepare_filing(
+            &fixture.config,
+            &fixture
+                .notes_input("Cedar Labs quarterly review\n\n- second notes"),
+            &cedar_options(false),
+        )
+        .expect_err("manual identity refuses without overwrite");
+        assert_eq!(already.code, "already_filed");
+        let prepared = fixture.prepare(
+            "Cedar Labs quarterly review\n\n- second notes",
+            cedar_options(true),
+        );
+        assert_eq!(prepared.stem, first.stem);
+        let replaced = fixture.replace(&prepared);
+        assert_eq!(replaced.overwrite.task_block_id, Some(first.task_block_id));
+        let body = live_note_body(&prepared.note_path);
+        assert!(
+            body.contains("second notes"),
+            "manual overwrite reseeds:\n{body}"
         );
     }
 }

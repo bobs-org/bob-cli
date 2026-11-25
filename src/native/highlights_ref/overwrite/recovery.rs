@@ -82,7 +82,7 @@ pub(crate) struct OverwriteIntent {
     /// Clean locked HEAD after pre-sync: the rollback base.
     pub(crate) base_head: String,
     /// Expected transaction commit subject
-    /// (`bob ref create: overwrite <type>/<stem>`).
+    /// (`<producer>: overwrite <type>/<stem>`).
     pub(crate) expected_subject: String,
     /// Commit SHA the transaction created, once proved; `None` while the
     /// transaction has not committed yet.

@@ -33,7 +33,6 @@ mod normalize;
 mod parent;
 #[cfg_attr(not(test), allow(dead_code))]
 mod profile;
-#[cfg_attr(not(test), allow(dead_code))]
 mod recap;
 mod resolve;
 mod token;
@@ -66,9 +65,10 @@ pub(crate) use normalize::normalize;
 pub(crate) use parent::{meeting_parent, MeetingParent};
 #[allow(unused_imports)]
 pub(crate) use profile::{render_meeting_pdf, MeetingMeta};
-#[allow(unused_imports)]
 pub(crate) use recap::{
-    recap_state, render_recap, replace_recap, RecapState, ReplaceRecapError,
+    apply_overwrite_recap, recap_preservation_span, recap_state, render_recap,
+    replace_recap, strip_recap, RecapOverwrite, RecapState, ReplaceRecapError,
+    EDITED_RECAP_WARNING,
 };
 pub(crate) use resolve::{
     recent_meetings, resolve_event, AmbiguousCandidate, RecentMeeting,

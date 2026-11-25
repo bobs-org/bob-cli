@@ -33,6 +33,17 @@ impl fmt::Display for ReplaceRecapError {
 
 impl StdError for ReplaceRecapError {}
 
+/// Warning when overwrite keeps a user-edited recap byte-for-byte.
+pub(crate) const EDITED_RECAP_WARNING: &str =
+    "meeting recap was edited and was not replaced";
+
+/// Result of applying a replacement recap against the live note's ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecapOverwrite {
+    pub body: String,
+    pub warning: Option<String>,
+}
+
 pub(crate) fn render_recap(notes: &MeetingNotes, meta: &RecapMeta) -> String {
     let mut inner = String::new();
     let mut meta_line =
@@ -147,6 +158,78 @@ pub(crate) fn replace_recap(
     }
 }
 
+/// Apply a newly rendered owned recap to a fresh overwrite skeleton using
+/// the live note body's recap ownership at the transaction preimage.
+///
+/// Owned and absent regions are replaced. An edited or malformed region
+/// stays on the live note; missing or malformed markers never authorize
+/// deleting user text.
+pub(crate) fn apply_overwrite_recap(
+    live_body: &str,
+    fresh_body: &str,
+    replacement: &str,
+) -> Result<RecapOverwrite, ReplaceRecapError> {
+    match recap_state(live_body) {
+        RecapState::Owned | RecapState::Absent => Ok(RecapOverwrite {
+            body: replace_recap(fresh_body, replacement)?,
+            warning: None,
+        }),
+        RecapState::Edited => {
+            let body = if let Some(old) = extract_recap(live_body) {
+                place_recap(fresh_body, old)
+            } else {
+                place_unparsed_recap(live_body, fresh_body)
+            };
+            Ok(RecapOverwrite {
+                body,
+                warning: Some(EDITED_RECAP_WARNING.to_string()),
+            })
+        }
+    }
+}
+
+/// Byte span of a recap region that overwrite may preserve or strip, even
+/// when the digest no longer matches. Malformed begin/end pairs still
+/// identify a span so user text is not deleted.
+pub(crate) fn recap_preservation_span(note_body: &str) -> Option<Range<usize>> {
+    if let Some((range, _, _)) = recap_region(note_body) {
+        return Some(range);
+    }
+    let start = match note_body.find(BEGIN_PREFIX) {
+        Some(start) => start,
+        None => {
+            let end = note_body.find(END_MARKER)?;
+            let start = note_body[..end]
+                .rfind("\n\n")
+                .map(|index| index + 2)
+                .unwrap_or(0);
+            return Some(start..end + END_MARKER.len());
+        }
+    };
+    if let Some(rel) = note_body[start..].find(END_MARKER) {
+        return Some(start..start + rel + END_MARKER.len());
+    }
+    let end = note_body[start..]
+        .find("## Highlights")
+        .map(|rel| start + rel)
+        .unwrap_or(note_body.len());
+    Some(start..end)
+}
+
+pub(crate) fn extract_recap(note_body: &str) -> Option<&str> {
+    recap_preservation_span(note_body).map(|range| &note_body[range])
+}
+
+/// Remove a recap span and collapse the blank lines around the cut so a
+/// managed skeleton comparison does not treat an owned recap as authored
+/// prose.
+pub(crate) fn strip_recap(note_body: &str) -> String {
+    let Some(range) = recap_preservation_span(note_body) else {
+        return note_body.to_string();
+    };
+    collapse_cut(note_body, range)
+}
+
 fn recap_region(note_body: &str) -> Option<(Range<usize>, String, &str)> {
     let start = note_body.find(BEGIN_PREFIX)?;
     let digest_start = start + BEGIN_PREFIX.len();
@@ -179,6 +262,69 @@ fn recap_region(note_body: &str) -> Option<(Range<usize>, String, &str)> {
     let inner = &note_body[body_start..inner_end];
     let range = start..end_marker_start + END_MARKER.len();
     Some((range, digest, inner))
+}
+
+fn place_recap(note_body: &str, recap: &str) -> String {
+    if let Some(range) = recap_preservation_span(note_body) {
+        let mut result = String::with_capacity(
+            note_body.len() - (range.end - range.start) + recap.len(),
+        );
+        result.push_str(&note_body[..range.start]);
+        result.push_str(recap);
+        result.push_str(&note_body[range.end..]);
+        result
+    } else {
+        insert_recap(note_body, recap)
+    }
+}
+
+fn place_unparsed_recap(live_body: &str, fresh_body: &str) -> String {
+    let Some(old_span) = embed_to_highlights(live_body) else {
+        return insert_recap(fresh_body, live_body.trim());
+    };
+    let kept = live_body[old_span.clone()].trim();
+    if kept.is_empty() {
+        return fresh_body.to_string();
+    }
+    insert_recap(fresh_body, kept)
+}
+
+fn embed_to_highlights(body: &str) -> Option<Range<usize>> {
+    let embed = body.find("![[")?;
+    let embed_end = body[embed..].find('\n').map(|rel| embed + rel)?;
+    let start = if body[embed_end..].starts_with('\n') {
+        embed_end + 1
+    } else {
+        embed_end
+    };
+    let end = body[start..]
+        .find("## Highlights")
+        .map(|rel| start + rel)
+        .unwrap_or(body.len());
+    Some(start..end)
+}
+
+fn collapse_cut(text: &str, range: Range<usize>) -> String {
+    let mut before = text[..range.start].to_string();
+    let mut after = text[range.end..].to_string();
+    while before.ends_with('\n') {
+        before.pop();
+    }
+    while after.starts_with('\n') {
+        after.remove(0);
+    }
+    if after.is_empty() {
+        if before.is_empty() {
+            String::new()
+        } else {
+            before.push('\n');
+            before
+        }
+    } else if before.is_empty() {
+        after
+    } else {
+        format!("{before}\n\n{after}")
+    }
 }
 
 fn insert_recap(note_body: &str, recap: &str) -> String {

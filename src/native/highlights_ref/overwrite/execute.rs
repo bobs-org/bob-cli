@@ -28,7 +28,7 @@ use crate::native::file_coordination::{Coordination, MoveContext};
 use crate::native::ref_library;
 use crate::native::ref_tasks;
 
-const OVERWRITE_SUBJECT_PREFIX: &str = "bob ref create: overwrite";
+const DEFAULT_OVERWRITE_PRODUCER: &str = "bob ref create";
 
 /// Test-only injection points for the overwrite executor. Never compiled
 /// into release builds and never read from a CLI flag or environment
@@ -122,6 +122,8 @@ pub(in crate::native::highlights_ref) struct OverwriteResult {
     pub(crate) highlights: u64,
     pub(crate) commit_sha: String,
     pub(crate) push_pending: bool,
+    /// Recap ownership and other overwrite notes for the route renderer.
+    pub(crate) warnings: Vec<String>,
 }
 
 /// Apply one prepared overwrite. Network-backed vault sync runs while the
@@ -256,10 +258,8 @@ fn execute_with_sync_and_session(
         .map_err(|error| {
         CommandError::new(format!("could not read vault HEAD: {error}"))
     })?;
-    let subject = format!(
-        "{OVERWRITE_SUBJECT_PREFIX} {}/{}",
-        locked.ref_type, locked.member.stem
-    );
+    let subject =
+        overwrite_subject(request, &locked.ref_type, &locked.member.stem);
     let manifest = transaction_manifest(&locked);
     let live_pdf = config.bob_dir.join(&locked.pdf_path);
     let transaction = if let Some(annotated) = &locked.annotated {
@@ -448,8 +448,8 @@ fn overwrite_inside_accessor(
         )
         .with_code("injected_crash"));
     }
-    let task_mark = match applied {
-        Ok((_, task_mark)) => task_mark,
+    let (task_mark, recap_warnings) = match applied {
+        Ok(applied) => (applied.task_mark, applied.warnings),
         Err(error) => {
             let rollback = recovery::rollback_transaction(
                 config,
@@ -591,7 +591,20 @@ fn overwrite_inside_accessor(
         highlights: locked.member.highlights.unwrap_or(0),
         commit_sha: sha,
         push_pending,
+        warnings: recap_warnings,
     })
+}
+
+fn overwrite_subject(
+    request: &OverwriteRequest,
+    ref_type: &str,
+    stem: &str,
+) -> String {
+    let producer = request
+        .producer
+        .as_deref()
+        .unwrap_or(DEFAULT_OVERWRITE_PRODUCER);
+    format!("{producer}: overwrite {ref_type}/{stem}")
 }
 
 fn same_locked_preflight(
@@ -1174,6 +1187,11 @@ fn ensure_staged_store_is_preflighted(
     }
 }
 
+struct AppliedOverwrite {
+    task_mark: char,
+    warnings: Vec<String>,
+}
+
 fn apply_and_verify(
     config: &Config,
     plan: &OverwritePreflight,
@@ -1181,7 +1199,7 @@ fn apply_and_verify(
     staged: &StagedOverwrite,
     manifest: &BTreeSet<PathBuf>,
     pdf_move: Option<&mut MoveContext<'_>>,
-) -> Result<(String, char), CommandError> {
+) -> Result<AppliedOverwrite, CommandError> {
     let pdf = config.bob_dir.join(&plan.pdf_path);
     let note_path = config.bob_dir.join(&plan.note_path);
     let old_note = fs::read_to_string(&note_path).map_err(|error| {
@@ -1317,6 +1335,24 @@ fn apply_and_verify(
     } else {
         body
     };
+    let mut warnings = Vec::new();
+    let body = if let Some(replacement) = request.meeting_recap.as_deref() {
+        let old_body = super::super::split_frontmatter(&old_note)
+            .map(|(_, body)| body)
+            .unwrap_or_else(|| old_note.clone());
+        let applied = crate::native::meetings::apply_overwrite_recap(
+            &old_body,
+            &body,
+            replacement,
+        )
+        .map_err(|error| CommandError::new(error.to_string()))?;
+        if let Some(warning) = applied.warning {
+            warnings.push(warning);
+        }
+        applied.body
+    } else {
+        body
+    };
     let note_contents = fresh_note_contents(
         &old_note,
         &body,
@@ -1428,7 +1464,10 @@ fn apply_and_verify(
     )?;
     #[cfg(test)]
     trip(OverwriteFailpoint::ForcedVerificationFailure)?;
-    Ok((expected_subtree, expected_mark))
+    Ok(AppliedOverwrite {
+        task_mark: expected_mark,
+        warnings,
+    })
 }
 
 fn apply_final_projection(
@@ -3356,6 +3395,53 @@ mod tests {
         planned.pointer
     }
 
+    fn meeting_recap(tldr: &str) -> String {
+        let notes = crate::native::meetings::MeetingNotes {
+            tldr: tldr.to_string(),
+            ..Default::default()
+        };
+        crate::native::meetings::render_recap(
+            &notes,
+            &crate::native::meetings::RecapMeta {
+                date: "2026-11-24".into(),
+                span: "14:00–14:30".into(),
+                event_link: "[[20261124#^cedar-review]]".into(),
+                producer: Some("VoiceQuill".into()),
+            },
+        )
+    }
+
+    fn insert_recap_into_note(note: &str, recap: &str) -> String {
+        if let Some(idx) = note.find("## Highlights") {
+            let mut out = note[..idx].to_string();
+            if !out.ends_with("\n\n") {
+                if out.ends_with('\n') {
+                    out.push('\n');
+                } else {
+                    out.push_str("\n\n");
+                }
+            }
+            out.push_str(recap);
+            out.push_str("\n\n");
+            out.push_str(&note[idx..]);
+            out
+        } else {
+            format!("{note}\n{recap}\n")
+        }
+    }
+
+    fn seed_live_recap(fixture: &mut ExecuteFixture, recap: &str) {
+        let note = fs::read_to_string(&fixture.note).expect("note");
+        fs::write(&fixture.note, insert_recap_into_note(&note, recap))
+            .expect("write recap");
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "seed meeting recap"],
+        );
+        refresh_fixture_plan(fixture);
+    }
+
     fn attach_staged_store(
         fixture: &mut ExecuteFixture,
         source_bytes: &[u8],
@@ -3507,6 +3593,8 @@ mod tests {
             .unwrap_or_else(|error| panic!("execute: {error}"));
         assert!(!result.push_pending, "a no-op post-sync is not pending");
         assert_committed_new_state(&fixture, &result);
+        let subject = git(&fixture.vault, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject, "bob ref create: overwrite papers/report");
     }
 
     #[test]
@@ -4383,6 +4471,229 @@ mod tests {
         assert_eq!(
             git(&fixture.vault, &["rev-parse", "HEAD"]),
             fixture.old_head
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+    }
+
+    #[test]
+    fn meeting_recap_stays_off_frozen_history_and_reseeds_when_owned() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-meeting-recap");
+        let old = meeting_recap("old owned recap");
+        let next = meeting_recap("replacement owned recap");
+        seed_live_recap(&mut fixture, &old);
+        fixture.request.meeting_recap = Some(next.clone());
+        fixture.request.producer = Some("bob ref meet".into());
+        refresh_fixture_plan(&mut fixture);
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("execute: {error}"));
+        assert_committed_new_state(&fixture, &result);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let live = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(
+            live.contains("replacement owned recap"),
+            "owned recap reseeds:\n{live}"
+        );
+        assert!(
+            !live.contains("old owned recap"),
+            "old owned recap must leave the live note:\n{live}"
+        );
+        let archive = fixture
+            .plan
+            .frozen_note
+            .as_ref()
+            .expect("authored prose still freezes");
+        let frozen = fs::read_to_string(fixture.vault.join(&archive.path))
+            .expect("frozen note");
+        assert!(
+            frozen.contains("Authored paragraph that must freeze."),
+            "unrelated authored prose still archives:\n{frozen}"
+        );
+        assert!(
+            !frozen.contains("bob:meeting-recap:begin"),
+            "meeting recap must stay off ref_history:\n{frozen}"
+        );
+        assert!(
+            !frozen.contains("old owned recap"),
+            "old recap must not migrate into the archive:\n{frozen}"
+        );
+        let subject = git(&fixture.vault, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject, "bob ref meet: overwrite papers/report");
+    }
+
+    #[test]
+    fn meeting_recap_without_request_still_freezes_as_authored_prose() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-recap-freeze");
+        let old = meeting_recap("generic recap that freezes");
+        seed_live_recap(&mut fixture, &old);
+        assert!(fixture.request.meeting_recap.is_none());
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("execute: {error}"));
+        assert_committed_new_state(&fixture, &result);
+        let archive = fixture
+            .plan
+            .frozen_note
+            .as_ref()
+            .expect("recap counts as authored without meeting_recap");
+        let frozen = fs::read_to_string(fixture.vault.join(&archive.path))
+            .expect("frozen note");
+        assert!(
+            frozen.contains("generic recap that freezes"),
+            "create overwrite still archives recap-like prose:\n{frozen}"
+        );
+        let live = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(
+            !live.contains("generic recap that freezes"),
+            "fresh skeleton does not keep the unmanaged recap:\n{live}"
+        );
+    }
+
+    #[test]
+    fn edited_meeting_recap_is_preserved_with_warning() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-edited-recap");
+        let old = meeting_recap("old owned recap");
+        let next = meeting_recap("replacement owned recap");
+        seed_live_recap(&mut fixture, &old);
+        let mut edited = fs::read_to_string(&fixture.note).expect("note");
+        let inner = edited.find(" -->\n").expect("owned recap begin marker");
+        edited.insert_str(inner + 5, "edited ");
+        fs::write(&fixture.note, edited).expect("edit recap");
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "edit meeting recap"],
+        );
+        fixture.request.meeting_recap = Some(next);
+        refresh_fixture_plan(&mut fixture);
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("execute: {error}"));
+        assert_committed_new_state(&fixture, &result);
+        assert_eq!(
+            result.warnings,
+            vec![crate::native::meetings::EDITED_RECAP_WARNING.to_string()]
+        );
+        let live = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(live.contains("edited "), "edited recap bytes stay:\n{live}");
+        assert!(
+            live.contains("old owned recap"),
+            "edited recap keeps its inner text:\n{live}"
+        );
+        assert!(
+            !live.contains("replacement owned recap"),
+            "replacement must not clobber an edited recap:\n{live}"
+        );
+        let archive = fixture
+            .plan
+            .frozen_note
+            .as_ref()
+            .expect("authored prose still freezes");
+        let frozen = fs::read_to_string(fixture.vault.join(&archive.path))
+            .expect("frozen note");
+        assert!(
+            !frozen.contains("bob:meeting-recap:begin"),
+            "edited recap stays off ref_history:\n{frozen}"
+        );
+    }
+
+    #[test]
+    fn malformed_meeting_recap_is_not_deleted() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-malformed-recap");
+        let next = meeting_recap("replacement owned recap");
+        let note = fs::read_to_string(&fixture.note).expect("note");
+        let malformed = insert_recap_into_note(
+            &note,
+            "<!-- bob:meeting-recap:begin v1 broken -->\nuser prose that must stay\n<!-- bob:meeting-recap:end -->",
+        );
+        fs::write(&fixture.note, malformed).expect("write malformed recap");
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "seed malformed recap"],
+        );
+        fixture.request.meeting_recap = Some(next);
+        refresh_fixture_plan(&mut fixture);
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("execute: {error}"));
+        assert_committed_new_state(&fixture, &result);
+        assert_eq!(
+            result.warnings,
+            vec![crate::native::meetings::EDITED_RECAP_WARNING.to_string()]
+        );
+        let live = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(
+            live.contains("user prose that must stay"),
+            "malformed recap must not authorize deletion:\n{live}"
+        );
+    }
+
+    #[test]
+    fn after_note_failpoint_rolls_back_meeting_recap() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-recap-rollback");
+        let old = meeting_recap("old owned recap");
+        let next = meeting_recap("replacement owned recap");
+        seed_live_recap(&mut fixture, &old);
+        fixture.request.meeting_recap = Some(next);
+        refresh_fixture_plan(&mut fixture);
+        let _armed = arm(OverwriteFailpoint::AfterNote);
+        let error = run_execute(&fixture, |_| Ok(()))
+            .expect_err("injected failpoint must abort");
+        assert!(
+            error.to_string().contains("injected failpoint")
+                || error.code == Some("injected_failpoint"),
+            "unexpected error: {error}"
+        );
+        assert_intact_old_state(&fixture);
+        let live = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(
+            live.contains("old owned recap"),
+            "rollback restores the preimage recap:\n{live}"
+        );
+        assert!(
+            !live.contains("replacement owned recap"),
+            "replacement recap must not survive rollback:\n{live}"
+        );
+    }
+
+    #[test]
+    fn recap_preimage_change_aborts_before_write() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-recap-preimage");
+        let old = meeting_recap("old owned recap");
+        let next = meeting_recap("replacement owned recap");
+        seed_live_recap(&mut fixture, &old);
+        fixture.request.meeting_recap = Some(next);
+        refresh_fixture_plan(&mut fixture);
+        let note = fixture.note.clone();
+        let vault = fixture.vault.clone();
+        let error = run_execute(&fixture, |pre| {
+            if pre {
+                let mut body = fs::read_to_string(&note).expect("note");
+                body.push_str("\nmutated after pre-sync\n");
+                fs::write(&note, body).expect("mutate");
+                git(&vault, &["add", "-A"]);
+                git(
+                    &vault,
+                    &["commit", "-q", "-m", "pre-sync pulled a newer recap"],
+                );
+            }
+            Ok(())
+        })
+        .expect_err("preimage must change");
+        assert_eq!(error.code, Some("preimage_changed"), "{error}");
+        let live = fs::read_to_string(&fixture.note).expect("note");
+        assert!(
+            live.contains("mutated after pre-sync"),
+            "overwrite must not roll back the pulled pre-sync commit"
+        );
+        assert!(
+            live.contains("old owned recap"),
+            "preimage recap stays on the pulled note:\n{live}"
         );
         assert!(super::super::recovery::load_intent(&fixture.config)
             .expect("load intent")
