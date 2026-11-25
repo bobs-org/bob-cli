@@ -3,29 +3,52 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: bob-host-currency --commit <sha>... --plugin <id>=<marker>...
+Usage: bob-host-currency (--commit <sha>... | --probe <name>...) --plugin <id>=<marker>...
 
-Check that every Bob host has a release containing all requested commits and that
-each host's deployed vault plugins contain the requested markers.
+Check that bob on every Bob host includes the requested change and that each
+host's deployed vault plugins contain the requested markers.
+
+Without --probe, a host's bob is current when its installed release is at least
+the earliest v* release tag that contains every --commit. With --probe, the
+probes decide: a host's bob is current when it passes every probe, and the
+release row is informational. Probes cover hosts that run a build from master
+ahead of the newest release, whose bob --version still prints that release.
 
 Options:
   --commit <sha>       Commit that must be present in the installed release (repeatable)
+  --probe <name>       Behavior the installed bob must show on each host (repeatable)
   --plugin <id>=<mark> Deployed plugin bundle marker to require (repeatable)
   -h, --help           Show this help
+
+Probes:
+  bold-drawer-read     bob capture-drawers reports a whole-bold drawer with
+                       marker "bold" in a throwaway vault under the host's
+                       temp directory; the real vault and state are untouched
 
 Hosts are queried through the configured Tailscale SSH aliases athena, apollo,
 and mac. Each SSH attempt is limited to 10 seconds. An unreachable host is
 reported as unknown and causes a nonzero exit.
+
+Examples:
+  bob-host-currency --commit 37b2080e --plugin bob-ledger-tools=bob-task-drawer-dual-read-v1
+  bob-host-currency --commit 37b2080e --probe bold-drawer-read \
+      --plugin bob-ledger-tools=bob-task-drawer-dual-read-v1
 EOF
 }
 
 commits=()
+probes=()
 plugins=()
 while (($#)); do
     case "$1" in
         --commit)
             (($# >= 2)) || { usage >&2; exit 2; }
             commits+=("$2")
+            shift 2
+            ;;
+        --probe)
+            (($# >= 2)) || { usage >&2; exit 2; }
+            probes+=("$2")
             shift 2
             ;;
         --plugin)
@@ -45,10 +68,55 @@ while (($#)); do
     esac
 done
 
-if ((${#commits[@]} == 0 || ${#plugins[@]} == 0)); then
+if (((${#commits[@]} == 0 && ${#probes[@]} == 0) || ${#plugins[@]} == 0)); then
     usage >&2
     exit 2
 fi
+
+# Each probe body runs on the host under POSIX sh, inside its own subshell, and
+# exits 0 only when the installed bob shows the behavior. It must not touch the
+# real vault, configuration, or state.
+probe_body() {
+    case "$1" in
+        bold-drawer-read)
+            cat <<'PROBE'
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/bob-host-currency.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' EXIT
+vault=$tmp/vault
+mkdir -p "$vault/.obsidian/plugins/obsidian-tasks-plugin" || exit 1
+printf '%s\n' '{"globalFilter":"#task","statusSettings":{"coreStatuses":[{"symbol":" ","name":"Todo","type":"TODO"},{"symbol":"x","name":"Done","type":"DONE"}],"customStatuses":[]}}' \
+    >"$vault/.obsidian/plugins/obsidian-tasks-plugin/data.json" || exit 1
+printf '# Tasks\n- [ ] #task Probe parent ^probe\n\t- **API Design**\n\t\t- review endpoint\n' \
+    >"$vault/probe.md" || exit 1
+out=$(BOB_CONFIG_FILE="$tmp/missing-config.toml" BOB_DIR="$vault" \
+    XDG_STATE_HOME="$tmp/state" XDG_CACHE_HOME="$tmp/cache" \
+    BOB_VAULT_SYNC_LOCK_FILE="$tmp/sync.lock" BOB_VAULT_SYNC_NOTIFY=0 \
+    BOB_REF_JOBS_KICK=off BOB_GMAIL_KICK=off \
+    bob capture-drawers -b "$vault" -r probe -i probe -f json 2>/dev/null) || exit 1
+case $out in
+    *'"title":"API Design"'*'"marker":"bold"'*) exit 0 ;;
+esac
+exit 1
+PROBE
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+probe_detail() {
+    case "$1" in
+        bold-drawer-read) printf 'capture-drawers lists **API Design** as marker=bold' ;;
+    esac
+}
+
+for probe in "${probes[@]}"; do
+    if ! probe_body "$probe" >/dev/null; then
+        printf 'Unknown probe: %s (known: bold-drawer-read)\n' "$probe" >&2
+        exit 2
+    fi
+done
 
 for commit in "${commits[@]}"; do
     if ! git cat-file -e "${commit}^{commit}" 2>/dev/null; then
@@ -75,6 +143,7 @@ mapfile -t release_tags < <(
         fi
     done < <(git tag --list 'v*') | sort | cut -d' ' -f2
 )
+((${#commits[@]})) || release_tags=()
 
 for tag in "${release_tags[@]}"; do
     contains_all=true
@@ -91,7 +160,9 @@ for tag in "${release_tags[@]}"; do
 done
 
 required_version=${required_tag#v}
-if [[ -z $required_tag ]]; then
+if ((${#commits[@]} == 0)); then
+    required_version='none (probes decide)'
+elif [[ -z $required_tag ]]; then
     required_version='no release tag contains all requested commits'
 fi
 
@@ -108,8 +179,11 @@ else
 fi
 
 printf 'Required release: %s\n' "$required_version"
-printf '%-10s %-12s %-18s %s\n' HOST CHECK RESULT DETAIL
-printf '%-10s %-12s %-18s %s\n' '----------' '------------' '------------------' '------------------------------'
+if ((${#probes[@]})); then
+    printf 'Required probes:  %s\n' "${probes[*]}"
+fi
+printf '%-10s %-22s %-10s %s\n' HOST CHECK RESULT DETAIL
+printf '%-10s %-22s %-10s %s\n' '----------' '----------------------' '----------' '------------------------------'
 
 overall_ok=true
 hosts=(athena apollo mac)
@@ -129,40 +203,70 @@ version_at_least() {
     return 0
 }
 
-for host in "${hosts[@]}"; do
-    remote_script='version=$(bob --version 2>/dev/null) || version=; printf "VERSION=%s\\n" "$version";'
-    for plugin in "${plugins[@]}"; do
-        plugin_id=${plugin%%=*}
-        marker=${plugin#*=}
-        remote_script+=" if grep -Fq -- '$marker' \"\$HOME/bob/.obsidian/plugins/$plugin_id/main.js\"; then printf 'PLUGIN_OK=$plugin_id\\n'; else printf 'PLUGIN_MISSING=$plugin_id\\n'; fi;"
-    done
+# The remote script is POSIX sh read from stdin, so it runs the same under
+# every login shell. Plugin ids and markers are validated above.
+remote_script='version=$(bob --version 2>/dev/null) || version=
+printf "VERSION=%s\n" "$version"
+'
+for plugin in "${plugins[@]}"; do
+    plugin_id=${plugin%%=*}
+    marker=${plugin#*=}
+    remote_script+="if grep -Fq -- '$marker' \"\$HOME/bob/.obsidian/plugins/$plugin_id/main.js\"; then printf 'PLUGIN_OK=$plugin_id\\n'; else printf 'PLUGIN_MISSING=$plugin_id\\n'; fi
+"
+done
+for probe in "${probes[@]}"; do
+    remote_script+="if (
+$(probe_body "$probe")
+) >/dev/null 2>&1; then printf 'PROBE_OK=$probe\\n'; else printf 'PROBE_FAILED=$probe\\n'; fi
+"
+done
 
-    if output=$(timeout 10 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "$remote_script" 2>/dev/null); then
+for host in "${hosts[@]}"; do
+    if output=$(timeout 10 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'sh -s' <<<"$remote_script" 2>/dev/null); then
         host_version=$(sed -n 's/^VERSION=bob \([0-9][0-9.]*\)$/\1/p' <<<"$output")
-        if [[ -z $host_version ]]; then
-            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$yellow" unknown "$reset" 'bob --version unavailable'
-            overall_ok=false
-        elif [[ -z $required_tag ]]; then
-            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$red" behind "$reset" "installed=$host_version; $required_version"
-            overall_ok=false
-        elif version_at_least "$required_version" "$host_version"; then
-            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$green" current "$reset" "installed=$host_version; required>=$required_version"
+        # With probes, the release row is informational: probes decide.
+        if ((${#probes[@]})); then
+            release_fail_color=$yellow
+            release_note='; probes decide'
         else
-            printf '%-10s %-12s %b%-18s%b %s\n' "$host" release "$red" behind "$reset" "installed=$host_version; required>=$required_version"
-            overall_ok=false
+            release_fail_color=$red
+            release_note=
         fi
+        if [[ -z $host_version ]]; then
+            printf '%-10s %-22s %b%-10s%b %s\n' "$host" release "$yellow" unknown "$reset" "bob --version unavailable$release_note"
+            ((${#probes[@]})) || overall_ok=false
+        elif ((${#commits[@]} == 0)); then
+            printf '%-10s %-22s %-10s %s\n' "$host" release installed "installed=$host_version"
+        elif [[ -z $required_tag ]]; then
+            printf '%-10s %-22s %b%-10s%b %s\n' "$host" release "$release_fail_color" behind "$reset" "installed=$host_version; $required_version$release_note"
+            ((${#probes[@]})) || overall_ok=false
+        elif version_at_least "$required_version" "$host_version"; then
+            printf '%-10s %-22s %b%-10s%b %s\n' "$host" release "$green" current "$reset" "installed=$host_version; required>=$required_version"
+        else
+            printf '%-10s %-22s %b%-10s%b %s\n' "$host" release "$release_fail_color" behind "$reset" "installed=$host_version; required>=$required_version$release_note"
+            ((${#probes[@]})) || overall_ok=false
+        fi
+
+        for probe in "${probes[@]}"; do
+            if grep -Fxq "PROBE_OK=$probe" <<<"$output"; then
+                printf '%-10s %-22s %b%-10s%b %s\n' "$host" "$probe" "$green" current "$reset" "$(probe_detail "$probe")"
+            else
+                printf '%-10s %-22s %b%-10s%b %s\n' "$host" "$probe" "$red" failed "$reset" "$(probe_detail "$probe")"
+                overall_ok=false
+            fi
+        done
 
         for plugin in "${plugins[@]}"; do
             plugin_id=${plugin%%=*}
             if grep -Fxq "PLUGIN_OK=$plugin_id" <<<"$output"; then
-                printf '%-10s %-12s %b%-18s%b %s\n' "$host" "$plugin_id" "$green" current "$reset" "marker=${plugin#*=}"
+                printf '%-10s %-22s %b%-10s%b %s\n' "$host" "$plugin_id" "$green" current "$reset" "marker=${plugin#*=}"
             else
-                printf '%-10s %-12s %b%-18s%b %s\n' "$host" "$plugin_id" "$red" missing "$reset" "marker=${plugin#*=}"
+                printf '%-10s %-22s %b%-10s%b %s\n' "$host" "$plugin_id" "$red" missing "$reset" "marker=${plugin#*=}"
                 overall_ok=false
             fi
         done
     else
-        printf '%-10s %-12s %b%-18s%b %s\n' "$host" all "$yellow" unknown "$reset" 'SSH unavailable within 10 seconds'
+        printf '%-10s %-22s %b%-10s%b %s\n' "$host" all "$yellow" unknown "$reset" 'SSH unavailable within 10 seconds'
         overall_ok=false
     fi
 done
