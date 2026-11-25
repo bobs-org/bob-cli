@@ -282,8 +282,12 @@ fn rewrite_fragment(
                 segment.to_string()
             };
             if drawer_key(&text) == spec.old_key {
-                hit = true;
-                encode(&spec.section_title)
+                if spec.case_only() && text == spec.section_title {
+                    segment.to_string()
+                } else {
+                    hit = true;
+                    encode(&spec.section_title)
+                }
             } else {
                 segment.to_string()
             }
@@ -411,7 +415,7 @@ mod tests {
     use super::*;
 
     fn spec() -> RenameSpec {
-        RenameSpec::parse("requirements", "notes").expect("spec")
+        RenameSpec::parse("requirements", "Notes").expect("spec")
     }
 
     fn index() -> NoteIndex {
@@ -463,7 +467,7 @@ mod tests {
     #[test]
     fn markdown_links_are_repaired_and_encoded() {
         let spec =
-            RenameSpec::parse("requirements", "future work").expect("spec");
+            RenameSpec::parse("requirements", "Future Work").expect("spec");
         let index = index();
         let renamed = BTreeSet::from([PathBuf::from("work/plan.md")]);
         let refused = BTreeSet::new();

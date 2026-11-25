@@ -32,8 +32,9 @@ use super::{
     NoteRename, RenameSpec, SectionChange,
 };
 use crate::native::{
+    capture::{line_spans, list_item_body},
     capture_dependency_tasks::vault_note_paths,
-    capture_drawers::invalidate_drawer_catalog,
+    capture_drawers::{self, invalidate_drawer_catalog, Drawer, DrawerMarker},
     env as bob_env,
     host_catalog::{
         self, CommitInfo, FileEdit, PlannedTxn, ReadDependencies, TxnResult,
@@ -41,6 +42,8 @@ use crate::native::{
     note_tasks::{self, NoteTaskSettings},
     ob,
     style::Styler,
+    task_block_layout::TaskBlock,
+    task_children::TaskChildKind,
     vault_links::NoteIndex,
     vault_rewrite::TxnFailure,
 };
@@ -53,6 +56,201 @@ const ARCHIVE_DIR: &str = "done";
 const TEMPLATES_DIR: &str = "_templates";
 /// Context lines around each changed run in a human excerpt.
 const EXCERPT_CONTEXT: usize = 2;
+
+#[derive(Debug, Clone)]
+struct InventoryEntry {
+    path: String,
+    line: usize,
+    title: String,
+    task: String,
+    task_line: usize,
+    block_id: Option<String>,
+    status: &'static str,
+    archive: bool,
+    entries: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct DuplicateIdentity {
+    path: String,
+    container: &'static str,
+    key: String,
+    owner: String,
+    owner_line: usize,
+    block_id: Option<String>,
+    status: Option<&'static str>,
+    headers: Vec<(usize, String, &'static str)>,
+}
+
+#[derive(Debug, Default)]
+struct LegacyInventory {
+    notes_scanned: usize,
+    legacy_drawers: Vec<InventoryEntry>,
+    empty_bold_drawers: Vec<InventoryEntry>,
+    bold_trailing_colon_leads: Vec<InventoryEntry>,
+    duplicates: Vec<DuplicateIdentity>,
+    io_errors: Vec<String>,
+}
+
+impl LegacyInventory {
+    fn ok(&self) -> bool {
+        self.io_errors.is_empty()
+    }
+
+    fn exit_code(&self) -> i32 {
+        i32::from(!self.ok())
+    }
+
+    fn to_json(&self) -> Value {
+        let item = |entry: &InventoryEntry| {
+            json!({
+                "path": entry.path,
+                "line": entry.line,
+                "title": entry.title,
+                "task": entry.task,
+                "task_line": entry.task_line,
+                "block_id": entry.block_id,
+                "status": entry.status,
+                "archive": entry.archive,
+                "entries": entry.entries,
+            })
+        };
+        json!({
+            "schema_version": SCHEMA_VERSION,
+            "ok": self.ok(),
+            "command": "rename-drawer",
+            "mode": "legacy_inventory",
+            "read_only": true,
+            "counts": {
+                "notes_scanned": self.notes_scanned,
+                "legacy_drawers": self.legacy_drawers.len(),
+                "empty_bold_drawers": self.empty_bold_drawers.len(),
+                "bold_trailing_colon_leads": self.bold_trailing_colon_leads.len(),
+                "duplicate_identities": self.duplicates.len(),
+            },
+            "legacy_drawers": self.legacy_drawers.iter().map(item).collect::<Vec<_>>(),
+            "empty_bold_drawers": self.empty_bold_drawers.iter().map(item).collect::<Vec<_>>(),
+            "bold_trailing_colon_leads": self.bold_trailing_colon_leads.iter().map(item).collect::<Vec<_>>(),
+            "duplicate_identities": self.duplicates.iter().map(|duplicate| json!({
+                "path": duplicate.path,
+                "container": duplicate.container,
+                "key": duplicate.key,
+                "owner": duplicate.owner,
+                "owner_line": duplicate.owner_line,
+                "block_id": duplicate.block_id,
+                "status": duplicate.status,
+                "headers": duplicate.headers.iter().map(|(line, title, marker)| json!({
+                    "line": line,
+                    "title": title,
+                    "marker": marker,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "io_errors": self.io_errors,
+        })
+    }
+
+    fn print_human(&self) {
+        let styler = Styler::detect();
+        for error in &self.io_errors {
+            eprintln!("{} {error}", styler.red("✗"));
+        }
+        println!(
+            "{} {} scanned",
+            styler.bold("Drawer migration inventory (read-only)"),
+            styler.dim(&counted(self.notes_scanned, "note", "notes")),
+        );
+        print_inventory_entries(
+            "Legacy ALL-CAPS drawers",
+            &self.legacy_drawers,
+            &styler,
+        );
+        print_inventory_entries(
+            "Empty bold drawers",
+            &self.empty_bold_drawers,
+            &styler,
+        );
+        print_inventory_entries(
+            "Bold trailing-colon leads (information only)",
+            &self.bold_trailing_colon_leads,
+            &styler,
+        );
+        println!(
+            "{} {}",
+            styler.cyan("Duplicate identities"),
+            styler.dim(&format!("({})", self.duplicates.len())),
+        );
+        if self.duplicates.is_empty() {
+            println!("  {}", styler.green("none found"));
+        } else {
+            for duplicate in &self.duplicates {
+                let headers = duplicate
+                    .headers
+                    .iter()
+                    .map(|(line, title, _)| format!("L{line} `{title}`"))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let owner = if duplicate.container == "task_drawers" {
+                    format!(
+                        "{} (line {})",
+                        duplicate.owner, duplicate.owner_line
+                    )
+                } else {
+                    duplicate.owner.clone()
+                };
+                println!(
+                    "  · {} {} `{}` · {} · {}",
+                    duplicate.path,
+                    duplicate.container,
+                    duplicate.key,
+                    owner,
+                    headers,
+                );
+            }
+        }
+    }
+}
+
+fn print_inventory_entries(
+    label: &str,
+    entries: &[InventoryEntry],
+    styler: &Styler,
+) {
+    println!(
+        "{} {}",
+        styler.cyan(label),
+        styler.dim(&format!("({})", entries.len())),
+    );
+    if entries.is_empty() {
+        println!("  {}", styler.green("none found"));
+        return;
+    }
+    for entry in entries {
+        let status = if entry.archive {
+            "archive".to_string()
+        } else {
+            entry.status.to_string()
+        };
+        let block_id = entry
+            .block_id
+            .as_ref()
+            .map(|id| format!(" ^{id}"))
+            .unwrap_or_default();
+        let entries = entry
+            .entries
+            .map(|count| format!(" · {}", counted(count, "entry", "entries")))
+            .unwrap_or_default();
+        println!(
+            "  · {}:{} `{}` · {}{} ({}){}",
+            entry.path,
+            entry.line,
+            entry.title,
+            entry.task,
+            block_id,
+            status,
+            entries,
+        );
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Vault plan
@@ -328,6 +526,173 @@ fn collect_markdown(directory: &Path, files: &mut Vec<PathBuf>) {
             files.push(path);
         }
     }
+}
+
+fn inventory_entry(
+    path: &Path,
+    task: &note_tasks::NoteTask,
+    drawer: &Drawer,
+    archive: bool,
+) -> InventoryEntry {
+    InventoryEntry {
+        path: slash(path),
+        line: drawer.line,
+        title: drawer.title.clone(),
+        task: task.description.clone(),
+        task_line: task.line_index + 1,
+        block_id: task.block_id.clone(),
+        status: if task.status_type.is_open() {
+            "open"
+        } else {
+            "closed"
+        },
+        archive,
+        entries: Some(drawer.entry_count),
+    }
+}
+
+fn duplicate_groups(
+    path: &Path,
+    container: &'static str,
+    owner: String,
+    owner_line: usize,
+    block_id: Option<String>,
+    status: Option<&'static str>,
+    drawers: Vec<Drawer>,
+) -> Vec<DuplicateIdentity> {
+    let mut by_key: BTreeMap<String, Vec<Drawer>> = BTreeMap::new();
+    for drawer in drawers {
+        by_key.entry(drawer.key.clone()).or_default().push(drawer);
+    }
+    by_key
+        .into_iter()
+        .filter(|(_, headers)| headers.len() > 1)
+        .map(|(key, headers)| DuplicateIdentity {
+            path: slash(path),
+            container,
+            key,
+            owner: owner.clone(),
+            owner_line,
+            block_id: block_id.clone(),
+            status,
+            headers: headers
+                .into_iter()
+                .map(|drawer| {
+                    (drawer.line, drawer.title, drawer.marker.as_str())
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn bold_trailing_colon_title(body: &str) -> Option<&str> {
+    let trimmed = body.trim();
+    let title = trimmed.strip_prefix("**")?.strip_suffix("**")?;
+    (title.trim() == title
+        && title.ends_with(':')
+        && !title.contains('*')
+        && title.chars().any(char::is_alphanumeric))
+    .then_some(title)
+}
+
+/// Read-only migration census. It intentionally uses Bob's live task and
+/// drawer readers so the inventory agrees with normal vault semantics.
+fn legacy_inventory(vault: &Path) -> LegacyInventory {
+    let (mut paths, walk_errors) = vault_note_paths(vault);
+    paths.sort();
+    let mut inventory = LegacyInventory {
+        io_errors: walk_errors,
+        ..LegacyInventory::default()
+    };
+    let settings = note_tasks::read_settings(vault);
+    for relative in paths {
+        let path = slash(&relative);
+        let contents = match fs::read_to_string(vault.join(&relative)) {
+            Ok(contents) => contents,
+            Err(error) => {
+                inventory
+                    .io_errors
+                    .push(format!("{path}: failed to read file: {error}"));
+                continue;
+            }
+        };
+        inventory.notes_scanned += 1;
+        let archive = in_archive(&relative);
+        let scan = note_tasks::scan(&contents, &settings);
+        for task in scan.tasks() {
+            let drawers = capture_drawers::drawers(&contents, task);
+            for drawer in &drawers {
+                let entry = inventory_entry(&relative, task, drawer, archive);
+                match drawer.marker {
+                    DrawerMarker::LegacyCaps => {
+                        inventory.legacy_drawers.push(entry)
+                    }
+                    DrawerMarker::Bold if drawer.entry_count == 0 => {
+                        inventory.empty_bold_drawers.push(entry)
+                    }
+                    DrawerMarker::Bold | DrawerMarker::Section => {}
+                }
+            }
+            inventory.duplicates.extend(duplicate_groups(
+                &relative,
+                "task_drawers",
+                task.description.clone(),
+                task.line_index + 1,
+                task.block_id.clone(),
+                Some(if task.status_type.is_open() {
+                    "open"
+                } else {
+                    "closed"
+                }),
+                drawers,
+            ));
+
+            let block =
+                TaskBlock::read(&contents, task, &settings.global_filter);
+            let lines = line_spans(&contents);
+            for child in &block.children {
+                if !matches!(child.kind, TaskChildKind::Authored) {
+                    continue;
+                }
+                let Some(line) = lines.get(child.line) else {
+                    continue;
+                };
+                let Some(body) = list_item_body(line.text) else {
+                    continue;
+                };
+                let Some(title) = bold_trailing_colon_title(body) else {
+                    continue;
+                };
+                inventory.bold_trailing_colon_leads.push(InventoryEntry {
+                    path: path.clone(),
+                    line: child.line + 1,
+                    title: title.to_string(),
+                    task: task.description.clone(),
+                    task_line: task.line_index + 1,
+                    block_id: task.block_id.clone(),
+                    status: if task.status_type.is_open() {
+                        "open"
+                    } else {
+                        "closed"
+                    },
+                    archive,
+                    entries: None,
+                });
+            }
+        }
+        if super::is_project_text(&contents) {
+            inventory.duplicates.extend(duplicate_groups(
+                &relative,
+                "project_sections",
+                String::new(),
+                0,
+                None,
+                None,
+                capture_drawers::project_h2_drawers(&contents),
+            ));
+        }
+    }
+    inventory
 }
 
 fn commit_subject(spec: &RenameSpec, notes: usize) -> String {
@@ -817,23 +1182,25 @@ pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Rename a task drawer and its project sections everywhere (dry run by default)")
         .long_about(
-            "Rename the task drawer OLD to NEW everywhere: every ALL-CAPS drawer bullet under a #task, whether the task is open, done, cancelled, or archived under done/, plus every eligible ## section of a project note, which is its ^prj task's drawers. OLD matches by drawer key, so case and spacing do not matter. NEW is written in the drawer catalog's casing: ALL-CAPS for a task drawer (NOTES) and Title Case for a ## section (Notes). Where an owner already holds NEW, or holds OLD twice, the containers merge into one at the earliest position, labelled NEW, with every body kept in original order: repeated content, anchors, checkbox bytes, logs, and nesting stay as written, and no bullet ever becomes a requirement. Heading links into renamed sections ([[note#Old]], ![[note#Old]], and Markdown note.md#Old) are repaired; block links never change. A project note whose rename would leave a heading ambiguous is refused with the reason. Ordinary headings in other notes, fenced code, and quotes are out of scope and listed as excluded; _templates/ hits are reported and never edited. Without -a the run is a dry run: it prints each change with a colored excerpt and takes no lock, writes nothing, runs no Git, and does no sync. -a takes the shared vault lock, pre-syncs, replans, guards each note by its full preimage, verifies that nothing replans, makes one commit, post-syncs only when it committed, and refreshes the drawer catalog. A second run reports nothing.",
+            "Rename the task drawer OLD to NEW everywhere: every legacy ALL-CAPS or bold drawer bullet under a #task, whether the task is open, done, cancelled, or archived under done/, plus every eligible ## section of a project note, which is its ^prj task's drawers. OLD matches by drawer key, so case and spacing do not matter. NEW is written verbatim as a bold task drawer title and a project ## section title. A same-key spelling change respells each matching header in place and converts legacy headers to bold without merging duplicate identities. For different keys, where an owner already holds NEW or holds OLD more than once, the dry-run report shows the merge; apply keeps the earliest position and all body content in order. Heading links into renamed sections ([[note#Old]], ![[note#Old]], and Markdown note.md#Old) are repaired; block links never change. A project note whose distinct-name rename would leave a heading ambiguous is refused with the reason. Ordinary headings in other notes, fenced code, and quotes are out of scope and listed as excluded; _templates/ hits are reported and never edited. Without -a the run is a dry run: it prints each change with a colored excerpt and takes no lock, writes nothing, runs no Git, and does no sync. -a takes the shared vault lock, pre-syncs, replans, guards each note by its full preimage, verifies that nothing replans, makes one commit, post-syncs only when it committed, and refreshes the drawer catalog. A second run reports nothing. Use -l/--legacy for a read-only migration inventory of legacy ALL-CAPS drawers, empty bold drawers, bold trailing-colon leads, and duplicate identities; inventory mode takes no OLD or NEW and never writes.",
         )
         .after_help(
-            "Examples:\n  bob task rename-drawer REQUIREMENTS NOTES      Preview the rename\n  bob task rename-drawer requirements notes -a   Apply it in one commit\n  bob task rename-drawer todo later -f json      Print the plan as JSON\n\nSee docs/task-requirements.md §3.5 for the rename contract.",
+            "Examples:\n  bob task rename-drawer REQUIREMENTS Notes       Preview a true-case respelling\n  bob task rename-drawer requirements 'Future Work' -a  Apply it in one commit\n  bob task rename-drawer -l -f json               Inventory legacy drawers\n  bob task rename-drawer todo later -f json       Print the plan as JSON\n\nSee docs/task-drawers.md for the drawer contract.",
         )
         .disable_help_flag(true)
         .arg(
             Arg::new("old")
                 .value_name("OLD")
-                .required(true)
+                .required_unless_present("legacy")
+                .conflicts_with("legacy")
                 .help("Drawer to rename, matched by drawer key (case and spacing ignored)"),
         )
         .arg(
             Arg::new("new")
                 .value_name("NEW")
-                .required(true)
-                .help("New drawer title: ALL-CAPS for task drawers, Title Case for ## sections"),
+                .required_unless_present("legacy")
+                .conflicts_with("legacy")
+                .help("New drawer title, written verbatim"),
         )
         .arg(
             Arg::new("apply")
@@ -865,6 +1232,14 @@ pub(crate) fn build_cli() -> ClapCommand {
                 .short('h')
                 .action(ArgAction::Help)
                 .help("Show help"),
+        )
+        .arg(
+            Arg::new("legacy")
+                .long("legacy")
+                .short('l')
+                .action(ArgAction::SetTrue)
+                .conflicts_with("apply")
+                .help("Read-only inventory for drawer migration"),
         )
 }
 
@@ -899,6 +1274,15 @@ fn execute(matches: &ArgMatches) -> i32 {
         .map(PathBuf::from)
         .map(|path| bob_env::expand_tilde(&path))
         .unwrap_or_else(bob_env::bob_dir);
+    if matches.get_flag("legacy") {
+        let inventory = legacy_inventory(&vault);
+        if json_mode {
+            println!("{}", inventory.to_json());
+        } else {
+            inventory.print_human();
+        }
+        return inventory.exit_code();
+    }
     let old = matches
         .get_one::<String>("old")
         .cloned()
@@ -1014,10 +1398,10 @@ mod tests {
 
     #[test]
     fn commit_subject_names_the_rename() {
-        let spec = RenameSpec::parse("requirements", "notes").expect("spec");
+        let spec = RenameSpec::parse("requirements", "Notes").expect("spec");
         assert_eq!(
             commit_subject(&spec, 2),
-            "bob task rename-drawer: REQUIREMENTS → NOTES (2 notes)"
+            "bob task rename-drawer: REQUIREMENTS → Notes (2 notes)"
         );
     }
 }

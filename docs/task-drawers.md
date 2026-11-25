@@ -79,6 +79,28 @@ titles keep today's Title Case mapping. An empty `##` section maps to a valid
 empty drawer; that mapping does not change the nonempty capture-creation rule.
 Invalid and reserved titles return named refusals.
 
+## Rename and migration inventory
+
+`bob task rename-drawer OLD NEW` matches OLD by its Unicode case-folded drawer
+key and writes NEW verbatim. Task drawers are written as `- **NEW**`; eligible
+project sections are written as `## NEW`. NEW follows the capture drawer-title
+rules, including the reserved-name, no-asterisk, and no-trailing-colon checks.
+
+When OLD and NEW have the same key, Bob respells each matching header in place.
+Legacy task headers become bold, bold task headers stay bold, and project
+headings keep their separate bodies. Duplicate identities stay separate during
+case-only respelling. With different keys, the dry run shows any merge with an
+existing NEW header or repeated OLD headers before `--apply` can merge their
+bodies at the earliest position. Section links are repaired; block links do not
+change. A second run reports no changes.
+
+`bob task rename-drawer -l, --legacy` runs a read-only migration inventory and
+takes no OLD or NEW. It lists every legacy ALL-CAPS task drawer, every empty
+bold task drawer, bold trailing-colon leads for information, and duplicate
+drawer or project-section identities. The inventory includes open and closed
+tasks and archived rows under `done/`; `--format json` reports the same items
+with `schema_version: 1`. It does not lock, sync, write, or commit.
+
 `Drawer.header_range` and `Drawer.title_range` are half-open UTF-8 byte offsets
 into the supplied Markdown source. The header range covers the complete line
 without its line ending. The title range excludes indentation, list markers,

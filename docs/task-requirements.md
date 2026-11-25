@@ -329,16 +329,20 @@ section (§3). Nothing else ever reorders a block: no writer, no
 
 ### 3.5 Renaming drawers
 
-`bob task rename-drawer OLD NEW` renames a drawer everywhere, as one
-previewed, idempotent commit. The `REQUIREMENTS` → `NOTES` migration (§9) is
-one approved run of it; it is not a one-off script.
+`bob task rename-drawer OLD NEW` renames or respells a drawer everywhere, as
+one previewed, idempotent commit. The `REQUIREMENTS` → `Notes` migration (§9)
+is one approved run of it; it is not a one-off script.
 
 - **Names.** OLD matches by drawer key, so case and spacing do not matter.
-  NEW is written in the drawer catalog's casing: ALL-CAPS for a task drawer
-  (`NOTES`), Title Case for a `##` section (`Notes`). A NEW that is reserved
-  for a managed line or `TASKS` (`reserved_drawer`) or is not a valid drawer
-  title (`invalid_drawer_title`), an OLD that names a managed line, and an OLD
-  equal to NEW (`same_drawer`) exit 2 before anything is read.
+  NEW is written verbatim as a bold task drawer and as the project note's
+  `##` section title. A NEW rejected by `can_create_drawer` (for example, a
+  reserved name or a title with `*` or a trailing `:`) and an OLD that names a
+  managed line exit 2 before the vault is read.
+- **Case-only respelling.** OLD and NEW may have the same drawer key. Each
+  matching header is respelled in place; a legacy ALL-CAPS task drawer becomes
+  `- **NEW**`, and a bold drawer remains bold. Matching project sections become
+  `## NEW`, and links to those sections are repaired. Repeated same-key headers
+  stay separate and are never merged by this operation.
 - **Scope.** Every `#task` drawer, whether its task is open, done, cancelled,
   or archived under `done/`, plus every eligible `##` section of a project
   note (the `^prj` task's drawers; structural sections never are). Ordinary
@@ -346,9 +350,10 @@ one approved run of it; it is not a one-off script.
   drawer-looking bullets that are not a task's direct child are left as
   written and listed as excluded. `_generated/` is never read, and
   `_templates/` hits are reported only, never edited.
-- **Merge.** Where one owner (a task, or a project note) already holds NEW,
-  or holds OLD more than once, the containers become one at the earliest
-  participating position, labelled NEW. Bodies follow in original order:
+- **Merge.** For different OLD and NEW keys, where one owner (a task, or a
+  project note) already holds NEW, or holds OLD more than once, the containers
+  become one at the earliest participating position, labelled NEW. The dry
+  run lists each merge before it can be applied. Bodies follow in original order:
   repeated content, anchors, checkbox bytes, logs, and nesting are kept, and
   an entry moved from a differently indented drawer takes the kept drawer's
   indentation. A section body that is not a list follows a blank line. No
@@ -374,6 +379,11 @@ one approved run of it; it is not a one-off script.
   makes one commit `bob task rename-drawer: OLD → NEW ({n} notes)`,
   post-syncs only when it committed, and refreshes the drawer catalog. A
   second run reports nothing.
+- **Inventory.** `-l, --legacy` takes no OLD or NEW and cannot be combined with
+  `-a`. It is read-only and reports legacy ALL-CAPS drawers, empty bold task
+  drawers, bold trailing-colon leads for information, and duplicate drawer or
+  project-section identities. `-f json` returns the same inventory as
+  `schema_version: 1`.
 
 ## 4. Rendering
 
@@ -687,11 +697,12 @@ mark, `[>]` stubs become `## Notes` lines verbatim, and loose notes plus
 
 ## 9. Vault migration
 
-`bob task rename-drawer REQUIREMENTS NOTES` (§3.5) retires the old name
+`bob task rename-drawer REQUIREMENTS Notes` (§3.5) retires the old name
 everywhere (open, closed, and archived tasks, plus `^prj` `## Requirements`
-sections, which become `## Notes`), preserving content byte for byte; drawer
-bullets never become reqs. Where the owner already has `NOTES`, the two
-merge, and heading links are repaired. One `bob task tidy` pass (§3.4)
+sections, which become `## Notes`), preserving content; legacy drawer headers
+become bold. Where the owner already has a different-key `Notes` drawer or
+section, the dry run previews the merge before apply, and heading links are
+repaired. One `bob task tidy` pass (§3.4)
 then repairs open task blocks into canonical order. Both run as gated,
 previewed, one-commit writes. (Shipped in the `drawer-rename`, `task-tidy`,
 and `vault-migration` phases.)

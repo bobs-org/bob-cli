@@ -7,7 +7,7 @@ fn settings() -> NoteTaskSettings {
 }
 
 fn spec() -> RenameSpec {
-    RenameSpec::parse("requirements", "notes").expect("valid spec")
+    RenameSpec::parse("requirements", "Notes").expect("valid spec")
 }
 
 fn note(lines: &[&str]) -> String {
@@ -49,26 +49,26 @@ fn renamed_with(contents: &str, spec: &RenameSpec) -> NoteRename {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn spec_keys_old_and_cases_new_for_both_containers() {
+fn spec_matches_old_by_key_and_keeps_new_verbatim_for_both_containers() {
     let spec =
         RenameSpec::parse(" requirements ", "future  work").expect("spec");
     assert_eq!(spec.old_key, "REQUIREMENTS");
     assert_eq!(spec.new_key, "FUTURE WORK");
-    assert_eq!(spec.drawer_title, "FUTURE WORK");
-    assert_eq!(spec.section_title, "Future Work");
+    assert_eq!(spec.drawer_title, "future  work");
+    assert_eq!(spec.section_title, "future  work");
 }
 
 #[test]
-fn spec_refuses_reserved_invalid_and_identical_names() {
+fn spec_refuses_reserved_or_invalid_new_titles_and_allows_case_only_names() {
     let code =
         |old: &str, new: &str| RenameSpec::parse(old, new).unwrap_err().code;
-    assert_eq!(code("requirements", "work log"), "reserved_drawer");
-    assert_eq!(code("requirements", "tasks"), "reserved_drawer");
+    assert_eq!(code("requirements", "work log"), "reserved");
+    assert_eq!(code("requirements", "tasks"), "reserved");
     assert_eq!(code("tasks", "notes"), "reserved_drawer");
-    assert_eq!(code("requirements", "café"), "invalid_drawer_title");
-    assert_eq!(code("requirements", "  "), "invalid_drawer_title");
+    assert_eq!(code("requirements", "*"), "not_a_drawer_title");
+    assert_eq!(code("requirements", "  "), "not_a_drawer_title");
     assert_eq!(code("", "notes"), "invalid_drawer_title");
-    assert_eq!(code("Notes", "NOTES "), "same_drawer");
+    assert!(RenameSpec::parse("Notes", "NOTES").is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -93,12 +93,12 @@ fn a_lone_drawer_is_retitled_in_place() {
         Some(
             note(&[
                 "- [ ] #task Ship the exporter ^export",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- [ ] not a req: still a drawer entry",
                 "\t\t- Handles Windows files ^win",
                 "- [x] #task Shipped ✅ 2026-11-20",
                 "\t- requirements",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- done already",
             ])
             .as_str()
@@ -136,7 +136,7 @@ fn an_existing_new_drawer_merges_at_the_earliest_position() {
         Some(
             note(&[
                 "- [ ] #task Ship",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- first",
                 "\t\t\t- nested ^keep",
                 "\t\t- second",
@@ -171,7 +171,7 @@ fn old_after_new_appends_to_new_and_twice_old_merges_too() {
         Some(
             note(&[
                 "- [ ] #task Ship",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- kept first",
                 "\t\t- appended",
                 "\t\t- appended again",
@@ -207,10 +207,10 @@ fn nested_owners_report_their_original_lines() {
             note(&[
                 "- [ ] #task Parent",
                 "\t- [ ] #task Child",
-                "\t\t- NOTES",
+                "\t\t- **Notes**",
                 "\t\t\t- child entry",
                 "\t\t\t- child note",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- parent entry",
             ])
             .as_str()
@@ -234,7 +234,7 @@ fn merged_entries_take_the_kept_drawers_indentation() {
         Some(
             note(&[
                 "- [ ] #task Ship",
-                "    - NOTES",
+                "    - **Notes**",
                 "        - kept",
                 "    \t- moved",
                 "    \t\t- deeper",
@@ -250,7 +250,7 @@ fn crlf_and_a_missing_final_newline_are_kept() {
     let pass = renamed(contents);
     assert_eq!(
         pass.updated.as_deref(),
-        Some("- [ ] #task Ship\r\n\t- NOTES\r\n\t\t- a\r\n\t\t- b")
+        Some("- [ ] #task Ship\r\n\t- **Notes**\r\n\t\t- a\r\n\t\t- b")
     );
 }
 
@@ -271,7 +271,7 @@ fn a_last_drawer_keeps_the_blank_line_that_parts_the_block() {
         Some(
             note(&[
                 "- [ ] #task Ship",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- a",
                 "\t\t- b",
                 "",
@@ -286,6 +286,39 @@ fn a_last_drawer_keeps_the_blank_line_that_parts_the_block() {
 fn a_note_without_old_plans_nothing() {
     let contents = note(&["- [ ] #task Ship", "\t- NOTES", "\t\t- a"]);
     assert_eq!(renamed(&contents), NoteRename::default());
+}
+
+#[test]
+fn case_only_task_respelling_converts_headers_without_merging_duplicates() {
+    let contents = note(&[
+        "- [ ] #task Design the API",
+        "\t- API DESIGN",
+        "\t\t- legacy note",
+        "\t- **Api Design**",
+        "\t\t- bold note",
+        "\t- **API design**",
+        "\t\t- already spelled",
+    ]);
+    let spec = RenameSpec::parse("API DESIGN", "API design").expect("spec");
+    let pass = renamed_with(&contents, &spec);
+    assert_eq!(
+        pass.updated.as_deref(),
+        Some(
+            note(&[
+                "- [ ] #task Design the API",
+                "\t- **API design**",
+                "\t\t- legacy note",
+                "\t- **API design**",
+                "\t\t- bold note",
+                "\t- **API design**",
+                "\t\t- already spelled",
+            ])
+            .as_str()
+        )
+    );
+    assert_eq!(pass.renamed(), 2);
+    assert_eq!(pass.merged(), 0);
+    assert_eq!(pass.drawers.len(), 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +367,36 @@ fn an_empty_last_section_is_retitled() {
         pass.updated.as_deref(),
         Some(project(&["- [ ] #task Ship ^prj", "", "## Notes"]).as_str())
     );
+}
+
+#[test]
+fn case_only_project_section_respelling_preserves_duplicate_sections() {
+    let contents = project(&[
+        "## API DESIGN",
+        "- first section",
+        "## Api Design",
+        "- second section",
+        "## API design",
+        "- already spelled",
+    ]);
+    let spec = RenameSpec::parse("API DESIGN", "API design").expect("spec");
+    let pass = renamed_with(&contents, &spec);
+    assert_eq!(
+        pass.updated.as_deref(),
+        Some(
+            project(&[
+                "## API design",
+                "- first section",
+                "## API design",
+                "- second section",
+                "## API design",
+                "- already spelled",
+            ])
+            .as_str()
+        )
+    );
+    assert_eq!(pass.sections.len(), 2);
+    assert_eq!(pass.merged(), 0);
 }
 
 #[test]
@@ -456,19 +519,10 @@ fn a_heading_left_ambiguous_refuses_the_note() {
 }
 
 #[test]
-fn a_structural_new_section_refuses_project_notes_only() {
-    let spec = RenameSpec::parse("later", "events").expect("spec");
-    let pass = renamed_with(&project(&["## Later", "- a"]), &spec);
-    assert_eq!(
-        pass.refusal.as_deref(),
-        Some("## Events is a structural section, so ## Later cannot become it")
-    );
-    let task = note(&["- [ ] #task Ship", "\t- LATER", "\t\t- a"]);
-    let pass = renamed_with(&task, &spec);
-    assert_eq!(
-        pass.updated.as_deref(),
-        Some(note(&["- [ ] #task Ship", "\t- EVENTS", "\t\t- a"]).as_str())
-    );
+fn structural_new_names_are_refused_by_title_validation() {
+    let refusal = RenameSpec::parse("later", "events").unwrap_err();
+    assert_eq!(refusal.code, "reserved");
+    assert!(refusal.message.contains("EVENTS is reserved"));
 }
 
 // ---------------------------------------------------------------------------

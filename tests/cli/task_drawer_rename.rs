@@ -26,11 +26,11 @@ const BOB: &str = "\
 const BOB_RENAMED: &str = "\
 ## Tasks
 - [ ] #task Ship the exporter ^export
-\t- NOTES
+\t- **Notes**
 \t\t- Handles supported inputs ^inputs
 \t\t- Morgan reported the issue.
 - [x] #task Shipped ✅ 2026-11-20
-\t- NOTES
+\t- **Notes**
 \t\t- [x] checkbox bytes stay
 ";
 
@@ -187,14 +187,14 @@ fn bare_run_is_a_dry_run_with_an_inventory() {
     let vault = fixture(&temp);
     let before = head(&vault);
 
-    let human = run(&vault, &temp, &["REQUIREMENTS", "notes"]);
+    let human = run(&vault, &temp, &["REQUIREMENTS", "Notes"]);
     assert_eq!(human.status.code(), Some(0), "{}", format_output(&human));
     let text = stdout(&human);
     for expected in [
         "bob.md (2 drawers · 1 merge)",
-        "L2 Ship the exporter (open) · REQUIREMENTS + NOTES → NOTES (merged)",
+        "L2 Ship the exporter (open) · REQUIREMENTS + NOTES → Notes (merged)",
         "    - \t- REQUIREMENTS",
-        "    + \t- NOTES",
+        "    + \t- **Notes**",
         "done/bob_done.md (1 drawer) archive",
         "proj.md (1 section)",
         "L8 ## Requirements → ## Notes",
@@ -232,7 +232,7 @@ fn bare_run_is_a_dry_run_with_an_inventory() {
         json!({
             "input": "Notes",
             "key": "NOTES",
-            "drawer_title": "NOTES",
+            "drawer_title": "Notes",
             "section_title": "Notes",
         })
     );
@@ -299,14 +299,14 @@ fn apply_commits_once_and_a_rerun_reports_nothing() {
     let output = run(
         &vault,
         &temp,
-        &["REQUIREMENTS", "NOTES", "-a", "-f", "json"],
+        &["REQUIREMENTS", "Notes", "-a", "-f", "json"],
     );
     assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
     let payload = json_of(&output);
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["dry_run"], false);
     let expected_subject =
-        "bob task rename-drawer: REQUIREMENTS → NOTES (4 notes)";
+        "bob task rename-drawer: REQUIREMENTS → Notes (4 notes)";
     assert_eq!(payload["commit"]["subject"], expected_subject);
     assert_eq!(payload["sync"]["pre"], "ok");
     assert_eq!(payload["sync"]["post"], "ok");
@@ -326,7 +326,7 @@ fn apply_commits_once_and_a_rerun_reports_nothing() {
     assert_eq!(read(&vault, "bob.md"), BOB_RENAMED);
     assert_eq!(
         read(&vault, "done/bob_done.md"),
-        DONE.replace("REQUIREMENTS", "NOTES")
+        DONE.replace("REQUIREMENTS", "**Notes**")
     );
     assert_eq!(
         read(&vault, "proj.md"),
@@ -339,7 +339,7 @@ fn apply_commits_once_and_a_rerun_reports_nothing() {
     let rerun = run(
         &vault,
         &temp,
-        &["REQUIREMENTS", "NOTES", "-a", "-f", "json"],
+        &["REQUIREMENTS", "Notes", "-a", "-f", "json"],
     );
     assert_eq!(rerun.status.code(), Some(0), "{}", format_output(&rerun));
     let payload = json_of(&rerun);
@@ -349,7 +349,7 @@ fn apply_commits_once_and_a_rerun_reports_nothing() {
     assert_eq!(payload["sync"]["post"], "skipped");
     assert_eq!(head(&vault), after);
 
-    let human = run(&vault, &temp, &["REQUIREMENTS", "NOTES"]);
+    let human = run(&vault, &temp, &["REQUIREMENTS", "Notes"]);
     assert_success(&human);
     assert!(
         stdout(&human).contains(
@@ -365,11 +365,11 @@ fn apply_prints_a_summary_per_note() {
     let temp = TempDir::new("rename-drawer-apply-human");
     let vault = fixture(&temp);
 
-    let output = run(&vault, &temp, &["requirements", "notes", "-a"]);
+    let output = run(&vault, &temp, &["requirements", "Notes", "-a"]);
     assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
     let text = stdout(&output);
     for expected in [
-        "✓ renamed REQUIREMENTS → NOTES: 3 drawers (1 open · 1 closed · 1 archived) · 1 project section · 1 merge · 3 links repaired in 4 notes (",
+        "✓ renamed REQUIREMENTS → Notes: 3 drawers (1 open · 1 closed · 1 archived) · 1 project section · 1 merge · 3 links repaired in 4 notes (",
         "  bob.md (2 drawers · 1 merge)",
         "  links.md (3 links)",
         "Refused (1 note, left unchanged)",
@@ -379,15 +379,114 @@ fn apply_prints_a_summary_per_note() {
 }
 
 #[test]
+fn case_only_respelling_converts_legacy_drawers_and_repairs_section_links() {
+    let temp = TempDir::new("rename-drawer-case-only");
+    let vault = fixture(&temp);
+    let output = run(
+        &vault,
+        &temp,
+        &["REQUIREMENTS", "requirements", "-a", "-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json_of(&output);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["new"]["drawer_title"], "requirements");
+    assert_eq!(payload["new"]["section_title"], "requirements");
+    assert_eq!(payload["counts"]["merges"], 0);
+    assert_eq!(
+        read(&vault, "bob.md"),
+        BOB.replace("\t- REQUIREMENTS", "\t- **requirements**")
+    );
+    assert_eq!(
+        read(&vault, "done/bob_done.md"),
+        DONE.replace("REQUIREMENTS", "**requirements**")
+    );
+    assert!(read(&vault, "proj.md").contains("## requirements"));
+    assert!(read(&vault, "links.md").contains("[[proj#requirements]]"));
+}
+
+#[test]
+fn legacy_inventory_is_read_only_and_reports_migration_categories() {
+    let temp = TempDir::new("rename-drawer-inventory");
+    let vault = fixture(&temp);
+    write(
+        &vault,
+        "inventory.md",
+        "- [ ] #task Prepare migration ^inventory\n\
+         \t- LEGACY NOTES\n\
+         \t\t- old entry\n\
+         \t- **WHY?**\n\
+         \t- **Important:**\n\
+         \t\t- labeled detail\n\
+         \t- **API Design**\n\
+         \t\t- first identity\n\
+         \t- **API DESIGN**\n\
+         \t\t- duplicate identity\n",
+    );
+    write(
+        &vault,
+        "done/archived_drawers.md",
+        "- [x] #task Archived ✅ 2026-01-02 ^history\n\
+         \t- RETIRED NOTES\n\
+         \t\t- archived entry\n",
+    );
+    let before = head(&vault);
+
+    let human = run(&vault, &temp, &["-l"]);
+    assert_eq!(human.status.code(), Some(0), "{}", format_output(&human));
+    let human_text = stdout(&human);
+    for expected in [
+        "Drawer migration inventory (read-only)",
+        "Legacy ALL-CAPS drawers (",
+        "Empty bold drawers (",
+        "Bold trailing-colon leads (information only) (1)",
+        "Duplicate identities (1)",
+        "inventory.md:",
+        "done/archived_drawers.md:",
+    ] {
+        assert!(
+            human_text.contains(expected),
+            "missing {expected:?}:\n{human_text}"
+        );
+    }
+
+    let output = run(&vault, &temp, &["--legacy", "--format", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
+    let payload = json_of(&output);
+    assert_eq!(payload["mode"], "legacy_inventory");
+    assert_eq!(payload["read_only"], true);
+    assert_eq!(payload["counts"]["legacy_drawers"], 7);
+    assert_eq!(payload["counts"]["empty_bold_drawers"], 1);
+    assert_eq!(payload["counts"]["bold_trailing_colon_leads"], 1);
+    assert_eq!(payload["counts"]["duplicate_identities"], 1);
+    assert!(payload["legacy_drawers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            item["path"] == "done/archived_drawers.md"
+                && item["status"] == "closed"
+                && item["archive"] == true
+        }));
+    assert_eq!(payload["empty_bold_drawers"][0]["title"], "WHY?");
+    assert_eq!(
+        payload["bold_trailing_colon_leads"][0]["title"],
+        "Important:"
+    );
+    assert_eq!(payload["duplicate_identities"][0]["key"], "API DESIGN");
+    assert_eq!(head(&vault), before);
+}
+
+#[test]
 fn invalid_requests_exit_2_before_reading_the_vault() {
     let temp = TempDir::new("rename-drawer-refusals");
     let vault = fixture(&temp);
     let before = head(&vault);
     for (args, code) in [
-        (["requirements", "work log"], "reserved_drawer"),
-        (["requirements", "tasks"], "reserved_drawer"),
-        (["requirements", "café"], "invalid_drawer_title"),
-        (["Notes", "NOTES"], "same_drawer"),
+        (["requirements", "work log"], "reserved"),
+        (["requirements", "tasks"], "reserved"),
+        (["requirements", "**"], "not_a_drawer_title"),
+        (["tasks", "Notes"], "reserved_drawer"),
     ] {
         let output =
             run(&vault, &temp, &[args[0], args[1], "-a", "-f", "json"]);
@@ -399,7 +498,9 @@ fn invalid_requests_exit_2_before_reading_the_vault() {
     let human = run(&vault, &temp, &["requirements", "WORK LOG"]);
     assert_eq!(human.status.code(), Some(2));
     assert!(
-        stderr(&human).contains("✗ WORK LOG is reserved for a managed line"),
+        stderr(&human).contains(
+            "✗ WORK LOG is reserved for a managed or structural line"
+        ),
         "{}",
         format_output(&human)
     );

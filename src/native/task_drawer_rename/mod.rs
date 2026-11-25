@@ -24,11 +24,10 @@ use super::{
         LineSpan,
     },
     capture_drawers::{
-        drawer_body_title, drawer_key, is_reserved_drawer_key,
-        is_structural_h2_key, normalize_drawer_literal, project_h2_drawers,
-        Drawer,
+        can_create_drawer, drawer_body_title, drawer_key,
+        is_reserved_drawer_key, is_structural_h2_key, project_h2_drawers,
+        Drawer, DrawerTitleRefusal,
     },
-    capture_project_note::format_project_section_title,
     markdown,
     note_tasks::{self, NoteTask, NoteTaskSettings},
     projects::{frontmatter_is_project, parse_frontmatter},
@@ -48,18 +47,17 @@ pub(crate) use command::{build_cli, run};
 // The rename request
 // ---------------------------------------------------------------------------
 
-/// A validated `OLD NEW` pair. OLD matches by drawer key; NEW is written in
-/// the drawer catalog's casing: ALL-CAPS for a task drawer, Title Case for a
-/// `##` section.
+/// A validated `OLD NEW` pair. OLD matches by drawer key; NEW is written
+/// verbatim as a bold task drawer and a project `##` section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RenameSpec {
     pub(crate) old_input: String,
     pub(crate) new_input: String,
     pub(crate) old_key: String,
     pub(crate) new_key: String,
-    /// NEW as a task drawer title (`NOTES`).
+    /// NEW as a task drawer title.
     pub(crate) drawer_title: String,
-    /// NEW as a project `##` section title (`Notes`).
+    /// NEW as a project `##` section title.
     pub(crate) section_title: String,
     /// OLD's first word, lowercased: a note that never mentions it holds no
     /// OLD container and no link to one.
@@ -91,37 +89,35 @@ impl RenameSpec {
                 hint: "managed links, logs, and TASKS are never drawers",
             });
         }
-        let Some(drawer_title) = normalize_drawer_literal(new) else {
-            return Err(SpecRefusal {
-                code: "invalid_drawer_title",
-                message: format!(
-                    "`{}` is not a valid drawer title",
-                    new.trim()
+        let drawer_title = new.to_string();
+        if let Err(reason) = can_create_drawer(&drawer_title, true) {
+            let (message, hint) = match reason {
+                DrawerTitleRefusal::NotADrawerTitle => (
+                    format!("`{new}` is not a valid drawer title"),
+                    "a title must be a single line with an alphanumeric character, no * or outer whitespace, and no trailing :",
                 ),
-                hint: "a drawer title starts with a letter or digit and uses letters, digits, spaces, and & ' ( ) , . / - ? ! ; (plus a final :)",
+                DrawerTitleRefusal::Reserved => (
+                    format!(
+                        "{} is reserved for a managed or structural line",
+                        drawer_key(&drawer_title)
+                    ),
+                    "choose a title that is not a managed line or structural section",
+                ),
+                DrawerTitleRefusal::EmptyDrawer => (
+                    format!("`{new}` cannot be used for an empty drawer"),
+                    "rename preserves the existing drawer content",
+                ),
+            };
+            return Err(SpecRefusal {
+                code: reason.code(),
+                message,
+                hint,
             });
-        };
+        }
         let new_key = drawer_key(&drawer_title);
-        if is_reserved_drawer_key(&new_key) {
-            return Err(SpecRefusal {
-                code: "reserved_drawer",
-                message: format!("{new_key} is reserved for a managed line"),
-                hint: "managed links, logs, and TASKS are never drawers",
-            });
-        }
-        if new_key == old_key {
-            return Err(SpecRefusal {
-                code: "same_drawer",
-                message: format!("OLD and NEW both name {old_key}"),
-                hint: "name a different NEW drawer",
-            });
-        }
-        let section_title = format_project_section_title(&drawer_title);
-        let needle = old_key
-            .split(' ')
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+        let section_title = drawer_title.clone();
+        let needle =
+            old_key.split(' ').next().unwrap_or_default().to_lowercase();
         Ok(Self {
             old_input: old.trim().to_string(),
             new_input: new.trim().to_string(),
@@ -136,11 +132,23 @@ impl RenameSpec {
     /// Cheap prefilter: whether `contents` can hold an OLD container or a
     /// heading link to one.
     pub(crate) fn may_match(&self, contents: &str) -> bool {
-        contents.to_ascii_lowercase().contains(&self.needle)
+        contents.to_lowercase().contains(&self.needle)
     }
 
     pub(crate) fn is_old(&self, title: &str) -> bool {
         drawer_key(title) == self.old_key
+    }
+
+    pub(crate) fn case_only(&self) -> bool {
+        self.old_key == self.new_key
+    }
+
+    pub(crate) fn renames_drawer(&self, title: &str) -> bool {
+        self.is_old(title) && (!self.case_only() || title != self.drawer_title)
+    }
+
+    pub(crate) fn renames_section(&self, title: &str) -> bool {
+        self.is_old(title) && (!self.case_only() || title != self.section_title)
     }
 
     fn participates(&self, key: &str) -> bool {
@@ -279,15 +287,31 @@ pub(crate) fn rename_note(
             Ok(updated) => current = updated,
             Err(reason) => return result.refused(reason),
         }
-        let titles: Vec<String> = sections
-            .iter()
-            .map(|section| section.title.clone())
-            .collect();
-        result.sections.push(SectionChange {
-            line: sections[0].line,
-            renamed: titles.iter().filter(|title| spec.is_old(title)).count(),
-            titles,
-        });
+        if spec.case_only() {
+            result.sections.extend(
+                sections
+                    .iter()
+                    .filter(|section| spec.renames_section(&section.title))
+                    .map(|section| SectionChange {
+                        line: section.line,
+                        titles: vec![section.title.clone()],
+                        renamed: 1,
+                    }),
+            );
+        } else {
+            let titles: Vec<String> = sections
+                .iter()
+                .map(|section| section.title.clone())
+                .collect();
+            result.sections.push(SectionChange {
+                line: sections[0].line,
+                renamed: titles
+                    .iter()
+                    .filter(|title| spec.renames_section(title))
+                    .count(),
+                titles,
+            });
+        }
     }
     result.updated = (current != contents).then_some(current);
     result
@@ -328,7 +352,7 @@ fn old_bullet_lines(lines: &[LineSpan<'_>], spec: &RenameSpec) -> Vec<usize> {
                     let key = drawer_key(title);
                     !is_reserved_drawer_key(&key)
                         && !is_structural_h2_key(&key)
-                        && spec.is_old(title)
+                        && spec.renames_drawer(title)
                 })
             })
         })
@@ -367,8 +391,9 @@ fn drawer_owners(
             })
             .cloned()
             .collect();
-        if participants.iter().any(|child| {
-            child_drawer_key(child).as_deref() == Some(&spec.old_key)
+        if participants.iter().any(|child| match &child.kind {
+            TaskChildKind::Drawer { title } => spec.renames_drawer(title),
+            _ => false,
         }) {
             owners.push(DrawerOwner {
                 task: task.clone(),
@@ -407,20 +432,61 @@ fn rename_task_drawers(
                 _ => None,
             })
             .collect();
-        let updated = merge_task_drawers(current, &lines, &owner, spec)?;
-        changes.push(DrawerChange {
-            line: owner.task.line_index + 1,
-            task: owner.task.description.clone(),
-            block_id: owner.task.block_id.clone(),
-            open: owner.task.status_type.is_open(),
-            renamed: titles.iter().filter(|title| spec.is_old(title)).count(),
-            titles,
-        });
+        let (updated, owner_changes) = if spec.case_only() {
+            respell_task_drawers(current, &owner, spec)
+        } else {
+            (
+                merge_task_drawers(current, &lines, &owner, spec)?,
+                vec![DrawerChange {
+                    line: owner.task.line_index + 1,
+                    task: owner.task.description.clone(),
+                    block_id: owner.task.block_id.clone(),
+                    open: owner.task.status_type.is_open(),
+                    renamed: titles
+                        .iter()
+                        .filter(|title| spec.renames_drawer(title))
+                        .count(),
+                    titles,
+                }],
+            )
+        };
+        changes.extend(owner_changes);
         settled_from = owner.task.line_index;
         *current = updated;
     }
     changes.reverse();
     Ok(changes)
+}
+
+/// Respelling is intentionally not a merge: duplicate identities stay as
+/// separate containers and each legacy header becomes a bold header.
+fn respell_task_drawers(
+    contents: &str,
+    owner: &DrawerOwner,
+    spec: &RenameSpec,
+) -> (String, Vec<DrawerChange>) {
+    let mut segments: Vec<String> =
+        contents.split_inclusive('\n').map(str::to_string).collect();
+    let mut changes = Vec::new();
+    for child in &owner.participants {
+        let TaskChildKind::Drawer { title } = &child.kind else {
+            continue;
+        };
+        if !spec.renames_drawer(title) {
+            continue;
+        }
+        segments[child.line] =
+            retitle_bullet(&segments[child.line], &spec.drawer_title);
+        changes.push(DrawerChange {
+            line: owner.task.line_index + 1,
+            task: owner.task.description.clone(),
+            block_id: owner.task.block_id.clone(),
+            open: owner.task.status_type.is_open(),
+            titles: vec![title.clone()],
+            renamed: 1,
+        });
+    }
+    (segments.concat(), changes)
 }
 
 /// Rename the first participant to NEW and move every later participant's
@@ -513,7 +579,10 @@ fn section_participants(contents: &str, spec: &RenameSpec) -> Vec<Drawer> {
         .into_iter()
         .filter(|section| spec.participates(&section.key))
         .collect();
-    if sections.iter().any(|section| section.key == spec.old_key) {
+    if sections
+        .iter()
+        .any(|section| spec.renames_section(&section.title))
+    {
         sections
     } else {
         Vec::new()
@@ -573,6 +642,9 @@ fn check_sections(
     spec: &RenameSpec,
     sections: &[Drawer],
 ) -> Result<(), String> {
+    if spec.case_only() {
+        return Ok(());
+    }
     let old_title = sections
         .iter()
         .find(|section| section.key == spec.old_key)
@@ -644,6 +716,9 @@ fn merge_sections(contents: &str, spec: &RenameSpec) -> Result<String, String> {
     let Some(kept) = sections.first() else {
         return Ok(contents.to_string());
     };
+    if spec.case_only() {
+        return respell_sections(contents, &sections, spec);
+    }
     let lines = line_spans(contents);
     let segments: Vec<&str> = contents.split_inclusive('\n').collect();
     let ending = document_line_ending(contents);
@@ -755,6 +830,25 @@ fn merge_sections(contents: &str, spec: &RenameSpec) -> Result<String, String> {
     Ok(keep_tail_shape(contents, out))
 }
 
+/// Respelling preserves duplicate section identities and their bodies.
+fn respell_sections(
+    contents: &str,
+    sections: &[Drawer],
+    spec: &RenameSpec,
+) -> Result<String, String> {
+    let mut segments: Vec<String> =
+        contents.split_inclusive('\n').map(str::to_string).collect();
+    for section in sections {
+        if !spec.renames_section(&section.title) {
+            continue;
+        }
+        let index = section.line_index();
+        segments[index] =
+            retitle_heading(&segments[index], &spec.section_title)?;
+    }
+    Ok(segments.concat())
+}
+
 // ---------------------------------------------------------------------------
 // Excluded lookalikes
 // ---------------------------------------------------------------------------
@@ -765,16 +859,16 @@ enum Lookalike {
 }
 
 fn lookalike(text: &str, spec: &RenameSpec) -> Option<Lookalike> {
-    if let Some((level, title)) = markdown::atx_heading(text)
-        && spec.is_old(title)
-    {
-        return Some(Lookalike::Heading { level });
+    if let Some((level, title)) = markdown::atx_heading(text) {
+        return spec
+            .renames_section(title)
+            .then_some(Lookalike::Heading { level });
     }
     let (title, _) = drawer_body_title(list_item_body(text)?)?;
     let key = drawer_key(title);
     (!is_reserved_drawer_key(&key)
         && !is_structural_h2_key(&key)
-        && spec.is_old(title))
+        && spec.renames_drawer(title))
     .then_some(Lookalike::Bullet)
 }
 
@@ -894,7 +988,7 @@ fn retitle_bullet(segment: &str, title: &str) -> String {
     let old = body.trim();
     let start = offset_in(text, old);
     format!(
-        "{}{title}{}{ending}",
+        "{}**{title}**{}{ending}",
         &text[..start],
         &text[start + old.len()..]
     )
@@ -939,8 +1033,8 @@ fn keep_tail_shape(original: &str, updated: String) -> String {
 
 /// Whether a trimmed line is a container header, and whether it is OLD.
 fn header_kind(line: &str, spec: &RenameSpec) -> Option<bool> {
-    let title = match markdown::atx_heading(line) {
-        Some((2, title)) => title,
+    let (title, is_section) = match markdown::atx_heading(line) {
+        Some((2, title)) => (title, true),
         Some(_) => return None,
         None => {
             let (title, _) = drawer_body_title(list_item_body(line)?)?;
@@ -951,11 +1045,18 @@ fn header_kind(line: &str, spec: &RenameSpec) -> Option<bool> {
             if is_reserved_drawer_key(&key) {
                 return None;
             }
-            title
+            (title, false)
         }
     };
     let key = drawer_key(title);
-    if key == spec.old_key {
+    let output_title = if is_section {
+        &spec.section_title
+    } else {
+        &spec.drawer_title
+    };
+    if spec.case_only() && title == output_title {
+        Some(false)
+    } else if key == spec.old_key {
         Some(true)
     } else if key == spec.new_key {
         Some(false)
