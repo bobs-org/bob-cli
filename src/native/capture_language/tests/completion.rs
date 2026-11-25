@@ -1603,3 +1603,20 @@ fn past_segment_suffix_field_ranges_and_queries() {
     assert_eq!(name.context, CompletionContext::PomodoroPastName);
     assert_eq!(name.query, "fi");
 }
+
+#[test]
+fn caret_browse_route_claims_only_the_bare_address() {
+    // Empty and partial IDs claim, lower-cased.
+    assert_eq!(caret_browse_route_at("@bob^", 5).as_deref(), Some("bob"));
+    assert_eq!(caret_browse_route_at("@bob^int", 8).as_deref(), Some("bob"));
+    assert_eq!(caret_browse_route_at("@BOB^int", 8).as_deref(), Some("bob"));
+    // Body at either edge is mint, never browse.
+    assert_eq!(caret_browse_route_at("Fix it @bob^x", 13), None);
+    assert_eq!(caret_browse_route_at("@bob^x Fix it", 6), None);
+    // Seals, sections, links, and declarations never claim.
+    assert_eq!(caret_browse_route_at("@bob^x@", 6), None);
+    assert_eq!(caret_browse_route_at("@bob^x#sec", 7), None);
+    assert_eq!(caret_browse_route_at("@bob:x", 6), None);
+    assert_eq!(caret_browse_route_at("@bob^bad.id", 9), None);
+    assert_eq!(caret_browse_route_at("@@work\n@bob^x", 11), None);
+}

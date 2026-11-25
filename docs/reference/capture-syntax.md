@@ -374,8 +374,9 @@ Editor `capture-rewrite` aliases include `@route.` / `@route;` → `^` / `:`,
 whole-item `;` → `:`, item-start `.` → `@`, spaced `./;` → route/dependency
 pickers.
 A trailing `.` toggles complete `@route:id` ↔ `@route^id`, including sealed
-project markers and task-list IDs. Direct CLI capture never applies these
-[typing assists](../capture.md#bob-capture-rewrite).
+project markers and task-list IDs; the `.` side resolves to `^`, whose
+whole-draft form opens the scoped Go To browse. Direct CLI capture never
+applies these [typing assists](../capture.md#bob-capture-rewrite).
 
 ### `@route^block-id` {#at-route-caret}
 
@@ -401,6 +402,8 @@ Contract: [Task with a requested block ID](../capture.md#task-with-a-requested-b
 
 Read-only Go To (`task_goto`). `bob capture` refuses with T5; `capture-parse`
 adds `goto` (`found`, `missing_note`, `missing_block_id`, `duplicate_block_id`).
+An empty or partial ID stays `task_block_id` completion with additive
+`block_id.goto` Go rows.
 
 ```bash
 bob capture '@bob^intention-rollovers'

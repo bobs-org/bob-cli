@@ -10,8 +10,21 @@ pub(super) fn reject_duplicate_block_id(
         .iter()
         .any(|existing| existing == block_id)
     {
+        // Teach the caret Go To: dropping the task text opens the
+        // existing block instead of minting. The route is the target's
+        // file stem, matching how minting resolved it.
+        let clause = target
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|route| !route.is_empty())
+            .map(|route| {
+                format!(
+                    "; remove the task text to go to it with @{route}^{block_id}"
+                )
+            })
+            .unwrap_or_default();
         return Err(CaptureError::io(format!(
-            "block ID ^{block_id} already exists in {}",
+            "block ID ^{block_id} already exists in {}{clause}",
             target.display()
         )));
     }

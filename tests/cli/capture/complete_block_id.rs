@@ -198,6 +198,290 @@ fn block_id_missing_note_is_not_an_error() {
     assert_eq!(value["candidates"].as_array().expect("candidates").len(), 0);
 }
 
+const GOTO_BOB_MD: &str = concat!(
+    "---\n",
+    "type: [[area]]\n",
+    "parent: \"[[life]]\"\n",
+    "done_tasks: \"[[done/bob_done]]\"\n",
+    "---\n",
+    "\n",
+    "# Tasks\n",
+    "\n",
+    "- [ ] #task Allow rollovers [created::2026-11-14] ^intention-rollovers\n",
+    "- [x] #task Finished already [completion:: 2026-01-02] ^done-one\n",
+    "\n",
+    "## Heading title ^heading-id\n",
+    "\n",
+    "- Plain bullet ^bullet-id\n",
+    "\n",
+    "- [ ] #task Dup one [created::2026-11-14] ^dup\n",
+    "- [ ] #task Dup two [created::2026-11-14] ^dup\n",
+    "\n",
+    "- [ ] #task Mixed case [created::2026-11-14] ^MixedCase\n",
+    "- [ ] #task Outline work [created::2026-11-14] ^outline\n",
+);
+
+fn write_goto_vault(vault: &std::path::Path) {
+    write_settings(vault);
+    write_file(&vault.join("bob.md"), GOTO_BOB_MD);
+    write_file(
+        &vault.join("done/bob_done.md"),
+        "# Archived\n\n- [x] #task Old thing [completion:: 2025-01-01] ^archived-one\n",
+    );
+    write_file(
+        &vault.join("taxes.md"),
+        concat!(
+            "---\n",
+            "parent: \"[[life]]\"\n",
+            "type: \"[[notebook]]\"\n",
+            "summary: Taxes.\n",
+            "---\n",
+            "\n",
+            "# Taxes\n",
+            "\n",
+            "- First note [created::2026-04-14] ^z-250414-15\n",
+            "- Second note [created::2026-04-14] ^z-250414-16\n",
+        ),
+    );
+}
+
+fn goto_of(value: &serde_json::Value) -> &serde_json::Value {
+    value["block_id"]["goto"]
+        .as_object()
+        .expect("block_id.goto present");
+    &value["block_id"]["goto"]
+}
+
+#[test]
+fn block_id_goto_empty_id_lists_living_then_archive_rows() {
+    let temp = TempDir::new("bob-cli-complete-block-id-goto");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_goto_vault(&vault);
+
+    let value = complete_json(&vault, "@bob^", 5, None);
+    assert_eq!(value["context"], "task_block_id", "{value}");
+    assert_eq!(value["block_id"]["intent"], "new", "{value}");
+    let goto = goto_of(&value);
+    assert_eq!(goto["eligible"], true, "{value}");
+    assert_eq!(goto["note_path"], "bob.md", "{value}");
+    assert!(
+        goto["target"].as_str().expect("target").ends_with("bob.md"),
+        "{value}"
+    );
+    assert_eq!(goto["archive_path"], "done/bob_done.md", "{value}");
+    let rows = goto["rows"].as_array().expect("goto rows");
+    let ids: Vec<&str> = rows
+        .iter()
+        .map(|row| row["block_id"].as_str().expect("block id"))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "intention-rollovers",
+            "done-one",
+            "heading-id",
+            "bullet-id",
+            "MixedCase",
+            "outline",
+            "archived-one",
+        ],
+        "{value}"
+    );
+    // A duplicated ID is omitted; the parse card explains it.
+    assert!(!ids.iter().any(|id| *id == "dup"), "{value}");
+    let kinds: Vec<&str> = rows
+        .iter()
+        .map(|row| row["target_kind"].as_str().expect("target kind"))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["task", "task", "heading", "bullet", "task", "task", "task"],
+        "{value}"
+    );
+    let lines: Vec<u64> = rows
+        .iter()
+        .map(|row| row["line"].as_u64().expect("line"))
+        .collect();
+    assert_eq!(lines, vec![9, 10, 12, 14, 19, 20, 3], "{value}");
+    // Only the archive row carries the flag.
+    let archived: Vec<bool> = rows
+        .iter()
+        .map(|row| row["archived"].as_bool().unwrap_or(false))
+        .collect();
+    assert_eq!(
+        archived,
+        vec![false, false, false, false, false, false, true],
+        "{value}"
+    );
+    for row in rows {
+        let reference = row["ref"].as_str().expect("ref");
+        let (line, digest) = reference.split_once(':').expect("line:digest");
+        assert_eq!(
+            line.parse::<u64>().ok(),
+            row["line"].as_u64(),
+            "{reference}"
+        );
+        assert_eq!(digest.len(), 8, "{reference}");
+    }
+}
+
+#[test]
+fn block_id_goto_partial_id_is_unfiltered() {
+    let temp = TempDir::new("bob-cli-complete-block-id-goto-partial");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_goto_vault(&vault);
+
+    // The Mac filters; bob reports every row whatever is typed.
+    let value = complete_json(&vault, "@bob^int", 8, None);
+    let goto = goto_of(&value);
+    let ids: Vec<&str> = goto["rows"]
+        .as_array()
+        .expect("goto rows")
+        .iter()
+        .map(|row| row["block_id"].as_str().expect("block id"))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "intention-rollovers",
+            "done-one",
+            "heading-id",
+            "bullet-id",
+            "MixedCase",
+            "outline",
+            "archived-one",
+        ],
+        "{value}"
+    );
+}
+
+#[test]
+fn block_id_goto_notebook_route_badges_notebook_notes() {
+    let temp = TempDir::new("bob-cli-complete-block-id-goto-notebook");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_goto_vault(&vault);
+
+    let value = complete_json(&vault, "@taxes^", 7, None);
+    assert_eq!(value["context"], "task_block_id", "{value}");
+    assert_eq!(value["block_id"]["intent"], "new", "{value}");
+    assert_eq!(value["block_id"]["destination_kind"], "notebook", "{value}");
+    let goto = goto_of(&value);
+    assert_eq!(goto["eligible"], true, "{value}");
+    assert_eq!(goto["note_path"], "taxes.md", "{value}");
+    assert!(goto.get("archive_path").is_none(), "{value}");
+    let rows = goto["rows"].as_array().expect("goto rows");
+    let ids: Vec<&str> = rows
+        .iter()
+        .map(|row| row["block_id"].as_str().expect("block id"))
+        .collect();
+    assert_eq!(ids, vec!["z-250414-15", "z-250414-16"], "{value}");
+    assert!(
+        rows.iter().all(|row| row["target_kind"] == "notebook_note"),
+        "{value}"
+    );
+}
+
+#[test]
+fn block_id_goto_missing_note_has_no_rows() {
+    let temp = TempDir::new("bob-cli-complete-block-id-goto-missing");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_goto_vault(&vault);
+
+    let value = complete_json(&vault, "@nope^", 6, None);
+    assert_eq!(value["context"], "task_block_id", "{value}");
+    assert_eq!(value["block_id"]["note_exists"], false, "{value}");
+    let goto = goto_of(&value);
+    assert_eq!(goto["eligible"], true, "{value}");
+    assert_eq!(goto["note_path"], "nope.md", "{value}");
+    assert_eq!(goto["rows"].as_array().expect("rows").len(), 0, "{value}");
+}
+
+#[test]
+fn block_id_goto_canonical_archive_pair_names_the_archive() {
+    let temp = TempDir::new("bob-cli-complete-block-id-goto-canonical");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_settings(&vault);
+    // No `done_tasks:` link: the canonical `done/<stem>_done.md` pair
+    // applies, exactly as the parse ladder resolves it.
+    write_file(
+        &vault.join("life.md"),
+        "---\ntype: [[area]]\n---\n\n# Tasks\n\n- [ ] #task Living ^living-only\n",
+    );
+    write_file(
+        &vault.join("done/life_done.md"),
+        "# Archived\n\n- [x] #task Canonical [completion:: 2025-11-01] ^canonical-one\n",
+    );
+
+    let value = complete_json(&vault, "@life^", 6, None);
+    let goto = goto_of(&value);
+    assert_eq!(goto["archive_path"], "done/life_done.md", "{value}");
+    let rows = goto["rows"].as_array().expect("goto rows");
+    let ids: Vec<&str> = rows
+        .iter()
+        .map(|row| row["block_id"].as_str().expect("block id"))
+        .collect();
+    assert_eq!(ids, vec!["living-only", "canonical-one"], "{value}");
+    assert!(rows[1]["archived"].as_bool().unwrap_or(false), "{value}");
+}
+
+#[test]
+fn block_id_goto_body_at_either_edge_omits_goto() {
+    let temp = TempDir::new("bob-cli-complete-block-id-goto-body");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_goto_vault(&vault);
+
+    for (draft, cursor) in [("Fix it @bob^x", 13), ("@bob^x Fix it", 6)] {
+        let value = complete_json(&vault, draft, cursor, None);
+        assert_eq!(value["context"], "task_block_id", "{draft}");
+        assert_eq!(value["block_id"]["intent"], "new", "{draft}");
+        assert!(
+            value["block_id"].get("goto").is_none(),
+            "body at an edge is mint, never browse ({draft})"
+        );
+    }
+}
+
+#[test]
+fn block_id_goto_sealed_project_note_omits_goto() {
+    let temp = TempDir::new("bob-cli-complete-block-id-goto-seal");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_goto_vault(&vault);
+
+    let value = complete_json(&vault, "@bob^x@", 6, None);
+    assert_eq!(value["context"], "task_block_id", "{value}");
+    assert_eq!(value["block_id"]["intent"], "project_note", "{value}");
+    assert!(value["block_id"].get("goto").is_none(), "{value}");
+}
+
+#[test]
+fn task_goto_completion_matches_caret_address() {
+    let temp = TempDir::new("bob-cli-complete-task-goto-caret");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_goto_vault(&vault);
+
+    let value = complete_json(&vault, "/bob^intention", 14, None);
+    assert_eq!(value["context"], "task_goto", "{value}");
+    let candidates = value["candidates"].as_array().expect("candidates");
+    assert_eq!(candidates.len(), 1, "{value}");
+    assert_eq!(candidates[0]["block_id"], "intention-rollovers", "{value}");
+    assert_eq!(candidates[0]["route"], "bob", "{value}");
+
+    let missing = complete_json(&vault, "/bob^nothing-here", 17, None);
+    assert_eq!(
+        missing["candidates"].as_array().expect("candidates").len(),
+        0,
+        "{missing}"
+    );
+}
+
 #[test]
 fn block_id_link_candidates_are_filtered_and_annotated() {
     let temp = TempDir::new("bob-cli-complete-block-id-link");

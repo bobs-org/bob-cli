@@ -2161,6 +2161,23 @@ pub(crate) fn completion_field_at(
     completion_field_at_with(raw_text, cursor, None)
 }
 
+/// Lowercased route of the cursor's item when it is exactly one
+/// `@route^id-or-empty` token (cli-browse eligibility for the additive
+/// `block_id.goto` object). Body at either edge, seals, and suffixes
+/// never claim, per the shared caret-address rule.
+pub(crate) fn caret_browse_route_at(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<String> {
+    let draft = split_capture_draft(raw_text);
+    let item = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
+    })?;
+    caret_address_token(item).map(|claimed| claimed.route.to_ascii_lowercase())
+}
+
 /// Identify the completable marker at `cursor`, optionally classifying
 /// notebook routes so a first-level `#` under a notebook-claimed item is
 /// an empty success instead of the drawer menu.

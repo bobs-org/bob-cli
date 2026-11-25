@@ -97,6 +97,111 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Scoped-browse payload for the additive `block_id.goto` completion
+/// object (cli-browse): every uniquely identified block in the living
+/// note in document order, then the paired archive's unique blocks
+/// flagged `archived`. IDs that occur more than once are omitted; the
+/// parse card explains them. The rows are unfiltered; the Mac filters
+/// as it does `used`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CaretBrowse {
+    pub(crate) eligible: bool,
+    pub(crate) note_path: String,
+    pub(crate) target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) archive_path: Option<String>,
+    pub(crate) rows: Vec<GotoRow>,
+}
+
+pub(crate) fn browse(bob_dir: &Path, route: &str) -> CaretBrowse {
+    let route = route.to_ascii_lowercase();
+    let note_path = capture::route_label(&route);
+    let living_abs = bob_dir.join(&note_path);
+    let target = living_abs.display().to_string();
+    let Ok(living_contents) = fs::read_to_string(&living_abs) else {
+        return CaretBrowse {
+            eligible: true,
+            note_path,
+            target,
+            archive_path: None,
+            rows: Vec::new(),
+        };
+    };
+    let settings = note_tasks::read_settings(bob_dir);
+    let living_scan = note_tasks::scan(&living_contents, &settings);
+    let living_notebook = is_notebook_contents(&living_contents);
+    let mut rows = unique_rows(
+        &note_path,
+        &living_abs,
+        &living_contents,
+        &living_scan,
+        living_notebook,
+        false,
+    );
+    let mut archive_path = None;
+    if let Some(archive) =
+        archive_for_living(bob_dir, &note_path, &living_contents)
+    {
+        let archive_abs = bob_dir.join(&archive);
+        if archive_abs.is_file()
+            && let Ok(archive_contents) = fs::read_to_string(&archive_abs)
+        {
+            archive_path = Some(archive.display().to_string());
+            let archive_scan = note_tasks::scan(&archive_contents, &settings);
+            let archive_notebook = is_notebook_contents(&archive_contents);
+            rows.extend(unique_rows(
+                &archive.to_string_lossy(),
+                &archive_abs,
+                &archive_contents,
+                &archive_scan,
+                archive_notebook,
+                true,
+            ));
+        }
+    }
+    CaretBrowse {
+        eligible: true,
+        note_path,
+        target,
+        archive_path,
+        rows,
+    }
+}
+
+/// Every block ID with exactly one hit, as a row in document order.
+fn unique_rows(
+    note_path: &str,
+    abs: &Path,
+    contents: &str,
+    scan: &note_tasks::NoteTaskScan,
+    notebook: bool,
+    archived: bool,
+) -> Vec<GotoRow> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut rows: Vec<GotoRow> = scan
+        .all_block_ids()
+        .filter(|id| scan.hits_for(id).len() == 1)
+        .map(|id| {
+            let hit = &scan.hits_for(id)[0];
+            let line = lines.get(hit.line_index).copied().unwrap_or("");
+            row_from_hit(
+                note_path,
+                abs,
+                contents,
+                scan,
+                id,
+                hit.line_index,
+                line,
+                hit.task_index,
+                notebook,
+                archived,
+            )
+        })
+        .collect();
+    rows.sort_by_key(|row| row.line);
+    rows
+}
+
 pub(crate) fn resolve(
     bob_dir: &Path,
     route: &str,
@@ -123,7 +228,6 @@ pub(crate) fn resolve(
     let living_scan = note_tasks::scan(&living_contents, &settings);
     let living_notebook = is_notebook_contents(&living_contents);
     let living_hits = rows_for_id(
-        bob_dir,
         &note_path,
         &living_abs,
         &living_contents,
@@ -170,7 +274,6 @@ pub(crate) fn resolve(
                     note_tasks::scan(&archive_contents, &settings);
                 let archive_notebook = is_notebook_contents(&archive_contents);
                 let archive_hits = rows_for_id(
-                    bob_dir,
                     &archive.to_string_lossy(),
                     &archive_abs,
                     &archive_contents,
@@ -275,7 +378,6 @@ fn is_notebook_contents(contents: &str) -> bool {
 }
 
 fn rows_for_id(
-    bob_dir: &Path,
     note_path: &str,
     abs: &Path,
     contents: &str,
@@ -290,7 +392,6 @@ fn rows_for_id(
         .filter_map(|hit| {
             let line = lines.get(hit.line_index).copied().unwrap_or("");
             Some(row_from_hit(
-                bob_dir,
                 note_path,
                 abs,
                 contents,
@@ -307,7 +408,6 @@ fn rows_for_id(
 }
 
 fn row_from_hit(
-    _bob_dir: &Path,
     note_path: &str,
     abs: &Path,
     contents: &str,
@@ -459,7 +559,6 @@ fn suggestions_for(
         let lines: Vec<&str> = contents.lines().collect();
         let line = lines.get(hit.line_index).copied().unwrap_or("");
         let row = row_from_hit(
-            bob_dir,
             note_path,
             abs,
             contents,
@@ -550,7 +649,6 @@ fn other_note_suggestions(
         let line = lines.get(hit.line_index).copied().unwrap_or("");
         let note_path = capture::route_label(&route);
         let row = row_from_hit(
-            bob_dir,
             &note_path,
             &path,
             &contents,

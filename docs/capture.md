@@ -1679,10 +1679,11 @@ JSON `kind` stays `"task"`. The block ID uses the same validator as other Bob
 task block IDs (letters, digits, and `-`).
 Before a real capture or `--dry-run` reports success, Bob rejects an ID that
 already appears anywhere in the destination note, leaving the note unchanged.
-This form never reads, validates, creates, or writes today's daily note; an
-invalid or missing `BOB_DAY_FILE` has no effect. The retired
-`@<route>::<block-id>` spelling is no longer accepted; use
-`@<route>^<block-id>` instead.
+The refusal teaches the Go To: `block ID ^foobar already exists in dev.md;
+remove the task text to go to it with @dev^foobar`. This form never reads,
+validates, creates, or writes today's daily note; an invalid or missing
+`BOB_DAY_FILE` has no effect. The retired `@<route>::<block-id>` spelling is
+no longer accepted; use `@<route>^<block-id>` instead.
 
 ### `#now` is retired
 
@@ -2279,7 +2280,7 @@ whole-draft rule `/` and `//` use.
 | Draft | Reading |
 | --- | --- |
 | `@bob^intention-rollovers` (± surrounding whitespace) | Go To `bob.md` at that line |
-| `@bob^` / `@bob^int` | Not this claim: the empty or partial ID is block-ID completion (scoped browse lands in a later phase) |
+| `@bob^` / `@bob^int` | Scoped Go To browse: `task_block_id` completion with `block_id.goto` Go rows for the note |
 | `@bob^x Fix it` / `Fix it @bob^x` | Mint with the authored ID, unchanged |
 | `@bob^x@`, `@bob^x@ %n`, `@bob^x#section` | Seal, notebook creation, or section bullet, unchanged |
 | `@bob^x` + a child bullet, or + a second item | Not claimed; today's behavior, byte for byte |
@@ -2339,10 +2340,23 @@ token is the exact typed token.
 additive top-level `goto` object (`status`, `route`, `block_id`,
 `note_path`, `target`, `archived`, plus `landing`, `hits`, or `suggestions`
 as the status requires). `schema_version` stays 1; `grammar` is 31. A `@@`
-declaration never applies. Completion for a caret address stays
-`task_block_id` in this phase. The human renderer prints one `go to` line,
+declaration never applies. The human renderer prints one `go to` line,
 for example `bob.md:9  [ ] Allow rollovers of intentions` or
 `no ^x in bob.md (did you mean ^y?)`.
+
+**Scoped browse.** An empty or partial ID (`@bob^`, `@bob^int`) as the whole
+draft stays `task_block_id` completion and gains an additive `block_id.goto`
+object: `eligible`, `note_path`, `target`, an optional `archive_path`, and
+unfiltered `rows`. Rows list every uniquely identified block in the living
+note in document order — tasks, notebook notes, bullets, headings, and
+paragraphs — each shaped like a parse `landing` row, then the paired
+archive's rows flagged `archived: true`. IDs that occur more than once are
+omitted; the parse card explains them. A missing route reports
+`note_exists: false` with no rows. Body text at either edge, seals, and
+suffixes never claim, so the mint composer keeps today's shape byte for
+byte. Typing `/bob^intention-rollovers` in the `/` picker finds the same
+task, since the `task_goto` index carries a `route^block-id` key beside
+`route:block-id`.
 
 The navigation itself runs through bob-navigation-hotkeys'
 `obsidian://bob-goto-task` URI, whose contract is in the [Go to task URI

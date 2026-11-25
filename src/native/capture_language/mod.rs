@@ -86,6 +86,7 @@ pub(crate) use self::bare_name::trailing_glued_timing;
 pub(crate) use self::close_log::assign_log_positions;
 pub(crate) use self::close_log::lexical_worked_tasks_with_all;
 pub(crate) use self::close_log::PositionalLogError;
+pub(crate) use self::completion::caret_browse_route_at;
 pub(crate) use self::completion::claimed_task_complete_tokens;
 pub(crate) use self::completion::completion_field_at;
 pub(crate) use self::completion::completion_field_at_with;

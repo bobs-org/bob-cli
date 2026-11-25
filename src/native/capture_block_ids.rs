@@ -12,10 +12,10 @@ use std::{
 use serde::Serialize;
 
 use super::{
-    capture,
+    capture, capture_caret_goto,
     capture_language::{
-        editor_item_at, parse_for_editor, project_task_block_id_detail,
-        CompletionContext,
+        caret_browse_route_at, editor_item_at, parse_for_editor,
+        project_task_block_id_detail, CompletionContext,
     },
     collect_done, note_tasks,
 };
@@ -78,6 +78,11 @@ pub(crate) struct BlockIdField {
     pub(crate) allowed_description: String,
     pub(crate) suggestions: Vec<String>,
     pub(crate) used: Vec<UsedBlockId>,
+    /// Additive scoped-browse Go rows for a whole-draft `@route^` /
+    /// `@route^partial` (cli-browse). Omitted for every other draft, so
+    /// old Mac apps keep today's composer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) goto: Option<capture_caret_goto::CaretBrowse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) owner_line: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -233,6 +238,17 @@ pub(crate) fn build_block_id_field_with_notebooks(
         && is_notebook_route(bob_dir, &route, notebook_policy))
     .then_some("notebook");
 
+    // Additive scoped-browse Go rows: on a `^` marker with new intent, a
+    // whole-draft `@route^` / `@route^partial` (no body at either edge,
+    // per the shared caret-address claim) gains `goto`. Every other
+    // draft keeps `goto` omitted, byte for byte.
+    let goto = (marker == '^' && intent == BlockIdIntent::New)
+        .then(|| caret_browse_route_at(raw_text, cursor))
+        .flatten()
+        .map(|claimed_route| {
+            capture_caret_goto::browse(bob_dir, &claimed_route)
+        });
+
     BlockIdField {
         route,
         relative_target,
@@ -246,6 +262,7 @@ pub(crate) fn build_block_id_field_with_notebooks(
         allowed_description: allowed_description.to_string(),
         suggestions,
         used,
+        goto,
         owner_line: None,
         splice: None,
     }
@@ -309,6 +326,7 @@ fn build_project_task_block_id_field(
             allowed_description: BLOCK_ID_ALLOWED_DESCRIPTION.to_string(),
             suggestions: Vec::new(),
             used: Vec::new(),
+            goto: None,
             owner_line: None,
             splice: None,
         };
@@ -381,6 +399,7 @@ fn build_project_task_block_id_field(
         allowed_description: allowed_description.to_string(),
         suggestions,
         used,
+        goto: None,
         owner_line: Some(detail.owner_line),
         splice: Some(BlockIdSplice {
             range: BlockIdMarkerRange {

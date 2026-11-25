@@ -331,12 +331,13 @@ fn best_field_tier(raw_fields: &[String], term: &str) -> Option<u32> {
 }
 
 /// Raw searchable fields for a linkable task, in no significant order:
-/// `route:block-id` and block ID (identified tasks only), cleaned
-/// description, route, section, and queued Pomodoro name.
+/// `route:block-id`, `route^block-id` (identified tasks only), block ID,
+/// cleaned description, route, section, and queued Pomodoro name.
 fn link_task_search_fields(task: &LinkTask) -> Vec<String> {
     let mut fields = Vec::new();
     if let Some(block_id) = &task.block_id {
         fields.push(format!("{}:{block_id}", task.route));
+        fields.push(format!("{}^{block_id}", task.route));
         fields.push(block_id.clone());
     }
     fields.push(task.text.clone());
@@ -1068,6 +1069,58 @@ mod tests {
                 "Run e2e on sase-8v",
             ]
         );
+    }
+
+    #[test]
+    fn ranker_matches_caret_address_queries() {
+        // cli-browse indexes `route^block-id` beside `route:block-id`
+        // so `/bob^…` finds the task.
+        fn candidate(
+            text: &str,
+            route: &str,
+            block_id: Option<&str>,
+        ) -> LinkTask {
+            LinkTask {
+                route: route.to_string(),
+                note_path: format!("{route}.md"),
+                note_kind: CaptureTargetKind::Project,
+                block_id: block_id.map(str::to_string),
+                block_id_suggestions: Vec::new(),
+                status_symbol: ' ',
+                status_name: "Todo".to_string(),
+                status_type: "TODO",
+                text: text.to_string(),
+                section: None,
+                depth: 0,
+                line: 1,
+                task_ref: "1:deadbeef".to_string(),
+                scheduled: None,
+                pulls_forward: false,
+                pomodoro: None,
+                group: LinkTaskGroup::Note,
+                task_kind: None,
+            }
+        }
+        let tasks = vec![
+            candidate("Polish capture picker", "bob", Some("polish")),
+            candidate("Fix deep bug", "sase", Some("deep-fix")),
+            candidate("Tune fuzzy weights", "bob", None),
+        ];
+        let ranked = |query: &str| {
+            rank(&tasks, query)
+                .iter()
+                .map(|task| task.text.clone())
+                .collect::<Vec<_>>()
+        };
+        // A field-prefix hit on the caret spelling.
+        assert_eq!(ranked("sase^deep"), vec!["Fix deep bug"]);
+        assert_eq!(ranked("sase^deep-fix"), vec!["Fix deep bug"]);
+        assert_eq!(ranked("bob^polish"), vec!["Polish capture picker"]);
+        // AND terms still filter: only the sase task carries both.
+        assert_eq!(ranked("sase deep-fix"), vec!["Fix deep bug"]);
+        // Queries without `^` keep today's matches.
+        assert_eq!(ranked("deep"), vec!["Fix deep bug"]);
+        assert_eq!(ranked("sase:deep"), vec!["Fix deep bug"]);
     }
 
     struct TempDir {

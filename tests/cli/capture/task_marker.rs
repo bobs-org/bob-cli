@@ -163,9 +163,10 @@ fn capture_task_block_id_dry_run_and_duplicate_preflight_do_not_write() {
         serde_json::from_str(stdout(&duplicate).trim()).expect("failure JSON");
     assert_eq!(json["ok"], false);
     assert!(
-        json["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("block ID ^dup already exists")),
+        json["error"].as_str().is_some_and(|error| error
+            .contains("block ID ^dup already exists in")
+            && error
+                .contains("remove the task text to go to it with @dev^dup")),
         "{json}"
     );
     assert_eq!(fs::read_to_string(&target).expect("read target"), before);
