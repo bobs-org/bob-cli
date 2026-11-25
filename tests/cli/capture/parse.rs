@@ -1499,7 +1499,7 @@ fn capture_parse_json_reports_drawer_and_incomplete_needs() {
         serde_json::json!([
             { "start": 20, "end": 24, "kind": "sub_bullet_route" },
             { "start": 25, "end": 28, "kind": "sub_bullet_block_id" },
-            { "start": 29, "end": 32, "kind": "drawer", "title": "REQ", "key": "REQ" },
+            { "start": 29, "end": 32, "kind": "drawer", "title": "Req", "key": "REQ" },
         ])
     );
 
@@ -1739,7 +1739,7 @@ fn capture_parse_json_reports_explicit_toggle_and_attached_type_spans() {
         serde_json::json!([
             { "start": 0, "end": 5, "kind": "sub_bullet_route" },
             { "start": 6, "end": 15, "kind": "sub_bullet_block_id" },
-            { "start": 16, "end": 25, "kind": "drawer", "title": "DEEP WORK", "key": "DEEP WORK" },
+            { "start": 16, "end": 25, "kind": "drawer", "title": "Deep Work", "key": "DEEP WORK" },
         ])
     );
 }

@@ -118,8 +118,8 @@ fn empty_query_lists_task_then_recent_rows_and_opens_unselected() {
             "task:NOTES",
             "task:FUTURE WORK",
             // Used in at least two notes; PERFORMANCE (one note) stays off.
-            "recent:MOTIVATION",
-            "recent:ACCEPTANCE",
+            "recent:Motivation",
+            "recent:Acceptance",
         ]
     );
     let target = value.target.as_ref().expect("target");
@@ -138,12 +138,12 @@ fn typed_query_drops_the_unselected_open_and_filters_every_group() {
     assert_eq!(value.query.as_deref(), Some("future"));
     assert_eq!(
         shape(&value)[..3],
-        ["task:FUTURE WORKFLOW", "task:FUTURE WORK", "new:FUTURE"]
+        ["task:FUTURE WORKFLOW", "task:FUTURE WORK", "new:Future"]
     );
 
     // A typed query searches the whole catalog, even single-note keys.
     let perf = menu(&temp, "note @foo+bar#perf");
-    assert_eq!(shape(&perf), ["recent:PERFORMANCE", "new:PERF"]);
+    assert_eq!(shape(&perf), ["recent:Performance", "new:Perf"]);
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn recent_rows_are_catalog_keys_the_task_lacks() {
     let temp = vault("bob-cli-drawer-menu-recent");
     let value = menu(&temp, "note @foo+bar#");
 
-    let motivation = row(&value, "recent", "MOTIVATION");
+    let motivation = row(&value, "recent", "Motivation");
     assert!(motivation.creates);
     assert_eq!(motivation.note_count, Some(3));
     assert!(motivation.last_seen.is_some_and(|seen| seen > 0));
@@ -228,12 +228,12 @@ fn recent_rows_are_catalog_keys_the_task_lacks() {
     assert_eq!(motivation.replacement, "#motivation");
     assert_eq!(
         motivation.consequence.as_deref(),
-        Some("Creates MOTIVATION under ^bar")
+        Some("Creates Motivation under ^bar")
     );
     assert_eq!(motivation.refused, None);
     assert_eq!(motivation.line, 0);
 
-    let acceptance = row(&value, "recent", "ACCEPTANCE");
+    let acceptance = row(&value, "recent", "Acceptance");
     assert_eq!(acceptance.detail, "used in 2 notes · today");
 
     // Keys already on the task never repeat as recent rows.
@@ -247,7 +247,7 @@ fn recent_rows_are_catalog_keys_the_task_lacks() {
 
     let single = menu(&temp, "note @foo+bar#perfo");
     assert_eq!(
-        row(&single, "recent", "PERFORMANCE").detail,
+        row(&single, "recent", "Performance").detail,
         "used in 1 note · today"
     );
 }
@@ -279,13 +279,13 @@ fn new_row_needs_a_typed_name_no_other_row_claims() {
     assert!(!shape(&empty).iter().any(|row| row.starts_with("new:")));
 
     let typed = menu(&temp, "note @foo+bar#budget");
-    assert_eq!(shape(&typed), ["new:BUDGET"]);
-    let new = row(&typed, "new", "BUDGET");
+    assert_eq!(shape(&typed), ["new:Budget"]);
+    let new = row(&typed, "new", "Budget");
     assert!(new.creates);
     assert_eq!(new.replacement, "#budget");
     assert_eq!(
         new.consequence.as_deref(),
-        Some("Creates BUDGET under ^bar")
+        Some("Creates Budget under ^bar")
     );
     assert_eq!(new.detail, "");
     assert_eq!(new.refused, None);
@@ -314,9 +314,9 @@ fn new_row_needs_a_typed_name_no_other_row_claims() {
 fn new_row_hints_at_a_near_catalog_key() {
     let temp = vault("bob-cli-drawer-menu-near-catalog");
     let value = menu(&temp, "note @foo+bar#motivaton");
-    let new = row(&value, "new", "MOTIVATON");
+    let new = row(&value, "new", "Motivaton");
     assert_eq!(new.refused, None);
-    assert_eq!(new.detail, "did you mean MOTIVATION?");
+    assert_eq!(new.detail, "did you mean Motivation?");
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn refused_rows_carry_the_commit_resolvers_reason() {
 
     // Reserved: the reason names the key the writer would use.
     let reserved = menu(&temp, "note @foo+bar#tasks");
-    let tasks = row(&reserved, "new", "TASKS");
+    let tasks = row(&reserved, "new", "Tasks");
     assert_eq!(
         tasks.refused.as_deref(),
         Some("`TASKS` is managed by Bob; name the drawer something else")
@@ -343,17 +343,17 @@ fn refused_rows_carry_the_commit_resolvers_reason() {
     assert_eq!(tasks.consequence, None);
     let links = menu(&temp, "note @foo+bar#\"links\"");
     assert_eq!(
-        row(&links, "new", "LINKS").refused.as_deref(),
+        row(&links, "new", "links").refused.as_deref(),
         Some("`LINKS` is managed by Bob; name the drawer something else")
     );
 
     // Near-duplicate: a strict prefix of an existing key, with the
     // quoted override spelled out.
     let near = menu(&temp, "note @foo+bar#req");
-    let req = row(&near, "new", "REQ");
+    let req = row(&near, "new", "Req");
     assert_eq!(
         req.refused.as_deref(),
-        Some("did you mean `#requirements`? write `#\"REQ\"` to create REQ")
+        Some("did you mean `#requirements`? write `#\"Req\"` to create Req")
     );
 
     // Ambiguous: duplicate drawers are both listed, both refused.
@@ -402,7 +402,7 @@ fn replacement_is_a_slug_only_when_it_resolves_back_to_the_same_drawer() {
     // A title no slug can spell is quoted.
     assert_eq!(row(&value, "task", "Q&A").replacement, "#\"Q&A\"");
     assert_eq!(row(&value, "task", "2 GB").replacement, "#\"2 GB\"");
-    assert_eq!(row(&value, "task", "PLAIN").replacement, "#plain");
+    assert_eq!(row(&value, "task", "PLAIN").replacement, "#\"PLAIN\"");
     // Ambiguity is judged against the whole list, not the filtered rows.
     let filtered = menu(&temp, "note @foo+bar#future-work");
     assert!(
@@ -432,10 +432,10 @@ fn replacement_covers_the_hash_and_the_name_and_reports_cursor_after() {
         }
     );
     let requirements = row(&value, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "#requirements");
+    assert_eq!(requirements.replacement, "#\"REQUIREMENTS\"");
     assert_eq!(
         requirements.cursor_after,
-        Some(hash + "#requirements".len())
+        Some(hash + "#\"REQUIREMENTS\"".len())
     );
 
     // A quoted partial replaces the quotes too, and the cursor lands after
@@ -451,7 +451,7 @@ fn replacement_covers_the_hash_and_the_name_and_reports_cursor_after() {
     );
     assert_eq!(
         row(&quoted, "task", "FUTURE WORK").cursor_after,
-        Some(hash + "#future-work".len())
+        Some(hash + "#\"FUTURE WORK\"".len())
     );
 }
 
@@ -497,10 +497,10 @@ fn unresolvable_targets_report_a_diagnostic_and_no_rows() {
 fn a_task_without_drawers_lists_recent_and_new_only() {
     let temp = vault("bob-cli-drawer-menu-plain");
     let value = menu(&temp, "note @foo+plain#");
-    assert_eq!(shape(&value), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
+    assert_eq!(shape(&value), ["recent:Motivation", "recent:Acceptance"]);
     assert_eq!(
-        row(&value, "recent", "MOTIVATION").consequence.as_deref(),
-        Some("Creates MOTIVATION under ^plain")
+        row(&value, "recent", "Motivation").consequence.as_deref(),
+        Some("Creates Motivation under ^plain")
     );
 }
 
@@ -548,7 +548,7 @@ fn project_note_prj_target_lists_sections_and_creates_title_case_sections() {
     // A structural heading refuses, and points at the section syntax.
     let structural = menu(&temp, "note @proj+prj#pomodoros");
     assert_eq!(
-        row(&structural, "new", "POMODOROS").refused.as_deref(),
+        row(&structural, "new", "Pomodoros").refused.as_deref(),
         Some("use `@proj#<Heading>` to capture into a project `##` section")
     );
 }
@@ -576,7 +576,7 @@ fn shell_drawer_rows_are_the_targets_own_unrefused_drawers() {
     let titles: Vec<&str> =
         items.iter().map(|item| item.title.as_str()).collect();
     assert_eq!(titles, ["REQUIREMENTS"]);
-    assert_eq!(items[0].replacement, "#requirements");
+    assert_eq!(items[0].replacement, "#\"REQUIREMENTS\"");
     assert!(warnings.is_empty());
 }
 
@@ -618,8 +618,8 @@ fn bullet_menu_on_an_existing_task_offers_bold_titles_with_the_glued_copy() {
             "task:FUTURE WORKFLOW",
             "task:NOTES",
             "task:FUTURE WORK",
-            "recent:MOTIVATION",
-            "recent:ACCEPTANCE",
+            "recent:Motivation",
+            "recent:Acceptance",
         ]
     );
     let target = value.target.as_ref().expect("target");
@@ -635,8 +635,8 @@ fn bullet_menu_on_an_existing_task_offers_bold_titles_with_the_glued_copy() {
     );
     assert_eq!(requirements.detail, "2 notes");
     assert_eq!(
-        row(&value, "recent", "MOTIVATION").consequence.as_deref(),
-        Some("Creates MOTIVATION under ^bar")
+        row(&value, "recent", "Motivation").consequence.as_deref(),
+        Some("Creates Motivation under ^bar")
     );
     // Every replacement is a whole-bold title: never `#slug` or `#"TITLE"`.
     for item in rows(&value) {
@@ -696,7 +696,7 @@ fn bullet_menu_filters_by_the_typed_name_and_decodes_a_quoted_literal() {
     assert_eq!(value.query.as_deref(), Some("future"));
     assert_eq!(
         shape(&value),
-        ["task:FUTURE WORKFLOW", "task:FUTURE WORK", "new:FUTURE"]
+        ["task:FUTURE WORKFLOW", "task:FUTURE WORK", "new:Future"]
     );
 
     // A closed literal queries the whole decoded name and its replacement
@@ -721,18 +721,18 @@ fn bullet_menu_filters_by_the_typed_name_and_decodes_a_quoted_literal() {
 fn bullet_new_row_spells_a_typed_slug_as_the_title_the_shortcut_creates() {
     let temp = vault("bob-cli-bullet-menu-new");
     let value = bullet(&temp, "@foo+bar\n- #brand-new");
-    let created = row(&value, "new", "BRAND NEW");
-    assert_eq!(created.replacement, "**BRAND NEW**\n  - ");
+    let created = row(&value, "new", "Brand New");
+    assert_eq!(created.replacement, "**Brand New**\n  - ");
     assert_eq!(
         created.consequence.as_deref(),
-        Some("Creates BRAND NEW under ^bar")
+        Some("Creates Brand New under ^bar")
     );
 
-    // A quoted literal keeps its hyphen.
+    // A quoted literal keeps its hyphen and authored case.
     let literal = bullet(&temp, "@foo+bar\n- #\"brand-new\"");
     assert_eq!(
-        row(&literal, "new", "BRAND-NEW").replacement,
-        "**BRAND-NEW**\n  - "
+        row(&literal, "new", "brand-new").replacement,
+        "**brand-new**\n  - "
     );
 }
 
@@ -740,14 +740,14 @@ fn bullet_new_row_spells_a_typed_slug_as_the_title_the_shortcut_creates() {
 fn bullet_menu_on_a_new_task_offers_recent_and_new_rows_only() {
     let temp = vault("bob-cli-bullet-menu-new-task");
     let value = bullet(&temp, "Ship it\n- #");
-    assert_eq!(shape(&value), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
+    assert_eq!(shape(&value), ["recent:Motivation", "recent:Acceptance"]);
     let target = value.target.as_ref().expect("target");
     assert_eq!(target.route, "mac_inbox.md");
     assert_eq!(target.block_id, None);
     assert_eq!(target.text, "Ship it");
     assert_eq!(
-        row(&value, "recent", "MOTIVATION").consequence.as_deref(),
-        Some("Starts MOTIVATION on the new task")
+        row(&value, "recent", "Motivation").consequence.as_deref(),
+        Some("Starts Motivation on the new task")
     );
 
     // The item's route, and a global `@@route`, name the destination.
@@ -755,7 +755,7 @@ fn bullet_menu_on_a_new_task_offers_recent_and_new_rows_only() {
     assert_eq!(routed.target.as_ref().expect("target").route, "foo.md");
     assert_eq!(
         shape(&routed),
-        ["recent:MOTIVATION", "new:MOT"],
+        ["recent:Motivation", "new:Mot"],
         "a prefix of a catalog key still gets its own new row"
     );
     let global = bullet(&temp, "@@foo\nShip it\n- #");
@@ -764,7 +764,7 @@ fn bullet_menu_on_a_new_task_offers_recent_and_new_rows_only() {
     // A new task owns no drawers, so a repeated name never shows a task
     // row, only the create rows.
     let typed = bullet(&temp, "Ship it\n- #brand-new");
-    assert_eq!(shape(&typed), ["new:BRAND NEW"]);
+    assert_eq!(shape(&typed), ["new:Brand New"]);
 }
 
 #[test]
@@ -793,7 +793,7 @@ fn punctuated_drawer_lists_under_task_with_exact_slug_reach() {
 
     // Typing `- #what` keeps it as a prefix match.
     let typed = bullet(&temp, "@foo+bar\n- #what");
-    assert_eq!(shape(&typed), ["task:WHAT IS SASE?", "new:WHAT"]);
+    assert_eq!(shape(&typed), ["task:WHAT IS SASE?", "new:What"]);
 
     // Glued `@route+id#what`: the title's slug is not a valid slug, so the
     // row keeps the quoted fallback (`slug_reach = exact`).
@@ -807,17 +807,17 @@ fn punctuated_drawer_lists_under_task_with_exact_slug_reach() {
 fn bullet_menu_on_a_new_project_note_preserves_section_titles() {
     let temp = vault("bob-cli-bullet-menu-project-note");
     let value = bullet(&temp, "@foo^fresh@ Plan it\n- #");
-    assert_eq!(shape(&value), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
+    assert_eq!(shape(&value), ["recent:Motivation", "recent:Acceptance"]);
     let target = value.target.as_ref().expect("target");
     assert_eq!(target.route, "foo_fresh.md");
     assert_eq!(target.block_id.as_deref(), Some("prj"));
     assert_eq!(target.text, "Plan it");
-    let motivation = row(&value, "recent", "MOTIVATION");
+    let motivation = row(&value, "recent", "Motivation");
     assert_eq!(
         motivation.consequence.as_deref(),
-        Some("Creates ## MOTIVATION")
+        Some("Creates ## Motivation")
     );
-    assert_eq!(motivation.replacement, "**MOTIVATION**\n  - ");
+    assert_eq!(motivation.replacement, "**Motivation**\n  - ");
 
     // The offer form `@route:id@` is also a new project note.
     let offer = bullet(&temp, "@foo:fresh@ Plan it\n- #");
@@ -848,8 +848,8 @@ fn bullet_menu_on_a_prj_task_lists_sections_and_refuses_structural_ones() {
         [
             "task:Requirements",
             "task:Future Work",
-            "recent:MOTIVATION",
-            "recent:ACCEPTANCE",
+            "recent:Motivation",
+            "recent:Acceptance",
         ]
     );
     let requirements = row(&value, "task", "Requirements");
@@ -860,9 +860,10 @@ fn bullet_menu_on_a_prj_task_lists_sections_and_refuses_structural_ones() {
     );
 
     let structural = bullet(&temp, "@proj+prj\n- #pomodoros");
-    assert_eq!(
-        row(&structural, "new", "POMODOROS").refused.as_deref(),
-        Some("use `@proj#<Heading>` to capture into a project `##` section")
+    assert!(
+        !shape(&structural).iter().any(|row| row == "new:Pomodoros"),
+        "a reserved bullet name is omitted rather than a refused bold header: {:?}",
+        shape(&structural)
     );
 }
 
@@ -881,19 +882,18 @@ fn bullet_rows_refuse_with_the_exact_resolvers_reason() {
     );
 
     let reserved = bullet(&temp, "@foo+bar\n- #tasks");
-    let tasks = row(&reserved, "new", "TASKS");
-    assert_eq!(
-        tasks.refused.as_deref(),
-        Some("`TASKS` is managed by Bob; name the drawer something else")
+    assert!(
+        !shape(&reserved).iter().any(|row| row == "new:Tasks"),
+        "a reserved bullet name is omitted rather than a refused bold header: {:?}",
+        shape(&reserved)
     );
-    assert_eq!(tasks.consequence, None);
 
     // Exact resolution has no near-duplicate guard: `REQ` is a plain new
     // drawer for a bullet, just like typing `- REQ` with notes under it.
     let near = bullet(&temp, "@foo+bar\n- #req");
-    let req = row(&near, "new", "REQ");
+    let req = row(&near, "new", "Req");
     assert_eq!(req.refused, None);
-    assert_eq!(req.consequence.as_deref(), Some("Creates REQ under ^bar"));
+    assert_eq!(req.consequence.as_deref(), Some("Creates Req under ^bar"));
 
     // Duplicate drawers are both listed and both refused.
     let ambiguous = bullet(&temp, "@foo+bar\n- #notes");
@@ -966,4 +966,63 @@ fn shell_completion_never_reaches_a_bullet_start() {
     )
     .expect("shell completion");
     assert_eq!(shell, None);
+}
+
+#[test]
+fn menu_rows_agree_with_the_resolver_for_every_row_kind() {
+    let temp = vault("bob-cli-drawer-menu-round-trip");
+    write_file(
+        &temp.path().join("foo.md"),
+        concat!(
+            "---\ntype: [[area]]\n---\n",
+            "- [ ] #task Parent task ^bar\n",
+            "\t- **API Design**\n",
+            "\t\t- existing\n",
+            "\t- NOTES\n",
+            "\t\t- one\n",
+        ),
+    );
+    write_file(
+        &temp.path().join("bold.md"),
+        concat!(
+            "---\ntype: [[area]]\n---\n",
+            "- [ ] #task Seed ^s\n",
+            "\t- **Future Work**\n",
+            "\t\t- catalog\n",
+            "\t- FUTURE WORK\n",
+            "\t\t- legacy\n",
+        ),
+    );
+
+    let glued = menu(&temp, "note @foo+bar#");
+    let api = row(&glued, "task", "API Design");
+    assert_eq!(api.replacement, "#\"API Design\"");
+    assert_eq!(api.refused, None);
+    let notes = row(&glued, "task", "NOTES");
+    assert_eq!(notes.replacement, "#\"NOTES\"");
+    assert_eq!(notes.refused, None);
+    let recent = menu(&temp, "note @foo+bar#future");
+    let recent = row(&recent, "recent", "Future Work");
+    assert_eq!(recent.replacement, "#future-work");
+    assert_eq!(
+        recent.consequence.as_deref(),
+        Some("Creates Future Work under ^bar")
+    );
+
+    let quoted = menu(&temp, "note @foo+bar#\"C++\"");
+    let created = row(&quoted, "new", "C++");
+    assert_eq!(created.replacement, "#\"C++\"");
+    assert_eq!(created.refused, None);
+
+    let existing = bullet(&temp, "@foo+bar\n- #api-design");
+    assert_eq!(
+        row(&existing, "task", "API Design").replacement,
+        "**API Design**\n  - "
+    );
+    let fresh = bullet(&temp, "Ship it\n- #git");
+    assert_eq!(row(&fresh, "new", "Git").replacement, "**Git**\n  - ");
+    assert_eq!(
+        row(&fresh, "new", "Git").consequence.as_deref(),
+        Some("Starts Git on the new task")
+    );
 }

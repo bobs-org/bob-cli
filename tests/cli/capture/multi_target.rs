@@ -421,7 +421,7 @@ fn repeated_near_catalog_warnings_are_reported_once_per_target_run() {
     assert!(warnings[0]["message"]
         .as_str()
         .unwrap()
-        .contains("REQUIREMENTS"));
+        .contains("Requirements"));
 }
 
 #[test]

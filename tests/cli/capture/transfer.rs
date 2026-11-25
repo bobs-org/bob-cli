@@ -924,8 +924,8 @@ fn transfer_merge_reports_target_and_tombstone_in_same_note() {
 fn transfer_merge_drawers_and_sections_preserve_selector_intent() {
     for (destination, heading, project) in [
         ("@db+upgrade#future-work", "FUTURE WORK", false),
-        ("@db+upgrade#new-ideas", "NEW IDEAS", false),
-        ("@db+upgrade#\"Future Works\"", "FUTURE WORKS", false),
+        ("@db+upgrade#new-ideas", "New Ideas", false),
+        ("@db+upgrade#\"Future Works\"", "Future Works", false),
         ("@db#future-work", "## Future Work", false),
         ("@db#\"Exact Heading\"", "## Exact Heading", false),
         ("@db+prj#future-work", "## Future Work", true),
@@ -992,7 +992,7 @@ fn transfer_merge_drawers_and_sections_preserve_selector_intent() {
                         line["text"]
                             .as_str()
                             .unwrap_or_default()
-                            .contains("NEW IDEAS")
+                            .contains("New Ideas")
                             && line["change"] == "added"
                     }),
                     "{json}"

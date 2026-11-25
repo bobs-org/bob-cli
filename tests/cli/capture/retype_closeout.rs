@@ -442,7 +442,7 @@ fn near_duplicate_teaches_requested_override_and_creates_it() {
         "suggests the existing drawer: {refused}"
     );
     assert!(
-        message.contains("write `#\"REQ\"` to create REQ"),
+        message.contains("write `#\"Req\"` to create Req"),
         "override teaches the requested title: {refused}"
     );
     assert_eq!(
@@ -461,7 +461,7 @@ fn near_duplicate_teaches_requested_override_and_creates_it() {
         .clone();
     assert_eq!(
         refused_row["refused"],
-        "did you mean `#requirements`? write `#\"REQ\"` to create REQ",
+        "did you mean `#requirements`? write `#\"Req\"` to create Req",
         "{menu}"
     );
     // Submitting the quoted override creates the requested drawer.
@@ -503,7 +503,7 @@ fn writer_acceptance_exact_bytes_and_transaction() {
         &["Postgres 17 minimum @foo+bar#requirements #fix"],
         false,
     );
-    assert_eq!(drawer["drawer"]["title"], "REQUIREMENTS", "{drawer}");
+    assert_eq!(drawer["drawer"]["title"], "Requirements", "{drawer}");
     assert_eq!(drawer["drawer"]["created"], true, "{drawer}");
     assert_eq!(drawer["task_theme"]["theme"]["name"], "FIX", "{drawer}");
     let (_, plain) = capture_json(
@@ -577,11 +577,11 @@ fn writer_exact_bytes_batch_header_and_spans() {
         let after =
             fs::read_to_string(vault.join("cash.md")).expect("read note");
         assert!(
-            after.contains("**REQUIREMENTS**\n"),
+            after.contains("**Requirements**\n"),
             "{name}: exact drawer bytes: {after:?}"
         );
         assert!(
-            !after.contains("REQUIREMENTS\n\n"),
+            !after.contains("Requirements\n\n"),
             "{name}: no blank line after header: {after:?}"
         );
     }
@@ -613,12 +613,12 @@ fn writer_exact_bytes_batch_header_and_spans() {
     assert_eq!(captures[1]["drawer"]["created"], false, "{json}");
     let after = fs::read_to_string(vault.join("cash.md")).expect("read note");
     assert_eq!(
-        after.matches("**REQUIREMENTS**").count(),
+        after.matches("**Requirements**").count(),
         1,
         "one header for two batch rows: {after:?}"
     );
     assert!(
-        !after.contains("REQUIREMENTS\n\n"),
+        !after.contains("Requirements\n\n"),
         "no blank line between header and first entry: {after:?}"
     );
     let parse = bob_command()

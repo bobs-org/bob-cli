@@ -35,7 +35,7 @@ pub(crate) enum Kind {
     Section,
     /// An open task of the routed note, by block ID.
     Task,
-    /// An ALL-CAPS child section of the `--task` parent.
+    /// A child drawer of the `--task` parent, by exact title.
     Drawer,
     /// An open Pomodoro, by stale-safe ref.
     PomodoroRef,

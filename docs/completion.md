@@ -137,7 +137,7 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
     `sections in <route>`.
   - `capture --task` and `capture-drawers --block-id`: open tasks
     of the routed note by block ID, grouped `tasks in <route>`.
-  - `capture --drawer`: ALL-CAPS child drawers of the `--task`
+  - `capture --drawer`: child drawers of the `--task`
     parent by exact title, grouped `drawers`.
   - `capture-pomodoro-name --pomodoro-ref`: open Pomodoros by
     stale-safe ref, grouped `open Pomodoros`.
@@ -484,7 +484,7 @@ another thin client of that service (see `docs/capture.md`
   searches the whole catalog by key or slug, prefix before substring), and one
   `new` row for a nonempty typed name no other row claims. Bob authors each
   row's `detail` (`2 notes`, `empty`, `used in 12 notes · 3 days ago`) and
-  `consequence` (`Adds after "2 GB RAM" in NOTES`, `Creates FUTURE WORK
+  `consequence` (`Adds after "2 GB RAM" in NOTES`, `Creates Future Work
   under ^bar`). A row's `replacement` is `#slug` only when the slug resolves
   back to exactly that drawer on the whole target, else `#"TITLE"`. `refused` is
   the commit's own reason for a reserved, near-duplicate, or ambiguous choice,
@@ -496,14 +496,14 @@ another thin client of that service (see `docs/capture.md`
   `Ship it` / `- #`, the `#` after a column-zero `- ` (or `* `, `+ `) opens the
   same `drawer` context, wherever the item's first-level bullets land directly
   under a task: a new task, a new project note, or a note-less `@route+id`.
-  The replacement covers the whole shortcut, and each row inserts the bare
-  ALL-CAPS title (`FUTURE WORK`) rather than `#future-work`, so the draft reads
+  The replacement covers the whole shortcut, and each row inserts a whole-bold
+  title (`**Future Work**`) rather than `#future-work`, so the draft reads
   exactly like the task block it writes. Existing tasks list `task`, `recent`,
   and `new` rows; new tasks and new project notes list `recent` and `new`
-  rows (`Starts FUTURE WORK on the new task`, `Creates ## Future Work`), and the
+  rows (`Starts Future Work on the new task`, `Creates ## Future Work`), and the
   response `target` carries `block_id: null` for a new task. When the token
   ends its line and no nested bullet follows, the replacement also opens the
-  nested bullet (`FUTURE WORK\n  - `) and `cursor_after` lands on it. Zsh
+  nested bullet (`**Future Work**\n  - `) and `cursor_after` lands on it. Zsh
   completes single-line drafts only, so it never reaches a bullet start. Rows
   are refused by the commit's own exact resolution (reserved or ambiguous
   names). Where the

@@ -34,7 +34,7 @@ fn capture_error(vault: &std::path::Path, draft: &str) -> serde_json::Value {
 }
 
 #[test]
-fn new_task_shortcut_renders_the_all_caps_drawer() {
+fn new_task_shortcut_renders_the_notebook_create_title() {
     let temp = TempDir::new("bob-cli-drawer-bullet-new-task");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -45,13 +45,13 @@ fn new_task_shortcut_renders_the_all_caps_drawer() {
     assert_eq!(
         json["sub_bullets"],
         serde_json::json!([
-            "\t- **FUTURE WORK**",
+            "\t- **Future Work**",
             "\t\t- try logical replication"
         ]),
         "{json}"
     );
     let note = fs::read_to_string(vault.join("work.md")).expect("work note");
-    assert!(note.contains("\t- **FUTURE WORK**\n"), "{note}");
+    assert!(note.contains("\t- **Future Work**\n"), "{note}");
     assert!(note.contains("\t\t- try logical replication\n"), "{note}");
 }
 
@@ -64,7 +64,7 @@ fn catalog_spelling_wins_for_a_slug() {
         &vault.join("seed.md"),
         concat!(
             "- [ ] #task Seed drawers [created::2026-01-01] ^seed\n",
-            "\t- NON-GOALS\n",
+            "\t- **Non Goals**\n",
             "\t\t- skip the rewrite\n",
         ),
     );
@@ -74,7 +74,7 @@ fn catalog_spelling_wins_for_a_slug() {
     );
     assert_eq!(
         json["sub_bullets"],
-        serde_json::json!(["\t- **NON-GOALS**", "\t\t- no rewrite pass"]),
+        serde_json::json!(["\t- **Non Goals**", "\t\t- no rewrite pass"]),
         "{json}"
     );
 }
@@ -91,7 +91,7 @@ fn repeated_keys_merge_in_draft_order() {
     assert_eq!(
         json["sub_bullets"],
         serde_json::json!([
-            "\t- **FUTURE WORK**",
+            "\t- **Future Work**",
             "\t\t- first",
             "\t\t- second"
         ]),

@@ -336,8 +336,9 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
             }),
         },
     );
-    // Drawer spans carry title/key when the name is valid: a slug's key,
-    // or a literal's uppercased title. Parsing stays lexical.
+    // Drawer spans carry title/key when the name is valid: a slug's
+    // create-title, or a quoted literal's preserved title. Parsing stays
+    // lexical.
     if let Some(section) = section_part
         && !section.is_empty()
     {
@@ -356,10 +357,10 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
                     (title, key)
                 })
             } else if crate::native::capture_drawers::is_drawer_slug(section) {
-                let spaced = section.replace('-', " ");
-                let canonical =
-                    super::normalize_task_text(&spaced).to_ascii_uppercase();
-                Some((canonical.clone(), canonical))
+                let title =
+                    super::place::format_notebook_section_create_title(section);
+                let key = crate::native::capture_drawers::drawer_key(&title);
+                Some((title, key))
             } else {
                 None
             };

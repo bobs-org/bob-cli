@@ -524,7 +524,7 @@ fn capture_complete_prj_drawer_menu_lists_h2_sections() {
     // The typed prefix of an existing section is a refused new row, never
     // a plausible create.
     assert_eq!(candidates[1]["group"], "new");
-    assert_eq!(candidates[1]["title"], "REQ");
+    assert_eq!(candidates[1]["title"], "Req");
     assert_eq!(
         candidates[1]["refused"],
         "did you mean `#requirements`? write `#\"Req\"` to create Req"

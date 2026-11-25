@@ -489,9 +489,8 @@ fn open_tasks(context: &Context, route: &str) -> Vec<note_tasks::NoteTask> {
         .collect()
 }
 
-/// ALL-CAPS child drawers of the `--task` parent, in document order
-/// under `drawers`. The value is the exact TITLE the flag
-/// expects.
+/// Child drawers of the `--task` parent, in document order under
+/// `drawers`. The value is the exact TITLE the flag expects.
 fn drawers(context: &Context) -> Vec<String> {
     let Some(route) = context.route.as_deref() else {
         return vec![protocol::message_line(MISSING_ROUTE_MESSAGE)];

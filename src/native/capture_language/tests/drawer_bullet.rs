@@ -21,7 +21,7 @@ fn leading_hash_on_a_first_level_bullet_is_a_drawer_shortcut() {
     else {
         panic!("expected a complete shortcut: {hit:?}");
     };
-    assert_eq!(title, "FUTURE WORK");
+    assert_eq!(title, "Future Work");
     assert_eq!(key, "FUTURE WORK");
     assert!(leftover.is_empty());
     assert!(!selector.exact);
@@ -155,7 +155,7 @@ fn punctuated_drawer_reports_a_drawer_bullet_span() {
     else {
         panic!("expected a complete quoted literal: {quoted:?}");
     };
-    assert_eq!(title, "WHAT IS SASE?");
+    assert_eq!(title, "what is sase?");
     assert!(selector.exact);
 }
 
@@ -298,7 +298,7 @@ fn each_reserved_bullet_is_flagged_once_and_a_glued_drawer_stays_quiet() {
 fn execution_files_a_shortcut_under_a_new_task() {
     let parsed = execute("Ship it\n- #future-work\n  - try replication")
         .expect("drawer group");
-    assert_eq!(parsed.sub_bullets[0].body, "FUTURE WORK");
+    assert_eq!(parsed.sub_bullets[0].body, "Future Work");
     assert!(parsed.sub_bullets[0].drawer.is_some());
     assert_eq!(parsed.sub_bullets[1].body, "try replication");
     assert_eq!(parsed.sub_bullets[1].depth, AuthoredDepth::NESTED);

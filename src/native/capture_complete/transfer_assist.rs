@@ -14,8 +14,8 @@ use std::path::Path;
 
 use super::model::{Candidates, CompleteError};
 use crate::native::{
-    capture, capture_drawers, capture_language, capture_project_note,
-    note_tasks, task_children, task_merge, task_move,
+    capture, capture_drawers, capture_language, note_tasks, task_children,
+    task_merge, task_move,
 };
 
 /// Narrow `candidates` (and extend `warnings`) for `role` on a `>`
@@ -466,9 +466,8 @@ fn scope_transfer_sections(
         }
         return Ok(());
     }
-    let normalized =
-        capture_language::normalize_task_text(&query.replace('-', " "));
-    let title = capture_project_note::format_project_section_title(&normalized);
+    let title =
+        capture_language::place::format_notebook_section_create_title(query);
     if title.is_empty() {
         return Ok(());
     }

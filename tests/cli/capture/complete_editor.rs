@@ -578,7 +578,7 @@ fn capture_complete_drawer_json_covers_components_and_warnings() {
     );
     assert_eq!(
         section_json["candidates"][0]["replacement"],
-        "#requirements"
+        "#\"REQUIREMENTS\""
     );
     assert_eq!(section_json["candidates"][0]["title"], "REQUIREMENTS");
     assert_eq!(section_json["candidates"][0]["slug"], "requirements");
@@ -610,7 +610,10 @@ fn capture_complete_drawer_json_covers_components_and_warnings() {
         .map(|candidate| candidate["title"].as_str().expect("title"))
         .collect();
     assert_eq!(titles, ["REQUIREMENTS", "FUTURE WORK"]);
-    assert_eq!(bare_json["candidates"][1]["replacement"], "#future-work");
+    assert_eq!(
+        bare_json["candidates"][1]["replacement"],
+        "#\"FUTURE WORK\""
+    );
     assert_eq!(bare_json["initial_selection"], "none");
 
     let empty_id = bob_command()

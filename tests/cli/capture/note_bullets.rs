@@ -205,7 +205,7 @@ fn two_bullets_naming_one_missing_drawer_merge() {
         "{json}"
     );
     let file = fs::read_to_string(vault.join("cash.md")).expect("cash.md");
-    assert_eq!(file.matches("FUTURE WORK").count(), 1, "{file}");
+    assert_eq!(file.matches("Future Work").count(), 1, "{file}");
 }
 
 #[test]
@@ -243,11 +243,11 @@ fn glued_drawer_files_every_bullet_inside() {
     assert_eq!(json["notes"].as_array().expect("notes").len(), 2, "{json}");
     assert_eq!(
         json["drawer"]["title"],
-        serde_json::json!("REQUIREMENTS"),
+        serde_json::json!("Requirements"),
         "{json}"
     );
     let file = fs::read_to_string(vault.join("cash.md")).expect("cash.md");
-    assert!(file.contains("REQUIREMENTS"), "{file}");
+    assert!(file.contains("Requirements"), "{file}");
     assert!(
         file.contains("- first") && file.contains("- second"),
         "{file}"

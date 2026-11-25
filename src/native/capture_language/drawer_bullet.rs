@@ -250,12 +250,12 @@ pub(crate) fn item_has_first_level_line(item: &CaptureItem<'_>) -> bool {
 }
 
 pub(crate) fn lexical_title_for_slug(slug: &str) -> String {
-    normalize_task_text(&slug.replace('-', " ")).to_ascii_uppercase()
+    format_notebook_section_create_title(slug)
 }
 
 pub(crate) fn drawer_bullet_text_error() -> String {
     "`- #notes` names a drawer, so it takes no text: nest \
-`Postgres 17` beneath it (`- NOTES` / `  - Postgres 17`); a task \
+`Postgres 17` beneath it (`- **Notes**` / `  - Postgres 17`); a task \
 type goes at the end of a line (`… #fix`)"
         .to_string()
 }
@@ -286,7 +286,7 @@ pub(crate) fn drawer_bullet_position_error(
             ..
         } => {
             let title = if selector.exact {
-                normalize_task_text(&selector.text).to_ascii_uppercase()
+                normalize_task_text(&selector.text)
             } else {
                 lexical_title_for_slug(&selector.text)
             };
@@ -318,9 +318,7 @@ pub(crate) fn editor_drawer_bullet_position_error(
         let title = if section.starts_with('"') || section.starts_with('“') {
             quoted_after_hash(section)
                 .and_then(|quoted| normalize_drawer_literal(&quoted.decoded))
-                .unwrap_or_else(|| {
-                    normalize_task_text(section).to_ascii_uppercase()
-                })
+                .unwrap_or_else(|| normalize_task_text(section))
         } else {
             lexical_title_for_slug(section)
         };
@@ -628,7 +626,7 @@ fn parse_hit(
             exact: false,
         },
         title: title.clone(),
-        key: title,
+        key: drawer_key(&title),
         leftover,
     }
 }

@@ -23,7 +23,9 @@ use crate::native::{
         self, Drawer, DrawerCatalogRecord, DrawerMatch, DrawerResolveError,
         DrawerResolveOutcome, DrawerResolved, DrawerScope,
     },
-    capture_language::{self, DrawerBulletTarget},
+    capture_language::{
+        self, place::format_notebook_section_create_title, DrawerBulletTarget,
+    },
     capture_project_note,
     note_tasks::{self, BlockIdLookup},
 };
@@ -384,7 +386,10 @@ impl Target {
         let slug = capture_language::selector_slug(title);
         if capture_drawers::is_drawer_slug(&slug) {
             match self.resolve(&slug, false, catalog) {
-                Ok(resolved) if matches_want(&resolved, want, title) => {
+                Ok(resolved)
+                    if matches_want(&resolved, want, title)
+                        && slug_replacement_agrees(&slug, &resolved) =>
+                {
                     return Choice {
                         replacement: format!("#{slug}"),
                         resolved: Ok(resolved),
@@ -556,7 +561,7 @@ impl Target {
         catalog: &BTreeMap<String, DrawerCatalogRecord>,
         now: u64,
     ) -> DrawerCandidate {
-        let title = wanted_title(&record.title, &record.key);
+        let title = capture_drawers::preferred_create_title(record);
         let mut row = self.base_row(&title, &record.key, GROUP_RECENT);
         row.note_count = Some(record.note_count);
         row.last_seen = Some(record.last_seen);
@@ -578,27 +583,25 @@ impl Target {
         if query.trim().is_empty() {
             return None;
         }
-        let title = capture_drawers::normalize_drawer_literal(query)?;
+        let title = if quoted {
+            capture_drawers::normalize_drawer_literal(query)?
+        } else if capture_drawers::is_drawer_slug(query)
+            || capture_drawers::normalize_drawer_literal(query).is_some()
+        {
+            format_notebook_section_create_title(query)
+        } else {
+            return None;
+        };
         // A slug names either spelling; a quoted literal only its own key.
-        let mut claimed = vec![capture_drawers::drawer_key(&title)];
+        let mut claimed = vec![capture_drawers::drawer_key(query)];
         if !quoted {
-            claimed.push(capture_drawers::drawer_key(&title.replace('-', " ")));
+            claimed.push(capture_drawers::drawer_key(&query.replace('-', " ")));
         }
+        claimed.push(capture_drawers::drawer_key(&title));
         if rows.iter().any(|row| claimed.contains(&row.key)) {
             return None;
         }
-        // A bullet commits the literal title, so an unquoted slug spells
-        // the title the `#slug` shortcut would create: hyphens read as
-        // spaces.
-        let wanted = match self.style {
-            RowStyle::Bullet if !quoted => {
-                capture_drawers::normalize_drawer_literal(
-                    &title.replace('-', " ").to_ascii_uppercase(),
-                )
-                .unwrap_or_else(|| title.clone())
-            }
-            _ => title,
-        };
+        let wanted = title;
         let mut row = self.base_row(&wanted, &claimed[0], GROUP_NEW);
         let choice = self.choose(&wanted, Want::Create, catalog);
         // A refused selector cannot be represented as a refused bold header:
@@ -689,11 +692,14 @@ fn matches_want(resolved: &DrawerResolved, want: Want, title: &str) -> bool {
     }
 }
 
-/// A catalog title that cannot be written as a bold header falls back to its
-/// normalized identity key.
-fn wanted_title(title: &str, key: &str) -> String {
-    capture_drawers::normalize_drawer_literal(title)
-        .unwrap_or_else(|| key.to_string())
+/// A glued `#slug` replacement only when parsing that slug yields the
+/// same title the row advertises, so replacement, parse, and commit agree.
+fn slug_replacement_agrees(slug: &str, resolved: &DrawerResolved) -> bool {
+    let lexical = format_notebook_section_create_title(slug);
+    match &resolved.outcome {
+        DrawerResolveOutcome::Existing { drawer } => drawer.title == lexical,
+        DrawerResolveOutcome::Create { title, .. } => *title == lexical,
+    }
 }
 
 /// A quoted selector only names titles that can be written as a valid bold

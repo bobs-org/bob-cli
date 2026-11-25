@@ -93,6 +93,9 @@ pub(crate) enum PlaceOutcome {
 /// Catalog lookup used by the drawer and project-section adapters.
 /// Loading the catalog stays with the caller.
 pub(crate) trait PlaceCatalog {
+    /// Preferred **explicit** create spelling for `slug` (bold drawer or
+    /// project `##` heading), else the notebook create-title rule. A
+    /// legacy-only catalog key never reseeds an ALL-CAPS name.
     fn spelling_for_slug(&self, slug: &str) -> String;
     fn near_title(&self, new_key: &str) -> Option<String>;
     fn is_legacy_title(&self, title: &str) -> bool;
@@ -222,16 +225,15 @@ impl TaskDrawer {
             items,
             catalog,
             "drawer",
-            |title| title.to_string(),
             is_reserved,
         )
     }
 }
 
-/// Project-`##` adapter: the same key ladder as [`TaskDrawer`], with
-/// section nouns and promotion Title Case on creation. Structural
-/// headings are refused by the H2 write wrapper before this matcher
-/// runs, so a managed `## Tasks` cannot become eligible by matching.
+/// Project-`##` adapter: the same key ladder and create-title rule as
+/// [`TaskDrawer`], with section nouns. Structural headings are refused
+/// by the H2 write wrapper before this matcher runs, so a managed
+/// `## Tasks` cannot become eligible by matching.
 pub(crate) struct ProjectSection;
 
 impl ProjectSection {
@@ -241,7 +243,6 @@ impl ProjectSection {
         items: &[PlaceCandidate],
         catalog: &C,
         is_reserved: impl Fn(&str) -> bool,
-        title_case: impl Fn(&str) -> String,
     ) -> PlaceOutcome {
         resolve_drawer_place(
             selector,
@@ -249,7 +250,6 @@ impl ProjectSection {
             items,
             catalog,
             "section",
-            title_case,
             is_reserved,
         )
     }
@@ -327,18 +327,16 @@ impl NotebookSection {
     }
 }
 
-fn resolve_drawer_place<C, Case, Reserved>(
+fn resolve_drawer_place<C, Reserved>(
     selector: &str,
     exact: bool,
     items: &[PlaceCandidate],
     catalog: &C,
     noun: &'static str,
-    title_case: Case,
     is_reserved: Reserved,
 ) -> PlaceOutcome
 where
     C: PlaceCatalog,
-    Case: Fn(&str) -> String,
     Reserved: Fn(&str) -> bool,
 {
     if exact {
@@ -385,11 +383,6 @@ where
 
     if let Some(near) = find_key_near_duplicate(items, &slug) {
         let intended = catalog.spelling_for_slug(&slug);
-        let intended = title_case(if catalog.is_legacy_title(&intended) {
-            &intended
-        } else {
-            &key_spaced
-        });
         let suggestion = if !is_place_slug(&near.slug) {
             quoted_legacy_suggestion(&near.title, catalog)
                 .unwrap_or_else(|| format!("#{}", near.slug))
@@ -407,11 +400,6 @@ where
     }
 
     let title = catalog.spelling_for_slug(&slug);
-    let title = title_case(if catalog.is_legacy_title(&title) {
-        &title
-    } else {
-        &key_spaced
-    });
     drawer_create(title, catalog, noun)
 }
 
@@ -420,6 +408,16 @@ fn drawer_create<C: PlaceCatalog>(
     catalog: &C,
     noun: &'static str,
 ) -> PlaceOutcome {
+    if crate::native::capture_drawers::normalize_bold_drawer_title(&title)
+        .is_none()
+    {
+        return PlaceOutcome::Refuse {
+            code: "unnameable_drawer",
+            message: format!(
+                "`{title}` cannot be created as a bold {noun} header"
+            ),
+        };
+    }
     let key = place_key(&title);
     let slug = selector_slug(&title);
     let warning = catalog

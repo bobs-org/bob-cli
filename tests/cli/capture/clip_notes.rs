@@ -264,13 +264,13 @@ fn clip_notes_drawers_and_prj_sections() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("drawer JSON");
-    assert_eq!(json["drawer"]["title"], "REQUIREMENTS");
+    assert_eq!(json["drawer"]["title"], "Requirements");
     assert_eq!(json["drawer"]["created"], true);
     assert_eq!(
         fs::read_to_string(vault2.join("cash.md")).expect("read created"),
         concat!(
             "- [ ] #task Parent ^id\n",
-            "\t- **REQUIREMENTS**\n",
+            "\t- **Requirements**\n",
             "\t\t- note one\n",
             "\t\t- note two\n",
         )

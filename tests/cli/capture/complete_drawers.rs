@@ -139,8 +139,8 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
             "task:NOTES",
             "task:NOTES",
             "task:FUTURE WORK",
-            "recent:MOTIVATION",
-            "recent:ACCEPTANCE",
+            "recent:Motivation",
+            "recent:Acceptance",
         ]
     );
 
@@ -148,7 +148,7 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
     assert_eq!(
         *requirements,
         serde_json::json!({
-            "replacement": "#requirements",
+            "replacement": "#\"REQUIREMENTS\"",
             "title": "REQUIREMENTS",
             "key": "REQUIREMENTS",
             "slug": "requirements",
@@ -161,16 +161,16 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
             "detail": "2 notes",
             "creates": false,
             "consequence": "Adds after \"fast disk\" in REQUIREMENTS",
-            "cursor_after": draft.len() - 1 + "#requirements".len(),
+            "cursor_after": draft.len() - 1 + "#\"REQUIREMENTS\"".len(),
         })
     );
     assert_eq!(row(&json, "task", "FUTURE WORK")["detail"], "empty");
 
-    let motivation = row(&json, "recent", "MOTIVATION");
+    let motivation = row(&json, "recent", "Motivation");
     assert_eq!(motivation["creates"], true);
     assert_eq!(motivation["note_count"], 3);
     assert_eq!(motivation["detail"], "used in 3 notes · today");
-    assert_eq!(motivation["consequence"], "Creates MOTIVATION under ^bar");
+    assert_eq!(motivation["consequence"], "Creates Motivation under ^bar");
     assert_eq!(motivation["replacement"], "#motivation");
     assert!(motivation["last_seen"].as_u64().unwrap() > 0);
     assert!(motivation.get("refused").is_none());
@@ -184,20 +184,20 @@ fn typed_drawer_menu_filters_groups_and_drops_the_unselected_open() {
     let json = complete(&temp, &vault, "note @foo+bar#perf");
     assert!(json.get("initial_selection").is_none());
     assert_eq!(json["query"], "perf");
-    assert_eq!(shape(&json), ["recent:PERFORMANCE", "new:PERF"]);
+    assert_eq!(shape(&json), ["recent:Performance", "new:Perf"]);
     assert_eq!(
-        row(&json, "recent", "PERFORMANCE")["detail"],
+        row(&json, "recent", "Performance")["detail"],
         "used in 1 note · today"
     );
-    let new = row(&json, "new", "PERF");
+    let new = row(&json, "new", "Perf");
     assert_eq!(new["creates"], true);
     assert_eq!(new["replacement"], "#perf");
-    assert_eq!(new["consequence"], "Creates PERF under ^bar");
+    assert_eq!(new["consequence"], "Creates Perf under ^bar");
 
     // A near-miss of a popular key is a hint, not a refusal.
     let typo = complete(&temp, &vault, "note @foo+bar#motivaton");
-    let new = row(&typo, "new", "MOTIVATON");
-    assert_eq!(new["detail"], "did you mean MOTIVATION?");
+    let new = row(&typo, "new", "Motivaton");
+    assert_eq!(new["detail"], "did you mean Motivation?");
     assert!(new.get("refused").is_none());
 }
 
@@ -215,7 +215,7 @@ fn quoted_drawer_literals_decode_the_query_and_cover_the_quotes() {
     );
     assert_eq!(
         row(&json, "task", "FUTURE WORK")["replacement"],
-        "#future-work"
+        "#\"FUTURE WORK\""
     );
 
     // A title no slug can spell is offered as a quoted literal.
@@ -233,14 +233,14 @@ fn refused_rows_name_the_commits_reason() {
 
     let reserved = complete(&temp, &vault, "note @foo+bar#tasks");
     assert_eq!(
-        row(&reserved, "new", "TASKS")["refused"],
+        row(&reserved, "new", "Tasks")["refused"],
         "`TASKS` is managed by Bob; name the drawer something else"
     );
 
     let near = complete(&temp, &vault, "note @foo+bar#req");
     assert_eq!(
-        row(&near, "new", "REQ")["refused"],
-        "did you mean `#requirements`? write `#\"REQ\"` to create REQ"
+        row(&near, "new", "Req")["refused"],
+        "did you mean `#requirements`? write `#\"Req\"` to create Req"
     );
 
     let ambiguous = complete(&temp, &vault, "note @foo+bar#notes");
@@ -354,7 +354,7 @@ fn drawer_menu_human_output_lists_bobs_detail_and_refusals() {
     assert_success(&output);
     let text = stdout(&output);
     assert!(
-        text.contains("TASKS  refused: `TASKS` is managed by Bob"),
+        text.contains("Tasks  refused: `TASKS` is managed by Bob"),
         "{text}"
     );
 
@@ -373,7 +373,7 @@ fn drawer_menu_human_output_lists_bobs_detail_and_refusals() {
     let text = stdout(&output);
     assert!(text.contains("REQUIREMENTS  2 notes  · task"), "{text}");
     assert!(
-        text.contains("MOTIVATION  used in 3 notes · today  · recent"),
+        text.contains("Motivation  used in 3 notes · today  · recent"),
         "{text}"
     );
     assert!(!text.contains(" items"), "{text}");
@@ -451,8 +451,8 @@ fn bullet_menu_json_pins_the_target_bold_titles_and_the_continuation() {
             "task:NOTES",
             "task:NOTES",
             "task:FUTURE WORK",
-            "recent:MOTIVATION",
-            "recent:ACCEPTANCE",
+            "recent:Motivation",
+            "recent:Acceptance",
         ]
     );
 
@@ -482,8 +482,8 @@ fn bullet_menu_json_pins_the_target_bold_titles_and_the_continuation() {
         })
     );
     assert_eq!(
-        row(&json, "recent", "MOTIVATION")["consequence"],
-        "Creates MOTIVATION under ^bar"
+        row(&json, "recent", "Motivation")["consequence"],
+        "Creates Motivation under ^bar"
     );
 }
 
@@ -523,10 +523,10 @@ fn bullet_menu_on_new_tasks_and_project_notes_carries_the_new_target() {
             "text": "Ship it",
         })
     );
-    assert_eq!(shape(&task), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
+    assert_eq!(shape(&task), ["recent:Motivation", "recent:Acceptance"]);
     assert_eq!(
-        row(&task, "recent", "MOTIVATION")["consequence"],
-        "Starts MOTIVATION on the new task"
+        row(&task, "recent", "Motivation")["consequence"],
+        "Starts Motivation on the new task"
     );
     let inbox = complete(&temp, &vault, "Ship it\n- #");
     assert_eq!(inbox["target"]["route"], "mac_inbox.md");
@@ -540,10 +540,10 @@ fn bullet_menu_on_new_tasks_and_project_notes_carries_the_new_target() {
             "text": "Plan",
         })
     );
-    assert_eq!(shape(&note), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
-    let motivation = row(&note, "recent", "MOTIVATION");
-    assert_eq!(motivation["replacement"], "**MOTIVATION**\n  - ");
-    assert_eq!(motivation["consequence"], "Creates ## MOTIVATION");
+    assert_eq!(shape(&note), ["recent:Motivation", "recent:Acceptance"]);
+    let motivation = row(&note, "recent", "Motivation");
+    assert_eq!(motivation["replacement"], "**Motivation**\n  - ");
+    assert_eq!(motivation["consequence"], "Creates ## Motivation");
 
     write_prj_note(&vault);
     let prj = complete(&temp, &vault, "@proj+prj\n- #");
@@ -612,7 +612,7 @@ fn accepting_a_bullet_row_makes_the_commit_agree_with_the_menu() {
                     continue;
                 }
                 assert!(ok, "{label}: {json}");
-                let title = row["key"].as_str().expect("key");
+                let title = row["title"].as_str().expect("title");
                 match scope {
                     "task" | "section" => assert_eq!(
                         json["drawer"]["created"], row["creates"],
@@ -630,10 +630,7 @@ fn accepting_a_bullet_row_makes_the_commit_agree_with_the_menu() {
                         "{label}: {json}"
                     ),
                     _ => assert_eq!(
-                        json["project_note"]["sections"][0]
-                            .as_str()
-                            .map(str::to_uppercase),
-                        Some(title.to_string()),
+                        json["project_note"]["sections"][0], title,
                         "{label}: {json}"
                     ),
                 }

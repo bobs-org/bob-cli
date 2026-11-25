@@ -1348,8 +1348,9 @@ Contract: [Merging tasks into a new task with `<`](../capture.md#merging-tasks-i
 Child bullet inside a task. `@route+block-id#drawer` selects by normalized
 key and accepts legacy ALL-CAPS or bold stored headers; `#future-work` matches
 `FUTURE WORK`. It requires note text, children, or `%c`. Missing names create
-unless a prefix or near-duplicate exists; quote `#"Title"` to create
-deliberately. On `^prj`, selectors address eligible `##` sections; managed
+with the catalog's explicit spelling or the notebook create-title rule
+unless a prefix or near-duplicate exists; quote `#"Title"` to preserve
+authored capitalization. On `^prj`, selectors address eligible `##` sections; managed
 logs and structural headings stay reserved.
 
 ```bash

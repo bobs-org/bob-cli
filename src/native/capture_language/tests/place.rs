@@ -7,13 +7,35 @@ use super::super::place::{
 };
 use super::*;
 use crate::native::capture_drawers::is_reserved_drawer_key;
-use crate::native::capture_project_note::format_project_section_title;
+use std::collections::HashMap;
 
 struct EmptyCatalog;
 
 impl PlaceCatalog for EmptyCatalog {
     fn spelling_for_slug(&self, slug: &str) -> String {
-        super::super::place::place_key(&slug.replace('-', " "))
+        format_notebook_section_create_title(slug)
+    }
+
+    fn near_title(&self, _: &str) -> Option<String> {
+        None
+    }
+
+    fn is_legacy_title(&self, title: &str) -> bool {
+        crate::native::capture_drawers::is_legacy_drawer_title(title)
+    }
+}
+
+struct MarkerCatalog {
+    explicit: HashMap<String, String>,
+}
+
+impl PlaceCatalog for MarkerCatalog {
+    fn spelling_for_slug(&self, slug: &str) -> String {
+        let key = super::super::place::place_key(&slug.replace('-', " "));
+        self.explicit
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| format_notebook_section_create_title(slug))
     }
 
     fn near_title(&self, _: &str) -> Option<String> {
@@ -116,7 +138,6 @@ fn quoted_exact_then_key_then_slug_then_create() {
             &drawers,
             &EmptyCatalog,
             is_reserved_drawer_key,
-            format_project_section_title,
         )),
         "FUTURE WORK"
     );
@@ -141,7 +162,7 @@ fn quoted_exact_then_key_then_slug_then_create() {
             &EmptyCatalog,
             is_reserved_drawer_key,
         )),
-        "API DESIGN"
+        "Api Design"
     );
     assert_eq!(
         create_title(ProjectSection::resolve(
@@ -150,9 +171,18 @@ fn quoted_exact_then_key_then_slug_then_create() {
             &drawers,
             &EmptyCatalog,
             is_reserved_drawer_key,
-            format_project_section_title,
         )),
         "Api Design"
+    );
+    assert_eq!(
+        create_title(TaskDrawer::resolve(
+            "API Design",
+            true,
+            &drawers,
+            &EmptyCatalog,
+            is_reserved_drawer_key,
+        )),
+        "API Design"
     );
     assert_eq!(
         create_title(NotebookSection::resolve("API-keys", false, &headings)),
@@ -216,7 +246,6 @@ fn reserved_and_structural_names_keep_scope_nouns() {
         &[],
         &EmptyCatalog,
         is_reserved_drawer_key,
-        format_project_section_title,
     ) {
         PlaceOutcome::Refuse { code, message } => {
             assert_eq!(code, "reserved_drawer");
@@ -253,7 +282,7 @@ fn near_miss_thresholds_differ_by_scope() {
         &EmptyCatalog,
         is_reserved_drawer_key,
     ) {
-        PlaceOutcome::Create { title, .. } => assert_eq!(title, "GTI"),
+        PlaceOutcome::Create { title, .. } => assert_eq!(title, "Gti"),
         other => panic!("drawer distance 2 creates: {other:?}"),
     }
 
@@ -278,4 +307,84 @@ fn notebook_create_title_keeps_typed_capitals() {
     assert_eq!(format_notebook_section_create_title("API-keys"), "API Keys");
     assert_eq!(format_notebook_section_create_title("git"), "Git");
     assert_eq!(format_notebook_section_create_title("coc.nvim"), "Coc.nvim");
+}
+
+#[test]
+fn catalog_explicit_spelling_beats_legacy_and_legacy_only_falls_back() {
+    let catalog = MarkerCatalog {
+        explicit: HashMap::from([(
+            "FUTURE WORK".to_string(),
+            "Future Work".to_string(),
+        )]),
+    };
+    assert_eq!(
+        create_title(TaskDrawer::resolve(
+            "future-work",
+            false,
+            &[],
+            &catalog,
+            is_reserved_drawer_key,
+        )),
+        "Future Work"
+    );
+    assert_eq!(
+        create_title(ProjectSection::resolve(
+            "future-work",
+            false,
+            &[],
+            &catalog,
+            is_reserved_drawer_key,
+        )),
+        "Future Work"
+    );
+    assert_eq!(
+        create_title(TaskDrawer::resolve(
+            "api-keys",
+            false,
+            &[],
+            &EmptyCatalog,
+            is_reserved_drawer_key,
+        )),
+        "Api Keys"
+    );
+}
+
+#[test]
+fn quoted_create_preserves_punctuation_and_refuses_invalid_bold_headers() {
+    for title in ["iOS / OAuth 2.0", "C++", "Q&A", "Café", "Q1: Goals"] {
+        assert_eq!(
+            create_title(TaskDrawer::resolve(
+                title,
+                true,
+                &[],
+                &EmptyCatalog,
+                is_reserved_drawer_key,
+            )),
+            title
+        );
+    }
+    match TaskDrawer::resolve(
+        "NOTES:",
+        true,
+        &[],
+        &EmptyCatalog,
+        is_reserved_drawer_key,
+    ) {
+        PlaceOutcome::Refuse { code, message } => {
+            assert_eq!(code, "unnameable_drawer");
+            assert!(message.contains("NOTES:"), "{message}");
+        }
+        other => panic!("invalid bold create: {other:?}"),
+    }
+    let existing = vec![drawer("NOTES:", 4)];
+    assert_eq!(
+        existing_title(TaskDrawer::resolve(
+            "NOTES:",
+            true,
+            &existing,
+            &EmptyCatalog,
+            is_reserved_drawer_key,
+        )),
+        "NOTES:"
+    );
 }

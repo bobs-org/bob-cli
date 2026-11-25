@@ -55,6 +55,26 @@ The notes home is matched by the `NOTES` key. Every bob-cli writer creates
 are each reused without adding a second header or rewriting their spelling.
 On a `^prj` task, the existing `## Notes` section remains the notes home.
 
+## Capture selectors and create titles
+
+A quoted `#"TITLE"` or `--drawer TITLE` selector preserves the authored
+capitalization. An unquoted slug uses the catalog's preferred explicit
+spelling (a `bold` or `section` marker on that key) when one exists,
+otherwise the notebook create-title rule: hyphens become spaces, a word
+that already contains an uppercase letter keeps its typed capitals
+(`#API-keys` → `API Keys`), and every other word takes first-character
+Title Case (`#git` → `Git`). A legacy-only catalog key never reseeds an
+ALL-CAPS name (`#non-goals` whose catalog is only `NON-GOALS` creates
+`Non Goals`).
+
+Existing drawers keep their stored title and marker, including legacy
+`NOTES:` and `FUTURE WORK`. Creation still requires a valid bold header:
+`#"NOTES:"` can select that existing drawer and cannot create it.
+Completion replacements are the same text a commit would receive. A glued
+`#slug` replacement is used only when that slug parses back to the row's
+title; otherwise the menu quotes `#"TITLE"`. A bullet replacement that
+cannot express its target is refused.
+
 ## Dual-read window and outside text
 
 Readers in bob-cli, task-status-cycler, bob-navigation-hotkeys, block-id-prompt,

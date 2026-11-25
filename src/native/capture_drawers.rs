@@ -31,8 +31,8 @@ use super::{
     capture_language::{
         self,
         place::{
-            self, PlaceCandidate, PlaceCatalog, PlaceOutcome, ProjectSection,
-            TaskDrawer,
+            self, format_notebook_section_create_title, PlaceCandidate,
+            PlaceCatalog, PlaceOutcome, ProjectSection, TaskDrawer,
         },
     },
     capture_project_note::format_project_section_title,
@@ -114,12 +114,18 @@ pub(crate) struct DrawerInsertion {
     pub(crate) indentation: String,
 }
 
-/// Canonical title for a quoted drawer literal: uppercase, whitespace
-/// collapsed, and valid as a drawer title.
+/// Canonical title for a quoted drawer literal: whitespace collapsed,
+/// capitalization preserved, and valid as a bold or legacy drawer title.
+/// Legacy-only titles such as `NOTES:` remain selectable; creation still
+/// requires a valid bold header.
 pub(crate) fn normalize_drawer_literal(decoded: &str) -> Option<String> {
-    let canonical =
-        capture_language::normalize_task_text(decoded).to_ascii_uppercase();
-    is_legacy_drawer_title(&canonical).then_some(canonical)
+    let canonical = capture_language::normalize_task_text(decoded);
+    if canonical.is_empty() {
+        return None;
+    }
+    (normalize_bold_drawer_title(&canonical).is_some()
+        || is_legacy_drawer_title(&canonical))
+    .then_some(canonical)
 }
 
 /// Validate a title for direct whole-bold container syntax while preserving
@@ -913,7 +919,7 @@ impl DrawerScope {
 /// Commit-time H2 resolution for a `^prj` target: structural and reserved
 /// keys refuse before matching (a project `##` section is captured with
 /// `@<route>#<Heading>`, never created here), then the shared exact rules
-/// run with section nouns and promotion Title Case on creation.
+/// run with section nouns and the shared create-title rule.
 pub(crate) fn resolve_h2_for_write(
     drawers: &[Drawer],
     selector_text: &str,
@@ -1227,7 +1233,6 @@ pub(crate) fn resolve_drawer_for_write(
             &items,
             catalog,
             is_reserved,
-            format_project_section_title,
         ),
     };
     map_drawer_outcome(outcome, drawers)
@@ -1269,46 +1274,101 @@ pub(crate) fn near_catalog_title(
             crate::native::note_tasks::bounded_levenshtein(new_key, key, 2)
                 .is_some()
         })
-        .map(|(_, record)| record.title.clone())
+        .map(|(_, record)| preferred_create_title(record))
 }
 
-/// Spelling for creation from a slug: most-used matching spelling among
-/// keys whose key or hyphen-space variant matches, else uppercase with
-/// hyphens as spaces. Stable tie break by smallest title.
+fn is_explicit_marker(marker: &str) -> bool {
+    matches!(marker, "bold" | "section")
+}
+
+fn explicit_spelling_count(record: &DrawerCatalogRecord, title: &str) -> u64 {
+    record
+        .spelling_markers
+        .get(title)
+        .map(|markers| {
+            markers
+                .iter()
+                .filter(|(marker, _)| is_explicit_marker(marker))
+                .map(|(_, count)| *count)
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// Preferred explicit spelling on one catalog key: bold or section
+/// markers only, highest explicit count, then smallest title. A frequent
+/// legacy spelling cannot defeat an available explicit one; marker
+/// metadata, not the spelling's appearance, decides eligibility.
+pub(crate) fn preferred_explicit_spelling(
+    record: &DrawerCatalogRecord,
+) -> Option<String> {
+    let mut titles: Vec<&String> = record.spelling_markers.keys().collect();
+    titles.sort();
+    let mut best: Option<(u64, String)> = None;
+    for title in titles {
+        let count = explicit_spelling_count(record, title);
+        if count == 0 {
+            continue;
+        }
+        match &best {
+            None => best = Some((count, title.clone())),
+            Some((best_count, best_title)) => {
+                if count > *best_count
+                    || (count == *best_count && title < best_title)
+                {
+                    best = Some((count, title.clone()));
+                }
+            }
+        }
+    }
+    best.map(|(_, title)| title)
+}
+
+/// Create-title for a catalog record: explicit spelling when any bold or
+/// section marker exists, else the notebook rule on the record's slug so
+/// a legacy-only key never reseeds ALL-CAPS.
+pub(crate) fn preferred_create_title(record: &DrawerCatalogRecord) -> String {
+    preferred_explicit_spelling(record).unwrap_or_else(|| {
+        let slug = if record.slug.is_empty() {
+            capture_language::selector_slug(&record.key)
+        } else {
+            record.slug.clone()
+        };
+        format_notebook_section_create_title(&slug)
+    })
+}
+
+/// Spelling for creation from a slug: the preferred explicit catalog
+/// spelling among keys whose key or hyphen-space variant matches, else
+/// the notebook create-title rule. Stable tie break by smallest title.
 pub(crate) fn drawer_spelling_for_slug(
     records: &BTreeMap<String, DrawerCatalogRecord>,
     slug: &str,
 ) -> String {
     let key_plain = drawer_key(slug);
     let key_spaced = drawer_key(&slug.replace('-', " "));
-    let mut candidates: Vec<(&String, &DrawerCatalogRecord)> = Vec::new();
-    for (key, record) in records {
-        if *key == key_plain || *key == key_spaced {
-            candidates.push((key, record));
-        }
-    }
-    if candidates.is_empty() {
-        return key_spaced;
-    }
-    // Most-used spelling across matching keys: highest total spelling
-    // count, then smallest title.
     let mut best: Option<(u64, String)> = None;
-    for (_, record) in candidates {
-        if let Some(title) = most_used_spelling(&record.spellings) {
-            let count = record.spellings.get(&title).copied().unwrap_or(0);
-            match &best {
-                None => best = Some((count, title)),
-                Some((best_count, best_title)) => {
-                    if count > *best_count
-                        || (count == *best_count && title < *best_title)
-                    {
-                        best = Some((count, title));
-                    }
+    for (key, record) in records {
+        if *key != key_plain && *key != key_spaced {
+            continue;
+        }
+        let Some(title) = preferred_explicit_spelling(record) else {
+            continue;
+        };
+        let count = explicit_spelling_count(record, &title);
+        match &best {
+            None => best = Some((count, title)),
+            Some((best_count, best_title)) => {
+                if count > *best_count
+                    || (count == *best_count && title < *best_title)
+                {
+                    best = Some((count, title));
                 }
             }
         }
     }
-    best.map(|(_, t)| t).unwrap_or(key_spaced)
+    best.map(|(_, title)| title)
+        .unwrap_or_else(|| format_notebook_section_create_title(slug))
 }
 
 /// Enumerate qualifying drawer bullets that are direct children of `task`.
@@ -2121,12 +2181,16 @@ fn list_capture_drawers(
         .map(|records| drawer_catalog_recent(records, &exclude))
         .unwrap_or_default()
         .into_iter()
-        .map(|record| RecentDrawer {
-            title: record.title.clone(),
-            key: record.key.clone(),
-            marker: catalog_spelling_marker(record, &record.title),
-            note_count: record.note_count,
-            last_seen: record.last_seen,
+        .map(|record| {
+            let title = preferred_create_title(record);
+            let marker = catalog_spelling_marker(record, &title);
+            RecentDrawer {
+                title,
+                key: record.key.clone(),
+                marker,
+                note_count: record.note_count,
+                last_seen: record.last_seen,
+            }
         })
         .collect::<Vec<_>>();
 
@@ -2516,8 +2580,8 @@ mod tests {
             ensure_drawer(contents, &task, &resolved).expect("create drawer");
 
         assert!(created);
-        assert_eq!(drawer.title, "REQUIREMENTS");
-        assert!(updated.contains("\t- **REQUIREMENTS**\n"));
+        assert_eq!(drawer.title, "Requirements");
+        assert!(updated.contains("\t- **Requirements**\n"));
         assert_eq!(drawers(&updated, &parent_task(&updated)).len(), 1);
     }
 
@@ -2663,11 +2727,41 @@ mod tests {
             Some("parent"),
             DrawerScope::Task,
         )
-        .expect("legacy writer remains valid");
+        .expect("explicit catalog spelling wins");
         let DrawerResolveOutcome::Create { title, .. } = created.outcome else {
             panic!("new task drawer should be created")
         };
-        assert_eq!(title, "FUTURE WORK");
+        assert_eq!(title, "Future Work");
+
+        let mut legacy_only = BTreeMap::new();
+        legacy_only.insert(
+            "NON-GOALS".to_string(),
+            DrawerCatalogRecord {
+                key: "NON-GOALS".to_string(),
+                title: "NON-GOALS".to_string(),
+                slug: "non-goals".to_string(),
+                spellings: HashMap::from([("NON-GOALS".to_string(), 9)]),
+                spelling_markers: HashMap::from([(
+                    "NON-GOALS".to_string(),
+                    HashMap::from([("legacy_caps".to_string(), 9)]),
+                )]),
+                ..DrawerCatalogRecord::default()
+            },
+        );
+        let created = resolve_drawer_for_write(
+            &[],
+            "non-goals",
+            false,
+            &legacy_only,
+            "one",
+            Some("parent"),
+            DrawerScope::Task,
+        )
+        .expect("legacy-only falls back to the notebook rule");
+        let DrawerResolveOutcome::Create { title, .. } = created.outcome else {
+            panic!("new task drawer should be created")
+        };
+        assert_eq!(title, "Non Goals");
     }
 
     #[test]
@@ -3038,7 +3132,7 @@ mod tests {
         assert_eq!(error.code, "drawer_near_duplicate");
         assert_eq!(
             error.message,
-            "did you mean `#\"WHAT IS SASE?\"`? write `#\"WHAT IS SASE\"` to create WHAT IS SASE"
+            "did you mean `#\"WHAT IS SASE?\"`? write `#\"What Is Sase\"` to create What Is Sase"
         );
     }
 

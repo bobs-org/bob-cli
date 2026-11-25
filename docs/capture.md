@@ -289,7 +289,7 @@ Bob refuses two cases before planning writes:
 | `remembered the timeout %n` | Pomodoro note |
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
-| `- #future-work` | First-level drawer shortcut: names the `FUTURE WORK` drawer |
+| `- #future-work` | First-level drawer shortcut: names the `Future Work` drawer (catalog explicit spelling, else the notebook create-title) |
 | `@cash+id#notes <text>` | Child under that task's `NOTES` section |
 | `@cash+id#coding` with no other text | Ensure Next and retype that existing task to `CODING` |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
@@ -7195,14 +7195,17 @@ The same marker accepts an optional trailing `#<drawer>` selector, as in
 drawer by key, whether its stored header is legacy ALL-CAPS or whole-bold:
 a slug (`#future-work`) or a quoted literal (`#"Future Work"`). Matching
 is exact by key, with reserved, near-duplicate, and ambiguous refusals, and a
-missing drawer is created using the drawer's child indentation (a created
+missing drawer is created as `- **Title**` using the catalog's explicit
+spelling or the notebook create-title rule (`#api-keys` → `API Keys`,
+`#git` → `Git`; quoted `#"TITLE"` keeps the authored capitalization), using
+the drawer's child indentation (a created
 `Notes` drawer goes first among the task's drawers; any other new drawer goes
 before the managed logs). The captured block is appended at the end of
 that drawer's own block — before the next direct child of the parent task, and
 before a managed log nested under the drawer. On the project note's own
 `^prj` task the selector instead names one of the note's eligible `##`
 sections, appending the block after that section's last nonblank line and
-creating a new `##` section at the end of the note when missing; structural
+creating a missing `##` section with that same title rule; structural
 headings (Tasks, the status-group titles, Pomodoros, Events, and
 Highlights) are never drawers. `@route+id#` with an empty selector is
 incomplete and reports need `drawer`; it does not mean "any drawer". A second
@@ -10146,9 +10149,10 @@ Older clients ignore it.
 Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate
-`replacement` covers the `#` and the name, as `#slug` (`#future-work` for
-`FUTURE WORK`) or a quoted `#"TITLE"` when the slug does not resolve back to
-exactly that drawer, and the field's `replacement` range starts at the `#`.
+`replacement` covers the `#` and the name, as `#slug` when the slug parses
+back to that title (`#future-work` for `Future Work`) or a quoted `#"TITLE"`
+when it does not (`#"FUTURE WORK"` for a legacy header), and the field's
+`replacement` range starts at the `#`.
 Rows form three groups: `task` (the target's drawers), `recent` (catalog
 drawers the task lacks), and `new` (one row for a typed name nothing claims);
 an empty query adds `initial_selection: "none"`. On the project note's own
@@ -10167,10 +10171,10 @@ A `new` row appears only when that bold header creates or selects the advertised
 drawer or section; reserved selectors that would become ordinary bold notes
 are omitted. An existing task offers `task`, `recent`, and `new` rows with the glued
 menu's copy; a new task offers `recent` and `new` rows only, with the
-consequence `Starts FUTURE WORK on the new task`; a new project note offers
+consequence `Starts Future Work on the new task`; a new project note offers
 the same two groups with `Creates ## Future Work`. When the shortcut ends its
 line and the next physical line is not a nested bullet, each `replacement` is
-`TITLE\n  - ` and `cursor_after` lands on the opened nested bullet. Shell
+`**Title**\n  - ` and `cursor_after` lands on the opened nested bullet. Shell
 completion serves one-line drafts only, so it never reaches a bullet start. A
 bullet-start `#`
 that cannot name a drawer (a same-line note, a glued drawer, a Pomodoro note,
@@ -10820,7 +10824,7 @@ section candidate has `title` and `level`. A drawer candidate has
 `note_count` and `last_seen` (recent rows), `refused`, `consequence`, and
 `cursor_after`. `detail` and `consequence` are Bob-authored with correct
 singular and plural (`1 note`, `used in 12 notes · 3 days ago`, `Adds after
-"2 GB RAM" in NOTES`, `Creates FUTURE WORK under ^bar`); `creates` is
+"2 GB RAM" in NOTES`, `Creates Future Work under ^bar`); `creates` is
 true on `recent` and `new` rows; `refused` is the commit resolver's reason for
 a reserved, near-duplicate, or ambiguous choice. `replacement` is `#slug`,
 or a quoted `#"TITLE"` when the slug does not resolve back to exactly that

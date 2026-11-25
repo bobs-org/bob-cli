@@ -2851,8 +2851,7 @@ fn add_transfer_selector_spans(
         let title = if destination.drawer_exact {
             drawer.to_string()
         } else {
-            super::normalize_task_text(&drawer.replace('-', " "))
-                .to_ascii_uppercase()
+            super::place::format_notebook_section_create_title(drawer)
         };
         let key = crate::native::capture_drawers::drawer_key(&title);
         let mut span = transfer_span(start, end, SpanKind::Drawer);

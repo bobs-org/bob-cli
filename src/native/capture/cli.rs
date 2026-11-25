@@ -495,7 +495,7 @@ note; the new note must not exist yet. Moving a task removes its complete block 
 from the parent and repairs links; the parent is replaced last, and this \
 capture lists the new note in the parent's Projects catalog (or refuses if \
 that catalog is damaged). Authored child bullets become \
-'## Tasks' entries or '## Title Case' sections from ALL-CAPS titles in the new \
+'## Tasks' entries or '##' sections from whole-bold container titles in the new \
 note. In that item's first-level bullets, '- ^<id>' moves an open top-level \
 task from the parent into that slot; '- :<id>' also makes it Next and links \
 it into the chosen Pomodoro. Moved blocks keep their children and identity. \
@@ -534,14 +534,17 @@ task block. The note and task must already exist. Existing child indentation and
 line endings are preserved; run 'bob capture-tasks -r <route>' to list eligible \
 task block IDs. A trailing '#<drawer>' component, as in \
 '@<route>+<block-id>#<drawer>', names an existing child drawer by key; a \
-missing task drawer is created with the legacy ALL-CAPS writer form. \
+missing task drawer is created as '- **Title**'. An unquoted slug uses the \
+catalog's explicit bold or section spelling, or the notebook create-title \
+rule (`#api-keys` → `API Keys`, `#git` → `Git`); a quoted `#\"TITLE\"` \
+preserves the authored capitalization. \
 The selector is a slug or quoted literal; matching is exact by key, with \
 reserved and near-duplicate refusals, and a missing drawer is created. The \
 captured block is appended at the end of that drawer, before a managed log \
 nested under it, using the drawer's child indentation. On the project note's \
 own '^prj' task the selector instead names one of the note's eligible '##' \
 sections, appending the block after that section's last nonblank line and \
-creating a new '## Title Case' section at the end of the note when missing. \
+creating a missing section with that same title rule. \
 '@<route>+<block-id>#' \
 with an empty selector is incomplete and needs a drawer; run \
 'bob capture-drawers -r <route> -i <block-id>' to list them. A marker-only \
@@ -600,11 +603,11 @@ heading matches, the bullet falls back to the pre-heading \
 section.\n\n\
 Use --route with --task and --drawer TITLE to nest a sub-bullet under \
 an existing child drawer of that task, including a whole-bold drawer. A \
-missing drawer is created with the legacy ALL-CAPS writer form. The title is matched exactly, \
+missing drawer is created as `- **TITLE**`, preserving the authored capitalization. The title is matched exactly, \
 case insensitively; unlike a typed #<drawer> selector, it is not slug- or \
 prefix-matched, so --drawer future-work does not match FUTURE WORK. On a \
 '^prj' parent it matches the project note's eligible '##' sections instead, \
-creating a missing section in Title Case.\n\n\
+creating a missing section with the same authored title.\n\n\
 Use expansion mode to print a template draft's expanded capture text and exit before vault access or planning. \
 In expansion mode all other capture options are accepted and ignored.",
         )
