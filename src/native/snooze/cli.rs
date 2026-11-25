@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use crate::native::{
     capture::{line_spans, nearest_shallower_list_item_parent},
     capture_pomodoros::{self, PomodoroState},
-    config::{self, PlanConfig},
+    config::{self, NotifyMode, PlanConfig},
     env as bob_env, event_task, markdown, note_tasks,
     plan_budget::{self, off_clock::DiskCloseVault},
     pomodoro,
@@ -519,6 +519,7 @@ fn drop_task(request: &Request, locator_text: &str) -> Result<Value, CliError> {
 }
 
 fn wake(request: &Request, task_texts: &[String]) -> Result<Value, CliError> {
+    let notify_mode = load_notify_mode()?;
     let explicit = !task_texts.is_empty();
     let initial_snapshot = read_snapshot(&request.bob_dir)?;
     let initial_now = clock_now()?;
@@ -709,19 +710,24 @@ fn wake(request: &Request, task_texts: &[String]) -> Result<Value, CliError> {
                     &day.contents,
                     &plan_config,
                 );
-                return Ok(wake_report(
-                    if fresh.plan.woken.is_empty() {
-                        "nothing_due"
-                    } else {
-                        "woke"
-                    },
+                return Ok(attach_wake_delivery(
+                    wake_report(
+                        if fresh.plan.woken.is_empty() {
+                            "nothing_due"
+                        } else {
+                            "woke"
+                        },
+                        &day,
+                        &now,
+                        &fresh,
+                        &fresh,
+                        &plan_config,
+                        count,
+                        &fresh.off_clock,
+                    ),
                     &day,
                     &now,
-                    &fresh,
-                    &fresh,
-                    &plan_config,
-                    count,
-                    &fresh.off_clock,
+                    notify_mode,
                 ));
             }
             Err(InstallError::Changed) if attempt == 0 => continue,
@@ -1482,6 +1488,34 @@ fn deferred_action(day: &Day, now: &ClockNow) -> Value {
     json!({"schema_version":SCHEMA_VERSION,"date":now.clock.date.to_string(),"now":now.rfc3339,"status":"deferred","daily_file":day.relative,"notified":"none","wake_id":Value::Null})
 }
 
+fn load_notify_mode() -> Result<NotifyMode, CliError> {
+    config::load_snooze_config(&config::config_path())
+        .map(|config| config.notify)
+        .map_err(|error| CliError::refusal("invalid_config", error.to_string()))
+}
+
+fn attach_wake_delivery(
+    mut report: Value,
+    day: &Day,
+    now: &ClockNow,
+    mode: NotifyMode,
+) -> Value {
+    let woken_empty = report
+        .get("woken")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    if report.get("status").and_then(Value::as_str) != Some("woke")
+        || woken_empty
+    {
+        return report;
+    }
+    let delivery =
+        super::notify::deliver(&report, &day.relative, &now.rfc3339, mode);
+    report["notified"] = json!(delivery.notified.as_str());
+    report["wake_id"] = delivery.wake_id;
+    report
+}
+
 fn wake_report(
     status: &str,
     day: &Day,
@@ -1915,6 +1949,7 @@ mod tests {
             ("BOB_CONFIG_FILE", Some(config.as_os_str())),
             ("BOB_NOW", Some(OsStr::new("2026-10-08T12:00:00-04:00"))),
             ("BOB_VAULT_SYNC_LOCK_FILE", Some(lock.as_os_str())),
+            ("XDG_STATE_HOME", Some(temp.path().as_os_str())),
         ])
     }
 

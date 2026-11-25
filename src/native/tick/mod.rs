@@ -27,6 +27,7 @@ pub(super) struct Options {
     quiet: bool,
 }
 const AFTER_HELP: &str = "Steps, in run order (default cadence · ceiling):
+  snooze    bob snooze wake     5m · 2m    due later-today tasks into today's ledger
   gcal      bob gcal sync       1h · 10m   today; yesterday too on the day's first run
   gmail     bob gmail sync      1h · 20m   file bob-labelled threads, watch replies
   gkeep     bob gkeep pull      manual     drain the Keep inbox
@@ -47,10 +48,10 @@ SIGINT, SIGTERM, and SIGHUP stop the child group; SIGKILL can orphan it.
 For vault Git sync, use `bob vault-sync`.";
 pub(crate) fn completion_descriptor() -> Command {
     Command::new("bob tick")
-        .about("Run Bob's due background work in one ordered pass: gcal → gmail → gkeep → refs → projects → tasks. A step runs when its tick.steps interval has passed since it last ran on this host, so cron can call bob tick every few minutes while each step keeps its own pace. bob tick never holds the shared vault lock across steps.")
+        .about("Run Bob's due background work in one ordered pass: snooze → gcal → gmail → gkeep → refs → projects → tasks. A step runs when its tick.steps interval has passed since it last ran on this host, so cron can call bob tick every few minutes while each step keeps its own pace. bob tick never holds the shared vault lock across steps.")
         .disable_help_flag(true)
         .after_help(AFTER_HELP)
-        .arg(Arg::new("step").value_name("STEP").num_args(0..).value_parser(["gcal", "gmail", "gkeep", "refs", "projects", "tasks"]).help("Run only these steps now (due times skipped, safety gates kept)"))
+        .arg(Arg::new("step").value_name("STEP").num_args(0..).value_parser(["snooze", "gcal", "gmail", "gkeep", "refs", "projects", "tasks"]).help("Run only these steps now (due times skipped, safety gates kept)"))
         .arg(Arg::new("all").short('a').long("all").action(ArgAction::SetTrue).conflicts_with_all(["step", "status"]).help("Run every step that is not off now, manual steps included").display_order(0))
         .arg(Arg::new("bob-dir").short('b').long("bob-dir").value_name("DIR").value_parser(clap::value_parser!(PathBuf)).help("Bob vault root; defaults to BOB_DIR or ~/bob").display_order(1))
         .arg(Arg::new("dry-run").short('d').long("dry-run").action(ArgAction::SetTrue).conflicts_with("status").help("Show what would run and why; run nothing, write nothing").display_order(2))

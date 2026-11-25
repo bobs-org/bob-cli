@@ -108,7 +108,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob records tidy`](records.md#bob-records-tidy) | Remove empty `## Notes` sections from Record Notes |
 | [`bob records update`](records.md#bob-records-update) | Update one existing Record Note in place |
 | [`bob ref`](ref.md) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
-| [`bob tick`](tick.md) | Run Bob's due background work in order: gcal, gmail, gkeep, refs, projects, tasks |
+| [`bob tick`](tick.md) | Run Bob's due background work in order: snooze, gcal, gmail, gkeep, refs, projects, tasks |
 | [`bob vault-sync`](vault-sync.md) | Reconcile the vault through Git (default: run) or show status |
 
 ## Integrations
@@ -205,8 +205,8 @@ Vault:
   records      List, inspect, check, create, update, and tidy Record Notes
   ref          Find, list, read, rename, and plan references for today; sync
                Highlights PDFs into them
-  tick         Run Bob's due background work in order: gcal, gmail, gkeep, refs,
-               projects, tasks
+  tick         Run Bob's due background work in order: snooze, gcal, gmail,
+               gkeep, refs, projects, tasks
   vault-sync   Reconcile the vault through Git (default: run) or show status
 
 Integrations:

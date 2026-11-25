@@ -1388,7 +1388,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "tick",
-        about: "Run Bob's due background work in order: gcal, gmail, gkeep, refs, projects, tasks",
+        about: "Run Bob's due background work in order: snooze, gcal, gmail, gkeep, refs, projects, tasks",
         section: Section::Vault,
         target: Target::Leaf(Leaf { native_command: NativeCommand::Tick, script_command: None }),
     },

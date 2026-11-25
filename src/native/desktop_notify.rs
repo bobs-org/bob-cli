@@ -1,6 +1,7 @@
-//! One best-effort desktop notification transport shared by vault sync and
-//! Gmail sync. Delivery can never roll back the work it announces and never
-//! affects exit codes or JSON output: every failure is swallowed.
+//! One best-effort desktop notification transport shared by vault sync,
+//! Gmail sync, and snooze wake. Delivery can never roll back the work it
+//! announces and never affects exit codes or JSON output: every failure is
+//! swallowed.
 //!
 //! macOS notifies through `osascript`; Linux notifies through `notify-send`
 //! when it is an executable on `PATH`. The existing `BOB_VAULT_SYNC_NOTIFY`
@@ -46,20 +47,43 @@ pub(crate) fn notifications_enabled() -> bool {
     }
 }
 
+/// Outcome of one desktop notification attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DesktopNotifyResult {
+    Sent,
+    Disabled,
+    NoTransport,
+    Failed,
+}
+
 /// Deliver one notification; never fails, never blocks the caller on output.
 pub(crate) fn send_notification(title: &str, body: &str) {
+    let _ = send_notification_result(title, body);
+}
+
+/// Same transport as [`send_notification`], with a delivery result so
+/// callers can report a truthful fallback. Existing Gmail and vault-sync
+/// callers keep the fire-and-forget wrapper.
+pub(crate) fn send_notification_result(
+    title: &str,
+    body: &str,
+) -> DesktopNotifyResult {
     if !notifications_enabled() {
-        return;
+        return DesktopNotifyResult::Disabled;
     }
     let Some((program, args)) = notification_command(title, body) else {
-        return;
+        return DesktopNotifyResult::NoTransport;
     };
-    let _ = Command::new(program)
+    match Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+    {
+        Ok(status) if status.success() => DesktopNotifyResult::Sent,
+        _ => DesktopNotifyResult::Failed,
+    }
 }
 
 /// Pure program-plus-argv builder behind [`send_notification`]. Returns `None`

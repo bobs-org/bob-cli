@@ -141,6 +141,14 @@ fn ran(receipt: &Value) -> Vec<&str> {
         .map(|s| s["name"].as_str().unwrap())
         .collect()
 }
+fn step<'a>(receipt: &'a Value, name: &str) -> &'a Value {
+    receipt["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"].as_str() == Some(name))
+        .unwrap_or_else(|| panic!("missing step {name}: {receipt}"))
+}
 const T0: &str = "2026-11-18T10:00:58Z";
 
 #[test]
@@ -163,11 +171,11 @@ fn five_minute_ticks_preserve_cadence_and_floor_jitter() {
         .unwrap();
         let r = f.json(&at, &[]);
         let expected = if minute % 60 == 0 {
-            vec!["gcal", "gmail", "refs", "projects", "tasks"]
+            vec!["snooze", "gcal", "gmail", "refs", "projects", "tasks"]
         } else if minute % 15 == 0 {
-            vec!["refs", "projects", "tasks"]
+            vec!["snooze", "refs", "projects", "tasks"]
         } else {
-            vec![]
+            vec!["snooze"]
         };
         assert_eq!(ran(&r), expected, "{at}");
         assert_eq!(r["schema_version"], 1);
@@ -198,9 +206,9 @@ fn failure_restarts_clock_and_keeps_last_success() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let r = json(&out);
-    assert_eq!(r["steps"][0]["reason"], "exit_nonzero");
-    assert_eq!(r["steps"][0]["exit_code"], 7);
-    assert_eq!(r["steps"][0]["last_success_at"], T0);
+    assert_eq!(step(&r, "gcal")["reason"], "exit_nonzero");
+    assert_eq!(step(&r, "gcal")["exit_code"], 7);
+    assert_eq!(step(&r, "gcal")["last_success_at"], T0);
     assert!(!ran(&f.json("2026-11-18T11:05:00Z", &[])).contains(&"gcal"));
     assert!(ran(&f.json("2026-11-18T12:00:00Z", &[])).contains(&"gcal"));
 }
@@ -213,8 +221,8 @@ fn named_all_off_and_follow_up_are_explicit() {
     let state: Value = serde_json::from_slice(&f.saved("state")).unwrap();
     assert_eq!(state["steps"]["tasks"]["follow_up_pending"], true);
     let r = f.json("2026-11-18T10:06:00Z", &[]);
-    assert_eq!(ran(&r), ["projects", "tasks"]);
-    assert_eq!(r["steps"][4]["reason"], "follow_up");
+    assert_eq!(ran(&r), ["snooze", "projects", "tasks"]);
+    assert_eq!(step(&r, "tasks")["reason"], "follow_up");
     assert!(ran(&f.json("2026-11-18T10:07:00Z", &["-a"])).contains(&"gkeep"));
     f.config("tick: {steps: {gcal: off}}");
     let before = fs::read(f.path("calls")).unwrap();
@@ -231,8 +239,8 @@ fn intake_pulls_derive_even_when_their_intervals_are_longer() {
     fs::create_dir_all(f.path("vault/lib")).unwrap();
     fs::write(f.path("vault/lib/tick-15.pdf"), "%PDF-1.4 tick 15").unwrap();
     let r = f.json("2026-11-18T10:15:00Z", &[]);
-    assert_eq!(ran(&r), ["refs", "projects", "tasks"]);
-    assert_eq!(r["steps"][4]["reason"], "follows_intake");
+    assert_eq!(ran(&r), ["snooze", "refs", "projects", "tasks"]);
+    assert_eq!(step(&r, "tasks")["reason"], "follows_intake");
 }
 #[test]
 fn read_only_views_and_wrong_writer_never_write_or_spawn() {
@@ -347,8 +355,8 @@ fn timeout_kills_group_and_continues_later_steps() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let r = json(&out);
-    assert_eq!(r["steps"][0]["reason"], "timeout");
-    assert_eq!(r["steps"][5]["outcome"], "ok");
+    assert_eq!(step(&r, "gcal")["reason"], "timeout");
+    assert_eq!(step(&r, "tasks")["outcome"], "ok");
     assert_gone(&f.ready());
 }
 #[test]
@@ -368,7 +376,7 @@ fn termination_forwards_to_group_and_persists_interruption() {
     }
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(143));
-    assert_eq!(json(&out)["steps"][0]["reason"], "interrupted");
+    assert_eq!(step(&json(&out), "gcal")["reason"], "interrupted");
     assert_eq!(
         serde_json::from_slice::<Value>(&f.saved("state")).unwrap()["steps"]
             ["gcal"]["last_reason"],
@@ -398,8 +406,8 @@ fn abrupt_death_keeps_follow_up_intent() {
         libc::kill(-pids[0], libc::SIGTERM);
     }
     let r = f.json("2026-11-18T10:06:00Z", &[]);
-    assert_eq!(ran(&r), ["projects", "tasks"]);
-    assert_eq!(r["steps"][4]["reason"], "follow_up");
+    assert_eq!(ran(&r), ["snooze", "projects", "tasks"]);
+    assert_eq!(step(&r, "tasks")["reason"], "follow_up");
 }
 #[test]
 fn spawn_failure_has_no_interval_and_quiet_shows_only_errors() {
@@ -413,8 +421,9 @@ fn spawn_failure_has_no_interval_and_quiet_shows_only_errors() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(json(&out)["steps"][0]["reason"], "spawn_failed");
-    assert!(json(&out)["steps"][0]["started_at"].is_null());
+    let r = json(&out);
+    assert_eq!(step(&r, "gcal")["reason"], "spawn_failed");
+    assert!(step(&r, "gcal")["started_at"].is_null());
     let out = f.command(T0).arg("-q").output().unwrap();
     assert_success(&out);
     assert!(out.stdout.is_empty());
@@ -484,8 +493,10 @@ fn help_conflicts_order_and_completion() {
         .filter(|line| !line.starts_with('!'))
         .map(|line| line.split('\t').next().unwrap().to_owned())
         .collect();
-    for step in ["gcal", "gmail", "gkeep", "refs", "projects", "tasks"] {
-        assert!(choices.contains(&step.to_string()), "{choices:?}");
+    for name in [
+        "snooze", "gcal", "gmail", "gkeep", "refs", "projects", "tasks",
+    ] {
+        assert!(choices.contains(&name.to_string()), "{choices:?}");
     }
 }
 
@@ -520,7 +531,7 @@ fn human_views_match_colorless_snapshots() {
     snapshot("run", &f.command(T0).output().unwrap());
     snapshot(
         "nothing_due",
-        &f.command("2026-11-18T10:05:00Z").output().unwrap(),
+        &f.command("2026-11-18T10:04:00Z").output().unwrap(),
     );
     snapshot(
         "plan",
@@ -549,20 +560,22 @@ fn human_views_match_colorless_snapshots() {
 #[test]
 fn readiness_missing_then_ready_and_unrendered() {
     let f = Fixture::new();
-    // Missing note: gcal and tasks wait, others run.
+    // Missing note: snooze, gcal, and tasks wait; others run.
     fs::remove_file(f.path("vault/2026/20261118.md")).unwrap();
     let r = f.json(T0, &[]);
-    assert_eq!(r["steps"][0]["outcome"], "waiting");
-    assert_eq!(r["steps"][0]["reason"], "note_missing");
-    assert_eq!(r["steps"][5]["outcome"], "waiting");
-    assert_eq!(r["steps"][5]["reason"], "note_missing");
-    assert!(r["steps"][0]["started_at"].is_null());
+    assert_eq!(step(&r, "snooze")["outcome"], "waiting");
+    assert_eq!(step(&r, "snooze")["reason"], "note_missing");
+    assert_eq!(step(&r, "gcal")["outcome"], "waiting");
+    assert_eq!(step(&r, "gcal")["reason"], "note_missing");
+    assert_eq!(step(&r, "tasks")["outcome"], "waiting");
+    assert_eq!(step(&r, "tasks")["reason"], "note_missing");
+    assert!(step(&r, "snooze")["started_at"].is_null());
     assert_eq!(r["exit_code"], 0);
     // Dry-run surfaces the gate reason without spawning.
     let before = fs::read(f.path("calls")).ok();
     let d = f.json(T0, &["-d"]);
-    assert_eq!(d["steps"][0]["would_run"], false);
-    assert!(d["steps"][0]["summary"]
+    assert_eq!(step(&d, "snooze")["would_run"], false);
+    assert!(step(&d, "snooze")["summary"]
         .as_str()
         .unwrap()
         .contains("doesn't exist"));
@@ -582,8 +595,8 @@ fn readiness_missing_then_ready_and_unrendered() {
     )
     .unwrap();
     let r = f.json("2026-11-18T10:10:00Z", &["gcal"]);
-    assert_eq!(r["steps"][0]["outcome"], "waiting");
-    assert_eq!(r["steps"][0]["reason"], "note_unrendered");
+    assert_eq!(step(&r, "gcal")["outcome"], "waiting");
+    assert_eq!(step(&r, "gcal")["reason"], "note_unrendered");
 }
 
 #[test]
@@ -693,7 +706,7 @@ fn gmail_busy_waits_without_consuming_interval() {
         .unwrap();
     assert_success(&out);
     let r: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let gmail = &r["steps"][1];
+    let gmail = step(&r, "gmail");
     assert_eq!(gmail["name"], "gmail");
     assert_eq!(gmail["outcome"], "waiting");
     assert_eq!(gmail["reason"], "vault_busy");
@@ -718,7 +731,7 @@ fn refs_change_gate_outcomes_and_prescan_fingerprint() {
     f.json(T0, &[]);
     let r = f.json("2026-11-18T10:15:00Z", &[]);
     assert!(!ran(&r).contains(&"refs"), "unchanged lib should skip");
-    assert_eq!(r["steps"][3]["reason"], "unchanged");
+    assert_eq!(step(&r, "refs")["reason"], "unchanged");
     // PDF touched opens the gate.
     fs::create_dir_all(f.path("vault/lib")).unwrap();
     fs::write(f.path("vault/lib/a.pdf"), "%PDF-1.4 a").unwrap();
@@ -743,7 +756,7 @@ fn refs_change_gate_outcomes_and_prescan_fingerprint() {
     assert_success(&r);
     let v: Value = serde_json::from_slice(&r.stdout).unwrap();
     assert!(ran(&v).contains(&"refs"), "hook should force refs");
-    assert_eq!(v["steps"][3]["gate"]["hook"], true);
+    assert_eq!(step(&v, "refs")["gate"]["hook"], true);
     // 6h ceiling forces a full scan.
     let f4 = Fixture::new();
     f4.json(T0, &[]);
@@ -754,7 +767,7 @@ fn refs_change_gate_outcomes_and_prescan_fingerprint() {
     f5.json(T0, &[]);
     let r = f5.json("2026-11-18T10:05:00Z", &["refs"]);
     assert_eq!(ran(&r), ["refs"]);
-    assert_eq!(r["steps"][3]["gate"]["open"], true);
+    assert_eq!(step(&r, "refs")["gate"]["open"], true);
     // Stored fingerprint is the pre-scan one: a mid-scan write is not lost.
     let f6 = Fixture::new();
     fs::create_dir_all(f6.path("vault/lib")).unwrap();
@@ -797,7 +810,7 @@ fn refs_change_gate_outcomes_and_prescan_fingerprint() {
     // Gate JSON is present for the mac_cutover probe: check the run receipt,
     // since -d at 10:30 is not due (no gate evaluated).
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["steps"][3]["gate"]["kind"], "refs_change");
+    assert_eq!(step(&v, "refs")["gate"]["kind"], "refs_change");
 }
 
 #[test]
@@ -842,9 +855,16 @@ fn per_step_summaries_come_from_real_json_shapes() {
         "cleared": [{}], "marked_blocked": [], "unblocked": [{}],
     })
     .to_string();
+    let snooze = serde_json::json!({
+        "status": "woke",
+        "woken": [{"title": "Email Dan"}],
+        "next_wake_at": "2026-11-18T19:00:00Z",
+    })
+    .to_string();
     let out = f
         .command(T0)
         .args(["-a", "-f", "json"])
+        .env("FAKE_JSON_SNOOZE", &snooze)
         .env("FAKE_JSON_GCAL", &gcal)
         .env("FAKE_JSON_GMAIL", &gmail)
         .env("FAKE_JSON_GKEEP", &gkeep)
@@ -864,6 +884,7 @@ fn per_step_summaries_come_from_real_json_shapes() {
             .unwrap()
             .clone()
     };
+    assert_eq!(by_name("snooze")["summary"], "woke 1 · next 19:00");
     assert!(by_name("gcal")["summary"]
         .as_str()
         .unwrap()
@@ -893,10 +914,10 @@ fn per_step_summaries_come_from_real_json_shapes() {
         .unwrap()
         .contains("4 status changes"));
     // Gate reasons appear in -d and the gate object in JSON: the -a run
-    // receipt carries gates for the gated steps (gcal readiness, refs change).
-    assert!(r["steps"][0]["gate"].is_object());
-    assert_eq!(r["steps"][0]["gate"]["kind"], "readiness");
-    assert_eq!(r["steps"][3]["gate"]["kind"], "refs_change");
+    // receipt carries gates for the gated steps (readiness, refs change).
+    assert_eq!(by_name("snooze")["gate"]["kind"], "readiness");
+    assert_eq!(by_name("gcal")["gate"]["kind"], "readiness");
+    assert_eq!(by_name("refs")["gate"]["kind"], "refs_change");
     // -d at T0 on a fresh fixture shows gate reasons without spawning.
     let f2 = Fixture::new();
     fs::create_dir_all(f2.path("vault/lib")).unwrap();
@@ -904,8 +925,8 @@ fn per_step_summaries_come_from_real_json_shapes() {
     let d = f2.command(T0).args(["-d", "-f", "json"]).output().unwrap();
     assert_success(&d);
     let v: Value = serde_json::from_slice(&d.stdout).unwrap();
-    assert_eq!(v["steps"][3]["gate"]["kind"], "refs_change");
-    assert_eq!(v["steps"][3]["would_run"], true);
+    assert_eq!(step(&v, "refs")["gate"]["kind"], "refs_change");
+    assert_eq!(step(&v, "refs")["would_run"], true);
 }
 
 #[test]
@@ -1389,4 +1410,36 @@ fn vault_busy_followed_by_offline_keeps_original_waiting_since() {
         .unwrap();
     assert_eq!(gcal["outcome"], "waiting");
     assert_eq!(gcal["reason"], "offline");
+}
+
+#[test]
+fn snooze_deferred_retries_without_consuming_cadence_and_skipped_is_ok() {
+    let f = Fixture::new();
+    f.json(T0, &[]);
+    let deferred = serde_json::json!({"status": "deferred"}).to_string();
+    let out = f
+        .command("2026-11-18T10:05:00Z")
+        .args(["-f", "json"])
+        .env("FAKE_JSON_SNOOZE", &deferred)
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r = json(&out);
+    assert_eq!(step(&r, "snooze")["outcome"], "waiting");
+    assert_eq!(step(&r, "snooze")["reason"], "deferred");
+    let again = f.json("2026-11-18T10:06:00Z", &[]);
+    assert!(ran(&again).contains(&"snooze"));
+
+    let skipped = serde_json::json!({"status": "skipped"}).to_string();
+    let out = f
+        .command("2026-11-18T10:11:00Z")
+        .args(["snooze", "-f", "json"])
+        .env("FAKE_JSON_SNOOZE", &skipped)
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let r = json(&out);
+    assert_eq!(step(&r, "snooze")["outcome"], "ok");
+    assert_eq!(step(&r, "snooze")["reason"], "skipped");
+    assert_eq!(r["exit_code"], 0);
 }

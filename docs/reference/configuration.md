@@ -338,18 +338,22 @@ store left under `~/Library/Application Support/gogcli` is not read. Rerun
 | `gmail.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 Missing `gmail:` uses defaults; unknown keys are ignored. Wrong types exit
-2 with the key, without affecting other loaders. Gmail shares
-[Calendar's gog config root](#gcal); `bob gmail login` or moving an existing
-Gmail `gogcli` store there supplies credentials.
-`BOB_GMAIL_GOG` overrides `gmail.gog` and `gog` on `PATH`.
-See [Gmail configuration](../gmail.md#configuration) and
+2. Gmail shares [Calendar's gog config root](#gcal).
+`BOB_GMAIL_GOG` overrides `gmail.gog`. See
+[Gmail configuration](../gmail.md#configuration) and
 [archive eligibility and undo](../gmail.md#archive-on-close).
+
+### `snooze`
+
+`snooze.notify` is `auto` (default), `desktop`, or `off`. Invalid values
+exit 2 before mutation. See [Snoozed tasks](../snooze.md).
 
 ### `tick`
 
 | Key | Values | Default |
 | --- | --- | --- |
 | `tick.writer` | Nonempty host label | `gcal.writer`, else any host |
+| `tick.steps.snooze` | Cadence | `5m` |
 | `tick.steps.gcal`, `tick.steps.gmail` | Cadence | `1h` |
 | `tick.steps.gkeep` | Cadence | `manual` |
 | `tick.steps.refs`, `tick.steps.projects`, `tick.steps.tasks` | Cadence | `15m` |

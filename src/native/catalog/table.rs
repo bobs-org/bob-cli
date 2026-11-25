@@ -952,7 +952,7 @@ pub(crate) const ENTRIES: &[Row] = &[
         network: true,
         ..syncs(
             "tick", &["tick"], "Run due background work",
-            &["tick", "background", "cron", "calendar", "mail", "references"],
+            &["tick", "background", "cron", "snooze", "calendar", "mail", "references"],
             Policy::PreviewFirst, Some(DRY_RUN), 7200,
         )
     },

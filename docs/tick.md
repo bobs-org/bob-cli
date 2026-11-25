@@ -5,11 +5,12 @@ description: Run Bob's frequent background work in a fixed, configurable order
 
 # `bob tick`
 
-`bob tick` runs Bob's frequent background work as one ordered pass: Calendar,
-Gmail, Keep, reference scans, project sync, then task reconciliation. A step
-runs only when its own cadence is due, so a scheduler can call `bob tick`
-every few minutes without repeating hourly work. The command does not hold the
-shared vault lock across steps; each child command manages its own lock.
+`bob tick` runs Bob's frequent background work as one ordered pass: snooze
+wake, Calendar, Gmail, Keep, reference scans, project sync, then task
+reconciliation. A step runs only when its own cadence is due, so a scheduler
+can call `bob tick` every few minutes without repeating hourly work. The
+command does not hold the shared vault lock across steps; each child command
+manages its own lock.
 
 See the [CLI reference](reference/cli/tick.md) for flags and examples.
 
@@ -17,16 +18,19 @@ See the [CLI reference](reference/cli/tick.md) for flags and examples.
 
 | Order | Step | Child command | Default cadence | Maximum run time |
 | ---: | --- | --- | --- | ---: |
-| 1 | `gcal` | `bob gcal sync` | `1h` | 10m |
-| 2 | `gmail` | `bob gmail sync` | `1h` | 20m |
-| 3 | `gkeep` | `bob gkeep pull` | `manual` | 20m |
-| 4 | `refs` | `bob ref scan -w` | `15m` | 30m |
-| 5 | `projects` | `bob projects sync` | `15m` | 10m |
-| 6 | `tasks` | `bob task reconcile --retry-timeout 120` | `15m` | 10m |
+| 1 | `snooze` | `bob snooze wake -q -f json` | `5m` | 2m |
+| 2 | `gcal` | `bob gcal sync` | `1h` | 10m |
+| 3 | `gmail` | `bob gmail sync` | `1h` | 20m |
+| 4 | `gkeep` | `bob gkeep pull` | `manual` | 20m |
+| 5 | `refs` | `bob ref scan -w` | `15m` | 30m |
+| 6 | `projects` | `bob projects sync` | `15m` | 10m |
+| 7 | `tasks` | `bob task reconcile --retry-timeout 120` | `15m` | 10m |
 
-The order is fixed: external data arrives before Bob derives project and task
-state. The `gkeep` step is manual by default because it can clip web pages.
-Run `bob tick gkeep` or `bob tick -a` when you want it to run.
+The order is fixed: due later-today tasks land first, then external data
+arrives before Bob derives project and task state. Intake steps still pull
+`projects` and `tasks` forward; snooze keeps its own 5-minute cadence. The
+`gkeep` step is manual by default because it can clip web pages. Run
+`bob tick gkeep` or `bob tick -a` when you want it to run.
 
 ## Configuration
 
@@ -36,6 +40,7 @@ Configure the scheduler in `~/.config/bob/config.yml`:
 tick:
   # writer: <host label>   # defaults to gcal.writer; unset means any host
   steps:
+    snooze: 5m
     gcal: 1h
     gmail: 1h
     gkeep: manual
@@ -68,12 +73,16 @@ scheduled intake step that starts also brings interval-based `projects` and
 `tasks` forward, even before their next interval. If either cannot start,
 a saved follow-up retries it on the next scheduled pass.
 
-Calendar and task reconciliation wait until today's daily note exists, is
-rendered, and contains `## Pomodoros`. Calendar runs include yesterday on the
-first successful run of each local day. Automated Calendar runs also observe
-the one-hour cooldown shared with direct `bob gcal sync` runs. A child that
-times out on the vault or scan lock reports `vault_busy` and waits without
-consuming its interval, as does Gmail when the vault is busy.
+Snooze, Calendar, and task reconciliation wait until today's daily note
+exists, is rendered, and contains `## Pomodoros`. A deferred snooze waits
+without consuming its 5-minute cadence and retries on the next tick. A
+skipped sweep (wrong writer host) succeeds and consumes the interval.
+Summaries read `woke N · next HH:MM` or `nothing due · next HH:MM`. Calendar
+runs include yesterday on the first successful run of each local day.
+Automated Calendar runs also observe the one-hour cooldown shared with
+direct `bob gcal sync` runs. A child that times out on the vault or scan
+lock reports `vault_busy` and waits without consuming its interval, as does
+Gmail when the vault is busy.
 
 Scheduled reference scans run when files in `lib/` or `xlib/` changed, a
 pre-scan hook is configured, or six hours have passed since a full scan.
@@ -115,10 +124,11 @@ line. A paused archive gate reads `archive_paused` and the pause warning
 with the confirm command.
 
 Reasons are stable codes: `due`, `never_ran`, `follows_intake`, `follow_up`,
-`named`, and `all` explain a run; `not_due`, `manual`, `off`, and `unchanged`
-explain a skip; `note_missing`, `note_unrendered`, `pomodoros_missing`,
-`vault_busy`, `inputs_changed`, and `offline` explain a wait; `exit_nonzero`,
-`timeout`, `spawn_failed`, `interrupted`, and `stalled` explain a failure.
+`named`, `skipped`, and `all` explain a run; `not_due`, `manual`, `off`, and
+`unchanged` explain a skip; `note_missing`, `note_unrendered`,
+`pomodoros_missing`, `vault_busy`, `inputs_changed`, `offline`, and
+`deferred` explain a wait; `exit_nonzero`, `timeout`, `spawn_failed`,
+`interrupted`, and `stalled` explain a failure.
 
 Only one run proceeds at a time. A second non-interactive run prints
 `already running` with the step in flight and exits 0 without writing state
@@ -166,6 +176,7 @@ child may outlive it.
 
 ## Related command contracts
 
+- [Snoozed tasks](snooze.md)
 - [Calendar sync](gcal.md#sync)
 - [Gmail sync](gmail.md#sync)
 - [Keep pull](gkeep.md#pull)

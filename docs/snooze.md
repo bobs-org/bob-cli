@@ -203,10 +203,24 @@ the link-count plan, and `dry_run`. Drop reports `status` (`dropped` or
 `planned`), `daily_file`, and `dry_run`. Wake reports `status` (`woke`,
 `nothing_due`, `deferred`, or `skipped`), `woken`, `dropped`, `ignored`,
 `pending`, `next_wake_at`, `plan`, `daily_file`, `notified`, and
-`wake_id`. Until wake delivery is added, `notified` is `none` and
-`wake_id` is null. A wake batch reports each task's destination, target,
-actual wake time, and whether that insert crossed the link cap. No command
-forges a notification receipt.
+`wake_id`. After a successful commit with a nonempty `woken[]`, wake
+writes `$XDG_STATE_HOME/bob-cli/snooze/last-wake.json` (mode 0600 from
+creation, then an atomic rename) and posts `org.bobs.bob.snooze.woken`
+on Darwin once that file is readable. The receipt and the command
+report share one `wake_id`. The file carries `schema_version`,
+`wake_id`, `date`, `woken_at`, `host`, `daily_file`, `tasks[]`
+(`title`, `route`, `block_id`, `target`, `woke_at`, `destination`,
+`line`), and `plan`. `snooze.notify` is `auto` (default), `desktop`,
+or `off`; an invalid value is exit 2 before any mutation. `notified`
+is `mac_capture` when `auto` finds a live Mac Capture claim in the
+sibling `notifier.json`; `desktop` when the desktop helper sent; and
+`none` when the preference is `off`, the send failed, or no tasks
+woke. A receipt write failure leaves `wake_id` null, skips Darwin, and
+does not roll back the vault. Dry runs, deferred writes, skipped
+sweeps, prune-only installs, and nothing-due wakes leave the prior
+receipt unchanged. A wake batch reports each task's destination,
+target, actual wake time, and whether that insert crossed the link
+cap. No command forges a notification receipt.
 
 For example, `bob snooze list -f json` returns a stable envelope such as:
 

@@ -114,6 +114,15 @@ const fn step_with(
 }
 pub(super) const STEPS: &[StepSpec] = &[
     step_with(
+        "snooze",
+        false,
+        Cadence::Interval(5),
+        2,
+        &["snooze", "wake", "-q", "-f", "json"],
+        gcal_gate,
+        adapters::snooze,
+    ),
+    step_with(
         "gcal",
         true,
         Cadence::Interval(60),

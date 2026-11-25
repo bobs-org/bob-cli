@@ -31,6 +31,7 @@ fn snooze_command(temp: &TempDir, args: &[&str]) -> std::process::Command {
         .env("BOB_CONFIG_FILE", config)
         .env("BOB_VAULT_SYNC_LOCK_FILE", temp.path().join("vault.lock"))
         .env("XDG_STATE_HOME", temp.path().join("state"))
+        .env("BOB_SNOOZE_NOTIFY_SINK", temp.path().join("notify.json"))
         .env("BOB_NOW", NOW);
     command.args(args);
     command
@@ -122,8 +123,31 @@ fn wake_moves_due_subtree_and_records_history() {
     let report = json_output(&output);
     assert_eq!(report["status"], "woke", "{report}");
     assert_eq!(report["woken"].as_array().unwrap().len(), 1);
-    assert_eq!(report["notified"], "none");
-    assert!(report["wake_id"].is_null());
+    assert_eq!(report["notified"], "desktop", "{report}");
+    let wake_id = report["wake_id"].as_str().expect("wake_id");
+    assert!(!wake_id.is_empty());
+    let receipt_path = temp.path().join("state/bob-cli/snooze/last-wake.json");
+    let receipt: Value = serde_json::from_str(
+        &fs::read_to_string(&receipt_path).expect("read wake receipt"),
+    )
+    .expect("parse wake receipt");
+    assert_eq!(receipt["wake_id"], wake_id);
+    assert_eq!(receipt["schema_version"], 1);
+    assert_eq!(receipt["tasks"][0]["title"], "Review the launch plan");
+    assert_eq!(receipt["tasks"][0]["block_id"], "job");
+    let sink: Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("notify.json"))
+            .expect("notify sink"),
+    )
+    .expect("parse notify sink");
+    assert_eq!(sink["title"], "bob snooze");
+    assert!(
+        sink["body"]
+            .as_str()
+            .unwrap()
+            .starts_with("Ready now: Review the launch plan (woke 12:00"),
+        "{sink}"
+    );
     let daily = fs::read_to_string(&daily_path).unwrap();
     assert!(daily.contains("- ~~**1100** [[jobs#^job]]~~ · woke 12:00"));
     assert!(daily.contains("- Keep this note"));
@@ -265,4 +289,166 @@ fn help_completion_and_catalog_expose_snooze_commands() {
             "missing catalog row {id}"
         );
     }
+}
+
+fn receipt_path(temp: &TempDir) -> std::path::PathBuf {
+    temp.path().join("state/bob-cli/snooze/last-wake.json")
+}
+
+#[test]
+fn dry_run_and_no_work_leave_the_prior_receipt_untouched() {
+    let (temp, daily_path) = snooze_vault(
+        "bob-cli-snooze-receipt-dry",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let dry =
+        snooze_command(&temp, &["wake", "jobs:job", "--dry-run", "-f", "json"])
+            .output()
+            .expect("dry-run wake");
+    assert_success(&dry);
+    let dry_report = json_output(&dry);
+    assert_eq!(dry_report["status"], "woke");
+    assert_eq!(dry_report["notified"], "none");
+    assert!(dry_report["wake_id"].is_null());
+    assert!(!receipt_path(&temp).exists());
+
+    let woke = snooze_command(&temp, &["wake", "-f", "json"])
+        .output()
+        .expect("wake once");
+    assert_success(&woke);
+    let prior = fs::read(receipt_path(&temp)).expect("receipt after wake");
+    let daily = fs::read_to_string(&daily_path).unwrap();
+
+    let noop = snooze_command(&temp, &["wake", "-f", "json"])
+        .output()
+        .expect("no-op wake");
+    assert_success(&noop);
+    assert_eq!(json_output(&noop)["status"], "nothing_due");
+    assert_eq!(fs::read(receipt_path(&temp)).unwrap(), prior);
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), daily);
+}
+
+#[test]
+fn live_mac_claim_reports_mac_capture_without_desktop() {
+    let (temp, _) = snooze_vault(
+        "bob-cli-snooze-mac-claim",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let claim_dir = temp.path().join("state/bob-cli/snooze");
+    fs::create_dir_all(&claim_dir).unwrap();
+    let claim = serde_json::json!({
+        "schema_version": 1,
+        "pid": std::process::id(),
+        "app": "Bob Mac Capture",
+        "version": "1.0.0",
+        "started_at": "2026-10-08T12:00:00Z",
+    });
+    write_file(&claim_dir.join("notifier.json"), &claim.to_string());
+    let output = snooze_command(&temp, &["wake", "-f", "json"])
+        .output()
+        .expect("wake with live claim");
+    assert_success(&output);
+    let report = json_output(&output);
+    assert_eq!(report["notified"], "mac_capture", "{report}");
+    assert!(report["wake_id"].as_str().is_some());
+    assert!(!temp.path().join("notify.json").exists());
+}
+
+#[test]
+fn notify_off_still_writes_receipt_and_desktop_failure_keeps_the_wake() {
+    let (temp, daily_path) = snooze_vault(
+        "bob-cli-snooze-notify-off",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let config = temp.path().join("off.yml");
+    write_file(
+        &config,
+        "timezone: America/New_York\nsnooze:\n  notify: off\n",
+    );
+    let output = snooze_command(&temp, &["wake", "-f", "json"])
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("wake with notify off");
+    assert_success(&output);
+    let report = json_output(&output);
+    assert_eq!(report["status"], "woke");
+    assert_eq!(report["notified"], "none");
+    assert!(receipt_path(&temp).exists());
+    assert!(!temp.path().join("notify.json").exists());
+    assert!(fs::read_to_string(&daily_path)
+        .unwrap()
+        .contains("~~**1100**"));
+
+    let (temp, daily_path) = snooze_vault(
+        "bob-cli-snooze-notify-fail",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let output = snooze_command(&temp, &["wake", "-f", "json"])
+        .env("BOB_SNOOZE_NOTIFY_SINK", "fail")
+        .output()
+        .expect("wake with failed desktop");
+    assert_success(&output);
+    let report = json_output(&output);
+    assert_eq!(report["status"], "woke", "{report}");
+    assert_eq!(report["notified"], "none");
+    assert!(report["wake_id"].as_str().is_some());
+    assert!(fs::read_to_string(daily_path)
+        .unwrap()
+        .contains("~~**1100**"));
+}
+
+#[test]
+fn invalid_notify_exits_two_before_mutating() {
+    let (temp, daily_path) = snooze_vault(
+        "bob-cli-snooze-notify-invalid",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let before = fs::read_to_string(&daily_path).unwrap();
+    let config = temp.path().join("bad.yml");
+    write_file(
+        &config,
+        "timezone: America/New_York\nsnooze:\n  notify: banner\n",
+    );
+    let output = snooze_command(&temp, &["wake", "-f", "json"])
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("wake with invalid notify");
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    let report = json_output(&output);
+    assert_eq!(report["error"]["kind"], "invalid_config");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("snooze.notify"),
+        "{report}"
+    );
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+    assert!(!receipt_path(&temp).exists());
+}
+
+#[test]
+fn skipped_sweep_does_not_write_a_receipt() {
+    let (temp, _) = snooze_vault(
+        "bob-cli-snooze-skipped-receipt",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "timezone: America/New_York\ntick:\n  writer: another-host\n",
+    );
+    let sweep = snooze_command(&temp, &["wake", "-f", "json"])
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("skipped sweep");
+    assert_success(&sweep);
+    assert_eq!(json_output(&sweep)["status"], "skipped");
+    assert!(!receipt_path(&temp).exists());
 }

@@ -789,6 +789,78 @@ pub(super) fn tasks(output: &RawRunOutput, reason: &str) -> Adapted {
     }
 }
 
+fn next_wake_hhmm(value: &Value) -> Option<String> {
+    let raw = value.get("next_wake_at")?.as_str()?;
+    if let Ok(when) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Some(when.format("%H:%M").to_string());
+    }
+    raw.split_once('T')
+        .map(|(_, rest)| rest.chars().take(5).collect())
+        .filter(|hhmm: &String| hhmm.len() == 5 && hhmm.as_bytes()[2] == b':')
+}
+
+fn snooze_summary(value: &Value) -> String {
+    let woken = value
+        .get("woken")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let head = if woken == 0 {
+        "nothing due".to_string()
+    } else {
+        format!("woke {woken}")
+    };
+    match next_wake_hhmm(value) {
+        Some(hhmm) => format!("{head} · next {hhmm}"),
+        None => head,
+    }
+}
+
+pub(super) fn snooze(output: &RawRunOutput, reason: &str) -> Adapted {
+    if output.interrupted || output.timed_out || output.status != Some(0) {
+        if let Some(wait) = contention_wait(output) {
+            return wait;
+        }
+        if let Some(wait) = offline_wait(output) {
+            return wait;
+        }
+        return generic_ok(output, reason);
+    }
+    let Some(value) = stdout_value(output) else {
+        return generic_ok(output, reason);
+    };
+    match value.get("status").and_then(Value::as_str) {
+        Some("deferred") => Adapted {
+            outcome: Outcome::Waiting,
+            reason: "deferred".into(),
+            summary: "deferred · retrying next tick".into(),
+            detail: child_detail(&value),
+            consumes_interval: false,
+        },
+        Some("skipped") => Adapted {
+            outcome: Outcome::Ok,
+            reason: "skipped".into(),
+            summary: "skipped on this host".into(),
+            detail: String::new(),
+            consumes_interval: true,
+        },
+        Some("woke") | Some("nothing_due") => Adapted {
+            outcome: Outcome::Ok,
+            reason: reason.into(),
+            summary: snooze_summary(&value),
+            detail: String::new(),
+            consumes_interval: true,
+        },
+        _ => Adapted {
+            outcome: Outcome::Ok,
+            reason: reason.into(),
+            summary: "done".into(),
+            detail: String::new(),
+            consumes_interval: true,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,6 +910,7 @@ mod tests {
             for output in [failed_with(code), failed_with_top_code(code)] {
                 for adapted in [
                     generic_ok(&output, "due"),
+                    snooze(&output, "due"),
                     gcal(&output, "due"),
                     gmail(&output, "due"),
                     gkeep(&output, "due"),
@@ -865,6 +938,7 @@ mod tests {
         ] {
             for adapted in [
                 generic_ok(&output, "due"),
+                snooze(&output, "due"),
                 gcal(&output, "due"),
                 refs(&output, "due"),
                 projects(&output, "due"),
@@ -963,6 +1037,7 @@ mod tests {
             let output = failed_with_kind(kind);
             for adapted in [
                 generic_ok(&output, "due"),
+                snooze(&output, "due"),
                 gcal(&output, "due"),
                 gmail(&output, "due"),
                 gkeep(&output, "due"),
@@ -1148,5 +1223,63 @@ mod tests {
         assert_eq!(adapted.outcome, Outcome::Failed);
         assert_eq!(adapted.reason, "exit_nonzero");
         assert_eq!(adapted.detail, format!("archive_paused\n{warning}"));
+    }
+
+    fn snooze_ok(
+        status: &str,
+        woken: usize,
+        next: Option<&str>,
+    ) -> RawRunOutput {
+        let mut woken_rows = Vec::new();
+        for index in 0..woken {
+            woken_rows.push(serde_json::json!({
+                "title": format!("task-{index}"),
+            }));
+        }
+        RawRunOutput {
+            status: Some(0),
+            stdout: serde_json::json!({
+                "status": status,
+                "woken": woken_rows,
+                "next_wake_at": next,
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        }
+    }
+
+    #[test]
+    fn snooze_summaries_and_nonfailure_deferred_skipped() {
+        let woke = snooze(
+            &snooze_ok("woke", 1, Some("2026-10-08T19:00:00-04:00")),
+            "due",
+        );
+        assert_eq!(woke.outcome, Outcome::Ok);
+        assert_eq!(woke.summary, "woke 1 · next 19:00");
+        assert!(woke.consumes_interval);
+
+        let idle = snooze(
+            &snooze_ok("nothing_due", 0, Some("2026-10-08T19:00:00-04:00")),
+            "due",
+        );
+        assert_eq!(idle.summary, "nothing due · next 19:00");
+        assert!(idle.consumes_interval);
+
+        let deferred = snooze(&snooze_ok("deferred", 0, None), "due");
+        assert_eq!(deferred.outcome, Outcome::Waiting);
+        assert_eq!(deferred.reason, "deferred");
+        assert_eq!(deferred.summary, "deferred · retrying next tick");
+        assert!(!deferred.consumes_interval);
+
+        let skipped = snooze(&snooze_ok("skipped", 0, None), "due");
+        assert_eq!(skipped.outcome, Outcome::Ok);
+        assert_eq!(skipped.reason, "skipped");
+        assert_eq!(skipped.summary, "skipped on this host");
+        assert!(skipped.consumes_interval);
     }
 }

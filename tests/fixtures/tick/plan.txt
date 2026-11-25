@@ -1,4 +1,5 @@
 bob tick · plan · Wed Nov 18 10:05 · test-host
+  · snooze    5m      10:09      not due · last ✓ 10:04 · done
   · gcal      1h      11:00      not due · last ✓ 10:00 · done
   · gmail     1h      11:00      not due · last ✓ 10:00 · done
   – gkeep     manual  —          manual

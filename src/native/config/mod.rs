@@ -18,6 +18,7 @@ pub(crate) mod meetings;
 pub(crate) mod plan;
 pub(crate) mod plugins;
 pub(crate) mod relations;
+pub(crate) mod snooze;
 pub(crate) mod stats;
 pub(crate) mod themes;
 
@@ -56,6 +57,7 @@ pub(crate) use plugins::{
 pub(crate) use relations::{
     load_relations_config, LabelEffect, RelationsConfig,
 };
+pub(crate) use snooze::{load_snooze_config, NotifyMode};
 #[allow(unused_imports)]
 pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};
 pub(crate) use themes::{
@@ -518,6 +520,8 @@ pub(crate) struct RawConfig {
     pub(crate) gcal: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) gmail: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) snooze: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) tick: Option<serde_yaml::Value>,
     #[serde(default)]

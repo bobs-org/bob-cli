@@ -1,6 +1,7 @@
 bob tick · status · Wed Nov 18 10:05 · test-host
-  last tick 10:05 (ok)
+  last tick 10:04 (ok)
   STEP      EVERY   LAST      RESULT                         LAST OK  NEXT
+  snooze    5m      10:04 ✓   done                           10:04    10:09
   gcal      1h      10:00 ✓   done                           10:00    11:00
   gmail     1h      10:00 ✓   done                           10:00    11:00
   gkeep     manual  —     –   never ran                      —        —

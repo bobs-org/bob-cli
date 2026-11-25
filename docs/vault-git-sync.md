@@ -356,11 +356,12 @@ Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttl
 
 The MacBook runs one cron job, `bob-tick`, every 5 minutes. Each run calls
 [`bob tick`](tick.md), which runs every due step in one fixed order
-(gcal → gmail → gkeep → refs → projects → tasks), each on its own cadence from
-`tick.steps` in `~/.config/bob/config.yml`: gcal and gmail hourly; refs,
-projects, and tasks every 15 minutes; gkeep manual. The job lives in the `cron:`
-data of `home/.chezmoidata.yaml` in the chezmoi dotfiles repo, the only source
-of truth for every machine's user crontab (see `cronctl`):
+(snooze → gcal → gmail → gkeep → refs → projects → tasks), each on its own
+cadence from `tick.steps` in `~/.config/bob/config.yml`: snooze every 5
+minutes; gcal and gmail hourly; refs, projects, and tasks every 15 minutes;
+gkeep manual. The job lives in the `cron:` data of `home/.chezmoidata.yaml`
+in the chezmoi dotfiles repo, the only source of truth for every machine's
+user crontab (see `cronctl`):
 
 ```yaml
 - name: bob-tick
@@ -376,9 +377,10 @@ Plain `bob tick`, not `-q`: a nothing-due tick is one line, so
 
 The old command name `bob task-status-hooks` keeps working as a permanent silent alias.
 
-Because every step runs inside one tick, intake always precedes derivation:
-gcal and gmail file first, then refs, projects, and tasks tidy the same rows
-later in the same pass. The hourly gcal/gmail cadence keeps an awake Mac inside
+Because every step runs inside one tick, snooze wakes due later-today tasks
+first, then intake precedes derivation: gcal and gmail file, then refs,
+projects, and tasks tidy the same rows later in the same pass. The hourly
+gcal/gmail cadence keeps an awake Mac inside
 [Bob Gmail](gmail.md#where-it-runs)'s two-hour `sync` staleness warning, and
 `bob tick -d` shows what is due and why. Since one tick holds no vault lock
 across steps — each child takes it itself — the 15-second `bob-vault-sync`

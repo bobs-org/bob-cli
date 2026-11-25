@@ -7,4 +7,4 @@
       │ detail 9
       │ detail 10
       │ detail 11
-  failed · 1 ran in <time> · next projects, tasks due · refs 10:15 · gmail 11:00 · gcal 11:10
+  failed · 1 ran in <time> · next snooze, projects, tasks due · refs 10:15 · gmail 11:00 · gcal 11:10

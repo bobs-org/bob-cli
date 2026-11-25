@@ -1,7 +1,8 @@
 bob tick · Wed Nov 18 10:00 · test-host
+  ✓ snooze    done                                     <time>
   ✓ gcal      done                                     <time>
   ✓ gmail     done                                     <time>
   ✓ refs      done                                     <time>
   ✓ projects  done                                     <time>
   ✓ tasks     done                                     <time>
-  ok · 5 ran in <time> · next refs, projects, tasks 10:15 · gcal, gmail 11:00
+  ok · 6 ran in <time> · next snooze due · refs, projects, tasks 10:15 · gcal, gmail 11:00
