@@ -158,8 +158,8 @@ fn assert_code(raw: &str, code: &str) {
 }
 
 #[test]
-fn grammar_revision_is_twenty_nine() {
-    assert_eq!(GRAMMAR_REVISION, 29);
+fn grammar_revision_is_thirty() {
+    assert_eq!(GRAMMAR_REVISION, 30);
 }
 
 #[test]
@@ -981,7 +981,8 @@ fn staged_sections_include_earlier_creates_and_skip_later_and_failed() {
 
 #[test]
 fn staged_sections_surface_percent_n_seeds_to_a_later_glued_selector() {
-    let raw = "Neovim notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n\nMore @dev_nvim#";
+    let raw =
+        "Neovim notes @dev^nvim@ %n\n- **Keymaps**\n  - x\n\nMore @dev_nvim#";
     let draft = split_capture_draft(raw);
     let later = draft.items.last().expect("later item");
     let staged =
@@ -1021,4 +1022,25 @@ fn editor_reports_notebook_section_ambiguous() {
         "{}",
         diagnostic.message
     );
+}
+
+#[test]
+fn editor_create_seed_exposes_bold_container_spans() {
+    let raw = "Notes @dev^nvim@ %n\n- **Café API**\n  - x";
+    let item = editor_parse(raw);
+    let marker_spans: Vec<_> = item
+        .spans
+        .iter()
+        .filter(|span| span.kind == SpanKind::DrawerMarker)
+        .collect();
+    let title = item
+        .spans
+        .iter()
+        .find(|span| span.kind == SpanKind::DrawerBullet)
+        .expect("bold seed title span");
+    assert_eq!(marker_spans.len(), 2);
+    assert_eq!(&raw[title.start..title.end], "Café API");
+    for marker in marker_spans {
+        assert_eq!(&raw[marker.start..marker.end], "**");
+    }
 }

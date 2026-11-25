@@ -59,17 +59,29 @@ On a `^prj` task, the existing `## Notes` section remains the notes home.
 
 Readers in bob-cli, task-status-cycler, bob-navigation-hotkeys, block-id-prompt,
 and bob-ledger-tools accept bold and legacy headers. Every bob-cli writer
-creates bold headers: `- **Title**` for a task drawer (an ALL-CAPS draft
-title is written as typed inside the marker) and `- **Notes**` for the notes
-drawer, while a `^prj` path writes `## {title}` verbatim. Capture draft
-syntax and completion menu replacements are unchanged in this phase: drafts
-still spell `- #slug`, `- #"Title"`, and ALL-CAPS with nested notes, and this
-page does not add `- **Title**` as capture draft syntax.
+creates bold headers: `- **Title**` for a task drawer and `- **Notes**` for
+the notes drawer. Capture also accepts a whole-bold first-level container
+header, such as `- **API Design**`, with nested `  - …` notes. In a new
+project note it writes `## API Design`; in a `%n` notebook creation seed it
+writes `## API Design`; and in a record capture it creates a matching
+`## API Design` group. Task drawer titles and project section titles preserve
+the spelling inside the bold markers. Bullet drawer completion inserts the
+whole bold header and opens a nested bullet when none follows.
 
-Imported or pasted child text that would become either kind of drawer is
-written with double underscores, such as `__Agenda__`. It renders bold while
-remaining a note. Google Calendar's rendered-span hash includes this body, so an
-untouched Google span picks up the escape on its next sync.
+An ALL-CAPS first-level bullet with nested notes in one of these container
+positions is retired capture syntax. Bob refuses it with `caps_drawer_retired`
+and suggests the equivalent bold header. A childless ALL-CAPS bullet remains
+ordinary note or task text. A bold childless container header is refused with
+`empty_drawer_bullet`; nest notes beneath it as `  - …`. Use `__Title__` when
+you need visible bold text that stays an ordinary note. In an existing
+route-only notebook list, bold text remains an ordinary note; `- #section`
+continues to select a notebook section. Bold section interpretation is
+enabled for notebooks only while parsing `%n` creation seeds.
+
+Imported or pasted child text that would become a drawer is written with
+double underscores, such as `__Agenda__`. It renders bold while remaining a
+note. Google Calendar's rendered-span hash includes this body, so an untouched
+Google span picks up the escape on its next sync.
 
 ## Title mapping and source ranges
 

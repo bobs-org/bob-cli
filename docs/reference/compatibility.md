@@ -68,9 +68,9 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 29` revision. Clients can use it to distinguish
+additive top-level `grammar: 30` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 29 admits requirement bullets: checkbox bullets under a task
+envelope. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; adds `drawer_marker` and title-only `drawer_bullet` spans; and refuses nested ALL-CAPS drafts with `caps_drawer_retired`. Grammar 29 admits requirement bullets: checkbox bullets under a task
 or requirement are requirements, nest beyond two levels beneath requirement
 chains, report `req_marker` spans with an additive `depth`, and refuse
 `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`. Grammar 28 claims whole-draft `//query` as `note_goto` (previously

@@ -102,11 +102,13 @@ Notebook routes parse as `notebook_note` or `notebook_sub_note`. Use
 `@notes` for a note, `@notes#Ideas` for a section, `@notes^id` for an
 authored block ID, or `@notes+id` for a sub-note. A complete
 `@parent^id@ %n` item is `notebook_create`: it writes `<parent>_<id>.md`,
-seeds ALL-CAPS first-level bullets as Title Case `##` sections and
-`- #Section` groups through the same body plan (plain siblings stay in
-the top region in source order), updates
-owner catalogs, and lets later same-draft notes use the new route. The body stays opaque to
-task-marker parsing. `bob capture` writes these modes through the guarded
+seeds whole-bold first-level bullets as verbatim `##` sections and
+`- #Section` groups through the same body plan (plain siblings stay in the
+top region in source order), updates
+owner catalogs, and lets later same-draft notes use the new route. Nested
+ALL-CAPS section drafts are refused with `caps_drawer_retired`; childless
+ALL-CAPS bullets remain notes. The body stays opaque to task-marker parsing.
+`bob capture` writes these modes through the guarded
 capture transaction: top-level and section notes append after the last note
 in the target region (exact title or whole-slug match; duplicate headings
 refuse with `notebook_section_ambiguous`; unquoted near misses refuse with

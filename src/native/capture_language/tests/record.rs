@@ -504,7 +504,7 @@ fn fields_parse_notes_stay_notes() {
 #[test]
 fn sections_group_and_nested_notes_attach() {
     let parsed = strict(
-        "@eat/ Ramen\n- VISIT NOTES\n- Great broth\n  - extra noodles\n- location:: Clark",
+        "@eat/ Ramen\n- **Visit Notes**\n- Great broth\n  - extra noodles\n- location:: Clark",
     )
     .expect("sections");
     let CaptureKind::RecordNote { intent } = &parsed.kind else {
@@ -513,7 +513,7 @@ fn sections_group_and_nested_notes_attach() {
     assert_eq!(intent.notes.len(), 1, "one section group");
     assert_eq!(
         intent.notes[0].section.as_deref(),
-        Some("VISIT NOTES"),
+        Some("Visit Notes"),
         "section header groups"
     );
     assert_eq!(intent.notes[0].lines[0].text, "Great broth");
@@ -521,6 +521,29 @@ fn sections_group_and_nested_notes_attach() {
     assert_eq!(intent.notes[0].lines[0].children[0].text, "extra noodles");
     assert_eq!(intent.fields.len(), 1);
     assert_eq!(intent.fields[0].key, "location");
+}
+
+#[test]
+fn record_sections_refuse_legacy_caps_and_empty_bold_headers() {
+    let policy = configured_policy();
+    let legacy = parse_capture_draft_with_options_coded(
+        "@eat/ Ramen\n- VISIT NOTES\n- Great broth",
+        None,
+        None,
+        &strict_options(Some(&policy)),
+    )
+    .expect_err("legacy record container syntax is retired");
+    assert_eq!(legacy.code, Some("caps_drawer_retired"));
+    assert!(legacy.message.contains("**VISIT NOTES**"), "{legacy:?}");
+
+    let empty = parse_capture_draft_with_options_coded(
+        "@eat/ Ramen\n- **Visit Notes**",
+        None,
+        None,
+        &strict_options(Some(&policy)),
+    )
+    .expect_err("empty record sections are not created");
+    assert_eq!(empty.code, Some("empty_drawer_bullet"));
 }
 
 #[test]
@@ -634,6 +657,27 @@ fn editor_spans_cover_route_stem_and_fields() {
             SpanKind::RecordFieldValue => assert_eq!(text, "Clark"),
             _ => {}
         }
+    }
+}
+
+#[test]
+fn editor_record_groups_expose_bold_container_spans() {
+    let raw = "@eat/ Ramen\n- **Café Notes**\n- broth was rich";
+    let item = editor_parse(raw);
+    let marker_spans: Vec<_> = item
+        .spans
+        .iter()
+        .filter(|span| span.kind == SpanKind::DrawerMarker)
+        .collect();
+    let title = item
+        .spans
+        .iter()
+        .find(|span| span.kind == SpanKind::DrawerBullet)
+        .expect("record group title span");
+    assert_eq!(marker_spans.len(), 2);
+    assert_eq!(&raw[title.start..title.end], "Café Notes");
+    for marker in marker_spans {
+        assert_eq!(&raw[marker.start..marker.end], "**");
     }
 }
 

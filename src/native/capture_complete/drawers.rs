@@ -4,8 +4,8 @@
 //! claims.
 //!
 //! Every row's `replacement` is the exact text a commit would receive (a
-//! `#slug` / `#"TITLE"` selector for the glued form, the bare ALL-CAPS
-//! title for a bullet), and its `refused` reason is the commit's own
+//! `#slug` / `#"TITLE"` selector for the glued form, a whole-bold title
+//! for a bullet), and its `refused` reason is the commit's own
 //! resolver decision (`resolve_drawer_for_write` / `resolve_h2_for_write`),
 //! never a parallel rule. A menu choice is therefore never authority to
 //! skip commit-time resolution.
@@ -37,7 +37,7 @@ pub(super) const GROUP_NEW: &str = "new";
 enum RowStyle {
     /// A glued `@route+id#…` selector: `#slug` or `#"TITLE"`.
     Glued,
-    /// A first-level bullet's body: the bare ALL-CAPS title.
+    /// A first-level bullet's body: the whole-bold title.
     Bullet,
 }
 
@@ -205,9 +205,8 @@ struct Target {
     /// round trips are checked against the whole list.
     drawers: Vec<Drawer>,
     style: RowStyle,
-    /// A project note this capture is about to create. Its writer turns
-    /// every ALL-CAPS bullet into a `## Title Case` section, structural
-    /// and managed names included, so no resolver refusal applies.
+    /// A project note this capture is about to create. Its writer treats
+    /// eligible whole-bold bullets as `##` sections with the same title.
     new_note: bool,
 }
 
@@ -326,7 +325,7 @@ fn lookup_target(
 /// How a row's `replacement` was chosen and what the commit would do with
 /// it.
 struct Choice {
-    /// `#slug` or `#"TITLE"`, covering the `#` and the name.
+    /// A selector (`#slug` or `#"TITLE"`) or a whole-bold bullet title.
     replacement: String,
     resolved: Result<DrawerResolved, DrawerResolveError>,
 }
@@ -409,17 +408,17 @@ impl Target {
         }
     }
 
-    /// A bullet row's replacement is the bare ALL-CAPS title, valid only
-    /// when committing that literal title (an exact resolution, like any
-    /// ALL-CAPS drawer bullet) reaches the row's intent: the same existing
-    /// drawer, or a creation of the same key.
+    /// A bullet row inserts a complete bold container header. Resolution
+    /// remains exact so accepting the row reaches the same existing drawer
+    /// or creates that title in the intended destination.
     fn choose_bullet(
         &self,
         title: &str,
         want: Want,
         catalog: &BTreeMap<String, DrawerCatalogRecord>,
     ) -> Choice {
-        let Some(canonical) = capture_drawers::normalize_drawer_literal(title)
+        let Some(canonical) =
+            capture_drawers::normalize_bold_drawer_title(title)
         else {
             return Choice {
                 replacement: capture_drawers::drawer_key(title),
@@ -430,23 +429,20 @@ impl Target {
             };
         };
         if self.new_note {
-            // The writer owns a new note's sections: any ALL-CAPS title
-            // becomes `## Title Case`, merging repeats.
+            // The writer owns a new note's sections. Bold headers preserve
+            // their authored title verbatim when rendered as `## Title`.
             let key = capture_drawers::drawer_key(&canonical);
             return Choice {
                 resolved: Ok(DrawerResolved {
                     outcome: DrawerResolveOutcome::Create {
-                        title:
-                            capture_project_note::format_project_section_title(
-                                &canonical,
-                            ),
+                        title: canonical.clone(),
                         slug: capture_language::selector_slug(&canonical),
                         key,
                     },
                     created: true,
                     warning: None,
                 }),
-                replacement: canonical,
+                replacement: format!("**{canonical}**"),
             };
         }
         let resolved = match self.resolve(&canonical, true, catalog) {
@@ -462,7 +458,7 @@ impl Target {
             other => other,
         };
         Choice {
-            replacement: canonical,
+            replacement: format!("**{canonical}**"),
             resolved,
         }
     }
@@ -597,7 +593,7 @@ impl Target {
         let wanted = match self.style {
             RowStyle::Bullet if !quoted => {
                 capture_drawers::normalize_drawer_literal(
-                    &title.replace('-', " "),
+                    &title.replace('-', " ").to_ascii_uppercase(),
                 )
                 .unwrap_or_else(|| title.clone())
             }
@@ -605,6 +601,16 @@ impl Target {
         };
         let mut row = self.base_row(&wanted, &claimed[0], GROUP_NEW);
         let choice = self.choose(&wanted, Want::Create, catalog);
+        // A refused selector cannot be represented as a refused bold header:
+        // the latter becomes an ordinary note at commit time.
+        if self.style == RowStyle::Bullet
+            && matches!(
+                &choice.resolved,
+                Err(error) if error.code == "reserved_drawer"
+            )
+        {
+            return None;
+        }
         self.apply_choice(&mut row, choice, &wanted);
         if row.refused.is_none()
             && let Some(near) =
@@ -683,15 +689,15 @@ fn matches_want(resolved: &DrawerResolved, want: Want, title: &str) -> bool {
     }
 }
 
-/// A catalog title that is not a valid ALL-CAPS drawer title (a project
-/// `##` heading's raw spelling) falls back to its uppercase key.
+/// A catalog title that cannot be written as a bold header falls back to its
+/// normalized identity key.
 fn wanted_title(title: &str, key: &str) -> String {
     capture_drawers::normalize_drawer_literal(title)
         .unwrap_or_else(|| key.to_string())
 }
 
-/// A quoted selector only names drawers whose uppercased title is valid
-/// drawer syntax; a `##` heading outside that grammar cannot be addressed.
+/// A quoted selector only names titles that can be written as a valid bold
+/// drawer header; a `##` heading outside that grammar cannot be addressed.
 fn quoted_title_is_nameable(replacement: &str, title: &str) -> bool {
     !replacement.starts_with("#\"")
         || capture_drawers::normalize_drawer_literal(title).is_some()
@@ -713,7 +719,7 @@ fn unnameable_copy(scope: DrawerScope) -> String {
 
 fn unnameable_bullet_copy(scope: DrawerScope) -> String {
     format!(
-        "this {} name uses characters an ALL-CAPS bullet cannot spell; capture into it with `@route#Heading`",
+        "this {} name cannot be written as a bold header; capture into it with `@route#Heading`",
         scope_noun(scope)
     )
 }

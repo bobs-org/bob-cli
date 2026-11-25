@@ -195,7 +195,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 29` for the capture-language revision while \
+Success JSON reports `grammar: 30` for the capture-language revision while \
 `schema_version` stays 1. An admitted requirement bullet's checkbox (`[ ] ` \
 under a task or requirement) reports a `req_marker` span with its \
 requirement `depth`; refused positions report `req_in_drawer`, \
@@ -5148,7 +5148,7 @@ record:
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 29);
+        assert_eq!(value["grammar"], 30);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -5214,7 +5214,7 @@ record:
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 29);
+        assert_eq!(value["grammar"], 30);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -6068,7 +6068,7 @@ record:
     fn json_reports_merge_in_wire_shape_and_grammar_27() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 29);
+        assert_eq!(value["grammar"], 30);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

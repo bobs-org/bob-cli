@@ -205,7 +205,7 @@ fn format_create_word(word: &str) -> String {
 }
 
 /// Task-drawer adapter: reserved names, key-form matching, prefix or
-/// edit-distance-1 near-miss, ALL-CAPS create titles.
+/// edit-distance-1 near-miss, case-preserving exact titles.
 pub(crate) struct TaskDrawer;
 
 impl TaskDrawer {
@@ -354,9 +354,7 @@ where
                 ambiguous_drawer(selector, exact, noun, matches)
             }
             MatchClass::None => {
-                let title = title_case(
-                    &normalize_task_text(selector).to_ascii_uppercase(),
-                );
+                let title = normalize_task_text(selector);
                 drawer_create(title, catalog, noun)
             }
         };

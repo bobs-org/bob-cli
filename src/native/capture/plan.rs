@@ -5573,6 +5573,61 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let groups = crate::native::capture_language::drawer_bullet_groups(
         &parsed.sub_bullets,
     );
+    if glued_section.is_none()
+        && let Some((header, _nested)) = groups
+            .iter()
+            .map(|(start, end)| {
+                (
+                    &parsed.sub_bullets[*start],
+                    &parsed.sub_bullets[*start + 1..*end],
+                )
+            })
+            .find(|(header, nested)| {
+                header.drawer.is_none()
+                    && !nested.is_empty()
+                    && capture_language::is_all_caps_drawer_title(&header.body)
+            })
+    {
+        let contents = planner.read_existing(&target)?;
+        let settings = note_tasks::read_settings(&request.bob_dir);
+        let scan = note_tasks::scan(&contents, &settings);
+        let parent = match &effective_target {
+            SubBulletTarget::BlockId(block_id) => {
+                match scan.by_block_id(block_id) {
+                    BlockIdLookup::Found(task) => Some(task),
+                    _ => None,
+                }
+            }
+            SubBulletTarget::Ref { line, digest } => {
+                match scan.by_ref(*line, digest) {
+                    RefLookup::Found(task) => Some(task),
+                    _ => None,
+                }
+            }
+        };
+        let title = header.body.trim();
+        let existing_title = parent.and_then(|parent| {
+            let key = capture_drawers::drawer_key(title);
+            let matches = if capture_drawers::is_prj_parent(&contents, parent) {
+                capture_drawers::project_h2_drawers(&contents)
+            } else {
+                capture_drawers::drawers(&contents, parent)
+            };
+            let mut found = matches.iter().filter(|drawer| drawer.key == key);
+            let first = found.next()?.title.clone();
+            found.next().is_none().then_some(first)
+        });
+        let replacement = existing_title.unwrap_or_else(|| {
+            capture_language::place::format_notebook_section_create_title(title)
+        });
+        return Err(CaptureError::usage_code(
+            capture_language::caps_drawer_retired_error_with_replacement(
+                title,
+                &replacement,
+            ),
+            "caps_drawer_retired",
+        ));
+    }
     let mut notes: Vec<crate::native::capture::SubBulletNoteJson> = Vec::new();
     let mut drawers: Vec<DrawerJson> = Vec::new();
     let mut seen_drawer_keys: std::collections::BTreeSet<String> =

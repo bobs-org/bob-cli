@@ -700,9 +700,11 @@ title order; `↑` opens the album. A one-record album has only the `↑` link.
 The position and album size render live and are never stored. `created` uses Bob's configured timezone and
 `BOB_NOW` when set. `## Notes` exists only when the new note holds ordinary
 bullets. With `dated_notes: true`, each first-level note bullet gets today's
-date; nested bullets stay nested. An all-caps first-level bullet with nested
-bullets becomes a title-cased section. A note with no ordinary bullets and no
-sections contains only its walk line:
+date; nested bullets stay nested. A whole-bold first-level container with
+nested bullets becomes a `##` group with the authored title preserved. Nested
+ALL-CAPS group drafts are refused with `caps_drawer_retired`; childless
+ALL-CAPS bullets remain ordinary notes. A note with no ordinary bullets and
+no sections contains only its walk line:
 
 ```markdown
 ---

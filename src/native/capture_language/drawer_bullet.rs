@@ -14,7 +14,8 @@ use super::model::{
     AuthoredDepth, AuthoredSubBullet, CaptureItem, CaptureKind, DrawerSelector,
 };
 use super::place::{
-    leftover_after, quoted_after_hash, scan_hash_opener, shift_range, token_end,
+    format_notebook_section_create_title, leftover_after, quoted_after_hash,
+    scan_hash_opener, shift_range, token_end,
 };
 use super::project_tasks::split_leading_checkbox;
 use crate::native::capture_drawers::{
@@ -22,6 +23,59 @@ use crate::native::capture_drawers::{
     normalize_drawer_literal,
 };
 use std::ops::Range;
+
+/// A whole-bold authored container title and the UTF-8 ranges needed by
+/// editor clients. The marker ranges cover the opening and closing `**`;
+/// the title range excludes both delimiters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BoldContainerParts {
+    pub(crate) title: String,
+    pub(crate) title_range: Range<usize>,
+    pub(crate) marker_ranges: [Range<usize>; 2],
+}
+
+pub(crate) fn bold_container_parts(
+    body: &str,
+    base: usize,
+) -> Option<BoldContainerParts> {
+    use crate::native::capture_drawers::DrawerMarker;
+
+    let (title, marker) =
+        crate::native::capture_drawers::drawer_body_title(body)?;
+    if marker != DrawerMarker::Bold {
+        return None;
+    }
+    let title_start = title.as_ptr() as usize - body.as_ptr() as usize;
+    let title_end = title_start + title.len();
+    Some(BoldContainerParts {
+        title: title.to_string(),
+        title_range: base + title_start..base + title_end,
+        marker_ranges: [
+            base + title_start - 2..base + title_start,
+            base + title_end..base + title_end + 2,
+        ],
+    })
+}
+
+pub(crate) fn empty_bold_container_error(title: &str) -> String {
+    format!(
+        "`- **{title}**` names a container but has no nested notes; nest them as `  - …`, or write `__{title}__` for a bold note"
+    )
+}
+
+pub(crate) fn caps_drawer_retired_error(title: &str) -> String {
+    let replacement = format_notebook_section_create_title(title);
+    caps_drawer_retired_error_with_replacement(title, &replacement)
+}
+
+pub(crate) fn caps_drawer_retired_error_with_replacement(
+    title: &str,
+    replacement: &str,
+) -> String {
+    format!(
+        "legacy ALL-CAPS container draft `{title}` is retired; write `- **{replacement}**` and nest its notes beneath it"
+    )
+}
 
 /// One leading drawer-shortcut classification on a first-level body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,7 +385,11 @@ beneath `- {title}`"
 pub(crate) fn code_for_message(message: &str) -> Option<&'static str> {
     if message == drawer_bullet_text_error() {
         Some("drawer_bullet_text")
+    } else if message.starts_with("legacy ALL-CAPS container draft `") {
+        Some("caps_drawer_retired")
     } else if message == empty_drawer_bullet_error()
+        || message.starts_with("`- **")
+            && message.contains("names a container but has no nested notes")
         || message.contains("is already a drawer on ^")
             && message.contains("nest the notes to add beneath `- ")
     {
@@ -388,19 +446,36 @@ pub(crate) fn authored_level_groups(
     groups
 }
 
-/// Apply under-task grouping after `CaptureKind` is known: position
-/// errors, childless-shortcut `empty_drawer_bullet`, and ALL-CAPS drawer
-/// bullets with nested notes.
+/// Apply container-header grouping after `CaptureKind` is known: position
+/// errors, childless-shortcut `empty_drawer_bullet`, and retired ALL-CAPS
+/// container bullets with nested notes.
 pub(crate) fn finish_execution_drawer_bullets(
     kind: &CaptureKind,
     parent_body: &str,
     sub_bullets: &mut [AuthoredSubBullet],
 ) -> Result<(), String> {
-    let under_task = is_under_task_kind(kind)
-        || is_multi_note_sub_bullet(kind, parent_body, sub_bullets);
+    let multi_note = is_multi_note_sub_bullet(kind, parent_body, sub_bullets);
+    let under_task = is_under_task_kind(kind) || multi_note;
+    let project_note_sections = matches!(kind, CaptureKind::ProjectNote { .. });
+    let defer_caps_refusal =
+        multi_note && matches!(kind, CaptureKind::SubBullet { .. });
     let groups = first_level_groups(sub_bullets);
     for (start, end) in groups {
         let nested = end.saturating_sub(start) > 1;
+        let body = &sub_bullets[start].body;
+        if sub_bullets[start].drawer.is_none()
+            && (under_task || project_note_sections)
+            && nested
+            && is_all_caps_drawer_title(body)
+        {
+            // Existing-task multi-note captures resolve the matching target
+            // spelling in the writer, where the destination note is loaded.
+            // Other container positions have no existing target spelling.
+            if !defer_caps_refusal {
+                return Err(caps_drawer_retired_error(body.trim()));
+            }
+            continue;
+        }
         if sub_bullets[start].drawer.is_some() {
             if !under_task {
                 return Err(drawer_bullet_position_error(kind, parent_body));
@@ -410,13 +485,36 @@ pub(crate) fn finish_execution_drawer_bullets(
             }
             continue;
         }
-        if under_task
-            && nested
-            && is_all_caps_drawer_title(&sub_bullets[start].body)
+        let Some(parts) = bold_container_parts(body, 0) else {
+            continue;
+        };
+        let is_project_note = project_note_sections;
+        let is_task_drawer = !is_project_note
+            && matches!(
+                kind,
+                CaptureKind::Task
+                    | CaptureKind::TaskWithBlockId { .. }
+                    | CaptureKind::Pomodoro { close: None, .. }
+                    | CaptureKind::SubBullet { .. }
+            );
+        if is_task_drawer
+            && crate::native::capture_drawers::can_create_drawer(
+                &parts.title,
+                true,
+            )
+            .is_err()
         {
-            let title = sub_bullets[start].body.trim().to_string();
+            // Reserved and otherwise ineligible whole-bold lines remain
+            // ordinary notes. A leading `#` remains the explicit refusal
+            // path for a forbidden selector.
+            continue;
+        }
+        if !nested {
+            return Err(empty_bold_container_error(&parts.title));
+        }
+        if is_task_drawer {
             sub_bullets[start].drawer = Some(DrawerSelector {
-                text: title,
+                text: parts.title,
                 exact: true,
             });
         }

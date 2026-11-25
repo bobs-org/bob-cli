@@ -494,7 +494,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
     let vault = temp.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
 
-    let input = "Parent @cash^auth1@\n- Call Morgan Stanley\n- FUTURE WORK\n  - nested detail\n";
+    let input = "Parent @cash^auth1@\n- Call Morgan Stanley\n- **Future Work**\n  - nested detail\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -527,7 +527,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
     assert!(contents.contains("- nested detail"), "{contents}");
 
     let tasks_input =
-        "Parent @cash^tasks1@\n- TASKS\n  - merged note\n- Real task\n";
+        "Parent @cash^tasks1@\n- **Tasks**\n  - merged note\n- Real task\n";
     let tasks_output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -942,7 +942,7 @@ fn capture_project_note_task_links_write_the_worked_example() {
          - Draft the resignation memo :draft-memo\n  - keep it short\n\
          - Call Morgan Stanley about the 401k :call-ms\n\
          - Collect the equity paperwork ^equity-docs\n\
-         - FUTURE WORK\n  - Revisit the severance terms\n";
+         - **Future Work**\n  - Revisit the severance terms\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")

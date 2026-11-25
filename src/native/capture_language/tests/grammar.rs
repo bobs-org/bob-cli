@@ -2248,7 +2248,7 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
          \x20 - keep it short\n\
          - Call Morgan Stanley about the 401k :call-ms\n\
          - Collect the equity paperwork ^equity-docs\n\
-         - FUTURE WORK\n\
+         - **Future Work**\n\
          \x20 - Revisit the severance terms",
     )
     .expect("worked example");
@@ -2269,7 +2269,7 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
             "keep it short",
             "Call Morgan Stanley about the 401k",
             "Collect the equity paperwork",
-            "FUTURE WORK",
+            "**Future Work**",
             "Revisit the severance terms",
         ]
     );

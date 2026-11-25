@@ -190,8 +190,13 @@ Capture into the project note through its `^prj` task with a `#drawer`
 selector (`note text @proj+prj#notes`): the selector resolves against
 the note's eligible `##` sections by the task-drawer key rules, appending the
 entry after the section's last nonblank line and creating a missing section as
-`## Title Case` at the end of the note. Structural headings (Tasks, the
+`## Title` at the end of the note. Structural headings (Tasks, the
 status-group titles, Pomodoros, Events, and Highlights) are never drawers.
+
+When a capture creates a new project note, a first-level whole-bold container
+such as `- **API Design**` with nested notes becomes a `## API Design` section.
+The title keeps its authored spelling. Nested ALL-CAPS section drafts are
+refused with `caps_drawer_retired`.
 
 The same `^prj` line doubles as the project's freshness tracker: while
 sync leaves it visible (no `#hide`), the morning review reminds Bryan

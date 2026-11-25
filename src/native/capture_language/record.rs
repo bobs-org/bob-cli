@@ -304,7 +304,7 @@ pub(crate) struct RecordNoteLine {
     pub(crate) children: Vec<RecordNoteLine>,
 }
 
-/// One note group: an optional ALL-CAPS section header plus the ordered
+/// One note group: an optional bold section header plus the ordered
 /// first-level note lines below it (each with nested note lines).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecordNoteGroup {
@@ -807,7 +807,7 @@ pub(crate) fn classify_record_item(
     let mut current_group: Option<RecordNoteGroup> = None;
     let mut has_first_level_owner = false;
     let mut last_first_level: Option<LastFirstLevel> = None;
-    for line in item.lines.iter().skip(1) {
+    for (line_index, line) in item.lines.iter().enumerate().skip(1) {
         if line.raw.text.trim().is_empty() {
             continue;
         }
@@ -848,22 +848,42 @@ pub(crate) fn classify_record_item(
                 last_first_level = Some(LastFirstLevel::Field);
                 continue;
             }
-            if super::drawer_bullet::is_all_caps_drawer_title(body) {
+            if let Some(parts) =
+                super::drawer_bullet::bold_container_parts(body, body_start)
+            {
+                if !record_header_has_group_content(item, line_index) {
+                    return Some(RecordClaim::refused(
+                        "empty_drawer_bullet",
+                        super::drawer_bullet::empty_bold_container_error(
+                            &parts.title,
+                        ),
+                        Some((parts.title_range.start, parts.title_range.end)),
+                    ));
+                }
                 if let Some(group) = current_group.take() {
                     notes.push(group);
                 }
-                let trimmed = body.trim();
-                let offset = body.find(trimmed).unwrap_or(0);
                 current_group = Some(RecordNoteGroup {
-                    section: Some(trimmed.to_string()),
+                    section: Some(parts.title),
                     section_range: Some((
-                        body_start + offset,
-                        body_start + offset + trimmed.len(),
+                        parts.title_range.start,
+                        parts.title_range.end,
                     )),
                     lines: Vec::new(),
                 });
                 last_first_level = Some(LastFirstLevel::Note);
                 continue;
+            }
+            if super::drawer_bullet::is_all_caps_drawer_title(body)
+                && record_header_has_group_content(item, line_index)
+            {
+                let title = body.trim();
+                let start = body_start + body.len() - body.trim_start().len();
+                return Some(RecordClaim::refused(
+                    "caps_drawer_retired",
+                    super::drawer_bullet::caps_drawer_retired_error(title),
+                    Some((start, start + title.len())),
+                ));
             }
             let group = current_group.get_or_insert_with(|| RecordNoteGroup {
                 section: None,
@@ -929,6 +949,46 @@ pub(crate) fn classify_record_item(
         return Some(refusal);
     }
     Some(RecordClaim::Note(claim))
+}
+
+fn record_header_has_group_content(
+    item: &CaptureItem<'_>,
+    header_index: usize,
+) -> bool {
+    for line in item.lines.iter().skip(header_index + 1) {
+        if line.raw.text.trim().is_empty() {
+            continue;
+        }
+        match classify_authored_line_capped(line.raw, TWO_LEVEL_CAP) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Item(authored)
+                if authored.depth == AuthoredDepth::NESTED =>
+            {
+                return true
+            }
+            AuthoredLineClass::Item(authored) => {
+                if super::drawer_bullet::bold_container_parts(
+                    authored.body,
+                    authored.body_start,
+                )
+                .is_some()
+                    || super::drawer_bullet::is_all_caps_drawer_title(
+                        authored.body,
+                    )
+                {
+                    return false;
+                }
+                if parse_record_field(authored.body, authored.body_start)
+                    .is_some()
+                {
+                    continue;
+                }
+                return true;
+            }
+            AuthoredLineClass::Invalid => continue,
+        }
+    }
+    false
 }
 
 /// Title text with the route token removed, plus its absolute range.
@@ -1708,6 +1768,42 @@ pub(crate) fn editor_view_for_claim(
                     needs.push(Need::RecordValue);
                 }
             }
+            for group in &intent.notes {
+                let (Some(title), Some((start, end))) =
+                    (group.section.as_ref(), group.section_range)
+                else {
+                    continue;
+                };
+                spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::DrawerBullet,
+                    project_note: None,
+                    title: Some(title.clone()),
+                    key: Some(crate::native::capture_drawers::drawer_key(
+                        title,
+                    )),
+                    section_action: None,
+                });
+                spans.push(Span {
+                    start: start.saturating_sub(2),
+                    end: start,
+                    kind: SpanKind::DrawerMarker,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                    section_action: None,
+                });
+                spans.push(Span {
+                    start: end,
+                    end: end + 2,
+                    kind: SpanKind::DrawerMarker,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                    section_action: None,
+                });
+            }
             spans.sort_by_key(|span| (span.start, span.end));
             RecordEditorView {
                 mode: match intent.action {
@@ -1741,7 +1837,42 @@ pub(crate) fn editor_view_for_claim(
                 body: String::new(),
                 route: None,
                 needs: Vec::new(),
-                spans: Vec::new(),
+                spans: if *code == "empty_drawer_bullet" {
+                    span.map(|(start, end)| {
+                        vec![
+                            Span {
+                                start,
+                                end,
+                                kind: SpanKind::DrawerBullet,
+                                project_note: None,
+                                title: None,
+                                key: None,
+                                section_action: None,
+                            },
+                            Span {
+                                start: start.saturating_sub(2),
+                                end: start,
+                                kind: SpanKind::DrawerMarker,
+                                project_note: None,
+                                title: None,
+                                key: None,
+                                section_action: None,
+                            },
+                            Span {
+                                start: end,
+                                end: end + 2,
+                                kind: SpanKind::DrawerMarker,
+                                project_note: None,
+                                title: None,
+                                key: None,
+                                section_action: None,
+                            },
+                        ]
+                    })
+                    .unwrap_or_default()
+                } else {
+                    Vec::new()
+                },
                 diagnostics: vec![Diagnostic {
                     severity: Severity::Error,
                     code,

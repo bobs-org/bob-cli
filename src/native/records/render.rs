@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 
-use super::super::capture_project_note::{
-    format_project_section_title, is_project_section_title,
-    normalize_project_section_title,
-};
+use super::super::capture_project_note::normalize_project_section_title;
 use super::schema::{
     validate_field_input, FieldInputState, RecordDiagnostic,
     RecordDiagnosticCode, RecordField, RecordScalar, RecordType, RecordValue,
@@ -17,13 +14,14 @@ use crate::native::markdown;
 ///
 /// `text` is the first-level bullet text without any `- ` prefix or dated
 /// prefix. `children` are nested bullet texts without any indent or `- `
-/// prefix. When `children` is non-empty and `text` is ALL-CAPS, the entry is
-/// a named section and renders as a `## Title Case` section using the
-/// project-note section helpers.
+/// prefix. `section` records whether capture admitted this as an explicit
+/// bold section header, so ordinary bold prose with nested detail stays a
+/// note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecordNoteInput {
     pub(crate) text: String,
     pub(crate) children: Vec<String>,
+    pub(crate) section: bool,
 }
 
 impl RecordNoteInput {
@@ -31,6 +29,7 @@ impl RecordNoteInput {
         Self {
             text: text.into(),
             children: Vec::new(),
+            section: false,
         }
     }
 
@@ -41,6 +40,7 @@ impl RecordNoteInput {
         Self {
             text: text.into(),
             children,
+            section: true,
         }
     }
 }
@@ -236,7 +236,7 @@ fn format_value(value: &RecordValue, today: NaiveDate) -> Vec<String> {
 }
 
 fn is_section_note(note: &RecordNoteInput) -> bool {
-    !note.children.is_empty() && is_project_section_title(&note.text)
+    note.section && !note.children.is_empty()
 }
 
 fn render_note_bullet(
@@ -328,7 +328,7 @@ pub(crate) fn render_record_with_identity(
     let mut section_index: BTreeMap<String, usize> = BTreeMap::new();
     for note in request.notes {
         if is_section_note(note) {
-            let title = format_project_section_title(&note.text);
+            let title = note.text.clone();
             let normalized = normalize_project_section_title(&title);
             let rendered_children: Vec<String> = note
                 .children
@@ -1611,7 +1611,7 @@ fn append_section_bullets(
     section_note: &RecordNoteInput,
     newline: &str,
 ) {
-    let title = format_project_section_title(&section_note.text);
+    let title = section_note.text.clone();
     let normalized = normalize_project_section_title(&title);
     let rendered: Vec<String> = section_note
         .children
@@ -2375,7 +2375,7 @@ mod tests {
             ordinary.markdown
         );
         let section = render(&[RecordNoteInput::section(
-            "MUST ORDER",
+            "Must Order",
             vec!["Dragon roll".to_owned()],
         )]);
         assert_eq!(
@@ -2386,7 +2386,7 @@ mod tests {
         let both = render(&[
             RecordNoteInput::bullet("a"),
             RecordNoteInput::section(
-                "MUST ORDER",
+                "Must Order",
                 vec!["Dragon roll".to_owned()],
             ),
         ]);
@@ -2627,9 +2627,10 @@ mod tests {
                         "oat latte".to_owned(),
                         "croissant".to_owned(),
                     ],
+                    section: false,
                 },
                 RecordNoteInput::section(
-                    "FUTURE WORK",
+                    "Future Work",
                     vec!["try decaf".to_owned()],
                 ),
             ],
@@ -2648,7 +2649,7 @@ mod tests {
             rendered
                 .markdown
                 .contains("## Future Work\n\n- try decaf\n"),
-            "ALL-CAPS section title-cased:\n{}",
+            "section title preserved:\n{}",
             rendered.markdown
         );
     }
@@ -3213,7 +3214,7 @@ mod tests {
             original,
             fields: &[],
             notes: &[RecordNoteInput::section(
-                "FUTURE WORK",
+                "Future Work",
                 vec!["new item".to_owned()],
             )],
             note_date: Some(NOTE_DATE),
@@ -3238,7 +3239,7 @@ mod tests {
         let record_type = restaurant_type();
         let front = "---\nparent: \"[[eat]]\"\ntype: \"[[restaurant]]\"\ntitle: \"T\"\nstatus: liked\ncategory: \"Coffee\"\nlocation: \"Clark\"\ncreated: 2026-11-08T12:41:07-0500\n---\n";
         let notes = [RecordNoteInput::section(
-            "MUST ORDER",
+            "Must Order",
             vec!["Dragon roll".to_owned()],
         )];
         let apply = |original: &str| {

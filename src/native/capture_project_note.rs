@@ -16,9 +16,10 @@
 //! the execution layer's JSON contract.
 //!
 //! Section mapping follows `buildProjectSeedFromChildBullets` in
-//! `plugins/bob-navigation-hotkeys/main.js`: a first-level authored bullet is
-//! a section when it has at least one nested bullet and its body matches the
-//! ALL-CAPS title shape, otherwise it is a task. Nested checkbox bullets
+//! `plugins/bob-navigation-hotkeys/main.js`: a first-level whole-bold
+//! authored bullet is a section when it has at least one nested bullet;
+//! ordinary bullets remain tasks. Legacy ALL-CAPS container drafts are
+//! refused by capture before rendering. Nested checkbox bullets
 //! under a task row are that row's requirements: the row is canonicalized
 //! so reqs sit in the reqs zone and loose notes file into `NOTES` (created
 //! only when a note lands). Rows without reqs, sections, moves, and the
@@ -233,6 +234,7 @@ where
 /// Delegates to [`crate::native::capture_drawers::is_legacy_drawer_title`] so the
 /// two grammars never drift: drawer sentence punctuation (`?`, `!`, `;`,
 /// trailing `:`) qualifies here too.
+#[cfg(test)]
 pub(crate) fn is_project_section_title(body: &str) -> bool {
     crate::native::capture_drawers::is_legacy_drawer_title(body.trim())
 }
@@ -458,12 +460,18 @@ pub(crate) fn render_project_note(
         let owner_body = group.owner.body.trim();
         let (checkbox, bare) = split_leading_checkbox(owner_body);
         let named = group.owner.task_id.as_ref();
+        let bold_section =
+            crate::native::capture_drawers::drawer_body_title(owner_body)
+                .filter(|(_, marker)| {
+                    *marker
+                        == crate::native::capture_drawers::DrawerMarker::Bold
+                })
+                .map(|(title, _)| title.to_string());
         if named.is_none()
             && checkbox.is_none()
             && !group.nested.is_empty()
-            && is_project_section_title(owner_body)
+            && let Some(title) = bold_section
         {
-            let title = format_project_section_title(owner_body);
             let normalized = normalize_project_section_title(&title);
             // Section entries sit at the section's left edge; anything
             // deeper keeps its authored shape beneath its entry.
@@ -1008,7 +1016,7 @@ mod tests {
     fn deeper_bullets_under_a_section_entry_keep_their_levels() {
         let sub_bullets = vec![
             bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
-            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("**Future Work**", AuthoredDepth::FIRST),
             bullet("Consider the Roth option", AuthoredDepth::NESTED),
             bullet("Ask about the limits", deep(3)),
             bullet("Revisit the severance terms", AuthoredDepth::NESTED),
@@ -1023,10 +1031,10 @@ mod tests {
     }
 
     #[test]
-    fn all_caps_section_with_children_becomes_a_header() {
+    fn bold_section_with_children_preserves_its_title() {
         let sub_bullets = vec![
             bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
-            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("**Future Work**", AuthoredDepth::FIRST),
             bullet("Consider the Roth option", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
@@ -1046,9 +1054,9 @@ mod tests {
     #[test]
     fn equal_section_titles_merge_in_source_order() {
         let sub_bullets = vec![
-            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("**Future Work**", AuthoredDepth::FIRST),
             bullet("First note", AuthoredDepth::NESTED),
-            bullet("FUTURE  WORK", AuthoredDepth::FIRST),
+            bullet("**FUTURE  WORK**", AuthoredDepth::FIRST),
             bullet("Second note", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
@@ -1079,7 +1087,7 @@ mod tests {
     fn tasks_section_merges_into_the_generated_header() {
         let sub_bullets = vec![
             bullet("Call Morgan Stanley", AuthoredDepth::FIRST),
-            bullet("TASKS", AuthoredDepth::FIRST),
+            bullet("**Tasks**", AuthoredDepth::FIRST),
             bullet("Carried reference note", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
@@ -1141,7 +1149,7 @@ mod tests {
                 "equity-docs",
                 false,
             ),
-            bullet("FUTURE WORK", AuthoredDepth::FIRST),
+            bullet("**Future Work**", AuthoredDepth::FIRST),
             bullet("Revisit the severance terms", AuthoredDepth::NESTED),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
@@ -1362,7 +1370,7 @@ mod tests {
         pin_utc();
         let sub_bullets = vec![
             bullet("Draft the memo", AuthoredDepth::FIRST),
-            bullet("TASKS", AuthoredDepth::FIRST),
+            bullet("**Tasks**", AuthoredDepth::FIRST),
             bullet("merged note", AuthoredDepth::NESTED),
             bullet("Collect paperwork", AuthoredDepth::FIRST),
             bullet("Collect paperwork", AuthoredDepth::FIRST),

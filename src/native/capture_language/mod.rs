@@ -51,10 +51,13 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
+/// Revision 30 admits whole-bold container drafts across task drawers,
+/// project sections, notebook seeds, and record groups; ALL-CAPS container
+/// drafts are refused during the dual-read window.
 /// Revision 29 admits requirement bullets: checkbox bullets under a task or
 /// requirement are requirements, nest beyond two levels beneath requirement
-/// chains, report `req_marker` spans with a depth, and refuse
-/// `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`.
+/// chains, report `req_marker` spans with a depth, and refuse `req_in_drawer`,
+/// `req_parent`, `req_state`, and `req_depth`.
 /// Revision 28 claims whole-draft `//query` as `note_goto` (previously
 /// prose). Revision 27 adds the additive `record_field` need on record
 /// items with keyless first-level bullets. Revision 26 adds notebook
@@ -66,7 +69,7 @@ mod type_marker;
 /// forms. Revision 22 makes sized `Nx` closes execute (see
 /// `sized_pomodoro_close.md`); older clients parse the size as literal
 /// task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 29;
+pub(crate) const GRAMMAR_REVISION: u32 = 30;
 
 #[cfg(test)]
 mod tests;
@@ -112,6 +115,7 @@ pub(crate) use self::draft::split_capture_draft;
 pub(crate) use self::draft::split_physical_lines;
 pub(crate) use self::draft::template_list_error;
 pub(crate) use self::drawer_bullet::authored_level_groups;
+pub(crate) use self::drawer_bullet::caps_drawer_retired_error_with_replacement;
 pub(crate) use self::drawer_bullet::empty_drawer_bullet_error;
 pub(crate) use self::drawer_bullet::existing_drawer_empty_error;
 pub(crate) use self::drawer_bullet::first_level_groups as drawer_bullet_groups;

@@ -360,7 +360,7 @@ fn offer_lists_only_open_ready_next_and_pending_task_rows() {
             "- Ready thing\n",
             "- Hidden #hide thing\n",
             "- Linked thing :linked\n",
-            "- FUTURE WORK\n",
+            "- **Future Work**\n",
             "  - Revisit later\n",
         ),
         &[],

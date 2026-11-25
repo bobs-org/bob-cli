@@ -104,7 +104,7 @@ fn test_create_under_area_writes_notebook_and_catalog() {
 fn test_seed_sections_and_later_same_draft_notes() {
     let temp = TempDir::new("bob-cli-capture-notebook-create-seed");
     let vault = vault_with_area(&temp);
-    let draft = "Neovim config notes @dev^nvim@ %n\n- KEYBINDS\n  - leader is space\n\nA later note @dev_nvim";
+    let draft = "Neovim config notes @dev^nvim@ %n\n- **KEYBINDS**\n  - leader is space\n\nA later note @dev_nvim";
     let json = dry_json(&vault, draft);
     let captures = json["captures"].as_array().expect("captures");
     assert_eq!(captures[0]["kind"], "notebook_create");
@@ -113,7 +113,7 @@ fn test_seed_sections_and_later_same_draft_notes() {
     let markdown = json["note_files"][0]["markdown"]
         .as_str()
         .expect("markdown");
-    assert!(markdown.contains("## Keybinds"));
+    assert!(markdown.contains("## KEYBINDS"));
     assert!(markdown.contains(&format!("- leader is space [created::{DATE}]")));
     assert!(markdown.contains(&format!("- A later note [created::{DATE}]")));
 
@@ -177,7 +177,7 @@ fn test_later_glued_selector_lists_earlier_seed_sections() {
     let temp = TempDir::new("bob-cli-capture-notebook-create-staged");
     let vault = vault_with_area(&temp);
     let draft =
-        "Neovim notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n\nMore @dev_nvim#";
+        "Neovim notes @dev^nvim@ %n\n- **Keymaps**\n  - x\n\nMore @dev_nvim#";
     let cursor = draft.len();
     let output = bob_command()
         .arg("capture-complete")

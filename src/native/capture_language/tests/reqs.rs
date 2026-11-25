@@ -533,7 +533,7 @@ fn both_parsers_refuse_with_the_shared_codes_and_copy() {
             copy::REQ_IN_DRAWER,
         ),
         (
-            "Fix\n- NOTES\n  - [ ] bad",
+            "Fix\n- **NOTES**\n  - [ ] bad",
             "req_in_drawer",
             copy::REQ_IN_DRAWER,
         ),

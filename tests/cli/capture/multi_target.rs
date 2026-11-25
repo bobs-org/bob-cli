@@ -339,7 +339,7 @@ fn note_less_bullets_and_drawers_are_filed_to_each_member() {
     let json = capture_json(
         &vault,
         &day,
-        "@cash+a @cash+b\n- Ping Alice\n- REQUIREMENTS\n  - Postgres 17",
+        "@cash+a @cash+b\n- Ping Alice\n- **REQUIREMENTS**\n  - Postgres 17",
     );
     assert_eq!(
         fs::read_to_string(&note).expect("read note"),

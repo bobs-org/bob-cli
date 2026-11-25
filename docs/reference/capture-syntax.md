@@ -1345,13 +1345,12 @@ Contract: [Merging tasks into a new task with `<`](../capture.md#merging-tasks-i
 
 ### `@route+block-id#drawer` {#plus-child-section}
 
-Child bullet inside a task drawer: an ALL-CAPS child bullet holding nested
-notes. `@route+block-id#section` targets `SECTION`. The glued `#drawer`
-requires note text, child bullets, or `%c`. Names match by normalized key;
-`#future-work` matches `FUTURE WORK`. Missing drawers are created, but a
-prefix or near-duplicate name is refused. A quoted `#"FUTURE WORK"` permits
-deliberate creation near an existing name. On a project's `^prj`, drawers
-are eligible `##` sections. Managed logs and structural headings are reserved.
+Child bullet inside a task. `@route+block-id#drawer` selects by normalized
+key and accepts legacy ALL-CAPS or bold stored headers; `#future-work` matches
+`FUTURE WORK`. It requires note text, children, or `%c`. Missing names create
+unless a prefix or near-duplicate exists; quote `#"Title"` to create
+deliberately. On `^prj`, selectors address eligible `##` sections; managed
+logs and structural headings stay reserved.
 
 ```bash
 bob capture 'Need a parser @work+prep#notes'
@@ -1367,8 +1366,10 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### Drawer bullets and several notes {#drawer-bullets}
 
-A task's first-level `- #notes` with nested notes names a drawer;
-ALL-CAPS works too. Empty `- #drawer` fails; empty ALL-CAPS stays a note.
+`- #notes` with nested notes selects a drawer; completion inserts a bold
+header. `- **Future Work**` with nested notes selects it and keeps its title.
+Nested ALL-CAPS container drafts refuse with `caps_drawer_retired`; childless
+ALL-CAPS stays text. Empty shortcuts and bold headers fail.
 Under a route-only notebook `@nb` or `@parent^id@ %n`, `- #Section` selects
 a `##` heading; nest notes or escape `\#git`.
 

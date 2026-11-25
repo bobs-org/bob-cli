@@ -361,8 +361,9 @@ fn bullet_menu_round_trips_through_parse_and_dry_run() {
         "More @dev_tools#API-keys".to_string(),
     ];
     // A `%n` draft contributes its staged draft-group row.
-    drafts
-        .push("Nvim notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n- #key".to_string());
+    drafts.push(
+        "Nvim notes @dev^nvim@ %n\n- **Keymaps**\n  - x\n- #key".to_string(),
+    );
     for draft in drafts {
         let json = end_complete(&temp, &vault, &draft);
         let replacement = json["replacement"].clone();
@@ -469,7 +470,8 @@ fn bullet_staged_view_lists_earlier_draft_sections() {
     );
     assert!(row.get("line").is_none_or(Value::is_null), "{json}");
     // An earlier `%n` seed appears in a later glued menu.
-    let draft = "Nvim notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n\nMore @dev_nvim#";
+    let draft =
+        "Nvim notes @dev^nvim@ %n\n- **Keymaps**\n  - x\n\nMore @dev_nvim#";
     let json = end_complete(&temp, &vault, draft);
     assert_eq!(json["context"], "section", "{json}");
     assert_eq!(titles(&json), vec!["Keymaps"], "{json}");
@@ -544,7 +546,7 @@ fn place_menu_covers_drawer_glued_and_bullet_menus() {
         "glued rows carry no continuation: {json}"
     );
     // `%n` captions the new notebook.
-    let draft = "Nvim notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n- #key";
+    let draft = "Nvim notes @dev^nvim@ %n\n- **Keymaps**\n  - x\n- #key";
     let json = end_complete(&temp, &vault, draft);
     let menu = &json["place_menu"];
     assert_eq!(menu["caption"], "📓 New notebook · Nvim · dev", "{json}");

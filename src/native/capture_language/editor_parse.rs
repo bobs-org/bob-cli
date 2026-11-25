@@ -3591,9 +3591,10 @@ fn attach_drawer_bullet_metadata(
     sub_bullets: &mut [AuthoredSubBullet],
 ) {
     use super::drawer_bullet::{
-        editor_drawer_bullet_position_error, first_level_groups,
-        is_all_caps_drawer_title, is_under_task_mode, scan_leading,
-        DrawerBulletHit,
+        bold_container_parts, caps_drawer_retired_error,
+        editor_drawer_bullet_position_error, empty_bold_container_error,
+        first_level_groups, is_all_caps_drawer_title, is_under_task_mode,
+        scan_leading, DrawerBulletHit,
     };
     use crate::native::capture_drawers::reserved_selector_error;
 
@@ -3609,6 +3610,11 @@ fn attach_drawer_bullet_metadata(
             && parent_body.trim().is_empty()
             && !is_glued
             && has_first_level);
+    let project_note_sections = matches!(
+        *mode,
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+    );
+    let container_header_position = under_task || project_note_sections;
     // Managed names (`TASKS`, `SCHEDULE LOG`, …) are refused as task
     // drawers and as existing-target sections, but a newly created project
     // note owns its structural headings, so `- TASKS` there is a valid
@@ -3719,53 +3725,142 @@ fn attach_drawer_bullet_metadata(
             Some(DrawerBulletHit::Invalid { .. })
             | Some(DrawerBulletHit::Escaped { .. })
             | None => {
-                if under_task && nested && is_all_caps_drawer_title(body_text) {
-                    let title = body_text.trim().to_string();
-                    let key =
-                        crate::native::capture_drawers::drawer_key(&title);
+                if container_header_position
+                    && nested
+                    && is_all_caps_drawer_title(body_text)
+                {
+                    let title = body_text.trim();
                     let leading =
                         body_text.len() - body_text.trim_start().len();
-                    let trailing = body_text.len() - body_text.trim_end().len();
                     let start = body_start + leading;
-                    let end = body_start + body_text.len() - trailing;
-                    if reserved_applies
-                        && let Some(error) =
-                            reserved_selector_error(&title, true)
-                    {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Error,
-                            code: error.code,
-                            message: error.message,
-                            range: Some((start, end)),
-                            rewrite: None,
-                        });
-                    }
-                    spans.push(Span {
-                        start,
-                        end,
-                        kind: SpanKind::DrawerBullet,
-                        project_note: None,
-                        title: Some(title),
-                        key: Some(key),
-                        section_action: None,
+                    let end = start + title.len();
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "caps_drawer_retired",
+                        message: caps_drawer_retired_error(title),
+                        range: Some((start, end)),
+                        rewrite: None,
                     });
+                    continue;
+                }
+                if under_task {
+                    let trimmed = body_text.trim();
+                    if trimmed == "****" {
+                        let leading =
+                            body_text.len() - body_text.trim_start().len();
+                        let marker_start = body_start + leading;
+                        spans.push(Span {
+                            start: marker_start,
+                            end: marker_start + 2,
+                            kind: SpanKind::DrawerMarker,
+                            project_note: None,
+                            title: None,
+                            key: None,
+                            section_action: None,
+                        });
+                        spans.push(Span {
+                            start: marker_start + 2,
+                            end: marker_start + 4,
+                            kind: SpanKind::DrawerMarker,
+                            project_note: None,
+                            title: None,
+                            key: None,
+                            section_action: None,
+                        });
+                        spans.push(Span {
+                            start: marker_start + 2,
+                            end: marker_start + 2,
+                            kind: SpanKind::InteractivePlaceholder,
+                            project_note: None,
+                            title: None,
+                            key: None,
+                            section_action: None,
+                        });
+                        if !needs.contains(&Need::Drawer) {
+                            needs.push(Need::Drawer);
+                        }
+                        *mode = EditorMode::Incomplete;
+                        continue;
+                    }
+                    if let Some(parts) =
+                        bold_container_parts(body_text, body_start)
+                    {
+                        let task_drawer = !project_note_sections;
+                        if task_drawer
+                            && crate::native::capture_drawers::can_create_drawer(
+                                &parts.title,
+                                true,
+                            )
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        for range in parts.marker_ranges {
+                            spans.push(Span {
+                                start: range.start,
+                                end: range.end,
+                                kind: SpanKind::DrawerMarker,
+                                project_note: None,
+                                title: None,
+                                key: None,
+                                section_action: None,
+                            });
+                        }
+                        spans.push(Span {
+                            start: parts.title_range.start,
+                            end: parts.title_range.end,
+                            kind: SpanKind::DrawerBullet,
+                            project_note: None,
+                            title: Some(parts.title.clone()),
+                            key: Some(
+                                crate::native::capture_drawers::drawer_key(
+                                    &parts.title,
+                                ),
+                            ),
+                            section_action: None,
+                        });
+                        if !nested {
+                            diagnostics.push(Diagnostic {
+                                severity: Severity::Error,
+                                code: "empty_drawer_bullet",
+                                message: empty_bold_container_error(
+                                    &parts.title,
+                                ),
+                                range: Some((
+                                    parts.title_range.start,
+                                    parts.title_range.end,
+                                )),
+                                rewrite: None,
+                            });
+                            if !needs.contains(&Need::DrawerNotes) {
+                                needs.push(Need::DrawerNotes);
+                            }
+                            *mode = EditorMode::Incomplete;
+                        }
+                    }
                 }
             }
         }
     }
 
-    if !under_task {
+    if !under_task || project_note_sections {
         return;
     }
     for (start, end) in first_level_groups(sub_bullets) {
         if sub_bullets[start].drawer.is_some() {
             continue;
         }
-        if end - start > 1 && is_all_caps_drawer_title(&sub_bullets[start].body)
+        if end - start > 1
+            && let Some(parts) =
+                bold_container_parts(&sub_bullets[start].body, 0)
+            && crate::native::capture_drawers::can_create_drawer(
+                &parts.title,
+                true,
+            )
+            .is_ok()
         {
-            let title = sub_bullets[start].body.trim().to_string();
             sub_bullets[start].drawer = Some(DrawerSelector {
-                text: title,
+                text: parts.title,
                 exact: true,
             });
         }

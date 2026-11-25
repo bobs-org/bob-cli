@@ -147,7 +147,7 @@ scanner as `bob capture-drawers`; the replacement range and text cover the \
 not resolve back to the same drawer). Bullet drawer completion covers the '#' that \
 starts a first-level bullet (`- #`, `- #fut`) where its bullets land directly under a \
 task (a new task, a new project note, or a note-less '@route+id'): every row's \
-replacement is the bare ALL-CAPS title (`FUTURE WORK`), with a nested `  - ` bullet \
+replacement is a whole-bold title (`**Future Work**`), with a nested `  - ` bullet \
 opened after it when nothing nested follows, and a bullet-start '#' that cannot name \
 a drawer returns a successful empty result. A first-level bullet's \
 leading '#' in a notebook body (a route-only '@nb' list or a \
@@ -299,7 +299,7 @@ own `%`, `#`, `@`, `~`, URLs, and `((` before task pickers. A local \
 Record parse objects and record completion metadata advertise \
 `assist_version: 1` when this named-field contract is present.\n\n\
 Every success response reports \
-`grammar: 29` while `schema_version` stays 1; an empty bare `#` or `%` \
+`grammar: 30` while `schema_version` stays 1; an empty bare `#` or `%` \
 query, an empty `=*` merge source, or an empty drawer query after `@route+id#`, adds \
 `initial_selection: \"none\"`. \
 A solo leading `:` token \

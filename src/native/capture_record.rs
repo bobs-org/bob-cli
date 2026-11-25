@@ -885,9 +885,9 @@ pub(crate) fn field_inputs_from_intent(
         .collect()
 }
 
-/// Convert grouped capture notes into engine note inputs. ALL-CAPS
-/// sections become one section input with flattened children; ordinary
-/// groups become one input per first-level line.
+/// Convert grouped capture notes into engine note inputs. Explicit bold
+/// section groups become one section input with flattened children;
+/// ordinary groups become one input per first-level line.
 pub(crate) fn record_note_inputs(
     intent: &RecordNoteIntent,
 ) -> Vec<RecordNoteInput> {
@@ -898,6 +898,7 @@ pub(crate) fn record_note_inputs(
         inputs.push(RecordNoteInput {
             text: intent.title.clone(),
             children: Vec::new(),
+            section: false,
         });
     }
     for group in &intent.notes {
@@ -913,6 +914,7 @@ pub(crate) fn record_note_inputs(
                 inputs.push(RecordNoteInput {
                     text: line.text.clone(),
                     children: note_child_texts(&line.children),
+                    section: false,
                 });
             }
         }

@@ -51,7 +51,7 @@ fn worked_example_files_notes_drawers_json_and_human() {
         &vault,
         "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n  - REQUIREMENTS\n    - 2 GB RAM\n",
     );
-    let draft = "@foo+bar\n- Ping Alice about the cutover\n- REQUIREMENTS\n  - Postgres 17 minimum\n- FUTURE WORK\n  - Try logical replication\n- Benchmarks look fine\n  - p99 under 40 ms";
+    let draft = "@foo+bar\n- Ping Alice about the cutover\n- **REQUIREMENTS**\n  - Postgres 17 minimum\n- **FUTURE WORK**\n  - Try logical replication\n- Benchmarks look fine\n  - p99 under 40 ms";
     // Human dry-run first: the vault is fresh so FUTURE WORK is new.
     let human = bob_command()
         .arg("capture")

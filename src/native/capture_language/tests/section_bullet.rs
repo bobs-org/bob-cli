@@ -218,6 +218,19 @@ fn all_caps_in_a_list_stays_a_plain_note() {
         panic!("{:?}", parsed.items[0].parsed.kind);
     };
     assert!(section.is_none());
+
+    let parsed = draft("@dev\n- **Keybinds**\n  - leader is space")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(parsed.items[0].parsed.body, "**Keybinds**");
+    let CaptureKind::NotebookNote { section, .. } =
+        &parsed.items[0].parsed.kind
+    else {
+        panic!("{:?}", parsed.items[0].parsed.kind);
+    };
+    assert!(
+        section.is_none(),
+        "route-only notebooks keep bold as a note"
+    );
 }
 
 #[test]
@@ -304,8 +317,8 @@ fn create_seed_plan_puts_plain_siblings_first() {
 }
 
 #[test]
-fn create_all_caps_and_hash_merge() {
-    let raw = "Notes @dev^nvim@ %n\n- KEYMAPS\n  - x\n- #Keymaps\n  - y";
+fn create_bold_and_hash_sections_merge() {
+    let raw = "Notes @dev^nvim@ %n\n- **Keymaps**\n  - x\n- #Keymaps\n  - y";
     let draft = split_capture_draft(raw);
     match plan_create_item(&draft.items[0], "dev_nvim") {
         NotebookBodyOutcome::Ready(plan) => {
@@ -315,6 +328,21 @@ fn create_all_caps_and_hash_merge() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn create_seed_refuses_legacy_caps_container_drafts() {
+    let raw = "Notes @dev^nvim@ %n\n- KEYMAPS\n  - x";
+    let policy = policy();
+    let error = parse_capture_draft_with_options_coded(
+        raw,
+        None,
+        None,
+        &strict_options(Some(&policy)),
+    )
+    .expect_err("legacy container syntax is retired");
+    assert_eq!(error.code, Some("caps_drawer_retired"));
+    assert!(error.message.contains("**KEYMAPS**"), "{error:?}");
 }
 
 #[test]

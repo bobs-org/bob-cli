@@ -363,7 +363,7 @@ fn an_authored_notes_drawer_merges_scooped_notes() {
     let json = capture_json(
         &vault,
         &[],
-        "@work Fix export\n- [ ] Handles CRLF\n- NOTES\n  - already filed\n- see the ticket",
+        "@work Fix export\n- [ ] Handles CRLF\n- **NOTES**\n  - already filed\n- see the ticket",
     );
     assert_req_entry(&json, "Fix export", 1, 1, false, false);
     let note = read_work(&vault);
@@ -371,8 +371,7 @@ fn an_authored_notes_drawer_merges_scooped_notes() {
         note.contains(concat!(
             "- [ ] #task Fix export [created::2026-06-15]\n",
             "\t- [ ] Handles CRLF\n",
-            // An ALL-CAPS draft title is written as typed inside the bold
-            // marker until capture-drawers owns the casing rule.
+            // A bold draft title is written verbatim in the drawer header.
             "\t- **NOTES**\n",
             "\t\t- already filed\n",
             "\t\t- see the ticket\n",
@@ -387,7 +386,7 @@ fn interleaved_notes_reqs_and_drawers_canonicalize() {
     let json = capture_json(
         &vault,
         &[],
-        "@work Fix export\n- see the ticket\n- [ ] Handles CRLF\n- FUTURE WORK\n  - later",
+        "@work Fix export\n- see the ticket\n- [ ] Handles CRLF\n- **FUTURE WORK**\n  - later",
     );
     assert_req_entry(&json, "Fix export", 1, 1, true, false);
     let note = read_work(&vault);
@@ -397,8 +396,7 @@ fn interleaved_notes_reqs_and_drawers_canonicalize() {
             "\t- [ ] Handles CRLF\n",
             "\t- **Notes**\n",
             "\t\t- see the ticket\n",
-            // An ALL-CAPS draft title is written as typed inside the bold
-            // marker until capture-drawers owns the casing rule.
+            // The bold draft title is preserved in the drawer header.
             "\t- **FUTURE WORK**\n",
             "\t\t- later\n",
         )),

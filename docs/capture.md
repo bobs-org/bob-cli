@@ -179,7 +179,7 @@ anything is written, and any failure rolls the whole batch back.
 | `- <task> :<task-id>` (project-note bullet) | Name the task, make it Next (`[*]`, or `[?]` when scheduled), and link `[[<stem>#^<task-id>]]` into the Pomodoro the task's type places, or the `#pomodoro` one |
 | `- <task> ^<task-id>` (project-note bullet) | Name the task only: `- [ ] #task <task> [created::DATE] ^<task-id>` |
 | `@route+block-id` | Ordinary child bullet under an existing task |
-| `@route+block-id#section <text>` | Child bullet under an ALL-CAPS section of that task |
+| `@route+block-id#drawer <text>` | Child bullet inside the named task drawer |
 | `@route+block-id` + bullets, no note text | File each first-level bullet as its own note, drawer bullets into that task's drawers |
 | `@route+block-id#drawer` + bullets, no note text | File each first-level bullet as its own note inside that drawer |
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
@@ -199,8 +199,9 @@ anything is written, and any failure rolls the whole batch back.
 | `#` | Incomplete `#<type>` at a parent-line or nested-bullet edge: add a type (`#fix`) or write `\#` to keep a literal `#`; a first-level `- #` names a drawer under a task or a notebook section under a route-only `@nb` list / `%n` body; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`; punctuated drawers like `WHAT IS SASE?` are reached through the menu or `#"WHAT IS SASE?"`, since `#what-is-sase` does not select them) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
-| `- #future-work` | Drawer shortcut on a first-level bullet under a new task or new project note: nest notes beneath it; capture writes `- FUTURE WORK` |
-| `- FUTURE WORK` with nested notes | Drawer bullet: an ALL-CAPS title with nested notes is a drawer (grammar below; e.g., `WHAT IS SASE?`); a childless ALL-CAPS bullet stays a plain note |
+| `- #future-work` | Drawer shortcut on a first-level bullet under a task: nest notes beneath it; completion inserts a whole-bold title such as `- **Future Work**` |
+| `- **Future Work**` with nested notes | Bold container header: creates or selects the task drawer; new project notes write `## Future Work`, and `%n` seeds create the same section title |
+| `- FUTURE WORK` with nested notes | Retired capture draft; refused with `caps_drawer_retired`. Existing ALL-CAPS drawers remain readable, and a childless ALL-CAPS bullet stays ordinary text |
 | `- #` | Incomplete drawer shortcut under a task, or incomplete notebook section under a route-only `@nb` list / `%n` body: add a name (`needs: ["drawer"]` / `["section"]`) or write `\#`; a complete childless shortcut needs nested notes (`needs: ["drawer_notes"]` / `["section_notes"]`) |
 | `- #Section` under `@nb` or `%n` | Notebook section bullet: nested one-line notes file under `## Section`; the selector line is never a note; `\#git` keeps a literal `#git` note |
 
@@ -442,7 +443,7 @@ Bob refuses two cases before planning writes:
 
 A separate `#<type>` token after `@route^id` types the new task. After
 `@route+id`, it retypes the existing task in the same transaction; a glued
-`#drawer` suffix names the ALL-CAPS task drawer for the child bullet. A `#` in the middle of the body stays ordinary text.
+`#drawer` suffix names a task drawer for the child bullet. A `#` in the middle of the body stays ordinary text.
 `@route::id` is retired; use `@route^id` for an ordinary task with a block ID.
 
 Leading `@route text` is accepted only on an item's first physical line. Later
@@ -1032,28 +1033,26 @@ later lines compose trailing runs only. A `sub_bullet`
 capture (`@route+block-id`) nests the newly captured line under the selected
 existing task, then preserves both authored levels relative to that new line.
 
-On a new task or a new project note, a first-level bullet that starts with
-`#` is a drawer shortcut: `- #future-work` with nested notes writes
-`- FUTURE WORK` (the catalog's most-used spelling when the slug matches).
-A first-level ALL-CAPS title with nested notes is the same drawer
-(`- FUTURE WORK` / `  - try replication`). A drawer title starts with
-`A-Z` or `0-9`, continues with `A-Z`, `0-9`, space, tab, and
-`& ' ( ) , . / -`, plus `?`, `!`, and `;` anywhere after the lead and `:`
-only as the final character (so `WHAT IS SASE?` and `OPTIONS:` qualify,
-but `NOTE: X`, `KEY:: VALUE`, and `OPTIONS::` do not), and contains at
-least one `A-Z`. A childless ALL-CAPS bullet
-stays a plain note. Same-line notes under `@route+id <note>` still nest,
-and a drawer shortcut there is refused (`drawer_bullet_position`). A
-drawer shortcut takes no same-line text (`drawer_bullet_text`); nest the
-note beneath it. Capture never creates an empty drawer
-(`empty_drawer_bullet`). A Bob-managed name (`TASKS`, `SCHEDULE LOG`,
-`LINKS`, and the other managed log and relation labels) cannot name a drawer
-under a task: `#tasks` and a literal `TASKS` with nested notes are refused
-(`reserved_drawer`), and `bob capture-parse` reports the same code and wording
-on the bullet's exact byte range as soon as it is typed. A childless literal
-stays a plain note, and a new project note keeps `TASKS` as a structural merge.
-On a new project note the shortcut becomes a `## Title Case` section through
-the existing writer.
+Under a task, a first-level `- #future-work` is a drawer shortcut. Accepting a
+completion row inserts a whole-bold header, for example `- **Future Work**`,
+with the caret opened on a nested note. You can also author the complete
+container as `- **Future Work**` followed by nested notes. The title is one
+line, has no `*` or whitespace inside the delimiters, contains a Unicode
+letter or digit, and does not end in `:`; Bob preserves its spelling. A
+childless bold container is refused with `empty_drawer_bullet`. A nested
+ALL-CAPS header draft such as `- FUTURE WORK` is refused with
+`caps_drawer_retired`; childless ALL-CAPS text remains ordinary content and
+existing ALL-CAPS drawers remain readable. `__Title__` writes visible bold
+text that stays an ordinary note.
+
+A shortcut takes no same-line text (`drawer_bullet_text`); nest the note
+beneath it. Same-line notes under `@route+id <note>` still nest, and a drawer
+shortcut there is refused (`drawer_bullet_position`). Bob-managed names such
+as `TASKS`, `SCHEDULE LOG`, and `LINKS` cannot be selected with `#` and report
+`reserved_drawer`; a bold line with one of those names stays an ordinary note.
+On a new project note, a whole-bold container such as `- **Future Work**`
+with nested notes becomes a verbatim `## Future Work` section. On an existing
+`^prj` task, drawer completion resolves against eligible `##` sections.
 
 #### Requirement bullets {#requirement-bullets}
 
@@ -1073,7 +1072,7 @@ Fix the export
 
 | Item and position | Checkbox bullet | Plain bullet |
 | --- | --- | --- |
-| New task (`Task`, `@route`, `@route^id`, `@route:id` with text, a task-list bullet) or note-less `@route+id`, first level | Requirement, depth 1 | Note, or a drawer header (`- #slug`, ALL-CAPS with nested bullets) |
+| New task (`Task`, `@route`, `@route^id`, `@route:id` with text, a task-list bullet) or note-less `@route+id`, first level | Requirement, depth 1 | Note, or a drawer header (`- #slug`, whole-bold with nested bullets) |
 | Under a drawer header | `req_in_drawer` | Drawer note |
 | Under a requirement at depth `d` | Requirement, depth `d+1` | Note of that requirement |
 | Under a note | `req_parent` | Nested note |
@@ -1322,7 +1321,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 29`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 30`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -6124,7 +6123,7 @@ Finish the Google exit packet! @cash^goog-exit@#admin
   - keep it short
 - Call Morgan Stanley about the 401k :call-ms
 - Collect the equity paperwork ^equity-docs
-- FUTURE WORK
+- **Future Work**
   - Revisit the severance terms
 ```
 
@@ -6203,19 +6202,15 @@ metadata, and `^prj` keeps capture's documented `s:<N>` `[?]` rule.
 `bob projects sync` never writes frontmatter `scheduled`.
 
 Authored child bullets are re-routed into the new note rather than nested
-under the captured line. A first-level authored bullet with at least one
-nested authored bullet **and** an ALL-CAPS drawer title (the drawer title
-grammar above, so `WHAT IS SASE?` and `OPTIONS:` qualify) becomes a
-`## Title Case` section appended at the end of the note, with its nested
-bullets copied in verbatim as `- <body>` lines. Title casing lowercases the
-body and uppercases the first character of every alphanumeric run, so
-`FUTURE WORK` becomes `Future Work`, `NON-GOALS` becomes `Non-Goals`, and
-`API DESIGN` becomes `Api Design` without preserving the acronym. Two
-sections whose titles normalize equally (trimmed, whitespace-collapsed,
-casefolded) merge into one in source order. A first-level bullet ending with
-a task ID always takes the task branch instead — naming it states the intent,
-so an ALL-CAPS bullet with nested bullets and a ` :<id>` / ` ^<id>` still
-renders as a task. Every other first-level authored bullet becomes a
+under the captured line. A first-level whole-bold container with nested
+authored bullets becomes a `##` section at the end of the note. Its title is
+preserved verbatim, and its nested bullets are copied as `- <body>` lines.
+Two sections whose titles normalize equally (trimmed, whitespace-collapsed,
+casefolded) merge into one in source order. A nested ALL-CAPS container draft
+is refused with `caps_drawer_retired`. A first-level bullet ending with a
+task ID always takes the task branch instead — naming it states the intent,
+so a bold container with a ` :<id>` / ` ^<id>` still renders as a task. Every
+other first-level authored bullet becomes a
 `- [ ] #task <body> [created::YYYY-MM-DD]` line inside `## Tasks`, with its
 nested authored bullets rendered one indentation unit beneath it; an authored
 checkbox status is preserved, and a bare ALL-CAPS bullet with no nested
@@ -6889,9 +6884,11 @@ Ramen Nagi @eat/
 This creates `eat/ramen_nagi.md` through the records planner and the
 existing no-replace installer. First-level `key:: value` bullets become
 field inputs (unknown keys stay fields so validation can teach the
-correction). Other first-level bullets, including ALL-CAPS section titles
-with nested bullets, become notes. Field values are opaque: URLs, wikilinks,
-and task sigils inside a `key:: value` are schema-checked only. Nested
+correction). Other first-level bullets become notes. A whole-bold
+container with nested bullets becomes a `##` group with its authored title
+preserved; nested ALL-CAPS group drafts are refused with
+`caps_drawer_retired`. Field values are opaque: URLs, wikilinks, and task
+sigils inside a `key:: value` are schema-checked only. Nested
 bullets under a field refuse with `record_field_nested`. A first-level
 `key: value` with one colon stays a note and warns
 `record_field_single_colon`.
@@ -7116,9 +7113,10 @@ is preserved. Plain first-level siblings stay in the top region in source
 order even when they sit between or after section groups. Repeated `#`
 groups merge in source order. Unquoted create words keep typed capitals
 (`#API-keys` → `API Keys`). Quoted titles stay verbatim. `#1`, `##`, and
-`#-` stay prose. `- \#git` writes a literal `#git` note. ALL-CAPS
-first-level bullets with children remain `%n` section seeds (Title Case);
-in `@nb` lists they stay plain notes with detail. A complete selector
+`#-` stay prose. `- \#git` writes a literal `#git` note. Whole-bold
+first-level bullets with children become `%n` section seeds with their titles
+preserved; nested ALL-CAPS drafts are refused with `caps_drawer_retired`. In
+`@nb` lists, bold titles stay plain notes with detail. A complete selector
 without nested notes is `incomplete` with `needs: ["section_notes"]` in
 the editor and `empty_section_bullet` at capture. Bare `- #`, `Note @nb#`,
 and an `@nb#` header need `section`. Same-line leftover text is
@@ -7139,9 +7137,9 @@ note under `## Git`.
 
 A complete `@parent^id@` caret seal plus `%n` creates a notebook named
 `<parent>_<id>.md` in the same capture transaction: `Neovim config notes
-@dev^nvim@ %n` writes `dev_nvim.md`, seeds ALL-CAPS first-level bullets as
-Title Case `##` sections and `- #Section` groups through the same body
-plan, updates owner catalogs, and lets later items in
+@dev^nvim@ %n` writes `dev_nvim.md`, seeds whole-bold first-level
+bullets as verbatim `##` sections and `- #Section` groups through the same
+body plan, updates owner catalogs, and lets later items in
 the same draft write notes into the new route. JSON `kind` is
 `notebook_create`; human output is `📓 New notebook dev_nvim.md · in dev`.
 The new file is in top-level `note_files[]` with `action: "create"`. An
@@ -7193,18 +7191,19 @@ Missing IDs include a close-match suggestion when possible and direct callers
 to `bob capture-tasks -r <route>`.
 
 The same marker accepts an optional trailing `#<drawer>` selector, as in
-`@cash+goog-exit#notes` or `@foo+bar#future-work`. The selector names an
-ALL-CAPS child drawer of that task: a slug (`#future-work`) or a quoted
-literal (`#"FUTURE WORK"`). Matching is exact by key, with reserved,
-near-duplicate, and ambiguous refusals, and a missing drawer is created using
-the drawer's child indentation (a created `NOTES` drawer goes first among the
-task's drawers; any other new drawer goes before the managed logs). The captured block is appended at the end of
+`@cash+goog-exit#notes` or `@foo+bar#future-work`. The selector names a task
+drawer by key, whether its stored header is legacy ALL-CAPS or whole-bold:
+a slug (`#future-work`) or a quoted literal (`#"Future Work"`). Matching
+is exact by key, with reserved, near-duplicate, and ambiguous refusals, and a
+missing drawer is created using the drawer's child indentation (a created
+`Notes` drawer goes first among the task's drawers; any other new drawer goes
+before the managed logs). The captured block is appended at the end of
 that drawer's own block — before the next direct child of the parent task, and
 before a managed log nested under the drawer. On the project note's own
 `^prj` task the selector instead names one of the note's eligible `##`
 sections, appending the block after that section's last nonblank line and
-creating a new `## Title Case` section at the end of the note when missing;
-structural headings (Tasks, the status-group titles, Pomodoros, Events, and
+creating a new `##` section at the end of the note when missing; structural
+headings (Tasks, the status-group titles, Pomodoros, Events, and
 Highlights) are never drawers. `@route+id#` with an empty selector is
 incomplete and reports need `drawer`; it does not mean "any drawer". A second
 `#`, or `#` before `+`, is not this family (`@foo#bar+baz` remains a
@@ -7234,15 +7233,16 @@ task:
 
 A note-less `@route+id` (or `@route+id#drawer`) item files each first-level
 bullet as its own note. Plain bullets become notes under the task; drawer
-bullets (a leading `#slug` or an ALL-CAPS title with nested notes) file into
-that task's drawers. For example,
+bullets (a leading `#slug` or a whole-bold header with nested notes) file into
+that task's drawers. Nested ALL-CAPS container drafts are refused with
+`caps_drawer_retired`. For example,
 
 ```text
 @foo+bar
 - Ping Alice about the cutover
-- NOTES
+- **Notes**
   - Postgres 17 minimum
-- FUTURE WORK
+- **Future Work**
   - Try logical replication
 - Benchmarks look fine
   - p99 under 40 ms
@@ -7265,10 +7265,10 @@ writes
 Plain notes land at the plain-child anchor (the end of the task block, before
 the earliest direct Schedule, Work, or Rotten Log) in draft order. Drawer
 bullets naming an existing drawer append at that drawer's end; naming a
-missing drawer creates it at the plain-child anchor. A childless literal
-ALL-CAPS bullet that repeats a drawer the target already has is refused, and
-a childless drawer shortcut is refused because capture never creates an empty
-drawer. On a `^prj` target drawers are the note's `##` sections. With a glued
+missing drawer creates it at the plain-child anchor. A childless bold
+container is refused with `empty_drawer_bullet`, and a childless drawer
+shortcut is refused because capture never creates an empty drawer. On a
+`^prj` target drawers are the note's `##` sections. With a glued
 drawer and no note text (`@route+id#drawer` + bullets) every bullet files
 inside that drawer. A same-line note (`@route+id <note>` + bullets) still
 nests, and ALL-CAPS stays literal there. Item-wide `s:<N>`, `$<N>`, `%c`,
@@ -7345,7 +7345,7 @@ section merges (see [Merging tasks](task-merge.md)).
 | --- | --- | --- |
 | `@c` | Move | Each source moves into `c.md`'s Tasks area through the move engine, keeping its `^id` with repaired links, relocated Task Links, and freshness stamps. A source already in `c.md` is refused (`move_same_note`). |
 | `@c+id` | Merge into task | Each source merges into `^id` at its plain-child anchor in typed order, retiring as a cancelled tombstone with `merged into [[T]]` provenance. |
-| `@c+id#drawer` | Merge into drawer | Each source merges into that task's ALL-CAPS drawer (`#future-work` matches `FUTURE WORK`; quoted `#”...”` selectors allow spaces). On a `^prj` task the drawer is an `##` section. Missing drawers are created; near-duplicates are refused. |
+| `@c+id#drawer` | Merge into drawer | Each source merges into that task's drawer by normalized key (`#future-work` matches `FUTURE WORK`; quoted `#”...”` selectors allow spaces). Stored headers may be legacy ALL-CAPS or whole-bold. On a `^prj` task the drawer is an `##` section. Missing drawers are created; near-duplicates are refused. |
 | `@c#section` | Merge into section | Each source merges into that note's `##` section, created in Title Case when missing. Works on area and project notes. |
 
 A transfer is recognized before target-run fan-out, so it never fans out and
@@ -7418,7 +7418,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 29. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
+`capture-parse` and `capture-complete` report grammar revision 30. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; it adds `drawer_marker` and title-only `drawer_bullet` spans and refuses nested ALL-CAPS drafts with `caps_drawer_retired`. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
 refuses an operator-only first-line body after an existing-task link start,
 teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
@@ -7600,7 +7600,7 @@ A separate `#type` token on `@route+block-id` retypes the existing task
 in the same transaction; a marker-only item also ensures Next, and the task's
 Task Link moves to the placement selected by that type. When the item has body
 text, `@route+block-id#drawer <text>` keeps its child-bullet meaning and selects
-an ALL-CAPS task drawer. A glued `@route+block-id#` with no drawer name is
+a task drawer by key. A glued `@route+block-id#` with no drawer name is
 incomplete and needs a drawer.
 
 The link-presence toggle, including Pomodoro-link insertion and
@@ -7886,14 +7886,14 @@ keep the prefix-matching behavior described above. Without `--section`,
 
 With `--route`, `-t, --task BLOCK-ID` selects sub-bullet mode while keeping
 every `@token` in the text literal. Add `-D, --drawer TITLE` to nest the
-new bullet under an ALL-CAPS child drawer of that task whose title matches
-`TITLE` exactly, compared case insensitively. `--drawer` also works with
+new bullet under a task drawer whose key matches `TITLE` exactly, compared
+case insensitively. `--drawer` also works with
 the hidden `--task-ref` option below; the command requires `--route` and
 either `--task` or `--task-ref`. Unlike a typed `#<drawer>` selector it is
 never slug-matched, so `--drawer future-work` does **not** match
-`FUTURE WORK` while `--drawer "Future Work"` does. On the project note's own
+`Future Work` while `--drawer "Future Work"` does. On the project note's own
 `^prj` parent it matches the note's eligible `##` sections instead, creating
-a missing section in Title Case. Picker
+a missing section with the supplied title spelling. Picker
 integrations may instead use the hidden `--task-ref <line>:<digest>` option,
 which also reaches parents without block IDs and recovers when unrelated edits
 shift the selected task's line.
@@ -7951,7 +7951,7 @@ Useful options:
   the task identified by that stale-safe ref from `capture-tasks` or
   `capture-complete`. Conflicts with `--task`. Not listed in `--help`.
 - `-D, --drawer TITLE`: with `--route` and `--task` or `--task-ref`, nest
-  under the exact ALL-CAPS child drawer; conflicts with `--section`
+  under the exact task drawer title; conflicts with `--section`
 
 ### Input, stdin, and JSON output
 
@@ -8212,7 +8212,8 @@ was appended. A separate `#type` on a body-bearing `@route+id` child retypes
 the target in the same transaction; human and dry-run output show
 `new drawer` when `created` and the type row together. Drawer refusals carry
 a JSON `code` (`invalid_drawer`, `drawer_text`, `drawer_bullet_text`,
-`drawer_bullet_position`, `empty_drawer_bullet`, `ambiguous_drawer`,
+`drawer_bullet_position`, `empty_drawer_bullet`, `caps_drawer_retired`,
+`ambiguous_drawer`,
 `reserved_drawer`, `drawer_near_duplicate`, `drawer_toggle`), and creating a
 drawer near a catalog name emits the `drawer_near_catalog` warning.
 The batch-level `task_blocks` array carries the same parents in full; see
@@ -8877,7 +8878,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 29` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 30` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse consults local metadata but never
 executes the draft; a successful parse does not guarantee a successful
@@ -9400,7 +9401,7 @@ generic capture/block presentation.
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
 `pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `project_note_offer_marker`, `project_note_separator`, `sub_bullet_route`,
-`sub_bullet_block_id`, `drawer`, `drawer_bullet`, `task_toggle_route`,
+`sub_bullet_block_id`, `drawer`, `drawer_marker`, `drawer_bullet`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_explicit_toggle`, `task_type`, `global_route`,
 `schedule`, `priority`, `clipboard`,
 `ref_url`, `gmail_url`, `ref_listen`,
@@ -9408,8 +9409,8 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `wikilink_heading`, `wikilink_block_id`, `wikilink_alias`,
 `wikilink_task_delimiter`, or `wikilink_task_query`. A first-level
 `- #future-work` shortcut is a `drawer` span with lexical `title` and `key`.
-An ALL-CAPS first-level drawer bullet with nested notes is a `drawer_bullet`
-span over the title text. A notebook section selector is a `section` span
+Each opening and closing `**` in a bold container is a `drawer_marker` span;
+the title alone is a `drawer_bullet` span. A notebook section selector is a `section` span
 with `notebook: true`, the resolved or to-be-created `title`, and optional
 `section_action` (`existing` or `create`); unrelated spans omit the field. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
@@ -9453,13 +9454,12 @@ stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
 and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
-`invalid_sub_bullet_block_id`, `invalid_drawer`,
-`drawer_bullet_text`, `drawer_bullet_position`, `empty_drawer_bullet`,
-`reserved_drawer` (a Bob-managed drawer name on a first-level shortcut or
-ALL-CAPS literal with nested notes under a new task or an existing
-`@route+id` target, ranged on the bullet's name; never on a new project note,
-and structural `^prj` headings or near-duplicates stay commit-time, because
-only the vault knows),
+`invalid_sub_bullet_block_id`, `invalid_drawer`, `drawer_bullet_text`,
+`drawer_bullet_position`, `empty_drawer_bullet`, `caps_drawer_retired`,
+`reserved_drawer` (a Bob-managed drawer name selected by a first-level
+shortcut, ranged on the bullet's name; nested legacy ALL-CAPS container
+drafts instead report `caps_drawer_retired`; structural `^prj` headings and
+near-duplicates stay commit-time, because only the vault knows),
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=bugs=3`, `=deep work`, or `=3bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, terminal markers on a complete shape, or an operator-only first-line body after a link start; the operator-only case ranges the operators and teaches the glued `+` spelling for one `++[N]` token), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one list or item, naming both lines), `empty_list` (a list header with no bullets), `list_header_marker` (item-wide markers on a list header line, which stands alone), `list_bullet_marker` (a route-changing marker on a list bullet), `list_bullet_checkbox` (a non-open checkbox on a list bullet), `template_list` (a list header in a `%t` template body), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a `%n` directive on the same item as `@route`,
 `s:<N>`, or `$<N>`),
@@ -10161,11 +10161,11 @@ task: a new task, a new project note, or a note-less `@route+id` (the
 [multi-note form](#several-notes-at-once)), or a note-less `@route+id @route+id`
 target run (which offers the first member's drawers). The field's
 `replacement` covers the whole shortcut, `#` through its end, and every row's
-`replacement` is the bare ALL-CAPS title (`FUTURE WORK`), never `#slug`. A row
-is valid only when committing that literal title (an exact resolution, like any
-ALL-CAPS drawer bullet) reaches the row's intent: the same existing drawer, or
-a creation of the same key; otherwise the row carries the resolver's `refused`
-reason. An existing task offers `task`, `recent`, and `new` rows with the glued
+`replacement` is a whole-bold header such as `**Future Work**`, never
+`#slug`. The title keeps its selected catalog spelling or authored spelling.
+A `new` row appears only when that bold header creates or selects the advertised
+drawer or section; reserved selectors that would become ordinary bold notes
+are omitted. An existing task offers `task`, `recent`, and `new` rows with the glued
 menu's copy; a new task offers `recent` and `new` rows only, with the
 consequence `Starts FUTURE WORK on the new task`; a new project note offers
 the same two groups with `Creates ## Future Work`. When the shortcut ends its
@@ -10443,7 +10443,7 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 29`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 30`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 
@@ -10814,7 +10814,7 @@ candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 `label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
 section candidate has `title` and `level`. A drawer candidate has
-`title` (the original ALL-CAPS body), `key`, `slug`, `route`, nullable `block_id`,
+`title` (the exact title spelling), `key`, `slug`, `route`, nullable `block_id`,
 `text` (the parent task description), `line`, `entry_count`, `group`
 (`task`, `recent`, or `new`), `detail`, `creates`, and optional
 `note_count` and `last_seen` (recent rows), `refused`, `consequence`, and
@@ -10828,7 +10828,7 @@ drawer; it covers the `#` and the name, and `cursor_after` is the draft offset
 just past it. The response adds `target: {route, block_id, text}`, and a
 `query` holding the decoded drawer query. On a `^prj` parent the `task` rows
 are the note's eligible `##` sections instead of task-child drawers. At a
-bullet start the rows use the same fields, `replacement` is the bare ALL-CAPS
+bullet start the rows use the same fields, `replacement` is a whole-bold
 title (with `\n  - ` appended when it opens the nested bullet), and `target`
 describes where the bullets land: `block_id` is `null` for a new task
 (`route` is its destination note, `text` its body) and `"prj"` for a new

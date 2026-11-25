@@ -122,6 +122,15 @@ pub(crate) fn normalize_drawer_literal(decoded: &str) -> Option<String> {
     is_legacy_drawer_title(&canonical).then_some(canonical)
 }
 
+/// Validate a title for direct whole-bold container syntax while preserving
+/// its authored case.
+pub(crate) fn normalize_bold_drawer_title(decoded: &str) -> Option<String> {
+    let wrapped = format!("**{decoded}**");
+    drawer_body_title(&wrapped)
+        .filter(|(_, marker)| *marker == DrawerMarker::Bold)
+        .map(|(title, _)| title.to_string())
+}
+
 /// Whitespace-collapsed Unicode uppercase key for a drawer title.
 pub(crate) fn drawer_key(title: &str) -> String {
     place::place_key(title)

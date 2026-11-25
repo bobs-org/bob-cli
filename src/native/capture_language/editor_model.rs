@@ -110,6 +110,8 @@ pub(crate) enum SpanKind {
     /// An ALL-CAPS first-level drawer bullet (the title text, not a `#`
     /// shortcut).
     DrawerBullet,
+    /// One of the two `**` delimiters around an authored container title.
+    DrawerMarker,
     MergeInArrow,
     MergeInSource,
     /// An admitted requirement's checkbox: `[`, the mark, `]`, and one
@@ -204,6 +206,7 @@ impl SpanKind {
             Self::WikilinkTaskDelimiter => "wikilink_task_delimiter",
             Self::WikilinkTaskQuery => "wikilink_task_query",
             Self::DrawerBullet => "drawer_bullet",
+            Self::DrawerMarker => "drawer_marker",
             Self::MergeInArrow => "merge_in_arrow",
             Self::MergeInSource => "merge_in_source",
             Self::ReqMarker => "req_marker",

@@ -154,8 +154,8 @@ fn capture_prj_drawer_creates_missing_h2_in_title_case() {
         format!("{PROJECT_NOTE}\n## New Area\n\n- first\n- second\n")
     );
 
-    // An explicit `--drawer` title matches case insensitively and creates
-    // a missing section in Title Case.
+    // An explicit `--drawer` title creates a missing section with the
+    // authored spelling.
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -174,7 +174,7 @@ fn capture_prj_drawer_creates_missing_h2_in_title_case() {
     assert_success(&output);
     assert!(fs::read_to_string(vault.join("proj.md"))
         .expect("read note")
-        .ends_with("## Tech Debt\n\n- debt entry\n"));
+        .ends_with("## tech debt\n\n- debt entry\n"));
 }
 
 #[test]

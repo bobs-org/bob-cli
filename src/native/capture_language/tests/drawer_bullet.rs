@@ -92,7 +92,7 @@ fn nested_hash_still_types_and_first_level_does_not() {
 }
 
 #[test]
-fn editor_reports_drawer_needs_and_all_caps_spans() {
+fn editor_reports_drawer_needs_bold_spans_and_retired_caps() {
     let incomplete = editor("Ship it\n- #");
     assert_eq!(incomplete.mode, EditorMode::Incomplete);
     assert!(incomplete.needs.contains(&Need::Drawer), "{incomplete:?}");
@@ -104,16 +104,22 @@ fn editor_reports_drawer_needs_and_all_caps_spans() {
     assert!(notes.diagnostics.is_empty(), "{notes:?}");
     assert!(span_kinds(&notes).contains(&SpanKind::Drawer));
 
-    let caps = editor("Ship it\n- FUTURE WORK\n  - try replication");
+    let caps = editor("Ship it\n- **Future Work**\n  - try replication");
     assert!(
-        span_kinds(&caps).contains(&SpanKind::DrawerBullet),
+        span_kinds(&caps).contains(&SpanKind::DrawerBullet)
+            && span_kinds(&caps).contains(&SpanKind::DrawerMarker),
         "{:?}",
         span_kinds(&caps)
     );
-    assert_eq!(caps.sub_bullets[0].body, "FUTURE WORK");
+    assert_eq!(caps.sub_bullets[0].body, "**Future Work**");
     assert!(caps.sub_bullets[0].drawer.as_ref().is_some_and(|drawer| {
-        drawer.exact && drawer.text == "FUTURE WORK"
+        drawer.exact && drawer.text == "Future Work"
     }));
+
+    let retired = editor("Ship it\n- FUTURE WORK\n  - try replication");
+    assert_eq!(retired.diagnostics[0].code, "caps_drawer_retired");
+    assert!(retired.diagnostics[0].message.contains("**FUTURE WORK**"));
+    assert!(retired.sub_bullets[0].drawer.is_none());
 
     let childless_caps = editor("Plan trip\n- NYC");
     assert!(!span_kinds(&childless_caps).contains(&SpanKind::DrawerBullet));
@@ -122,23 +128,23 @@ fn editor_reports_drawer_needs_and_all_caps_spans() {
 
 #[test]
 fn punctuated_drawer_reports_a_drawer_bullet_span() {
-    // `@route+id` / `- WHAT IS SASE?` / `  - note` files into the drawer.
-    let caps = editor("@foo+bar\n- WHAT IS SASE?\n  - a note");
+    // `@route+id` / `- **What Is Sase?**` / `  - note` files into the drawer.
+    let caps = editor("@foo+bar\n- **What Is Sase?**\n  - a note");
     assert!(
         span_kinds(&caps).contains(&SpanKind::DrawerBullet),
         "{:?}",
         span_kinds(&caps)
     );
-    assert_eq!(caps.sub_bullets[0].body, "WHAT IS SASE?");
+    assert_eq!(caps.sub_bullets[0].body, "**What Is Sase?**");
     assert!(caps.sub_bullets[0].drawer.as_ref().is_some_and(|drawer| {
-        drawer.exact && drawer.text == "WHAT IS SASE?"
+        drawer.exact && drawer.text == "What Is Sase?"
     }));
 
-    let parsed = execute("@foo+bar\n- WHAT IS SASE?\n  - a note")
+    let parsed = execute("@foo+bar\n- **What Is Sase?**\n  - a note")
         .expect("punctuated drawer parses");
-    assert_eq!(parsed.sub_bullets[0].body, "WHAT IS SASE?");
+    assert_eq!(parsed.sub_bullets[0].body, "**What Is Sase?**");
     assert!(parsed.sub_bullets[0].drawer.as_ref().is_some_and(|drawer| {
-        drawer.exact && drawer.text == "WHAT IS SASE?"
+        drawer.exact && drawer.text == "What Is Sase?"
     }));
 
     // A quoted slug resolves to the punctuated title.
@@ -172,16 +178,13 @@ fn reserved_ranges(raw: &str) -> Vec<(&'static str, String)> {
 fn editor_flags_reserved_shortcuts_and_literals_under_a_task() {
     for (raw, flagged) in [
         ("Ship it\n- #tasks\n  - note", "#tasks"),
-        ("Ship it\n- TASKS\n  - note", "TASKS"),
         ("Ship it\n- #schedule-log\n  - note", "#schedule-log"),
         (
             "Ship it\n- #\"Schedule Log\"\n  - note",
             "#\"Schedule Log\"",
         ),
-        ("Ship it\n- SCHEDULE LOG\n  - note", "SCHEDULE LOG"),
         ("Ship it\n- #links\n  - note", "#links"),
         ("@foo+bar\n- #tasks\n  - note", "#tasks"),
-        ("@foo+bar\n- TASKS\n  - note", "TASKS"),
     ] {
         assert_eq!(
             reserved_ranges(raw),
@@ -225,10 +228,8 @@ fn reserved_ranges_are_utf8_byte_offsets() {
         vec![("reserved_drawer", "#tasks".to_string())]
     );
     let literal = "Ship caf\u{e9} \u{1f680}\n- TASKS\n  - note";
-    assert_eq!(
-        reserved_ranges(literal),
-        vec![("reserved_drawer", "TASKS".to_string())]
-    );
+    assert!(reserved_ranges(literal).is_empty());
+    assert!(codes(&editor(literal)).contains(&"caps_drawer_retired"));
 }
 
 #[test]
@@ -236,7 +237,8 @@ fn legal_controls_and_vault_dependent_names_stay_unflagged() {
     for raw in [
         // An ordinary drawer, shortcut and literal.
         "Ship it\n- #future-work\n  - note",
-        "Ship it\n- FUTURE WORK\n  - note",
+        "Ship it\n- **Future Work**\n  - note",
+        "Ship it\n- **TASKS**\n  - note",
         // A childless literal ALL-CAPS bullet is a plain note, even when
         // the word is a managed name.
         "Ship it\n- TASKS",
@@ -258,7 +260,7 @@ fn legal_controls_and_vault_dependent_names_stay_unflagged() {
 fn a_new_project_note_keeps_its_structural_sections() {
     for raw in [
         "Parent @cash^p1@\n- #tasks\n  - merged\n- Real",
-        "Parent @cash^p2@\n- TASKS\n  - merged\n- Real",
+        "Parent @cash^p2@\n- **Tasks**\n  - merged\n- Real",
         "Parent @cash^p3@\n- #schedule-log\n  - merged\n- Real",
     ] {
         assert!(reserved_ranges(raw).is_empty(), "{raw:?}");
@@ -279,13 +281,11 @@ fn reserved_childless_shortcut_keeps_its_drawer_notes_need() {
 
 #[test]
 fn each_reserved_bullet_is_flagged_once_and_a_glued_drawer_stays_quiet() {
-    let raw = "Ship it\n- #tasks\n  - a\n- #future-work\n  - b\n- LINKS\n  - c";
+    let raw =
+        "Ship it\n- #tasks\n  - a\n- #future-work\n  - b\n- **LINKS**\n  - c";
     assert_eq!(
         reserved_ranges(raw),
-        vec![
-            ("reserved_drawer", "#tasks".to_string()),
-            ("reserved_drawer", "LINKS".to_string()),
-        ]
+        vec![("reserved_drawer", "#tasks".to_string())]
     );
     // Every bullet of a glued drawer item already lives in that drawer, so
     // a drawer-looking bullet there is not a drawer position.
@@ -302,6 +302,52 @@ fn execution_files_a_shortcut_under_a_new_task() {
     assert!(parsed.sub_bullets[0].drawer.is_some());
     assert_eq!(parsed.sub_bullets[1].body, "try replication");
     assert_eq!(parsed.sub_bullets[1].depth, AuthoredDepth::NESTED);
+}
+
+#[test]
+fn execution_admits_bold_titles_and_refuses_legacy_container_drafts() {
+    let parsed = execute("Ship it\n- **API Design**\n  - review")
+        .expect("bold drawer parses");
+    assert_eq!(parsed.sub_bullets[0].body, "**API Design**");
+    assert_eq!(
+        parsed.sub_bullets[0]
+            .drawer
+            .as_ref()
+            .map(|drawer| drawer.text.as_str()),
+        Some("API Design")
+    );
+
+    let empty = execute("Ship it\n- **API Design**")
+        .expect_err("capture cannot create an empty drawer");
+    assert!(empty.contains("has no nested notes"), "{empty}");
+
+    let retired = execute("Ship it\n- API DESIGN\n  - review")
+        .expect_err("legacy ALL-CAPS container drafts are retired");
+    assert!(
+        retired.contains("legacy ALL-CAPS container draft"),
+        "{retired}"
+    );
+    assert!(retired.contains("**API DESIGN**"), "{retired}");
+}
+
+#[test]
+fn bold_container_spans_are_utf8_byte_ranges() {
+    let raw = "Ship caf\u{e9}\n- **Café API**\n  - note";
+    let parsed = editor(raw);
+    let spans = &parsed.spans;
+    let markers: Vec<_> = spans
+        .iter()
+        .filter(|span| span.kind == SpanKind::DrawerMarker)
+        .collect();
+    let title = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::DrawerBullet)
+        .expect("title span");
+    assert_eq!(markers.len(), 2);
+    for marker in markers {
+        assert_eq!(&raw[marker.start..marker.end], "**");
+    }
+    assert_eq!(&raw[title.start..title.end], "Café API");
 }
 
 // ---------------------------------------------------------------------------

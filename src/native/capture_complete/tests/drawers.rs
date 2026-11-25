@@ -597,7 +597,7 @@ fn is_empty_success(temp: &TempDir, raw: &str, cursor: usize) -> bool {
 }
 
 #[test]
-fn bullet_menu_on_an_existing_task_offers_bare_titles_with_the_glued_copy() {
+fn bullet_menu_on_an_existing_task_offers_bold_titles_with_the_glued_copy() {
     let temp = vault("bob-cli-bullet-menu-existing");
     let raw = "@foo+bar\n- #";
     let value = bullet(&temp, raw);
@@ -628,7 +628,7 @@ fn bullet_menu_on_an_existing_task_offers_bare_titles_with_the_glued_copy() {
     assert_eq!(target.text, "Parent task");
 
     let requirements = row(&value, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "REQUIREMENTS\n  - ");
+    assert_eq!(requirements.replacement, "**REQUIREMENTS**\n  - ");
     assert_eq!(
         requirements.consequence.as_deref(),
         Some("Adds after \"fast disk\" in REQUIREMENTS")
@@ -638,7 +638,7 @@ fn bullet_menu_on_an_existing_task_offers_bare_titles_with_the_glued_copy() {
         row(&value, "recent", "MOTIVATION").consequence.as_deref(),
         Some("Creates MOTIVATION under ^bar")
     );
-    // Every replacement is a bare title: never `#slug` or `#"TITLE"`.
+    // Every replacement is a whole-bold title: never `#slug` or `#"TITLE"`.
     for item in rows(&value) {
         assert!(!item.replacement.starts_with('#'), "{item:?}");
     }
@@ -654,26 +654,29 @@ fn bullet_replacement_continues_with_a_nested_bullet_only_when_nothing_follows()
     // drawer's first note and the caret lands past it.
     let end = bullet(&temp, "@foo+bar\n- #req");
     let requirements = row(&end, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "REQUIREMENTS\n  - ");
+    assert_eq!(requirements.replacement, "**REQUIREMENTS**\n  - ");
     assert_eq!(
         requirements.cursor_after,
-        Some(hash + "REQUIREMENTS\n  - ".len())
+        Some(hash + "**REQUIREMENTS**\n  - ".len())
     );
 
-    // A nested bullet already follows: bare title, caret after the title.
+    // A nested bullet already follows: bold header, caret after the title.
     let nested_raw = "@foo+bar\n- #req\n  - already";
     let _cache = isolate_cache();
     let nested = result(temp.path(), nested_raw, hash + "#req".len());
     let requirements = row(&nested, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "REQUIREMENTS");
-    assert_eq!(requirements.cursor_after, Some(hash + "REQUIREMENTS".len()));
+    assert_eq!(requirements.replacement, "**REQUIREMENTS**");
+    assert_eq!(
+        requirements.cursor_after,
+        Some(hash + "**REQUIREMENTS**".len())
+    );
 
     // A sibling first-level bullet is not a nested bullet.
     let sibling_raw = "@foo+bar\n- #req\n- other";
     let sibling = result(temp.path(), sibling_raw, hash + "#req".len());
     assert_eq!(
         row(&sibling, "task", "REQUIREMENTS").replacement,
-        "REQUIREMENTS\n  - "
+        "**REQUIREMENTS**\n  - "
     );
 
     // Text after the token on the line: no continuation.
@@ -681,7 +684,7 @@ fn bullet_replacement_continues_with_a_nested_bullet_only_when_nothing_follows()
     let trailing = result(temp.path(), trailing_raw, hash + "#req".len());
     assert_eq!(
         row(&trailing, "task", "REQUIREMENTS").replacement,
-        "REQUIREMENTS"
+        "**REQUIREMENTS**"
     );
 }
 
@@ -710,7 +713,7 @@ fn bullet_menu_filters_by_the_typed_name_and_decodes_a_quoted_literal() {
     );
     assert_eq!(
         row(&quoted, "task", "FUTURE WORK").replacement,
-        "FUTURE WORK\n  - "
+        "**FUTURE WORK**\n  - "
     );
 }
 
@@ -719,7 +722,7 @@ fn bullet_new_row_spells_a_typed_slug_as_the_title_the_shortcut_creates() {
     let temp = vault("bob-cli-bullet-menu-new");
     let value = bullet(&temp, "@foo+bar\n- #brand-new");
     let created = row(&value, "new", "BRAND NEW");
-    assert_eq!(created.replacement, "BRAND NEW\n  - ");
+    assert_eq!(created.replacement, "**BRAND NEW**\n  - ");
     assert_eq!(
         created.consequence.as_deref(),
         Some("Creates BRAND NEW under ^bar")
@@ -729,7 +732,7 @@ fn bullet_new_row_spells_a_typed_slug_as_the_title_the_shortcut_creates() {
     let literal = bullet(&temp, "@foo+bar\n- #\"brand-new\"");
     assert_eq!(
         row(&literal, "new", "BRAND-NEW").replacement,
-        "BRAND-NEW\n  - "
+        "**BRAND-NEW**\n  - "
     );
 }
 
@@ -781,11 +784,10 @@ fn punctuated_drawer_lists_under_task_with_exact_slug_reach() {
         ),
     );
 
-    // Bullet-start `- #` lists it under the task group, not refused, with
-    // the bare-title replacement.
+    // Bullet-start `- #` lists it under the task group with a bold title.
     let value = bullet(&temp, "@foo+bar\n- #");
     let sase = row(&value, "task", "WHAT IS SASE?");
-    assert_eq!(sase.replacement, "WHAT IS SASE?\n  - ");
+    assert_eq!(sase.replacement, "**WHAT IS SASE?**\n  - ");
     assert_eq!(sase.refused, None);
     assert_eq!(sase.detail, "3 notes");
 
@@ -802,21 +804,20 @@ fn punctuated_drawer_lists_under_task_with_exact_slug_reach() {
 }
 
 #[test]
-fn bullet_menu_on_a_new_project_note_creates_title_case_sections() {
+fn bullet_menu_on_a_new_project_note_preserves_section_titles() {
     let temp = vault("bob-cli-bullet-menu-project-note");
     let value = bullet(&temp, "@foo^fresh@ Plan it\n- #");
-    assert_eq!(shape(&value), ["recent:Motivation", "recent:Acceptance"]);
+    assert_eq!(shape(&value), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
     let target = value.target.as_ref().expect("target");
     assert_eq!(target.route, "foo_fresh.md");
     assert_eq!(target.block_id.as_deref(), Some("prj"));
     assert_eq!(target.text, "Plan it");
-    let motivation = row(&value, "recent", "Motivation");
+    let motivation = row(&value, "recent", "MOTIVATION");
     assert_eq!(
         motivation.consequence.as_deref(),
-        Some("Creates ## Motivation")
+        Some("Creates ## MOTIVATION")
     );
-    // The bullet text stays ALL-CAPS: the project-note writer converts it.
-    assert_eq!(motivation.replacement, "MOTIVATION\n  - ");
+    assert_eq!(motivation.replacement, "**MOTIVATION**\n  - ");
 
     // The offer form `@route:id@` is also a new project note.
     let offer = bullet(&temp, "@foo:fresh@ Plan it\n- #");
@@ -847,12 +848,12 @@ fn bullet_menu_on_a_prj_task_lists_sections_and_refuses_structural_ones() {
         [
             "task:Requirements",
             "task:Future Work",
-            "recent:Motivation",
-            "recent:Acceptance",
+            "recent:MOTIVATION",
+            "recent:ACCEPTANCE",
         ]
     );
     let requirements = row(&value, "task", "Requirements");
-    assert_eq!(requirements.replacement, "REQUIREMENTS\n  - ");
+    assert_eq!(requirements.replacement, "**Requirements**\n  - ");
     assert_eq!(
         requirements.consequence.as_deref(),
         Some("Adds to ## Requirements")
@@ -902,7 +903,7 @@ fn bullet_rows_refuse_with_the_exact_resolvers_reason() {
         .collect();
     assert_eq!(duplicates.len(), 2);
     for duplicate in duplicates {
-        assert_eq!(duplicate.replacement, "NOTES\n  - ");
+        assert_eq!(duplicate.replacement, "**NOTES**\n  - ");
         assert_eq!(
             duplicate.refused.as_deref(),
             Some("drawer `NOTES` matches more than one drawer (lines 6, 7); rename one")

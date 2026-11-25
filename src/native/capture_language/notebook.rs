@@ -2808,6 +2808,7 @@ fn notebook_create_editor_view(
     let mut diagnostics = Vec::new();
     let mut mode = EditorMode::NotebookCreate;
     let mut section = None;
+    push_create_body_section_spans(&mut spans, item, options, &created);
     match outcome {
         NotebookBodyOutcome::Failed {
             diagnostics: extra, ..
@@ -2841,11 +2842,9 @@ fn notebook_create_editor_view(
                 .first()
                 .map(|entry| entry.selector.clone())
                 .or_else(|| first_complete_section_selector(item));
-            push_create_body_section_spans(&mut spans, item, options, &created);
         }
         NotebookBodyOutcome::Ready(plan) => {
             section = plan.sections.first().map(|entry| entry.selector.clone());
-            push_create_body_section_spans(&mut spans, item, options, &created);
         }
     }
     spans.sort_by_key(|span| (span.start, span.end));
@@ -2901,9 +2900,7 @@ fn push_create_body_section_spans(
     options: &EditorParseOptions<'_>,
     created: &str,
 ) {
-    let Some(policy) = options.notebook_policy else {
-        return;
-    };
+    let policy = options.notebook_policy;
     for line in item.lines.iter().skip(1) {
         let super::draft::AuthoredLineClass::Item(authored) =
             super::draft::classify_authored_line_capped(
@@ -2916,13 +2913,44 @@ fn push_create_body_section_spans(
         if authored.depth != super::model::AuthoredDepth::FIRST {
             continue;
         }
-        if let Some(SectionBulletHit::Complete {
-            span,
-            selector,
-            exact,
-            leftover,
-            ..
-        }) = scan_leading(authored.body, authored.body_start)
+        if let Some(parts) = super::drawer_bullet::bold_container_parts(
+            authored.body,
+            authored.body_start,
+        ) {
+            for range in parts.marker_ranges {
+                spans.push(Span {
+                    start: range.start,
+                    end: range.end,
+                    kind: SpanKind::DrawerMarker,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                    section_action: None,
+                });
+            }
+            spans.push(Span {
+                start: parts.title_range.start,
+                end: parts.title_range.end,
+                kind: SpanKind::DrawerBullet,
+                project_note: None,
+                title: Some(parts.title.clone()),
+                key: Some(crate::native::capture_drawers::drawer_key(
+                    &parts.title,
+                )),
+                section_action: None,
+            });
+            continue;
+        }
+        if let (
+            Some(policy),
+            Some(SectionBulletHit::Complete {
+                span,
+                selector,
+                exact,
+                leftover,
+                ..
+            }),
+        ) = (policy, scan_leading(authored.body, authored.body_start))
             && leftover.is_empty()
         {
             spans.push(section_span(

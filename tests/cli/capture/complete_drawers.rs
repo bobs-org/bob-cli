@@ -115,7 +115,7 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
     let draft = "Postgres 17 minimum @foo+bar#";
     let json = complete(&temp, &vault, draft);
 
-    assert_eq!(json["grammar"], 29);
+    assert_eq!(json["grammar"], 30);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["context"], "drawer");
     assert_eq!(json["initial_selection"], "none");
@@ -422,13 +422,13 @@ fn write_prj_note(vault: &Path) {
 }
 
 #[test]
-fn bullet_menu_json_pins_the_target_the_bare_titles_and_the_continuation() {
+fn bullet_menu_json_pins_the_target_bold_titles_and_the_continuation() {
     let temp = TempDir::new("bob-cli-bullet-menu-wire");
     let vault = drawer_vault(&temp);
     let draft = "@foo+bar\n- #";
     let json = complete(&temp, &vault, draft);
 
-    assert_eq!(json["grammar"], 29);
+    assert_eq!(json["grammar"], 30);
     assert_eq!(json["context"], "drawer");
     assert_eq!(json["initial_selection"], "none");
     assert_eq!(json["query"], "");
@@ -455,11 +455,17 @@ fn bullet_menu_json_pins_the_target_the_bare_titles_and_the_continuation() {
             "recent:ACCEPTANCE",
         ]
     );
+
+    let reserved = complete(&temp, &vault, "@foo+bar\n- #tasks");
+    assert!(rows(&reserved)
+        .iter()
+        .all(|candidate| candidate["key"] != "TASKS"));
+
     let requirements = row(&json, "task", "REQUIREMENTS");
     assert_eq!(
         *requirements,
         serde_json::json!({
-            "replacement": "REQUIREMENTS\n  - ",
+            "replacement": "**REQUIREMENTS**\n  - ",
             "title": "REQUIREMENTS",
             "key": "REQUIREMENTS",
             "slug": "requirements",
@@ -472,7 +478,7 @@ fn bullet_menu_json_pins_the_target_the_bare_titles_and_the_continuation() {
             "detail": "2 notes",
             "creates": false,
             "consequence": "Adds after \"fast disk\" in REQUIREMENTS",
-            "cursor_after": draft.len() - 1 + "REQUIREMENTS\n  - ".len(),
+            "cursor_after": draft.len() - 1 + "**REQUIREMENTS**\n  - ".len(),
         })
     );
     assert_eq!(
@@ -490,16 +496,16 @@ fn bullet_menu_continuation_depends_on_what_follows_the_token() {
     let json = complete(&temp, &vault, end);
     assert_eq!(
         row(&json, "task", "REQUIREMENTS")["replacement"],
-        "REQUIREMENTS\n  - "
+        "**REQUIREMENTS**\n  - "
     );
 
     let nested = "@foo+bar\n- #req\n  - already";
     let json = complete_at(&temp, &vault, nested, end.len());
     let requirements = row(&json, "task", "REQUIREMENTS");
-    assert_eq!(requirements["replacement"], "REQUIREMENTS");
+    assert_eq!(requirements["replacement"], "**REQUIREMENTS**");
     assert_eq!(
         requirements["cursor_after"],
-        "@foo+bar\n- ".len() + "REQUIREMENTS".len()
+        "@foo+bar\n- ".len() + "**REQUIREMENTS**".len()
     );
 }
 
@@ -534,23 +540,20 @@ fn bullet_menu_on_new_tasks_and_project_notes_carries_the_new_target() {
             "text": "Plan",
         })
     );
-    assert_eq!(shape(&note), ["recent:Motivation", "recent:Acceptance"]);
-    let motivation = row(&note, "recent", "Motivation");
-    assert_eq!(motivation["replacement"], "MOTIVATION\n  - ");
-    assert_eq!(motivation["consequence"], "Creates ## Motivation");
+    assert_eq!(shape(&note), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
+    let motivation = row(&note, "recent", "MOTIVATION");
+    assert_eq!(motivation["replacement"], "**MOTIVATION**\n  - ");
+    assert_eq!(motivation["consequence"], "Creates ## MOTIVATION");
 
     write_prj_note(&vault);
     let prj = complete(&temp, &vault, "@proj+prj\n- #");
     assert_eq!(prj["target"]["block_id"], "prj");
     assert_eq!(
         row(&prj, "task", "Requirements")["replacement"],
-        "REQUIREMENTS\n  - "
+        "**Requirements**\n  - "
     );
     let structural = complete(&temp, &vault, "@proj+prj\n- #pomodoros");
-    assert_eq!(
-        row(&structural, "new", "POMODOROS")["refused"],
-        "use `@proj#<Heading>` to capture into a project `##` section"
-    );
+    assert!(rows(&structural).is_empty(), "{structural}");
 }
 
 #[test]

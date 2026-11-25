@@ -22,9 +22,6 @@ use super::notebook::{
 use super::place::{
     leftover_after, quoted_after_hash, scan_hash_opener, shift_range, token_end,
 };
-use crate::native::capture_project_note::{
-    format_project_section_title, is_project_section_title,
-};
 use std::ops::Range;
 
 /// One leading section-shortcut classification on a first-level body.
@@ -170,7 +167,6 @@ pub(crate) struct NotebookPlannedSection {
     pub(crate) selector_span: Range<usize>,
     pub(crate) line_number: usize,
     pub(crate) notes: Vec<NotebookPlannedNote>,
-    pub(crate) all_caps: bool,
 }
 
 /// Date-independent seed/body: top notes in source order, then section
@@ -229,7 +225,7 @@ pub(crate) fn plan_create_item(
 /// the `%n` writer, which only adds dates. Offsets are unused there.
 pub(crate) fn plan_from_sub_bullets(
     sub_bullets: &[AuthoredSubBullet],
-    all_caps_as_section: bool,
+    bold_as_section: bool,
 ) -> NotebookBodyPlan {
     let mut groups = Vec::new();
     let mut index = 0;
@@ -257,7 +253,7 @@ pub(crate) fn plan_from_sub_bullets(
             0..bullet.body.len(),
             0,
             notes,
-            all_caps_as_section,
+            bold_as_section,
         ));
     }
     merge_groups(groups, &[])
@@ -317,7 +313,6 @@ fn plan_list_lines(item: &CaptureItem<'_>, route: &str) -> NotebookBodyOutcome {
                     selector_span: span,
                     line_number: first.line_number,
                     notes: nested.notes,
-                    all_caps: false,
                 }],
             })
         }
@@ -422,8 +417,15 @@ fn plan_create_lines(
                             leftover, ..
                         }) if leftover.is_empty() => true,
                         Some(SectionBulletHit::Incomplete { .. }) => true,
-                        None if is_project_section_title(authored.body)
-                            && nested_follows =>
+                        None if super::drawer_bullet::bold_container_parts(
+                            authored.body,
+                            authored.body_start,
+                        )
+                        .is_some()
+                            || (nested_follows
+                                && super::drawer_bullet::is_all_caps_drawer_title(
+                                    authored.body,
+                                )) =>
                         {
                             true
                         }
@@ -564,7 +566,7 @@ fn group_from_first_level(
     source_range: Range<usize>,
     line_number: usize,
     notes: Vec<NotebookPlannedNote>,
-    all_caps_as_section: bool,
+    bold_as_section: bool,
 ) -> PlannedGroup {
     match scan_leading(body, body_start) {
         Some(SectionBulletHit::Incomplete { span }) => {
@@ -596,7 +598,6 @@ fn group_from_first_level(
                 selector_span: span,
                 line_number,
                 notes,
-                all_caps: false,
             })
         }
         Some(SectionBulletHit::Escaped { .. }) => {
@@ -606,19 +607,44 @@ fn group_from_first_level(
             note.detail = notes;
             PlannedGroup::Top(note)
         }
-        None if all_caps_as_section
+        None if bold_as_section
             && !notes.is_empty()
-            && is_project_section_title(body) =>
+            && super::drawer_bullet::is_all_caps_drawer_title(body) =>
         {
-            let title = format_project_section_title(body);
+            let title = body.trim();
+            let leading = body.len() - body.trim_start().len();
+            let start = body_start + leading;
+            PlannedGroup::Failed(NotebookBodyOutcome::failed(error_at(
+                "caps_drawer_retired",
+                super::drawer_bullet::caps_drawer_retired_error(title),
+                Some((start, start + title.len())),
+            )))
+        }
+        None if bold_as_section
+            && super::drawer_bullet::bold_container_parts(body, body_start)
+                .is_some() =>
+        {
+            let parts =
+                super::drawer_bullet::bold_container_parts(body, body_start)
+                    .expect("checked above");
+            if notes.is_empty() {
+                return PlannedGroup::Failed(NotebookBodyOutcome::failed(
+                    error_at(
+                        "empty_drawer_bullet",
+                        super::drawer_bullet::empty_bold_container_error(
+                            &parts.title,
+                        ),
+                        Some((parts.title_range.start, parts.title_range.end)),
+                    ),
+                ));
+            }
             PlannedGroup::Section(NotebookPlannedSection {
-                selector: title.clone(),
+                selector: parts.title,
                 exact: true,
-                authored_marker: body.trim().to_string(),
-                selector_span: source_range,
+                authored_marker: body.to_string(),
+                selector_span: parts.title_range,
                 line_number,
                 notes,
-                all_caps: true,
             })
         }
         None => {
@@ -666,7 +692,6 @@ fn merge_groups(
                 selector_span: 0..0,
                 line_number: heading.line_index,
                 notes: Vec::new(),
-                all_caps: false,
             })
             .collect(),
     })
@@ -683,7 +708,7 @@ fn merge_create_groups(
         match group {
             PlannedGroup::Top(note) => top_notes.push(note),
             PlannedGroup::Section(mut section) => {
-                let exact = section.exact || section.all_caps;
+                let exact = section.exact;
                 match resolve_notebook_section(
                     &section.selector,
                     exact,
@@ -902,7 +927,7 @@ pub(crate) fn section_operations_from_item(
                         offset: section.selector_span.start,
                         selector_range: section.selector_span.clone(),
                         selector: section.selector,
-                        exact: section.exact || section.all_caps,
+                        exact: section.exact,
                         route: created.to_string(),
                     });
                 }
@@ -913,7 +938,7 @@ pub(crate) fn section_operations_from_item(
                         offset: section.selector_span.start,
                         selector_range: section.selector_span.clone(),
                         selector: section.selector,
-                        exact: section.exact || section.all_caps,
+                        exact: section.exact,
                         route: created.to_string(),
                     });
                 }

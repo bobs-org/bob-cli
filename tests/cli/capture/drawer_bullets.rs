@@ -86,7 +86,7 @@ fn repeated_keys_merge_in_draft_order() {
     fs::create_dir_all(&vault).expect("create vault");
     let json = capture_json(
         &vault,
-        "@work Ship it\n- #future-work\n  - first\n- FUTURE WORK\n  - second",
+        "@work Ship it\n- #future-work\n  - first\n- **FUTURE WORK**\n  - second",
     );
     assert_eq!(
         json["sub_bullets"],
@@ -147,7 +147,7 @@ fn punctuated_drawer_merges_into_the_existing_drawer() {
             "\t\t- third\n",
         ),
     );
-    let draft = "@foo+bar\n- WHAT IS SASE?\n  - fourth note";
+    let draft = "@foo+bar\n- **WHAT IS SASE?**\n  - fourth note";
 
     let parse = parse_json(draft);
     assert!(
@@ -212,7 +212,7 @@ fn project_note_shortcut_becomes_a_section() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^auth1@ Parent\n- #future-work\n  - nested detail")
+        .arg("@cash^auth1@ Parent\n- **Future Work**\n  - nested detail")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .env("TZ", "UTC0")
         .output()
@@ -323,10 +323,8 @@ fn vault_files(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
 fn reserved_new_task_drafts_agree_across_parse_preview_and_commit() {
     for draft in [
         "Ship it\n- #tasks\n  - note",
-        "Ship it\n- TASKS\n  - note",
         "Ship it\n- #schedule-log\n  - note",
         "Ship it\n- #\"Work Log\"\n  - note",
-        "Ship it\n- LINKS\n  - note",
         "Ship it\n- #future-work\n  - fine\n- #tasks\n  - not fine",
     ] {
         let temp = TempDir::new("bob-cli-drawer-reserved-new-task");
@@ -382,7 +380,7 @@ fn reserved_diagnostic_copy_matches_the_refusal() {
 fn legal_drawer_controls_agree_across_parse_preview_and_commit() {
     for draft in [
         "Ship it\n- #future-work\n  - note",
-        "Ship it\n- FUTURE WORK\n  - note",
+        "Ship it\n- **Future Work**\n  - note",
         // A childless literal ALL-CAPS bullet stays a plain note, even for
         // a managed word.
         "Ship it\n- TASKS",
@@ -405,10 +403,25 @@ fn legal_drawer_controls_agree_across_parse_preview_and_commit() {
 }
 
 #[test]
+fn legacy_caps_container_drafts_are_refused() {
+    let temp = TempDir::new("bob-cli-drawer-legacy-caps-refuse");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let refusal = capture_error(&vault, "Ship it\n- FUTURE WORK\n  - note");
+    assert_eq!(refusal["code"], "caps_drawer_retired", "{refusal}");
+    assert!(
+        refusal["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("**FUTURE WORK**")),
+        "{refusal}"
+    );
+}
+
+#[test]
 fn new_project_note_structural_sections_stay_legal_everywhere() {
     for (draft, note) in [
         (
-            "Parent @cash^p1@\n- TASKS\n  - merged\n- Real",
+            "Parent @cash^p1@\n- **Tasks**\n  - merged\n- Real",
             "cash_p1.md",
         ),
         (
@@ -429,4 +442,16 @@ fn new_project_note_structural_sections_stay_legal_everywhere() {
         assert_eq!(contents.matches("## Tasks").count(), 1, "{contents}");
         assert!(contents.contains("- merged"), "{contents}");
     }
+}
+
+#[test]
+fn legacy_caps_project_section_drafts_are_refused() {
+    let temp = TempDir::new("bob-cli-project-note-legacy-caps-refuse");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: [[area]]\n---\n");
+    let refusal = capture_error(
+        &vault,
+        "Parent @cash^p1@\n- FUTURE WORK\n  - nested detail",
+    );
+    assert_eq!(refusal["code"], "caps_drawer_retired", "{refusal}");
 }
