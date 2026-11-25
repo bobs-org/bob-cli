@@ -127,12 +127,43 @@ impl QueueFailure {
     }
 }
 
+/// Optional typed in-place edit of one daily-note Event Task row, applied
+/// inside the locked intake transaction. Only meetings use this: a missing
+/// or inbox `[root::]` is replaced with the chosen filing parent, using
+/// `gcal::render::set_row_metadata` so the Google-owned badge span is
+/// preserved. The daily note joins dirty checks, preimage handling, and
+/// the scoped commit set. It is applied only on successful ingest; queued
+/// or refused ingest leaves the daily note untouched and reports the
+/// skipped re-root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct EventRootEdit {
+    /// Vault-relative daily note, for example `2026/20261124.md`.
+    pub(super) path: PathBuf,
+    /// One-based line number of the Event Task row.
+    pub(super) line: usize,
+    /// The row's `^id`.
+    pub(super) block_id: String,
+    /// Google event id when known, for identity recheck.
+    pub(super) event_id: Option<String>,
+    /// Previous root (`None` for missing).
+    pub(super) from: Option<String>,
+    /// Whether the previous root was an inbox note (missing counts as true).
+    pub(super) from_is_inbox: bool,
+    /// Chosen filing parent route.
+    pub(super) to: String,
+    /// Exact expected row bytes at prepare time.
+    pub(super) expected_line: String,
+    /// Whole-file SHA-256 at prepare time, for stale-row diagnosis.
+    pub(super) expected_file_sha256: String,
+}
+
 pub(super) struct IntakeRequest<'a> {
     pub(super) producer: &'a str,
     pub(super) keep_reason: Option<&'a str>,
     pub(super) expected_source_pointer: Option<&'a str>,
     pub(super) dry_run: bool,
     pub(super) progress: Option<&'a dyn Fn(&str)>,
+    pub(super) event_root_edit: Option<EventRootEdit>,
 }
 
 #[derive(Debug)]
@@ -298,6 +329,7 @@ fn file_unit(
         &unit,
         request.producer,
         request.expected_source_pointer,
+        request.event_root_edit.as_ref(),
     ) {
         Ok(mut ingested) => {
             ingested.sync_status = session.post_sync();
@@ -417,6 +449,7 @@ impl IntakeSession {
         unit: &IntakeUnit,
         producer: &str,
         expected_source_pointer: Option<&str>,
+        event_root_edit: Option<&EventRootEdit>,
     ) -> std::result::Result<Ingested, IngestFailure> {
         // Locked reread recheck before any move/task/note mutation: when
         // another host filed the whole-bundle name after queue time,
@@ -507,6 +540,30 @@ impl IntakeSession {
                 QueueFailure::new(QueueReason::Refused, error.to_string()),
             );
         }
+        // Meeting re-root preconditions, checked under the intake locks
+        // after the pre-sync pull and before any mutation. A changed event
+        // row, a newly filed meeting, an unresolvable parent, a dirty
+        // daily note, or a malformed root refuses without touching the
+        // daily note.
+        let root_preimage: Option<(PathBuf, Vec<u8>)> =
+            if let Some(edit) = event_root_edit {
+                match verify_event_root_edit(config, edit) {
+                    Ok(preimage) => Some(preimage),
+                    Err(failure) => {
+                        return rollback_or_queue(&mut moves, failure);
+                    }
+                }
+            } else {
+                None
+            };
+        // Dirty-target guard for the daily note itself: an uncommitted
+        // edit to the event note refuses rather than rebasing the
+        // in-place root change on top of it.
+        if let Some(edit) = event_root_edit
+            && let Err(failure) = ensure_daily_note_clean(config, edit)
+        {
+            return rollback_or_queue(&mut moves, failure);
+        }
         // Capture before `execute_pdf_sync`: routed intents drop out of
         // `scoped_write_path_set` once their destination already contains
         // the candidate identity.
@@ -554,6 +611,22 @@ impl IntakeSession {
                 )));
             }
         };
+
+        // The meeting re-root lands only on successful ingest, inside the
+        // same scoped commit. Queued, held, or incomplete ingest leaves the
+        // daily note untouched; the queued drain never replays the intent.
+        if let Some(edit) = event_root_edit {
+            let daily_abs = config.bob_dir.join(&edit.path);
+            path_set.insert(daily_abs.clone());
+            if let Err(error) = apply_event_root_edit(&daily_abs, edit) {
+                // Restore the preimage so a failed in-place edit never
+                // leaves a half-written event row behind.
+                if let Some((restore_path, before)) = root_preimage {
+                    let _ = fs::write(&restore_path, &before);
+                }
+                return Err(IngestFailure::Incomplete(error));
+            }
+        }
 
         let note = plan.note_path.clone();
         if let Some(expected) = expected_source_pointer {
@@ -1121,6 +1194,179 @@ fn intake_commit_subject(
     }
 }
 
+/// Verify a meeting re-root before any vault mutation. The checks run
+/// under the intake locks after the pre-sync pull: the daily note must
+/// still contain the exact expected event row, the root transition must
+/// still be a missing-or-inbox to explicit-parent move, the meeting must
+/// still be unfiled, and the chosen parent must still resolve. Returns the
+/// daily-note absolute path and its pre-edit bytes for rollback handling.
+/// A changed event or a newly filed meeting queues without touching the
+/// daily note.
+fn verify_event_root_edit(
+    config: &Config,
+    edit: &EventRootEdit,
+) -> std::result::Result<(PathBuf, Vec<u8>), QueueFailure> {
+    let refused =
+        |detail: String| QueueFailure::new(QueueReason::Refused, detail);
+    // The chosen parent must still be an eligible filing parent; an
+    // unresolvable parent is never written into the event row.
+    if crate::native::parent_notes::resolve_parent(&config.bob_dir, &edit.to)
+        .is_err()
+    {
+        return Err(refused(format!(
+            "meeting parent `{}` no longer resolves; re-root refused",
+            edit.to
+        )));
+    }
+    // Meeting identity recheck: another host may have filed this
+    // occurrence after preparation but before the locked ingest.
+    let filed = crate::native::meetings::filed_notes_index(&config.bob_dir);
+    let already_filed = edit
+        .event_id
+        .as_deref()
+        .and_then(|event_id| filed.by_event_id.get(event_id))
+        .is_some()
+        || filed
+            .by_target
+            .contains_key(&(edit.path.clone(), edit.block_id.clone()));
+    if already_filed {
+        return Err(refused(format!(
+            "meeting notes are already filed for this occurrence; re-root refused"
+        )));
+    }
+    let absolute = config.bob_dir.join(&edit.path);
+    let before = fs::read(&absolute).map_err(|error| {
+        refused(format!(
+            "could not read the event note {}: {error}",
+            absolute.display()
+        ))
+    })?;
+    let text = String::from_utf8(before.clone()).map_err(|_| {
+        refused(format!(
+            "the event note {} is not valid UTF-8",
+            absolute.display()
+        ))
+    })?;
+    let current =
+        text.lines()
+            .nth(edit.line.saturating_sub(1))
+            .ok_or_else(|| {
+                refused(
+                    "the selected Event Task moved while it was being prepared"
+                        .to_string(),
+                )
+            })?;
+    if current != edit.expected_line {
+        let current_sha = super::source_store::sha256_hex(&before);
+        return Err(refused(format!(
+            "the selected event changed while it was being prepared (expected sha {}, found {current_sha}); re-root refused",
+            edit.expected_file_sha256
+        )));
+    }
+    match crate::native::task_root::parse_task_root(current) {
+        crate::native::task_root::TaskRootState::Repair { .. } => {
+            return Err(refused(
+                "the event has a malformed root field and cannot be re-rooted safely"
+                    .to_string(),
+            ));
+        }
+        crate::native::task_root::TaskRootState::Set { .. } => {
+            // An edit is only created for a missing or inbox root. The
+            // exact-line check above already proves the row still carries
+            // the prepared `from` value; reject here if the prepared
+            // transition itself was never an inbox/missing re-root.
+            if !edit.from_is_inbox && edit.from.is_some() {
+                return Err(refused(
+                    "the event root is no longer a missing or inbox root; re-root refused"
+                        .to_string(),
+                ));
+            }
+        }
+        crate::native::task_root::TaskRootState::None => {
+            if edit.from.is_some() {
+                return Err(refused(
+                    "the event root changed while it was being prepared; re-root refused"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok((absolute, before))
+}
+
+/// Refuse a re-root onto a dirty daily note rather than rebasing the
+/// in-place `[root::]` edit on top of uncommitted user changes.
+fn ensure_daily_note_clean(
+    config: &Config,
+    edit: &EventRootEdit,
+) -> std::result::Result<(), QueueFailure> {
+    let absolute = config.bob_dir.join(&edit.path);
+    let status = git_status(config, &[absolute]).map_err(|error| {
+        QueueFailure::new(QueueReason::Refused, error.to_string())
+    })?;
+    match status {
+        GitStatus::Worktree { entries } if !entries.is_empty() => {
+            Err(QueueFailure::new(
+                QueueReason::Refused,
+                format!(
+                    "refusing to re-root a dirty event note: {}",
+                    edit.path.display()
+                ),
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Apply the checked in-place root edit with the shared gcal renderer so
+/// the Google-owned badge span is preserved. Never uses
+/// `task_root::set_task_root`, which would move `[buffer::]` out of the
+/// hashed span.
+fn apply_event_root_edit(
+    daily_abs: &Path,
+    edit: &EventRootEdit,
+) -> std::result::Result<(), String> {
+    let before = fs::read(daily_abs).map_err(|error| {
+        format!("read event note {}: {error}", daily_abs.display())
+    })?;
+    let text = String::from_utf8(before).map_err(|_| {
+        format!("the event note {} is not valid UTF-8", daily_abs.display())
+    })?;
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let index = edit.line.saturating_sub(1);
+    if index >= lines.len() {
+        return Err(
+            "the selected Event Task moved while it was being prepared"
+                .to_string(),
+        );
+    }
+    if lines[index] != edit.expected_line {
+        return Err("the selected event changed while it was being prepared"
+            .to_string());
+    }
+    let next = crate::native::gcal::render::set_row_metadata(
+        &lines[index],
+        Some(&edit.to),
+        false,
+    );
+    if next == lines[index] {
+        return Err(format!(
+            "re-root of {} to `{}` changed nothing; refusing",
+            edit.path.display(),
+            edit.to
+        ));
+    }
+    lines[index] = next;
+    let mut output = lines.join("\n");
+    if text.ends_with('\n') {
+        output.push('\n');
+    }
+    fs::write(daily_abs, output).map_err(|error| {
+        format!("write event note {}: {error}", daily_abs.display())
+    })?;
+    Ok(())
+}
+
 /// Producer name in the commit subject of every queue drain.
 const DRAIN_PRODUCER: &str = "bob ref scan";
 
@@ -1436,7 +1682,7 @@ fn drain_queue(
                     .to_string(),
             }
         } else {
-            match session.ingest(config, &unit, DRAIN_PRODUCER, None) {
+            match session.ingest(config, &unit, DRAIN_PRODUCER, None, None) {
                 Ok(ingested) => {
                     for path in &ingested.ignored_paths {
                         progress(&ignored_path_warning(path));

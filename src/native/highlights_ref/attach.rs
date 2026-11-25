@@ -408,6 +408,7 @@ pub(super) fn run_attach(
             expected_source_pointer: None,
             dry_run: false,
             progress: Some(&progress),
+            event_root_edit: None,
         },
     );
     match outcome {

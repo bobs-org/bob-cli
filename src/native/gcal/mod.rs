@@ -27,7 +27,7 @@ mod logout;
 mod model;
 mod plan;
 mod refile;
-mod render;
+pub(crate) mod render;
 mod replaced;
 mod reset;
 mod root;

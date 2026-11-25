@@ -44,6 +44,8 @@ use super::{sources as sources_mod, target as target_mod};
 use super::{FIELD_CAPTURED, FIELD_SOURCE_NOTE};
 use crate::native::style::Styler;
 
+#[cfg_attr(not(test), allow(dead_code))]
+mod meet_route;
 mod podcast_route;
 
 const DEFAULT_MARKDOWN_REF_TYPE: &str = "chat";
@@ -457,6 +459,7 @@ pub(super) fn finish_create_intake(
             expected_source_pointer,
             dry_run: false,
             progress: Some(&progress),
+            event_root_edit: None,
         },
     );
     super::intake::print_outcome(config, plan, outcome)

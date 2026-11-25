@@ -8,7 +8,8 @@ mod prepare;
 
 #[allow(unused_imports)]
 pub(super) use model::{
-    MeetingListReport, MeetingPrepareReport, PrepareError, PreparedFiling,
+    GuardedRootEdit, MeetingListReport, MeetingPrepareReport, PrepareError,
+    PreparedFiling,
 };
 #[allow(unused_imports)]
 pub(super) use output::{

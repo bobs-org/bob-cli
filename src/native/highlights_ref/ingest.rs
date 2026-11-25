@@ -1115,6 +1115,7 @@ fn apply_intake(
             expected_source_pointer: source_pointer,
             dry_run: false,
             progress: request.progress,
+            event_root_edit: None,
         },
     );
     Ok(map_created_intake(
