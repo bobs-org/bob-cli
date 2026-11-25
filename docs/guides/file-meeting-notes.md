@@ -8,9 +8,9 @@ tags:
 # File meeting notes
 
 This guide files one Event Task's notes as a `meetings` reference with
-`bob ref meet`. All names are fictional. Obsidian and Mac Capture gestures
-below apply only where those clients expose them; this guide invents no Mac
-shortcut.
+`bob ref meet`. All names are fictional. Mac Capture files the same preview
+through Command-M and its agenda Notes action; see
+[Mac Capture meeting notes](../reference/mac-capture/meeting-notes.md).
 
 ## Before you start
 
