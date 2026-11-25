@@ -34,6 +34,7 @@ Highlights pipeline:
   doctor  Check library health and Highlights sync prerequisites
   jobs    Queue and clip reading-queue links in the background
   marker  Inspect the marker note for one PDF
+  meet    List meetings and file meeting notes as a meetings reference
   scan    Scan the configured Highlights library
   sync    Sync one PDF marker note into its Bob reference note
 

@@ -581,6 +581,37 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    // `bob ref meet` takes event tokens, note files, and filing options.
+    Entry {
+        path: &["ref", "meet"],
+        arg: "event",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["ref", "meet"],
+        arg: "expect-sha256",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["ref", "meet"],
+        arg: "input",
+        kind: Kind::Files(None),
+    },
+    Entry {
+        path: &["ref", "meet"],
+        arg: "producer",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["ref", "meet"],
+        arg: "status",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["ref", "meet"],
+        arg: "window",
+        kind: Kind::FreeText,
+    },
     // `bob ref recatalog` takes optional reference handles.
     Entry {
         path: &["ref", "recatalog"],

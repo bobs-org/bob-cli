@@ -66,6 +66,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [bob query](../dataview.md) — `bob query` Dataview and Tasks
 - [Reference library (`bob ref`)](../ref.md) — Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback
 - [Ref jobs (`bob ref jobs`)](../ref-jobs.md) — `bob ref jobs` background capture progress, worker, fallback, and recovery
+- [Meeting notes (`bob ref meet`)](../meeting-notes.md) — `bob ref meet` meeting notes as a `meetings` reference, with recap ownership, overwrite, and queue
 
 ## Vault
 

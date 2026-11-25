@@ -45,7 +45,7 @@ use super::{FIELD_CAPTURED, FIELD_SOURCE_NOTE};
 use crate::native::style::Styler;
 
 #[cfg_attr(not(test), allow(dead_code))]
-mod meet_route;
+pub(crate) mod meet_route;
 mod podcast_route;
 
 const DEFAULT_MARKDOWN_REF_TYPE: &str = "chat";

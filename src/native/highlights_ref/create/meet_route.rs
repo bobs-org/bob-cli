@@ -20,33 +20,34 @@ const MEETING_PRODUCER: &str = "bob ref meet";
 /// Structured result for a first filing, preserving the facts a human
 /// receipt and the JSON contract need.
 #[derive(Debug)]
-pub(super) struct MeetFileResult {
-    pub(super) outcome: IntakeOutcome,
+pub(in crate::native::highlights_ref) struct MeetFileResult {
+    pub(in crate::native::highlights_ref) outcome: IntakeOutcome,
     /// Human warnings: preparation, render, source-store, and skipped
     /// re-root notes.
-    pub(super) warnings: Vec<String>,
+    pub(in crate::native::highlights_ref) warnings: Vec<String>,
     /// Applied re-root `(from, to)` on successful ingest.
-    pub(super) reroot_applied: Option<(Option<String>, String)>,
+    pub(in crate::native::highlights_ref) reroot_applied:
+        Option<(Option<String>, String)>,
     /// True when a prepared re-root was skipped because ingest queued.
-    pub(super) skipped_reroot: bool,
+    pub(in crate::native::highlights_ref) skipped_reroot: bool,
     /// Installed PDF digest's source pointer, when the store was written.
-    pub(super) source_pointer: Option<String>,
+    pub(in crate::native::highlights_ref) source_pointer: Option<String>,
     /// Rendered PDF page count.
-    pub(super) pages: usize,
+    pub(in crate::native::highlights_ref) pages: usize,
 }
 
 /// Structured result for an in-place meeting replacement.
 #[derive(Debug)]
-pub(super) struct MeetReplaceResult {
-    pub(super) overwrite: OverwriteResult,
-    pub(super) warnings: Vec<String>,
-    pub(super) source_pointer: Option<String>,
-    pub(super) pages: usize,
+pub(in crate::native::highlights_ref) struct MeetReplaceResult {
+    pub(in crate::native::highlights_ref) overwrite: OverwriteResult,
+    pub(in crate::native::highlights_ref) warnings: Vec<String>,
+    pub(in crate::native::highlights_ref) source_pointer: Option<String>,
+    pub(in crate::native::highlights_ref) pages: usize,
 }
 
 /// Fresh ingest or in-place replacement of a prepared meeting dossier.
 #[derive(Debug)]
-pub(super) enum MeetWriteResult {
+pub(in crate::native::highlights_ref) enum MeetWriteResult {
     Filed(MeetFileResult),
     Replaced(MeetReplaceResult),
 }
@@ -57,7 +58,7 @@ pub(super) enum MeetWriteResult {
 /// the meeting, never runs notes through `prepare_target`, and never
 /// prints. It returns the structured intake outcome so the CLI can render
 /// human and JSON receipts.
-pub(super) fn file_meeting(
+pub(in crate::native::highlights_ref) fn file_meeting(
     config: &Config,
     prepared: &PreparedFiling,
     scratch: &mut super::super::ScratchDir,
@@ -212,7 +213,7 @@ pub(super) fn file_meeting(
 /// semantics and files a fresh reference instead of targeting an unrelated
 /// note. Dedupe without overwrite is refused by preparation before this
 /// route renders.
-pub(super) fn file_or_replace_meeting(
+pub(in crate::native::highlights_ref) fn file_or_replace_meeting(
     config: &Config,
     prepared: &PreparedFiling,
     scratch: &mut super::super::ScratchDir,
@@ -230,7 +231,7 @@ pub(super) fn file_or_replace_meeting(
 
 /// Replace a filed meeting's notes in place, preserving identity, LINKS,
 /// and recap ownership inside the overwrite transaction.
-pub(super) fn replace_meeting(
+pub(in crate::native::highlights_ref) fn replace_meeting(
     config: &Config,
     prepared: &PreparedFiling,
     scratch: &mut super::super::ScratchDir,

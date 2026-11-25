@@ -26,7 +26,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Highlights pipeline",
-        &["create", "doctor", "jobs", "marker", "scan", "sync"],
+        &["create", "doctor", "jobs", "marker", "meet", "scan", "sync"],
     ),
 ];
 
@@ -108,6 +108,7 @@ fn all_subcommands() -> Vec<ClapCommand> {
         doctor_command(),
         crate::native::ref_jobs::command(),
         marker_command(),
+        super::meet_cli::command(),
         scan_command(),
         sync_command(),
     ]

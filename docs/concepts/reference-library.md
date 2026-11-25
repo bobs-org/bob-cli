@@ -42,3 +42,4 @@ Rename guarantees cover supported unannotated references: moving the note, PDF, 
 - [Ref jobs](../ref-jobs.md) — background capture progress, worker, fallback, and recovery.
 - [Highlights create](../highlights-create.md) — vault-note snapshots, PDFs, and URL collections.
 - [Highlights Reference Note Sync](../highlights-ref-sync.md) — PDF intake and annotation sync.
+- [Meeting notes](../meeting-notes.md) — the `meetings` reference type and its contract.

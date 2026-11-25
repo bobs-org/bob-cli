@@ -1230,9 +1230,10 @@ fn verify_event_root_edit(
             .by_target
             .contains_key(&(edit.path.clone(), edit.block_id.clone()));
     if already_filed {
-        return Err(refused(format!(
+        return Err(refused(
             "meeting notes are already filed for this occurrence; re-root refused"
-        )));
+                .to_string(),
+        ));
     }
     let absolute = config.bob_dir.join(&edit.path);
     let before = fs::read(&absolute).map_err(|error| {

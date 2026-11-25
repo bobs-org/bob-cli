@@ -25,7 +25,7 @@ use crate::native::ref_library::{
 
 /// One live family member: a filed ref note, or a queued intake PDF.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct FamilyMember {
+pub(in crate::native::highlights_ref) struct FamilyMember {
     /// Vault-relative path (`ref/papers/foo.md`, `xlib/blogs/foo.pdf`).
     pub path: String,
     /// Filename stem.
@@ -58,7 +58,7 @@ pub(super) struct FamilyMember {
 
 /// One selected capture family: the root plus every live member.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SelectedFamily {
+pub(in crate::native::highlights_ref) struct SelectedFamily {
     /// The family root's full stem. A later reading never becomes the
     /// root, and a natural version-looking root (such as `protocol__v2`
     /// without lineage) keeps its full stem.
@@ -142,7 +142,7 @@ pub(super) struct RereadPreflight {
 /// selected member (explicit `-N`, else the newest reading), not from
 /// reread's newest-member allocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct OverwriteSelection {
+pub(in crate::native::highlights_ref) struct OverwriteSelection {
     /// The family whose selected member will be replaced.
     pub family: SelectedFamily,
     /// Defaults from the selected member's located task and type.
@@ -154,7 +154,7 @@ pub(super) struct OverwriteSelection {
 /// routes the selected note through the same family and overwrite model used
 /// by ordinary reference captures.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct MeetingOverwritePreflight {
+pub(in crate::native::highlights_ref) struct MeetingOverwritePreflight {
     pub selection: OverwriteSelection,
     pub source_pdf: Option<String>,
 }
@@ -225,7 +225,7 @@ impl RereadPlan {
 /// its library type. Reread uses the newest reading; overwrite uses the
 /// selected member. Explicit `-P`/`-t` always win at the call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct FamilyDefaults {
+pub(in crate::native::highlights_ref) struct FamilyDefaults {
     pub parent: Option<String>,
     pub ref_type: Option<String>,
 }

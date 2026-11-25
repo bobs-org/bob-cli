@@ -173,6 +173,10 @@ groups:
         summary: "`bob ref jobs` background capture progress, worker, fallback, and recovery"
         order: 28
         reader: guides/recover-reference-job.md
+      - stem: meeting-notes
+        summary: "`bob ref meet` meeting notes as a `meetings` reference, with recap ownership, overwrite, and queue"
+        order: 59
+        reader: guides/file-meeting-notes.md
   - title: "Vault"
     entries:
       - stem: obsidian-sync-exclusions

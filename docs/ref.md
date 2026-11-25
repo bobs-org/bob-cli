@@ -34,6 +34,7 @@ For scheduled reference scans and their change gate, see the
 | Add links to older saved-source catalogs | `bob ref recatalog [REF]... [-d]` | Record links and map pages from existing PDF annotations |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
+| File meeting notes | `bob ref meet -i notes.md <EVENT>` | List meetings or file notes as a `meetings` reference; see [Meeting notes](meeting-notes.md) |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | File the PDF, note, and reading task inline; use `-k` to queue it in `xlib/` |
 | Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the job files the note when it runs, and a queued clip appears in `ref list` after the host's intake drain (`bob ref scan -i`) |
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |

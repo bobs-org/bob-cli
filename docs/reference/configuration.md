@@ -268,6 +268,18 @@ See [URL routing](../ref.md#url-routing),
 [PDFs open in Highlights](../highlights-ref-sync.md#pdfs-open-in-highlights), and
 [web article capture](../highlights-clip.md#hosts-and-browsers).
 
+### `meetings`
+
+| Key | Type and rules | Default | Effect |
+| --- | --- | --- | --- |
+| `meetings.producer` | String or unset | Unset | Dossier/marker producer; `--producer` overrides it. |
+| `meetings.relation_label` | Valid relation label | `notes from` | Inert task-to-event relation; effect-bearing labels refuse. |
+| `meetings.status` | `next`, `ready`, `wip`, `read` | `next` | New reading-task status. |
+| `meetings.window_days` | Integer, 1–365 | `7` | Default lookback; `--window` overrides it. |
+
+Precedence is flag, then key, then default. Unknown keys are ignored;
+wrong types are setup errors. See [Meeting notes](../meeting-notes.md).
+
 ### `gkeep`
 
 | Key | Type and rules | Default | Effect |

@@ -13,6 +13,7 @@ mod jobs;
 mod listen;
 mod marker;
 mod marker_write;
+mod meet_cli;
 mod meeting_birth;
 mod overwrite;
 mod overwrite_annotated;

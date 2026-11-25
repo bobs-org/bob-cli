@@ -1115,6 +1115,38 @@ pub(crate) const ENTRIES: &[Row] = &[
         60,
     ),
     Row {
+        slots: &[("EVENT", "text"), ("event", "text")],
+        adapter: Some("ref-meet"),
+        invalidates: &["references", "tasks"],
+        ..writes(
+            "ref-meet",
+            &["ref", "meet"],
+            "File meeting notes",
+            &[
+                "meeting",
+                "meetings",
+                "notes",
+                "event",
+                "minutes",
+                "recap",
+            ],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            300,
+        )
+    },
+    Row {
+        fixed: &["-l"],
+        ..reads(
+            "ref-meet-list",
+            &["ref", "meet"],
+            "List meetings",
+            &["meeting", "meetings", "events", "agenda", "list"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
         slots: &[("REF", "ref"), ("ref", "ref")],
         ..reads(
             "ref-show",

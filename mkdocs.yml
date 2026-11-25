@@ -213,6 +213,7 @@ nav:
           - See which tasks mention a task: guides/see-task-mentions.md
       - Reading:
           - Save a link to your reading queue: guides/save-link-to-reading-queue.md
+          - File meeting notes: guides/file-meeting-notes.md
       - Fix problems:
           - Resolve a vault-sync conflict copy: guides/resolve-vault-conflict-copy.md
           - Recover a stuck reference job: guides/recover-reference-job.md
@@ -380,6 +381,7 @@ nav:
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md
               - "Ref jobs (`bob ref jobs`)": ref-jobs.md
+              - "Meeting notes (`bob ref meet`)": meeting-notes.md
           - "Vault":
               - "Obsidian Sync folder exclusions (historical)": obsidian-sync-exclusions.md
               - "Bob vault Git sync runbook": vault-git-sync.md

@@ -64,6 +64,7 @@ mod marker;
 mod marker_write;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) mod meet;
+pub(crate) mod meet_cli;
 mod meeting_birth;
 #[allow(dead_code)]
 pub(crate) mod meeting_profile;
@@ -404,6 +405,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             run_doctor(sub_matches, no_hooks_flag(&matches, sub_matches))
         }
         Some(("marker", sub_matches)) => run_marker(sub_matches),
+        Some(("meet", sub_matches)) => meet_cli::run(sub_matches),
         _ => 2,
     }
 }
