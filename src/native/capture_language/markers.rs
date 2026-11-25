@@ -517,6 +517,21 @@ pub(super) fn note_goto_picker_error(token: &str) -> String {
     )
 }
 
+/// T5: a whole-draft `@route^id` caret Go To. The address only opens the
+/// named block in Obsidian; it is never captured. Lexical: the notebook
+/// clause uses the notebook policy when it is already loaded.
+pub(super) fn caret_goto_error(
+    token: &str,
+    route_label: &str,
+    block_id: &str,
+    notebook: bool,
+) -> String {
+    let kind = if notebook { "note" } else { "task" };
+    format!(
+        "`{token}` opens {route_label} at ^{block_id} in Obsidian — it never captures; add {kind} text after the ID to create a {kind} with this ID"
+    )
+}
+
 /// T1: a `:` picker query whose suffix is not a complete caret link. The
 /// query is only a picker search; it is never captured.
 pub(super) fn task_link_picker_error(token: &str) -> String {

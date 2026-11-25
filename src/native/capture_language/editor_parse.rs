@@ -572,6 +572,7 @@ pub(crate) fn parse_for_editor_with(
                 || item.mode == EditorMode::PomodoroStart
                 || item.mode == EditorMode::Ref
                 || item.mode == EditorMode::TaskComplete
+                || item.mode == EditorMode::TaskGoto
                 || item.needs == [Need::TaskLink]
                 || item.needs == [Need::TaskGoto]
                 || item.needs == [Need::NoteGoto]
@@ -987,6 +988,7 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         EditorMode::Task | EditorMode::Incomplete | EditorMode::NotePull => {
             "task"
         }
+        EditorMode::TaskGoto => "Go To",
     }
 }
 
@@ -1138,6 +1140,75 @@ pub(super) fn parse_editor_task_link_item<'a>(
                 key: None,
                 section_action: None,
             }],
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+            targets: Vec::new(),
+            merge_in: None,
+            req_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    })
+}
+
+/// A whole-draft `@route^id` caret Go To: a single-line, single-token
+/// item holding the whole draft reports mode `task_goto` with empty
+/// `needs`, the route and block ID, `task_block_id_route` / `task_block_id`
+/// spans (the caret itself unspanned), and no diagnostics. A `@@`
+/// declaration never applies to it.
+pub(super) fn parse_editor_caret_goto_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    let claimed = caret_goto_token(item)?;
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: String::new(),
+            mode: EditorMode::TaskGoto,
+            route: Some(claimed.route.to_ascii_lowercase()),
+            section: None,
+            block_id: Some(claimed.block_id.to_string()),
+            needs: Vec::new(),
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            pomodoro_past: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            list: None,
+            spans: vec![
+                Span {
+                    start: claimed.route_range.0,
+                    end: claimed.route_range.1,
+                    kind: SpanKind::TaskBlockIdRoute,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                    section_action: None,
+                },
+                Span {
+                    start: claimed.id_range.0,
+                    end: claimed.id_range.1,
+                    kind: SpanKind::TaskBlockId,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                    section_action: None,
+                },
+            ],
             diagnostics: Vec::new(),
             sub_bullets: Vec::new(),
             has_local_destination: true,
@@ -1804,6 +1875,9 @@ pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
+    if let Some(caret_goto) = parse_editor_caret_goto_item(item) {
+        return caret_goto;
+    }
     if let Some(view) = super::notebook::editor_view_for_item(item, options) {
         return notebook_editor_outcome(item, view);
     }
@@ -4951,6 +5025,9 @@ pub(super) fn parse_editor_item_inner<'a>(
     // claims, no operator or picker forms.
     if item.list.is_some() {
         return parse_editor_list_item(item, options);
+    }
+    if let Some(caret_goto) = parse_editor_caret_goto_item(item) {
+        return caret_goto;
     }
     if let Some(note_goto) = parse_editor_note_goto_item(item) {
         return note_goto;

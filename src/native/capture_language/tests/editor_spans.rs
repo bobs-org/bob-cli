@@ -551,7 +551,7 @@ fn editor_accepts_marker_only_input_with_an_empty_body() {
         ("@dev+id!", EditorMode::TaskToggle),
         ("@dev+id#req", EditorMode::SubBullet),
         ("@+", EditorMode::Incomplete),
-        ("@dev^id", EditorMode::Task),
+        ("@dev^id", EditorMode::TaskGoto),
         ("@^", EditorMode::Incomplete),
         ("@", EditorMode::Incomplete),
     ] {

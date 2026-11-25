@@ -112,6 +112,7 @@ fn is_whole_item_action(item: &capture_language::EditorItemParse) -> bool {
             | EditorMode::PomodoroPast
             | EditorMode::PomodoroStart
             | EditorMode::TaskComplete
+            | EditorMode::TaskGoto
             | EditorMode::Ref
     ) || item.pomodoro_close.is_some()
         || item.pomodoro_past.is_some()

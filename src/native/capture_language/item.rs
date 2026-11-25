@@ -2259,6 +2259,28 @@ fn parse_capture_item_masked<'a>(
             }
         }
     }
+    // A whole-draft `@route^id` caret Go To is never executable: it
+    // rejects with the T5 teaching error before any other item parser --
+    // beside the T3 `/` and T4 `//` checks, before the `&` dependency
+    // scan. Forced flags do not change this. The refusal is lexical and
+    // never reads the vault; notebook wording uses the already-loaded
+    // policy when it is present.
+    if let Some(claimed) = caret_goto_token(item) {
+        let notebook = options.notebook_policy.is_some_and(|policy| {
+            !matches!(
+                policy.lookup(claimed.route, item.start),
+                super::notebook::NotebookRouteLookup::Miss
+            )
+        });
+        return Err(caret_goto_error(
+            claimed.token.text,
+            &crate::native::capture::route_label(
+                &claimed.route.to_ascii_lowercase(),
+            ),
+            claimed.block_id,
+            notebook,
+        ));
+    }
     // A whole-draft `//query` Go To Notes search is never executable: it
     // rejects with the T4 teaching error before any other item parser --
     // beside the T3 `/` check, before the `&` dependency scan, and so

@@ -3128,6 +3128,7 @@ pub(super) fn classify_local_marker(
         | EditorMode::TaskMerge
         | EditorMode::Ref
         | EditorMode::NotePull
+        | EditorMode::TaskGoto
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -3253,6 +3254,10 @@ pub(super) fn non_absorbable_marker_notice(
         ),
         EditorMode::NotePull => format!(
             "@@ cannot take a note pull: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::TaskGoto => format!(
+            "@@ cannot take a Go To address: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::NotebookNote

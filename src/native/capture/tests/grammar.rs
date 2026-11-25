@@ -945,7 +945,10 @@ fn malformed_task_block_id_markers_are_usage_errors() {
         ("body @^id", "route must contain"),
         ("body @bad.route^id", "route must contain"),
         ("body @cash^bad.id", "block ID must be"),
-        ("@cash^id", "task text is required"),
+        (
+            "@cash^id",
+            "`@cash^id` opens cash.md at ^id in Obsidian — it never captures; add task text after the ID to create a task with this ID",
+        ),
     ] {
         let error = parse_capture_text(raw, None)
             .expect_err(&format!("{raw} should fail"));

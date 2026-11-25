@@ -34,7 +34,9 @@ use transform::*;
 
 pub(crate) use archive::atomic_write;
 pub(crate) use command::run_collection;
-pub(crate) use pair::{ArchiveLookup, ArchivePairIndex, SourceLookup};
+pub(crate) use pair::{
+    done_tasks_archive_path, ArchiveLookup, ArchivePairIndex, SourceLookup,
+};
 pub(crate) use transform::{
     block_ids_in_markdown, is_block_id_byte, split_line_ending,
     trailing_block_id_in_line,

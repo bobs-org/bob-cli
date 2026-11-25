@@ -536,7 +536,7 @@ pub(crate) fn collect_used(
         .collect()
 }
 
-fn nontask_text(line: &str, id: &str) -> String {
+pub(crate) fn nontask_text(line: &str, id: &str) -> String {
     let trimmed = line.trim_end();
     let without_id = trimmed
         .strip_suffix(&format!("^{id}"))

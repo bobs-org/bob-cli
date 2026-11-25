@@ -125,6 +125,7 @@ fn draft_items(raw: &str) -> Vec<(usize, usize, &str)> {
 
 mod alias_tip;
 mod bare_close;
+mod caret_goto;
 mod chain;
 mod completion;
 mod draft;

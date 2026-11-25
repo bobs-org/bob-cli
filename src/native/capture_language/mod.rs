@@ -51,6 +51,8 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
+/// Revision 31 claims a whole-draft `@route^id` as `task_goto` (previously
+/// a complete empty-body `task` that execution refused as missing text).
 /// Revision 30 admits whole-bold container drafts across task drawers,
 /// project sections, notebook seeds, and record groups; ALL-CAPS container
 /// drafts are refused during the dual-read window.
@@ -69,7 +71,7 @@ mod type_marker;
 /// forms. Revision 22 makes sized `Nx` closes execute (see
 /// `sized_pomodoro_close.md`); older clients parse the size as literal
 /// task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 30;
+pub(crate) const GRAMMAR_REVISION: u32 = 31;
 
 #[cfg(test)]
 mod tests;

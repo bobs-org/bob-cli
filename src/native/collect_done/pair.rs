@@ -1476,6 +1476,28 @@ fn resolve_target(
     }
 }
 
+/// Vault-relative archive path named by a living note's `done_tasks:`
+/// frontmatter wiki link, when that path stays inside the vault.
+///
+/// Resolves `[[done/x]]` / `[[done/x|alias]]` to a `.md` path. Parent-dir
+/// and absolute components are rejected; this never builds a `NoteIndex`.
+pub(crate) fn done_tasks_archive_path(contents: &str) -> Option<PathBuf> {
+    let target = frontmatter_value(contents, "done_tasks:")?;
+    let path = Path::new(&target);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    let mut path = path.to_path_buf();
+    if path.extension().is_none() {
+        path.set_extension("md");
+    }
+    Some(path)
+}
+
 /// Raw value of a frontmatter key from actual YAML frontmatter.
 ///
 /// The block between the first `---` line and its closing `---` is the only

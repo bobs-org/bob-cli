@@ -519,6 +519,71 @@ pub(super) fn note_goto_query_token<'a>(
     (item.source.trim() == token.text).then_some(*token)
 }
 
+/// A whole-draft `@route^id` caret-address claim. The item is one
+/// physical line holding one token `@<route>^<block-id-or-empty>` that is
+/// the whole draft (`item.source` trimmed). `<route>` uses today's route
+/// charset; the bytes after `^` are empty or block-ID bytes
+/// (`collect_done::is_block_id_byte`). `@@` is never a caret address.
+/// `block_id` may be empty (`@route^`); parse and execution use
+/// [`caret_goto_token`], which requires a non-empty ID. Completion
+/// eligibility in a later phase uses this predicate. Nothing else may
+/// re-derive the rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CaretAddressToken<'a> {
+    pub(super) token: Token<'a>,
+    pub(super) route: &'a str,
+    pub(super) block_id: &'a str,
+    pub(super) route_range: (usize, usize),
+    pub(super) id_range: (usize, usize),
+}
+
+/// Shared whole-draft caret-address claim, including a dangling `@route^`.
+pub(super) fn caret_address_token<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<CaretAddressToken<'a>> {
+    let [line] = item.lines.as_slice() else {
+        return None;
+    };
+    let tokens = tokenize_line_with_spans(&line.raw);
+    let [token] = tokens.as_slice() else {
+        return None;
+    };
+    if item.source.trim() != token.text {
+        return None;
+    }
+    if token.text.starts_with("@@") {
+        return None;
+    }
+    let rest = token.text.strip_prefix('@')?;
+    let caret = rest.find('^')?;
+    let route = &rest[..caret];
+    let block_id = &rest[caret + 1..];
+    if !is_route_token(route) {
+        return None;
+    }
+    if !block_id.bytes().all(collect_done::is_block_id_byte) {
+        return None;
+    }
+    let route_end = token.start + 1 + route.len();
+    let id_start = route_end + 1;
+    Some(CaretAddressToken {
+        token: *token,
+        route,
+        block_id,
+        route_range: (token.start, route_end),
+        id_range: (id_start, token.end),
+    })
+}
+
+/// Whole-draft `@route^id` Go To: [`caret_address_token`] with a non-empty
+/// block ID. Parse and execution call this one predicate.
+pub(super) fn caret_goto_token<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<CaretAddressToken<'a>> {
+    let claimed = caret_address_token(item)?;
+    (!claimed.block_id.is_empty()).then_some(claimed)
+}
+
 /// One whole-item `!` token claim, shared by execution, the editor parse,
 /// and completion. A query is still being typed (`!`, `!fix`, `!sase:`);
 /// a complete token names a task; anything extra on the item is a

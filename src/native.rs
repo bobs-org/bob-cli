@@ -23,6 +23,7 @@ pub(crate) mod bank;
 mod capture;
 mod capture_active_tasks;
 mod capture_block_ids;
+mod capture_caret_goto;
 mod capture_clip;
 mod capture_completable_tasks;
 mod capture_complete;

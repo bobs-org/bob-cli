@@ -2389,7 +2389,8 @@ pub(crate) fn completion_field_at_with(
     // A whole-draft `/` token completes Go To searches instead of
     // offering `@` route completion. This runs before the `!`, `:`, and
     // `^` paths; all four only fire on the item's leading line and their
-    // claims are disjoint.
+    // claims are disjoint. A whole-draft `@route^id` caret address keeps
+    // `task_block_id` this phase (`caret_goto_token`); Go rows land later.
     if leading && let Some(field) = task_goto_completion_field_at(item, cursor)
     {
         return Some(field);

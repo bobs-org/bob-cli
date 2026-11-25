@@ -6,6 +6,7 @@ mod batch;
 mod blocked_tasks;
 mod blocks;
 mod capture_type_marker;
+mod caret_goto;
 mod clip;
 mod clip_notes;
 mod complete_block_id;

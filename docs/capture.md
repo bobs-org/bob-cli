@@ -37,6 +37,7 @@ workflow guide.
   - [Picking any open task with ':'](#picking-any-open-task-with)
   - [Going to a task with '/'](#going-to-a-task-with)
   - [Going to a note with '//'](#going-to-a-note-with)
+  - [Going to a task with '@route^id'](#going-to-a-task-with-at-route-caret)
   - [Adding prerequisites with '&'](#adding-prerequisites-with)
   - [Blocking existing tasks with '*'](#blocking-existing-tasks-with)
   - [Relating existing tasks with '&' and '*'](#relating-existing-tasks)
@@ -1321,7 +1322,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 30`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 31`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -2252,6 +2253,100 @@ A non-empty query scores `match_keys` with the same matcher `:` uses (AND
 across whitespace terms). Primary matches come first by score descending;
 rows whose only match is `note_path` (without `.md`) come next; ties keep
 canonical position. There is never a row cap.
+
+### Going to a task with '@route^id' {#going-to-a-task-with-at-route-caret}
+
+Type a bare `@route^block-id` as the whole capture draft to open that block
+in Obsidian. `/` searches when you remember words; `@route^id` addresses a
+block when you know where it lives. The address reaches closed tasks,
+archived tasks, notebook notes, headings, bullets, and paragraphs — anything
+with a trailing `^block-id` outside frontmatter and fenced code.
+
+Go To never writes: no Task Link, no lane raise, no freshness stamp, no
+ledger edit, no walk move, no block-ID minting, no stash or capture-history
+entry, no "Captured" toast. The vault's `git status` is identical before and
+after a resolution and after an accepted navigation.
+
+A draft is a caret Go To exactly when, after trimming surrounding whitespace,
+it is one item on one physical line, and that line is one whitespace-delimited
+token `@<route>^<block-id>`. `<route>` uses today's route charset and is
+matched lower-cased, as minting resolves it. `<block-id>` is non-empty and
+passes `[A-Za-z0-9-]+`. The token has no body text at either edge, no `@`
+seal, `#section`, `#type`, `s:`, `$`, `%` directive, `=` suffix, `+`/`:`
+separator, children, second item, or `@@` declaration. This is the same
+whole-draft rule `/` and `//` use.
+
+| Draft | Reading |
+| --- | --- |
+| `@bob^intention-rollovers` (± surrounding whitespace) | Go To `bob.md` at that line |
+| `@bob^` / `@bob^int` | Not this claim: the empty or partial ID is block-ID completion (scoped browse lands in a later phase) |
+| `@bob^x Fix it` / `Fix it @bob^x` | Mint with the authored ID, unchanged |
+| `@bob^x@`, `@bob^x@ %n`, `@bob^x#section` | Seal, notebook creation, or section bullet, unchanged |
+| `@bob^x` + a child bullet, or + a second item | Not claimed; today's behavior, byte for byte |
+| `@bob:x`, `^bob:x`, `@bob+x` | Link and ensure-Next writes, unchanged |
+| `@taxes^z-250414-15` on a notebook route | Go To the named note bullet, badged `Note` |
+| `Discuss @bob^x later` | Literal task text, unchanged |
+
+The four caret-family forms:
+
+| Draft | Reading |
+| --- | --- |
+| `@r:x` | Link that existing task into today's ledger |
+| `^r:x` | The active-task spelling of the same link |
+| `@r^x` (whole draft) | Open that block in Obsidian |
+| `text @r^x` | Create a new task with that authored ID |
+
+**Resolution.** `bob capture-parse` resolves the route as minting does
+(`<route>.md`), then scans the living note for lines whose trailing block ID
+equals the requested ID (case-sensitive; frontmatter and fences do not
+count):
+
+1. One hit → `found`, with a `landing` row naming the note, 1-based line,
+   `target` (absolute path), `ref`, `target_kind`
+   (`task` / `notebook_note` / `bullet` / `heading` / `paragraph`), and the
+   task fields when the line is a task.
+2. Two or more hits → `duplicate_block_id`, naming every hit. This fails
+   closed and never guesses.
+3. Zero hits → follow the archive pair once: the note's `done_tasks:`
+   frontmatter wiki link when present, otherwise the canonical
+   `done/<parent>/<stem>_done.md` path when that file exists. A unique archive
+   hit is `found` with `archived: true` and `note_path` naming the archive
+   file. A present `done_tasks:` link that does not exist on disk does not
+   fall through to the canonical path.
+4. Still nothing → `missing_block_id`, with up to three did-you-mean
+   suggestions: first, IDs in the same living note that differ only by case,
+   extend the typed ID as a prefix, or sit within edit distance 2; only when
+   that pass finds nothing, the exact same ID in other routable notes from the
+   catalog `/` already reads. Each suggestion carries the exact replacement
+   draft (`@other^id`). Prefixes never auto-resolve:
+   `@bob^intention` does not land on `intention-rollovers`.
+
+A missing route is `missing_note`.
+
+`bob capture` (and `--dry-run`) refuses a claimed draft before any other item
+parser — beside the T3 `/` and T4 `//` checks, before the `&` dependency
+scan — so the whole batch rolls back and forced flags such as `-r` and `-s`
+change nothing. No vault file changes. The teaching error (T5) keeps the
+usual `capture item 1 starting on line L: …` prefix and reads
+`` `@bob^intention-rollovers` opens bob.md at ^intention-rollovers in
+Obsidian — it never captures; add task text after the ID to create a task
+with this ID `` (on a notebook route the kind word is `note`). The quoted
+token is the exact typed token.
+
+`bob capture-parse` reports a claimed draft as mode `task_goto` with empty
+`needs`, the route and block ID, the existing `task_block_id_route` /
+`task_block_id` spans (the caret itself unspanned), no diagnostics, and an
+additive top-level `goto` object (`status`, `route`, `block_id`,
+`note_path`, `target`, `archived`, plus `landing`, `hits`, or `suggestions`
+as the status requires). `schema_version` stays 1; `grammar` is 31. A `@@`
+declaration never applies. Completion for a caret address stays
+`task_block_id` in this phase. The human renderer prints one `go to` line,
+for example `bob.md:9  [ ] Allow rollovers of intentions` or
+`no ^x in bob.md (did you mean ^y?)`.
+
+The navigation itself runs through bob-navigation-hotkeys'
+`obsidian://bob-goto-task` URI, whose contract is in the [Go to task URI
+reference](reference/plugins/goto-task-uri.md).
 
 ### Choosing a parent task with `+`
 
@@ -7421,7 +7516,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 30. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; it adds `drawer_marker` and title-only `drawer_bullet` spans and refuses nested ALL-CAPS drafts with `caps_drawer_retired`. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
+`capture-parse` and `capture-complete` report grammar revision 31. Grammar 31 claims a whole-draft `@route^id` as mode `task_goto` with an additive `goto` payload. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; it adds `drawer_marker` and title-only `drawer_bullet` spans and refuses nested ALL-CAPS drafts with `caps_drawer_retired`. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
 refuses an operator-only first-line body after an existing-task link start,
 teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
@@ -8882,7 +8977,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 30` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 31` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse consults local metadata but never
 executes the draft; a successful parse does not guarantee a successful
@@ -10476,7 +10571,7 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 30`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 31`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

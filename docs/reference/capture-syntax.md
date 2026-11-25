@@ -28,6 +28,7 @@ unknown alphabetic options fail. `--` makes `-o` and `--flag` text.
 | Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Append a note, section note, note with an ID, or child note | [Notebook capture](../notebooks.md#capture) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
+| whole-draft `@route^block-id` | **Go To:** open that block in Obsidian; never captures | [`@route^block-id` Go To](#at-route-caret-goto) |
 | `@route:block-id` | New Next task plus a Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |
 | `@route:block-id#pomodoro` | Same, under a named Pomodoro | [`@route:block-id#pomodoro`](#at-route-colon-named) |
 | `@route:block-id=<X>` / `@route:block-id=name` | Same, and start that session (`@work:outline=bugs` links under `BUGS` and starts it) | [`@route:block-id=<X>`](#at-route-colon-start) |
@@ -378,7 +379,8 @@ project markers and task-list IDs. Direct CLI capture never applies these
 
 ### `@route^block-id` {#at-route-caret}
 
-Create an ordinary open task with that block ID.
+Create an ordinary open task with that block ID. A whole draft that is
+exactly this token, with no body, is [Go To](#at-route-caret-goto) instead.
 
 ```bash
 bob capture 'Write an outline @work^outline'
@@ -394,6 +396,17 @@ bob capture 'Write an outline @work^outline'
 ```
 
 Contract: [Task with a requested block ID](../capture.md#task-with-a-requested-block-id).
+
+### whole-draft `@route^block-id` {#at-route-caret-goto}
+
+Read-only Go To (`task_goto`). `bob capture` refuses with T5; `capture-parse`
+adds `goto` (`found`, `missing_note`, `missing_block_id`, `duplicate_block_id`).
+
+```bash
+bob capture '@bob^intention-rollovers'
+```
+
+Contract: [Going to a task with '@route^id'](../capture.md#going-to-a-task-with-at-route-caret).
 
 ### `@route:block-id` {#at-route-colon}
 

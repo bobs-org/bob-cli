@@ -330,6 +330,8 @@ pub(crate) enum EditorMode {
     Ref,
     /// A lone `@route` header that pulls that note's tasks (§12.20).
     NotePull,
+    /// A whole-draft `@route^id` caret Go To. Complete: `needs` is empty.
+    TaskGoto,
     Incomplete,
 }
 
@@ -363,6 +365,7 @@ impl EditorMode {
             Self::NotebookCreate => "notebook_create",
             Self::Ref => "ref",
             Self::NotePull => "note_pull",
+            Self::TaskGoto => "task_goto",
             Self::Incomplete => "incomplete",
         }
     }

@@ -99,10 +99,10 @@ impl fmt::Display for TaskRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BlockIdOccurrence {
-    line_index: usize,
-    excerpt: String,
-    task_index: Option<usize>,
+pub(crate) struct BlockIdOccurrence {
+    pub(crate) line_index: usize,
+    pub(crate) excerpt: String,
+    pub(crate) task_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +145,14 @@ impl NoteTaskScan {
         self.tasks
             .iter()
             .find(|task| task.description == description)
+    }
+
+    pub(crate) fn hits_for(&self, id: &str) -> &[BlockIdOccurrence] {
+        self.block_ids.get(id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub(crate) fn all_block_ids(&self) -> impl Iterator<Item = &str> {
+        self.block_ids.keys().map(String::as_str)
     }
 
     pub(crate) fn by_block_id(&self, id: &str) -> BlockIdLookup<'_> {
