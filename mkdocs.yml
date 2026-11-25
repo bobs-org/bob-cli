@@ -320,6 +320,7 @@ nav:
           - Look up:
               - Release train reference: develop/releases/reference.md
       - CI: develop/ci.md
+      - Reconcile drift meter: develop/reconcile-drift.md
       - Build: develop/build.md
       - Writing docs: develop/writing-docs.md
       - Reader testing: develop/reader-testing.md

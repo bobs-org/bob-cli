@@ -99,6 +99,7 @@ check-scripts:
     bash scripts/dev/capture_related_calibrate_test
     bash scripts/dev/highlights_coordination_acceptance --self-test
     python3 -B scripts/dev/test_macos_ci_check.py
+    python3 -B scripts/dev/test_reconcile_drift.py
     python3 -B -m unittest discover -s scripts/lib/install_ui/tests -t scripts/lib
 
 # Type-check the pinned Keep adapter and run its offline self-test.

@@ -16,6 +16,8 @@ pages remain beside the code they specify.
 - [Releases](releases/index.md) for the maintainer release train, preview, and
   operational guides.
 - [bob-cli CI](ci.md) for the per-push workflow and contributor checks.
+- [Reconcile drift meter](reconcile-drift.md) to replay vault history through
+  `bob task reconcile --dry-run` and measure note-local churn.
 - Follow [Writing docs](writing-docs.md) when adding or changing a page.
 - [Migration notes](migration-notes.md) for old command spellings and retired
   capture tokens.

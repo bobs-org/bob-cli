@@ -1,0 +1,971 @@
+#!/usr/bin/env python3
+"""Replay vault commits through `bob task reconcile --dry-run`.
+
+A read-only developer meter. For each vault commit in a window it takes a
+`git archive` snapshot, runs reconcile with `BOB_NOW` pinned to the commit
+time, classifies planned changes, attributes category increments to the
+gesture that introduced them, and reports tidy debt at the window's end.
+"""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, time
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from typing import Any
+from zoneinfo import ZoneInfo
+
+
+SCHEMA_VERSION = 1
+COMMAND = "reconcile-drift"
+TASKS_SETTINGS = ".obsidian/plugins/obsidian-tasks-plugin/data.json"
+DEFAULT_TZ = "America/New_York"
+DEFAULT_SINCE = "7 days ago"
+DEFAULT_JOBS = 8
+MORNING_START = time(5, 0)
+MORNING_END = time(9, 0)
+DAILY_NOTE = re.compile(r"^\d{4}/\d{8}\.md$")
+DAILY_FILE = re.compile(r"^(20\d{2})/(20\d{2})(\d{2})(\d{2})\.md$")
+
+CATEGORIES = (
+    "status_group_move",
+    "badge_row",
+    "local_schedule_flip",
+    "recurring_spawn_flip",
+    "linked_from_mention_strip",
+    "midnight_wake_or_unblock",
+    "ledger_hygiene",
+    "dependency_or_field_healing",
+    "other",
+)
+
+CATEGORY_LABELS = {
+    "status_group_move": "status-group move",
+    "badge_row": "badge row",
+    "local_schedule_flip": "local schedule flip",
+    "recurring_spawn_flip": "recurring spawn flip",
+    "linked_from_mention_strip": "LINKED FROM mention strip",
+    "midnight_wake_or_unblock": "midnight wake or unblock",
+    "ledger_hygiene": "ledger hygiene",
+    "dependency_or_field_healing": "dependency or field healing",
+    "other": "other",
+}
+
+CATEGORY_SHORT = {
+    "status_group_move": "group",
+    "badge_row": "badge",
+    "local_schedule_flip": "sched",
+    "recurring_spawn_flip": "recur",
+    "linked_from_mention_strip": "mention",
+    "midnight_wake_or_unblock": "wake",
+    "ledger_hygiene": "ledger",
+    "dependency_or_field_healing": "deps",
+    "other": "other",
+}
+
+LEDGER_FIELDS = (
+    "struck_completed_references",
+    "embedded_completed_references",
+    "moved_completed_references",
+    "marker_added_references",
+    "marker_removed_references",
+    "removed_canceled_references",
+    "consumed_blocked_references",
+    "removed_duplicate_lines",
+    "removed_empty_pomodoros",
+    "settled",
+    "coalesced_pomodoros",
+    "type_agreement",
+)
+
+DEP_FIELDS = (
+    "dependency_projection_updates",
+    "adopted_dependency_lines",
+    "healed_dependency_links",
+    "canonicalized_dependency_lines",
+    "blocks_line_updates",
+    "minted_dependent_block_ids",
+    "minted_relation_source_block_ids",
+    "prj_is_blocked_tags_added",
+    "prj_is_blocked_tags_stripped",
+    "unblocked_fields_written",
+    "unblocked_fields_pruned",
+)
+
+OTHER_FIELDS = (
+    "marked_next",
+    "marked_in_progress",
+    "cleared",
+    "cleared_in_progress",
+)
+
+REPEAT_MARKERS = ("[repeat::", "🔁")
+
+HELP = """\
+Replay vault commits through bob task reconcile --dry-run and classify
+the planned note-local churn.
+
+Usage: scripts/dev/reconcile-drift [options]
+
+For each commit in the window, take a git archive snapshot of Markdown notes
+and the Tasks plugin settings, run reconcile with BOB_NOW pinned to the
+commit time, sort planned changes into churn categories, and attribute
+category increments to the review-journal gesture that introduced them
+(else to the commit itself). Mornings are a first-class grouping. A tidy
+dry-run at the last commit reports remaining child-order debt.
+
+This is a read-only developer check. It never writes the live vault.
+
+Options
+  --bob PATH           bob executable (default: $BOB_BIN or bob)
+  --every N            replay every Nth commit after the baseline (default: 1)
+  -f, --format FMT     human or json (default: human)
+  -h, --help           show this help
+  -j, --jobs N         concurrent replays (default: 8, or CPU count if smaller)
+  --since DATE         git since date (default: 7 days ago)
+  --timezone ZONE      IANA zone for morning grouping (default: America/New_York)
+  --until DATE         git until date (default: now)
+  --vault DIR          vault git checkout (default: $BOB_DIR or ~/bob)
+
+Categories
+  status-group move, badge row, local schedule flip, recurring spawn flip,
+  LINKED FROM mention strip, midnight wake or unblock, ledger hygiene,
+  dependency or field healing, other.
+
+Cost
+  Commits whose Markdown-plus-Tasks-settings tree matches the previously
+  replayed commit are skipped. --every samples the window.
+
+Exit codes
+  0  report printed
+  2  the check could not run (missing vault, git, or bob)
+"""
+
+
+class DriftError(Exception):
+    """Unrecoverable meter failure; main() maps this to exit 2."""
+
+
+def empty_counts() -> dict[str, int]:
+    return {name: 0 for name in CATEGORIES}
+
+
+def _items(payload: dict[str, Any], key: str) -> list[Any]:
+    value = payload.get(key) or []
+    return value if isinstance(value, list) else []
+
+
+def _is_recurring(item: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(item.get(key) or "")
+        for key in ("description", "detail", "line", "task")
+    )
+    return any(marker in blob for marker in REPEAT_MARKERS)
+
+
+def classify_reconcile(payload: dict[str, Any]) -> dict[str, int]:
+    """Count planned reconcile changes into the drift categories."""
+    counts = empty_counts()
+    for section in _items(payload, "grouped_task_sections"):
+        moved = int(section.get("moved_block_count") or 0)
+        if moved > 0:
+            counts["status_group_move"] += moved
+        else:
+            counts["badge_row"] += 1
+    for item in _items(payload, "marked_blocked"):
+        reasons = item.get("reason_kinds") or []
+        if "local_schedule" in reasons:
+            if _is_recurring(item):
+                counts["recurring_spawn_flip"] += 1
+            else:
+                counts["local_schedule_flip"] += 1
+        else:
+            counts["other"] += 1
+    for item in _items(payload, "linked_from_line_updates"):
+        removed = item.get("mentions_removed") or []
+        if removed:
+            counts["linked_from_mention_strip"] += 1
+        else:
+            counts["dependency_or_field_healing"] += 1
+    counts["midnight_wake_or_unblock"] += len(_items(payload, "unblocked"))
+    for field in LEDGER_FIELDS:
+        counts["ledger_hygiene"] += len(_items(payload, field))
+    for field in DEP_FIELDS:
+        counts["dependency_or_field_healing"] += len(_items(payload, field))
+    for field in OTHER_FIELDS:
+        counts["other"] += len(_items(payload, field))
+    return counts
+
+
+def positive_delta(
+    new: dict[str, int], old: dict[str, int]
+) -> dict[str, int]:
+    return {
+        name: max(0, new.get(name, 0) - old.get(name, 0)) for name in CATEGORIES
+    }
+
+
+def add_counts(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+    return {name: left.get(name, 0) + right.get(name, 0) for name in CATEGORIES}
+
+
+def total_counts(counts: dict[str, int]) -> int:
+    return sum(counts.get(name, 0) for name in CATEGORIES)
+
+
+def relevant_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.endswith(".md") or normalized == TASKS_SETTINGS
+
+
+def keep_archive_member(name: str) -> bool:
+    return relevant_path(name)
+
+
+def default_vault() -> Path:
+    raw = os.environ.get("BOB_DIR") or os.path.expanduser("~/bob")
+    return Path(raw).expanduser()
+
+
+def default_jobs() -> int:
+    cpus = os.cpu_count() or 1
+    return max(1, min(DEFAULT_JOBS, cpus))
+
+
+def color_enabled(stream) -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    return bool(getattr(stream, "isatty", lambda: False)())
+
+
+def paint(enabled: bool, code: str, text: str) -> str:
+    if not enabled:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def fail(message: str) -> None:
+    raise DriftError(f"{COMMAND}: error: {message}")
+
+
+def run_git(
+    vault: Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", "-C", str(vault), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip() or f"exit {result.returncode}"
+        fail(f"git {' '.join(args)}: {detail}")
+    return result
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="scripts/dev/reconcile-drift",
+        add_help=False,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=HELP,
+    )
+    parser.add_argument("--bob", default=os.environ.get("BOB_BIN", "bob"))
+    parser.add_argument("--every", type=int, default=1, metavar="N")
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=("human", "json"),
+        default="human",
+    )
+    parser.add_argument("-h", "--help", action="store_true")
+    parser.add_argument("-j", "--jobs", type=int, default=None, metavar="N")
+    parser.add_argument("--since", default=DEFAULT_SINCE)
+    parser.add_argument("--timezone", default=DEFAULT_TZ)
+    parser.add_argument("--until", default=None)
+    parser.add_argument("--vault", default=None)
+    args = parser.parse_args(argv)
+    if args.help:
+        print(HELP, end="" if HELP.endswith("\n") else "\n")
+        raise SystemExit(0)
+    if args.every < 1:
+        fail("--every must be a positive integer")
+    if args.jobs is None:
+        args.jobs = default_jobs()
+    if args.jobs < 1:
+        fail("--jobs must be a positive integer")
+    try:
+        args.tz = ZoneInfo(args.timezone)
+    except Exception as error:
+        fail(f"unknown --timezone {args.timezone}: {error}")
+    return args
+
+
+def resolve_vault(raw: str | None) -> Path:
+    vault = Path(raw).expanduser() if raw else default_vault()
+    if not vault.is_dir():
+        fail(f"vault directory does not exist: {vault}")
+    vault = vault.resolve()
+    probe = run_git(vault, "rev-parse", "--is-inside-work-tree", check=False)
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        fail(f"vault is not a git checkout: {vault}")
+    return vault
+
+
+def resolve_bob(bob: str) -> str:
+    if os.path.sep in bob or bob.startswith("."):
+        path = Path(bob).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+        fail(f"bob executable not found: {bob}")
+    found = shutil.which(bob)
+    if not found:
+        fail(f"bob executable not found: {bob}")
+    return found
+
+
+class Commit:
+    __slots__ = ("sha", "when", "subject", "parent")
+
+    def __init__(
+        self, sha: str, when: datetime, subject: str, parent: str | None
+    ) -> None:
+        self.sha = sha
+        self.when = when
+        self.subject = subject
+        self.parent = parent
+
+    @property
+    def short(self) -> str:
+        return self.sha[:12]
+
+
+def parse_commit_time(value: str) -> datetime:
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as error:
+        fail(f"cannot parse commit time {value!r}: {error}")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo(DEFAULT_TZ))
+    return parsed
+
+
+def list_commits(
+    vault: Path, since: str, until: str | None, every: int
+) -> list[Commit]:
+    args = ["log", "--reverse", "--format=%H%x1f%cI%x1f%s%x1f%P", "--since", since]
+    if until:
+        args.extend(["--until", until])
+    result = run_git(vault, *args)
+    commits: list[Commit] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        sha, stamp, subject, parents = (line.split("\x1f", 3) + [""] * 4)[:4]
+        parent = parents.split()[0] if parents.strip() else None
+        commits.append(
+            Commit(sha, parse_commit_time(stamp), subject, parent)
+        )
+    if every > 1:
+        commits = commits[::every]
+    return commits
+
+
+def relevant_changed(vault: Path, old: str | None, new: str) -> bool:
+    if old is None:
+        return True
+    result = run_git(
+        vault,
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        old,
+        new,
+    )
+    return any(relevant_path(path) for path in result.stdout.splitlines())
+
+
+def is_daily_note_birth(vault: Path, commit: Commit) -> bool:
+    if commit.parent is None:
+        names = run_git(
+            vault, "diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha
+        ).stdout.splitlines()
+    else:
+        names = run_git(
+            vault,
+            "diff-tree",
+            "--diff-filter=A",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            commit.parent,
+            commit.sha,
+        ).stdout.splitlines()
+    return any(DAILY_NOTE.match(name.replace("\\", "/")) for name in names)
+
+
+def journal_events_added(vault: Path, commit: Commit) -> list[dict[str, Any]]:
+    if commit.parent is None:
+        args = ["show", "--unified=0", commit.sha, "--", ".bob/stats/review"]
+    else:
+        args = [
+            "diff",
+            "--unified=0",
+            f"{commit.parent}..{commit.sha}",
+            "--",
+            ".bob/stats/review",
+        ]
+    result = run_git(vault, *args, check=False)
+    events: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        raw = line[1:].strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def gesture_label(commit: Commit, events: list[dict[str, Any]], rollover: bool) -> str:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        if event.get("kind") not in (None, "review.answer"):
+            continue
+        tier = str(event.get("tier") or "").strip()
+        outcome = str(event.get("outcome") or "").strip()
+        if not tier and not outcome:
+            continue
+        label = f"{tier}:{outcome}" if outcome else tier
+        if label not in seen:
+            seen.add(label)
+            labels.append(label)
+    if labels:
+        return ", ".join(labels)
+    if rollover:
+        return "midnight_rollover"
+    subject = commit.subject.strip()
+    return subject or "unattributed"
+
+
+def path_in_commit(vault: Path, sha: str, path: str) -> bool:
+    result = run_git(vault, "cat-file", "-e", f"{sha}:{path}", check=False)
+    return result.returncode == 0
+
+
+def extract_snapshot(vault: Path, sha: str, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    args = ["git", "-C", str(vault), "archive", "--format=tar", sha, "--", "*.md"]
+    if path_in_commit(vault, sha, TASKS_SETTINGS):
+        args.append(TASKS_SETTINGS)
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdout is not None
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
+            for member in archive:
+                name = member.name.replace("\\", "/")
+                while name.startswith("./"):
+                    name = name[2:]
+                keep = member.isfile() and keep_archive_member(name)
+                if keep:
+                    member.name = name
+                    try:
+                        archive.extract(member, dest, filter="data")
+                    except TypeError:
+                        archive.extract(member, dest)
+                    continue
+                data = archive.extractfile(member)
+                if data is not None:
+                    while data.read(1024 * 1024):
+                        pass
+    finally:
+        _, stderr = proc.communicate()
+    if proc.returncode != 0:
+        detail = (stderr or b"").decode("utf-8", "replace").strip()
+        lowered = detail.lower()
+        if "pathspec" in lowered and "did not match" in lowered:
+            return
+        fail(f"git archive {sha[:12]}: {detail or f'exit {proc.returncode}'}")
+
+
+def parse_json_stdout(stdout: str, label: str) -> dict[str, Any]:
+    text = stdout.strip()
+    if not text:
+        fail(f"{label} produced no JSON")
+    first = text.splitlines()[0]
+    try:
+        payload = json.loads(first)
+    except json.JSONDecodeError:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as error:
+            fail(f"{label} JSON: {error}")
+    if not isinstance(payload, dict):
+        fail(f"{label} JSON was not an object")
+    return payload
+
+
+def snapshot_day_file(snapshot: Path, when: datetime) -> Path | None:
+    """Return the ledger note reconcile should use for `when`.
+
+    Prefer YYYY/YYYYMMDD.md for the commit's local date. When that file is
+    missing (the new daily note has not been born yet, or archive already
+    moved it), use the latest daily note on or before that date.
+    """
+    expected = snapshot / f"{when.year:04d}" / (
+        f"{when.year:04d}{when.month:02d}{when.day:02d}.md"
+    )
+    if expected.is_file():
+        return expected
+    target = when.date()
+    best: Path | None = None
+    best_date = None
+    for year_dir in snapshot.glob("20[0-9][0-9]"):
+        if not year_dir.is_dir():
+            continue
+        for note in year_dir.glob("20[0-9][0-9][0-9][0-9][0-9][0-9].md"):
+            match = DAILY_FILE.match(note.relative_to(snapshot).as_posix())
+            if not match:
+                continue
+            try:
+                note_date = date(
+                    int(match.group(2)), int(match.group(3)), int(match.group(4))
+                )
+            except ValueError:
+                continue
+            if note_date <= target and (best_date is None or note_date > best_date):
+                best = note
+                best_date = note_date
+    return best
+
+
+def bob_env(
+    snapshot: Path,
+    now: datetime,
+    lock: Path,
+    state: Path,
+    day_file: Path | None = None,
+) -> dict[str, str]:
+    env = os.environ.copy()
+    env["BOB_NOW"] = now.strftime("%Y-%m-%d %H:%M:%S")
+    env["BOB_DIR"] = str(snapshot)
+    env["BOB_VAULT_SYNC_LOCK_FILE"] = str(lock)
+    env["XDG_STATE_HOME"] = str(state)
+    if day_file is not None:
+        env["BOB_DAY_FILE"] = str(day_file)
+    else:
+        env.pop("BOB_DAY_FILE", None)
+    return env
+
+
+def run_bob(
+    bob: str,
+    args: list[str],
+    snapshot: Path,
+    now: datetime,
+    work: Path,
+    label: str,
+    day_file: Path | None = None,
+) -> dict[str, Any]:
+    lock = work / "lock"
+    state = work / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [bob, *args, "--bob-dir", str(snapshot)],
+        capture_output=True,
+        text=True,
+        env=bob_env(snapshot, now, lock, state, day_file),
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        fail(f"{label} exit {result.returncode}: {detail}")
+    return parse_json_stdout(result.stdout, label)
+
+
+def replay_commit(
+    bob: str,
+    vault: Path,
+    commit: Commit,
+    scratch: Path,
+) -> dict[str, int]:
+    dest = scratch / commit.short
+    work = scratch / f"{commit.short}-work"
+    dest.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+    extract_snapshot(vault, commit.sha, dest)
+    payload = run_bob(
+        bob,
+        ["task", "reconcile", "--dry-run", "--format", "json", "--retry-timeout", "0"],
+        dest,
+        commit.when,
+        work,
+        f"bob task reconcile @ {commit.short}",
+        snapshot_day_file(dest, commit.when),
+    )
+    return classify_reconcile(payload)
+
+
+def tidy_commit(
+    bob: str,
+    vault: Path,
+    commit: Commit,
+    scratch: Path,
+) -> dict[str, Any]:
+    dest = scratch / f"{commit.short}-tidy"
+    work = scratch / f"{commit.short}-tidy-work"
+    extract_snapshot(vault, commit.sha, dest)
+    payload = run_bob(
+        bob,
+        ["task", "tidy", "--format", "json"],
+        dest,
+        commit.when,
+        work,
+        f"bob task tidy @ {commit.short}",
+        snapshot_day_file(dest, commit.when),
+    )
+    counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+    return {
+        "ok": bool(payload.get("ok", True)),
+        "dry_run": bool(payload.get("dry_run", True)),
+        "notes_scanned": int(counts.get("notes_scanned") or 0),
+        "open_tasks_scanned": int(counts.get("open_tasks_scanned") or 0),
+        "notes_changed": int(counts.get("notes_changed") or 0),
+        "tasks_changed": int(counts.get("tasks_changed") or 0),
+        "moves": int(counts.get("moves") or 0),
+    }
+
+
+def local_day(when: datetime, tz: ZoneInfo) -> str:
+    return when.astimezone(tz).date().isoformat()
+
+
+def in_morning(when: datetime, tz: ZoneInfo) -> bool:
+    local = when.astimezone(tz).time()
+    return MORNING_START <= local < MORNING_END
+
+
+def choose_replays(vault: Path, commits: list[Commit]) -> list[Commit]:
+    chosen: list[Commit] = []
+    last: str | None = None
+    for commit in commits:
+        if relevant_changed(vault, last, commit.sha):
+            chosen.append(commit)
+            last = commit.sha
+        else:
+            last = last or commit.sha
+    return chosen
+
+
+def baseline_commit(vault: Path, first: Commit) -> Commit | None:
+    if not first.parent:
+        return None
+    result = run_git(
+        vault,
+        "log",
+        "-1",
+        "--format=%H%x1f%cI%x1f%s%x1f%P",
+        first.parent,
+    )
+    line = result.stdout.strip()
+    if not line:
+        return None
+    sha, stamp, subject, parents = (line.split("\x1f", 3) + [""] * 4)[:4]
+    parent = parents.split()[0] if parents.strip() else None
+    return Commit(sha, parse_commit_time(stamp), subject, parent)
+
+
+def progress(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def build_report(
+    vault: Path,
+    bob: str,
+    commits: list[Commit],
+    tz: ZoneInfo,
+    jobs: int,
+    since: str,
+    until: str | None,
+) -> dict[str, Any]:
+    if not commits:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "vault": str(vault),
+            "since": since,
+            "until": until,
+            "timezone": str(tz),
+            "commits_considered": 0,
+            "commits_replayed": 0,
+            "commits_skipped_unchanged": 0,
+            "categories": empty_counts(),
+            "mornings": [],
+            "gestures": [],
+            "tidy": None,
+            "outstanding": empty_counts(),
+            "errors": [],
+        }
+
+    baseline = baseline_commit(vault, commits[0])
+    chain: list[Commit] = ([baseline] if baseline else []) + commits
+    needed = choose_replays(vault, chain)
+    scratch_root = Path(tempfile.mkdtemp(prefix="bob-reconcile-drift-"))
+    classified: dict[str, dict[str, int]] = {}
+    errors: list[dict[str, str]] = []
+    try:
+        progress(
+            f"{COMMAND}: replaying {len(needed)} of {len(chain)} snapshots ({jobs} jobs)"
+        )
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = {
+                pool.submit(replay_commit, bob, vault, commit, scratch_root): commit
+                for commit in needed
+            }
+            done = 0
+            for future in as_completed(futures):
+                commit = futures[future]
+                try:
+                    classified[commit.sha] = future.result()
+                except Exception as error:
+                    errors.append({"commit": commit.sha, "error": str(error)})
+                    progress(f"{COMMAND}: {commit.short} failed: {error}")
+                done += 1
+                progress(f"{COMMAND}: {done}/{len(needed)} {commit.short}")
+
+        previous = (
+            classified.get(baseline.sha, empty_counts())
+            if baseline is not None
+            else empty_counts()
+        )
+        introduced = empty_counts()
+        mornings: dict[str, dict[str, Any]] = {}
+        gestures: dict[str, dict[str, Any]] = {}
+        skipped = 0
+        outstanding = previous
+        failed = {item["commit"] for item in errors}
+        for commit in commits:
+            if commit.sha in classified:
+                counts = classified[commit.sha]
+            else:
+                if commit.sha not in failed:
+                    skipped += 1
+                counts = previous
+            delta = positive_delta(counts, previous)
+            previous = counts
+            outstanding = counts
+            introduced = add_counts(introduced, delta)
+            day = local_day(commit.when, tz)
+            events = journal_events_added(vault, commit)
+            rollover = is_daily_note_birth(vault, commit)
+            gesture = gesture_label(commit, events, rollover)
+            journal_days = []
+            for event in events:
+                if event.get("day"):
+                    journal_days.append(str(event["day"]))
+                elif event.get("ts"):
+                    try:
+                        journal_days.append(
+                            local_day(parse_commit_time(str(event["ts"])), tz)
+                        )
+                    except DriftError:
+                        continue
+            review_day = day in journal_days or in_morning(commit.when, tz)
+            bucket = mornings.setdefault(
+                day,
+                {
+                    "day": day,
+                    "review_window": False,
+                    "commits": 0,
+                    "categories": empty_counts(),
+                    "gestures": {},
+                },
+            )
+            bucket["commits"] += 1
+            bucket["review_window"] = bool(bucket["review_window"] or review_day)
+            bucket["categories"] = add_counts(bucket["categories"], delta)
+            g_bucket = bucket["gestures"].setdefault(
+                gesture,
+                {"gesture": gesture, "commits": 0, "categories": empty_counts()},
+            )
+            g_bucket["commits"] += 1
+            g_bucket["categories"] = add_counts(g_bucket["categories"], delta)
+            g_all = gestures.setdefault(
+                gesture,
+                {"gesture": gesture, "commits": 0, "categories": empty_counts()},
+            )
+            g_all["commits"] += 1
+            g_all["categories"] = add_counts(g_all["categories"], delta)
+
+        try:
+            tidy = tidy_commit(bob, vault, commits[-1], scratch_root)
+        except DriftError as error:
+            tidy = None
+            errors.append({"commit": commits[-1].sha, "error": str(error)})
+            progress(f"{COMMAND}: tidy failed: {error}")
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+    morning_rows = []
+    for day in sorted(mornings):
+        row = mornings[day]
+        row["gestures"] = sorted(
+            row["gestures"].values(),
+            key=lambda item: (-total_counts(item["categories"]), item["gesture"]),
+        )
+        morning_rows.append(row)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "vault": str(vault),
+        "since": since,
+        "until": until,
+        "timezone": str(tz),
+        "commits_considered": len(commits),
+        "commits_replayed": sum(1 for commit in commits if commit.sha in classified),
+        "commits_skipped_unchanged": skipped,
+        "categories": introduced,
+        "mornings": morning_rows,
+        "gestures": sorted(
+            gestures.values(),
+            key=lambda item: (-total_counts(item["categories"]), item["gesture"]),
+        ),
+        "tidy": tidy,
+        "outstanding": outstanding,
+        "baseline_commit": baseline.sha if baseline else None,
+        "errors": errors,
+    }
+
+
+def format_human(report: dict[str, Any], stream=sys.stdout) -> str:
+    enabled = color_enabled(stream)
+    cyan = lambda text: paint(enabled, "36", text)
+    bold = lambda text: paint(enabled, "1", text)
+    dim = lambda text: paint(enabled, "2", text)
+    lines: list[str] = []
+    until = report.get("until") or "now"
+    lines.append(bold(f"Reconcile drift  {report['vault']}"))
+    lines.append(
+        f"Window           {report['since']} → {until}  "
+        f"({report['commits_considered']} commits, "
+        f"{report['commits_replayed']} replayed, "
+        f"{report['commits_skipped_unchanged']} unchanged)"
+    )
+    lines.append(f"Timezone         {report['timezone']}")
+    lines.append("")
+    lines.append(cyan("Category                         Introduced"))
+    for name in CATEGORIES:
+        label = CATEGORY_LABELS[name]
+        value = report["categories"].get(name, 0)
+        lines.append(f"{label:<32} {value:>10}")
+    lines.append(f"{'total':<32} {total_counts(report['categories']):>10}")
+    lines.append("")
+    lines.append(cyan("By morning"))
+    header = (
+        f"{'Day':<12} {'Review':<7} {'Commits':>7} "
+        + " ".join(f"{CATEGORY_SHORT[name]:>7}" for name in CATEGORIES)
+    )
+    lines.append(header)
+    for row in report["mornings"]:
+        review = "yes" if row["review_window"] else "no"
+        cells = " ".join(
+            f"{row['categories'].get(name, 0):>7}" for name in CATEGORIES
+        )
+        lines.append(
+            f"{row['day']:<12} {review:<7} {row['commits']:>7} {cells}"
+        )
+    if not report["mornings"]:
+        lines.append(dim("(no commits in window)"))
+    lines.append("")
+    lines.append(cyan("By gesture"))
+    lines.append(
+        f"{'Gesture':<28} {'Commits':>7} "
+        + " ".join(f"{CATEGORY_SHORT[name]:>7}" for name in CATEGORIES)
+    )
+    for row in report["gestures"]:
+        cells = " ".join(
+            f"{row['categories'].get(name, 0):>7}" for name in CATEGORIES
+        )
+        gesture = row["gesture"]
+        if len(gesture) > 28:
+            gesture = gesture[:25] + "..."
+        lines.append(f"{gesture:<28} {row['commits']:>7} {cells}")
+    if not report["gestures"]:
+        lines.append(dim("(none)"))
+    lines.append("")
+    tidy = report.get("tidy")
+    if tidy:
+        lines.append(
+            "Tidy at window end: "
+            f"{tidy['open_tasks_scanned']} open tasks in {tidy['notes_scanned']} notes scanned, "
+            f"{tidy['tasks_changed']} tidied"
+        )
+    else:
+        lines.append("Tidy at window end: (no commits)")
+    outstanding = total_counts(report.get("outstanding") or empty_counts())
+    lines.append(f"Outstanding planned reconcile changes: {outstanding}")
+    errors = report.get("errors") or []
+    if errors:
+        lines.append("")
+        lines.append(f"Replay errors: {len(errors)}")
+        for item in errors[:12]:
+            lines.append(f"  {item.get('commit', '')[:12]}  {item.get('error', '')}")
+        if len(errors) > 12:
+            lines.append(f"  … {len(errors) - 12} more")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = parse_args(argv)
+        vault = resolve_vault(args.vault)
+        bob = resolve_bob(args.bob)
+        commits = list_commits(vault, args.since, args.until, args.every)
+        report = build_report(
+            vault,
+            bob,
+            commits,
+            args.tz,
+            args.jobs,
+            args.since,
+            args.until,
+        )
+        if args.format == "json":
+            json.dump(report, sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+        else:
+            sys.stdout.write(format_human(report))
+        return 0
+    except DriftError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    except BrokenPipeError:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
