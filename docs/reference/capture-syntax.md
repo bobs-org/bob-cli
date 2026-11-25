@@ -7,86 +7,86 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 
 `@` routes; `#` names sections, drawers, or types; `%` selects directives.
 
-Examples assume `BOB_NOW=2026-10-20 12:00:00` and `TZ=UTC`. Put options first;
+Examples use `BOB_NOW=2026-10-20 12:00:00` and `TZ=UTC`. Options come first;
 unknown alphabetic options fail. `--` makes `-o` and `--flag` text.
 
 ## Token index
 
 | Token | Meaning | Heading |
 | --- | --- | --- |
-| Bare public URL | Queue a reference job under `mac_inbox` | [Bare public URL](#bare-public-url) |
-| `URL @route` / `@route URL` | Queue the reference under that route | [`URL @route`](#url-at-route) |
-| `URL %l` / `URL %l @route` | Queue with companion audio | [`URL %l`](#url-listen) |
-| `-r route` | Force the URL (or task) route from the CLI | [`-r`](#cli-route) |
-| `@@route` | Draft-wide destination for unrouted items | [`@@route`](#global-route) |
+| Bare public URL | Queue in `mac_inbox` | [Bare public URL](#bare-public-url) |
+| `URL @route` / `@route URL` | Route the reference | [`URL @route`](#url-at-route) |
+| `URL %l` / `URL %l @route` | Reference plus audio | [`URL %l`](#url-listen) |
+| `-r route` | Force URL or task route | [`-r`](#cli-route) |
+| `@@route` | Default destination for unrouted items | [`@@route`](#global-route) |
 | `%t` | Expand one capture per template row | [`%t`](#template) |
 | `%` | **Picker:** choose a capture directive | [Bare `%`](#percent-picker) |
 | `#` | **Picker:** choose a task type | [Bare `#`](#hash-picker) |
-| `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
-| `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or existing-record update | [Record notes](#record-notes) |
-| `@route#Section` / `@route#section^id` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
-| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Append a note, section note, note with an ID, or child note | [Notebook capture](../notebooks.md#capture) |
-| `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
-| `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
-| whole-draft `@route^block-id` | **Go To:** open that block in Obsidian; never captures | [`@route^block-id` Go To](#at-route-caret-goto) |
-| `@route:block-id` | New Next task plus a Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |
-| `@route:block-id#pomodoro` | Same, under a named Pomodoro | [`@route:block-id#pomodoro`](#at-route-colon-named) |
-| `@route:block-id=<X>` / `@route:block-id=name` | Same, and start that session (`@work:outline=bugs` links under `BUGS` and starts it) | [`@route:block-id=<X>`](#at-route-colon-start) |
+| `@route` | Task to `<route>.md` | [`@route`](#at-route) |
+| `@dir/` / `@dir/^stem` / `@dir/stem` | Record create, explicit stem, or update | [Record notes](#record-notes) |
+| `@route#Section` / `@route#section^id` | Bullet under a matching heading | [`@route#Section`](#at-route-section) |
+| Notebook `@route`, `@route#section`, `@route^id`, `@route+id` | Notebook note, section, ID, or child | [Notebook capture](../notebooks.md#capture) |
+| `@route#` | Bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
+| `@route^block-id` | New task with explicit block ID | [`@route^block-id`](#at-route-caret) |
+| whole-draft `@route^block-id` | **Go To:** open the block in Obsidian | [`@route^block-id` Go To](#at-route-caret-goto) |
+| `@route:block-id` | New Next task and Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |
+| `@route:block-id#pomodoro` | Same under a named Pomodoro | [`@route:block-id#pomodoro`](#at-route-colon-named) |
+| `@route:block-id=<X>` / `@route:block-id=name` | Same, then start the session | [`@route:block-id=<X>`](#at-route-colon-start) |
 | `@route:block-id` with no other text | Link an existing task into today's ledger | [Link an existing task](#link-existing) |
-| `^route:block-id` | Active-task spelling of a link | [`^route:block-id`](#caret-active-task) |
-| `:<query>` | **Picker:** choose any open task to link | [`:<query>`](#colon-picker) |
-| `/<query>` | **Picker:** choose any open task to open | [`/<query>`](#slash-picker) |
-| `//<query>` | **Picker:** choose a living note to open | [`//<query>`](#double-slash-picker) |
+| `^route:block-id` | Active-task link spelling | [`^route:block-id`](#caret-active-task) |
+| `:<query>` | **Picker:** choose an open task to link | [`:<query>`](#colon-picker) |
+| `/<query>` | **Picker:** choose an open task to open | [`/<query>`](#slash-picker) |
+| `//<query>` | **Picker:** choose a living note | [`//<query>`](#double-slash-picker) |
 | `+query` | **Picker:** choose a parent task | [`+query`](#plus-parent-picker) |
 | lone `+` | Editor parent picker; Escape leaves `+5m` unchanged | [lone `+`](#lone-plus) |
-| `&note:block-id` | Captured task depends on that prerequisite | [`&note:block-id`](#ampersand-prereq) |
+| `&note:block-id` | Add a prerequisite to the captured task | [`&note:block-id`](#ampersand-prereq) |
 | `&` / `&query` | **Picker:** choose a prerequisite | [`&`](#ampersand-picker) |
-| `^route:block-id &note:id` | Add a prerequisite to an existing owner | [Add a prerequisite](#add-prereq-existing) |
-| `*note:block-id` | Named open task depends on the captured task | [`*note:block-id`](#star-blocks) |
+| `^route:block-id &note:id` | Add prerequisite to an existing task | [Add a prerequisite](#add-prereq-existing) |
+| `*note:block-id` | Block the captured task with a named task | [`*note:block-id`](#star-blocks) |
 | `*query` | **Picker:** choose a blocked task | [`*query`](#star-picker) |
 | `^route:block-id *note:id` | Existing owner blocks an existing task | [Block from an existing owner](#star-existing) |
 | `~note:block-id` | This task links to that task, with an optional label | [`~note:block-id`](#tilde-link) |
-| `~note:block-id\|\|label` | Same link; the label hides from suggestions once the capture succeeds (a one-off) | [`~note:block-id`](#tilde-link) |
+| `~note:block-id\|\|label` | Same link; hide this one-off label after capture | [`~note:block-id`](#tilde-link) |
 | `~~note:block-id` | That task links to this task, with an optional label | [`~~note:block-id`](#tilde-tilde-link) |
 | `^route:block-id ~note:id` | Relate an existing owner | [Relate an existing owner](#tilde-existing) |
 | `!` / `!query` | **Picker:** choose a task to complete | [`!`](#bang-picker) |
-| `!note:block-id` | Complete that existing open task | [`!note:block-id`](#bang-complete) |
-| `+[N]` | Extend today's current timed Pomodoro | [`+[N]`](#plus-adjust) |
-| `-[N]` | Shorten today's current timed Pomodoro | [`-[N]`](#minus-adjust) |
-| `++[N]` | Shift the running session later | [`++[N]`](#plus-plus-shift) |
-| `--[N]` | Shift the running session earlier | [`--[N]`](#minus-minus-shift) |
-| `=` / `=<X>` | Start the next future Pomodoro, or restart | [`=`](#equals-start) |
-| `=name` | Start a named Pomodoro (`=bugs`, `=3bugs`, `=bugs3`, `=fix2+`) | [`=name`](#equals-named) |
+| `!note:block-id` | Complete an existing open task | [`!note:block-id`](#bang-complete) |
+| `+[N]` | Extend today's timed Pomodoro | [`+[N]`](#plus-adjust) |
+| `-[N]` | Shorten today's timed Pomodoro | [`-[N]`](#minus-adjust) |
+| `++[N]` | Shift the session later | [`++[N]`](#plus-plus-shift) |
+| `--[N]` | Shift the session earlier | [`--[N]`](#minus-minus-shift) |
+| `=` / `=<X>` | Start next Pomodoro or restart | [`=`](#equals-start) |
+| `=name` | Start a named Pomodoro | [`=name`](#equals-named) |
 | `=/[base][#type…]` | Split types into separate planned Pomodoros | [`=/`](#equals-split) |
 | `=*[source][#destination…]` | Merge the next planned Pomodoro or named destinations into one open session | [`=*`](#equals-merge) |
-| `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
-| `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
+| `~<K>` | Drop queued Task Links from the start | [`~<K>`](#tilde-drop) |
+| `x` | Close today's timed Pomodoro | [`x`](#x-close) |
 | `[N]x` | Close at N blocks | [`[N]x`](#nx-close) |
-| `x=E[s][!][=X]` | Record a past Pomodoro ending at the next five-minute boundary or segment | [Recording past Pomodoros](#recording-past-pomodoros) |
-| `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
-| `x*<P>` | Close, parking those Task Links | [`x*<P>`](#x-park-links) |
-| `x~<K>` | Close, dropping those Task Links | [`x~<K>`](#x-drop-links) |
-| Work Log | Log work onto the close's worked tasks | [Work Log](#x-work-log) |
+| `x=E[s][!][=X]` | Record a past Pomodoro by end time or segment | [Recording past Pomodoros](#recording-past-pomodoros) |
+| `x!<M>` | Close and complete Task Links | [`x!<M>`](#x-complete-links) |
+| `x*<P>` | Close and park Task Links | [`x*<P>`](#x-park-links) |
+| `x~<K>` | Close and drop Task Links | [`x~<K>`](#x-drop-links) |
+| Work Log | Log work onto closed tasks | [Work Log](#x-work-log) |
 | `+2 x` / `x =` | Chain session operators on one line | [Operator chain](#operator-chain) |
-| `@route:block-id=x` | Link that task, then close | [`@route:block-id=x`](#link-then-close) |
-| `@route^block-id@` | Project note, or notebook with `%n` | [`@route^block-id@`](#project-note-seal) |
-| `@route:block-id@` | Create a project note and offer its open tasks | [`@route:block-id@`](#project-note-offer) |
-| `:id` | Project-note child: name, Next, and link | [`:id` child](#project-colon-child) |
+| `@route:block-id=x` | Link task, then close | [`@route:block-id=x`](#link-then-close) |
+| `@route^block-id@` | Project note; notebook with `%n` | [`@route^block-id@`](#project-note-seal) |
+| `@route:block-id@` | Create project note and offer open tasks | [`@route:block-id@`](#project-note-offer) |
+| `:id` | Project-note child: name, Next, link | [`:id` child](#project-colon-child) |
 | `^id` | Project-note child: name only | [`^id` child](#project-caret-child) |
-| `@route+block-id` | Child bullet under an existing task | [`@route+block-id`](#plus-child) |
-| `@route+id @route+id` | Target run | [Target run](#plus-child-target-run) |
-| `@a+x @b+y > @c` / `@a+x @b+y > @c+id` / `@a+x > @c+id#drawer` / `@a+x > @c#section` | Move or merge tasks with `>` | [`>` transfer](#transfer) |
+| `@route+block-id` | Child bullet under a task | [`@route+block-id`](#plus-child) |
+| `@route+id @route+id` | Apply capture to a target run | [Target run](#plus-child-target-run) |
+| `@a+x @b+y > @c` / `@a+x @b+y > @c+id` / `@a+x > @c+id#drawer` / `@a+x > @c#section` | Transfer or merge tasks with `>` | [`>` transfer](#transfer) |
 | `T < @a+x @b+y` | Merge into the new task | [`<` merge-in](#merge-in) |
 | `@route+block-id#drawer` | Child inside a task drawer | [`@route+block-id#drawer`](#plus-child-section) |
 | `- #drawer` / `- #Section` | Drawer, or notebook section under `@nb`/`%n` | [Drawer bullets](#drawer-bullets) |
 | `- [ ] text` | Requirement | [Requirement bullets](../capture.md#requirement-bullets) |
-| `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
-| `@route+block-id!` | Toggle that task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
+| `@route+block-id` with no other text | Ensure Next; move its Task Link | [Ensure Next](#plus-ensure-next) |
+| `@route+block-id!` | Toggle the task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
 | `%n` | Pomodoro note, or notebook with `@parent^id@` | [`%n`](#trailing-hash) |
-| `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
-| `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
-| `%c` / `%c<N>` | Capture clipboard content as child bullets | [`%c`](#percent-clipboard) |
-| `#<type>` | Type a new task or retype its existing target | [`#<type>`](#hash-type) |
+| `s:<N>` | Schedule N days ahead; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
+| `$` / `$<N>` | Set priority and roll scheduled date | [`$`](#dollar-priority) |
+| `%c` / `%c<N>` | Capture clipboard as child bullets | [`%c`](#percent-clipboard) |
+| `#<type>` | Type a task or retype its target | [`#<type>`](#hash-type) |
 
 ## Overloaded markers
 
@@ -94,18 +94,18 @@ unknown alphabetic options fail. `--` makes `-o` and `--flag` text.
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
 | `,` | Parent picker; glued `@route:id` / `@route^id` | Alias `+`; continue target runs with ` +`; change `:`/`^` to `+` |
-| `.` | Mac Capture picker positions | `@` before routing; `^` glued to `@route`; `&` spaced after routing. Spaced `;` gives `*` |
+| `.` | Mac Capture picker positions | `@` before route, `^` after route, `&` spaced after route; spaced `;` gives `*` |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge; `@parent^id@` | Pomodoro note; create a notebook |
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
 | `#` | `@route+id#drawer`; `- #drawer`; `x=#"NAME"` | Drawer, drawer shortcut, or exact past-session name |
-| `@` | `@route`, `@@route`, `URL @route`; after project owner ID | Note/draft/reference route or project seal (`:id@` offers tasks) |
+| `@` | `@route`, `@@route`, `URL @route`; after project owner ID | Note, draft, or reference route; project seal (`:id@` offers tasks) |
 | `@` | `x@N` | Close keep-list; `@` is retired as start or past timing |
 | `%l` | URL | Request companion audio |
 | `*` | `*note:id`, `x*`, `=*source` | Block task, park links, or merge sessions |
 | `/` | `=/base#type` | Split a merged session |
 | `*` | Line-initial bare `*` | Markdown bullet, not a blocked-task marker |
-| `~` | `~note:id|label`, `~note:id||label`; `x~`, `=~` | Relation label or drop close/start links |
+| `~` | `~note:id|label`, `~note:id||label`; `x~`, `=~` | Relation label or drop links on close/start |
 | `~` | `~/path`, `~5m`, mid-line `~x:y` | Not relation syntax |
 | `~~` | `~~note:id`; `~~old~~` | Reverse relation; strikethrough |
 | `!` | `!note:id`, `x!`, `x=E!` | Complete task/links or permit closed-edge repair |
@@ -1552,24 +1552,20 @@ letters, digits, and hyphens; quoted literals allow spaces and punctuation
 prose. `t:` is ordinary prose. Escape `\#fix` to keep the literal hash text
 in the body.
 
-With configured `types:`, only configured entries are accepted. Without that
-vocabulary, only names already present in Pomodoro history are accepted;
-inventory labels are excluded. Unknown names fail transactionally with
-`type_not_configured`, including in dry-run mode. A separate `#type` token on
-`@route+block-id` retypes the target in the same transaction; with no body or
-authored children it also ensures Next, while with body text the glued
-`#drawer` suffix keeps its task-drawer meaning. `@route^block-id #type` (separate
-token) types the new task with that explicit block ID. Named Pomodoro owners such as `@route:block-id#NAME`,
-`^route:block-id#NAME`, `=NAME`, and project-note `@route^block-id@#NAME` /
-`@route:block-id@#NAME` keep their existing meanings.
+With configured `types:`, only configured entries are accepted; otherwise
+names must occur in Pomodoro history (inventory labels are excluded). Unknown
+names fail transactionally with `type_not_configured`, including dry runs.
+A separate `#type` on `@route+block-id` retypes the target; without body or
+authored children it also ensures Next, while glued `#drawer` keeps its drawer
+meaning. `@route^block-id #type` types a new task with that explicit ID.
+Named Pomodoro forms such as `@route:block-id#NAME`, `^route:block-id#NAME`,
+`=NAME`, and project-note `@route^block-id@#NAME` remain valid.
 
-With a Pomodoro destination, the task keeps its effective type (including a
-separate `#type` choice), and a typed destination gains a missing type: a
-BUILD task landing in FIX makes `FIX + BUILD`. A container (a name with no
-type components) keeps its name and the task's type, with a warning; a MEET
-destination retypes a different effective type to MEET. Explicit retyping
-stages the `[type::]` edit with the gesture and relocates the live Task
-Link. Closed targets are refused.
+With a Pomodoro destination, the task keeps its effective type and a typed
+destination gains a missing type (`BUILD` landing in `FIX` becomes `FIX + BUILD`).
+A container keeps its name and the task type, with a warning; a `MEET`
+destination retypes a different effective type. Explicit retyping stages the
+`[type::]` edit and relocates the live Task Link. Closed targets are refused.
 
 ```bash
 bob capture --no-clip 'Fix the parser #fix @sase'

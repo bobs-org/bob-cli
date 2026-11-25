@@ -5,19 +5,19 @@ description: Machine-readable Bob output contracts.
 
 # JSON outputs
 
-Fixtures use this checkout's `bob`, isolated `HOME`/`XDG_*`, a synthetic
-vault, `BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`, and job kicks off; network,
-clipboard, sync, and hooks are stubbed. Only stdout `schema_version` counts.
+Fixtures run this checkout's `bob` against a synthetic vault with isolated
+`HOME`/`XDG_*`, `BOB_NOW=2026-10-20 12:00:00`, and `TZ=UTC`; jobs kick off.
+Network, clipboard, sync, and hooks are stubbed. Only stdout `schema_version` counts.
 
 ## Framing
 
-JSON goes to stdout, chatter to stderr; usage errors exit 2.
+JSON goes to stdout and chatter to stderr; usage errors exit 2.
 
 Versioned helpers include `ok` and `schema_version`; `tick` uses
 `exit_code` without `ok`. Some capture-helper errors return unversioned
 `{"ok":false,"error":"…"}`.
 
-`…` marks omissions.
+`…` marks omitted fields.
 
 ```bash
 bob capture-parse -f json -- 'Buy milk @dev'
@@ -65,7 +65,7 @@ bob plan -f json -b /path/to/synthetic-vault
 | `bob capture-templates delete` | `-f json` | Removed entries plus remaining count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates clear` | `-f json` | Cleared count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 
-Capture item results optionally carry `gmail: [{url, verdict, thread_id?, note?, link?, date_hint?, message}]`. These offline previews contain no bodies; see [Gmail links](../capture.md#gmail-links).
+Capture results may carry body-free `gmail: [{url, verdict, thread_id?, note?, link?, date_hint?, message}]` previews; see [Gmail links](../capture.md#gmail-links).
 
 ### Record notes {#record-notes}
 
@@ -471,7 +471,7 @@ capture unversioned).
 | --- | --- | --- | --- | --- |
 | `bob task move` | `-f json` | Move plan and repaired-link report | `schema_version: 1` | [Task move](../task-move.md) |
 | `bob task restore` | `-f json` | Same move report for an archive source: `moves[]` carries the bound or `-d` destination, `status_symbol` reflects `--reopen`, commit subject is `bob task restore …` | `schema_version: 1` | [Task archive](../task-archive.md#restore) |
-| `bob task archive` | `-f json` | `moves`, `holds`, `skips`, `grandfathered`, `link_repairs`, `renames` (`source`, `from`, `to`), `diagnostics` (`complete`, `counts`, `findings`), `git`, and `exit` (applied/deferred paths, recovery directory); `threshold` is nullable and `scan.files_selected` reports moved sources; `-n` previews | `schema_version: 2` | [Task archive](../task-archive.md#json) |
+| `bob task archive` | `-f json` | Moves, holds, skips, link repairs, renames, diagnostics, Git and exit results; `-n` previews | `schema_version: 2` | [Task archive](../task-archive.md#json) |
 | `bob task merge` | `-f json` | `merges[]` with source, target, outcome, repaired dependencies and links; `pull_in` counts; write paths, Git results, and error | `schema_version: 1` | [Task merge](../task-merge.md#9-command-line) |
 | `bob task rename-drawer` | `-f json` | Rename plan (`OLD NEW`) or read-only `--legacy` inventory: legacy drawers, empty bold drawers, bold trailing-colon leads, and duplicate identities | `schema_version: 1` | [Renaming drawers](../task-requirements.md#35-renaming-drawers) |
 | `bob task split` | `-f json` | `candidates[]`, `splits[]` with owner, new tasks, stubs, placement, cursor, notice, and clamped counts; write paths, Git results, and error | `schema_version: 1` | [Task split](../task-split.md#3-command-line) |
@@ -496,7 +496,7 @@ no `--format json` or `--json` flag.
 | `bob ref show` | `-f json` | One note: reading state, dates, annotation pointers, additive `source_markdown` pointer, and an additive `sections` list (omitted when the region has none; `schema_version` stays 1) | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref code` | `-f json` | One reference's saved source and render-time code catalog, optional block/page filters, and a status (`available`, `no_code`, `no_catalog`, `no_source`, `source_missing`, `source_invalid`) | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md#bob-ref-code) |
 | `bob ref links` | `-f json` | One reference's recorded URI links with bob-computed `label`, `site`, and `markdown`, optional link/page filters, and a status (`available`, `no_links`, `not_recorded`, `no_catalog`, `no_source`, `source_missing`, `source_invalid`) | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md#bob-ref-links) |
-| `bob ref scan` | `-f json` | Scan report: `mode`, `write_pdfs`, `hook`, `intake`, `summary` (with `held`), `notes` (with `marker_write`, including `restored` when a stale save was restored), `failures`, `intake_only`, `queued`, `held`. Every writing scan that holds the writer lock also writes that exact line to `<state>/bob-cli/ref/last-scan.json` and (macOS) posts `org.bobs.bob.ref.scan-finished`. `--intake-only` files queued `xlib/` PDFs and audio only (no annotation pass); `ok` is then also false when a writing drain leaves `queued` nonempty. Hard failures use the error envelope (`error.code` / `hint` / `paths`) instead of `summary`/`notes`/`failures`, with no `held` field. | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [JSON output](../highlights-ref-sync.md#json-output) |
+| `bob ref scan` | `-f json` | Scan mode, write and intake state, summaries, failures, queued and held paths; intake-only queues PDFs/audio without annotation. Hard failures use an error envelope. | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [JSON output](../highlights-ref-sync.md#json-output) |
 | `bob ref today` | `-f json` | Pulls one reference's reading task into a Pomodoro (`mode` `dry_run` or `write`; `-d` plans without writing). Success carries `changed`, `ref`, `task`, `pomodoros`, and `capture`. This is not a listing of today's references. | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [bob ref today](../ref.md#bob-ref-today) |
 | `bob ref rename` | `-f json` | Rename plan and rewritten-link report | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref meet` | `-f json` | List or filing/queued receipt with unique keys and typed errors | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Meeting notes](../meeting-notes.md) |
@@ -505,9 +505,9 @@ no `--format json` or `--json` flag.
 | `bob ref jobs list` | `-f json` | Queued background jobs plus a `summary` | `schema_version: 1` | [Ref jobs](../ref-jobs.md) |
 | `bob ref jobs run` | Human only | Clips pending jobs through the shared ingest | No JSON flag | [Ref jobs](../ref-jobs.md) |
 | `bob gcal calendars` | `-f json` (default is `table`) | Calendar identity rows with optional `mark` | `schema_version: 1` | [Bob Gcal](../gcal.md) |
-| `bob gcal` and `bob gcal list` | `-f json` (default is `table`); `-a` adds omitted events | Local-day events: RSVP, inclusion, root, Google identity, source calendar (`id`, `name`, `mark`), note summary (not text), directives, clock, buffer, description counts, warnings, vault state, and last sync; titles stay bare | `schema_version: 1`, `day`, `calendars`, `events`, `counts`, `last_sync`, `past_open`, `warnings`, `deprecations` | [Bob Gcal](../gcal.md), [Private event notes](../gcal-notes.md) |
+| `bob gcal` and `bob gcal list` | `-f json` (default is `table`); `-a` adds omitted events | Local-day events with identity, RSVP, note summary, directives, clock, buffer, warnings, vault state, and last sync; titles stay bare | `schema_version: 1`, `day`, `calendars`, `events`, `counts`, `last_sync`, `past_open`, `warnings`, `deprecations` | [Bob Gcal](../gcal.md), [Private event notes](../gcal-notes.md) |
 | `bob gcal doctor` | `-f json` | Checks (`id`, `status`, `summary`, `fix`); calendar summary names the sync set and marks non-primary names | `schema_version: 1` | [Bob Gcal](../gcal.md) |
-| `bob gcal sync` | `-f json` (default is `human`); `-d` previews without writing; `-q` silences success chatter while warnings stay visible | One day's Events/MEET report: row actions with `calendar_id` and `calendar` identity (`id`, `name`, `mark`), buffer, description counts, note summary (not text), skipped events, MEET entries, stamp, waiting/held outcomes, warnings, and deprecations | `schema_version: 1`, `ok`, `day`, `path`, `status`, `force`, `rows`, `in_sync`, `skipped`, `waiting`, `held`, `pomodoro`, `warnings`, `deprecations`, `stamp` | [Bob Gcal](../gcal.md#sync), [Private event notes](../gcal-notes.md) |
+| `bob gcal sync` | `-f json` (default is `human`); `-d` previews; `-q` silences success chatter | One-day Events/MEET report with row actions, calendar identity, buffer, note summary, skipped events, MEET entries, waiting/held outcomes, warnings, and stamp | `schema_version: 1`, `ok`, `day`, `path`, `status`, `force`, `rows`, `in_sync`, `skipped`, `waiting`, `held`, `pomodoro`, `warnings`, `deprecations`, `stamp` | [Bob Gcal](../gcal.md#sync), [Private event notes](../gcal-notes.md) |
 | `bob gcal note` | `-f json` (default is `human`); `-l`, `-a`, `-D`, `-i`/`-C`, `-s` | 90-day selection with identity, RSVP, organizer (no email), `lands`, note summary (no text in listings); show adds text; ambiguous returns `candidates` | `schema_version: 1`, `ok`, `window`, `notes`/`events`, `event`, `candidates`, `orphans`, `warnings` | [Private event notes](../gcal-notes.md) |
 | `bob gcal login` | `-f json` | One-time setup report: `already_connected`, `account`, `client`, calendar counts, `sign_in` (`already_connected`, `browser`, `paste`), `client_source` (`stored`, `file`, `gog_client`, `downloads`, `pasted`), `client_project`, `reconnected` | `schema_version: 1` | [Bob Gcal](../gcal.md) |
 | `bob gcal logout` | `-f json` | Removed grant: `account`, `client`, `revoke_url` | `schema_version: 1` | [Bob Gcal](../gcal.md) |
@@ -522,7 +522,7 @@ no `--format json` or `--json` flag.
 | `bob gmail search` | `-f json` (default is `table`) | `query`, `shown`, `limit`, and metadata-only `threads[]` with optional saved-note matches | `schema_version: 1` | [Search](../gmail.md#search) |
 | `bob gmail peek` | `-f json` | Identity verdict, thread metadata, saved note, label, and message; no body or vault writes | `schema_version: 1` | [Peek](../gmail.md#peek) |
 | `bob gmail link` | `-f json` | Link replacements | `schema_version: 1` | [Link](../gmail.md#link) |
-| `bob gmail sync` | `-f json`; `-d` preview, `-c` digest, `-n` (`archive_skipped`) | Filing, watch, problem, archive report with config, summary and warnings. Watch `reopened` rows add reply sender as `who`, `reason` (`replied`\|`bounced`), and restored locators. Archive `review` rows add `first_seen`, `hint`, never entering the digest. `recent_archive` reports distinct threads since previous local midnight; latest items: note, archive time, message count, receipt label/event id, state. `null` means unavailable. Digest: dry-run/paused only. `failure_kinds` (only when `ok` is false): sorted, deduped kinds of every failure cause. | `schema_version: 1` | [Sync](../gmail.md#sync), [Archive](../gmail.md#archive-on-close), [Watch](../gmail.md#watch), [Reopen](../gmail.md#reopen) |
+| `bob gmail sync` | `-f json`; `-d` preview, `-c` digest, `-n` (`archive_skipped`) | Filing, watch, problem, and archive reports with config, summaries, and warnings; includes reopened replies, archive review receipts, recent archive status, and failure kinds | `schema_version: 1` | [Sync](../gmail.md#sync), [Archive](../gmail.md#archive-on-close), [Watch](../gmail.md#watch), [Reopen](../gmail.md#reopen) |
 | `bob gmail unarchive` | `-f json`; `-d` dry-run | Per-input results, frozen IDs, label, and errors | `schema_version: 1` | [Explicit undo](../gmail.md#explicit-undo) |
 | `bob gmail attach` | `-f json` | Attachment import results | `schema_version: 1` | [Attachments](../gmail.md#attachments) |
 | `bob gmail new`, `reply` | `-f json` | `status`, `note`, and `cursor: {line, column}` for the local edit | `schema_version: 1` | [Compose notes](../gmail.md#compose-notes) |
@@ -546,9 +546,8 @@ These public non-JSON formats use their own flags.
 | Markdown | `bob query -f markdown`, `bob ref find -f markdown`, `bob ref list -f markdown`, `bob ref show -f markdown` | Rendered notes output |
 | Paths | `bob query` default (`-f paths`) | Newline-separated vault paths |
 
-Hidden adapters (Keep, web-clip, Dataview internals) and on-disk state files
-(`.bob/`, `templates.json`, the Stats review journal, ref job spool files)
-are not public command outputs even when they contain JSON.
+Keep, web-clip, and Dataview adapters plus on-disk state (`.bob/`,
+`templates.json`, Stats journal, ref job spool) are not public command outputs.
 
 ## Related
 
