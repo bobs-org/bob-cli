@@ -699,6 +699,7 @@ pub(crate) fn is_structural_h2_key(key: &str) -> bool {
         || key == drawer_key("Pomodoros")
         || key == drawer_key("Events")
         || key == drawer_key("Highlights")
+        || key == drawer_key("Snoozed")
     {
         return true;
     }
@@ -1206,13 +1207,19 @@ pub(crate) fn resolve_drawer_for_write(
     let _ = (route, parent_block_id);
     let items = place_candidates(drawers);
     let is_reserved = |key: &str| is_reserved_drawer_key(key);
+    // Task drawers share the structural H2 space (`## Snoozed` belongs to
+    // the snooze writer): a selector naming one is refused here so capture
+    // never creates it as a `- **…**` user drawer. The created bullet
+    // would never be recognized as a drawer anyway.
+    let is_task_unwritable =
+        |key: &str| is_reserved_drawer_key(key) || is_structural_h2_key(key);
     let outcome = match scope {
         DrawerScope::Task => TaskDrawer::resolve(
             selector_text,
             exact,
             &items,
             catalog,
-            is_reserved,
+            is_task_unwritable,
         ),
         DrawerScope::ProjectSection => ProjectSection::resolve(
             selector_text,
@@ -2462,6 +2469,32 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn snoozed_is_structural_never_a_user_drawer() {
+        // Row-model reservation (bob-cli-q5.1.1): capture never offers or
+        // creates `## Snoozed` as a task drawer; the snooze writer owns it.
+        assert!(is_structural_h2_key(&drawer_key("Snoozed")));
+        assert!(is_structural_h2_key(&drawer_key("snoozed")));
+        let contents = "- [ ] #task Parent ^parent\n\n## Snoozed\n\n- **1530** [[job#^x]]\n";
+        assert!(
+            !titles_of(contents).iter().any(|title| title == "Snoozed"),
+            "Snoozed must not appear as a drawer"
+        );
+        assert!(
+            resolve_drawer_for_write(
+                &[],
+                "Snoozed",
+                false,
+                &BTreeMap::new(),
+                "note",
+                Some("parent"),
+                DrawerScope::Task,
+            )
+            .is_err(),
+            "Snoozed must refuse drawer creation"
+        );
     }
 
     #[test]

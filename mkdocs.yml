@@ -121,6 +121,7 @@ plugins:
           - task-dependencies.md
           - task-requirements.md
           - task-drawers.md
+          - snooze.md
           - task-relations.md
           - task-move.md
           - task-archive.md
@@ -377,6 +378,7 @@ nav:
               - "Task requirements": task-requirements.md
               - "Task drawers": task-drawers.md
               - "Mail Close Card": mail-close-card.md
+              - "Snoozed tasks: later-today Task Links": snooze.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md

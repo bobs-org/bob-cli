@@ -60,6 +60,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Task requirements](../task-requirements.md) — Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors
 - [Task drawers](../task-drawers.md) — Task drawer headers: dual recognition, identity, Notes home, outside-text escape, source ranges, and marker JSON
 - [Mail Close Card](../mail-close-card.md) — Mail Close Card: the shared Gmail Task close model, copy, digest vectors, and per-surface confirmation contract
+- [Snoozed tasks: later-today Task Links](../snooze.md) — Snoozed tasks: later-today Task Links, the ## Snoozed row grammar, the injected zoned time grammar, resolved-state classification, live_targets, and conformance vectors
 
 ## References
 

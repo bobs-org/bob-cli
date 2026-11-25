@@ -1,0 +1,655 @@
+{
+  "schema_version": 1,
+  "docs": "docs/snooze.md § Conformance vectors. Language-neutral schemas for all six vector groups. Row-model phase populates and executes rows/when/live; mutation-planners completes snooze/wake/cleanup without silently skipping unknown cases (unknown group, runner, or mode is a hard error in the typed loader).",
+  "schemas": {
+    "rows": "input: {note: string (LF or CRLF daily note), encoding: 'lf'|'crlf'}; expected: {header: number|null (1-based), duplicates: number[] (1-based), rows: [{line, kind: 'active'|'history'|'malformed', hhmm|null, target|null, block|null, embedded: bool, aliased: bool, children: number (count of note-subtree lines), malformed_reason|null, woke|null}]}",
+    "when": "input: {input: string, date: 'YYYY-MM-DD', now: 'HH:MM', zone: IANA name}; expected: {hhmm, minutes, rfc3339_contains} | {refusal: 'past'|'next_day'|'dst_gap'|'invalid'}",
+    "live": "input: {today: 'YYYY-MM-DD', note_date: 'YYYY-MM-DD', now: 'HH:MM', rows: [{line, minutes|null, history: bool, malformed: bool, resolution: 'found'|'missing'|'ambiguous', route|null, block|null, status|null, is_task: bool, is_event: bool, live_link: bool}]}; expected: {states: [{line, state}], planned: string[] ('route#^block'), blocked: string[], next_wake_at_contains|null, event_lints: number[]}",
+    "snooze": "Owned by mutation-planners (add plan): input {note, targets, now}; expected postimage note plus report. Empty until that phase lands.",
+    "wake": "Owned by mutation-planners (wake plan): input {note, targets, now}; expected postimage note plus report. Empty until that phase lands.",
+    "cleanup": "Owned by mutation-planners (row cleanup): input {note, targets}; expected postimage note. Empty until that phase lands."
+  },
+  "groups": {
+    "rows": [
+      {
+        "id": "rows-section-basic",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 5,
+          "duplicates": [],
+          "rows": [
+            {"line": 7, "kind": "active", "hhmm": "1530", "target": "job", "block": "email-dan", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-section-stops-at-h2",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1530** [[a#^x]]\n\n## Next\n\n- **1900** [[b#^y]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1530", "target": "a", "block": "x", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-frontmatter-fence-headings-ignored",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "---\n## Snoozed\n---\n\n```\n## Snoozed\n```\n\n## Snoozed\n\n- **1530** [[a#^x]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 9,
+          "duplicates": [],
+          "rows": [
+            {"line": 11, "kind": "active", "hhmm": "1530", "target": "a", "block": "x", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-duplicate-section-linted",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1530** [[a#^x]]\n\n## Snoozed\n\n- **1900** [[b#^y]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [5],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1530", "target": "a", "block": "x", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-colon-forms-normalize",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **15:30** [[a#^x]]\n\n- **3:30** [[b#^y]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1530", "target": "a", "block": "x", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null},
+            {"line": 5, "kind": "active", "hhmm": "0330", "target": "b", "block": "y", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-embedded-aliased-link",
+        "runners": ["rust", "js"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1530** ![[job#^email-dan|Email Dan]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1530", "target": "job", "block": "email-dan", "embedded": true, "aliased": true, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-local-link",
+        "runners": ["rust", "js"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1900** [[#^fix-sink]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1900", "target": "", "block": "fix-sink", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-history-tail",
+        "runners": ["rust", "js"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- ~~**1530** [[job#^x]]~~ · woke 15:32\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "history", "hhmm": "1530", "target": "job", "block": "x", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": "15:32"}
+          ]
+        }
+      },
+      {
+        "id": "rows-malformed-extra-link",
+        "runners": ["rust", "js"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1530** [[a#^x]] [[b#^y]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "malformed", "hhmm": null, "target": null, "block": null, "embedded": false, "aliased": false, "children": 0, "malformed_reason": "malformed", "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-indented-never-executes",
+        "runners": ["rust", "js"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n  - **1530** [[a#^x]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "malformed", "hhmm": null, "target": null, "block": null, "embedded": false, "aliased": false, "children": 0, "malformed_reason": "indented", "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-extra-row-text-malformed",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1530** [[a#^x]] after lunch\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "malformed", "hhmm": null, "target": null, "block": null, "embedded": false, "aliased": false, "children": 0, "malformed_reason": "malformed", "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-children-are-notes",
+        "runners": ["rust", "js"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1900** [[home#^fix-sink]]\n  - grab the wrench first\n  - second note\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1900", "target": "home", "block": "fix-sink", "embedded": false, "aliased": false, "children": 2, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-child-row-like-stays-note",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1900** [[home#^fix-sink]]\n  - **1530** [[a#^x]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1900", "target": "home", "block": "fix-sink", "embedded": false, "aliased": false, "children": 1, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-fenced-example-ignored",
+        "runners": ["rust", "js"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n```\n- **1530** [[a#^x]]\n```\n\n- **1900** [[b#^y]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 7, "kind": "active", "hhmm": "1900", "target": "b", "block": "y", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-crlf",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\r\n\r\n- **1530** [[a#^x]]\r\n  - note\r\n",
+          "encoding": "crlf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1530", "target": "a", "block": "x", "embedded": false, "aliased": false, "children": 1, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-heading-trailing-text-still-opens",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed tasks\n\n- **1530** [[a#^x]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1530", "target": "a", "block": "x", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      }
+    ],
+    "when": [
+      {
+        "id": "when-absolute-1530",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "1530", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1530", "minutes": 930, "rfc3339_contains": "2026-11-25T15:30:00"}
+      },
+      {
+        "id": "when-colon-1530",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "15:30", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1530", "minutes": 930, "rfc3339_contains": "2026-11-25T15:30:00"}
+      },
+      {
+        "id": "when-meridiem-330p",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "3:30p", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1530", "minutes": 930, "rfc3339_contains": "2026-11-25T15:30:00"}
+      },
+      {
+        "id": "when-hour-pm-3p",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "3p", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1500", "minutes": 900, "rfc3339_contains": "2026-11-25T15:00:00"}
+      },
+      {
+        "id": "when-hour-19",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "19", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1900", "minutes": 1140, "rfc3339_contains": "2026-11-25T19:00:00"}
+      },
+      {
+        "id": "when-bare-330-early",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "330", "date": "2026-11-25", "now": "02:00", "zone": "UTC"},
+        "expected": {"hhmm": "0330", "minutes": 210, "rfc3339_contains": "2026-11-25T03:30:00"}
+      },
+      {
+        "id": "when-bare-330-next-occurrence",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "330", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1530", "minutes": 930, "rfc3339_contains": "2026-11-25T15:30:00"}
+      },
+      {
+        "id": "when-bare-330-past",
+        "runners": ["rust"],
+        "mode": "resolve",
+        "input": {"input": "330", "date": "2026-11-25", "now": "16:00", "zone": "UTC"},
+        "expected": {"refusal": "past"}
+      },
+      {
+        "id": "when-relative-45m",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "+45m", "date": "2026-11-25", "now": "13:02", "zone": "UTC"},
+        "expected": {"hhmm": "1347", "minutes": 827, "rfc3339_contains": "2026-11-25T13:47:00"}
+      },
+      {
+        "id": "when-relative-rounds-up",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "+2m", "date": "2026-11-25", "now": "13:02", "zone": "UTC"},
+        "expected": {"hhmm": "1307", "minutes": 787, "rfc3339_contains": "2026-11-25T13:07:00"}
+      },
+      {
+        "id": "when-relative-combo",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "+1h30m", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1430", "minutes": 870, "rfc3339_contains": "2026-11-25T14:30:00"}
+      },
+      {
+        "id": "when-relative-2h",
+        "runners": ["rust"],
+        "mode": "resolve",
+        "input": {"input": "+2h", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"hhmm": "1500", "minutes": 900, "rfc3339_contains": "2026-11-25T15:00:00"}
+      },
+      {
+        "id": "when-past-refuses",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "1300", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"refusal": "past"}
+      },
+      {
+        "id": "when-midnight-overflow",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "+12h", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"refusal": "next_day"}
+      },
+      {
+        "id": "when-dst-gap",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "0230", "date": "2026-03-08", "now": "00:00", "zone": "America/New_York"},
+        "expected": {"refusal": "dst_gap"}
+      },
+      {
+        "id": "when-fold-picks-first-past",
+        "runners": ["rust"],
+        "mode": "resolve",
+        "input": {"input": "0130", "date": "2026-11-01", "now": "01:45", "zone": "America/New_York"},
+        "expected": {"refusal": "past"}
+      },
+      {
+        "id": "when-fold-picks-first-future",
+        "runners": ["rust"],
+        "mode": "resolve",
+        "input": {"input": "0130", "date": "2026-11-01", "now": "01:00", "zone": "America/New_York"},
+        "expected": {"hhmm": "0130", "minutes": 90, "rfc3339_contains": "-04:00"}
+      },
+      {
+        "id": "when-invalid",
+        "runners": ["rust", "js"],
+        "mode": "resolve",
+        "input": {"input": "tomorrow", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"refusal": "invalid"}
+      },
+      {
+        "id": "when-invalid-hour",
+        "runners": ["rust"],
+        "mode": "resolve",
+        "input": {"input": "2500", "date": "2026-11-25", "now": "13:00", "zone": "UTC"},
+        "expected": {"refusal": "invalid"}
+      }
+    ],
+    "live": [
+      {
+        "id": "live-asleep-due-blocked",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "16:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "a", "status": "*", "is_task": true, "is_event": false, "live_link": false},
+            {"line": 8, "minutes": 930, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "b", "status": "/", "is_task": true, "is_event": false, "live_link": false},
+            {"line": 9, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "c", "status": "?", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "asleep"}, {"line": 8, "state": "due"}, {"line": 9, "state": "blocked"}],
+          "planned": ["job.md#^a", "job.md#^b", "job.md#^c"],
+          "blocked": ["job.md#^c"],
+          "next_wake_at_contains": "2026-11-25T15:30:00",
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-ready-ignored",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "d", "status": " ", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "ready"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-missing-ambiguous",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "missing", "route": null, "block": null, "status": null, "is_task": false, "is_event": false, "live_link": false},
+            {"line": 8, "minutes": 1140, "history": false, "malformed": false, "resolution": "ambiguous", "route": null, "block": null, "status": null, "is_task": false, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "missing"}, {"line": 8, "state": "ambiguous"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-malformed-nontask",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": null, "history": false, "malformed": true, "resolution": "found", "route": null, "block": null, "status": null, "is_task": false, "is_event": false, "live_link": false},
+            {"line": 8, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "notes.md", "block": "plain", "status": "*", "is_task": false, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "malformed"}, {"line": 8, "state": "not_task"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-event-lint",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "20261125.md", "block": "meet", "status": "*", "is_task": true, "is_event": true, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "event_task"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": [7]
+        }
+      },
+      {
+        "id": "live-done-cancelled-ignored",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "done", "status": "x", "is_task": true, "is_event": false, "live_link": false},
+            {"line": 8, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "cx", "status": "-", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "done"}, {"line": 8, "state": "cancelled"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-already-linked",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 930, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "a", "status": "*", "is_task": true, "is_event": false, "live_link": true}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "already_linked"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-duplicate-earliest-wins",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "same", "status": "*", "is_task": true, "is_event": false, "live_link": false},
+            {"line": 8, "minutes": 930, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "same", "status": "*", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "duplicate"}, {"line": 8, "state": "asleep"}],
+          "planned": ["job.md#^same"],
+          "blocked": [],
+          "next_wake_at_contains": "2026-11-25T15:30:00",
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-duplicate-tie-source-order",
+        "runners": ["rust"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "same", "status": "*", "is_task": true, "is_event": false, "live_link": false},
+            {"line": 8, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "same", "status": "*", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "asleep"}, {"line": 8, "state": "duplicate"}],
+          "planned": ["job.md#^same"],
+          "blocked": [],
+          "next_wake_at_contains": "2026-11-25T19:00:00",
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-spelling-variants-share-identity",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "same", "status": "*", "is_task": true, "is_event": false, "live_link": false},
+            {"line": 8, "minutes": 930, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "same", "status": "*", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "duplicate"}, {"line": 8, "state": "asleep"}],
+          "planned": ["job.md#^same"],
+          "blocked": [],
+          "next_wake_at_contains": "2026-11-25T15:30:00",
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-history-never-planned",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "16:00",
+          "rows": [
+            {"line": 7, "minutes": 930, "history": true, "malformed": false, "resolution": "found", "route": "job.md", "block": "h", "status": "*", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "woken"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-previous-day",
+        "runners": ["rust", "js"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-24", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "a", "status": "*", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "previous_day"}],
+          "planned": [],
+          "blocked": [],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      },
+      {
+        "id": "live-next-wake-null-when-blocked-only",
+        "runners": ["rust"],
+        "mode": "classify",
+        "input": {
+          "today": "2026-11-25", "note_date": "2026-11-25", "now": "13:00",
+          "rows": [
+            {"line": 7, "minutes": 1140, "history": false, "malformed": false, "resolution": "found", "route": "job.md", "block": "c", "status": "?", "is_task": true, "is_event": false, "live_link": false}
+          ]
+        },
+        "expected": {
+          "states": [{"line": 7, "state": "blocked"}],
+          "planned": ["job.md#^c"],
+          "blocked": ["job.md#^c"],
+          "next_wake_at_contains": null,
+          "event_lints": []
+        }
+      }
+    ],
+    "snooze": [],
+    "wake": [],
+    "cleanup": []
+  }
+}

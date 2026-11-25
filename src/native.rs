@@ -112,6 +112,11 @@ mod ref_jobs;
 pub(crate) mod ref_library;
 pub(crate) mod ref_tasks;
 mod relation_labels;
+// Row-model contracts for bob-cli-q5.1.1 (row-model phase). Production
+// wiring (mutation planners, CLI, readers) lands in later phases of the
+// same child epic; tests are the only caller until then.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod snooze;
 mod spinner;
 mod stats;
 pub(crate) mod style;

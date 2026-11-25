@@ -125,6 +125,9 @@ groups:
       - stem: task-drawers
         summary: "Task drawer headers: dual recognition, identity, Notes home, outside-text escape, source ranges, and marker JSON"
         order: 57
+      - stem: snooze
+        summary: "Snoozed tasks: later-today Task Links, the ## Snoozed row grammar, the injected zoned time grammar, resolved-state classification, live_targets, and conformance vectors"
+        order: 60
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
         order: 36
