@@ -8048,7 +8048,7 @@ A note-less `@route+id` (or `@route+id#drawer`) item files each first-level
 bullet as its own note. Its item JSON keeps `kind: "sub_bullet"` with
 `text: ""` and `task_line: ""`, omits `sub_bullets`, and adds `notes` (one
 entry per note in draft order, each with `text`, `task_line`, optional
-`sub_bullets`, and `drawer` with `title`, `key`, and `created` or null) plus
+`sub_bullets`, and `drawer` with `title`, `key`, `marker`, and `created` or null) plus
 `drawers` (every drawer the item filed into, in first-touch order). `drawer`
 is that single entry when exactly one drawer received every note, else null.
 Human output mirrors the draft order with drawer titles and `new drawer`
@@ -8208,10 +8208,11 @@ in the batch-level `pomodoro_blocks` array; see
 Sub-bullet results additionally include `parent_line`, `parent_text`,
 `parent_status_symbol`, and `parent_status_name`. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
-Every sub-bullet item carries a `drawer` object (`{title, key, created}`) for
-a drawer capture, or `null` for a plain child. On a `^prj` parent the drawer
-title is the matched `##` section title, with `created` true when the `##`
-was appended. A separate `#type` on a body-bearing `@route+id` child retypes
+Every sub-bullet item carries a `drawer` object
+(`{title, key, marker, created}`) for a drawer capture, or `null` for a plain
+child. `marker` is `bold`, `legacy_caps`, or `section` for the destination.
+On a `^prj` parent the drawer title is the matched `##` section title, with
+`created` true when the `##` was appended. A separate `#type` on a body-bearing `@route+id` child retypes
 the target in the same transaction; human and dry-run output show
 `new drawer` when `created` and the type row together. Drawer refusals carry
 a JSON `code` (`invalid_drawer`, `drawer_text`, `drawer_bullet_text`,

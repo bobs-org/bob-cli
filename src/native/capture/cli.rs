@@ -565,7 +565,7 @@ as in '@<route>+<block-id>! #<type>'; \
 '@<route>+<block-id>#<type>!' is refused. A note-less '@<route>+<block-id>' \
 (or '@<route>+<block-id>#<drawer>') item files each first-level bullet as its \
 own note: plain bullets become notes under the task, drawer bullets (a leading \
-'#slug' or an ALL-CAPS title with nested notes) file into that task's drawers, \
+'#slug' or a whole-bold header with nested notes) file into that task's drawers, \
 and '@<route>+<block-id>#<drawer>' with no note text files every bullet inside \
 that drawer. Item-wide 's:<N>', '$<N>', '%c', and --clip are refused on this \
 form, while a separate '#<type>' retypes the target and '&', '*', '~' keep it \

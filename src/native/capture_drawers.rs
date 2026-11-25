@@ -179,7 +179,7 @@ pub(crate) fn is_reserved_drawer_key(key: &str) -> bool {
 }
 
 /// The managed key a drawer selector would be refused for, if any. An exact
-/// (quoted or ALL-CAPS literal) selector has one key; a slug selector is
+/// exact literal selector has one key; a slug selector is
 /// checked under both its plain and hyphen-as-space spellings, in that
 /// order. The commit-time resolver and the lexical editor parse share this
 /// one rule so a reserved name never reads differently in each place.
@@ -1626,7 +1626,8 @@ pub(crate) fn can_create_drawer(
 }
 
 /// Map a drawer header to its project-note H2 spelling. Bold titles are
-/// lossless; legacy ALL-CAPS titles keep today's Title Case conversion.
+/// lossless; only the legacy compatibility branch keeps the old Title Case
+/// conversion during dual-read.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn heading_for_drawer(title: &str, marker: DrawerMarker) -> String {
     match marker {

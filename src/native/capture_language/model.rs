@@ -1017,8 +1017,8 @@ pub(crate) struct AuthoredSubBullet {
     /// `task_id` and `move_task` stay `None`.
     pub(crate) move_choice: Option<MoveChoiceBullet>,
     /// Leading `#slug` / `#"TITLE"` drawer shortcut, when this first-level
-    /// bullet names a drawer. Literal ALL-CAPS drawer bullets gain this
-    /// after grouping. Nested notes keep `None`.
+    /// bullet names a drawer. Whole-bold container bullets gain this after
+    /// grouping. Nested notes keep `None`.
     pub(crate) drawer: Option<DrawerSelector>,
     /// Set on an admitted requirement bullet once the item's requirement
     /// positions resolve. The body keeps its leading checkbox.

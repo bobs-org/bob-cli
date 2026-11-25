@@ -403,8 +403,8 @@ fn prj_section_write_plan(
 /// Capture into a project note's `##` section for a `^prj` parent: the
 /// `#drawer` selector resolves against the note's eligible H2s by the drawer
 /// key rules. A match appends the block after the section's last nonblank
-/// line; a miss appends a new `## Title Case` section at the end of the
-/// note, the way promotion does. One staged write per item keeps batch
+/// line; a miss appends a new `##` section with the shared resolver's
+/// create-title spelling at the end of the note. One staged write per item keeps batch
 /// captures atomic: a later item re-resolves from staged text.
 fn plan_prj_section_capture(
     planner: &mut CaptureBatchPlanner,

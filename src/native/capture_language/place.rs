@@ -95,7 +95,8 @@ pub(crate) enum PlaceOutcome {
 pub(crate) trait PlaceCatalog {
     /// Preferred **explicit** create spelling for `slug` (bold drawer or
     /// project `##` heading), else the notebook create-title rule. A
-    /// legacy-only catalog key never reseeds an ALL-CAPS name.
+    /// legacy-only catalog key never seeds a new drawer from its legacy
+    /// spelling.
     fn spelling_for_slug(&self, slug: &str) -> String;
     fn near_title(&self, new_key: &str) -> Option<String>;
     fn is_legacy_title(&self, title: &str) -> bool;

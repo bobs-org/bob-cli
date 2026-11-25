@@ -107,7 +107,7 @@ pub(crate) enum SpanKind {
     WikilinkAlias,
     WikilinkTaskDelimiter,
     WikilinkTaskQuery,
-    /// An ALL-CAPS first-level drawer bullet (the title text, not a `#`
+    /// A whole-bold first-level drawer bullet (the title text, not a `#`
     /// shortcut).
     DrawerBullet,
     /// One of the two `**` delimiters around an authored container title.

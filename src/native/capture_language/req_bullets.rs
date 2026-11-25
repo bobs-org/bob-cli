@@ -328,8 +328,8 @@ pub(crate) struct ReqBullet {
     pub(crate) level: u8,
     /// The leading checkbox mark, when the bullet starts with one.
     pub(crate) mark: Option<char>,
-    /// A first-level drawer header (`- #slug`, or ALL-CAPS with nested
-    /// bullets) or, in a project note, a section.
+    /// A first-level drawer header (`- #slug` or a whole-bold container with
+    /// nested bullets) or, in a project note, a section.
     pub(crate) header: bool,
     /// A checkbox with no text after it.
     pub(crate) empty: bool,

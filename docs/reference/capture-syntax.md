@@ -5,19 +5,12 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 
 # Capture syntax
 
-`bob capture` writes tasks, notebook notes, Record Notes, references, and Pomodoro changes.
-See [Capture contract](../capture.md).
+`@` routes; `#` names sections, drawers, or types; `%` selects directives.
 
-`@` chooses a destination; `#` names a section, drawer, or task type; `%` selects a
-capture directive.
-
-Examples use synthetic notes (`BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`).
-Options precede drafts. Unknown alphabetic options before drafts fail;
-`--` makes `-o` or `--flag` literal.
+Examples assume `BOB_NOW=2026-10-20 12:00:00` and `TZ=UTC`. Put options first;
+unknown alphabetic options fail. `--` makes `-o` and `--flag` text.
 
 ## Token index
-
-Incomplete **picker** input cannot execute.
 
 | Token | Meaning | Heading |
 | --- | --- | --- |
@@ -1367,18 +1360,18 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### Drawer bullets and several notes {#drawer-bullets}
 
-`- #notes` with nested notes selects a drawer; completion inserts a bold
-header. `- **Future Work**` with nested notes selects it and keeps its title.
-Nested ALL-CAPS container drafts refuse with `caps_drawer_retired`; childless
-ALL-CAPS stays text. Empty shortcuts and bold headers fail.
-Under a route-only notebook `@nb` or `@parent^id@ %n`, `- #Section` selects
-a `##` heading; nest notes or escape `\#git`.
+At task depth, `- #name` with nested notes selects a drawer; completion inserts
+`- **Title**` and opens a note when needed. A bold header with nested notes
+creates or selects it. Existing targets keep title and marker; creation
+prefers explicit catalog spelling, then notebook title rules. See [task drawer
+rules](../task-drawers.md) for matching.
 
-Note-less `@route+id` files each first-level bullet as a note, drawer
-bullets in their drawers; `@route+id#drawer` takes them all. A same-line
-note keeps its children.
-
-Contract: [Several notes at once](../capture.md#several-notes-at-once).
+Nested ALL-CAPS containers refuse with `caps_drawer_retired`; childless
+ALL-CAPS stays text. New empty shortcuts/headers refuse with
+`empty_drawer_bullet`; stored empty headers can be filled. In route-only
+notebook lists, `- #Section` with nested notes selects `##`; bold notes stay
+notes. Note-less `@route+id` files drawer groups; `@route+id#drawer` files all bullets there.
+Same-line notes keep children. See [several-note capture](../capture.md#several-notes-at-once).
 
 ### `@route+block-id` with no other text {#plus-ensure-next}
 
