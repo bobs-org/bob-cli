@@ -202,10 +202,10 @@ pub(crate) fn parse_section(lines: &[&str]) -> Option<SnoozedSection> {
         };
         let end = row.children_end;
         rows.push(row);
-        index = index.max(end);
-        if end <= index {
-            index += 1;
-        }
+        // `children_end` is exclusive, so it is already the next line
+        // after this subtree. `max(index + 1)` still advances when a
+        // malformed row reports `children_end == line_index`.
+        index = end.max(index + 1);
     }
     Some(SnoozedSection {
         header_line,
@@ -531,6 +531,16 @@ mod tests {
         let text = "---\n## Snoozed\n---\n\n```\n## Snoozed\n```\n\n## Snoozed\n\n- **1530** [[a#^x]]\n";
         let owned = lines(text);
         assert_eq!(first_snoozed_header(&owned), Some(8));
+    }
+
+    #[test]
+    fn consecutive_active_rows_all_parse() {
+        let text = "## Snoozed\n\n- **1530** [[job#^first]]\n- **1530** [[job#^second]]\n";
+        let owned = lines(text);
+        let section = parse_section(&owned).expect("section");
+        assert_eq!(section.rows.len(), 2);
+        assert_eq!(section.rows[0].block_id.as_deref(), Some("first"));
+        assert_eq!(section.rows[1].block_id.as_deref(), Some("second"));
     }
 
     #[test]

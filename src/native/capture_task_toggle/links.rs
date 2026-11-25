@@ -157,6 +157,7 @@ pub(crate) fn select_typed_implicit_entry(
         entries: &entries,
         exempt: typed.exempt,
         already_queued: false,
+        never_running: false,
     }) {
         routing::PlaceOutcome::Entry(index) => scan
             .entries

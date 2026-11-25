@@ -362,11 +362,38 @@ pub(super) fn destination_endpoint_after_move(
         .map_err(relocation_from_link_plan_error)
 }
 
+/// Where a moved or newly inserted subtree lands under a Pomodoro entry.
+/// Ordinary callers keep [`SubtreeInsert::Append`]; snooze wake uses
+/// [`SubtreeInsert::FirstChild`] so the woken link is next-up, not last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubtreeInsert {
+    /// After the destination's existing children (historical default).
+    Append,
+    /// Immediately after the destination headline, before existing children.
+    FirstChild,
+}
+
 pub(crate) fn move_subtree_to_entry(
     contents: &str,
     source_line_index: usize,
     source_subtree_end: usize,
     dest_entry_index: usize,
+) -> Result<(String, LinkPlacement), LinkRelocationError> {
+    move_subtree_to_entry_at(
+        contents,
+        source_line_index,
+        source_subtree_end,
+        dest_entry_index,
+        SubtreeInsert::Append,
+    )
+}
+
+pub(crate) fn move_subtree_to_entry_at(
+    contents: &str,
+    source_line_index: usize,
+    source_subtree_end: usize,
+    dest_entry_index: usize,
+    position: SubtreeInsert,
 ) -> Result<(String, LinkPlacement), LinkRelocationError> {
     let lines = line_spans(contents);
     let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
@@ -392,31 +419,62 @@ pub(crate) fn move_subtree_to_entry(
     let reindented = reindent_subtree(subtree, source_indent, &dest_indent);
     let new_lines = logical_lines(&reindented);
 
-    let lines_removed_before_insert = if source_line_index <= dest_child_end {
+    let insert_anchor = match position {
+        SubtreeInsert::Append => dest_child_end,
+        SubtreeInsert::FirstChild => dest_entry_index,
+    };
+    let lines_removed_before_insert = if source_line_index <= insert_anchor {
         source_subtree_end - source_line_index + 1
     } else {
         0
     };
-    let dest_after = dest_child_end - lines_removed_before_insert;
+    let dest_after = insert_anchor - lines_removed_before_insert;
     let without_source = remove_line_range(
         contents,
         &lines,
         source_line_index,
         source_subtree_end,
     );
-    let updated_lines = line_spans(&without_source);
-    let placement = if updated_lines[dest_after].end >= without_source.len() {
+    Ok(insert_lines_into_entry(
+        &without_source,
+        dest_after,
+        &new_lines,
+    ))
+}
+
+/// Insert an already-indented subtree under the destination entry.
+/// `subtree_lines` are logical lines (no endings).
+pub(crate) fn insert_subtree_into_entry(
+    contents: &str,
+    dest_entry_index: usize,
+    subtree_lines: &[String],
+    position: SubtreeInsert,
+) -> Result<(String, LinkPlacement), LinkRelocationError> {
+    let lines = line_spans(contents);
+    if dest_entry_index >= lines.len() {
+        return Err(LinkRelocationError::NoEligibleOpenEntry);
+    }
+    let dest_child_end = child_block_end_line(&lines, dest_entry_index);
+    let dest_after = match position {
+        SubtreeInsert::Append => dest_child_end,
+        SubtreeInsert::FirstChild => dest_entry_index,
+    };
+    Ok(insert_lines_into_entry(contents, dest_after, subtree_lines))
+}
+
+fn insert_lines_into_entry(
+    contents: &str,
+    dest_after: usize,
+    new_lines: &[String],
+) -> (String, LinkPlacement) {
+    let lines = line_spans(contents);
+    let placement = if lines[dest_after].end >= contents.len() {
         LinkPlacement::Appended
     } else {
         LinkPlacement::Inserted
     };
-    let content = insert_lines_after(
-        &without_source,
-        &updated_lines,
-        dest_after,
-        &new_lines,
-    );
-    Ok((content, placement))
+    let content = insert_lines_after(contents, &lines, dest_after, new_lines);
+    (content, placement)
 }
 
 pub(crate) fn insert_named_placeholder(
@@ -457,11 +515,37 @@ pub(crate) fn insert_named_placeholder(
             .or_else(|| capture_pomodoros::canonicalize_pomodoro_name(selector))
             .ok_or(LinkRelocationError::InvalidPomodoroName)?
     };
+    let placeholder = capture_pomodoros::format_named_placeholder_line(&name);
+    let (content, created_line) =
+        insert_placeholder_at_next_up(contents, &scan, &placeholder)?;
+    Ok((content, created_line, name))
+}
+
+/// Insert the ordinary untyped placeholder `- [ ] ()` in the next-up
+/// slot (after the running entry, else after the last completed, else
+/// first in the section). Snooze wake uses this when the task has no
+/// effective type and no untimed open entry exists.
+pub(crate) fn insert_unnamed_placeholder(
+    contents: &str,
+) -> Result<(String, usize), LinkRelocationError> {
+    let scan = capture_pomodoros::scan(contents);
+    if !scan.has_section {
+        return Err(LinkRelocationError::NoPomodorosSection);
+    }
+    insert_placeholder_at_next_up(contents, &scan, "- [ ] ()")
+}
+
+/// Next-up insertion used by named and unnamed placeholder creation.
+/// MEET filing keeps [`insert_named_placeholder_after_last_open`].
+fn insert_placeholder_at_next_up(
+    contents: &str,
+    scan: &capture_pomodoros::PomodoroScan,
+    placeholder: &str,
+) -> Result<(String, usize), LinkRelocationError> {
     let lines = line_spans(contents);
     let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
     let section = pomodoro::pomodoros_section_range(&line_texts)
         .ok_or(LinkRelocationError::NoPomodorosSection)?;
-    let placeholder = capture_pomodoros::format_named_placeholder_line(&name);
     let timed = scan.entries.iter().find(|entry| {
         entry.state == PomodoroState::Open && entry.time_range.is_some()
     });
@@ -470,34 +554,34 @@ pub(crate) fn insert_named_placeholder(
         .iter()
         .rev()
         .find(|entry| entry.state == PomodoroState::Completed);
-    let (content, created_line) = if let Some(entry) = timed.or(last_completed)
-    {
+    if let Some(entry) = timed.or(last_completed) {
         let after = child_block_end_line(&lines, entry.line - 1);
-        (
-            insert_line_after(contents, &lines, after, &placeholder),
+        return Ok((
+            insert_line_after(contents, &lines, after, placeholder),
             after + 1,
-        )
-    } else if let Some(first) = scan.entries.first() {
+        ));
+    }
+    if let Some(first) = scan.entries.first() {
         let index = first.line - 1;
-        (
-            insert_line_before(contents, &lines, index, &placeholder),
+        return Ok((
+            insert_line_before(contents, &lines, index, placeholder),
             index,
-        )
-    } else if section.start < lines.len() {
-        (
-            insert_line_before(contents, &lines, section.start, &placeholder),
+        ));
+    }
+    if section.start < lines.len() {
+        return Ok((
+            insert_line_before(contents, &lines, section.start, placeholder),
             section.start,
-        )
-    } else if !lines.is_empty() {
+        ));
+    }
+    if !lines.is_empty() {
         let after = lines.len() - 1;
-        (
-            insert_line_after(contents, &lines, after, &placeholder),
+        return Ok((
+            insert_line_after(contents, &lines, after, placeholder),
             after + 1,
-        )
-    } else {
-        return Err(LinkRelocationError::NoPomodorosSection);
-    };
-    Ok((content, created_line, name))
+        ));
+    }
+    Err(LinkRelocationError::NoPomodorosSection)
 }
 
 /// Insert `- [ ] () — NAME` after the child block of the last open

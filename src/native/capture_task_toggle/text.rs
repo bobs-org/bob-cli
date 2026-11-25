@@ -22,7 +22,7 @@ pub(crate) fn insert_line_before(
     )
 }
 
-pub(super) fn extract_line_range<'a>(
+pub(crate) fn extract_line_range<'a>(
     contents: &'a str,
     lines: &[LineSpan<'_>],
     start_line: usize,
@@ -42,7 +42,7 @@ pub(crate) fn remove_line_range(
     format!("{}{}", &contents[..start], &contents[lines[end_line].end..])
 }
 
-pub(super) fn reindent_subtree(
+pub(crate) fn reindent_subtree(
     subtree: &str,
     from_indent: &str,
     to_indent: &str,
@@ -62,7 +62,7 @@ pub(super) fn reindent_subtree(
     result
 }
 
-pub(super) fn logical_lines(text: &str) -> Vec<String> {
+pub(crate) fn logical_lines(text: &str) -> Vec<String> {
     physical_line_pieces(text)
         .into_iter()
         .map(|(line, _)| line.to_string())
@@ -97,7 +97,7 @@ fn physical_line_pieces(text: &str) -> Vec<(&str, &str)> {
     lines
 }
 
-pub(super) fn insert_lines_after(
+pub(crate) fn insert_lines_after(
     content: &str,
     lines: &[LineSpan<'_>],
     after_index: usize,
@@ -259,7 +259,7 @@ fn unordered_child_indentation(line: &str) -> Option<&str> {
 /// one, else the section's own established child indentation anywhere else
 /// in the Pomodoros section, else the canonical tab fallback. Mirrors
 /// `findPomodoroChildIndentation` exactly.
-pub(super) fn pomodoro_child_indentation(
+pub(crate) fn pomodoro_child_indentation(
     lines: &[LineSpan<'_>],
     entry_index: usize,
     entry_end_index: usize,

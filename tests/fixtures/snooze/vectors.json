@@ -5,9 +5,9 @@
     "rows": "input: {note: string (LF or CRLF daily note), encoding: 'lf'|'crlf'}; expected: {header: number|null (1-based), duplicates: number[] (1-based), rows: [{line, kind: 'active'|'history'|'malformed', hhmm|null, target|null, block|null, embedded: bool, aliased: bool, children: number (count of note-subtree lines), malformed_reason|null, woke|null}]}",
     "when": "input: {input: string, date: 'YYYY-MM-DD', now: 'HH:MM', zone: IANA name}; expected: {hhmm, minutes, rfc3339_contains} | {refusal: 'past'|'next_day'|'dst_gap'|'invalid'}",
     "live": "input: {today: 'YYYY-MM-DD', note_date: 'YYYY-MM-DD', now: 'HH:MM', rows: [{line, minutes|null, history: bool, malformed: bool, resolution: 'found'|'missing'|'ambiguous', route|null, block|null, status|null, is_task: bool, is_event: bool, live_link: bool}]}; expected: {states: [{line, state}], planned: string[] ('route#^block'), blocked: string[], next_wake_at_contains|null, event_lints: number[]}",
-    "snooze": "Owned by mutation-planners (add plan): input {note, targets, now}; expected postimage note plus report. Empty until that phase lands.",
-    "wake": "Owned by mutation-planners (wake plan): input {note, targets, now}; expected postimage note plus report. Empty until that phase lands.",
-    "cleanup": "Owned by mutation-planners (row cleanup): input {note, targets}; expected postimage note. Empty until that phase lands."
+    "snooze": "input: {day, when?, now, date, zone, task: {path, contents, line (1-based), route, block, target, status, is_task, is_event, blocked, type_key, type_name, link}}; mode: 'add'|'drop'; expected: {refusal|null, day, task?, task_unchanged?}",
+    "wake": "input: {day, now, date, zone, tasks: [task], explicit?: [{route, block}], link_count?, max_links?}; mode: 'wake'; expected: {day, woken?: [{block, destination, created}], over?, tasks_unchanged?, second_wake_empty?}",
+    "cleanup": "input: {day, now, date, zone, tasks: [task]}; mode: 'cleanup'; expected: {day}"
   },
   "groups": {
     "rows": [
@@ -24,6 +24,23 @@
           "duplicates": [],
           "rows": [
             {"line": 7, "kind": "active", "hhmm": "1530", "target": "job", "block": "email-dan", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
+          ]
+        }
+      },
+      {
+        "id": "rows-consecutive-active-rows",
+        "runners": ["rust"],
+        "mode": "parse",
+        "input": {
+          "note": "## Snoozed\n\n- **1530** [[job#^first]]\n- **1530** [[job#^second]]\n",
+          "encoding": "lf"
+        },
+        "expected": {
+          "header": 1,
+          "duplicates": [],
+          "rows": [
+            {"line": 3, "kind": "active", "hhmm": "1530", "target": "job", "block": "first", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null},
+            {"line": 4, "kind": "active", "hhmm": "1530", "target": "job", "block": "second", "embedded": false, "aliased": false, "children": 0, "malformed_reason": null, "woke": null}
           ]
         }
       },
@@ -648,8 +665,987 @@
         }
       }
     ],
-    "snooze": [],
-    "wake": [],
-    "cleanup": []
+    "snooze": [
+      {
+        "id": "snooze-add-ready-creates-section",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [ ] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": " ",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "type_key": "write",
+            "type_name": "WRITE",
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "task": "- [*] #task Email Dan [fresh:: 2026-11-25] ^email-dan\n",
+          "task_unchanged": false
+        }
+      },
+      {
+        "id": "snooze-add-next-task-line-unchanged",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "type_key": "write",
+            "type_name": "WRITE",
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "task": "- [*] #task Email Dan ^email-dan\n",
+          "task_unchanged": true
+        }
+      },
+      {
+        "id": "snooze-add-from-live-link-with-notes",
+        "runners": ["rust", "js"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\t\t- Mention the timeline.\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "type_key": "write",
+            "type_name": "WRITE",
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n\t- Mention the timeline.\n",
+          "task_unchanged": true
+        }
+      },
+      {
+        "id": "snooze-add-keeps-unrelated-empty-placeholder",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n- [ ] () — FIX\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — FIX\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n"
+        }
+      },
+      {
+        "id": "snooze-add-keeps-running-entry",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n\t- [[job#^email-dan]]\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [/] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "/",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "task_unchanged": true
+        }
+      },
+      {
+        "id": "snooze-add-retime",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n- **1900** [[home#^sink]]\n",
+          "when": "1600",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]",
+            "identities": [
+              {"target": "home", "block": "sink", "route": "home.md"}
+            ]
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1600** [[job#^email-dan]]\n- **1900** [[home#^sink]]\n"
+        }
+      },
+      {
+        "id": "snooze-add-resnooze-replaces-history",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:32\n",
+          "when": "1900",
+          "now": "16:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1900** [[job#^email-dan]]\n"
+        }
+      },
+      {
+        "id": "snooze-add-refuse-event",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — MEET\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "2026/20261125.md",
+            "contents": "- [*] #task **1530-1600** Interview [type:: MEET] ^interview\n",
+            "line": 1,
+            "route": "2026/20261125.md",
+            "block": "interview",
+            "target": "",
+            "status": "*",
+            "is_task": true,
+            "is_event": true,
+            "blocked": false,
+            "link": "[[#^interview]]"
+          }
+        },
+        "expected": { "refusal": "event_task" }
+      },
+      {
+        "id": "snooze-add-refuse-blocked",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [?] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "?",
+            "is_task": true,
+            "is_event": false,
+            "blocked": true,
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": { "refusal": "blocked" }
+      },
+      {
+        "id": "snooze-add-same-note",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Tasks\n\n- [ ] #task Email Dan ^email-dan\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "2026/20261125.md",
+            "contents": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Tasks\n\n- [ ] #task Email Dan ^email-dan\n",
+            "line": 7,
+            "route": "2026/20261125.md",
+            "block": "email-dan",
+            "target": "",
+            "status": " ",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[#^email-dan]]\n\n## Tasks\n\n- [*] #task Email Dan [fresh:: 2026-11-25] ^email-dan\n"
+        }
+      },
+      {
+        "id": "snooze-add-dup-live-keeps-notes",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\t\t- First notes.\n\t- [[job#^email-dan]]\n\t\t- Second notes.\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- Email Dan\n\t\t- Second notes.\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n\t- First notes.\n"
+        }
+      },
+      {
+        "id": "snooze-add-closed-recorded-kept",
+        "runners": ["rust"],
+        "mode": "add",
+        "input": {
+          "day": "## Pomodoros\n\n- [x] (**0900-0925** [t:: 25m]) — WRITE\n\t- [[job#^email-dan]]\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n",
+          "when": "1530",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [x] (**0900-0925** [t:: 25m]) — WRITE\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n"
+        }
+      },
+      {
+        "id": "snooze-drop-live-row",
+        "runners": ["rust"],
+        "mode": "drop",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n- **1900** [[home#^sink]]\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]",
+            "identities": [
+              {"target": "home", "block": "sink", "route": "home.md"}
+            ]
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1900** [[home#^sink]]\n"
+        }
+      },
+      {
+        "id": "snooze-drop-deletes-empty-heading",
+        "runners": ["rust"],
+        "mode": "drop",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n\n## Notes\n\nKeep me.\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]"
+          }
+        },
+        "expected": {
+          "refusal": null,
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Notes\n\nKeep me.\n"
+        }
+      },
+      {
+        "id": "snooze-drop-not-snoozed",
+        "runners": ["rust"],
+        "mode": "drop",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1900** [[home#^sink]]\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "task": {
+            "path": "job.md",
+            "contents": "- [*] #task Email Dan ^email-dan\n",
+            "line": 1,
+            "route": "job.md",
+            "block": "email-dan",
+            "target": "job",
+            "status": "*",
+            "is_task": true,
+            "is_event": false,
+            "blocked": false,
+            "link": "[[job#^email-dan]]",
+            "identities": [
+              {"target": "home", "block": "sink", "route": "home.md"}
+            ]
+          }
+        },
+        "expected": { "refusal": "not_snoozed" }
+      }
+    ],
+    "wake": [
+      {
+        "id": "wake-due-into-untimed-exact",
+        "runners": ["rust", "js"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] () — WRITE\n\t- [[job#^other]]\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "15:40",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^email-dan]]"
+            },
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Other ^other\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "other",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^other]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\t- [[job#^other]]\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:40\n",
+          "woken": [{"block": "email-dan", "destination": "WRITE", "created": false}],
+          "tasks_unchanged": true,
+          "second_wake_empty": true
+        }
+      },
+      {
+        "id": "wake-skips-running-creates-next-up",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "15:30",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:30\n",
+          "woken": [{"block": "email-dan", "destination": "WRITE", "created": true}],
+          "tasks_unchanged": true
+        }
+      },
+      {
+        "id": "wake-batch-stable-order",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^first]]\n- **1530** [[job#^second]]\n",
+          "now": "15:40",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task First ^first\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "first",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^first]]"
+            },
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Second ^second\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "second",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^second]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^first]]\n\t- [[job#^second]]\n\n## Snoozed\n\n- ~~**1530** [[job#^first]]~~ · woke 15:40\n- ~~**1530** [[job#^second]]~~ · woke 15:40\n",
+          "woken": [
+            {"block": "first", "destination": "WRITE", "created": false},
+            {"block": "second", "destination": "WRITE", "created": false}
+          ]
+        }
+      },
+      {
+        "id": "wake-over-cap-succeeds",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "15:30",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "link_count": 13,
+          "max_links": 13,
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:30\n",
+          "over": true
+        }
+      },
+      {
+        "id": "wake-explicit-bypasses-due",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1900** [[job#^email-dan]]\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "explicit": [{"route": "job.md", "block": "email-dan"}],
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- ~~**1900** [[job#^email-dan]]~~ · woke 13:00\n",
+          "woken": [{"block": "email-dan", "destination": "WRITE", "created": false}]
+        }
+      },
+      {
+        "id": "wake-leaves-blocked",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "15:40",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [?] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "?",
+              "is_task": true,
+              "is_event": false,
+              "blocked": true,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "woken": []
+        }
+      },
+      {
+        "id": "wake-untyped-first-untimed",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] ()\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "15:30",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] ()\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:30\n",
+          "woken": [{"block": "email-dan", "created": false}]
+        }
+      },
+      {
+        "id": "wake-containing-dest",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] () — WRITE + DEEP\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "15:30",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] () — WRITE + DEEP\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:30\n",
+          "woken": [{"block": "email-dan", "destination": "WRITE + DEEP", "created": false}],
+          "tasks_unchanged": true
+        }
+      },
+      {
+        "id": "wake-untyped-creates-unnamed",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "15:30",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n- [ ] ()\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:30\n",
+          "woken": [{"block": "email-dan", "created": true}],
+          "tasks_unchanged": true
+        }
+      },
+      {
+        "id": "wake-notes-travel-under-new-link",
+        "runners": ["rust"],
+        "mode": "wake",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^other]]\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n\t- Mention the timeline.\n",
+          "now": "15:40",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^email-dan]]"
+            },
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Other ^other\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "other",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "type_key": "write",
+              "type_name": "WRITE",
+              "link": "[[job#^other]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\t\t- Mention the timeline.\n\t- [[job#^other]]\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:40\n",
+          "woken": [{"block": "email-dan", "destination": "WRITE", "created": false}],
+          "tasks_unchanged": true,
+          "second_wake_empty": true
+        }
+      }
+    ],
+    "cleanup": [
+      {
+        "id": "cleanup-prunes-done",
+        "runners": ["rust", "js"],
+        "mode": "cleanup",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n- **1900** [[home#^sink]]\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [x] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "x",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "link": "[[job#^email-dan]]"
+            },
+            {
+              "path": "home.md",
+              "contents": "- [*] #task Fix sink ^sink\n",
+              "line": 1,
+              "route": "home.md",
+              "block": "sink",
+              "target": "home",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "link": "[[home#^sink]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1900** [[home#^sink]]\n"
+        }
+      },
+      {
+        "id": "cleanup-prunes-already-linked",
+        "runners": ["rust"],
+        "mode": "cleanup",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [*] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "*",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n"
+        }
+      },
+      {
+        "id": "cleanup-leaves-blocked",
+        "runners": ["rust"],
+        "mode": "cleanup",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [?] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "?",
+              "is_task": true,
+              "is_event": false,
+              "blocked": true,
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n"
+        }
+      },
+      {
+        "id": "cleanup-heading-deletion-when-empty",
+        "runners": ["rust", "js"],
+        "mode": "cleanup",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n\n## Notes\n\nKeep me.\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [x] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "x",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Notes\n\nKeep me.\n"
+        }
+      },
+      {
+        "id": "cleanup-keeps-prose-heading",
+        "runners": ["rust"],
+        "mode": "cleanup",
+        "input": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\nParked for later.\n- **1530** [[job#^email-dan]]\n",
+          "now": "13:00",
+          "date": "2026-11-25",
+          "zone": "UTC",
+          "tasks": [
+            {
+              "path": "job.md",
+              "contents": "- [x] #task Email Dan ^email-dan\n",
+              "line": 1,
+              "route": "job.md",
+              "block": "email-dan",
+              "target": "job",
+              "status": "x",
+              "is_task": true,
+              "is_event": false,
+              "blocked": false,
+              "link": "[[job#^email-dan]]"
+            }
+          ]
+        },
+        "expected": {
+          "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\nParked for later.\n"
+        }
+      }
+    ]
   }
 }

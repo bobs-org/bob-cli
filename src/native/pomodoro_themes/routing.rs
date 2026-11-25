@@ -262,12 +262,20 @@ pub(crate) struct PlaceInput<'a> {
     pub(crate) entries: &'a [PlaceEntry<'a>],
     pub(crate) exempt: &'a [String],
     pub(crate) already_queued: bool,
+    /// When true, skip timed/running entries in every branch, including
+    /// containing matches. Ordinary link routing keeps the default
+    /// (`false`): running exact, then untimed exact, then any containing.
+    pub(crate) never_running: bool,
 }
 
 /// Pure placement rule (D7). Unlike menus, placement may create entries
 /// for unknown or unconfigured names (the `theme_not_configured`
 /// warning is the caller's job). With no effective type the caller
 /// keeps today's implicit current/next selection.
+///
+/// `never_running` is the snooze-wake opt-in: it excludes timed entries
+/// from exact and containing matches so a wake never lands in the
+/// running Pomodoro. Default callers pass `false` and keep D7 as-is.
 pub(crate) fn place(input: &PlaceInput<'_>) -> PlaceOutcome {
     let Some(key) = input.type_key else {
         return PlaceOutcome::NoType;
@@ -275,13 +283,14 @@ pub(crate) fn place(input: &PlaceInput<'_>) -> PlaceOutcome {
     if input.already_queued {
         return PlaceOutcome::AlreadyQueued;
     }
-    if let Some(index) =
-        input.entries.iter().enumerate().find_map(|(index, entry)| {
-            (entry.open
-                && entry.running
-                && is_exact(entry.name, key, input.exempt))
-            .then_some(index)
-        })
+    if !input.never_running
+        && let Some(index) =
+            input.entries.iter().enumerate().find_map(|(index, entry)| {
+                (entry.open
+                    && entry.running
+                    && is_exact(entry.name, key, input.exempt))
+                .then_some(index)
+            })
     {
         return PlaceOutcome::Entry(index);
     }
@@ -294,12 +303,16 @@ pub(crate) fn place(input: &PlaceInput<'_>) -> PlaceOutcome {
         })
     {
         // Ledger order decides among duplicates: the first open exact
-        // entry wins. Running entries were checked above.
+        // entry wins. Running entries were checked above unless
+        // `never_running` skipped that branch.
         return PlaceOutcome::Entry(index);
     }
     if let Some(index) =
         input.entries.iter().enumerate().find_map(|(index, entry)| {
-            (entry.open && contains_key(entry.name, key)).then_some(index)
+            (entry.open
+                && !(input.never_running && entry.running)
+                && contains_key(entry.name, key))
+            .then_some(index)
         })
     {
         return PlaceOutcome::Entry(index);
@@ -457,6 +470,7 @@ pub(crate) fn relocate(input: &RelocateInput<'_>) -> RelocateOutcome {
             entries: &planned,
             exempt: &exempt,
             already_queued: false,
+            never_running: false,
         });
         if let PlaceOutcome::Entry(to) = placed
             && to != from
@@ -513,6 +527,7 @@ pub(crate) fn relocate(input: &RelocateInput<'_>) -> RelocateOutcome {
         entries: &planned,
         exempt: &exempt,
         already_queued: false,
+        never_running: false,
     });
     if let PlaceOutcome::Entry(to) = placed
         && to != from
@@ -735,6 +750,7 @@ mod tests {
                 entries: &entries,
                 exempt: &exempt,
                 already_queued: case["already_queued"].as_bool().unwrap(),
+                never_running: false,
             });
             let expected = &case["expected"];
             match expected["kind"].as_str().unwrap() {
@@ -1064,5 +1080,71 @@ mod tests {
                 other => panic!("{id}: unexpected select kind {other}"),
             }
         }
+    }
+
+    #[test]
+    fn never_running_skips_running_exact_for_untimed_exact() {
+        let entries = [
+            PlaceEntry {
+                name: Some("WRITE"),
+                open: true,
+                running: true,
+            },
+            PlaceEntry {
+                name: Some("WRITE"),
+                open: true,
+                running: false,
+            },
+        ];
+        let default = place(&PlaceInput {
+            type_key: Some("write"),
+            type_name: Some("WRITE"),
+            entries: &entries,
+            exempt: &[],
+            already_queued: false,
+            never_running: false,
+        });
+        assert_eq!(default, PlaceOutcome::Entry(0));
+        let never = place(&PlaceInput {
+            type_key: Some("write"),
+            type_name: Some("WRITE"),
+            entries: &entries,
+            exempt: &[],
+            already_queued: false,
+            never_running: true,
+        });
+        assert_eq!(never, PlaceOutcome::Entry(1));
+    }
+
+    #[test]
+    fn never_running_skips_running_containing_and_creates() {
+        let entries = [PlaceEntry {
+            name: Some("WRITE + FIX"),
+            open: true,
+            running: true,
+        }];
+        let default = place(&PlaceInput {
+            type_key: Some("write"),
+            type_name: Some("WRITE"),
+            entries: &entries,
+            exempt: &[],
+            already_queued: false,
+            never_running: false,
+        });
+        assert_eq!(default, PlaceOutcome::Entry(0));
+        let never = place(&PlaceInput {
+            type_key: Some("write"),
+            type_name: Some("WRITE"),
+            entries: &entries,
+            exempt: &[],
+            already_queued: false,
+            never_running: true,
+        });
+        assert_eq!(
+            never,
+            PlaceOutcome::Create {
+                name: "WRITE".to_string()
+            }
+        );
     }
 }

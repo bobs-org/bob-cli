@@ -1,25 +1,28 @@
 //! Snoozed tasks: later-today Task Links waiting in `## Snoozed`.
 //!
 //! The contract lives in `docs/snooze.md`. This module owns the row-model
-//! layer only: section bounds ([`parse`]), the injected zoned time grammar
-//! ([`when`]), pure resolved-state classification ([`state`]), and the
-//! shared conformance-vector loader ([`vectors`]).
+//! layer ([`parse`], [`when`], [`state`]), the shared conformance-vector
+//! loader ([`vectors`]), and the pure mutation planners ([`plan`]).
 //!
-//! Mutation planners (`plan.rs`), the CLI (`cli.rs`), receipts, and tick
-//! integration belong to later phases of the same child epic and must not
-//! be added here.
+//! The CLI (`cli.rs`), receipts, and tick integration belong to later
+//! phases of the same child epic.
 
 pub(crate) mod parse;
+pub(crate) mod plan;
 pub(crate) mod state;
 pub(crate) mod vectors;
 pub(crate) mod when;
 
-// Stable module exports for downstream phases (mutation planners, CLI,
-// readers). Unused until those phases land; the allowance is scoped to
-// this child epic's row-model phase and goes away at integration.
+// Re-exports are the later CLI/capture surface; this phase's tests import
+// through the submodule paths, so rustc would otherwise warn.
 #[allow(unused_imports)]
 pub(crate) use parse::{
     duplicate_snoozed_headers, snoozed_section_range, SnoozedSection,
+};
+#[allow(unused_imports)]
+pub(crate) use plan::{
+    plan_add, plan_cleanup, plan_drop, plan_wake, AddInput, AddRefusal,
+    CleanupInput, DropInput, DropRefusal, FilePostimage, TaskFact, WakeInput,
 };
 #[allow(unused_imports)]
 pub(crate) use state::{

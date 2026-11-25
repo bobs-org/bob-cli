@@ -35,15 +35,19 @@ pub(crate) use links::{
 };
 pub(crate) use relocation::{
     endpoint_from_entry, insert_named_placeholder,
-    insert_named_placeholder_after_last_open, move_subtree_to_entry,
-    plan_link_relocation, LinkRelocationAction, LinkRelocationError,
-    PomodoroEndpoint,
+    insert_named_placeholder_after_last_open, insert_subtree_into_entry,
+    insert_unnamed_placeholder, move_subtree_to_entry, plan_link_relocation,
+    LinkRelocationAction, LinkRelocationError, PomodoroEndpoint, SubtreeInsert,
 };
+// Snooze wake and later capture reuse this; ordinary callers keep Append.
+#[allow(unused_imports)]
+pub(crate) use relocation::move_subtree_to_entry_at;
 pub(crate) use task_update::{
     plan_task_link, set_task_line_status,
     task_update_has_single_future_scheduled, TaskTogglePlan,
 };
 pub(crate) use text::{
-    child_block_end_line, insert_line_after, insert_line_before,
-    remove_line_range,
+    child_block_end_line, extract_line_range, insert_line_after,
+    insert_line_before, insert_lines_after, logical_lines,
+    pomodoro_child_indentation, reindent_subtree, remove_line_range,
 };

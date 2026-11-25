@@ -13,12 +13,12 @@ an unwoken row becomes history at midnight and the sticky Next lane returns
 the task to review; multi-day deferral is `[scheduled::]`.
 
 This page is the contract. The Rust side is `src/native/snooze/`
-(`parse.rs`, `when.rs`, `state.rs`, `vectors.rs`); the JavaScript mirror
-lives in bob-ledger-tools and runs the shared fixture verbatim. The
-machine-readable parity vectors live in
-`tests/fixtures/snooze/vectors.json`, which both languages cite: Rust runs
-the `rows`, `when`, and `live` groups (plus unit tests); the mutation
-planners complete the `snooze`, `wake`, and `cleanup` groups.
+(`parse.rs`, `when.rs`, `state.rs`, `plan.rs`, `vectors.rs`); the
+JavaScript mirror lives in bob-ledger-tools and runs the shared fixture
+verbatim. The machine-readable parity vectors live in
+`tests/fixtures/snooze/vectors.json`, which both languages cite: Rust
+runs all six groups (plus unit tests); plugins copy the fixture and run
+`rows`, `when`, `live`, and `cleanup` verbatim.
 
 This is not the Reading Board's Snoozed lane (a review parking lot with
 no clock) and not a project-frontmatter `snooze:` hold (a project-level
@@ -112,17 +112,50 @@ and dash queries), and `blocked` distinguishes the parked subset. Ready,
 history, duplicate, and ignored rows never enter planned-today. Readers
 that mean workable now keep Today.
 
-## Mutations (later phases own this section)
+## Mutations
 
-`add`, `drop`, and `wake` planners land in `snooze/plan.rs` with the
-mutation-planners phase: identity-based subtree moves, row
-deduplication and history, opt-in never-running placement, and the
-shared cleanup planner for capture and plugin consumers. Wake processes
-due live rows in deterministic time and link order, strikes each row
-with the actual wake time, and never edits a task line. The guarded CLI,
-receipts, tick step, and writer audit land in their own phases; until
-then this document's mutation and machine-contract sections stay
-planned, not implemented.
+Pure planners in `snooze/plan.rs` take explicit note snapshots and
+return postimages plus metadata. They never shell out or write files.
+Callers (the guarded CLI, and later capture's in-memory batch) supply
+the daily note, task facts, the identity map, and an injected
+`SnoozeClock`. Same-path task and daily-note edits coalesce, including
+shifted line offsets after a Ready→Next stamp.
+
+- `plan_add` refuses Event, Blocked, done, cancelled, and non-task
+  targets (`event_task`, `blocked`, `done`, `cancelled`, `not_task`) and
+  a missing Pomodoros section (`no_pomodoros`). Ready becomes Next via
+  `plan_task_link` (and `[fresh::]` when that write changes the line);
+  Next and In Progress stay byte-identical. The first live dedicated
+  ledger link's notes become the snooze subtree; later dedicated
+  duplicates keep those notes as a display bullet; only untimed entries
+  this operation emptied are removed; running and closed recorded-time
+  entries stay. An existing active row is retimed; a matching history
+  row is replaced. Rows sort by target time, then link text. The
+  heading is created after Pomodoros when missing.
+- `plan_drop` removes every unstruck active row for one identity and
+  deletes the heading only when no rows and no prose remain. Task
+  fields never change. Absence refuses `not_snoozed`.
+- `plan_wake` wakes due live rows in time then source order. An
+  explicit identity list bypasses due-time for asleep/due rows and
+  never overrides ignored or blocked. Destinations use opt-in
+  `never_running` placement: untimed exact, then untimed containing,
+  else a typed next-up placeholder after the running entry. No type
+  uses the first untimed open entry, else `- [ ] ()`. Each batch of
+  the same destination inserts at the top (`FirstChild`, then after
+  the previous subtree). Notes travel under the new ledger link; the
+  snooze row is struck (`- ~~**HHMM** link~~ · woke HH:MM`) and its
+  children are stripped. Wake never edits a task line, never refuses
+  on `plan.max_links` (over-cap is reported), and prunes
+  done/cancelled/already_linked rows in the same pass. Blocked rows
+  stay. An immediate second wake is empty.
+- `plan_cleanup` is the capture/plugin reuse of that prune: drop
+  done, cancelled, and already-linked active rows; leave blocked,
+  Ready, Event, malformed, and history.
+
+Ordinary link routing, MEET placement, and subtree-appending callers
+keep their defaults: `place(..., never_running: false)` and
+`SubtreeInsert::Append`. The guarded CLI, receipts, tick step, and
+writer audit land in later phases.
 
 ## Conformance vectors
 
@@ -139,8 +172,7 @@ language-neutral schemas (`schemas` in the fixture file):
   duplicates (earliest wins, source-order ties, spelling variants),
   previous-day notes, history exclusion, blocked parking, event lints,
   and `next_wake_at` nullability.
-- `snooze`, `wake`, `cleanup`: add, wake, and cleanup plans. Owned by
-  the mutation-planners phase; present now as documented empty groups.
+- `snooze`, `wake`, `cleanup`: add/drop, wake, and cleanup plans.
   The typed loader (`vectors.rs`) rejects unknown groups, runners, and
   modes instead of skipping them.
 
