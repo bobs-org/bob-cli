@@ -157,7 +157,7 @@
 - query: "@route+block-id"
   location: /reference/capture-syntax/#plus-child
 - query: "@route+block-id#section"
-  location: /reference/capture-syntax/#plus-child-section
+  location: /capture/#bob-capture-rewrite
 - query: "@route+block-id#drawer"
   location: /reference/capture-syntax/#plus-child-section
 - query: "@route+block-id with no other text"
@@ -165,6 +165,8 @@
 - query: "@route+block-id!"
   location: /reference/capture-syntax/#plus-toggle
 - query: "- #Section selects a heading"
+  location: /capture/#section-bullets
+- query: "- #Section"
   location: /reference/capture-syntax/#drawer-bullets
 - query: "- #drawer with nested notes"
   location: /reference/capture-syntax/#drawer-bullets

@@ -99,6 +99,7 @@ plugins:
           - gcal.md
           - gcal-acks.md
           - gcal-notes.md
+          - meeting-notes.md
           - gkeep.md
           - gmail.md
           - highlights-clip.md

@@ -197,11 +197,11 @@ block id, plus `commit`, optional `commit_warning` / `sync_status` /
 re-root was skipped. Errors use `error: {code, message, hint?}` with
 `root`, `candidates`, `parent_candidates`, or `existing` where relevant.
 Diagnostics go to stderr in JSON mode; stdout stays one envelope. See
-[JSON outputs](reference/json-outputs.md#ref-meet).
+[JSON outputs](reference/json-outputs.md#references-jobs-keep-plugins-and-status).
 
 ## Related
 
 - [File meeting notes](guides/file-meeting-notes.md) — the CLI flow.
 - [Reference library](ref.md) — reading state, identity, and rename guarantees.
 - [Configuration](reference/configuration.md#meetings) — meetings keys.
-- [JSON outputs](reference/json-outputs.md#ref-meet) — versioned envelopes.
+- [JSON outputs](reference/json-outputs.md#references-jobs-keep-plugins-and-status) — versioned envelopes.
