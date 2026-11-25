@@ -87,13 +87,21 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 
 ## Memory Notes
 
+### `sase/memory/gotchas.md`
+
+- Type: `core`
+- Parent: `AGENTS.md`
+- Description: No description set.
+- Lines: 11
+- Approx. tokens: 86
+
 ### `sase/memory/sase.md`
 
 - Type: `core`
 - Parent: `AGENTS.md`
 - Description: No description set.
-- Lines: 87
-- Approx. tokens: 1243
+- Lines: 88
+- Approx. tokens: 1269
 
 ### `sase/memory/decisions.md`
 
@@ -101,8 +109,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Description: Accepted architecture and policy decisions for bob-cli, bob-plugins, Bob
   Mac Capture, and the Bob vault — the choice, its rejected alternatives, and what would
   reopen it.
-- Lines: 370
-- Approx. tokens: 6469
+- Lines: 389
+- Approx. tokens: 6761
 
 ### `sase/memory/glossary.md`
 
@@ -166,12 +174,12 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 
 ## Statistics
 
-- Total notes: 9
-- Core notes: 1
+- Total notes: 10
+- Core notes: 2
 - Reference notes: 5
 - Web descriptor notes: 3
-- Total lines: 894
-- Total approx. tokens: 13093
+- Total lines: 925
+- Total approx. tokens: 13497
 
 ## Commands
 

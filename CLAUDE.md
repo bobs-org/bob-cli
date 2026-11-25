@@ -26,8 +26,9 @@ note's `type:` frontmatter decide how it reaches you.
   `/sase_memory_read` skill, never by opening the file directly.
 - **Memory webs** are keyed collections: a flat descriptor note (`sase/memory/<web>.md`)
   plus a sibling directory of strand files (`sase/memory/<web>/<slug>.md`). A web's
-  descriptor is always inlined into your agent instructions; a strand body never is —
-  read strands on demand with your `/sase_memory_read` skill
+  descriptor is always inlined into your agent instructions; its roster is too unless
+  the web loads its roster on demand (read with `sase memory read roster:<web>`); a
+  strand body never is — read strands on demand with your `/sase_memory_read` skill
   (`sase memory read <web>:<keyword>`, for example `glossary:stitch`).
 
 Memory files are not ordinary files: before you create, edit, or delete any of them — or
@@ -91,6 +92,13 @@ you, so hand long commands to `/sase_monitor` before starting them. Every root t
 through `/sase_final`, including handoff turns: a staged handoff is adopted by the host
 after finalizers settle.
 
+### 1.2 Gotchas (gotchas)
+
+bob-cli ships only through the scheduled release train: at most one version per New York
+day after full CI on the exact SHA, with no release PR. Never edit `Cargo.toml` versions
+or `CHANGELOG.md`; mark CLI or JSON contract breaks with `!`. See
+[[decisions/bob-cli-releases-ride-a-daily-train]].
+
 ## 2. Reference Memory
 
 The below files contain detailed reference material. When working in their domain, you
@@ -110,363 +118,40 @@ memory files directly.
 
 ## 3. Memory Webs
 
-Each memory web below is a keyed collection. Its descriptor is always loaded, but a
-strand's body is not: read strands on demand with your `/sase_memory_read` skill, for
-example `sase memory read glossary:stitch -r "<why>"`.
+Each memory web below is a keyed collection. Its descriptor is always loaded with its
+roster unless the descriptor says the roster loads on demand; read those with
+`sase memory read roster:<web>`. A strand's body is not: read strands on demand with
+your `/sase_memory_read` skill, for example
+`sase memory read glossary:stitch -r "<why>"`.
 
 ### 3.1 Decisions (decisions)
 
 Accepted architecture and policy decisions spanning bob-cli, bob-plugins, Bob Mac
-Capture, and the Bob vault. Each roster summary is a rule to follow as written. Before
-changing behavior a record governs, or proposing one of its rejected alternatives, read
-it with `sase memory read decisions:<keyword> -r "<why>"`; each record states where it
-applies, the claim, why it beat the credible alternatives, what it costs, and what would
-reopen it. A record is not a design doc, runbook, command contract, or keymap — those
-live in `docs/` and each repo's README. Records cite checkable evidence (a commit, doc,
-plan, or research ref); when no source records the reason, ask Bryan rather than infer
-one. A record is immutable once accepted: if course changes, write a new record and mark
-the old one with `metadata.status` plus `superseded_by` and a `[[...]]` back-link, never
-edited in place.
+Capture, and the Bob vault. Records are rules once read: before writing or revising a
+SASE plan, read the roster with `sase memory read roster:decisions -r "<why>"` and cite
+each governing decision as `decisions:<keyword>`; before changing governed behavior
+directly — capture, walk/review, tasks/lanes/decay, gcal/meetings, refs,
+themes/relations, releases, or Mac Capture — consult the roster first when no plan cites
+the decision. Each record states where it applies, the claim, why it beat the credible
+alternatives, what it costs, and what would reopen it. A record is not a design doc,
+runbook, command contract, or keymap — those live in `docs/` and each repo's README.
+Records cite checkable evidence (a commit, doc, plan, or research ref); when no source
+records the reason, ask Bryan rather than infer one. A record is immutable once
+accepted: if course changes, write a new record and mark the old one with
+`metadata.status` plus `superseded_by` and a `[[...]]` back-link, never edited in place.
 
-1. **#now Is A User-Owned Weekly Bet, Never A Status** (`now-tag-is-user-owned`) -
-   _[superseded by `task-lanes-are-sticky`, `today-is-read-from-the-ledger`]_ Only
-   Bryan's explicit gestures add or remove #now; no automation infers, adds, or strips
-   it. It never changes task status or feeds Next, and it stays a tag, never an inline
-   field.
-2. **A Jump Successor Lands Last And Parks The Walk**
-   (`successor-jump-parks-the-walk`) - Ctrl+J pins at most one successor offer per card.
-   After every write lands, Bob focuses that task; a pinned close from a ]s landing
-   parks the walk at the closed row's neighbour instead of advancing.
-3. **A Notebook Route Writes Notes; `@@` Stays Draft-Wide**
-   (`notebook-routes-write-notes`) - Notebooks hold only note bullets; on a notebook
-   route the existing `@nb` forms write notes, `@@` stays draft-wide, `@parent^id@ %n`
-   creates a notebook, and bob owns each `## Notebooks` catalog's content.
-4. **A Pomodoro Theme Is One Name Component** (`pomodoro-theme-is-one-component`) - A
-   theme is one + component of a Pomodoro's — NAME tail, keyed by normalize_component,
-   with the catalog derived from canonical daily notes.
-5. **A Task Move Never Advances The Walk** (`task-move-never-advances-the-walk`) -
-   Ctrl+Shift+M never advances the ]s walk, even from a landed row: it follows the moved
-   task to its destination note and parks the walk, so the next ]s / [s resumes at the
-   moved row's walk neighbour.
-6. **Active Task Statuses Are Derived, Not Authored** (`task-status-is-derived`) -
-   _[partly superseded by `task-lanes-are-sticky`, `task-deps-are-depends-on-links`,
-   `projects-block-from-prj-line`]_ Today's Pomodoro ledger drives Next and In Progress;
-   open dependencies and future scheduled dates drive Blocked. bob task-status-hooks
-   reconciles them, so writers change those inputs, never just the checkbox.
-7. **Alt+N Answers From Due Rows** (`alt-n-answers-from-due-rows`) - Alt+N answers from
-   the ]s landing or from any due walk row (same note and line text in the pre-write
-   queue), advancing once to that row's walk successor; PRE/POST and RECURRING still
-   stay, and every other answer key stays landing-gated.
-8. **An Empty Capture Draft Shows Today's Ledger Agenda**
-   (`idle-capture-shows-ledger-agenda`) - _[partly superseded by
-   `decisions:idle-capture-mirrors-walk-attention`]_ An empty capture draft shows bob's
-   `capture-pomodoros --tasks` agenda (Now, Next, Later), cached in app memory and
-   revalidated on filtered vault events and show; folds go farthest-first (logs,
-   one-line, one-row, name strip) below a fixed eye line; the app never reads the vault.
-9. **Answering A Walk Landing Advances The Walk** (`answering-advances-the-walk`) -
-   _[partly superseded by `task-move-never-advances-the-walk`,
-   `alt-n-answers-from-due-rows`, `ctrl-enter-leaves-pre`,
-   `successor-jump-parks-the-walk`]_ A gesture that started on the row ]s just landed
-   on, and whose committed write takes that row out of today's walk, advances the walk
-   exactly once to the next remaining review item: Ctrl+Enter close, Ctrl+Alt+F, Alt+N,
-   the Ctrl+Shift+Enter link, a resolving Task Card commit, and Ctrl+Shift+M. Alt+F is
-   the one stay answer; Ctrl+Enter never crosses the PRE/POST boundary; a short gesture
-   lock swallows double presses; every walk landing records a <C-o> jump.
-10. **Awaiting A Gmail Reply Is A Tagged Schedule Hold**
-    (`gmail-reply-wait-is-a-tagged-hold`) - A watched Gmail send holds its open tasks
-    with exact #awaiting_reply plus one scheduled nudge date; a reply or bounce lifts
-    that hold, and an eligible Ready row resurfaces through [unblocked::] after the hold
-    date is gone.
-11. **Bob Cli Releases Ride A Daily Train** (`bob-cli-releases-ride-a-daily-train`) -
-    bob-cli ships only through the scheduled release train, at most one version per New
-    York day after full CI on the exact SHA, with no release PR; agents never edit the
-    Cargo.toml version or CHANGELOG.md and mark CLI or JSON contract breaks with !.
-12. **Bob Gcal Is Read Only And Proposes Once**
-    (`bob-gcal-is-read-only-and-proposes-once`) - _[partly superseded by
-    `decisions:gcal-root-follows-google-until-edited`,
-    `decisions:meet-filing-follows-google-until-edited`,
-    `decisions:gcal-force-resets-the-day`]_ Google Calendar stays read-only; Bob writes
-    each row and link once, updates only untouched Google spans, tombstones deletions,
-    and cancels only untouched tasks.
-13. **Bob Mac Capture Is A Thin Client Of bob** (`mac-capture-is-a-thin-client`) - Bob
-    Mac Capture never parses capture grammar, computes previews, or writes the vault; it
-    runs bob, renders the spans, candidates, and previews bob returns, and submits each
-    draft as one bob capture call.
-14. **Buffer Reasons Ride The Description Bullets**
-    (`buffer-reasons-ride-description-bullets`) - A -N reason / +M reason line sets that
-    side's buffer and writes one labelled reason bullet at the top of the Google-owned
-    description block.
-15. **Calendar Events Are Daily Note Event Tasks**
-    (`calendar-events-are-daily-note-event-tasks`) - _[partly superseded by
-    `decisions:synced-meetings-link-by-phase`]_ Synced calendar events live in their
-    daily note's Events section with root attribution and one appended MEET.
-16. **Capture Bullets Mirror The Task Block**
-    (`capture-bullets-mirror-the-task-block`) - _[partly superseded by
-    `decisions:task-reqs-are-met-with-their-task`]_ A first-level capture bullet is its
-    task's child: ALL-CAPS with notes is a drawer, a leading # names one, and note-less
-    @file+id files each bullet as a note.
-17. **Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites**
-    (`capture-link-drops-blocking-deps`) - Typing an existing-task capture link on a
-    task Blocked only by its own open prerequisites drops those links and then performs
-    the gesture; plugins keep today's consumption.
-18. **Capture Reserves Clock Tags** (`capture-reserves-clock-tags`) - Free clock tags at
-    capture item edges are task tags, not types.
-19. **Capture Sigils Say Where What How** (`capture-sigils-say-where-what-how`) -
-    _[partly superseded by `decisions:capture-reserves-clock-tags`,
-    `decisions:capture-bullets-mirror-the-task-block`,
-    `decisions:notebook-routes-write-notes`]_ '@' says where, glued '#' names a place
-    and free '#' a type, '%' says how.
-20. **Capture Star Blocks Existing Tasks** (`capture-star-blocks-existing-tasks`) -
-    Capture `*` makes the new task a prerequisite of an existing task.
-21. **Close Selections List Explicitly** (`close-selections-list-explicitly`) - Any
-    numeric close list selects explicit scope; Event Tasks keep clock outcomes.
-22. **Code Copy Reads bob's Render-Time Catalog**
-    (`code-copy-reads-render-time-catalog`) - bob records code blocks and page anchors
-    during PDF rendering, and serves the catalog through bob ref code; clients present
-    those bytes and never extract code from the PDF text layer or re-parse Markdown at
-    read time.
-23. **Consumption Keeps Notes And Recorded Time**
-    (`consumption-keeps-notes-and-recorded-time`) - Consuming Task Links keeps notes,
-    removes only emptied entries, matches resolved identities, and retains closed
-    recorded time.
-24. **Ctrl+Enter Carries The Last PRE Chore Into The Next Group**
-    (`ctrl-enter-leaves-pre`) - _[partly superseded by `successor-jump-parks-the-walk`]_
-    On the last PRE row the walk landed on, Ctrl+Enter completes the chore and lands
-    where ]s would. A short guard swallows a repeated rapid press. A wrap back to a
-    skipped chore still stays, and lane rows still never step onto POST.
-25. **Decay Decisions Are Available Immediately**
-    (`decay-decisions-are-available-immediately`) - Gesture-triggered approved-decay
-    cards are available as soon as compatible plugins are installed; there is no
-    calendar gate, replacement date, or counting-only period.
-26. **Ended Off-Clock Events Settle Into Closed Sessions**
-    (`ended-off-clock-events-settle`) - Reconcile settles ended off-clock Event Tasks
-    left under an unstarted placeholder into closed sessions and completes their task
-    rows.
-27. **ended-synced-meetings-are-born-done** (`ended-synced-meetings-are-born-done`) -
-    _[partly superseded by `decisions:meet-filing-follows-google-until-edited`]_ Event
-    Tasks first synced after their buffered span ends are born `[x]` with the note-day
-    completion date and a struck 🍅 link under their closed MEET.
-28. **Event Buffers Widen The Occupied Span** (`event-buffers-widen-the-span`) -
-    _[partly superseded by `decisions:buffer-reasons-ride-description-bullets`,
-    `decisions:private-event-notes-beat-google-per-field`]_ The buffered span is what
-    the event occupies; the meeting span is when the meeting happens.
-29. **Event Task Links Close By The Clock** (`event-task-links-close-by-the-clock`) -
-    Timed closes classify same-day Event Task links by meeting and session clocks;
-    explicit picks win, except not-started events stay out of wildcard completion and
-    parking.
-30. **Gcal Force Resets The Day** (`gcal-force-resets-the-day`) - A replaced Events
-    section holds; only an explicit forced sync restores that day's rows.
-31. **Gcal Root Follows Google Until Edited**
-    (`gcal-root-follows-google-until-edited`) - _[partly superseded by
-    `decisions:private-event-notes-beat-google-per-field`]_ An Event Task's [root::]
-    follows Google's chosen root until Bryan edits it; his edits always win and are
-    reported once on conflict.
-32. **Hiding A Theme Removes It From Recent Only** (`theme-hide-is-recent-only`) -
-    Hiding a theme removes it from Recent suggestion rows only; today, Stats, colors,
-    and typing the name stay unchanged, and using it never unhides it.
-33. **Idle Capture Mirrors Walk Attention** (`idle-capture-mirrors-walk-attention`) -
-    _[partly superseded by `decisions:review-attention-follows-the-walk`,
-    `decisions:w-count-reads-lane-excess`]_ Today's Bob walk attention appears as s/w/b
-    marks in the idle agenda title row, from an independent `bob walks` refresh lane.
-34. **meet-filing-follows-google-until-edited**
-    (`meet-filing-follows-google-until-edited`) - _[partly superseded by
-    `decisions:past-day-sync-closes-bob-filed-meetings`]_ Google time or parsed buffer
-    moves refile an Event Task under a new MEET when its existing filing remains
-    Bob-owned; edited filing stays put.
-35. **Next And Pending Are Sticky Lanes; Only Blocked Is Derived**
-    (`task-lanes-are-sticky`) - _[partly superseded by `projects-block-from-prj-line`,
-    `task-decay-is-one-ladder`]_ Linking raises Ready to Next and an =x close sets In
-    Progress (PENDING); no unlink, hooks run, or capture drop lowers them; only Alt+N
-    release returns a task to Ready; Blocked stays derived.
-36. **Next Keeps Ask For An Optional Rotten Log Reason**
-    (`next-keeps-ask-an-optional-rotten-reason`) - _[partly superseded by
-    `task-decay-is-one-ladder`]_ Alt+F and Ctrl+Alt+F on a Next task ask why it stays; a
-    nonblank reason writes a Rotten Log entry, while blank Enter stamps without logging
-    or changing the keep streak.
-37. **Note Ready Cap Counts The Lane** (`note-ready-cap-counts-the-lane`) - The per-note
-    soft cap (plan.max_ready_per_note, default 5; ready_cap: N|off) counts each
-    area/project note's whole Ready lane by residence, whatever its freshness.
-38. **Off-Clock Follows Tag Then Note Default**
-    (`off-clock-follows-tag-then-note-default`) - _[partly superseded by
-    `decisions:off-clock-note-defaults-filter-by-task-type`]_ A task's clock is #on,
-    then #off (or a deprecated alias), then the nearest area/project offclock default on
-    its root walk, then on-clock; writers stamp that effective clock and closed rows
-    stay frozen.
-39. **Off-Clock Note Defaults Filter By Task Type**
-    (`off-clock-note-defaults-filter-by-task-type`) - Nearest area or project notes can
-    filter off-clock time by effective task type; the list wins over a same-note
-    boolean.
-40. **Off-Clock Pomodoros Are Recorded And Counted Apart**
-    (`off-clock-pomodoros-count-apart`) - _[partly superseded by
-    `decisions:off-clock-follows-tag-then-note-default`]_ A timed row with [off:: Nm]
-    records off-clock minutes; separate clock views keep those minutes out of Worked
-    metrics.
-41. **Open PDF Writes Are Coordinated** (`open-pdf-writes-are-coordinated`) - bob writes
-    Highlights PDFs only through bounded .forMerging file coordination around the whole
-    per-PDF write, holding when uncertain or while you read; never UI automation, never
-    .forReplacing.
-42. **Open Pomodoro Names Follow Task Links**
-    (`open-pomodoro-names-follow-task-links`) - Every live Task Link under one of
-    today's open, typed Pomodoros agrees with its entry's name; writers, the close
-    settle, and bob task reconcile enforce it, and reconcile never writes task fields.
-43. **Past Day Sync Closes Bob Filed Meetings**
-    (`past-day-sync-closes-bob-filed-meetings`) - Past-day sync closes eligible
-    untouched Bob-filed Event Tasks, with safe-shape rules for running and unlinked
-    rows.
-44. **Private Event Notes Beat Google Per Field**
-    (`private-event-notes-beat-google-per-field`) - A private event note is vault-stored
-    Bob-only description text keyed by the Google event; it beats Google per field, and
-    the row keeps one ownership rule.
-45. **Projects Block Their Tasks From The ^prj Line** (`projects-block-from-prj-line`) -
-    _[partly superseded by `decisions:subprojects-inherit-project-blocking`,
-    `decisions:capture-link-drops-blocking-deps`]_ A project's prerequisites and date
-    live on its ^prj task; while that line is Blocked, every open resident is Blocked
-    and tagged #prj_is_blocked, and Blocked tasks keep no Task Links under today's open
-    Pomodoros.
-46. **q-and-ctrl-bracket-mirror-esc** (`q-and-ctrl-bracket-mirror-esc`) - Every Bob
-    panel that Esc closes or backs out of also does so with q and Ctrl+[, through Esc's
-    own dispatch and regardless of focus; q types only in the panel's text controls,
-    Ctrl+[ never does, and no panel binds q to anything else.
-47. **READY Is Freshness-Gated With NEW and ROTTEN Review**
-    (`ready-is-freshness-gated`) - _[partly superseded by
-    `note-ready-cap-counts-the-lane`, `review-walk-is-tiered`,
-    `rotten-keeps-use-priority-decay`, `unblocked-tasks-resurface-as-ticklers`]_ READY
-    is the freshness-gated confirmed/exempt backlog (visible TODO pool minus NEW and
-    ROTTEN buckets) with TODAY → NEW → PENDING → NEXT → READY sections and
-    NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review clears NEW then ROTTEN; no
-    tags, fields, or status changes store review state.
-48. **Recurring Occurrences Walk When Due** (`recurring-occurrences-walk-when-due`) -
-    The ]s walk is PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN
-    → POST; due recurring occurrences walk in RECURRING (never stamped); schema 13
-    retired REFERENCES so refs use ordinary groups; a ^prj walks in PROJECTS only when
-    it lacks #hide.
-49. **Ref Rename Keeps Identity** (`ref-rename-keeps-identity`) - _[superseded by
-    `decisions:reference-renames-keep-identity`]_ Ref renames change bundle paths while
-    preserving reference and task identity.
-50. **Reference Ids Follow File Stems** (`reference-ids-follow-file-stems`) - A
-    reference id follows its note stem, with a numbered suffix only to avoid duplicate
-    ids across ref/.
-51. **Reference Renames Keep Identity** (`reference-renames-keep-identity`) - _[partly
-    superseded by `decisions:reference-ids-follow-file-stems`]_ Renaming eligible
-    references moves their bundle paths and inbound links while preserving reference and
-    reading-task identity.
-52. **Reference Sources Are Preserved Write-Once**
-    (`reference-sources-are-preserved-write-once`) - bob preserves render-input Markdown
-    and its derived code catalog in a hidden, content-addressed .bob store; source bytes
-    are write-once and reference notes carry a note-local source_markdown pointer.
-53. **References Are Ingested At Birth** (`references-are-ingested-at-birth`) - The
-    creating host files each reference under the maintenance and scan locks, queues
-    locally when unsafe, and leaves annotation sync to the Mac.
-54. **Relation Card Tab Accepts Ctrl-D Hides**
-    (`relation-card-tab-accepts-ctrl-d-hides`) - _[partly superseded by
-    `decisions:relation-equals-alias-and-flips`]_ Ctrl+N/P navigate the relation card
-    without touching the query, Tab accepts or completes the top match, selection is by
-    key, and Ctrl+D hides what Return would insert.
-55. **Relation Equals Alias And Flips** (`relation-equals-alias-and-flips`) - `=` is the
-    only relation alias for `~` under Bob's Links To gate; a glued `~`/`=` flips a
-    complete relation token; `~`/`=` flip direction in the editor, picker, and label
-    card; a fast `==` types one literal `=`.
-56. **Relation Label Hide Is Suggestions-Only**
-    (`relation-label-hide-is-suggestions-only`) - Hiding a relation label removes it
-    from suggestions only; LINKS text, mirrors, chips, counts, and typed use stay
-    unchanged, and using it never unhides it.
-57. **Relation Label Prefs Live In A Per-Host Journal**
-    (`relation-label-prefs-live-in-per-host-journal`) - Relation label hide, unhide, and
-    rename events live in vault-synced .bob/relations/<host>.jsonl; fold is
-    last-writer-wins and bob is the only writer.
-58. **Relation Label Rename Rewrites History**
-    (`relation-label-rename-rewrites-history`) - bob relations rename rewrites matching
-    label spans everywhere, including done/ and the previous daily note, in one
-    previewed transaction and one revertable commit.
-59. **Review Attention Follows The ]s Walk** (`review-attention-follows-the-walk`) - The
-    `s` mark is on exactly when `]s` has a row to land on, wearing the hue of the group
-    `]s` enters first; PRE and POST share cyan as bookends and the Mac `s` count reads
-    the walk total.
-60. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) -
-    _[partly superseded by `recurring-occurrences-walk-when-due`]_ The ]s walk visits
-    one shared queue in explicit tiers PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER →
-    REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist rows resolve only by
-    completion; Pending and Next come due daily under pending_interval / next_interval
-    (default 1, false walks that lane off); tiers never feed buckets or chips; upkeep
-    outside the lanes counts the budget; stamps stay and the seed never re-runs.
-61. **Rotten Keeps Are Logged** (`rotten-keeps-are-logged`) - _[partly superseded by
-    `next-keeps-ask-an-optional-rotten-reason`, `task-decay-is-one-ladder`]_ Every
-    counted keep — Alt+F/Ctrl+Alt+F on an exact due Ready ROTTEN or scheduled TICKLER
-    row, or the decay card's Keep — asks an optional reason and writes one dated 🥀
-    ROTTEN LOG entry with the stamp; the entry count is display-only history, never a
-    field or a decay input.
-62. **Rotten Keeps Decay Through The Priority Ladder**
-    (`rotten-keeps-use-priority-decay`) - _[partly superseded by
-    `decay-decisions-are-available-immediately`, `unblocked-tasks-resurface-as-ticklers`
-    , `rotten-keeps-are-logged`, `task-decay-is-one-ladder`]_ Repeated due-Ready keeps
-    earn an explicit approved decision that enters the existing priority ladder; nothing
-    decays silently and freshness itself still never changes priority or schedule.
-63. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
-    Capture shows a "Similar tasks" band only after typing settles and only when a match
-    clears bob's calibrated bars; every row action is an explicit draft edit and Return
-    never changes.
-64. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`) -
-    _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ A blocked project
-    passes its dependency or schedule reason through its project descendants, with
-    reconcile as the authority and the ^prj tag as the proxy for other engines.
-65. **sync-sorts-event-task-links** (`sync-sorts-event-task-links`) - Every bob gcal
-    sync run reorders each Pomodoro entry's same-note Event Task links by meeting span;
-    other children keep their slots.
-66. **Synced Meetings Are Linked By Phase At Birth** (`synced-meetings-link-by-phase`) -
-    _[partly superseded by `decisions:untracked-sessions-omit-t-field`,
-    `decisions:event-buffers-widen-the-span`, `decisions:sync-sorts-event-task-links`,
-    `decisions:ended-synced-meetings-are-born-done`,
-    `decisions:meet-filing-follows-google-until-edited`]_ A new Event Task is filed
-    under a past, running, or planned MEET at birth: closed clusters for ended meetings,
-    one open MEET for current and future.
-67. **Task Decay Is One Ladder** (`task-decay-is-one-ladder`) - Repeated freshness keeps
-    on WIP, Next, Ready, and P-level tasks follow one consent-based decay ladder (WIP →
-    Next → Ready → P1 → … → P4): each rung allows a configured number of due keeps, then
-    the next due keep opens one rung-aware card whose Enter steps exactly one rung down
-    and whose Alt+F stays and restarts the count.
-68. **Task Dependencies Are Links On One Depends-On Line**
-    (`task-deps-are-depends-on-links`) - _[partly superseded by
-    `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
-    task dependency links on one managed Depends-On first-child line; that line is the
-    source of truth and the [dependsOn::] / [id::] fields are derived from it.
-69. **Task Requirements Are Met With Their Task**
-    (`task-reqs-are-met-with-their-task`) - A req is a non-#task checkbox child of a
-    task or of another req; it is met or moot with its owner and never written as
-    completed; only drop and carry write to it.
-70. **The Mac `w` Mark Counts Lane Excess** (`w-count-reads-lane-excess`) - The Mac `w`
-    mark shows Bob's summed WIP/NEXT/READY lane excess.
-71. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
-    (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
-    color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
-    top-level area stem, then name hash; clients render the hue Bob reports.
-72. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
-    (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
-    `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
-    then plan.exempt mute, then top-level area stem, then name hash; clients render the
-    hue Bob reports.
-73. **Theme Preferences Live In A Per-Host Journal**
-    (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
-    live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
-    the only writer.
-74. **Today Is Read From The Ledger, Never Written To Tasks**
-    (`today-is-read-from-the-ledger`) - _[partly superseded by
-    `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
-    under today's open Pomodoros, computed at read time by bob plan and
-    bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
-    retired.
-75. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
-    Every would-be successor link from a managed Done gesture is offered for explicit
-    selection; recovery remains automatic.
-76. **Unblocked Tasks Resurface As Ticklers**
-    (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
-    `decisions:unblocked-tasks-are-offered`,
-    `decisions:gmail-reply-wait-is-a-tagged-hold`]_ Every automatic Blocked-to-Ready
-    recovery records [unblocked:: today] unless a WRITE skip applies, so the task is
-    TICKLER in the next morning review; a keep on that row leaves the streak unchanged.
-77. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
-    _[superseded by `decisions:off-clock-pomodoros-count-apart`]_ A timed ledger row
-    without [t::] is an untracked session; writers decide trackedness when they write a
-    span and readers only look at the row.
+**Roster on demand.** This web's 78 decisions are not listed here. You MUST read the
+DECISIONS roster with `sase memory read roster:decisions -r "<why>"`:
+
+- before writing or revising a SASE plan (any agent using `/sase_plan`); cite each
+  decision that governs the plan as `decisions:<keyword>`
+- when performing research, to find decisions related to the question before
+  recommending anything
+- before changing governed behavior when no plan cites the decision: capture,
+  walk/review, tasks/lanes/decay, gcal/meetings, refs, themes/relations, releases, or
+  Mac Capture
+
+Read one decision with `sase memory read decisions:<keyword> -r "<why>"`.
 
 ### 3.2 Glossary Terms (glossary)
 
