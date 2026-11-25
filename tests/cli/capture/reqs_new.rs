@@ -169,7 +169,7 @@ fn a_new_task_files_notes_into_notes_and_reports_the_write() {
             "\t\t- [ ] Windows\n",
             "\t\t\t- [ ] Mixed files\n",
             "\t\t\t\t- seen in March\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- see the ticket\n",
         )),
         "{note}"
@@ -214,14 +214,14 @@ fn a_named_new_task_and_a_linked_pomodoro_task_write_the_same_layout() {
         note.contains(concat!(
             "- [ ] #task Fix named [created::2026-06-15] ^export\n",
             "\t- [ ] Handles CRLF\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- see the ticket\n",
         )),
         "{note}"
     );
     assert!(
         note.contains(
-            "\t- [ ] Handles CRLF\n\t- NOTES\n\t\t- see the ticket\n"
+            "\t- [ ] Handles CRLF\n\t- **Notes**\n\t\t- see the ticket\n"
         ),
         "linked row files NOTES:\n{note}"
     );
@@ -252,7 +252,7 @@ fn a_task_list_canonicalizes_each_owner_and_leaves_zero_req_rows() {
         note.contains(concat!(
             "- [ ] #task Ship the parser [created::2026-06-15]\n",
             "\t- [ ] Handles CRLF\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- see the ticket\n",
         )),
         "{note}"
@@ -312,7 +312,7 @@ fn a_project_note_row_files_its_loose_note_into_notes() {
             "\t- [ ] req\n",
             "\t\t- [ ] deeper\n",
             "\t\t\t- why\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- Ask about fees\n",
             "- [ ] #task Book the flight [created::2026-09-20]\n",
         )),
@@ -349,7 +349,7 @@ fn clip_notes_with_reqs_file_into_notes() {
         note.contains(concat!(
             "- [ ] #task Fix export [created::2026-06-15]\n",
             "\t- [ ] Handles CRLF\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
         )),
         "{note}"
     );
@@ -371,7 +371,9 @@ fn an_authored_notes_drawer_merges_scooped_notes() {
         note.contains(concat!(
             "- [ ] #task Fix export [created::2026-06-15]\n",
             "\t- [ ] Handles CRLF\n",
-            "\t- NOTES\n",
+            // An ALL-CAPS draft title is written as typed inside the bold
+            // marker until capture-drawers owns the casing rule.
+            "\t- **NOTES**\n",
             "\t\t- already filed\n",
             "\t\t- see the ticket\n",
         )),
@@ -393,9 +395,11 @@ fn interleaved_notes_reqs_and_drawers_canonicalize() {
         note.contains(concat!(
             "- [ ] #task Fix export [created::2026-06-15]\n",
             "\t- [ ] Handles CRLF\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- see the ticket\n",
-            "\t- FUTURE WORK\n",
+            // An ALL-CAPS draft title is written as typed inside the bold
+            // marker until capture-drawers owns the casing rule.
+            "\t- **FUTURE WORK**\n",
             "\t\t- later\n",
         )),
         "{note}"

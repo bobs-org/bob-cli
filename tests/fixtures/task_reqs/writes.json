@@ -514,7 +514,7 @@
           "\t- [ ] Morgan reported the original issue.",
           "\t\t- see the thread",
           "\t- [ ] #task Subtask ^sub",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- Fixture data lives in tests/data.",
           "\t- FUTURE WORK",
           "\t\t- later",
@@ -678,7 +678,7 @@
         "line": 3,
         "lines": [
           "- [ ] #task A ^a",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- only req",
           "\t- FUTURE WORK",
           "\t\t- later"
@@ -881,7 +881,7 @@
           "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
           "\t- [ ] Handles supported inputs",
           "\t- [ ] #task Subtask ^sub",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- Morgan reported the original issue.",
           "\t\t\t- see the thread",
           "\t\t- Fixture data lives in tests/data.",
@@ -968,7 +968,7 @@
           "\t\t- [ ] inner",
           "\t\t\t- note of inner",
           "\t\t- plain note",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- note"
         ],
         "notes_created": true,
@@ -1026,7 +1026,7 @@
           "- [ ] #task A ^a",
           "  - [ ] first req",
           "    - nested note",
-          "  - NOTES",
+          "  - **Notes**",
           "    - loose note",
           "  - 🛠️ **WORK LOG**"
         ],
@@ -1053,7 +1053,7 @@
         "lines": [
           "- [ ] #task A ^a",
           "\t- [ ] first req",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- loose note"
         ],
         "notes_created": true,

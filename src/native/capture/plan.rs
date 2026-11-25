@@ -4937,7 +4937,10 @@ pub(super) fn resolve_new_task_drawer_bullets(
             continue;
         }
         let mut header = first;
-        header.body = title;
+        // Writers emit bold headers; the resolved title keeps its
+        // current casing (uppercased shortcuts stay uppercased inside
+        // the marker until capture-drawers owns the casing rule).
+        header.body = capture_drawers::drawer_header_body(&title);
         key_at.insert(key, groups.len());
         groups.push((header, nested));
     }

@@ -45,7 +45,7 @@ keeps it right.
 		- ❌ **CANCEL LOG**
 			- *2026-11-21* — v1 is gone
 	- [>] [[#^export-docs|Docs cover every flag]]  ← carried req
-	- NOTES                                     ← drawer (NOTES first)
+	- **Notes**                                 ← drawer (NOTES first)
 		- Morgan reported the original issue.
 	- 🛠️ **WORK LOG**                           ← logs
 ```
@@ -129,7 +129,8 @@ The zones, in order:
 2. **Managed links.** DEPENDS ON, BLOCKS, SUB-PROJECTS, LINKS, LINKED FROM.
 3. **Reqs.** Each req moves with its whole subtree.
 4. **Authored.** Loose notes and nested `#task` subtasks, in authored order.
-5. **Drawers.** `NOTES` comes first, then the other drawers in authored
+5. **Drawers.** `NOTES` comes first (writers create `- **Notes**`; a legacy
+   `- NOTES` header is reused as-is), then the other drawers in authored
    order.
 6. **Logs.** SCHEDULE, WORK, ROTTEN, in their existing relative order.
 
@@ -157,10 +158,11 @@ keeps its notes in a `NOTES` drawer:
 - Hand edits in Obsidian are never reshuffled. `bob task tidy` fixes drift
   on request.
 
-`NOTES` is created only when a note lands in it: the scoop moved at least
-one note, or a note is being written. A req-owning task with no notes has no
-`NOTES` header. This keeps the Task Drawer contract: a drawer is nonempty by
-construction. Reviewer decision `notes_drawer_birth = with_first_note`.
+A `- **Notes**` header is created only when a note lands in it: the scoop
+moved at least one note, or a note is being written. A req-owning task with
+no notes has no notes header. This keeps the Task Drawer contract: a drawer
+is nonempty by construction. Reviewer decision `notes_drawer_birth =
+with_first_note`.
 
 On a project note's `^prj` task, `NOTES` is the note's `## Notes` section
 rather than a task-child drawer. An existing `## Notes` or `## NOTES`
@@ -199,10 +201,10 @@ trailing blank lines.
 
 `note_home(contents, task)` answers where a Bob-written loose note files:
 `loose` (a task with no reqs: the `authored` tail slot), `notes` (the task's
-existing `NOTES` drawer), or `new-notes` (create `NOTES`, first among the
-drawers, then file in it). `ensure_drawer` routes through the same slots, so a
-created `NOTES` lands first among the drawers and every other created drawer
-keeps its place before the logs.
+existing notes drawer, whatever its spelling), or `new-notes` (create
+`- **Notes**`, first among the drawers, then file in it). `ensure_drawer`
+routes through the same slots, so a created notes drawer lands first among
+the drawers and every other created drawer keeps its place before the logs.
 
 The link and log writers already agree with the zones, and a test pins that:
 `blocks_insert_slot` and `relation_insert_slot` place BLOCKS, LINKS, and
@@ -319,7 +321,8 @@ section (§3). Nothing else ever reorders a block: no writer, no
   `bob task tidy ({t} tasks in {n} notes)`, and post-syncs only when it
   committed.
 - **Safety.** A planned note must keep every nonblank line exactly once,
-  indentation aside, and may only add the `NOTES` headers it reports. A note
+  indentation aside, and may only add the `- **Notes**` headers it reports
+  (or `## Notes` on a `^prj` owner). A note
   that fails the check, or that a second pass would still change, is left
   unchanged with a warning.
 - **Idempotent.** A second run reports nothing.
@@ -705,8 +708,10 @@ and `vault-migration` phases.)
   req-owning `^prj` task's `## Notes` home (`RL53`–`RL61`), including bold
   `**Notes**` drawer reuse (`RL61`).
 - **RW** (`tests/fixtures/task_reqs/writes.json`): drop, restore, toggle,
-  insert, the first-req scoop, the `with_first_note` NOTES birth, CRLF notes,
-  every refusal code (§3.3), and the `^prj` `## Notes` writers (`RW54`–`RW57`).
+  insert, the first-req scoop, the `with_first_note` NOTES birth (created
+  headers are `- **Notes**`; pre-existing `- NOTES` headers are reused
+  as-is), CRLF notes, every refusal code (§3.3), and the `^prj` `## Notes`
+  writers (`RW54`–`RW57`).
 - **SP32–SP50** (`tests/fixtures/task_split/vectors.json`): carry — `[>]`
   stubs, whole-branch moves with rebased depth, the NOTES rule on the new
   task, move maps, daily-note owners, and the carry refusals (§6).

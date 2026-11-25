@@ -270,7 +270,7 @@ fn clip_notes_drawers_and_prj_sections() {
         fs::read_to_string(vault2.join("cash.md")).expect("read created"),
         concat!(
             "- [ ] #task Parent ^id\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **REQUIREMENTS**\n",
             "\t\t- note one\n",
             "\t\t- note two\n",
         )

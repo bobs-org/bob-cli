@@ -218,7 +218,7 @@ fn a_new_task_writes_requirements_past_two_levels_at_their_depth() {
     let note = fs::read_to_string(vault.join("work.md")).expect("work note");
     assert!(
         note.contains(
-            "- [ ] #task Fix export [created::2026-06-15]\n\t- [ ] Handles CRLF\n\t\t- [ ] Windows\n\t\t\t- [ ] Mixed files\n\t\t\t\t- seen in March\n\t- NOTES\n\t\t- see the ticket\n"
+            "- [ ] #task Fix export [created::2026-06-15]\n\t- [ ] Handles CRLF\n\t\t- [ ] Windows\n\t\t\t- [ ] Mixed files\n\t\t\t\t- seen in March\n\t- **Notes**\n\t\t- see the ticket\n"
         ),
         "{note}"
     );

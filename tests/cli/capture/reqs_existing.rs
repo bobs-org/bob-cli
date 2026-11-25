@@ -142,7 +142,7 @@ fn first_req_scoops_only_preexisting_notes_before_planning_new_notes() {
             "- [ ] #task Existing [created::2026-01-01] ^ex\n",
             "\t- [ ] Add the export checksum\n",
             "\t- [ ] Verify the manifest\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- old note one\n",
             "\t\t- old note two\n",
             "\t\t- opening note\n",
@@ -215,7 +215,7 @@ fn same_line_req_and_its_children_insert_as_one_block() {
             "\t- [ ] Handles CRLF\n",
             "\t\t- [ ] Windows line endings\n",
             "\t\t\t- Fixture: windows.csv\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- existing loose note\n",
         )
     );
@@ -301,11 +301,11 @@ fn implicit_notes_on_a_req_owner_reports_the_drawer() {
     let mut dry_json: Value =
         serde_json::from_str(stdout(&dry).trim()).expect("dry-run JSON");
     assert_eq!(dry_json["dry_run"], true, "{dry_json}");
-    assert_eq!(dry_json["drawer"]["title"], "NOTES", "{dry_json}");
+    assert_eq!(dry_json["drawer"]["title"], "Notes", "{dry_json}");
     assert_eq!(dry_json["drawer"]["key"], "NOTES", "{dry_json}");
     assert_eq!(dry_json["drawer"]["created"], true, "{dry_json}");
     assert_eq!(
-        dry_json["notes"][0]["drawer"]["title"], "NOTES",
+        dry_json["notes"][0]["drawer"]["title"], "Notes",
         "{dry_json}"
     );
     assert_eq!(
@@ -321,7 +321,7 @@ fn implicit_notes_on_a_req_owner_reports_the_drawer() {
     let human = capture(&vault, &["--dry-run"], draft, false);
     assert_success(&human);
     let text = stdout(&human);
-    assert!(text.contains("NOTES"), "{text}");
+    assert!(text.contains("· Notes ·"), "{text}");
     assert!(text.contains("new drawer"), "{text}");
     assert!(text.contains("first note"), "{text}");
 
@@ -336,7 +336,7 @@ fn implicit_notes_on_a_req_owner_reports_the_drawer() {
         concat!(
             "- [ ] #task Existing [created::2026-01-01] ^ex\n",
             "\t- [ ] a req\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- first note\n",
         )
     );

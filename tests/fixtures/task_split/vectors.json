@@ -1485,7 +1485,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - ⛓️ **DEPENDS ON:** [[#^parser]]\n  - [>] [[#^handles-supported|Handles supported inputs]]\n  - [ ] Benchmarks within 5% of v1\n- [ ] #task Handles supported inputs [created:: 2026-11-03] ^handles-supported\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - [ ] Handles Windows files\n    - [ ] Preserves CRLF\n    - Fixture: windows.csv\n  - [ ] Handles empty input\n  - NOTES\n    - Fixture: inputs.zip\n- [ ] #task Write the parser [created:: 2026-10-19] ^parser\n"
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - ⛓️ **DEPENDS ON:** [[#^parser]]\n  - [>] [[#^handles-supported|Handles supported inputs]]\n  - [ ] Benchmarks within 5% of v1\n- [ ] #task Handles supported inputs [created:: 2026-11-03] ^handles-supported\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - [ ] Handles Windows files\n    - [ ] Preserves CRLF\n    - Fixture: windows.csv\n  - [ ] Handles empty input\n  - **Notes**\n    - Fixture: inputs.zip\n- [ ] #task Write the parser [created:: 2026-10-19] ^parser\n"
         },
         "tasks": [
           {
@@ -1562,7 +1562,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [>] [[#^handles-windows|Handles Windows files]]\n    - [ ] Handles empty input\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - [ ] Preserves CRLF\n  - NOTES\n    - Fixture: windows.csv\n"
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles supported inputs\n    - [>] [[#^handles-windows|Handles Windows files]]\n    - [ ] Handles empty input\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - [ ] Preserves CRLF\n  - **Notes**\n    - Fixture: windows.csv\n"
         },
         "tasks": [
           {
@@ -1807,7 +1807,7 @@
         "ok": true,
         "files": {
           "2026/20261103.md": "- [ ] #task Deploy the release [created:: 2026-11-03] ^deploy [root:: projects/launch]\n  - [>] [[projects/launch#^backups-are-current|Backups are current]]\n",
-          "projects/launch.md": "# Launch\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n- [ ] #task Backups are current [created:: 2026-11-03] ^backups-are-current\n  - 🪢 **LINKED FROM:** [[2026/20261103#^deploy]] (💬 mentions)\n  - [ ] Restore drill passes\n  - NOTES\n    - Check the S3 bucket\n"
+          "projects/launch.md": "# Launch\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n- [ ] #task Backups are current [created:: 2026-11-03] ^backups-are-current\n  - 🪢 **LINKED FROM:** [[2026/20261103#^deploy]] (💬 mentions)\n  - [ ] Restore drill passes\n  - **Notes**\n    - Check the S3 bucket\n"
         },
         "tasks": [
           {

@@ -77,7 +77,7 @@ fn new_task_preview_annotates_requirement_depths() {
     assert_req(line_named(block, "Windows"), 2, "pending");
     assert_req(line_named(block, "Mixed files"), 3, "pending");
     assert_no_req(line_named(block, "seen in March"));
-    assert_no_req(line_named(block, "NOTES"));
+    assert_no_req(line_named(block, "**Notes**"));
     assert_no_req(line_named(block, "see the ticket"));
     assert_no_req(line_named(block, "#task Fix export"));
 }

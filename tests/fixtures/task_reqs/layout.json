@@ -701,7 +701,7 @@
         "lines": [
           "- [ ] #task A ^a",
           "\t- [ ] a req",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- a note"
         ],
         "moves": 0,
@@ -867,7 +867,7 @@
         "lines": [
           "- [ ] #task A ^a",
           "\t- [ ] a req",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- loose note",
           "\t- FUTURE WORK",
           "\t\t- later",
@@ -892,7 +892,7 @@
         "lines": [
           "- [ ] #task A ^a",
           "  - [ ] a req",
-          "  - NOTES",
+          "  - **Notes**",
           "    - loose note",
           "      - its child"
         ],
@@ -917,7 +917,7 @@
           "- [ ] #task Outer ^outer",
           "\t- [ ] #task Inner ^inner",
           "\t\t- [ ] inner req",
-          "\t\t- NOTES",
+          "\t\t- **Notes**",
           "\t\t\t- loose inner note",
           "\t- outer note"
         ],
@@ -976,7 +976,7 @@
         "lines": [
           "- [ ] #task A ^a",
           "\t- [ ] a req",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- loose note",
           "\t\t  - its child"
         ],

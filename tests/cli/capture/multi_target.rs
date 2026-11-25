@@ -351,7 +351,7 @@ fn note_less_bullets_and_drawers_are_filed_to_each_member() {
             "  - Ping Alice\n",
             "- [ ] #task Beta ^b\n",
             "  - Ping Alice\n",
-            "  - REQUIREMENTS\n",
+            "  - **REQUIREMENTS**\n",
             "    - Postgres 17\n",
         )
     );

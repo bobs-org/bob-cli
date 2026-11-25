@@ -68,7 +68,7 @@ fn a_req_owning_task_files_loose_notes_under_new_notes() {
                 "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
                 "\t- [ ] Handles supported inputs",
                 "\t\t- Fixture: windows.csv",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- Morgan reported the original issue.",
             ])
             .as_str()
@@ -84,7 +84,28 @@ fn a_req_owning_task_files_loose_notes_under_new_notes() {
     assert!(repair.moves >= 1);
     assert_eq!(repair.before.len(), 5);
     assert_eq!(repair.after.len(), 6);
-    assert_eq!(repair.after[4], "\t- NOTES");
+    assert_eq!(repair.after[4], "\t- **Notes**");
+}
+
+/// A legacy `NOTES` header is reused as-is: tidy files into it without
+/// creating a bold header or respelling the existing line.
+#[test]
+fn legacy_notes_header_is_reused_and_never_respelled() {
+    let contents = note(&[
+        "- [ ] #task Ship the exporter ^export",
+        "\t- [ ] Handles supported inputs",
+        "\t- NOTES",
+        "\t\t- first entry",
+        "\t- a loose note",
+    ]);
+    let pass = tidied(&contents);
+    let updated = pass.updated.as_deref().expect("loose note files");
+    assert!(updated.contains("\t- NOTES\n"));
+    assert!(!updated.contains("**Notes**"));
+    assert_eq!(pass.drawers_created(), 0);
+    let repair = &pass.repairs[0];
+    assert_eq!(repair.notes_filed, 1);
+    assert!(!repair.notes_created);
 }
 
 #[test]
@@ -151,13 +172,13 @@ fn every_open_task_in_a_note_is_repaired_with_shifted_lines() {
             note(&[
                 "- [ ] #task First",
                 "\t- [ ] first req",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- first note",
                 "- [ ] #task Canonical",
                 "\t- fine",
                 "- [ ] #task Second",
                 "\t- [ ] second req",
-                "\t- NOTES",
+                "\t- **Notes**",
                 "\t\t- second note",
             ])
             .as_str()
@@ -190,7 +211,7 @@ fn a_nested_subtask_is_repaired_after_its_parent_moves_it() {
                 "- [ ] #task Parent",
                 "\t- [ ] #task Child",
                 "\t\t- [ ] child req",
-                "\t\t- NOTES",
+                "\t\t- **Notes**",
                 "\t\t\t- child note",
                 "\t- 🛠️ **WORK LOG**",
                 "\t\t- *2026-11-20* — started",
@@ -253,7 +274,9 @@ fn crlf_notes_keep_their_endings() {
     let pass = tidied(contents);
     assert_eq!(
         pass.updated.as_deref(),
-        Some("- [ ] #task Crlf\r\n\t- [ ] a req\r\n\t- NOTES\r\n\t\t- a note\r\n")
+        Some(
+            "- [ ] #task Crlf\r\n\t- [ ] a req\r\n\t- **Notes**\r\n\t\t- a note\r\n"
+        )
     );
 }
 
@@ -270,7 +293,7 @@ fn content_check_refuses_dropped_or_invented_lines() {
         .unwrap_err()
         .contains("add"));
     let with_notes =
-        note(&["- [ ] #task T", "\t- NOTES", "\t\t- a", "\t\t- b"]);
+        note(&["- [ ] #task T", "\t- **Notes**", "\t\t- a", "\t\t- b"]);
     assert!(content_preserved(&before, &with_notes, 1).is_ok());
     assert!(content_preserved(&before, &with_notes, 0).is_err());
     let with_section = note(&[

@@ -132,7 +132,7 @@ fn worked_example_files_notes_drawers_json_and_human() {
     let file = fs::read_to_string(vault.join("foo.md")).expect("foo.md");
     assert_eq!(
         file,
-        "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n  - REQUIREMENTS\n    - 2 GB RAM\n    - Postgres 17 minimum\n  - Ping Alice about the cutover\n  - FUTURE WORK\n    - Try logical replication\n  - Benchmarks look fine\n    - p99 under 40 ms\n",
+        "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n  - REQUIREMENTS\n    - 2 GB RAM\n    - Postgres 17 minimum\n  - Ping Alice about the cutover\n  - **FUTURE WORK**\n    - Try logical replication\n  - Benchmarks look fine\n    - p99 under 40 ms\n",
         "file mismatch"
     );
 }
@@ -171,7 +171,7 @@ fn notes_on_a_req_owning_task_file_into_notes() {
     let file = fs::read_to_string(vault.join("cash.md")).expect("cash.md");
     assert_eq!(
         file,
-        "- [ ] #task Parent ^parent\n\t- [ ] first requirement\n\t- NOTES\n\t\t- first\n\t\t- second\n\t- \u{1f6e0}\u{fe0f} **WORK LOG**\n\t\t- *2026-08-01* \u{2014} worked\n"
+        "- [ ] #task Parent ^parent\n\t- [ ] first requirement\n\t- **Notes**\n\t\t- first\n\t\t- second\n\t- \u{1f6e0}\u{fe0f} **WORK LOG**\n\t\t- *2026-08-01* \u{2014} worked\n"
     );
     // A task with no requirements keeps its loose note exactly as before.
     write_cash(&vault, "- [ ] #task Parent ^parent\n\t- keep me\n");

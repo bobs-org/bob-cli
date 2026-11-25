@@ -30,7 +30,7 @@ const BOB_TIDY: &str = "\
 \t- ⛓️ **DEPENDS ON:** [[#^parser]]
 \t- [ ] Handles supported inputs
 \t\t- [ ] Handles Windows files
-\t- NOTES
+\t- **Notes**
 \t\t- Morgan reported the original issue.
 - [ ] #task Write the parser ^parser
 - [x] #task Shipped ✅ 2026-11-20
@@ -169,7 +169,7 @@ fn bare_run_is_a_dry_run_with_excerpts_and_counts() {
         ),
         "{text}"
     );
-    assert!(text.contains("    + \t- NOTES"), "{text}");
+    assert!(text.contains("    + \t- **Notes**"), "{text}");
     assert!(
         text.contains("    - \t- Morgan reported the original issue."),
         "{text}"
@@ -216,7 +216,7 @@ fn bare_run_is_a_dry_run_with_excerpts_and_counts() {
     assert_eq!(task["notes_filed"], 1);
     assert_eq!(task["notes_created"], true);
     assert_eq!(task["before"][1], "\t- Morgan reported the original issue.");
-    assert_eq!(task["after"][4], "\t- NOTES");
+    assert_eq!(task["after"][4], "\t- **Notes**");
     assert_eq!(payload["commit"], Value::Null);
     assert_eq!(payload["sync"], Value::Null);
 

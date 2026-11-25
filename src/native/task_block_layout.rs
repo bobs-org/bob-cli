@@ -66,8 +66,8 @@ pub(crate) use writers::{
 /// Drawer key of the notes drawer a req-owning task keeps.
 /// Identity key shared by every spelling of the notes home.
 pub(crate) const NOTES_KEY: &str = "NOTES";
-/// New task-drawer spelling; this phase keeps the legacy bytes.
-pub(crate) const NOTES_TITLE: &str = "NOTES";
+/// Title every writer uses when it creates the notes drawer.
+pub(crate) const NOTES_TITLE: &str = "Notes";
 
 /// Title Case heading created for a `^prj` task's `## Notes` section.
 pub(crate) const NOTES_SECTION_TITLE: &str = "Notes";
@@ -431,7 +431,7 @@ pub(crate) fn notes_drawer(contents: &str, task: &NoteTask) -> Option<Drawer> {
 }
 
 /// Title written when NOTES is created for `task`: Title Case `Notes` on a
-/// `^prj` owner, else ALL-CAPS `NOTES`.
+/// `^prj` owner, else the bold drawer title `Notes`.
 pub(crate) fn notes_create_title(
     contents: &str,
     task: &NoteTask,

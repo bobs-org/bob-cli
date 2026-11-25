@@ -89,6 +89,18 @@ impl Drawer {
     }
 }
 
+/// Body of a created task-drawer header: the resolved title in bold.
+/// Titles never carry markers: bold titles reject `*` and legacy titles
+/// cannot contain it, so wrapping is never doubled.
+pub(crate) fn drawer_header_body(title: &str) -> String {
+    format!("**{title}**")
+}
+
+/// A created task-drawer header line: `{indent}- **{title}**`.
+pub(crate) fn drawer_header_line(indent: &str, title: &str) -> String {
+    format!("{indent}- {}", drawer_header_body(title))
+}
+
 /// Where a capture block lands under a selected drawer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DrawerInsertion {
@@ -1469,7 +1481,7 @@ pub(crate) fn ensure_drawer(
                     task,
                     *key == task_block_layout::NOTES_KEY,
                 );
-                let header = format!("{drawer_indent}- {title}");
+                let header = drawer_header_line(&drawer_indent, title);
                 let addition = insertion_text_preserving_line_endings(
                     contents,
                     header_offset,
@@ -2658,7 +2670,7 @@ mod tests {
 
         assert!(created);
         assert_eq!(drawer.title, "REQUIREMENTS");
-        assert!(updated.contains("\t- REQUIREMENTS\n"));
+        assert!(updated.contains("\t- **REQUIREMENTS**\n"));
         assert_eq!(drawers(&updated, &parent_task(&updated)).len(), 1);
     }
 

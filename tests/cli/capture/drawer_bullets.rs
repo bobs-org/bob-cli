@@ -44,11 +44,14 @@ fn new_task_shortcut_renders_the_all_caps_drawer() {
     );
     assert_eq!(
         json["sub_bullets"],
-        serde_json::json!(["\t- FUTURE WORK", "\t\t- try logical replication"]),
+        serde_json::json!([
+            "\t- **FUTURE WORK**",
+            "\t\t- try logical replication"
+        ]),
         "{json}"
     );
     let note = fs::read_to_string(vault.join("work.md")).expect("work note");
-    assert!(note.contains("\t- FUTURE WORK\n"), "{note}");
+    assert!(note.contains("\t- **FUTURE WORK**\n"), "{note}");
     assert!(note.contains("\t\t- try logical replication\n"), "{note}");
 }
 
@@ -71,7 +74,7 @@ fn catalog_spelling_wins_for_a_slug() {
     );
     assert_eq!(
         json["sub_bullets"],
-        serde_json::json!(["\t- NON-GOALS", "\t\t- no rewrite pass"]),
+        serde_json::json!(["\t- **NON-GOALS**", "\t\t- no rewrite pass"]),
         "{json}"
     );
 }
@@ -87,7 +90,11 @@ fn repeated_keys_merge_in_draft_order() {
     );
     assert_eq!(
         json["sub_bullets"],
-        serde_json::json!(["\t- FUTURE WORK", "\t\t- first", "\t\t- second"]),
+        serde_json::json!([
+            "\t- **FUTURE WORK**",
+            "\t\t- first",
+            "\t\t- second"
+        ]),
         "{json}"
     );
 }

@@ -868,7 +868,9 @@ fn task_drawers_and_project_h2_drawers_resolve_for_merge() {
         ),
     )
     .expect("create task drawer");
-    assert!(post(&plan, "dest.md").contains("\t- REQUIREMENTS\n\t\t- Source\n"));
+    assert!(
+        post(&plan, "dest.md").contains("\t- **REQUIREMENTS**\n\t\t- Source\n")
+    );
 
     let project = snapshot(&[
         source,

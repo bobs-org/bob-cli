@@ -617,7 +617,7 @@ fn accepting_a_bullet_row_makes_the_commit_agree_with_the_menu() {
                     ),
                     "new task" => assert_eq!(
                         json["sub_bullets"][0],
-                        format!("\t- {title}"),
+                        format!("\t- **{title}**"),
                         "{label}: {json}"
                     ),
                     // The template's own `## Tasks` is not a new section.

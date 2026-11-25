@@ -225,7 +225,7 @@ fn idless_task_ref_retype_plain_and_drawer() {
             );
             assert_eq!(json["drawer"]["created"], true, "{name}: {json}");
             assert!(
-                after.contains("\t- REQUIREMENTS\n\t\t- note"),
+                after.contains("\t- **REQUIREMENTS**\n\t\t- note"),
                 "{name}: drawer bytes without a blank line: {after:?}"
             );
             assert!(
@@ -475,7 +475,10 @@ fn near_duplicate_teaches_requested_override_and_creates_it() {
     assert_eq!(created["drawer"]["title"], "REQ", "{created}");
     assert_eq!(created["drawer"]["created"], true, "{created}");
     let after = fs::read_to_string(vault.join("foo.md")).expect("read note");
-    assert!(after.contains("  - REQ\n"), "distinct drawer: {after:?}");
+    assert!(
+        after.contains("  - **REQ**\n"),
+        "distinct drawer: {after:?}"
+    );
     assert!(
         after.contains("  - REQUIREMENTS\n"),
         "existing drawer kept: {after:?}"
@@ -574,7 +577,7 @@ fn writer_exact_bytes_batch_header_and_spans() {
         let after =
             fs::read_to_string(vault.join("cash.md")).expect("read note");
         assert!(
-            after.contains("- REQUIREMENTS\n"),
+            after.contains("**REQUIREMENTS**\n"),
             "{name}: exact drawer bytes: {after:?}"
         );
         assert!(
@@ -610,7 +613,7 @@ fn writer_exact_bytes_batch_header_and_spans() {
     assert_eq!(captures[1]["drawer"]["created"], false, "{json}");
     let after = fs::read_to_string(vault.join("cash.md")).expect("read note");
     assert_eq!(
-        after.matches("- REQUIREMENTS").count(),
+        after.matches("**REQUIREMENTS**").count(),
         1,
         "one header for two batch rows: {after:?}"
     );

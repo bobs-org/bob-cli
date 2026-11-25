@@ -151,7 +151,7 @@ fn capture_authored_bullets_preserve_inline_markdown_and_checkbox_text() {
         concat!(
             "- [ ] #task parent [created::2026-06-15]\n",
             "\t- [ ] looks like a checkbox\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- **bold** and `code`\n",
         )
     );

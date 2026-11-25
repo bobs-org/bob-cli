@@ -50,17 +50,21 @@ and `NOTES` share `NOTES`, while `Straße` maps to `STRASSE` and `Café` maps to
 `CAFÉ`. If one task contains two headers with the same key, lookup reports an
 ambiguity and names both rows.
 
-The notes home is matched by the `NOTES` key. During this phase the writer title
-remains `NOTES`; a hand-authored `**Notes**` header is reused without adding a
-second header or rewriting its spelling. On a `^prj` task, the existing `##
-Notes` section remains the notes home.
+The notes home is matched by the `NOTES` key. Every bob-cli writer creates
+`- **Notes**`; a hand-authored `**Notes**` header and a legacy `NOTES` header
+are each reused without adding a second header or rewriting their spelling.
+On a `^prj` task, the existing `## Notes` section remains the notes home.
 
 ## Dual-read window and outside text
 
 Readers in bob-cli, task-status-cycler, bob-navigation-hotkeys, block-id-prompt,
-and bob-ledger-tools accept bold and legacy headers. Writers, capture drafts,
-completion rows, and header creation stay on the legacy contract in this phase. In
-particular, this page does not add `- **Title**` as capture draft syntax.
+and bob-ledger-tools accept bold and legacy headers. Every bob-cli writer
+creates bold headers: `- **Title**` for a task drawer (an ALL-CAPS draft
+title is written as typed inside the marker) and `- **Notes**` for the notes
+drawer, while a `^prj` path writes `## {title}` verbatim. Capture draft
+syntax and completion menu replacements are unchanged in this phase: drafts
+still spell `- #slug`, `- #"Title"`, and ALL-CAPS with nested notes, and this
+page does not add `- **Title**` as capture draft syntax.
 
 Imported or pasted child text that would become either kind of drawer is
 written with double underscores, such as `__Agenda__`. It renders bold while

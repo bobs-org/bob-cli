@@ -464,13 +464,13 @@ fn a_created_notes_drawer_lands_first_among_the_drawers() {
     let (updated, drawer, created) =
         ensure_notes_drawer(contents, &task).expect("created");
     assert!(created);
-    assert_eq!(drawer.title, "NOTES");
+    assert_eq!(drawer.title, "Notes");
     assert_eq!(
         lines_of(&updated),
         [
             "- [ ] #task A ^a",
             "\t- [ ] req",
-            "\t- NOTES",
+            "\t- **Notes**",
             "\t- FUTURE WORK",
             "\t\t- later",
             "\t- 🛠️ **WORK LOG**",
@@ -536,7 +536,7 @@ fn a_note_without_a_final_newline_keeps_that_state() {
     .expect("tidy moves the req and files the note");
     assert_eq!(
         plan.updated,
-        "- [ ] #task A ^a\n\t- [ ] first req\n\t- NOTES\n\t\t- loose"
+        "- [ ] #task A ^a\n\t- [ ] first req\n\t- **Notes**\n\t\t- loose"
     );
     assert_eq!(
         (plan.moves, plan.notes_filed, plan.notes_created),
@@ -571,7 +571,7 @@ fn canonicalize_new_req_block_files_notes_and_keeps_req_subtrees() {
             "\t- [ ] Handles CRLF\n",
             "\t\t- [ ] Windows\n",
             "\t\t\t- seen in March\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- see the ticket\n",
             "\t- FUTURE WORK\n",
             "\t\t- later\n",

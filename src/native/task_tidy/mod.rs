@@ -141,9 +141,9 @@ fn block_excerpt(contents: &str, task: &NoteTask) -> Vec<String> {
     excerpt
 }
 
-/// The created task-child `NOTES` header line, trimmed.
+/// The created task-child notes header line, trimmed: `- **Notes**`.
 fn notes_header() -> String {
-    format!("- {NOTES_TITLE}")
+    format!("- **{NOTES_TITLE}**")
 }
 
 /// The created `^prj` `## Notes` heading, trimmed.
@@ -157,7 +157,7 @@ fn is_created_notes_header(line: &str) -> bool {
 
 /// Check that a tidy only moved, re-indented, and filed lines: every
 /// nonblank line of `before` survives exactly once (indentation aside), and
-/// the only new lines are the `drawers_created` `NOTES` headers (`- NOTES`
+/// the only new lines are the `drawers_created` notes headers (`- **Notes**`
 /// or, on a `^prj` owner, `## Notes`). Blank separator lines are ignored.
 pub(crate) fn content_preserved(
     before: &str,
@@ -190,7 +190,7 @@ pub(crate) fn content_preserved(
     }
     if headers_added != drawers_created as isize {
         return Err(format!(
-            "it would add {headers_added} NOTES headers, not {drawers_created}"
+            "it would add {headers_added} notes headers, not {drawers_created}"
         ));
     }
     if drawers_created > 0

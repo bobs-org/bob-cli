@@ -524,7 +524,7 @@ fn carry_req_by_row_key_moves_the_branch_and_maps_descendants() {
 - [ ] #task Handles Windows files [created:: 2026-11-21] ^handles-windows
 \t- 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)
 \t- [ ] Preserves CRLF
-\t- NOTES
+\t- **Notes**
 \t\t- Fixture: windows.csv
 - [ ] #task Write the parser [created:: 2026-10-19] ^parser
 "

@@ -992,7 +992,7 @@ mod tests {
              \t- [ ] Confirm the account number\n\
              \t\t- [ ] Find the statement\n\
              \t\t\t- It is in the blue folder\n\
-             \t- NOTES\n\
+             \t- **Notes**\n\
              \t\t- Ask about fees\n\
              - [ ] #task Book the flight [created::2026-09-20]\n"
         ));
