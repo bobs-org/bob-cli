@@ -70,10 +70,9 @@ fn test_recap_meta() -> RecapMeta {
     RecapMeta {
         date: "2026-11-24".into(),
         span: "14:00–14:30".into(),
-        event_link:
-            "[[20261124#^cedar-driftwood|Cedar Labs and Driftwood Analytics]]"
-                .into(),
+        event_link: "[[20261124#^cedar-driftwood]]".into(),
         producer: Some("VoiceQuill".into()),
+        event_title: Some("Cedar Labs and Driftwood Analytics".into()),
     }
 }
 
@@ -159,6 +158,86 @@ fn wispr_shape_preserves_required_evidence_and_other_party_owner() {
         .any(|item| { item.contains("sounded like 'Mistral'") })));
     assert_eq!(notes.next_steps[1].owner.as_deref(), Some("Morgan Hale"));
     assert!(notes.next_steps[1].action.contains("Confirm whether"));
+}
+
+#[test]
+fn wispr_next_steps_without_blank_line_keep_every_word() {
+    let source = "Cedar Labs reviewed the rollout.\n\n\nNext steps\n(Ari) Ship the connector\n(Morgan) Confirm the adapter name";
+    let notes = normalize(source);
+    assert_eq!(notes.next_steps.len(), 2, "both steps parsed: {notes:?}");
+    assert_eq!(notes.next_steps[0].owner.as_deref(), Some("Ari"));
+    assert_eq!(notes.next_steps[0].action, "Ship the connector");
+    assert_eq!(notes.next_steps[1].owner.as_deref(), Some("Morgan"));
+    let meta = test_meta(false);
+    let dossier = render_dossier(&notes, &meta);
+    assert_eq!(
+        word_tokens(source),
+        word_tokens(&visible_dossier_body(&dossier))
+    );
+    let parsed = parse_dossier(&dossier).expect("round trip parses");
+    let recap = render_recap(&parsed.notes, &test_recap_meta());
+    assert_eq!(
+        word_tokens(source),
+        word_tokens(&visible_recap_content(&recap))
+    );
+    assert!(
+        !recap.contains("(Morgan)"),
+        "recap renders owner bold: {recap}"
+    );
+    assert!(recap.contains("Ship the connector"), "{recap}");
+    assert!(recap.contains("Confirm the adapter name"), "{recap}");
+    assert_eq!(normalize(&dossier), notes, "dossier normalizes back");
+}
+
+#[test]
+fn wispr_section_heading_without_blank_line_keeps_sentence() {
+    let source = "Cedar Labs reviewed the rollout.\n\n\nMigration risks\n\nThe adapter name needs confirmation.";
+    let notes = normalize(source);
+    assert!(
+        notes.sections.iter().any(
+            |section| section.heading.as_deref() == Some("Migration risks")
+        ),
+        "section heading kept: {notes:?}"
+    );
+    let meta = test_meta(false);
+    let dossier = render_dossier(&notes, &meta);
+    assert_eq!(
+        word_tokens(source),
+        word_tokens(&visible_dossier_body(&dossier))
+    );
+    let parsed = parse_dossier(&dossier).expect("round trip parses");
+    let recap = render_recap(&parsed.notes, &test_recap_meta());
+    assert_eq!(
+        word_tokens(source),
+        word_tokens(&visible_recap_content(&recap))
+    );
+    assert_eq!(normalize(&dossier), notes, "dossier normalizes back");
+}
+
+#[test]
+fn old_layout_owned_recap_is_replaced_on_overwrite() {
+    let old_inner = "_2026-11-24 · 14:00–14:30 · [[20261124#^cedar-driftwood]] · VoiceQuill_\n\nold owned tldr\n\n## Migration risks\n- old item";
+    let digest = crate::native::intentions::digest(old_inner);
+    let old_recap = format!(
+        "<!-- bob:meeting-recap:begin v1 {digest} -->\n{old_inner}\n<!-- bob:meeting-recap:end -->"
+    );
+    assert_eq!(
+        recap_state(&old_recap),
+        RecapState::Owned,
+        "old layout stays owned"
+    );
+    let notes = normalize(&fixture("wispr_plain.txt"));
+    let next = render_recap(&notes, &test_recap_meta());
+    let skeleton = "# Meeting\n\n![[job#^ref-meeting]]\n\n## Highlights\n";
+    let live = format!(
+        "# Meeting\n\n![[job#^ref-meeting]]\n\n{old_recap}\n\n## Highlights\n"
+    );
+    let applied =
+        apply_overwrite_recap(&live, skeleton, &next).expect("owned reseed");
+    assert!(applied.warning.is_none());
+    assert_eq!(recap_state(&applied.body), RecapState::Owned);
+    assert!(applied.body.contains(&next));
+    assert!(!applied.body.contains("old owned tldr"));
 }
 
 #[test]
@@ -379,11 +458,34 @@ fn visible_recap_content(recap: &str) -> String {
     let (inner, _) = rest
         .rsplit_once("\n<!-- bob:meeting-recap:end -->")
         .unwrap();
-    let content = inner.split_once('\n').map_or("", |(_, content)| content);
-    decode_entities(content)
+    decode_entities(inner)
         .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            if trimmed == "## Notes" {
+                return false;
+            }
+            if trimmed.starts_with('_')
+                && trimmed.ends_with('_')
+                && trimmed.contains('·')
+            {
+                return false;
+            }
+            if trimmed == "> [!summary] TL;DR" {
+                return false;
+            }
+            true
+        })
         .map(|line| {
-            line.trim_start_matches('#').trim_start_matches("- ").trim()
+            let mut current = line.trim();
+            while let Some(rest) = current.strip_prefix('>') {
+                current = rest.trim_start();
+            }
+            current = current.trim_start_matches('#').trim_start();
+            current = current.strip_prefix("- ").unwrap_or(current);
+            current = current.strip_prefix("**").unwrap_or(current);
+            current = current.strip_suffix("**").unwrap_or(current);
+            current.trim().to_string()
         })
         .collect::<Vec<_>>()
         .join("\n")

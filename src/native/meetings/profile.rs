@@ -68,7 +68,6 @@ fn meeting_extra_metadata(
 ) -> Vec<(&'static str, String)> {
     let mut extra = vec![
         ("bob-return-links", "false".to_string()),
-        ("bob-meeting-pdf-title", meta.title.clone()),
         ("bob-meeting-accent", accent_hex(meta.accent.as_deref())),
     ];
     extra.push(("bob-meeting-head", running_header(dossier_md, meta)));
@@ -323,6 +322,18 @@ mod tests {
         out.status
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[test]
+    fn meeting_filter_emits_no_preamble_only_commands() {
+        // The Lua filter runs after \begin{document}, so a preamble-only
+        // command like \AtBeginDocument aborts older TeX kernels. PDF Info
+        // Title already comes from pandoc's title metadata.
+        assert!(
+            !crate::native::highlights_ref::meeting_profile::MEETING_FILTER
+                .contains("\\AtBeginDocument"),
+            "meeting filter must not emit preamble-only LaTeX"
+        );
     }
 
     #[test]

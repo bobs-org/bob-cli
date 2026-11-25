@@ -46,8 +46,11 @@ pub(crate) struct RecapOverwrite {
 
 pub(crate) fn render_recap(notes: &MeetingNotes, meta: &RecapMeta) -> String {
     let mut inner = String::new();
-    let mut meta_line =
-        format!("_{} · {} · {}", meta.date, meta.span, meta.event_link);
+    inner.push_str("## Notes\n\n");
+    let day = super::profile::format_meeting_day(&meta.date);
+    let event_link =
+        render_event_link(&meta.event_link, meta.event_title.as_deref());
+    let mut meta_line = format!("_{day} · {} · {event_link}", meta.span);
     if let Some(producer) = meta
         .producer
         .as_deref()
@@ -59,13 +62,26 @@ pub(crate) fn render_recap(notes: &MeetingNotes, meta: &RecapMeta) -> String {
     meta_line.push('_');
     inner.push_str(&meta_line);
 
-    if let Some(title) = notes.own_title.as_deref() {
-        inner.push_str("\n\n### ");
+    if let Some(title) = notes
+        .own_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    {
+        inner.push_str("\n\n**");
         inner.push_str(&escape_recap_text(title));
+        inner.push_str("**");
     }
     if !notes.tldr.trim().is_empty() {
-        inner.push_str("\n\n");
-        render_text_block(&notes.tldr, &mut inner);
+        inner.push_str("\n\n> [!summary] TL;DR");
+        for line in notes.tldr.lines() {
+            if line.trim().is_empty() {
+                inner.push_str("\n>");
+            } else {
+                inner.push_str("\n> ");
+                inner.push_str(&escape_recap_text(line));
+            }
+        }
     }
 
     for content in &notes.content_order {
@@ -73,11 +89,7 @@ pub(crate) fn render_recap(notes: &MeetingNotes, meta: &RecapMeta) -> String {
             ContentRef::NextSteps => {
                 let heading =
                     notes.next_steps_heading.as_deref().unwrap_or("Next steps");
-                inner.push_str("\n\n");
-                inner.push_str(
-                    &"#".repeat(notes.next_steps_level.clamp(2, 3) as usize),
-                );
-                inner.push(' ');
+                inner.push_str("\n\n### ");
                 inner.push_str(&escape_recap_text(heading));
                 for step in &notes.next_steps {
                     inner.push_str("\n- ");
@@ -95,15 +107,25 @@ pub(crate) fn render_recap(notes: &MeetingNotes, meta: &RecapMeta) -> String {
                 };
                 if let Some(heading) = section.heading.as_deref() {
                     inner.push_str("\n\n");
-                    inner.push_str(
-                        &"#".repeat(section.level.clamp(2, 3) as usize),
-                    );
-                    inner.push(' ');
+                    if section.level >= 3 {
+                        inner.push_str("#### ");
+                    } else {
+                        inner.push_str("### ");
+                    }
                     inner.push_str(&escape_recap_text(heading));
-                }
-                for item in &section.items {
-                    inner.push_str("\n- ");
-                    render_multiline_item(item, &mut inner);
+                    for item in &section.items {
+                        inner.push_str("\n- ");
+                        render_multiline_item(item, &mut inner);
+                    }
+                } else if !section.items.is_empty() {
+                    for (position, item) in section.items.iter().enumerate() {
+                        if position == 0 {
+                            inner.push_str("\n\n- ");
+                        } else {
+                            inner.push_str("\n- ");
+                        }
+                        render_multiline_item(item, &mut inner);
+                    }
                 }
             }
         }
@@ -111,6 +133,32 @@ pub(crate) fn render_recap(notes: &MeetingNotes, meta: &RecapMeta) -> String {
 
     let digest = crate::native::intentions::digest(&inner);
     format!("{BEGIN_PREFIX}{digest} -->\n{inner}\n{END_MARKER}")
+}
+
+fn render_event_link(event_link: &str, event_title: Option<&str>) -> String {
+    let Some(title) =
+        event_title.map(str::trim).filter(|title| !title.is_empty())
+    else {
+        return event_link.to_string();
+    };
+    let mut alias = crate::native::ref_tasks::sanitize_title_alias(title);
+    alias = alias.replace("<!--", "");
+    alias = alias
+        .chars()
+        .filter(|ch| !matches!(ch, '|' | '[' | ']' | '#' | '^' | '\n' | '\r'))
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if alias.is_empty() || alias.contains("<!--") {
+        return event_link.to_string();
+    }
+    let Some(bare) = event_link.strip_suffix("]]") else {
+        return event_link.to_string();
+    };
+    if bare.contains('|') {
+        return event_link.to_string();
+    }
+    format!("{}|{}]]", bare, escape_recap_text(&alias))
 }
 
 pub(crate) fn recap_state(note_body: &str) -> RecapState {
@@ -355,16 +403,6 @@ fn insert_recap(note_body: &str, recap: &str) -> String {
     }
     result.push_str(after);
     result
-}
-
-fn render_text_block(text: &str, output: &mut String) {
-    let lines: Vec<&str> = text.lines().collect();
-    for (index, line) in lines.iter().enumerate() {
-        if index > 0 {
-            output.push('\n');
-        }
-        output.push_str(&escape_recap_text(line));
-    }
 }
 
 fn render_multiline_item(item: &str, output: &mut String) {

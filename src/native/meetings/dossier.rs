@@ -283,10 +283,27 @@ fn parse_body(
                     unreachable!("transcript is handled above")
                 }
             }
-        } else if !line.trim().is_empty()
-            && matches!(active, BodySection::Transcript)
-        {
-            transcript.push(line.to_string());
+        } else if !line.trim().is_empty() {
+            let text = line.trim().to_string();
+            match active {
+                BodySection::NextSteps => {
+                    notes.next_steps.push(parse_next_step(text));
+                }
+                BodySection::Section(section_index) => {
+                    if let Some(section) = notes.sections.get_mut(section_index)
+                    {
+                        section.items.push(text);
+                    }
+                }
+                BodySection::None => {
+                    let section_index = unheaded_section(&mut notes);
+                    notes.sections[section_index].items.push(text);
+                    active = BodySection::Section(section_index);
+                }
+                BodySection::Transcript => {
+                    transcript.push(line.to_string());
+                }
+            }
         }
         index += 1;
     }
@@ -335,7 +352,7 @@ fn parse_next_step(text: String) -> MeetingNextStep {
 fn render_heading(level: u8, heading: &str, output: &mut String) {
     output.push_str(&"#".repeat(level as usize));
     output.push(' ');
-    output.push_str(heading);
+    output.push_str(&heading.split_whitespace().collect::<Vec<_>>().join(" "));
     output.push_str("\n\n");
 }
 

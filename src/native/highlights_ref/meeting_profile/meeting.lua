@@ -515,12 +515,6 @@ function Pandoc(doc)
       "\\renewcommand{\\BobMeetingHeadLeft}{" .. latex_escape(head) .. "}"
     )
   end
-  local pdf_title = meta_to_string(doc.meta["bob-meeting-pdf-title"])
-  if pdf_title and pdf_title ~= "" then
-    preamble[#preamble + 1] = raw_block(
-      "\\AtBeginDocument{\\hypersetup{pdftitle={" .. latex_escape(pdf_title) .. "}}}"
-    )
-  end
   local card = {}
   card[#card + 1] = raw_block("\\BobMeetingKicker{}")
   card[#card + 1] = para_wrapped(

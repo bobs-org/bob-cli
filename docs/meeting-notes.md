@@ -90,6 +90,13 @@ transcripts and escapes notes-derived tokens. Without `--transcript`, no
 transcript bytes enter the PDF input or the saved source; with it, the
 appendix is included but the note body never is.
 
+The filed note keeps an owned `## Notes` recap between the embed and
+`## Highlights`. It starts with a meta line such as `_Tue 2026-11-24 ·
+14:00–14:30 · [[20261124#^cedar-review|Cedar Labs review]] · VoiceQuill_`,
+then an optional `**Meeting title**`, a `> [!summary] TL;DR` callout,
+`### Next steps`, and `###`/`####` sections. An empty filing keeps only the
+heading and the meta line.
+
 Editor review (`-e`) opens a temporary normalized draft with the scissors
 convention; trusted event and parent identity stays outside the editable
 notes. The accepted body parses back into notes and sets the dossier

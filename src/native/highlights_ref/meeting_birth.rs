@@ -245,6 +245,7 @@ fn render_meeting_recap(
                     .producer
                     .clone()
                     .or_else(|| producer.map(str::to_string)),
+                event_title: Some(document.meta.event_title.clone()),
             };
             render_birth_recap(&document.notes, &meta)
         }
@@ -284,6 +285,7 @@ fn marker_recap_meta(
         span,
         event_link: event_raw.to_string(),
         producer: producer.map(str::to_string),
+        event_title: None,
     }
 }
 
@@ -414,6 +416,7 @@ mod tests {
             span: "15:00–15:30".to_string(),
             event_link: "[[2026/20261123#^acme-qbr]]".to_string(),
             producer: Some("VoiceQuill".to_string()),
+            event_title: None,
         });
         let body = meeting_birth_body(
             "Acme QBR",

@@ -53,6 +53,7 @@ mod tests {
             span: "14:00–14:30".into(),
             event_link: "[[20261124#^cedar-driftwood]]".into(),
             producer: Some("VoiceQuill".into()),
+            event_title: None,
         }
     }
 

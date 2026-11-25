@@ -206,8 +206,9 @@ pub(crate) fn prepare_human(prepared: &PreparedFiling) -> String {
         report.filing.relation.label, report.filing.relation.target
     ));
     lines.push(format!(
-        "notes     {:?} · sha256 {}",
-        report.notes.shape, report.notes.sha256
+        "notes     {} · sha256 {}",
+        shape_label(report.notes.shape),
+        report.notes.sha256
     ));
     if !report.notes.outline.tldr.is_empty() {
         lines.push(format!("  TL;DR   {}", report.notes.outline.tldr));
@@ -311,6 +312,18 @@ fn transcript_label(
         super::model::TranscriptDisposition::Kept => "kept",
         super::model::TranscriptDisposition::Omitted => "omitted",
         super::model::TranscriptDisposition::None => "none",
+    }
+}
+
+fn shape_label(shape: crate::native::meetings::NotesShape) -> &'static str {
+    match shape {
+        crate::native::meetings::NotesShape::WisprPlainText => {
+            "wispr_plain_text"
+        }
+        crate::native::meetings::NotesShape::Markdown => "markdown",
+        crate::native::meetings::NotesShape::PlainParagraphs => {
+            "plain_paragraphs"
+        }
     }
 }
 

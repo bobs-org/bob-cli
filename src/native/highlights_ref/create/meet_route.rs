@@ -381,6 +381,7 @@ fn recap_meta_for(
         ),
         event_link: prepared.relation_target.clone(),
         producer: prepared.effective_config.producer.clone(),
+        event_title: Some(prepared.meeting.title.clone()),
     }
 }
 

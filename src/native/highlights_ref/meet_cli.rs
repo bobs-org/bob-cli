@@ -52,7 +52,7 @@ pub(crate) fn command() -> ClapCommand {
             Arg::new("event")
                 .value_name("EVENT")
                 .num_args(0..)
-                .help("Bare/path note#^id, aliased wikilink, note:id, leading ~, Google Calendar URL with eid, or title-query words; joined as the existing parser expects"),
+                .help("Meeting to file, for example 20261124#^cedar-review; also 2026/20261124#^cedar-review, [[2026/20261124#^cedar-review|Cedar review]], note:id, ~query, a Google Calendar URL with eid, or title words"),
         )
         .arg(bob_dir_arg())
         .arg(
@@ -61,7 +61,7 @@ pub(crate) fn command() -> ClapCommand {
                 .short('c')
                 .action(ArgAction::SetTrue)
                 .conflicts_with("input")
-                .help("Read notes through Bob's clipboard helper"),
+                .help("Read the notes from the clipboard"),
         )
         .arg(
             Arg::new("day")
@@ -69,14 +69,14 @@ pub(crate) fn command() -> ClapCommand {
                 .short('D')
                 .value_name("DAY")
                 .value_parser(OsStringValueParser::new())
-                .help("Local day using the gcal note parser"),
+                .help("List one local day: today, tomorrow, yesterday, or YYYY-MM-DD"),
         )
         .arg(
             Arg::new("dry-run")
                 .long("dry-run")
                 .short('d')
                 .action(ArgAction::SetTrue)
-                .help("Resolve and preview; no vault/store writes, locks, PDF rendering, network, or model calls"),
+                .help("Preview only; writes nothing and renders no PDF"),
         )
         .arg(
             Arg::new("edit")
@@ -84,7 +84,7 @@ pub(crate) fn command() -> ClapCommand {
                 .short('e')
                 .action(ArgAction::SetTrue)
                 .conflicts_with("list")
-                .help("Review normalized notes in VISUAL, EDITOR, or vi; empty starting buffer if no source"),
+                .help("Review the notes in your editor before filing"),
         )
         .arg(
             Arg::new("expect-sha256")
@@ -102,7 +102,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("FORMAT")
                 .value_parser(["human", "json"])
                 .default_value("human")
-                .help("Human default; one JSON envelope on stdout"),
+                .help("Output style: human text or one JSON object"),
         )
         .arg(
             Arg::new("input")
@@ -111,7 +111,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("FILE")
                 .value_parser(OsStringValueParser::new())
                 .conflicts_with("list")
-                .help("UTF-8 text file; `-` reads stdin"),
+                .help("Notes file to file; `-` reads stdin"),
         )
         .arg(
             Arg::new("lib-dir")
@@ -119,7 +119,7 @@ pub(crate) fn command() -> ClapCommand {
                 .short('L')
                 .value_name("PATH")
                 .value_parser(OsStringValueParser::new())
-                .help("Highlights PDF library; defaults to BOB_HIGHLIGHTS_LIB_DIR or lib"),
+                .help("PDF library directory; defaults to BOB_HIGHLIGHTS_LIB_DIR or lib"),
         )
         .arg(
             Arg::new("list")
@@ -136,7 +136,7 @@ pub(crate) fn command() -> ClapCommand {
                 .conflicts_with("transcript")
                 .conflicts_with("producer")
                 .conflicts_with("parent")
-                .help("Recent meetings and filed state"),
+                .help("Show recent meetings and whether each has notes"),
         )
         .arg(
             Arg::new("overwrite")
@@ -144,7 +144,7 @@ pub(crate) fn command() -> ClapCommand {
                 .short('O')
                 .action(ArgAction::SetTrue)
                 .conflicts_with("list")
-                .help("Replace the existing occurrence's notes"),
+                .help("Replace the notes already filed for this meeting"),
         )
         .arg(
             Arg::new("parent")
@@ -153,7 +153,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("NOTE")
                 .value_parser(OsStringValueParser::new())
                 .conflicts_with("list")
-                .help("Filing destination; may authorize inbox/missing-root re-root"),
+                .help("File under NOTE instead of the meeting root"),
         )
         .arg(
             Arg::new("producer")
@@ -162,7 +162,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("NAME")
                 .value_parser(OsStringValueParser::new())
                 .conflicts_with("list")
-                .help("Override configured producer"),
+                .help("Producer name shown on the note; defaults to meetings.producer when set"),
         )
         .arg(ref_dir_arg())
         .arg(
@@ -172,7 +172,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("STATUS")
                 .value_parser(OsStringValueParser::new())
                 .conflicts_with("list")
-                .help("New task status; explicit override on overwrite"),
+                .help("Reading task status: next, ready, wip, read; defaults to meetings.status, else next"),
         )
         .arg(
             Arg::new("title")
@@ -181,7 +181,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("TITLE")
                 .value_parser(OsStringValueParser::new())
                 .conflicts_with("list")
-                .help("Override derived reference title"),
+                .help("Reference title; defaults to the meeting title"),
         )
         .arg(
             Arg::new("transcript")
@@ -189,7 +189,7 @@ pub(crate) fn command() -> ClapCommand {
                 .short('t')
                 .action(ArgAction::SetTrue)
                 .conflicts_with("list")
-                .help("PDF/source appendix only; never the recap"),
+                .help("Include the transcript appendix in the PDF only"),
         )
         .arg(
             Arg::new("window")
@@ -197,11 +197,11 @@ pub(crate) fn command() -> ClapCommand {
                 .short('w')
                 .value_name("DAYS")
                 .value_parser(OsStringValueParser::new())
-                .help("Lookback, default configured 7 days"),
+                .help("Days to look back; defaults to meetings.window_days, else 7"),
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Modes:\n  With -c, -i, or -e it files; with none it lists. -l explicitly lists and conflicts with filing-only options. Clipboard and input conflict.\n\nMeeting and destination selection:\n  Accept bare/path note#^id, aliased wikilinks, note:id, leading ~, a Google Calendar URL carrying eid, or title-query words. Join query arguments as the existing parser expects. Explicit identities win over query and automatic matching. Missing block IDs need an actionable refusal.\n\nNotes, config, and editing:\n  Read at most 1 MiB with the existing notes reader; reject empty, binary, unreadable, invalid UTF-8, and oversized notes. For -d, do not launch an editor: preview supplied notes; an empty editor-only dry run returns no_notes with a hint to supply notes or drop -d.\n\nOutput and failures:\n  Exit 0 for completed list/preview/file/queue. Exit 1 for operational/input failure. Exit 2 for no_meeting/ambiguous_meeting needing selection, needs_parent, or already_filed. Required codes: notes_unreadable, no_notes, no_meeting, ambiguous_meeting with evidenced candidates, needs_parent with root and parent candidates, already_filed with {note,task}, and notes_changed.\n\nExamples:\n  bob ref meet\n  bob ref meet -l -f json\n  bob ref meet -c 20261124#^cedar-review\n  bob ref meet -i notes.md 20261124#^cedar-review\n  bob ref meet -e 20261124#^cedar-review -P job\n  bob ref meet -c -d 20261124#^cedar-review\n  bob ref meet -i - 20261124#^cedar-review < notes.md\n  bob ref meet --overwrite -i revised.md 20261124#^cedar-review\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    meetings config; defaults to ~/.config/bob/config.yml\n  BOB_NOW            Local datetime override for day/window selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests\n  VISUAL, EDITOR       Editor used by -e (vi if both are unset)\n\nSee docs/meeting-notes.md for the full contract.",
+            "Modes:\n  With -c, -i, or -e it files; with none it lists. -l explicitly lists and conflicts with filing-only options. Clipboard and input conflict.\n\nMeeting and destination selection:\n  Give one meeting as 20261124#^cedar-review, a 2026/20261124#^cedar-review path, a [[2026/20261124#^cedar-review|Cedar review]] link, note:id, ~query, a Google Calendar URL with eid, or title words. Extra words narrow the match. A named meeting wins over automatic matching.\n\nNotes, config, and editing:\n  Reads at most 1 MiB of UTF-8 notes. Empty, binary, unreadable, and oversized notes refuse. With -d bob previews without opening an editor; give notes with -c or -i, or drop -d to edit.\n\nOutput and failures:\n  Exit 0 when the list, preview, filing, or queue succeeds. Exit 1 when the notes or vault cannot be used. Exit 2 when bob needs a choice: an ambiguous or missing meeting, a needed parent, or an already-filed meeting.\n\nExamples:\n  bob ref meet\n  bob ref meet -l -f json\n  bob ref meet -c 20261124#^cedar-review\n  bob ref meet -i notes.md 20261124#^cedar-review\n  bob ref meet -e 20261124#^cedar-review -P job\n  bob ref meet -c -d 20261124#^cedar-review\n  bob ref meet -i - 20261124#^cedar-review < notes.md\n  bob ref meet --overwrite -i revised.md 20261124#^cedar-review\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    meetings config; defaults to ~/.config/bob/config.yml\n  BOB_NOW            Local datetime override for day/window selection\n  BOB_GCAL_ASSUME_TTY  Set to 1 to force interactive prompts in tests\n  VISUAL, EDITOR       Editor used by -e (vi if both are unset)\n\nSee docs/meeting-notes.md for the full contract.",
         )
 }
 
@@ -1180,7 +1180,7 @@ fn report_filed(
         "relation  {} {}",
         report.filing.relation.label, report.filing.relation.target
     );
-    println!("pdf       {} ({} pages)", report.filing.pdf, pages);
+    println!("pdf       {} ({})", report.filing.pdf, page_label(pages));
     if let Some(commit) = commit.as_deref() {
         println!("commit    {commit}");
     }
@@ -1202,6 +1202,14 @@ fn report_filed(
         println!("warning   {warning}");
     }
     0
+}
+
+fn page_label(pages: usize) -> String {
+    if pages == 1 {
+        "1 page".to_string()
+    } else {
+        format!("{pages} pages")
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1252,7 +1260,7 @@ fn report_queued(
     }
     println!("Queued meeting notes as {}", report.filing.note);
     println!("queued    {} ({reason}: {detail})", path.display());
-    println!("pdf       {} ({} pages)", report.filing.pdf, pages);
+    println!("pdf       {} ({})", report.filing.pdf, page_label(pages));
     println!("run `bob ref scan` to file the queued notes; nothing was filed");
     if skipped_reroot {
         println!("warning   skipped the event re-root because intake queued");

@@ -156,4 +156,5 @@ pub(crate) struct RecapMeta {
     pub(crate) span: String,
     pub(crate) event_link: String,
     pub(crate) producer: Option<String>,
+    pub(crate) event_title: Option<String>,
 }

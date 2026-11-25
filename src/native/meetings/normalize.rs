@@ -184,6 +184,43 @@ fn normalize_wispr(blocks: Vec<String>, notes: &mut MeetingNotes) {
             continue;
         }
         let first_paragraph = paragraphs[0].trim();
+        if first_paragraph.contains('\n') || first_paragraph.contains('\r') {
+            let mut lines = first_paragraph.lines();
+            let first_line = lines.next().unwrap_or("").trim();
+            if is_short_heading(first_line) && is_next_steps_heading(first_line)
+            {
+                notes.next_steps_heading = Some(first_line.to_string());
+                notes.next_steps_level = 2;
+                notes.content_order.push(ContentRef::NextSteps);
+                active_next_steps = true;
+                active_section = None;
+                for line in lines {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    notes.next_steps.push(parse_next_step(line.to_owned()));
+                }
+                for paragraph in paragraphs.iter().skip(1) {
+                    push_wispr_item(
+                        paragraph,
+                        active_section,
+                        active_next_steps,
+                        notes,
+                    );
+                }
+                continue;
+            }
+            for paragraph in &paragraphs {
+                push_wispr_item(
+                    paragraph,
+                    active_section,
+                    active_next_steps,
+                    notes,
+                );
+            }
+            continue;
+        }
         if is_short_heading(first_paragraph) {
             if is_next_steps_heading(first_paragraph) {
                 notes.next_steps_heading = Some(first_paragraph.to_string());
@@ -309,6 +346,9 @@ fn split_single_blank_paragraphs(block: &str) -> Vec<String> {
 
 fn is_short_heading(text: &str) -> bool {
     let trimmed = text.trim();
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        return false;
+    }
     let word_count = trimmed.split_whitespace().count();
     !trimmed.is_empty()
         && trimmed.len() <= 96
