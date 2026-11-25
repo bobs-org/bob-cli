@@ -1371,3 +1371,66 @@ fn holds_closed_root_with_open_task_descendant() {
         }]
     );
 }
+
+#[test]
+fn link_repair_rewrites_only_targets_inside_snoozed_rows() {
+    let index =
+        note_index(["obsidian.md", "daily.md", "done/obsidian_done.md"]);
+    let moved_targets =
+        moved_targets([("obsidian.md", "gone", "done/obsidian_done")]);
+
+    let before = concat!(
+        "## Pomodoros\n",
+        "\n",
+        "- [ ] () — WORK\n",
+        "\n",
+        "## Snoozed\n",
+        "\n",
+        "- **1530** [[obsidian#^gone]]\n",
+        "  - Keep this note\n",
+        "  - nested detail\n",
+        "- **1700** [[obsidian#^kept]]\n",
+        "- ~~**0900** [[obsidian#^gone]]~~ · woke 09:05\n",
+        "  - old note\n",
+        "\n",
+        "## Next\n",
+        "\n",
+        "- sentinel stays put\n",
+    );
+    let repair = repair_links_in_note(
+        before,
+        Path::new("daily.md"),
+        &index,
+        &moved_targets,
+    );
+
+    assert!(repair.link_count >= 2, "both gone links repair");
+    let after = repair.contents;
+    // Only the moved target path changes: the time, strike marker, woke
+    // time, notes, unrelated rows, and sentinel stay byte-identical.
+    for line in [
+        "- **1530** [[done/obsidian_done#^gone",
+        "  - Keep this note",
+        "  - nested detail",
+        "- **1700** [[obsidian#^kept]]",
+        "- ~~**0900** [[done/obsidian_done#^gone",
+        "~~ · woke 09:05",
+        "  - old note",
+        "## Next",
+        "- sentinel stays put",
+    ] {
+        assert!(after.contains(line), "keeps {line:?}:\n{after}");
+    }
+    assert!(
+        !after.contains("[[obsidian#^gone]]"),
+        "no stale target remains:\n{after}"
+    );
+    assert_eq!(
+        after
+            .lines()
+            .filter(|line| line.starts_with("- **") || line.starts_with("- ~~"))
+            .count(),
+        3,
+        "row count unchanged:\n{after}"
+    );
+}

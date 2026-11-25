@@ -563,32 +563,29 @@ parent: "[[2026/2026-W43]]"
 ```
 
 The optional `**Headline:**` line sits in the preamble (after frontmatter,
-before the first `## ` heading). It is the day's **Daily Headline**: one
+before the first `## ` heading): the day's **Daily Headline**, one
 Bryan-written sentence naming the result that would make the day count.
-bob, plugins, the Mac app, and agents only read it; no bob command creates,
-fills, or edits it (a vault-wide link repair such as `bob task archive` may
-update a link inside it like any other link). Writing, changing, or deleting
-it never changes a task's lane, Today membership, freshness, priority, or
-schedule. An empty or missing slot is valid. Parse looks only at the
-preamble, skips fenced blocks, matches `**Headline:**` or `**Headline**:`
-ASCII-case-insensitively, joins soft-wrapped continuation lines, and stops
-at a blank line, list item, heading, fence, or another bold `**Label:**`.
-The first non-empty Headline wins. Screens show a flattened `display` form
-(wiki-link aliases, Markdown link labels, emphasis stripped). It appears on
-the week note's Days table and strip, in `bob periods show` / `brief` day
-rows, and at the top of the Bob Mac Capture idle agenda
-(`bob capture-pomodoros --tasks`).
+bob, plugins, the Mac app, and agents never write it (a vault-wide link
+repair such as `bob task archive` may update a link inside it like any
+other link), and editing it never changes a task's lane, Today membership,
+freshness, priority, or schedule. An empty or missing slot is valid. Parse
+looks only at the preamble, skips fenced blocks, matches `**Headline:**`
+or `**Headline**:` ASCII-case-insensitively, joins soft-wrapped
+lines, and stops at a blank line, list item, heading, fence,
+or another bold `**Label:**`; the first non-empty Headline wins. Screens
+show a flattened `display` form (wiki-link aliases, Markdown link labels,
+emphasis stripped) on the week note's Days table and strip, in
+`bob periods show` / `brief` day rows, and atop the Bob Mac Capture idle
+agenda (`bob capture-pomodoros --tasks`).
 
-Column-0 checkbox items are Pomodoro entries. A timespan is a timed
-session; `()` is a placeholder. `[t:: Nm]` (or the legacy stopwatch) marks a
-worked session. `[off:: Nm]` records an off-clock Pomodoro: the time remains
-in the ledger but stays out of Worked metrics. A bare historical timed row
-without either key is classified from its span and receives `[off:: Nm]` when
-retimed. If both keys appear, `[t::]` wins and writers remove `[off::]`.
-An optional ` — NAME` suffix (em
-dash plus ALL-CAPS name) names it. Child bullets that are exactly one Task
-Link are that session's queued work. `bob capture` session operators (`=`,
-`+N`, `++N`, `x`) rewrite this section.
+Column-0 checkbox items are Pomodoro entries: a timespan is a timed
+session and `()` a placeholder. `[t:: Nm]` (or the legacy stopwatch) marks a
+worked session; `[off:: Nm]` records an off-clock one whose time stays out of
+Worked metrics. A bare historical timed row without either key is classified
+from its span and gains `[off:: Nm]` when retimed; with both keys `[t::]`
+wins and writers remove `[off::]`. An optional ` — NAME` suffix names it. Child bullets that are exactly one Task Link are
+that session's queued work, rewritten by session operators (`=`, `+N`,
+`++N`, `x`).
 
 ### Events section and Event Tasks
 
@@ -618,8 +615,8 @@ qualify too; Google Calendar is not required.
 ```
 
 The span is local to the daily note's `timezone:` (or the host timezone).
-Hours are `00`–`23` and minutes are `00`–`59`; when the end is earlier than
-the start, the event crosses midnight. Context rows have no checkbox, so they
+Hours are `00`–`23` and minutes are `00`–`59`; an end earlier than
+the start crosses midnight. Context rows have no checkbox, so they
 are not Event Tasks. A standalone `#off` tag (deprecated aliases `#offclock`,
 `#off-clock`, and `#untracked`) marks an Event Task off-clock; `#on` is an
 on-clock override. Untagged Event Tasks inherit the area or project clock
@@ -645,7 +642,7 @@ also accepts deprecated `#offclock`, `#off-clock`, and `#untracked`), then
 `[buffer:: -30m +15m]` for buffered events (each
 side omitted when zero; no field without buffers), then `[root::]`, then
 `[type:: MEET]` only when needed, then a `^block-id` minted from the bare
-title (without any calendar mark) and unique within the note. A row from a
+title, unique within the note. A row from a
 non-primary calendar starts its Google-owned title span with that calendar's
 configured mark (`- **all day** 🎂 Ava's Birthday [📅](…)`); primary rows are
 unmarked. When the Google event has a human
@@ -666,8 +663,8 @@ before the route is read.
 
 Contract: [Event Task](glossary.md#event-task), [Bob Gcal](../gcal.md#sync).
 
-A `+` separates types within a name: `WORK + ADMIN` has two types. The
-type catalog comes from canonical daily notes, with hide and color
+A `+` separates types within a name. The
+type catalog comes from canonical daily notes, with hide/color
 preferences in `.bob/themes/<host>.jsonl`. Hiding affects Recent suggestions;
 the ledger and its history remain intact.
 
@@ -679,6 +676,16 @@ Canonical daily-note Next tasks are the R9 carve-out from sticky lanes.
 
 Contract: [The ledger](../plan.md#the-ledger), [Pomodoro](glossary.md#pomodoro),
 [Pomodoro homes](../pomodoro-homes.md), [Task types](../task-types.md).
+
+### Snoozed section
+
+A daily note may end its ledger with one trailing `## Snoozed` section of
+later-today Task Links. Active rows are `- **HHMM** <block link>` at
+column 0; children are its notes, and woken rows are struck. Only exact
+rows execute. Writers leave the bytes untouched, except `bob task archive`
+link repair.
+
+Contract: [Snoozed tasks](../snooze.md).
 
 ### Reference notes
 

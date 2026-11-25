@@ -235,6 +235,22 @@ For example, `bob snooze list -f json` returns a stable envelope such as:
 }
 ```
 
+## Writer preservation
+
+The section is trailing on purpose: every ledger writer is section-bounded
+and leaves the Snoozed bytes untouched. `bob capture` link, start, close,
+`x=` record, and `=` lineup writes end at the next H2, so Snoozed
+subtree bytes stay identical, with LF and CRLF coverage where helpers
+manipulate offsets. Google Events insertion and MEET filing place rows in
+`## Events` and links in `## Pomodoros` without touching the section.
+Reconcile keeps Snoozed rows and children byte-identical and confines link
+cleanup to `## Pomodoros`. `bob task archive` link repair is the one
+exception: when a task's note moves, it rewrites only the intended target
+path inside rows and children, leaving time, strike, notes, and every
+other byte intact. `Snoozed` is a structural H2, never a user drawer, and
+rows are note prose for task mentions (MN5), so no writer treats the
+section as task context.
+
 ## Conformance vectors
 
 `tests/fixtures/snooze/vectors.json` owns six groups with documented,

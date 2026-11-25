@@ -43,6 +43,7 @@ mod relations_rename;
 mod relations_reverse;
 mod run_env;
 mod snooze;
+mod snooze_writer_audit;
 mod stats;
 mod stats_clock;
 mod support;

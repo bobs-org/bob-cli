@@ -933,3 +933,87 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod snoozed_mention_tests {
+    use super::*;
+
+    fn settings() -> task_status_hooks::TasksSettings {
+        task_status_hooks::TasksSettings {
+            global_filter: "#task".into(),
+            done_statuses: BTreeSet::from(['x']),
+            status_types: BTreeMap::from([(
+                ' ',
+                note_tasks::TaskStatusType::Todo,
+            )]),
+            status_definitions: Vec::new(),
+            status_settings_error: None,
+        }
+    }
+
+    #[test]
+    fn snoozed_rows_create_no_mentions() {
+        let settings = settings();
+        let daily = concat!(
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] () — WORK\n",
+            "\n",
+            "## Snoozed\n",
+            "\n",
+            "- **1530** [[jobs#^snoozed]]\n",
+            "  - Keep this [[jobs#^snoozed]] note\n",
+            "- ~~**0900** [[jobs#^woken]]~~ · woke 09:05\n",
+        );
+        let target = "- [*] #task Snoozed work ^snoozed\n";
+        let woken = "- [*] #task Woken work ^woken\n";
+        let files = [
+            file_scan(
+                Path::new("2026/20261008.md"),
+                Path::new("2026/20261008.md"),
+                daily,
+                &settings,
+            ),
+            file_scan(
+                Path::new("jobs.md"),
+                Path::new("jobs.md"),
+                &format!("{target}{woken}"),
+                &settings,
+            ),
+        ];
+        let index = NoteIndex::from_paths([
+            PathBuf::from("2026/20261008.md"),
+            PathBuf::from("jobs.md"),
+        ]);
+        // MN5: a Snoozed row is note prose, not a task context, so neither
+        // the row link nor a matching link in its child notes mentions the
+        // task.
+        assert!(scan_mentions(&files, &index).pairs.is_empty());
+
+        // Control: the same link as a task child is a mention, so the
+        // empty result above is not vacuous.
+        let source = concat!(
+            "- [*] #task Source ^source\n",
+            "  - see [[jobs#^snoozed]]\n",
+        );
+        let control = [
+            file_scan(
+                Path::new("src.md"),
+                Path::new("src.md"),
+                source,
+                &settings,
+            ),
+            file_scan(
+                Path::new("jobs.md"),
+                Path::new("jobs.md"),
+                target,
+                &settings,
+            ),
+        ];
+        let control_index = NoteIndex::from_paths([
+            PathBuf::from("src.md"),
+            PathBuf::from("jobs.md"),
+        ]);
+        assert_eq!(scan_mentions(&control, &control_index).pairs.len(), 1);
+    }
+}

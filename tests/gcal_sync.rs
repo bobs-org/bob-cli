@@ -6062,3 +6062,49 @@ fn deconfigured_calendar_rows_freeze_without_lookup() {
         "{keys:?}"
     );
 }
+
+#[test]
+fn trailing_snoozed_section_survives_events_and_meet_filing() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-snoozed-tail");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    // A trailing Snoozed queue with rows, nested notes, and history, plus
+    // a sentinel section: Events insertion and MEET filing must leave the
+    // whole tail byte-identical.
+    let snoozed_tail = concat!(
+        "\n",
+        "## Snoozed\n",
+        "\n",
+        "- **1530** [[jobs#^snoozed]]\n",
+        "  - Keep this note\n",
+        "  - nested detail\n",
+        "- **1700** [[jobs#^blocked]]\n",
+        "- ~~**0900** [[jobs#^woken]]~~ · woke 09:05\n",
+        "\n",
+        "## Next\n",
+        "\n",
+        "- sentinel stays put\n",
+    );
+    let today_path = env.vault().join("2026/20261030.md");
+    let before_head = fs::read_to_string(&today_path).expect("today note");
+    fs::write(&today_path, format!("{before_head}{snoozed_tail}"))
+        .expect("append Snoozed tail");
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let marker = note.find("## Snoozed").expect("Snoozed survives");
+    assert_eq!(
+        &note[marker..],
+        snoozed_tail
+            .strip_prefix('\n')
+            .expect("tail starts with a blank"),
+        "Events/MEET writes leave the Snoozed tail byte-identical"
+    );
+    assert!(
+        note.find("## Events").expect("Events inserted")
+            < note.find("## Pomodoros").expect("Pomodoros kept"),
+        "{note}"
+    );
+}
