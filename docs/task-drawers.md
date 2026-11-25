@@ -1,6 +1,6 @@
 ---
 title: Task drawers
-description: The dual-read contract for task drawer headers in Bob vault notes.
+description: Dual-read task drawer headers, Obsidian trays and typing, and the limited title round-trip.
 ---
 
 # Task drawers
@@ -124,3 +124,49 @@ Each drawer object and each recent-spelling object has an additive `marker`:
 `bold`, `legacy_caps`, or `section`. The `title` remains verbatim. Existing
 fields and `schema_version: 1` stay unchanged. The drawer catalog is version 3
 and keeps marker provenance separately for each spelling.
+
+## Obsidian rendering
+
+Bob Ledger Tools paints a recognized drawer header in Live Preview and reading
+view. A quiet tray occupies the existing list-marker slot (~0.95em), tinted
+with the owner task's type hue mixed toward muted ink. The authored title stays
+on the line at weight 600; nested notes keep normal weight. Attributes are
+source-backed: `data-bob-drawer`, `data-bob-drawer-key`,
+`data-bob-drawer-count` (direct notes only; fences do not count),
+`data-bob-drawer-empty`, and `data-bob-drawer-owner-state`, plus the owner's
+type hue and state. Folded drawers append a muted tabular `· n`. Empty drawers
+use a hollow dashed tray. `[x]` and `[-]` owners desaturate the glyph and
+title. Native Live Preview still reveals `**` on the caret line. **Toggle task
+drawer marks** (default on) removes only those attributes and styles and never
+rewrites Markdown.
+
+## Obsidian typing
+
+On an empty non-checkbox bullet directly under a real `#task`, typing `*`
+writes `- **|**` (shown as `- ****` with the caret in the middle). One Undo
+returns the literal `- *`. `autoPairMarkdown` on and off produce the same
+bytes because the assist inserts its own star. A `*` at the end of a valid
+title, immediately before the closing `**`, steps over both stars. Enter there
+opens a nested note bullet. Backspace inside empty `****` deletes all four
+stars and keeps the list marker. The assist does not fire in fences, quotes,
+frontmatter, on a checkbox, or deeper than a task's direct children.
+
+**Toggle Drawer** wraps or unwraps that direct child, preserving title bytes
+and descendants. A legacy ALL-CAPS drawer may be marked bold without recasing;
+unwrapping a bold header yields its plain title, which can still be a dual-read
+legacy drawer if it is ALL-CAPS. Checkbox lines, managed lines, reserved names,
+invalid or trailing-colon titles, and deeper positions show an actionable
+notice and write nothing.
+
+## Writers
+
+Every bob-cli writer and the plugin twins emit `- **Title**` for a new task
+drawer and `- **Notes**` for the notes home. An existing header, bold or
+legacy, is reused without respelling. Plugin conversion uses
+`heading_for_drawer` / `drawer_for_heading`: bold titles round-trip byte for
+byte onto `## Title` and back to `- **Title**`; legacy ALL-CAPS titles still
+use Title Case. Eligible empty H2 sections and explicitly authored empty
+drawers are preserved. Invalid and reserved headings refuse before any write.
+Capture draft syntax is unchanged in this dual-read window: drafts still spell
+`- #slug` and ALL-CAPS with nested notes. ALL-CAPS cutover is a later
+migration.

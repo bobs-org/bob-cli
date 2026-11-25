@@ -88,7 +88,7 @@ queued intake; full scans also synchronize annotations. The
 | [log-recall.md](log-recall.md) | Vault-derived phrase history from Schedule, Work, Rotten, and Cancel Logs, including `bob logs list` and shared client behavior |
 | [task-requirements.md](task-requirements.md) | Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors |
 | [props.md](props.md) | Note properties: ordered frontmatter inventory, ownership roles, guarded `bob props show` / `update`, undo, and JSON |
-| [task-drawers.md](task-drawers.md) | Task drawer headers: dual recognition, identity, Notes home, outside-text escape, source ranges, and marker JSON |
+| [task-drawers.md](task-drawers.md) | Task drawer headers: dual recognition, identity, Notes home, Obsidian trays and typing, limited title round-trip, source ranges, and marker JSON |
 | [mail-close-card.md](mail-close-card.md) | Mail Close Card: the shared Gmail Task close model, copy, digest vectors, and per-surface confirmation contract |
 | [meeting-notes.md](meeting-notes.md) | `bob ref meet` meeting notes as a `meetings` reference, with recap ownership, overwrite, and queue |
 | [snooze.md](snooze.md) | Snoozed tasks: later-today Task Links, the ## Snoozed row grammar, the injected zoned time grammar, resolved-state classification, live_targets, and conformance vectors |

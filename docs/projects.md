@@ -469,20 +469,25 @@ picker's labeled date chip.
 
 Promotion moves the boundary one level. An outer pending requirement becomes
 an open `## Tasks` row (`- [ ] #task … [created:: …]`); its descendant
-requirements stay requirements and its direct notes follow the `NOTES` rule
-(filed into a `NOTES` drawer when the new row owns child requirements, kept
-loose otherwise). A dropped requirement becomes a `[-]` row keeping its Cancel
-Log, a legacy `[x]` requirement becomes an `[x]` row, and a carried `[>]`
-stub becomes a `## Notes` line verbatim. Loose notes and the `NOTES` drawer
-merge into one `## Notes` section, even on requirement-less tasks; any other
-drawer becomes a `## Title Case` section as before (a qualifying bullet's body
-is lowercased then title-cased — `FUTURE WORK` becomes `Future Work` — and
-reuses a matching `##` header when one exists). Unmarked children — images and
-Gmail links included — become `## Notes`, never `#task` rows. A task with no
+requirements stay requirements and its direct notes follow the Notes rule
+(filed into a `- **Notes**` drawer, or a reused `NOTES` header, when the new
+row owns child requirements, kept loose otherwise). A dropped requirement
+becomes a `[-]` row keeping its Cancel Log, a legacy `[x]` requirement becomes
+an `[x]` row, and a carried `[>]` stub becomes a `## Notes` line verbatim.
+Loose notes and the Notes drawer merge into one `## Notes` section, even on
+requirement-less tasks. A bold drawer becomes a `##` section that keeps its
+authored title byte for byte (`API Design`, `C++ Notes`, `Q1: Goals`, `Café`),
+including an eligible empty drawer; a legacy ALL-CAPS qualifying bullet still
+maps with Title Case (`FUTURE WORK` becomes `Future Work`) and reuses a
+matching `##` header when one exists. Unmarked children — images and Gmail
+links included — become `## Notes`, never `#task` rows. A task with no
 requirements promotes to an empty `## Tasks` with the notice `No requirements
 to promote — Ctrl+] marks one`. The receipt reads `Promoted “{S}” · {t} tasks
-· {n} notes`, and content the seed cannot convert still refuses losslessly.
-See the [task requirements contract](task-requirements.md#8-promotion-moves-the-boundary-one-level)
+· {n} notes`, and content the seed cannot convert still refuses losslessly
+(`not_a_drawer_title`, `reserved`) without writing. Reversal of those sections
+writes `- **Title**`, never uppercasing a bold title. See the
+[task drawer contract](task-drawers.md) and the
+[task requirements contract](task-requirements.md#8-promotion-moves-the-boundary-one-level)
 for the full rule.
 
 The same hotkey on a project note's `^prj` task restores that project as a

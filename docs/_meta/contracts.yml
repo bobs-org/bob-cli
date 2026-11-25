@@ -123,7 +123,7 @@ groups:
         summary: "Task requirements: recognition, derived state, layout, rendering, authoring, carry, card, promotion, migration, and vectors"
         order: 55
       - stem: task-drawers
-        summary: "Task drawer headers: dual recognition, identity, Notes home, outside-text escape, source ranges, and marker JSON"
+        summary: "Task drawer headers: dual recognition, identity, Notes home, Obsidian trays and typing, limited title round-trip, source ranges, and marker JSON"
         order: 57
       - stem: snooze
         summary: "Snoozed tasks: later-today Task Links, the ## Snoozed row grammar, the injected zoned time grammar, resolved-state classification, live_targets, and conformance vectors"
