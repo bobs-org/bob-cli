@@ -454,7 +454,9 @@ pub(super) struct ApplyReport {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ComposeContext<'a> {
     pub(super) daily_path: &'a Path,
+    pub(super) daily_relative_path: Option<&'a Path>,
     pub(super) previous_daily_path: Option<&'a Path>,
+    pub(super) today: NaiveDate,
     pub(super) daily_contents: &'a str,
     pub(super) normalized_daily_contents: &'a str,
     pub(super) settings: &'a TasksSettings,

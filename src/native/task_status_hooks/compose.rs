@@ -1,4 +1,5 @@
 //! Output composition and task-grouping eligibility.
+use super::super::task_settle::settle_note;
 use super::*;
 
 pub(super) fn compose_outputs(
@@ -84,18 +85,28 @@ pub(super) fn compose_outputs(
     let mut grouping_warnings = Vec::new();
     let mut structural_files = BTreeSet::new();
     for (index, file) in files.iter().enumerate() {
-        if !task_grouping_eligible(
-            file,
-            ctx.daily_path,
-            ctx.previous_daily_path,
-        ) {
+        if ctx
+            .previous_daily_path
+            .is_some_and(|path| paths_match(&file.path, path))
+        {
             continue;
         }
         let input = updated
             .get(&index)
             .map(String::as_str)
             .unwrap_or(&file.contents);
-        let transformed = task_status_groups::transform(input, &classification);
+        let daily_relative = if paths_match(&file.path, ctx.daily_path) {
+            &file.relative_path
+        } else {
+            ctx.daily_relative_path.unwrap_or(Path::new(""))
+        };
+        let transformed = settle_note(
+            &file.relative_path,
+            input,
+            ctx.today,
+            &classification,
+            daily_relative,
+        );
         grouped_task_sections.extend(
             transformed
                 .grouped_sections
@@ -202,25 +213,6 @@ pub(crate) fn task_group_classification(
     )
 }
 
-pub(super) fn task_grouping_eligible(
-    file: &FileScan,
-    daily_path: &Path,
-    previous_daily_path: Option<&Path>,
-) -> bool {
-    if !grouping_eligible_note(
-        &file.relative_path,
-        &file.path,
-        &file.contents,
-        daily_path,
-    ) {
-        return false;
-    }
-    if previous_daily_path.is_some_and(|path| paths_match(&file.path, path)) {
-        return false;
-    }
-    true
-}
-
 /// Whether a note's contents are grouping-eligible: `[[area]]` or
 /// `[[project]]` frontmatter, not a canonical `YYYY/YYYYMMDD.md` daily note,
 /// and not today's day file. Shared with `bob task reroll`, which composes
@@ -231,15 +223,28 @@ pub(crate) fn grouping_eligible_note(
     contents: &str,
     daily_path: &Path,
 ) -> bool {
-    if !note_kind(contents).is_area_or_project() {
-        return false;
-    }
-    if canonical_daily_date(relative_path).is_some()
-        || paths_match(path, daily_path)
-    {
-        return false;
-    }
-    true
+    grouping_eligible_kind_and_date(relative_path, contents)
+        && !paths_match(path, daily_path)
+}
+
+/// Filesystem-free grouping eligibility for settle's pure transform. The
+/// caller supplies vault-relative paths, so today's file is excluded by
+/// lexical identity and canonical daily notes by their path shape.
+pub(crate) fn grouping_eligible_relative_note(
+    relative_path: &Path,
+    contents: &str,
+    daily_relative_path: &Path,
+) -> bool {
+    grouping_eligible_kind_and_date(relative_path, contents)
+        && relative_path != daily_relative_path
+}
+
+fn grouping_eligible_kind_and_date(
+    relative_path: &Path,
+    contents: &str,
+) -> bool {
+    note_kind(contents).is_area_or_project()
+        && canonical_daily_date(relative_path).is_none()
 }
 
 pub(super) fn paths_match(left: &Path, right: &Path) -> bool {

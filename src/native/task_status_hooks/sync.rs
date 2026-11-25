@@ -1023,7 +1023,9 @@ pub(super) fn sync_task_statuses(
         &changes,
         ComposeContext {
             daily_path: &daily_path,
+            daily_relative_path: daily_relative,
             previous_daily_path: previous_daily_path.as_deref(),
+            today: anchor,
             daily_contents: &daily_contents,
             normalized_daily_contents: &normalized_daily,
             settings: &settings,

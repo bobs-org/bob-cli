@@ -1,0 +1,212 @@
+{
+  "version": 1,
+  "today": "2026-11-25",
+  "daily_path": "2026/20261125.md",
+  "classification": {
+    "global_filter": "#task",
+    "status_types": [
+      {"symbol": " ", "type": "TODO"},
+      {"symbol": "*", "type": "ON_HOLD"},
+      {"symbol": "/", "type": "IN_PROGRESS"},
+      {"symbol": "?", "type": "ON_HOLD"},
+      {"symbol": "x", "type": "DONE"},
+      {"symbol": "X", "type": "DONE"},
+      {"symbol": "-", "type": "CANCELLED"},
+      {"symbol": "P", "type": "TODO"}
+    ]
+  },
+  "cases": [
+    {
+      "id": "all_status_destinations_and_badge",
+      "path": "Areas/home.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks", "",
+        "Short context for this project.", "",
+        "- [ ] #task An idea to pick up later ^idea",
+        "- [/] #task Finish the design ^design",
+        "  - Keep the keyboard interaction simple.",
+        "- [*] #task Review the implementation ^review",
+        "- [?] #task Ship when the dependency is ready ^ship",
+        "- [x] #task Agree on the scope ^scope",
+        "- [-] #task Superseded experiment ^experiment"
+      ]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks",
+        "[`⚪ 1 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Tasks#Blocked) · [`🟢 2 done/canceled`](#Tasks#Done%20&%20Canceled)",
+        "", "Short context for this project.", "",
+        "- [ ] #task An idea to pick up later ^idea", "",
+        "### Next & In Progress", "", "- [/] #task Finish the design ^design",
+        "  - Keep the keyboard interaction simple.",
+        "- [*] #task Review the implementation ^review", "",
+        "### Blocked", "", "- [?] #task Ship when the dependency is ready ^ship", "",
+        "### Done & Canceled", "", "- [x] #task Agree on the scope ^scope",
+        "- [-] #task Superseded experiment ^experiment"
+      ]}, "changed": true, "line_map": [
+        [0,0],[1,1],[2,2],[3,3],[4,5],[5,6],[6,7],[7,8],
+        [8,12],[9,13],[10,14],[11,18],[12,22],[13,23]
+      ], "warning_codes": []}
+    },
+    {
+      "id": "stale_badge_is_updated",
+      "path": "Areas/badge-update.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks",
+        "[`⚪ 9 open`](#Tasks) · [`🔵 9 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 9 blocked`](#Tasks#Blocked) · [`🟢 9 done/canceled`](#Tasks#Done%20&%20Canceled)",
+        "### Next & In Progress", "- [*] #task Current next"
+      ]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks",
+        "[`⚪ 0 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · `🔴 0 blocked` · `🟢 0 done/canceled`",
+        "", "### Next & In Progress", "", "- [*] #task Current next"
+      ]}, "changed": true, "line_map": [[0,0],[1,1],[2,2],[3,3],[5,6],[6,8]], "warning_codes": []}
+    },
+    {
+      "id": "empty_groups_and_badges_are_removed",
+      "path": "Areas/group-removal.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks",
+        "[`⚪ 0 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · `🔴 0 blocked` · `🟢 0 done/canceled`",
+        "", "### Next & In Progress", "", "- [ ] #task Reopened"
+      ]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks", "", "- [ ] #task Reopened"
+      ]}, "changed": true, "line_map": [[0,0],[1,1],[2,2],[3,3],[7,4],[8,5]], "warning_codes": []}
+    },
+    {
+      "id": "future_schedule_boundaries_and_statuses",
+      "path": "Notes/plain.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": [
+        "- [ ] #task Future ready [scheduled:: 2026-11-26]",
+        "- [*] #task Future next [scheduled:: 2026-11-26]",
+        "- [/] #task Future working [scheduled:: 2026-11-26]",
+        "- [?] #task Future blocked [fresh:: 2026-11-24] [unblocked:: 2026-11-20] [scheduled:: 2026-11-26]",
+        "- [ ] #task Today [scheduled:: 2026-11-25]",
+        "- [ ] #task Past [scheduled:: 2026-11-24]",
+        "- [x] #task Closed future [scheduled:: 2026-11-26]",
+        "- [-] #task Canceled future [scheduled:: 2026-11-26]",
+        "- [!] #task Unrecognized future [scheduled:: 2026-11-26]",
+        "- [P] #task Custom open future [scheduled:: 2026-11-26]",
+        "- [ ] #task Recurring future (repeat:: 1) [scheduled:: 2026-11-26]",
+        "```tasks",
+        "- [ ] #task Fenced future [scheduled:: 2026-11-26]",
+        "```"
+      ]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": [
+        "- [?] #task Future ready [scheduled:: 2026-11-26]",
+        "- [?] #task Future next [scheduled:: 2026-11-26]",
+        "- [?] #task Future working [scheduled:: 2026-11-26]",
+        "- [?] #task Future blocked [fresh:: 2026-11-24] [scheduled:: 2026-11-26]",
+        "- [ ] #task Today [scheduled:: 2026-11-25]",
+        "- [ ] #task Past [scheduled:: 2026-11-24]",
+        "- [x] #task Closed future [scheduled:: 2026-11-26]",
+        "- [-] #task Canceled future [scheduled:: 2026-11-26]",
+        "- [!] #task Unrecognized future [scheduled:: 2026-11-26]",
+        "- [?] #task Custom open future [scheduled:: 2026-11-26]",
+        "- [?] #task Recurring future (repeat:: 1) [scheduled:: 2026-11-26]",
+        "```tasks",
+        "- [?] #task Fenced future [scheduled:: 2026-11-26]",
+        "```"
+      ]}, "changed": true, "line_map": "identity", "warning_codes": []}
+    },
+    {
+      "id": "current_daily_is_not_grouped",
+      "path": "2026/20261125.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks", "- [/] #task Today's future task [scheduled:: 2026-11-26]"
+      ]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[area]]", "---", "## Tasks", "- [?] #task Today's future task [scheduled:: 2026-11-26]"
+      ]}, "changed": true, "line_map": "identity", "warning_codes": []}
+    },
+    {
+      "id": "other_canonical_daily_is_not_grouped",
+      "path": "2026/20261124.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[project]]", "---", "## Tasks", "- [ ] #task Earlier ledger [scheduled:: 2026-11-26]"
+      ]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[project]]", "---", "## Tasks", "- [?] #task Earlier ledger [scheduled:: 2026-11-26]"
+      ]}, "changed": true, "line_map": "identity", "warning_codes": []}
+    },
+    {
+      "id": "ordinary_note_still_gets_local_schedule_settle",
+      "path": "Notes/person.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[person]]", "---", "## Tasks", "- [ ] #task Wait [scheduled:: 2026-11-26]"
+      ]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": [
+        "---", "type: [[person]]", "---", "## Tasks", "- [?] #task Wait [scheduled:: 2026-11-26]"
+      ]}, "changed": true, "line_map": "identity", "warning_codes": []}
+    },
+    {
+      "id": "crlf_and_missing_final_newline",
+      "path": "Notes/crlf.md",
+      "input": {"ending": "\r\n", "final_newline": false, "lines": [
+        "- [ ] #task Future [scheduled:: 2026-11-26]", "- [ ] #task Untouched"
+      ]},
+      "expect": {"text": {"ending": "\r\n", "final_newline": false, "lines": [
+        "- [?] #task Future [scheduled:: 2026-11-26]", "- [ ] #task Untouched"
+      ]}, "changed": true, "line_map": "identity", "warning_codes": []}
+    },
+    {
+      "id": "skip_h6_container",
+      "path": "Areas/h6.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "###### Tasks", "", "- [*] #task Stuck"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "###### Tasks", "", "- [*] #task Stuck"]}, "changed": false, "line_map": "identity", "warning_codes": ["h6_container"]}
+    },
+    {
+      "id": "skip_ambiguous_boundary",
+      "path": "Areas/ambiguous.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "- [*] #task title", "lazy continuation"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "- [*] #task title", "lazy continuation"]}, "changed": false, "line_map": "identity", "warning_codes": ["ambiguous_boundary"]}
+    },
+    {
+      "id": "skip_ownership_collision",
+      "path": "Areas/collision.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "- [*] #task Next", "", "### Next & In Progress", "", "This is my own notes section.", "", "- some bullet"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "- [*] #task Next", "", "### Next & In Progress", "", "This is my own notes section.", "", "- some bullet"]}, "changed": false, "line_map": "identity", "warning_codes": ["ownership_collision"]}
+    },
+    {
+      "id": "skip_malformed_ownership",
+      "path": "Areas/malformed.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:ACTIV -->", "", "- [*] #task next"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:ACTIV -->", "", "- [*] #task next"]}, "changed": false, "line_map": "identity", "warning_codes": ["malformed_ownership"]}
+    },
+    {
+      "id": "skip_duplicate_group_heading",
+      "path": "Areas/duplicate.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "- [*] #task a", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "- [/] #task b"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "- [*] #task a", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "- [/] #task b"]}, "changed": false, "line_map": "identity", "warning_codes": ["duplicate_group_heading"]}
+    },
+    {
+      "id": "skip_renamed_marked_heading",
+      "path": "Areas/renamed.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### My WIP", "<!-- bob:task-status-group:v1:active -->", "", "- [*] #task next"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### My WIP", "<!-- bob:task-status-group:v1:active -->", "", "- [*] #task next"]}, "changed": false, "line_map": "identity", "warning_codes": ["renamed_marked_heading"]}
+    },
+    {
+      "id": "skip_authored_heading_in_group",
+      "path": "Areas/authored.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "- [*] #task next", "", "#### Notes", "details"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "- [*] #task next", "", "#### Notes", "details"]}, "changed": false, "line_map": "identity", "warning_codes": ["authored_heading_in_group"]}
+    },
+    {
+      "id": "skip_misplaced_badge_row",
+      "path": "Areas/misplaced.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "[`⚪ 1 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)", "", "- [*] #task next", "", "### Blocked", "<!-- bob:task-status-group:v1:blocked -->", "", "### Done & Canceled", "<!-- bob:task-status-group:v1:closed -->"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "### Next & In Progress", "<!-- bob:task-status-group:v1:active -->", "", "[`⚪ 1 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)", "", "- [*] #task next", "", "### Blocked", "<!-- bob:task-status-group:v1:blocked -->", "", "### Done & Canceled", "<!-- bob:task-status-group:v1:closed -->"]}, "changed": false, "line_map": "identity", "warning_codes": ["misplaced_badge_row"]}
+    },
+    {
+      "id": "skip_nested_under_ordinary_item",
+      "path": "Areas/nested.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "- context", "  - [*] #task nested", "- [?] #task root"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "[`⚪ 0 open`](#Tasks) · `🔵 0 next/wip` · [`🔴 1 blocked`](#Tasks#Blocked) · `🟢 0 done/canceled`", "", "- context", "  - [*] #task nested", "", "### Blocked", "", "- [?] #task root"]}, "changed": true, "line_map": [[0,0],[1,1],[2,2],[3,3],[4,5],[5,6],[6,7],[7,11]], "warning_codes": ["nested_under_ordinary_item"]}
+    },
+    {
+      "id": "skip_unsupported_ordered_list",
+      "path": "Areas/ordered.md",
+      "input": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "", "1. [*] #task numbered", "- [?] #task sibling"]},
+      "expect": {"text": {"ending": "\n", "final_newline": true, "lines": ["---", "type: [[area]]", "---", "## Tasks", "[`⚪ 1 open`](#Tasks) · `🔵 0 next/wip` · [`🔴 1 blocked`](#Tasks#Blocked) · `🟢 0 done/canceled`", "", "1. [*] #task numbered", "", "### Blocked", "", "- [?] #task sibling"]}, "changed": true, "line_map": [[0,0],[1,1],[2,2],[3,3],[4,5],[5,6],[6,10]], "warning_codes": ["unsupported_ordered_list"]}
+    }
+  ]
+}

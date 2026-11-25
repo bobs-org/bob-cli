@@ -23,9 +23,7 @@ use super::{
     is_always_excluded_note_directory_name, plan_budget,
     pomodoro as native_pomodoro, projects,
     style::{display_width, pad_right, Styler},
-    task_status_groups::{
-        self, GroupedSection, GroupingWarning, TaskClassification,
-    },
+    task_status_groups::{GroupedSection, GroupingWarning, TaskClassification},
     task_status_hooks_write::{
         acquire_maintenance_lock, apply_plan, capture_optional,
         capture_required, new_run_id, planned_write, snapshot_for_path,
@@ -292,10 +290,15 @@ use structure::*;
 use sync::*;
 
 pub(crate) use super::task_dependencies;
-pub(crate) use compose::{grouping_eligible_note, task_group_classification};
+pub(crate) use compose::{
+    grouping_eligible_note, grouping_eligible_relative_note,
+    task_group_classification,
+};
 pub(crate) use model::{TaskStatusDefinition, TaskStatusType, TasksSettings};
 pub(crate) use output::SyncError;
-pub(crate) use parse::{after_list_marker, markdown_files, task_metadata};
+pub(crate) use parse::{
+    after_list_marker, markdown_files, task_metadata, trailing_block_id,
+};
 pub(crate) use pomodoro::logical_lines;
 pub(crate) use reconcile::{
     is_cancel_log_line, rebuild_child_line, set_task_fields,

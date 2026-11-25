@@ -75,5 +75,6 @@ fn date(year: i32, month: u32, day: u32) -> NaiveDate {
 }
 
 mod blocks;
+mod settle;
 mod structure;
 mod sync;

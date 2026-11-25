@@ -244,6 +244,7 @@ pub(crate) struct TransformOutput {
 pub(crate) struct TaskClassification {
     global_filter: String,
     buckets: BTreeMap<char, StatusBucket>,
+    open_statuses: BTreeSet<char>,
 }
 
 impl TaskClassification {
@@ -251,12 +252,24 @@ impl TaskClassification {
         Self {
             global_filter: global_filter.into(),
             buckets: BTreeMap::new(),
+            open_statuses: BTreeSet::new(),
         }
     }
 
     #[cfg(test)]
     fn with_symbol(mut self, symbol: char, bucket: StatusBucket) -> Self {
         self.buckets.insert(symbol, bucket);
+        if matches!(
+            bucket,
+            StatusBucket::Ready
+                | StatusBucket::NextAndInProgress
+                | StatusBucket::Blocked
+                | StatusBucket::OtherOpen
+        ) {
+            self.open_statuses.insert(symbol);
+        } else {
+            self.open_statuses.remove(&symbol);
+        }
         self
     }
 
@@ -285,6 +298,12 @@ impl TaskClassification {
     {
         let mut classification = Self::new(global_filter);
         for (symbol, status_type) in status_types {
+            if !matches!(
+                status_type,
+                "DONE" | "CANCELLED" | "NON_TASK" | "EMPTY"
+            ) {
+                classification.open_statuses.insert(symbol);
+            }
             let bucket = if symbol == next_symbol || symbol == wip_symbol {
                 StatusBucket::NextAndInProgress
             } else if symbol == blocked_symbol {
@@ -308,27 +327,39 @@ impl TaskClassification {
             .buckets
             .entry('X')
             .or_insert(StatusBucket::DoneAndCanceled);
-        classification
-            .buckets
-            .entry(next_symbol)
-            .or_insert(StatusBucket::NextAndInProgress);
-        classification
-            .buckets
-            .entry(wip_symbol)
-            .or_insert(StatusBucket::NextAndInProgress);
-        classification
-            .buckets
-            .entry(blocked_symbol)
-            .or_insert(StatusBucket::Blocked);
-        classification
-            .buckets
-            .entry(ready_symbol)
-            .or_insert(StatusBucket::Ready);
+        for (symbol, bucket) in [
+            (next_symbol, StatusBucket::NextAndInProgress),
+            (wip_symbol, StatusBucket::NextAndInProgress),
+            (blocked_symbol, StatusBucket::Blocked),
+            (ready_symbol, StatusBucket::Ready),
+        ] {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                classification.buckets.entry(symbol)
+            {
+                entry.insert(bucket);
+                classification.open_statuses.insert(symbol);
+            }
+        }
         classification
     }
 
     pub(crate) fn matches_filter(&self, body: &str) -> bool {
         self.global_filter.is_empty() || body.contains(&self.global_filter)
+    }
+
+    /// Whether a one-character Tasks status is recognized as an open task.
+    /// Unknown, non-task, empty, done, and canceled statuses are excluded.
+    pub(crate) fn is_open_status(&self, symbol: char) -> bool {
+        self.open_statuses.contains(&symbol)
+    }
+
+    /// Apply Obsidian Tasks' token-level `globalFilter` to one parsed task
+    /// body. The grouping parser's broader substring check remains separate.
+    pub(crate) fn matches_task_filter(&self, body: &str) -> bool {
+        self.global_filter.is_empty()
+            || body
+                .split_whitespace()
+                .any(|token| token == self.global_filter)
     }
 
     pub(crate) fn bucket(&self, symbol: char) -> StatusBucket {

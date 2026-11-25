@@ -276,7 +276,7 @@ pub(crate) fn after_list_marker(line: &str, index: usize) -> Option<usize> {
         .then_some(index + digits + 1)
 }
 
-pub(super) fn trailing_block_id(body: &str) -> Option<String> {
+pub(crate) fn trailing_block_id(body: &str) -> Option<String> {
     let token = body.split_whitespace().next_back()?;
     let block_id = token.strip_prefix('^')?;
     (!block_id.is_empty()

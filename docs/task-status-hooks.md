@@ -765,6 +765,27 @@ the sticky-lanes R9 carve-out and may clear on the next run.
 See [task-dependencies.md §13.5](task-dependencies.md#135-consumption) and
 the PDL vectors.
 
+## Writers settle note-local structure
+
+`settle_note` applies the note-local changes in one ordered pass: future
+`[scheduled::]` values on recognized open `#task` rows become `[?]` when the
+date is later than the selected day, then eligible area and project notes get
+their status groups and badges refreshed. It preserves the line endings and
+returns a line map for rows that survive grouping. A future schedule never
+unblocks a task or writes `[unblocked::]`; when marking the task blocked, the
+pass prunes a stale `[unblocked::]` field using the same rule as reconcile.
+
+`bob task reconcile` composes this pass into each note it writes. The shared
+writer helper loads the selected daily path, date, and Tasks classification
+once so other note writers can settle their output in the same write. Capture
+and task-command integrations are follow-on work; until those writers use the
+helper, reconcile remains the repair path for stale groups and badge counts.
+
+Dependency resolution, project and inherited block reasons, dependency tags,
+`[unblocked::]` writes, freshness and keep updates, daily-ledger cleanup, and
+clock-driven work remain reconcile-only. The settle pass handles only a task's
+own future schedule and its note-local groups and badges.
+
 ## Status Grouping
 
 After all final checkbox changes and daily-note structural cleanup are

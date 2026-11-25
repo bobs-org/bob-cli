@@ -141,6 +141,7 @@ pub(crate) mod task_relations;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod task_reqs;
 mod task_root;
+pub(crate) mod task_settle;
 pub(crate) mod task_split;
 mod task_status_groups;
 mod task_status_hooks;
