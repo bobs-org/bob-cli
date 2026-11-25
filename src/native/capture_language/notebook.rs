@@ -9,6 +9,7 @@ use super::{
         AuthoredSubBullet, CaptureItem, CaptureKind, CaptureParseOptions,
         EditorParseOptions, FanoutContext, ParsedCaptureText,
     },
+    place::{self, PlaceCandidate, PlaceOutcome},
     section_bullet::{
         empty_section_bullet_error, notebook_section_required_error,
         plan_create_item, plan_from_sub_bullets, plan_list_item, scan_leading,
@@ -248,171 +249,37 @@ pub(crate) fn resolve_notebook_section(
     exact: bool,
     headings: &[NotebookSection],
 ) -> NotebookSectionResolution {
-    if exact {
-        return match classify_matches(title_matches(selector, headings)) {
-            MatchClass::Unique(heading) => {
-                NotebookSectionResolution::Existing {
-                    title: heading.title.clone(),
-                    line_index: heading.line_index,
-                }
-            }
-            MatchClass::None => NotebookSectionResolution::Create {
-                title: selector.to_string(),
-            },
-            MatchClass::Many(matches) => ambiguous_resolution(matches),
-        };
-    }
-
-    match classify_matches(title_matches(selector, headings)) {
-        MatchClass::Unique(heading) => {
-            return NotebookSectionResolution::Existing {
-                title: heading.title.clone(),
-                line_index: heading.line_index,
-            };
-        }
-        MatchClass::Many(matches) => {
-            return ambiguous_resolution(matches);
-        }
-        MatchClass::None => {}
-    }
-
-    let query_slug = super::selector_slug(selector);
-    match classify_matches(slug_matches(&query_slug, headings)) {
-        MatchClass::Unique(heading) => {
-            return NotebookSectionResolution::Existing {
-                title: heading.title.clone(),
-                line_index: heading.line_index,
-            };
-        }
-        MatchClass::Many(matches) => {
-            return ambiguous_resolution(matches);
-        }
-        MatchClass::None => {}
-    }
-
-    let mut suggestion = headings.iter().find_map(|heading| {
-        let slug = super::selector_slug(&heading.title);
-        (!slug.is_empty()
-            && !query_slug.is_empty()
-            && slug.starts_with(&query_slug))
-        .then_some((slug, heading.title.clone()))
-    });
-    if suggestion.is_none() && !query_slug.is_empty() {
-        let mut best: Option<(usize, String)> = None;
-        for heading in headings {
-            let slug = super::selector_slug(&heading.title);
-            if slug.is_empty() {
-                continue;
-            }
-            if let Some(distance) =
-                crate::native::note_tasks::bounded_levenshtein(
-                    &query_slug,
-                    &slug,
-                    2,
-                )
-                && best
-                    .as_ref()
-                    .is_none_or(|(best_distance, _)| distance < *best_distance)
-            {
-                best = Some((distance, slug));
-            }
-        }
-        suggestion = best.map(|(_, slug)| {
-            let title = headings
-                .iter()
-                .find(|heading| super::selector_slug(&heading.title) == slug)
-                .map(|heading| heading.title.clone())
-                .unwrap_or_else(|| slug.clone());
-            (slug, title)
-        });
-    }
-    if let Some((slug, _)) = suggestion {
-        return NotebookSectionResolution::NearMiss {
-            slug,
-            quoted_title: format_notebook_section_create_title(selector),
-        };
-    }
-
-    NotebookSectionResolution::Create {
-        title: format_notebook_section_create_title(selector),
-    }
-}
-
-enum MatchClass<'a> {
-    None,
-    Unique(&'a NotebookSection),
-    Many(Vec<&'a NotebookSection>),
-}
-
-fn classify_matches<'a>(matches: Vec<&'a NotebookSection>) -> MatchClass<'a> {
-    match matches.len() {
-        0 => MatchClass::None,
-        1 => MatchClass::Unique(matches[0]),
-        _ => MatchClass::Many(matches),
-    }
-}
-
-fn title_matches<'a>(
-    selector: &str,
-    headings: &'a [NotebookSection],
-) -> Vec<&'a NotebookSection> {
-    headings
+    let items: Vec<PlaceCandidate> = headings
         .iter()
-        .filter(|heading| heading.title.eq_ignore_ascii_case(selector))
-        .collect()
-}
-
-fn slug_matches<'a>(
-    query_slug: &str,
-    headings: &'a [NotebookSection],
-) -> Vec<&'a NotebookSection> {
-    if query_slug.is_empty() {
-        return Vec::new();
-    }
-    headings
-        .iter()
-        .filter(|heading| {
-            let slug = super::selector_slug(&heading.title);
-            !slug.is_empty() && slug == query_slug
+        .map(|heading| {
+            PlaceCandidate::from_heading(&heading.title, heading.line_index)
         })
-        .collect()
-}
-
-fn ambiguous_resolution(
-    matches: Vec<&NotebookSection>,
-) -> NotebookSectionResolution {
-    NotebookSectionResolution::Ambiguous {
-        matches: matches
-            .into_iter()
-            .map(|heading| AmbiguousSectionMatch {
-                title: heading.title.clone(),
-                line: heading.line_index + 1,
-            })
-            .collect(),
-    }
-}
-
-/// Create-title for an unquoted selector: `-` becomes a space, then each
-/// whitespace-separated word that contains an uppercase letter keeps the
-/// typed capitals (`#API-keys` → `API Keys`) and every other word takes
-/// first-character Title Case (`#git` → `Git`, `#coc.nvim` → `Coc.nvim`).
-pub(crate) fn format_notebook_section_create_title(selector: &str) -> String {
-    selector
-        .replace('-', " ")
-        .split_whitespace()
-        .map(format_create_word)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn format_create_word(word: &str) -> String {
-    if word.chars().any(char::is_uppercase) {
-        return word.to_string();
-    }
-    let mut chars = word.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().chain(chars).collect(),
+        .collect();
+    match place::NotebookSection::resolve(selector, exact, &items) {
+        PlaceOutcome::Existing(item) => NotebookSectionResolution::Existing {
+            title: item.title,
+            line_index: item.line,
+        },
+        PlaceOutcome::Create { title, .. } => {
+            NotebookSectionResolution::Create { title }
+        }
+        PlaceOutcome::NearMiss {
+            slug, quoted_title, ..
+        } => NotebookSectionResolution::NearMiss { slug, quoted_title },
+        PlaceOutcome::Ambiguous { matches } => {
+            NotebookSectionResolution::Ambiguous {
+                matches: matches
+                    .into_iter()
+                    .map(|item| AmbiguousSectionMatch {
+                        title: item.title,
+                        line: item.line.saturating_add(1),
+                    })
+                    .collect(),
+            }
+        }
+        PlaceOutcome::Refuse { code, message } => unreachable!(
+            "notebook sections have no reserved refusals: {code}: {message}"
+        ),
     }
 }
 

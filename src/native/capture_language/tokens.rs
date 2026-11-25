@@ -8,6 +8,7 @@ use super::editor_parse::*;
 use super::item::*;
 use super::markers::*;
 use super::model::*;
+use super::place::quoted_after_hash;
 use super::pomodoro_literal::{
     canonicalize_exact_name, expand_literal_token, lex_exact_name_after_hash,
     opens_exact_name,
@@ -49,8 +50,8 @@ pub(super) fn parse_hash_section_and_id(after_hash: &str) -> HashSectionAndId {
         };
     }
     if opens_exact_name(after_hash) {
-        match lex_exact_name_after_hash(after_hash, after_hash.len()) {
-            Some(lex) if !lex.complete => {
+        match quoted_after_hash(after_hash) {
+            Some(quoted) if !quoted.complete => {
                 return HashSectionAndId {
                     section: None,
                     exact: true,
@@ -63,15 +64,15 @@ pub(super) fn parse_hash_section_and_id(after_hash: &str) -> HashSectionAndId {
                     quoted_incomplete: true,
                 };
             }
-            Some(lex) => {
-                let rest = after_hash.get(lex.literal_len..).unwrap_or("");
-                let empty_title = lex.decoded.is_empty();
+            Some(quoted) => {
+                let rest = after_hash.get(quoted.literal_len..).unwrap_or("");
+                let empty_title = quoted.decoded.is_empty();
                 if rest.is_empty() {
                     return HashSectionAndId {
-                        section: (!empty_title).then_some(lex.decoded),
+                        section: (!empty_title).then_some(quoted.decoded),
                         exact: true,
                         block_id: None,
-                        section_len: lex.literal_len,
+                        section_len: quoted.literal_len,
                         has_caret: false,
                         id_len: 0,
                         incomplete_section: empty_title,
@@ -82,10 +83,10 @@ pub(super) fn parse_hash_section_and_id(after_hash: &str) -> HashSectionAndId {
                 if let Some(id) = rest.strip_prefix('^') {
                     let valid = !id.is_empty() && is_block_id(id);
                     return HashSectionAndId {
-                        section: (!empty_title).then_some(lex.decoded),
+                        section: (!empty_title).then_some(quoted.decoded),
                         exact: true,
                         block_id: valid.then(|| id.to_string()),
-                        section_len: lex.literal_len,
+                        section_len: quoted.literal_len,
                         has_caret: true,
                         id_len: id.len(),
                         incomplete_section: empty_title,
@@ -324,23 +325,22 @@ pub(super) fn parse_sub_bullet_route_token(
             );
         }
         Some(selector) if opens_exact_name(selector) => {
-            let Some(lex) = lex_exact_name_after_hash(selector, selector.len())
-            else {
+            let Some(quoted) = quoted_after_hash(selector) else {
                 return Err(
                     "invalid drawer: use `#slug` (`#notes`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
                         .to_string(),
                 );
             };
-            if !lex.complete {
+            if !quoted.complete {
                 // Partial quoted literal: incomplete drawer query.
                 Some(DrawerSelector {
-                    text: lex.decoded.clone(),
+                    text: quoted.decoded.clone(),
                     exact: true,
                 })
             } else {
                 let canonical =
                     crate::native::capture_drawers::normalize_drawer_literal(
-                        &lex.decoded,
+                        &quoted.decoded,
                     );
                 let Some(canonical) = canonical else {
                     return Err(
@@ -350,7 +350,7 @@ pub(super) fn parse_sub_bullet_route_token(
                 };
                 // Quoted literals must match exactly; trailing bytes
                 // after the closing quote are invalid.
-                if selector.len() != lex.literal_len {
+                if selector.len() != quoted.literal_len {
                     return Err(
                         "invalid drawer: use `#slug` (`#notes`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
                             .to_string(),

@@ -13,7 +13,9 @@ use super::line::normalize_task_text;
 use super::model::{
     AuthoredDepth, AuthoredSubBullet, CaptureItem, CaptureKind, DrawerSelector,
 };
-use super::pomodoro_literal::lex_exact_name_after_hash;
+use super::place::{
+    leftover_after, quoted_after_hash, scan_hash_opener, shift_range, token_end,
+};
 use super::project_tasks::split_leading_checkbox;
 use crate::native::capture_drawers::{
     drawer_key, is_drawer_slug, is_legacy_drawer_title,
@@ -57,28 +59,11 @@ impl DrawerBulletHit {
 /// Scan the start of a first-level authored body (marker already stripped)
 /// for a leading drawer shortcut. `base` is the absolute start of `body`.
 pub(crate) fn scan_leading(body: &str, base: usize) -> Option<DrawerBulletHit> {
-    let trimmed_start = body.len() - body.trim_start().len();
-    let rest = &body[trimmed_start..];
-    if rest.is_empty() {
-        return None;
-    }
-    let escaped = rest.starts_with("\\#");
-    let sigil_rel = if escaped { 1 } else { 0 };
-    if !rest[sigil_rel..].starts_with('#') {
-        return None;
-    }
-    let after_hash = &rest[sigil_rel + 1..];
-    let next = after_hash.chars().next();
-    let opens = next.is_some_and(|character| {
-        character.is_ascii_alphabetic() || matches!(character, '"' | '“')
-    });
-    let bare = next.is_none() || next.is_some_and(char::is_whitespace);
-    if !opens && !bare {
-        return None;
-    }
-    let start = trimmed_start;
-    let sigil = start + sigil_rel;
-    Some(shift_hit(parse_hit(body, start, sigil, escaped), base))
+    let opener = scan_hash_opener(body)?;
+    Some(shift_hit(
+        parse_hit(body, opener.start, opener.sigil, opener.escaped),
+        base,
+    ))
 }
 
 /// Scan a whole physical first-level child line (`- `, `* `, or `+ `).
@@ -277,8 +262,8 @@ pub(crate) fn editor_drawer_bullet_position_error(
 ) -> String {
     if let Some(section) = glued_section.filter(|value| !value.is_empty()) {
         let title = if section.starts_with('"') || section.starts_with('“') {
-            lex_exact_name_after_hash(section, section.len())
-                .and_then(|lex| normalize_drawer_literal(&lex.decoded))
+            quoted_after_hash(section)
+                .and_then(|quoted| normalize_drawer_literal(&quoted.decoded))
                 .unwrap_or_else(|| {
                     normalize_task_text(section).to_ascii_uppercase()
                 })
@@ -466,11 +451,9 @@ fn parse_hit(
     let content_start = sigil + 1;
     let rest = &line[content_start..];
     let candidate_end = token_end(line, start);
-    if rest.starts_with('"') || rest.starts_with('“') {
-        let lex = lex_exact_name_after_hash(rest, rest.len())
-            .expect("quote opener yields a literal");
-        let marker_end = content_start + lex.literal_len;
-        let remainder_end = if lex.complete
+    if let Some(quoted) = quoted_after_hash(rest) {
+        let marker_end = content_start + quoted.literal_len;
+        let remainder_end = if quoted.complete
             && marker_end < line.len()
             && !line[marker_end..]
                 .chars()
@@ -481,7 +464,7 @@ fn parse_hit(
         } else {
             marker_end
         };
-        let raw_end = if lex.complete {
+        let raw_end = if quoted.complete {
             remainder_end
         } else {
             line.len()
@@ -491,15 +474,15 @@ fn parse_hit(
                 span: start..raw_end,
             };
         }
-        if !lex.complete || lex.decoded.trim().is_empty() {
+        if !quoted.complete || quoted.decoded.trim().is_empty() {
             return DrawerBulletHit::Incomplete {
                 span: start..raw_end,
             };
         }
-        let Some(title) = normalize_drawer_literal(&lex.decoded) else {
+        let Some(title) = normalize_drawer_literal(&quoted.decoded) else {
             return DrawerBulletHit::Invalid {
                 span: start..raw_end,
-                raw: lex.decoded,
+                raw: quoted.decoded,
             };
         };
         if marker_end != raw_end {
@@ -552,12 +535,8 @@ fn parse_hit(
     }
 }
 
-fn leftover_after(line: &str, end: usize) -> String {
-    line.get(end..).unwrap_or("").trim().to_string()
-}
-
 fn shift_hit(hit: DrawerBulletHit, base: usize) -> DrawerBulletHit {
-    let shift = |span: Range<usize>| (span.start + base)..(span.end + base);
+    let shift = |span: Range<usize>| shift_range(span, base);
     match hit {
         DrawerBulletHit::Complete {
             span,
@@ -583,14 +562,4 @@ fn shift_hit(hit: DrawerBulletHit, base: usize) -> DrawerBulletHit {
             DrawerBulletHit::Escaped { span: shift(span) }
         }
     }
-}
-
-fn token_end(line: &str, start: usize) -> usize {
-    let mut end = start;
-    while end < line.len()
-        && !line[end..].chars().next().unwrap().is_whitespace()
-    {
-        end += line[end..].chars().next().map(char::len_utf8).unwrap_or(1);
-    }
-    end
 }

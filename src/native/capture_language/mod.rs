@@ -34,6 +34,7 @@ mod model;
 mod move_bullet;
 pub(crate) mod notebook;
 pub(crate) mod past;
+pub(crate) mod place;
 mod pomodoro_literal;
 mod project_tasks;
 pub(crate) mod record;

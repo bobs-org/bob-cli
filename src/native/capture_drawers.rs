@@ -28,7 +28,13 @@ use super::{
         leading_whitespace, line_spans, list_item_body,
         parse_managed_task_log_marker, LineSpan,
     },
-    capture_language,
+    capture_language::{
+        self,
+        place::{
+            self, PlaceCandidate, PlaceCatalog, PlaceOutcome, ProjectSection,
+            TaskDrawer,
+        },
+    },
     capture_project_note::format_project_section_title,
     env as bob_env,
     markdown::fenced_lines,
@@ -118,20 +124,13 @@ pub(crate) fn normalize_drawer_literal(decoded: &str) -> Option<String> {
 
 /// Whitespace-collapsed Unicode uppercase key for a drawer title.
 pub(crate) fn drawer_key(title: &str) -> String {
-    capture_language::normalize_task_text(title).to_uppercase()
+    place::place_key(title)
 }
 
 /// Whether `value` is a valid drawer slug: ASCII letter start, then ASCII
 /// letters, digits, or hyphens.
 pub(crate) fn is_drawer_slug(value: &str) -> bool {
-    let mut chars = value.bytes();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() {
-        return false;
-    }
-    chars.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    place::is_place_slug(value)
 }
 
 /// Reserved drawer keys derived from existing managed-line owners, never a
@@ -248,6 +247,83 @@ pub(crate) struct DrawerCatalogRecord {
     pub(crate) spelling_markers: HashMap<String, HashMap<String, u64>>,
     #[serde(default)]
     pub(crate) notes: Vec<String>,
+}
+
+impl PlaceCatalog for BTreeMap<String, DrawerCatalogRecord> {
+    fn spelling_for_slug(&self, slug: &str) -> String {
+        drawer_spelling_for_slug(self, slug)
+    }
+
+    fn near_title(&self, new_key: &str) -> Option<String> {
+        near_catalog_title(new_key, self)
+    }
+
+    fn is_legacy_title(&self, title: &str) -> bool {
+        is_legacy_drawer_title(title)
+    }
+}
+
+fn place_candidates(drawers: &[Drawer]) -> Vec<PlaceCandidate> {
+    drawers
+        .iter()
+        .map(|drawer| {
+            PlaceCandidate::new(
+                drawer.title.clone(),
+                drawer.key.clone(),
+                drawer.slug.clone(),
+                drawer.line,
+            )
+        })
+        .collect()
+}
+
+fn map_drawer_outcome(
+    outcome: PlaceOutcome,
+    drawers: &[Drawer],
+) -> Result<DrawerResolved, DrawerResolveError> {
+    match outcome {
+        PlaceOutcome::Existing(item) => {
+            let drawer = drawers
+                .iter()
+                .find(|drawer| drawer.line == item.line)
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "matched place line {} missing from drawers",
+                        item.line
+                    )
+                });
+            Ok(DrawerResolved {
+                outcome: DrawerResolveOutcome::Existing { drawer },
+                created: false,
+                warning: None,
+            })
+        }
+        PlaceOutcome::Create {
+            title,
+            key,
+            slug,
+            warning,
+        } => Ok(DrawerResolved {
+            outcome: DrawerResolveOutcome::Create { title, key, slug },
+            created: true,
+            warning,
+        }),
+        PlaceOutcome::Refuse { code, message } => {
+            Err(DrawerResolveError { code, message })
+        }
+        PlaceOutcome::NearMiss { message, code, .. } => {
+            Err(DrawerResolveError {
+                code: code.unwrap_or("drawer_near_duplicate"),
+                message: message.unwrap_or_else(|| {
+                    "did you mean a nearby drawer?".to_string()
+                }),
+            })
+        }
+        PlaceOutcome::Ambiguous { matches } => {
+            unreachable!("drawer adapters refuse ambiguity: {matches:?}")
+        }
+    }
 }
 
 pub(crate) fn drawer_now_unix() -> u64 {
@@ -1119,149 +1195,26 @@ pub(crate) fn resolve_drawer_for_write(
     // ^prj structural and reserved keys are checked by
     // `resolve_h2_for_write` before this shared matcher runs.
     let _ = (route, parent_block_id);
-    let noun = scope.noun();
-    if exact {
-        if let Some(key) = reserved_selector_key(selector_text, true) {
-            return Err(reserved_drawer_error(&key, scope));
-        }
-        let key = drawer_key(selector_text);
-        // Exact key matching.
-        let matches: Vec<&Drawer> =
-            drawers.iter().filter(|d| d.key == key).collect();
-        if matches.len() == 1 {
-            return Ok(DrawerResolved {
-                outcome: DrawerResolveOutcome::Existing {
-                    drawer: matches[0].clone(),
-                },
-                created: false,
-                warning: None,
-            });
-        }
-        if matches.len() > 1 {
-            let lines = matches
-                .iter()
-                .map(|d| d.line.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(DrawerResolveError::new(
-                "ambiguous_drawer",
-                format!(
-                    "{noun} `{selector_text}` matches more than one {noun} (lines {lines}); rename one"
-                ),
-            ));
-        }
-        // Create with canonical title (promotion Title Case for `##`).
-        let title = cased_creation_title(
-            &capture_language::normalize_task_text(selector_text)
-                .to_ascii_uppercase(),
-            scope,
-        );
-        let key = drawer_key(&title);
-        let slug = capture_language::selector_slug(&title);
-        let warning = near_catalog_warning(&key, catalog, scope);
-        return Ok(DrawerResolved {
-            outcome: DrawerResolveOutcome::Create { title, key, slug },
-            created: true,
-            warning,
-        });
-    }
-    // Slug path.
-    let slug = selector_text.to_string();
-    let key_plain = drawer_key(&slug);
-    let key_spaced = drawer_key(&slug.replace('-', " "));
-    // Exact key matches (slug key or hyphen-space variant).
-    let mut matches: Vec<&Drawer> = drawers
-        .iter()
-        .filter(|d| d.key == key_plain || d.key == key_spaced)
-        .collect();
-    // Deduplicate by line (a drawer appears once, but both keys could
-    // match the same drawer when FUTURE-WORK vs FUTURE WORK collide).
-    matches.sort_by_key(|d| d.line);
-    matches.dedup_by_key(|d| d.line);
-    if matches.len() == 1 {
-        // Single match selects that drawer.
-        return Ok(DrawerResolved {
-            outcome: DrawerResolveOutcome::Existing {
-                drawer: matches[0].clone(),
-            },
-            created: false,
-            warning: None,
-        });
-    }
-    if matches.len() > 1 {
-        let lines = matches
-            .iter()
-            .map(|d| d.line.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(DrawerResolveError::new(
-            "ambiguous_drawer",
-            format!(
-                "{noun} `#{slug}` matches more than one {noun} (lines {lines}); use a quoted literal to pick one"
-            ),
-        ));
-    }
-    // No match: reserved?
-    // A slug whose key (either interpretation) is reserved refuses.
-    if let Some(key) = reserved_selector_key(&slug, false) {
-        return Err(reserved_drawer_error(&key, scope));
-    }
-    // Near-duplicate guard (slug only): strict prefix or edit distance 1.
-    // The suggestion names the existing drawer, but the quoted creation
-    // override teaches the requested selector's intended new title with the
-    // same casing and key rules as the actual writer below.
-    if let Some(near) = find_near_duplicate_drawer(drawers, &slug) {
-        let intended = drawer_spelling_for_slug(catalog, &slug);
-        let intended = cased_creation_title(
-            if is_legacy_drawer_title(&intended) {
-                &intended
-            } else {
-                &key_spaced
-            },
-            scope,
-        );
-        // A punctuated drawer (`WHAT IS SASE?`, `Q&A`) has a slug that is
-        // not itself a valid slug, so suggesting `#slug` would suggest a
-        // selector that cannot parse. Suggest the quoted literal instead.
-        let suggestion = if !is_drawer_slug(&near.slug) {
-            normalize_drawer_literal(&near.title)
-                .map(|key| format!("#\"{key}\""))
-                .unwrap_or_else(|| format!("#{}", near.slug))
-        } else {
-            format!("#{}", near.slug)
-        };
-        return Err(DrawerResolveError::new(
-            "drawer_near_duplicate",
-            format!(
-                "did you mean `{suggestion}`? write `#\"{intended}\"` to create {intended}"
-            ),
-        ));
-    }
-    // Create.
-    let title = drawer_spelling_for_slug(catalog, &slug);
-    // Ensure the catalog spelling is a valid drawer title; otherwise
-    // fall back to uppercase spaced. `##` sections then take promotion
-    // Title Case.
-    let title = cased_creation_title(
-        if is_legacy_drawer_title(&title) {
-            &title
-        } else {
-            &key_spaced
-        },
-        scope,
-    );
-    let key = drawer_key(&title);
-    let slug_out = capture_language::selector_slug(&title);
-    let warning = near_catalog_warning(&key, catalog, scope);
-    Ok(DrawerResolved {
-        outcome: DrawerResolveOutcome::Create {
-            title,
-            key,
-            slug: slug_out,
-        },
-        created: true,
-        warning,
-    })
+    let items = place_candidates(drawers);
+    let is_reserved = |key: &str| is_reserved_drawer_key(key);
+    let outcome = match scope {
+        DrawerScope::Task => TaskDrawer::resolve(
+            selector_text,
+            exact,
+            &items,
+            catalog,
+            is_reserved,
+        ),
+        DrawerScope::ProjectSection => ProjectSection::resolve(
+            selector_text,
+            exact,
+            &items,
+            catalog,
+            is_reserved,
+            format_project_section_title,
+        ),
+    };
+    map_drawer_outcome(outcome, drawers)
 }
 
 /// The `reserved_drawer` refusal for a managed key, naming the key the
@@ -1280,58 +1233,9 @@ pub(crate) fn find_near_duplicate_drawer<'a>(
     drawers: &'a [Drawer],
     slug: &str,
 ) -> Option<&'a Drawer> {
-    let needle_key = drawer_key(slug);
-    let needle_spaced = drawer_key(&slug.replace('-', " "));
-    // Strict prefix of a drawer key.
-    // Edit distance 1 from a drawer key.
-    let mut candidates: Vec<&Drawer> = Vec::new();
-    for drawer in drawers {
-        if drawer.key.starts_with(&needle_key)
-            && drawer.key.len() > needle_key.len()
-        {
-            candidates.push(drawer);
-            continue;
-        }
-        if drawer.key.starts_with(&needle_spaced)
-            && drawer.key.len() > needle_spaced.len()
-        {
-            candidates.push(drawer);
-            continue;
-        }
-        if crate::native::note_tasks::bounded_levenshtein(
-            &needle_key,
-            &drawer.key,
-            1,
-        )
-        .is_some()
-        {
-            candidates.push(drawer);
-            continue;
-        }
-        if crate::native::note_tasks::bounded_levenshtein(
-            &needle_spaced,
-            &drawer.key,
-            1,
-        )
-        .is_some()
-        {
-            candidates.push(drawer);
-        }
-    }
-    // Stable: smallest line wins? Spec says guard returns the drawer;
-    // for multiple, pick first in document order.
-    candidates.sort_by_key(|d| d.line);
-    candidates.into_iter().next()
-}
-
-fn near_catalog_warning(
-    new_key: &str,
-    catalog: &BTreeMap<String, DrawerCatalogRecord>,
-    scope: DrawerScope,
-) -> Option<String> {
-    let noun = scope.noun();
-    near_catalog_title(new_key, catalog)
-        .map(|title| format!("new {noun} {new_key} · did you mean {title}?"))
+    let items = place_candidates(drawers);
+    let found = place::find_key_near_duplicate(&items, slug)?;
+    drawers.iter().find(|drawer| drawer.line == found.line)
 }
 
 /// Title of a catalog key within edit distance 2 of `new_key` that is used
@@ -1350,16 +1254,6 @@ pub(crate) fn near_catalog_title(
                 .is_some()
         })
         .map(|(_, record)| record.title.clone())
-}
-
-/// Creation title for `scope`: ALL-CAPS drawer titles stay as resolved,
-/// while `##` sections take the promotion Title Case
-/// (`FUTURE WORK` becomes `Future Work`).
-fn cased_creation_title(resolved: &str, scope: DrawerScope) -> String {
-    match scope {
-        DrawerScope::Task => resolved.to_string(),
-        DrawerScope::ProjectSection => format_project_section_title(resolved),
-    }
 }
 
 /// Spelling for creation from a slug: most-used matching spelling among
@@ -1507,95 +1401,6 @@ pub(crate) fn ensure_drawer(
                 .ok_or_else(|| format!("failed to create drawer {title}"))?;
             Ok((updated, drawer, true))
         }
-    }
-}
-
-/// Whole-slug match in document order, else the first slug-prefix match.
-// Covered by unit tests; prod write path uses `resolve_drawer_for_write`.
-#[allow(dead_code)]
-pub(crate) fn select_drawer<'a>(
-    drawers: &'a [Drawer],
-    selector: &str,
-) -> Option<&'a Drawer> {
-    let needle = capture_language::selector_slug(selector);
-    if needle.is_empty() {
-        return None;
-    }
-    drawers
-        .iter()
-        .find(|drawer| drawer.slug == needle)
-        .or_else(|| {
-            drawers
-                .iter()
-                .find(|drawer| drawer.slug.starts_with(&needle))
-        })
-}
-
-/// Whole-title match in document order, compared case-insensitively.
-///
-/// This is the picker path (`--drawer TITLE`): hyphenated slugs are
-/// not rewritten, so `future-work` does not match `FUTURE WORK`.
-// Covered by unit tests; prod write path uses `resolve_drawer_for_write`.
-#[allow(dead_code)]
-pub(crate) fn select_drawer_exact<'a>(
-    drawers: &'a [Drawer],
-    title: &str,
-) -> Option<&'a Drawer> {
-    drawers
-        .iter()
-        .find(|drawer| drawer_key(&drawer.title) == drawer_key(title))
-}
-
-/// Dispatch slug/prefix matching or exact title matching.
-// Covered by unit tests; prod write path uses `resolve_drawer_for_write`.
-#[allow(dead_code)]
-pub(crate) fn match_drawer<'a>(
-    drawers: &'a [Drawer],
-    selector: &str,
-    exact: bool,
-) -> Option<&'a Drawer> {
-    if exact {
-        select_drawer_exact(drawers, selector)
-    } else {
-        select_drawer(drawers, selector)
-    }
-}
-
-/// Unique nearby drawer for a failed selector, or `None` when several
-/// candidates are equally close. Slug matching compares slugs; exact
-/// matching compares lowercased titles.
-// Covered by unit tests; prod write path uses `find_near_duplicate_drawer`.
-#[allow(dead_code)]
-pub(crate) fn suggest_drawer<'a>(
-    drawers: &'a [Drawer],
-    selector: &str,
-    exact: bool,
-) -> Option<&'a Drawer> {
-    let requested = if exact {
-        selector.to_ascii_lowercase()
-    } else {
-        capture_language::selector_slug(selector)
-    };
-    if requested.is_empty() {
-        return None;
-    }
-    let key = |drawer: &Drawer| {
-        if exact {
-            drawer.title.to_ascii_lowercase()
-        } else {
-            drawer.slug.clone()
-        }
-    };
-    if drawers.iter().any(|drawer| key(drawer) == requested) {
-        return None;
-    }
-    let mut close = drawers.iter().filter(|drawer| {
-        super::note_tasks::bounded_levenshtein(&requested, &key(drawer), 2)
-            .is_some()
-    });
-    match (close.next(), close.next()) {
-        (Some(drawer), None) => Some(drawer),
-        _ => None,
     }
 }
 
@@ -3352,65 +3157,61 @@ mod tests {
     }
 
     #[test]
-    fn whole_slug_beats_earlier_prefix_and_first_duplicate_wins() {
-        let contents = concat!(
-            "- [ ] #task Parent\n",
-            "\t- FUTURE WORKFLOW\n",
-            "\t- FUTURE WORK\n",
-            "\t- FUTURE  WORK\n",
-        );
-        let drawers = drawers_of(contents);
-        assert_eq!(
-            select_drawer(&drawers, "future-work")
-                .map(|drawer| drawer.title.as_str()),
-            Some("FUTURE WORK")
-        );
-        assert_eq!(
-            select_drawer(&drawers, "FUTURE WORK").map(|drawer| drawer.line),
-            Some(3)
-        );
-        assert_eq!(
-            select_drawer(&drawers, "future")
-                .map(|drawer| drawer.title.as_str()),
-            Some("FUTURE WORKFLOW")
-        );
-        assert_eq!(
-            select_drawer(&drawers, "future-workflow")
-                .map(|drawer| drawer.title.as_str()),
-            Some("FUTURE WORKFLOW")
-        );
-        assert_eq!(select_drawer(&drawers, ""), None);
-        assert_eq!(select_drawer(&drawers, "absent"), None);
-    }
-
-    #[test]
-    fn exact_title_match_is_case_insensitive_and_not_a_slug() {
+    fn live_resolver_selects_by_key_and_refuses_prefix_as_near_duplicate() {
+        let empty = BTreeMap::new();
         let contents = concat!(
             "- [ ] #task Parent\n",
             "\t- FUTURE WORKFLOW\n",
             "\t- FUTURE WORK\n",
         );
         let drawers = drawers_of(contents);
-        assert_eq!(
-            select_drawer_exact(&drawers, "Future Work")
-                .map(|drawer| drawer.title.as_str()),
-            Some("FUTURE WORK")
-        );
-        assert_eq!(select_drawer_exact(&drawers, "future-work"), None);
-        assert_eq!(
-            match_drawer(&drawers, "Future Work", true)
-                .map(|drawer| drawer.title.as_str()),
-            Some("FUTURE WORK")
-        );
-        assert_eq!(
-            match_drawer(&drawers, "future", false)
-                .map(|drawer| drawer.title.as_str()),
-            Some("FUTURE WORKFLOW")
-        );
+        let resolved = resolve_drawer_for_write(
+            &drawers,
+            "future-work",
+            false,
+            &empty,
+            "note",
+            Some("parent"),
+            DrawerScope::Task,
+        )
+        .expect("key form selects FUTURE WORK");
+        let DrawerResolveOutcome::Existing { drawer } = resolved.outcome else {
+            panic!("expected existing drawer: {resolved:?}");
+        };
+        assert_eq!(drawer.title, "FUTURE WORK");
+        assert_eq!(drawer.line, 3);
+
+        let exact = resolve_drawer_for_write(
+            &drawers,
+            "Future Work",
+            true,
+            &empty,
+            "note",
+            Some("parent"),
+            DrawerScope::Task,
+        )
+        .expect("quoted key matches FUTURE WORK");
+        let DrawerResolveOutcome::Existing { drawer } = exact.outcome else {
+            panic!("expected existing drawer: {exact:?}");
+        };
+        assert_eq!(drawer.title, "FUTURE WORK");
+
+        let prefix = resolve_drawer_for_write(
+            &drawers,
+            "future",
+            false,
+            &empty,
+            "note",
+            Some("parent"),
+            DrawerScope::Task,
+        )
+        .expect_err("prefix is a near-duplicate, not a selection");
+        assert_eq!(prefix.code, "drawer_near_duplicate");
     }
 
     #[test]
-    fn suggests_unique_nearby_titles_and_slugs() {
+    fn live_resolver_suggests_the_earliest_distance_1_drawer() {
+        let empty = BTreeMap::new();
         let contents = concat!(
             "- [ ] #task Parent\n",
             "\t- REQUIREMENTS\n",
@@ -3419,19 +3220,18 @@ mod tests {
             "\t- NOTE\n",
         );
         let drawers = drawers_of(contents);
-        assert_eq!(
-            suggest_drawer(&drawers, "requirments", false)
-                .map(|drawer| drawer.title.as_str()),
-            Some("REQUIREMENTS")
-        );
-        assert_eq!(
-            suggest_drawer(&drawers, "future-work", true)
-                .map(|drawer| drawer.title.as_str()),
-            Some("FUTURE WORK")
-        );
-        assert_eq!(suggest_drawer(&drawers, "notx", false), None);
-        assert_eq!(suggest_drawer(&drawers, "zzz", false), None);
-        assert_eq!(suggest_drawer(&drawers, "", false), None);
+        let error = resolve_drawer_for_write(
+            &drawers,
+            "requirments",
+            false,
+            &empty,
+            "note",
+            Some("parent"),
+            DrawerScope::Task,
+        )
+        .expect_err("distance 1 is a near-duplicate");
+        assert_eq!(error.code, "drawer_near_duplicate");
+        assert!(error.message.contains("#requirements"), "{}", error.message);
     }
 
     #[test]

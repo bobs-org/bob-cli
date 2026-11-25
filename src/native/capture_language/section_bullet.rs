@@ -19,7 +19,9 @@ use super::notebook::{
     resolve_notebook_section, strip_trailing_caret_id, NotebookSection,
     NotebookSectionResolution,
 };
-use super::pomodoro_literal::lex_exact_name_after_hash;
+use super::place::{
+    leftover_after, quoted_after_hash, scan_hash_opener, shift_range, token_end,
+};
 use crate::native::capture_project_note::{
     format_project_section_title, is_project_section_title,
 };
@@ -49,28 +51,11 @@ pub(crate) fn scan_leading(
     body: &str,
     base: usize,
 ) -> Option<SectionBulletHit> {
-    let trimmed_start = body.len() - body.trim_start().len();
-    let rest = &body[trimmed_start..];
-    if rest.is_empty() {
-        return None;
-    }
-    let escaped = rest.starts_with("\\#");
-    let sigil_rel = if escaped { 1 } else { 0 };
-    if !rest[sigil_rel..].starts_with('#') {
-        return None;
-    }
-    let after_hash = &rest[sigil_rel + 1..];
-    let next = after_hash.chars().next();
-    let opens = next.is_some_and(|character| {
-        character.is_ascii_alphabetic() || matches!(character, '"' | '“')
-    });
-    let bare = next.is_none() || next.is_some_and(char::is_whitespace);
-    if !opens && !bare {
-        return None;
-    }
-    let start = trimmed_start;
-    let sigil = start + sigil_rel;
-    Some(shift_hit(parse_hit(body, start, sigil, escaped), base))
+    let opener = scan_hash_opener(body)?;
+    Some(shift_hit(
+        parse_hit(body, opener.start, opener.sigil, opener.escaped),
+        base,
+    ))
 }
 
 /// Whether an unquoted selector is consumed whole by the section-bullet
@@ -811,26 +796,28 @@ fn parse_hit(
 ) -> SectionBulletHit {
     let content_start = sigil + 1;
     let rest = &line[content_start..];
-    if rest.starts_with('"') || rest.starts_with('“') {
-        let lex = lex_exact_name_after_hash(rest, rest.len())
-            .expect("quote opener yields a literal");
-        let marker_end = content_start + lex.literal_len;
-        let raw_end = if lex.complete { marker_end } else { line.len() };
+    if let Some(quoted) = quoted_after_hash(rest) {
+        let marker_end = content_start + quoted.literal_len;
+        let raw_end = if quoted.complete {
+            marker_end
+        } else {
+            line.len()
+        };
         if escaped {
             return SectionBulletHit::Escaped {
                 span: start..raw_end,
             };
         }
-        if !lex.complete || lex.decoded.trim().is_empty() {
+        if !quoted.complete || quoted.decoded.trim().is_empty() {
             return SectionBulletHit::Incomplete {
                 span: start..raw_end,
             };
         }
-        let leftover = leftover_after_selector(line, marker_end);
+        let leftover = leftover_after(line, marker_end);
         let authored = line[start..marker_end].trim_start().to_string();
         return SectionBulletHit::Complete {
             span: start..marker_end,
-            selector: lex.decoded,
+            selector: quoted.decoded,
             exact: true,
             leftover,
             authored,
@@ -851,9 +838,9 @@ fn parse_hit(
     let parsed = super::tokens::parse_hash_section_and_id(suffix);
     let selector_end = content_start + parsed.section_len;
     let leftover = if parsed.has_caret {
-        leftover_after_selector(line, selector_end)
+        leftover_after(line, selector_end)
     } else {
-        leftover_after_selector(line, candidate_end)
+        leftover_after(line, candidate_end)
     };
     if parsed.incomplete_section
         || parsed.section.as_ref().is_none_or(|s| s.is_empty())
@@ -873,12 +860,8 @@ fn parse_hit(
     }
 }
 
-fn leftover_after_selector(line: &str, end: usize) -> String {
-    line.get(end..).unwrap_or("").trim().to_string()
-}
-
 fn shift_hit(hit: SectionBulletHit, base: usize) -> SectionBulletHit {
-    let shift = |span: Range<usize>| (span.start + base)..(span.end + base);
+    let shift = |span: Range<usize>| shift_range(span, base);
     match hit {
         SectionBulletHit::Complete {
             span,
@@ -900,16 +883,6 @@ fn shift_hit(hit: SectionBulletHit, base: usize) -> SectionBulletHit {
             SectionBulletHit::Escaped { span: shift(span) }
         }
     }
-}
-
-fn token_end(line: &str, start: usize) -> usize {
-    let mut end = start;
-    while end < line.len()
-        && !line[end..].chars().next().unwrap().is_whitespace()
-    {
-        end += line[end..].chars().next().map(char::len_utf8).unwrap_or(1);
-    }
-    end
 }
 
 /// Extract accepted section operations from a capture item for the staged

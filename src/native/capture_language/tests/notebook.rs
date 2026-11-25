@@ -8,10 +8,11 @@ use super::super::draft::TemplateCodedError;
 use super::*;
 use crate::native::capture_language::notebook::{
     candidate_notebook_routes, discover_notebook_creates,
-    format_notebook_section_create_title, resolve_notebook_section,
-    staged_notebook_sections, NotebookRouteInfo, NotebookRoutePolicy,
-    NotebookSection, NotebookSectionProvenance, NotebookSectionResolution,
+    resolve_notebook_section, staged_notebook_sections, NotebookRouteInfo,
+    NotebookRoutePolicy, NotebookSection, NotebookSectionProvenance,
+    NotebookSectionResolution,
 };
+use crate::native::capture_language::place::format_notebook_section_create_title;
 
 fn policy() -> NotebookRoutePolicy {
     let mut policy = NotebookRoutePolicy::default();

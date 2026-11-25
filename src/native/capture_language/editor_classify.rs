@@ -6,6 +6,8 @@ use super::item::{effective_start_timing, session_equals_token};
 use super::line::*;
 use super::markers::*;
 use super::model::*;
+use super::place::quoted_after_hash;
+use super::pomodoro_literal::opens_exact_name;
 use super::tokens::*;
 
 /// A lexed `@<route>:<block-id>=x…` close suffix: either a valid selection
@@ -248,9 +250,6 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
         && !section.is_empty()
     {
         if section.starts_with('"') || section.starts_with('“') {
-            use super::pomodoro_literal::{
-                lex_exact_name_after_hash, opens_exact_name,
-            };
             if !opens_exact_name(section) {
                 return TokenParse::Invalid(token_diagnostic(
                     token,
@@ -258,20 +257,19 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
                     INVALID_DRAWER_ERROR,
                 ));
             }
-            let Some(lex) = lex_exact_name_after_hash(section, section.len())
-            else {
+            let Some(quoted) = quoted_after_hash(section) else {
                 return TokenParse::Invalid(token_diagnostic(
                     token,
                     "invalid_drawer",
                     INVALID_DRAWER_ERROR,
                 ));
             };
-            if !lex.complete {
+            if !quoted.complete {
                 // Partial quoted: stays incomplete, handled below.
             } else {
                 let canonical =
                     crate::native::capture_drawers::normalize_drawer_literal(
-                        &lex.decoded,
+                        &quoted.decoded,
                     );
                 let Some(_canonical) = canonical else {
                     return TokenParse::Invalid(token_diagnostic(
@@ -280,7 +278,7 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
                         INVALID_DRAWER_ERROR,
                     ));
                 };
-                if section.len() != lex.literal_len {
+                if section.len() != quoted.literal_len {
                     return TokenParse::Invalid(token_diagnostic(
                         token,
                         "invalid_drawer",
@@ -343,31 +341,28 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     if let Some(section) = section_part
         && !section.is_empty()
     {
-        let drawer_meta: Option<(String, String)> = if section.starts_with('"')
-            || section.starts_with('“')
-        {
-            super::pomodoro_literal::lex_exact_name_after_hash(
-                section,
-                section.len(),
-            )
-            .filter(|lex| lex.complete)
-            .and_then(|lex| {
-                crate::native::capture_drawers::normalize_drawer_literal(
-                    &lex.decoded,
-                )
-            })
-            .map(|title| {
-                let key = crate::native::capture_drawers::drawer_key(&title);
-                (title, key)
-            })
-        } else if crate::native::capture_drawers::is_drawer_slug(section) {
-            let spaced = section.replace('-', " ");
-            let canonical =
-                super::normalize_task_text(&spaced).to_ascii_uppercase();
-            Some((canonical.clone(), canonical))
-        } else {
-            None
-        };
+        let drawer_meta: Option<(String, String)> =
+            if section.starts_with('"') || section.starts_with('“') {
+                quoted_after_hash(section)
+                .filter(|quoted| quoted.complete)
+                .and_then(|quoted| {
+                    crate::native::capture_drawers::normalize_drawer_literal(
+                        &quoted.decoded,
+                    )
+                })
+                .map(|title| {
+                    let key =
+                        crate::native::capture_drawers::drawer_key(&title);
+                    (title, key)
+                })
+            } else if crate::native::capture_drawers::is_drawer_slug(section) {
+                let spaced = section.replace('-', " ");
+                let canonical =
+                    super::normalize_task_text(&spaced).to_ascii_uppercase();
+                Some((canonical.clone(), canonical))
+            } else {
+                None
+            };
         if let Some((title, key)) = drawer_meta {
             for span in parsed.spans.iter_mut() {
                 if span.kind == SpanKind::Drawer {

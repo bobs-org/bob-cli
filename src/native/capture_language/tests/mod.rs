@@ -141,6 +141,7 @@ mod move_bullet;
 mod note_goto;
 mod notebook;
 mod past;
+mod place;
 mod pomodoro_merge;
 mod record;
 mod ref_grammar;
