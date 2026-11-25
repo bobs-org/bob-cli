@@ -443,6 +443,7 @@ impl Target {
                         title: canonical.clone(),
                         slug: capture_language::selector_slug(&canonical),
                         key,
+                        marker: self.scope.create_marker(),
                     },
                     created: true,
                     warning: None,
@@ -640,8 +641,9 @@ impl Target {
                     row.refused = Some(unnameable_copy(self.scope));
                     return;
                 }
-                if let DrawerResolveOutcome::Create { title, key, slug } =
-                    resolved.outcome
+                if let DrawerResolveOutcome::Create {
+                    title, key, slug, ..
+                } = resolved.outcome
                 {
                     // A new note's template already carries `## Tasks`,
                     // so a `TASKS` bullet adds to it instead of creating.

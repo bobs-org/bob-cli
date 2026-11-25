@@ -3560,6 +3560,7 @@ pub(super) fn plan_capture_item(
                                 DrawerJson {
                                     title: drawer.title.clone(),
                                     key: drawer.key.clone(),
+                                    marker: drawer.marker,
                                     created,
                                 },
                                 placement,
@@ -3568,11 +3569,13 @@ pub(super) fn plan_capture_item(
                         capture_drawers::DrawerResolveOutcome::Create {
                             title,
                             key,
+                            marker,
                             ..
                         } => (
                             DrawerJson {
                                 title: title.clone(),
                                 key,
+                                marker,
                                 created,
                             },
                             Placement::Appended,
@@ -3627,6 +3630,7 @@ pub(super) fn plan_capture_item(
                                 DrawerJson {
                                     title: drawer.title.clone(),
                                     key: drawer.key.clone(),
+                                    marker: drawer.marker,
                                     created,
                                 },
                                 placement,
@@ -3635,6 +3639,7 @@ pub(super) fn plan_capture_item(
                         capture_drawers::DrawerResolveOutcome::Create {
                             title,
                             key,
+                            marker,
                             ..
                         } => {
                             // The header would be created at the
@@ -3655,6 +3660,7 @@ pub(super) fn plan_capture_item(
                                 DrawerJson {
                                     title: title.clone(),
                                     key,
+                                    marker,
                                     created,
                                 },
                                 placement,
@@ -3691,6 +3697,7 @@ pub(super) fn plan_capture_item(
                             Some(DrawerJson {
                                 title: drawer.title,
                                 key: drawer.key,
+                                marker: drawer.marker,
                                 created: false,
                             }),
                             offset,
@@ -3700,19 +3707,27 @@ pub(super) fn plan_capture_item(
                         let title = task_block_layout::notes_create_title(
                             &contents, parent,
                         );
-                        let offset = if capture_drawers::is_prj_parent(
-                            &contents, parent,
-                        ) {
+                        let prj =
+                            capture_drawers::is_prj_parent(&contents, parent);
+                        let offset = if prj {
                             contents.len()
                         } else {
                             task_block_layout::drawer_header_offset(
                                 &contents, parent, true,
                             )
                         };
+                        // New `NOTES` headers are task drawers; a `^prj`
+                        // parent owns a `## Notes` section instead.
+                        let marker = if prj {
+                            capture_drawers::DrawerMarker::Section
+                        } else {
+                            capture_drawers::DrawerMarker::Bold
+                        };
                         (
                             Some(DrawerJson {
                                 title: title.to_string(),
                                 key: task_block_layout::NOTES_KEY.to_string(),
+                                marker,
                                 created: true,
                             }),
                             offset,

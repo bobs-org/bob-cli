@@ -609,3 +609,46 @@ fn capture_prj_drawer_promotion_round_trip() {
         .expect("read note")
         .ends_with("## Requirements\n\n- Postgres 17 minimum\n- follow up\n"));
 }
+
+#[test]
+fn capture_prj_drawer_reports_section_markers() {
+    let temp = TempDir::new("bob-cli-prj-drawer-section-marker");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("proj.md"), PROJECT_NOTE);
+
+    let run = |dry_run: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command
+            .arg("Postgres 17 minimum @proj+prj#requirements")
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("run prj drawer capture");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture JSON")
+    };
+    let dry = run(true);
+    let commit = run(false);
+    // Dry-run and commit describe the same section destination.
+    for json in [&dry, &commit] {
+        assert_eq!(
+            json["drawer"],
+            serde_json::json!({
+                "title": "Requirements",
+                "key": "REQUIREMENTS",
+                "marker": "section",
+                "created": false,
+            }),
+            "{json}"
+        );
+    }
+}

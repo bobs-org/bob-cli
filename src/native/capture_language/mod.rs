@@ -236,6 +236,7 @@ pub(crate) use self::record::ALBUM_SCHEMA_INVALID_CODE;
 pub(crate) use self::record::RECORD_ASSIST_VERSION;
 pub(crate) use self::record::RECORD_DISCOVERY_INCOMPLETE_CODE;
 pub(crate) use self::rewrite::bullet_sigil_may_need_notebook_policy;
+pub(crate) use self::rewrite::drawer_marker_may_need_notebook_policy;
 pub(crate) use self::rewrite::req_marker_may_need_notebook_policy;
 pub(crate) use self::rewrite::rewrite_draft;
 pub(crate) use self::rewrite::rewrite_draft_with;

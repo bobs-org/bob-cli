@@ -1262,12 +1262,15 @@ pub(super) struct NotePullSummaryJson {
 }
 
 /// Per-item drawer report: the matched or created drawer title, its key,
-/// and whether this item created it. `None` serializes as `null` for a
-/// plain child.
+/// the header marker that describes the resolved destination (`bold` for a
+/// task `- **Title**` header, `legacy_caps` for an existing ALL-CAPS
+/// drawer, `section` for a project `## Title` heading), and whether this
+/// item created it. `None` serializes as `null` for a plain child.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct DrawerJson {
     pub(super) title: String,
     pub(super) key: String,
+    pub(super) marker: crate::native::capture_drawers::DrawerMarker,
     pub(super) created: bool,
 }
 

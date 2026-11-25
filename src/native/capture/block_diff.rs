@@ -35,6 +35,23 @@ pub(super) struct BlockLineJson {
     /// never infer it from `[ ]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) req: Option<crate::native::task_reqs::ReqLineJson>,
+    /// Drawer annotation from the recognizer: the resolved drawer's title,
+    /// key, header marker, and whether the header holds no notes. Present
+    /// only on drawer header lines, so unrelated output stays
+    /// byte-identical. Clients draw the container from this object and
+    /// never infer it from `**`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) drawer: Option<DrawerLineJson>,
+}
+
+/// One drawer header line in a task preview: the resolved drawer plus its
+/// marker provenance and emptiness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DrawerLineJson {
+    pub(super) title: String,
+    pub(super) key: String,
+    pub(super) marker: crate::native::capture_drawers::DrawerMarker,
+    pub(super) empty: bool,
 }
 
 impl BlockLineJson {
@@ -52,6 +69,7 @@ impl BlockLineJson {
             reason: None,
             origin: None,
             req: None,
+            drawer: None,
         }
     }
 }
@@ -295,6 +313,90 @@ pub(super) struct ReqSnapshot<'a> {
     pub(super) settings: &'a note_tasks::NoteTaskSettings,
 }
 
+/// Map of 0-based note line index → drawer annotation, built from one
+/// recognizer pass over real task and `^prj` section headers (including
+/// empty headers). Task drawers win a shared line; every other line stays
+/// unmarked. Index-keyed, so duplicate text at unrelated depths annotates
+/// deterministically.
+pub(super) fn drawer_line_map(
+    contents: &str,
+    settings: &note_tasks::NoteTaskSettings,
+) -> BTreeMap<usize, DrawerLineJson> {
+    use crate::native::capture_drawers;
+    let mut map = BTreeMap::new();
+    for header in capture_drawers::project_h2_drawers(contents) {
+        map.insert(
+            header.line_index(),
+            DrawerLineJson {
+                title: header.title,
+                key: header.key,
+                marker: header.marker,
+                empty: header.entry_count == 0,
+            },
+        );
+    }
+    let scan = note_tasks::scan(contents, settings);
+    for task in scan.tasks() {
+        for header in capture_drawers::drawers(contents, task) {
+            map.insert(
+                header.line_index(),
+                DrawerLineJson {
+                    title: header.title,
+                    key: header.key,
+                    marker: header.marker,
+                    empty: header.entry_count == 0,
+                },
+            );
+        }
+    }
+    map
+}
+
+/// Fill `drawer` from the recognizer. Unchanged, added, and changed rows
+/// use the after snapshot; removed rows use the before snapshot.
+pub(super) fn annotate_drawer_lines(
+    lines: &mut [BlockLineJson],
+    before: Option<ReqSnapshot<'_>>,
+    after: Option<ReqSnapshot<'_>>,
+) {
+    let before_map = before
+        .as_ref()
+        .map(|snapshot| drawer_line_map(snapshot.contents, snapshot.settings));
+    let after_map = after
+        .as_ref()
+        .map(|snapshot| drawer_line_map(snapshot.contents, snapshot.settings));
+    let before_start =
+        before.as_ref().map(|snapshot| snapshot.start).unwrap_or(0);
+    let after_start =
+        after.as_ref().map(|snapshot| snapshot.start).unwrap_or(0);
+    let mut before_index = 0usize;
+    let mut after_index = 0usize;
+    for row in lines {
+        match row.change {
+            BlockLineChange::Removed => {
+                if let Some(map) = before_map.as_ref() {
+                    row.drawer =
+                        map.get(&(before_start + before_index)).cloned();
+                }
+                before_index += 1;
+            }
+            BlockLineChange::Added => {
+                if let Some(map) = after_map.as_ref() {
+                    row.drawer = map.get(&(after_start + after_index)).cloned();
+                }
+                after_index += 1;
+            }
+            BlockLineChange::Unchanged | BlockLineChange::Changed => {
+                if let Some(map) = after_map.as_ref() {
+                    row.drawer = map.get(&(after_start + after_index)).cloned();
+                }
+                before_index += 1;
+                after_index += 1;
+            }
+        }
+    }
+}
+
 /// Fill `req` from the recognizer. Unchanged, added, and changed rows
 /// use the after snapshot; removed rows use the before snapshot. Owner
 /// done → met and owner cancelled → moot follow from those snapshots.
@@ -349,6 +451,7 @@ pub(super) fn annotate_req_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::capture_drawers::DrawerMarker;
     use crate::native::task_reqs::ReqLineJson;
     use std::path::Path;
 
@@ -358,6 +461,19 @@ mod tests {
 
     fn req(depth: usize, state: &'static str) -> ReqLineJson {
         ReqLineJson { depth, state }
+    }
+
+    fn drawer(
+        title: &str,
+        marker: DrawerMarker,
+        empty: bool,
+    ) -> DrawerLineJson {
+        DrawerLineJson {
+            title: title.to_string(),
+            key: crate::native::capture_drawers::drawer_key(title),
+            marker,
+            empty,
+        }
     }
 
     #[test]
@@ -506,5 +622,187 @@ mod tests {
                 Some(req(1, "carried")),
             ]
         );
+    }
+
+    #[test]
+    fn annotate_drawer_lines_uses_after_snapshot_except_removed() {
+        let settings = settings();
+        let before = concat!(
+            "- [ ] #task Owner ^ex\n",
+            "\t- NOTES\n",
+            "\t\t- old note\n",
+            "\t- STALE\n",
+            "\t\t- stale note\n",
+        );
+        let after = concat!(
+            "- [ ] #task Owner ^ex\n",
+            "\t- **Notes**\n",
+            "\t\t- old note\n",
+            "\t- **Ideas**\n",
+            "\t\t- new idea\n",
+            "\t- **Empty**\n",
+        );
+        let mut lines = vec![
+            BlockLineJson::new(
+                "- [ ] #task Owner ^ex".into(),
+                0,
+                BlockLineChange::Unchanged,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t- **Notes**".into(),
+                1,
+                BlockLineChange::Changed,
+                Some("\t- NOTES".into()),
+            ),
+            BlockLineJson::new(
+                "\t\t- old note".into(),
+                2,
+                BlockLineChange::Unchanged,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t- STALE".into(),
+                1,
+                BlockLineChange::Removed,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t\t- stale note".into(),
+                2,
+                BlockLineChange::Removed,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t- **Ideas**".into(),
+                1,
+                BlockLineChange::Added,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t\t- new idea".into(),
+                2,
+                BlockLineChange::Added,
+                None,
+            ),
+            BlockLineJson::new(
+                "\t- **Empty**".into(),
+                1,
+                BlockLineChange::Added,
+                None,
+            ),
+        ];
+        annotate_drawer_lines(
+            &mut lines,
+            Some(ReqSnapshot {
+                contents: before,
+                start: 0,
+                settings: &settings,
+            }),
+            Some(ReqSnapshot {
+                contents: after,
+                start: 0,
+                settings: &settings,
+            }),
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|row| row.drawer.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                None,
+                Some(drawer("Notes", DrawerMarker::Bold, false)),
+                None,
+                Some(drawer("STALE", DrawerMarker::LegacyCaps, false)),
+                None,
+                Some(drawer("Ideas", DrawerMarker::Bold, false)),
+                None,
+                Some(drawer("Empty", DrawerMarker::Bold, true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn annotate_drawer_lines_ignores_nested_duplicates_and_marks_sections() {
+        let settings = settings();
+        // A nested `**Notes**` bullet is a note, not a drawer header, even
+        // though its text matches the direct-child header above it. The
+        // eligible `^prj` section is a section marker, and ordinary lines
+        // stay unmarked.
+        let after = concat!(
+            "- [ ] #task Owner ^ex\n",
+            "\t- **Notes**\n",
+            "\t\t- regular note\n",
+            "\t\t- **Notes**\n",
+            "\t- second note\n",
+            "## Ideas\n",
+        );
+        let after_block: Vec<String> =
+            after.lines().map(str::to_owned).collect();
+        let after_depths = vec![0, 1, 2, 2, 1, 0];
+        let mut lines = pair_lines(&[], &[], &after_block, &after_depths, true);
+        annotate_drawer_lines(
+            &mut lines,
+            None,
+            Some(ReqSnapshot {
+                contents: after,
+                start: 0,
+                settings: &settings,
+            }),
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|row| row.drawer.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                None,
+                Some(drawer("Notes", DrawerMarker::Bold, false)),
+                None,
+                None,
+                None,
+                Some(drawer("Ideas", DrawerMarker::Section, true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn annotate_drawer_lines_reads_crlf_and_tab_indentation() {
+        let settings = settings();
+        let after =
+            "- [ ] #task Owner ^ex\r\n\t- **Notes**\r\n\t\t- tabbed note\r\n";
+        let after_block: Vec<String> =
+            after.lines().map(str::to_owned).collect();
+        let after_depths = vec![0, 1, 2];
+        let mut lines = pair_lines(&[], &[], &after_block, &after_depths, true);
+        annotate_drawer_lines(
+            &mut lines,
+            None,
+            Some(ReqSnapshot {
+                contents: after,
+                start: 0,
+                settings: &settings,
+            }),
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|row| row.drawer.clone())
+                .collect::<Vec<_>>(),
+            vec![None, Some(drawer("Notes", DrawerMarker::Bold, false)), None]
+        );
+        // `lines()` strips the carriage return, so the preview row carries
+        // no terminator either.
+        assert_eq!(lines[1].text, "\t- **Notes**");
+    }
+
+    #[test]
+    fn drawer_headers_are_task_indented_vault_bullets() {
+        // Vault drawer headers sit one indent under their task; a
+        // column-zero bullet is a sibling task, never a drawer.
+        let settings = settings();
+        let contents = "- [ ] #task Owner ^ex\n- NOTES\n\t- old note\n";
+        assert!(drawer_line_map(contents, &settings).is_empty());
     }
 }

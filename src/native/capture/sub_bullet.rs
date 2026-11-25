@@ -106,6 +106,7 @@ pub(super) fn plan_sub_bullet_capture(
                 Some(DrawerJson {
                     title: drawer.title,
                     key: drawer.key,
+                    marker: drawer.marker,
                     created,
                 }),
             )
@@ -138,6 +139,7 @@ pub(super) fn plan_sub_bullet_capture(
                         Some(DrawerJson {
                             title: drawer.title,
                             key: drawer.key,
+                            marker: drawer.marker,
                             created: false,
                         }),
                     )
@@ -168,6 +170,7 @@ pub(super) fn plan_sub_bullet_capture(
                         Some(DrawerJson {
                             title: drawer.title,
                             key: drawer.key,
+                            marker: drawer.marker,
                             created,
                         }),
                     )
@@ -379,6 +382,7 @@ fn prj_section_write_plan(
         drawer: Some(DrawerJson {
             title: drawer.title,
             key: drawer.key,
+            marker: drawer.marker,
             created,
         }),
         parent_status_symbol: parent.status_symbol,

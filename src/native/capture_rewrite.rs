@@ -106,6 +106,9 @@ When the byte before --cursor is `/` or `#` glued to a single-`@` route \
 When the cursor follows the space in an authored dash-bullet `- [ ` start, it \
 reads notebook route metadata, and record route metadata when applicable, so \
 the shared capture resolver can decide whether the marker is a requirement. \
+When the cursor ends a lone-star bullet body (`- *`, or `- **` with the \
+caret between the pair), it reads the same route metadata so the shared \
+editor parser can decide whether that position admits a drawer container. \
 Every other rewrite never opens the vault, never reads the clipboard, and \
 never touches the filesystem. The rules are described below.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
@@ -248,6 +251,20 @@ and `bob capture-parse` are not rewritten. An editor client should absorb a \
 typed `]` and then a space when those keys overtype the inserted marker; \
 Backspace immediately after `[ ] ` should delete all four marker bytes as one \
 edit, whether or not this rewrite created them.\n\n\
+Drawer marker expansion (requires --cursor): when the caret ends a lone-star \
+first-level bullet body (`- *`), bob probes the draft with `- **Drawer \
+Probe**` plus a nested note and asks the shared editor parser whether that \
+exact title is an admitted container. Only then does it return `- ****` \
+with the caret parked between the pairs (`**|**`) and rule \
+'expand_drawer_marker'. A closing star already supplied by editor auto-pairing \
+(`- **` with the caret between the stars) expands the same way. Notebook and \
+record routes keep their ineligible drawer positions literal, as do nested \
+notes, route-only notebook lists, plain bullets, checkboxes, mid-line stars \
+(multiplication, emphasis, the `*task` blocking sigil), and pasted text. \
+Templates, `bob capture`, and `bob capture-parse` are not rewritten. An \
+editor client should absorb a typed `*` that overtypes the inserted pair; \
+Backspace immediately after the expansion should delete all four marker bytes \
+as one edit.\n\n\
 Bare '@@' absorption: typing a bare '@@' inside an item that already \
 carries a local destination marker (or, absent that, when the draft already \
 carries exactly one other '@@' declaration) rewrites the bare token to \
@@ -442,18 +459,24 @@ struct SourceRange {
 impl CaptureRewriteResult {
     fn new(input: String, cursor: Option<usize>) -> Self {
         // Build route policies only for the rewrites that need them:
-        // notebook metadata for a section alias or requirement-marker
-        // candidate, and record metadata for an album alias or requirement
-        // candidate with a record route. Every other rewrite stays
-        // filesystem-free.
+        // notebook metadata for a section alias, a requirement-marker
+        // candidate, or a drawer-marker candidate, and record metadata
+        // for an album alias or a marker candidate with a record route.
+        // Every other rewrite stays filesystem-free.
         let req_marker_candidate = cursor.is_some_and(|position| {
             capture_language::req_marker_may_need_notebook_policy(
+                &input, position,
+            )
+        });
+        let drawer_marker_candidate = cursor.is_some_and(|position| {
+            capture_language::drawer_marker_may_need_notebook_policy(
                 &input, position,
             )
         });
         let notebook_store = match cursor {
             Some(position)
                 if req_marker_candidate
+                    || drawer_marker_candidate
                     || capture_language::bullet_sigil_may_need_notebook_policy(
                         &input, position,
                     ) =>
@@ -470,7 +493,7 @@ impl CaptureRewriteResult {
                 &input, position,
             )
         });
-        let record_store = if req_marker_candidate
+        let record_store = if (req_marker_candidate || drawer_marker_candidate)
             && !capture_language::candidate_dirs(&input).is_empty()
         {
             Some(super::capture_record::record_policy_for_draft(

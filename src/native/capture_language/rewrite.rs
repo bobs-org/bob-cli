@@ -65,6 +65,7 @@ pub(crate) enum RewriteRule {
     AbsorbLocalMarker,
     AbsorbDeclaration,
     ExpandReqMarker,
+    ExpandDrawerMarker,
     SwitchBlockIdSeparator,
     AttachRelationLabel,
     ToggleRelationDirection,
@@ -78,6 +79,7 @@ impl RewriteRule {
             Self::AbsorbLocalMarker => "absorb_local_marker",
             Self::AbsorbDeclaration => "absorb_declaration",
             Self::ExpandReqMarker => "expand_req_marker",
+            Self::ExpandDrawerMarker => "expand_drawer_marker",
             Self::SwitchBlockIdSeparator => "switch_block_id_separator",
             Self::AttachRelationLabel => "attach_relation_label",
             Self::ToggleRelationDirection => "toggle_relation_direction",
@@ -119,11 +121,12 @@ pub(crate) fn rewrite_draft(
 /// Apply the capture grammar's editor typing assists with optional
 /// notebook and record route policies.
 ///
-/// Policy-aware assists include the requirement marker expansion, the `/`
-/// -> `#` alias at a first-level bullet start (notebook section menu), and
-/// the same alias glued to `@route` (literal `/` on an album record route).
-/// The caller performs any vault I/O (see
-/// [`req_marker_may_need_notebook_policy`],
+/// Policy-aware assists include the requirement marker expansion, the
+/// drawer marker expansion, the `/` -> `#` alias at a first-level bullet
+/// start (notebook section menu), and the same alias glued to `@route`
+/// (literal `/` on an album record route). The caller performs any vault
+/// I/O (see [`req_marker_may_need_notebook_policy`],
+/// [`drawer_marker_may_need_notebook_policy`],
 /// [`bullet_sigil_may_need_notebook_policy`], and
 /// [`slash_route_may_need_album_policy`]); this function itself never
 /// touches the filesystem.
@@ -137,6 +140,12 @@ pub(crate) fn rewrite_draft_with(
     }
     if let Some(position) = cursor
         && let Some(rewrite) = expand_req_marker(raw_text, position, policies)
+    {
+        return rewrite;
+    }
+    if let Some(position) = cursor
+        && let Some(rewrite) =
+            expand_drawer_marker(raw_text, position, policies)
     {
         return rewrite;
     }
@@ -239,6 +248,149 @@ fn expand_req_marker(
         text,
         cursor: Some(marker_end),
         summary: Some("Expanded requirement marker".to_string()),
+        notices: Vec::new(),
+        alias: None,
+    })
+}
+
+/// Cheap lexical preflight for the drawer-marker typing rewrite: true when
+/// the byte before `cursor` is a `*` that completes a lone-star (or an
+/// editor-autopaired `**`) bullet body. The caller builds its bounded
+/// notebook/record policy reads only when this returns true; the shared
+/// editor parser remains the authority on whether that position admits a
+/// container. Mid-line stars (multiplication, emphasis, the `*task`
+/// blocking sigil after body text), checkbox content, and non-empty bodies
+/// all return false.
+pub(crate) fn drawer_marker_may_need_notebook_policy(
+    raw_text: &str,
+    cursor: usize,
+) -> bool {
+    drawer_star_site(raw_text, cursor).is_some()
+}
+
+/// A lone-star (or autopaired-star) bullet body ending at `cursor`: the byte
+/// offset of the typed `*` and whether the editor already supplied its
+/// closing pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DrawerStarSite {
+    star: usize,
+    paired: bool,
+}
+
+/// Locate the typed drawer star: the byte before `cursor` is `*`, the text
+/// before it is a bullet start (indent, one `-`/`*`/`+` marker, blanks),
+/// and the rest of the line is either empty (lone star) or exactly the
+/// autopaired closing `*` (cursor between the pair with nothing else on the
+/// line). Anything else stays literal.
+fn drawer_star_site(raw_text: &str, cursor: usize) -> Option<DrawerStarSite> {
+    if cursor == 0 || cursor > raw_text.len() {
+        return None;
+    }
+    if !raw_text.is_char_boundary(cursor)
+        || !raw_text.is_char_boundary(cursor - 1)
+        || raw_text.as_bytes().get(cursor - 1) != Some(&b'*')
+    {
+        return None;
+    }
+    let line_start = raw_text[..cursor - 1]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let prefix = raw_text.get(line_start..cursor - 1)?;
+    let after_indent = prefix.trim_start_matches([' ', '\t']);
+    let marker = after_indent.strip_prefix(['-', '*', '+'])?;
+    if !marker.chars().all(|cell| cell == ' ' || cell == '\t') {
+        return None;
+    }
+    let paired = raw_text.as_bytes().get(cursor) == Some(&b'*');
+    if paired && !raw_text.is_char_boundary(cursor + 1) {
+        return None;
+    }
+    let rest = raw_text.get(cursor + usize::from(paired)..)?;
+    // The star must be the whole body: after an autopaired pair nothing
+    // else may sit on the line, and after a lone star only blanks may
+    // follow. This keeps `**bold**` caret jumps, `- * task` prose, and
+    // `- ** Title` starts literal.
+    if !rest.split('\n').next().unwrap_or("").trim().is_empty() {
+        return None;
+    }
+    Some(DrawerStarSite {
+        star: cursor - 1,
+        paired,
+    })
+}
+
+/// Expand a lone bullet `*` into the incomplete `****` drawer-marker state,
+/// with the caret parked between the pairs (`**|**`). An editor-autopaired
+/// `**` with the caret between the stars expands the same way. The edit is
+/// admitted only when the shared editor parser accepts a hypothetical bold
+/// title plus a nested note in that position, so every eligible creation
+/// family (new and note-less existing tasks, project-note sections,
+/// notebook seeds, record groups) expands while route-only notebook lists,
+/// nested notes, plain bullets, checkboxes, and structural ineligibility
+/// stay literal. No cursor means no typing assist; paste, templates, and
+/// ordinary `bob capture` submissions never rewrite.
+fn expand_drawer_marker(
+    raw_text: &str,
+    cursor: usize,
+    policies: RewritePolicies<'_>,
+) -> Option<DraftRewrite> {
+    let site = drawer_star_site(raw_text, cursor)?;
+    let line_start = raw_text[..site.star]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let line_end = raw_text[site.star..]
+        .find('\n')
+        .map_or(raw_text.len(), |offset| site.star + offset);
+    let prefix = raw_text.get(line_start..site.star)?.to_string();
+    let indent: String = prefix
+        .chars()
+        .take_while(|cell| *cell == ' ' || *cell == '\t')
+        .collect();
+    // The probe title is creatable in every family (alphanumeric, no
+    // reserved key), so admission reports the position, never the title.
+    let probe = "Drawer Probe";
+    let probe_line = format!("{prefix}**{probe}**");
+    let probe_text = format!(
+        "{}{}\n{}  - probe note{}",
+        &raw_text[..line_start],
+        probe_line,
+        indent,
+        &raw_text[line_end..],
+    );
+    let options = EditorParseOptions {
+        record_policy: policies.record,
+        notebook_policy: policies.notebook,
+        ..EditorParseOptions::routing_off()
+    };
+    let parsed =
+        super::editor_parse::parse_for_editor_with(&probe_text, &options);
+    let title_start = line_start + prefix.len() + 2;
+    let title_end = title_start + probe.len();
+    let admitted = parsed.spans.iter().any(|span| {
+        span.kind == SpanKind::DrawerBullet
+            && span.start == title_start
+            && span.end == title_end
+    });
+    if !admitted {
+        return None;
+    }
+    let (replacement, new_cursor) = if site.paired {
+        ("**".to_string(), cursor + 2)
+    } else {
+        ("***".to_string(), cursor + 1)
+    };
+    let edits = vec![TextEdit {
+        start: cursor,
+        end: cursor,
+        replacement,
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::ExpandDrawerMarker),
+        edits,
+        text,
+        cursor: Some(new_cursor),
+        summary: Some("Expanded drawer marker".to_string()),
         notices: Vec::new(),
         alias: None,
     })

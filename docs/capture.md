@@ -9625,8 +9625,8 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 Applies the capture grammar's automatic draft rewrites -- the
 block-ID separator toggle, relation-label pipe attach, sigil aliases, global
 destination collapse, relation direction toggle, requirement marker expansion,
-and bare `@@` absorption -- and reports the resulting edits, cursor, and a
-human summary. It is read-only and takes no `--bob-dir`: rewrites are lexical
+drawer marker expansion, and bare `@@` absorption -- and reports the
+resulting edits, cursor, and a human summary. It is read-only and takes no `--bob-dir`: rewrites are lexical
 except for bounded route-policy reads.
 When the byte before `--cursor` is `/` at a first-level bullet start
 (`- /`), it reads notebook route frontmatter from the configured vault
@@ -9636,6 +9636,9 @@ that one album head to decide whether `/` stays literal. When the cursor
 follows the space in a dash-bullet `- [ ` start, it reads notebook route
 metadata and, when the draft contains a record route, record route metadata
 so the shared resolver can decide whether that checkbox is a requirement.
+When the cursor ends a lone-star bullet body (`- *`, or `- **` with the
+caret between the pair), it reads the same route metadata so the shared
+editor parser can decide whether that position admits a drawer container.
 Every other rewrite never opens the vault, never reads the clipboard or the
 URL routing config, and never touches the filesystem. `bob capture-parse` reads that config unless
 `--no-ref` is set; see [above](#bob-capture-parse).
@@ -9664,6 +9667,31 @@ duplicates. Backspace with the cursor immediately after `[ ] ` deletes the
 whole four-byte marker in one edit, whether it was produced by this rewrite or
 was already present. For example, a marker span over `[ ] ` lets a client make
 Backspace leave the original `- ` bullet prefix intact.
+
+**Drawer marker expansion.** With `--cursor`, a lone star ending a
+first-level bullet body (`- *`) is expanded into the incomplete `****`
+drawer-marker state only when probing the draft -- that line as
+`- **Drawer Probe**` plus a nested note -- through the shared editor parser
+produces the matching `drawer_bullet` span. This makes the editor parser
+authoritative for every eligible creation family (new and note-less existing
+tasks, project-note sections, notebook seeds, record groups) while route-only
+notebook lists, nested notes, plain bullets, checkboxes, mid-line stars
+(multiplication, emphasis, the `*task` blocking sigil), and structural
+ineligibility stay literal. A closing star already supplied by editor
+auto-pairing (`- **` with the caret between the stars) expands the same way.
+The returned draft contains `- ****`, the cursor lands parked between the
+pairs (`**|**`), and the rule is `expand_drawer_marker`. The rewrite is one
+insert edit at the caret. It does not run on pasted text, templates,
+`bob capture`, or `bob capture-parse`.
+
+Editor clients handle the next keys locally: a typed `*` that overtypes the
+inserted pair is absorbed instead of inserting a duplicate. Backspace
+immediately after the expansion deletes all four marker bytes as one edit,
+whether or not this rewrite created them. For example, a `drawer_marker`
+span pair over `****` with an `interactive_placeholder` between them lets a
+client keep Backspace leaving the original `- ` bullet prefix intact. The two
+`drawer_marker` spans cover the opening and closing `**`; the `drawer_bullet`
+span covers the title bytes only.
 
 **Block-ID separator toggle.** Typing `^` immediately after a complete
 plain `@route:id` or `@route+id`, `:` after `@route^id` or `@route+id`, or `+`

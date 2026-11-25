@@ -810,6 +810,25 @@ impl TaskBlockTracker {
                         settings: &settings,
                     }),
                 );
+                // Drawer headers resolve against the same snapshots:
+                // removed rows read the before note, every other row the
+                // final note. Pomodoro and record previews share this
+                // line model but never mark non-task headings.
+                annotate_drawer_lines(
+                    &mut lines,
+                    (!created && !before_block.is_empty()).then_some(
+                        ReqSnapshot {
+                            contents: &before_note,
+                            start: before_start,
+                            settings: &settings,
+                        },
+                    ),
+                    Some(ReqSnapshot {
+                        contents: &final_text,
+                        start: final_start,
+                        settings: &settings,
+                    }),
+                );
                 ordered.push((
                     ordinal,
                     TaskBlockJson {

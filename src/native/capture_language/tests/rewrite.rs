@@ -3,6 +3,7 @@
 use super::super::alias_tip::AliasId;
 use super::super::editor_model::{EditorMode, Severity, SpanKind};
 use super::super::editor_parse::*;
+use super::super::notebook::{NotebookRouteInfo, NotebookRoutePolicy};
 use super::super::record::{
     AlbumRouteMeta, PerRouteDecision, RecordRoutePolicy,
 };
@@ -3191,4 +3192,192 @@ fn rewrite_draft_still_collapses_global_album_slash() {
     assert_eq!(rewrite.rule, Some(RewriteRule::CollapseGlobalDestination));
     assert_eq!(rewrite.text, "@eat#");
     assert_eq!(rewrite.alias, None);
+}
+
+fn drawer_notebook_policy() -> NotebookRoutePolicy {
+    let mut policy = NotebookRoutePolicy::default();
+    policy.insert(
+        "dev".into(),
+        NotebookRouteInfo {
+            title: "Developer tools".into(),
+            summary: Some("Tools".into()),
+            owner: Some("dev".into()),
+            breadcrumb: vec!["dev".into(), "Developer tools".into()],
+            sections: vec![super::super::notebook::NotebookSection {
+                title: "Git".into(),
+                line_index: 6,
+            }],
+        },
+    );
+    policy
+}
+
+fn drawer_policies<'a>(
+    notebook: &'a NotebookRoutePolicy,
+    record: &'a RecordRoutePolicy,
+) -> RewritePolicies<'a> {
+    RewritePolicies {
+        notebook: Some(notebook),
+        record: Some(record),
+    }
+}
+
+fn assert_drawer_expanded(raw: &str, cursor: usize, paired: bool) {
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(
+        rewrite.rule,
+        Some(RewriteRule::ExpandDrawerMarker),
+        "{raw:?} at {cursor}"
+    );
+    assert_eq!(
+        RewriteRule::ExpandDrawerMarker.code(),
+        "expand_drawer_marker"
+    );
+    let (insert, new_cursor) = if paired {
+        ("**", cursor + 2)
+    } else {
+        ("***", cursor + 1)
+    };
+    let mut expected = raw.to_string();
+    expected.insert_str(cursor, insert);
+    assert_eq!(rewrite.text, expected, "{raw:?} at {cursor}");
+    assert_eq!(rewrite.cursor, Some(new_cursor), "{raw:?} at {cursor}");
+    assert_eq!(
+        rewrite.summary.as_deref(),
+        Some("Expanded drawer marker"),
+        "{raw:?} at {cursor}"
+    );
+    assert_eq!(
+        rewrite.edits,
+        vec![TextEdit {
+            start: cursor,
+            end: cursor,
+            replacement: insert.to_string(),
+        }],
+        "{raw:?} at {cursor}"
+    );
+    // Feeding the expansion back in is a no-op: the caret no longer ends a
+    // lone star.
+    let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+    assert_eq!(again.rule, None, "{raw:?} at {cursor}");
+    assert_eq!(again.text, rewrite.text, "{raw:?} at {cursor}");
+}
+
+#[test]
+fn rewrite_draft_expands_a_lone_drawer_star() {
+    let raw = "Buy milk @dev\n- *";
+    assert_drawer_expanded(raw, raw.len(), false);
+}
+
+#[test]
+fn rewrite_draft_expands_an_autopaired_drawer_star() {
+    let raw = "Buy milk @dev\n- **";
+    assert_drawer_expanded(raw, raw.len() - 1, true);
+}
+
+#[test]
+fn rewrite_draft_expands_drawer_stars_after_unicode() {
+    let raw = "Café @dev\n- *";
+    assert_eq!(raw.len(), "Café @dev\n- *".len());
+    assert_drawer_expanded(raw, raw.len(), false);
+    let paired = "Café @dev\n- **";
+    assert_drawer_expanded(paired, paired.len() - 1, true);
+}
+
+#[test]
+fn rewrite_draft_expands_drawer_stars_without_a_route() {
+    assert_drawer_expanded("Buy milk\n- *", "Buy milk\n- *".len(), false);
+}
+
+#[test]
+fn rewrite_draft_expands_drawer_stars_for_note_less_tasks() {
+    let raw = "@dev+abc\n- *";
+    assert_drawer_expanded(raw, raw.len(), false);
+}
+
+#[test]
+fn rewrite_draft_expands_drawer_stars_for_project_note_sections() {
+    let raw = "New section @file^abc@\n- *";
+    assert_drawer_expanded(raw, raw.len(), false);
+}
+
+#[test]
+fn rewrite_draft_expands_drawer_stars_for_records_and_notebook_seeds() {
+    let notebook = drawer_notebook_policy();
+    let record = RecordRoutePolicy::absent()
+        .insert_route("eat".to_owned(), album_valid_decision());
+    let policies = drawer_policies(&notebook, &record);
+    for raw in ["Ramen Nagi @eat/\n- *", "Notes @dev^nvim@ %n\n- *"] {
+        let rewrite = rewrite_draft_with(raw, Some(raw.len()), policies);
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandDrawerMarker),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, format!("{raw}***"), "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(raw.len() + 1), "{raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_leaves_ineligible_drawer_stars_literal() {
+    let notebook = drawer_notebook_policy();
+    let record = RecordRoutePolicy::absent()
+        .insert_route("eat".to_owned(), album_valid_decision());
+    let policies = drawer_policies(&notebook, &record);
+    // Nested notes, plain bullets, checkboxes, route-only notebook lists,
+    // non-empty bodies, and ordinary prose stars never expand.
+    for raw in [
+        "Buy milk @dev\n  - *",
+        "- *",
+        "Buy milk @dev\n- [ ] *",
+        "@dev+parent-id\n- *",
+        "Buy milk @dev\n- * task",
+        "Buy milk @dev\n- **bold**",
+        "Fix it *",
+        "Buy 2 * 3",
+        "Buy *milk*",
+        "Buy milk @dev\n- *\n  trailing",
+    ] {
+        let rewrite = rewrite_draft_with(raw, Some(raw.len()), policies);
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+    // Without a cursor there is no typing assist, even in an eligible
+    // position; templates never rewrite either.
+    for raw in ["Buy milk @dev\n- *", "Buy milk @dev\n- **"] {
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+    let template = "Task {0} %t\n- *\n\nvalue";
+    let rewrite = rewrite_draft(template, Some(template.len() - 7));
+    assert_eq!(rewrite.rule, None, "{template:?}");
+}
+
+#[test]
+fn drawer_star_preflight_gates_the_policy_read() {
+    for (raw, cursor) in [
+        ("Buy milk @dev\n- *", "Buy milk @dev\n- *".len()),
+        ("Buy milk @dev\n- **", "Buy milk @dev\n- **".len() - 1),
+        ("  - *", 5),
+    ] {
+        assert!(
+            drawer_marker_may_need_notebook_policy(raw, cursor),
+            "{raw:?} at {cursor} should gate the policy read"
+        );
+    }
+    for (raw, cursor) in [
+        ("Buy milk @dev\n- *", 0),
+        ("Fix it *", "Fix it *".len()),
+        ("Buy 2 * 3", "Buy 2 *".len()),
+        ("Buy milk @dev\n- [ ] *", "Buy milk @dev\n- [ ] *".len()),
+        ("Buy milk @dev\n- * task", "Buy milk @dev\n- *".len()),
+        ("Buy milk @dev", "Buy milk @dev".len()),
+    ] {
+        assert!(
+            !drawer_marker_may_need_notebook_policy(raw, cursor),
+            "{raw:?} at {cursor} must not gate the policy read"
+        );
+    }
 }

@@ -2068,3 +2068,77 @@ fn capture_rewrite_json_keeps_slash_literal_after_an_album_route() {
         "{json}"
     );
 }
+
+#[test]
+fn capture_rewrite_help_describes_drawer_marker_expansion() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-rewrite help");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("Drawer marker expansion")
+            && out.contains("expand_drawer_marker"),
+        "capture-rewrite help should describe drawer marker expansion:\n{out}"
+    );
+}
+
+#[test]
+fn capture_rewrite_json_expands_a_lone_drawer_star() {
+    let temp = TempDir::new("bob-cli-rewrite-drawer-marker");
+    let vault = notebook_alias_vault(&temp);
+    let draft = "Buy milk @dev\n- *";
+    let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+    assert_eq!(json["changed"], true, "{json}");
+    assert_eq!(json["text"], "Buy milk @dev\n- ****", "{json}");
+    assert_eq!(json["cursor"], draft.len() + 1, "{json}");
+    assert_eq!(json["rule"], "expand_drawer_marker", "{json}");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            {
+                "range": { "start": draft.len(), "end": draft.len() },
+                "replacement": "***",
+            },
+        ]),
+        "{json}"
+    );
+
+    // An editor-autopaired closing star expands the same way, with the
+    // caret parked between the pairs.
+    let paired = "Buy milk @dev\n- **";
+    let json = rewrite_with_vault_json(paired, Some(paired.len() - 1), &vault);
+    assert_eq!(json["changed"], true, "{json}");
+    assert_eq!(json["text"], "Buy milk @dev\n- ****", "{json}");
+    assert_eq!(json["cursor"], paired.len() + 1, "{json}");
+    assert_eq!(json["rule"], "expand_drawer_marker", "{json}");
+
+    // Feeding the expansion back in is a no-op.
+    let expanded = "Buy milk @dev\n- ****";
+    let json =
+        rewrite_with_vault_json(expanded, Some(expanded.len() - 2), &vault);
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], expanded, "{json}");
+}
+
+#[test]
+fn capture_rewrite_json_keeps_ineligible_drawer_stars_literal() {
+    let temp = TempDir::new("bob-cli-rewrite-drawer-marker-literal");
+    let vault = notebook_alias_vault(&temp);
+    // The `*` blocking sigil after body text, a nested bullet, and a
+    // route-only notebook list never expand.
+    for draft in ["Fix it *", "Buy milk @dev\n  - *", "@dev_tools+parent\n- *"]
+    {
+        let json = rewrite_with_vault_json(draft, Some(draft.len()), &vault);
+        assert_eq!(json["changed"], false, "{draft}: {json}");
+        assert_eq!(json["text"], draft, "{draft}: {json}");
+    }
+    // Without a cursor there is no typing assist.
+    let draft = "Buy milk @dev\n- *";
+    let json = rewrite_with_vault_json(draft, None, &vault);
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], draft, "{json}");
+}

@@ -296,6 +296,99 @@ fn preview_and_commit(
     (run(true), run(false))
 }
 
+#[test]
+fn drawer_reports_carry_marker_provenance_and_preview_annotations() {
+    let temp = TempDir::new("bob-cli-drawer-marker-json");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("foo.md"),
+        concat!(
+            "- [ ] #task Parent [created:: 2026-01-01] ^bar\n",
+            "\t- NOTES\n",
+            "\t\t- first\n",
+        ),
+    );
+
+    // An existing legacy drawer reports its own marker; dry-run and commit
+    // describe the same destination.
+    let (preview, commit) =
+        preview_and_commit(&vault, "@foo+bar\n- #notes\n  - second");
+    let preview = preview.unwrap_or_else(|error| panic!("preview: {error}"));
+    let commit = commit.unwrap_or_else(|error| panic!("commit: {error}"));
+    for json in [&preview, &commit] {
+        assert_eq!(
+            json["notes"][0]["drawer"],
+            serde_json::json!({
+                "title": "NOTES",
+                "key": "NOTES",
+                "marker": "legacy_caps",
+                "created": false,
+            }),
+            "{json}"
+        );
+    }
+    let block = &commit["task_blocks"][0];
+    let header = block["lines"]
+        .as_array()
+        .expect("lines array")
+        .iter()
+        .find(|row| row["text"] == "\t- NOTES")
+        .expect("legacy header line");
+    assert_eq!(
+        header["drawer"],
+        serde_json::json!({
+            "title": "NOTES",
+            "key": "NOTES",
+            "marker": "legacy_caps",
+            "empty": false,
+        }),
+        "{block}"
+    );
+    let note = block["lines"]
+        .as_array()
+        .expect("lines array")
+        .iter()
+        .find(|row| row["text"] == "\t\t- first")
+        .expect("drawer note line");
+    assert!(note.get("drawer").is_none(), "{block}");
+
+    // A created drawer reports the bold marker on both responses.
+    let (preview, commit) =
+        preview_and_commit(&vault, "@foo+bar\n- #ideas\n  - second");
+    let preview = preview.unwrap_or_else(|error| panic!("preview: {error}"));
+    let commit = commit.unwrap_or_else(|error| panic!("commit: {error}"));
+    for json in [&preview, &commit] {
+        assert_eq!(
+            json["notes"][0]["drawer"],
+            serde_json::json!({
+                "title": "Ideas",
+                "key": "IDEAS",
+                "marker": "bold",
+                "created": true,
+            }),
+            "{json}"
+        );
+    }
+    let block = &commit["task_blocks"][0];
+    let header = block["lines"]
+        .as_array()
+        .expect("lines array")
+        .iter()
+        .find(|row| row["text"] == "\t- **Ideas**")
+        .expect("bold header line");
+    assert_eq!(
+        header["drawer"],
+        serde_json::json!({
+            "title": "Ideas",
+            "key": "IDEAS",
+            "marker": "bold",
+            "empty": false,
+        }),
+        "{block}"
+    );
+}
+
 fn vault_files(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];

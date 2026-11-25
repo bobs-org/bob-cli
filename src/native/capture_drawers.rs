@@ -295,6 +295,7 @@ fn place_candidates(drawers: &[Drawer]) -> Vec<PlaceCandidate> {
 fn map_drawer_outcome(
     outcome: PlaceOutcome,
     drawers: &[Drawer],
+    scope: DrawerScope,
 ) -> Result<DrawerResolved, DrawerResolveError> {
     match outcome {
         PlaceOutcome::Existing(item) => {
@@ -320,7 +321,12 @@ fn map_drawer_outcome(
             slug,
             warning,
         } => Ok(DrawerResolved {
-            outcome: DrawerResolveOutcome::Create { title, key, slug },
+            outcome: DrawerResolveOutcome::Create {
+                title,
+                key,
+                slug,
+                marker: scope.create_marker(),
+            },
             created: true,
             warning,
         }),
@@ -914,6 +920,14 @@ impl DrawerScope {
             Self::ProjectSection => "section",
         }
     }
+
+    /// The header marker a created drawer carries in this scope.
+    pub(crate) fn create_marker(self) -> DrawerMarker {
+        match self {
+            Self::Task => DrawerMarker::Bold,
+            Self::ProjectSection => DrawerMarker::Section,
+        }
+    }
 }
 
 /// Commit-time H2 resolution for a `^prj` target: structural and reserved
@@ -1173,6 +1187,10 @@ pub(crate) enum DrawerResolveOutcome {
         title: String,
         key: String,
         slug: String,
+        /// The marker the writer emits for this destination: `bold` for a
+        /// task `- **Title**` header, `section` for a project `## Title`
+        /// heading. Existing drawers keep their own `drawer.marker`.
+        marker: DrawerMarker,
     },
 }
 
@@ -1235,7 +1253,7 @@ pub(crate) fn resolve_drawer_for_write(
             is_reserved,
         ),
     };
-    map_drawer_outcome(outcome, drawers)
+    map_drawer_outcome(outcome, drawers, scope)
 }
 
 /// The `reserved_drawer` refusal for a managed key, naming the key the
