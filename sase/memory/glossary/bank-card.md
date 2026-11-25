@@ -5,10 +5,12 @@ aliases:
   - setup panel
 ---
 
-A [[property-card]] rendering of bank state. The `bob-bank` fences render
-read-only views: `view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`,
-and `view: subscriptions` on `subscriptions.md`. The bank card under `# 🏦 Bank`
-(formerly the Setup panel) draws `bob bank config` categories, accounts, rules,
-and findings; `==`, ⊞ Edit, or Command Mode opens the bank card editor.
-Painting writes nothing and mobile stays read-only. Not the [[bank-badge]],
-the Bank Period Charts panel, or a Stats fact. See `docs/bank.md`.
+A [[property-card]] view of bank state. `bob-bank` fences show the queue
+(`bank.md`), month (`bank/YYYY-MM.md`), and subscriptions (`subscriptions.md`).
+On `bank.md`, the card owns the note top and hides native Properties only while
+source/cache evidence, confirmed `props_v1`, and editor routing agree; otherwise
+native Properties and the existing per-row `bank` fallback return. Under
+`# 🏦 Bank`, it shows `bob bank config` categories, accounts, rules, and findings.
+Setup folds when healthy; `_` toggles it, and `==`, ⊞ Setup, or Command Mode
+opens the editor. Painting never writes; mobile remains read-only. Not the
+[[bank-badge]], Bank Period Charts, or a Stats fact. See `docs/bank.md`.
