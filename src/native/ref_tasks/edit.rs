@@ -75,8 +75,10 @@ pub(crate) fn locate_original_line(
 /// `planned_index` is where the locator saw it. Only the checkbox mark —
 /// and, on close, a missing `[completion:: DATE]`/`[cancelled:: DATE]` stamp
 /// before the trailing ID — may change; children, fields, IDs, and line
-/// endings are preserved.
+/// endings are preserved. The staged note is settled before staging so a
+/// later reconcile plans nothing note-local.
 pub(crate) fn edit_reading_task_checkbox(
+    bob_dir: &Path,
     destination: &Path,
     planned_index: usize,
     original_line: &str,
@@ -109,6 +111,16 @@ pub(crate) fn edit_reading_task_checkbox(
             });
         }
         let updated = splice_line(&contents, index, &flipped);
+        let updated = destination
+            .strip_prefix(bob_dir)
+            .ok()
+            .map(|relative| {
+                crate::native::task_settle::SettleContext::for_vault(bob_dir)
+                    .settle_written_note(relative, &updated)
+            })
+            .filter(|settled| settled.changed)
+            .map(|settled| settled.contents)
+            .unwrap_or(updated);
         let staged = StagedTextFile {
             target: destination.to_path_buf(),
             target_existed: true,
@@ -241,8 +253,8 @@ mod tests {
         let temp = vault();
         let dest = temp.path().join("sase.md");
         write(&dest, &format!("# Sase\n\n{LINE}\n"));
-        let out =
-            edit_reading_task_checkbox(&dest, 2, LINE, 'x').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, LINE, 'x')
+            .expect("edit");
         assert_eq!(out.line_index, 2);
         assert!(out.wrote);
         assert!(out.task_line.starts_with("- [x]"), "{}", out.task_line);
@@ -265,8 +277,8 @@ mod tests {
                 "# Sase\n\n- [ ] unrelated one\n- [ ] unrelated two\n{LINE}\n"
             ),
         );
-        let out =
-            edit_reading_task_checkbox(&dest, 2, LINE, '/').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, LINE, '/')
+            .expect("edit");
         assert_eq!(out.line_index, 4);
         assert!(out.task_line.starts_with("- [/]"), "{}", out.task_line);
     }
@@ -277,18 +289,21 @@ mod tests {
         let dest = temp.path().join("sase.md");
         // Deleted: the line is gone everywhere.
         write(&dest, "# Sase\n\n- [ ] something else\n");
-        let error = edit_reading_task_checkbox(&dest, 2, LINE, 'x')
-            .expect_err("deleted must fail");
+        let error =
+            edit_reading_task_checkbox(temp.path(), &dest, 2, LINE, 'x')
+                .expect_err("deleted must fail");
         assert_eq!(error, READING_TASK_CHANGED);
         // Changed: same index holds different bytes, no copy elsewhere.
         write(&dest, "# Sase\n\n- [ ] #task #ref [[ref/papers/x|X]] edited title [created::2026-10-09] ^ref-x\n");
-        let error = edit_reading_task_checkbox(&dest, 2, LINE, 'x')
-            .expect_err("changed must fail");
+        let error =
+            edit_reading_task_checkbox(temp.path(), &dest, 2, LINE, 'x')
+                .expect_err("changed must fail");
         assert_eq!(error, READING_TASK_CHANGED);
         // Duplicated: two equal lines, planned index no longer matches.
         write(&dest, &format!("# Sase\n\n{LINE}\n\n{LINE}\n"));
-        let error = edit_reading_task_checkbox(&dest, 0, LINE, 'x')
-            .expect_err("ambiguous must fail");
+        let error =
+            edit_reading_task_checkbox(temp.path(), &dest, 0, LINE, 'x')
+                .expect_err("ambiguous must fail");
         assert_eq!(error, READING_TASK_CHANGED);
     }
 
@@ -298,8 +313,8 @@ mod tests {
         let dest = temp.path().join("sase.md");
         let before = format!("# Sase\r\n\r\n{LINE}\r\n\r\n- [ ] neighbor\r\n");
         write(&dest, &before);
-        let out =
-            edit_reading_task_checkbox(&dest, 2, LINE, '*').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, LINE, '*')
+            .expect("edit");
         let contents = std::fs::read_to_string(&dest).expect("read");
         assert!(contents.contains("\r\n"), "{contents:?}");
         // No bare-LF line ending survived: every `\n` follows a `\r`.
@@ -327,7 +342,8 @@ mod tests {
         let stamped = "- [x] #task #ref [[ref/papers/x|X]] [created::2026-10-01] [completion:: 2026-10-02] ^ref-x";
         write(&dest, &format!("# Sase\n\n{stamped}\n"));
         let out =
-            edit_reading_task_checkbox(&dest, 2, stamped, 'x').expect("edit");
+            edit_reading_task_checkbox(temp.path(), &dest, 2, stamped, 'x')
+                .expect("edit");
         assert!(!out.wrote);
         assert_eq!(out.task_line, stamped);
         assert_eq!(
@@ -348,8 +364,8 @@ mod tests {
             &dest,
             &format!("# Sase\n\n{LINE}\n\n- [ ] user's own task\n"),
         );
-        let out =
-            edit_reading_task_checkbox(&dest, 2, LINE, '/').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, LINE, '/')
+            .expect("edit");
         assert!(out.wrote);
         let contents = std::fs::read_to_string(&dest).expect("read");
         assert!(contents.contains("- [ ] user's own task"), "{contents}");
@@ -360,8 +376,9 @@ mod tests {
     fn missing_destination_fails_before_any_write() {
         let temp = vault();
         let dest = temp.path().join("gone.md");
-        let error = edit_reading_task_checkbox(&dest, 0, LINE, 'x')
-            .expect_err("missing must fail");
+        let error =
+            edit_reading_task_checkbox(temp.path(), &dest, 0, LINE, 'x')
+                .expect_err("missing must fail");
         assert_eq!(error, READING_TASK_CHANGED);
         assert!(!dest.exists());
     }
@@ -375,7 +392,8 @@ mod tests {
             ">> > - [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
         write(&dest, &format!("# Sase\n\n{quoted}\n\n{nested}\n"));
         let out =
-            edit_reading_task_checkbox(&dest, 2, quoted, 'x').expect("edit");
+            edit_reading_task_checkbox(temp.path(), &dest, 2, quoted, 'x')
+                .expect("edit");
         assert!(out.task_line.starts_with("> - [x]"), "{}", out.task_line);
         assert!(out.task_line.ends_with("^ref-x"), "{}", out.task_line);
         let contents = std::fs::read_to_string(&dest).expect("read");
@@ -397,8 +415,8 @@ mod tests {
         );
         // Write raw bytes to keep the mixed endings exact.
         std::fs::write(&dest, &before).expect("write");
-        let out =
-            edit_reading_task_checkbox(&dest, 2, LINE, '*').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, LINE, '*')
+            .expect("edit");
         let after = std::fs::read(&dest).expect("read");
         let after_str = String::from_utf8(after.clone()).expect("utf8");
         assert!(after_str.contains(&out.task_line), "{after_str:?}");
@@ -447,8 +465,8 @@ mod preservation_tests {
         let dest = temp.path().join("sase.md");
         let line = "- [ ] #task #ref [[ref/papers/x|X]] (theme::  WRITE) [created::2026-10-09] ^ref-x";
         write(&dest, &format!("# Sase\n\n{line}\n"));
-        let out =
-            edit_reading_task_checkbox(&dest, 2, line, 'x').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, line, 'x')
+            .expect("edit");
         assert_eq!(
             out.task_line,
             "- [x] #task #ref [[ref/papers/x|X]] (theme::  WRITE) [created::2026-10-09] [completion:: 2026-10-09] ^ref-x"
@@ -466,8 +484,8 @@ mod preservation_tests {
         let dest = temp.path().join("sase.md");
         let line = "- [ ] #task #ref [[ref/papers/x|X]] [type:: WRITE] [created::2026-10-09] ^ref-x";
         write(&dest, &format!("# Sase\n\n{line}\n"));
-        let out =
-            edit_reading_task_checkbox(&dest, 2, line, 'x').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, line, 'x')
+            .expect("edit");
         assert_eq!(
             out.task_line,
             "- [x] #task #ref [[ref/papers/x|X]] [type:: WRITE] [created::2026-10-09] [completion:: 2026-10-09] ^ref-x"
@@ -488,8 +506,8 @@ mod preservation_tests {
         let dest = temp.path().join("sase.md");
         let line = "- [ ] #task #ref [[ref/papers/x|X]] (root::  sase) [created::2026-10-09] ^ref-x";
         write(&dest, &format!("# Sase\n\n{line}\n"));
-        let out =
-            edit_reading_task_checkbox(&dest, 2, line, 'x').expect("edit");
+        let out = edit_reading_task_checkbox(temp.path(), &dest, 2, line, 'x')
+            .expect("edit");
         assert_eq!(
             out.task_line,
             "- [x] #task #ref [[ref/papers/x|X]] (root::  sase) [created::2026-10-09] [completion:: 2026-10-09] ^ref-x"

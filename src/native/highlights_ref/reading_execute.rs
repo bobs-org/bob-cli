@@ -133,6 +133,7 @@ pub(super) fn execute_reading_line_edit(
     }
     let destination = bob_dir.join(&task.path);
     let edited = edit_reading_task_checkbox(
+        bob_dir,
         &destination,
         task.line_index,
         &task.line,

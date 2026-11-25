@@ -2314,11 +2314,26 @@ fn execute_routed_intents(
             if current.as_deref() == Some(rendered.as_str()) {
                 break;
             }
+            // Settle the routed note before staging: annotation tasks land
+            // grouped with badges and the local future-schedule Blocked
+            // rule applied, so a later reconcile plans nothing note-local.
+            let settled = intent.path.strip_prefix(&config.bob_dir).ok().map(
+                |relative| {
+                    crate::native::task_settle::SettleContext::for_vault(
+                        &config.bob_dir,
+                    )
+                    .settle_written_note(relative, &rendered)
+                },
+            );
+            let updated_target = settled
+                .filter(|settled| settled.changed)
+                .map(|settled| settled.contents)
+                .unwrap_or(rendered);
             let staged = crate::native::capture::StagedTextFile {
                 target: intent.path.clone(),
                 target_existed: existed,
                 original_target: current.clone().unwrap_or_default(),
-                updated_target: rendered,
+                updated_target,
             };
             match crate::native::capture::write_staged_files(
                 std::slice::from_ref(&staged),

@@ -1266,9 +1266,18 @@ fn build_write_plan(
     scan: &Scan,
     plan: &MovePlan,
 ) -> Result<WritePlan, String> {
+    // Settle every staged note before staging: source, destination, and
+    // link-repaired notes land grouped with badges and the local
+    // future-schedule Blocked rule applied, so a later reconcile plans
+    // nothing note-local. Restore shares this pipeline.
+    let mut settled = plan.postimages.clone();
+    crate::native::task_settle::settle_plan_postimages(
+        &report.vault,
+        &mut settled,
+    );
     let source = plan.moves.first().map(|item| item.source_path.as_path());
     let dest = plan.moves.first().map(|item| item.dest_path.as_path());
-    let mut postimages: Vec<_> = plan.postimages.iter().collect();
+    let mut postimages: Vec<_> = settled.iter().collect();
     postimages.sort_by(|(left, _), (right, _)| {
         output_rank(left, source, dest)
             .cmp(&output_rank(right, source, dest))

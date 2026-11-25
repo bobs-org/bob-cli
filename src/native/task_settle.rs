@@ -78,6 +78,31 @@ impl SettleContext {
             &self.daily_path,
         )
     }
+
+    /// Settle every staged note in a writer's postimage map before staging.
+    /// Keys are vault-relative paths. Settled notes pass through unchanged,
+    /// so composing this into a writer is idempotent.
+    pub(crate) fn settle_postimages(
+        &self,
+        postimages: &mut BTreeMap<PathBuf, String>,
+    ) {
+        for (relative, contents) in postimages.iter_mut() {
+            let settled = self.settle_written_note(relative, contents);
+            if settled.changed {
+                *contents = settled.contents;
+            }
+        }
+    }
+}
+
+/// Settle every staged note in a writer's postimage map before staging.
+/// Builds one [`SettleContext`] per call so the Tasks settings, daily path,
+/// and date stay stable across every staged note in the write.
+pub(crate) fn settle_plan_postimages(
+    vault: &Path,
+    postimages: &mut BTreeMap<PathBuf, String>,
+) {
+    SettleContext::for_vault(vault).settle_postimages(postimages);
 }
 
 /// Settle note-local state without reading the filesystem or clock.

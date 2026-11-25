@@ -2256,3 +2256,60 @@ fn move_leaves_ambiguous_owned_targets_untouched() {
     assert!(daily.contains("[[#^mv]]"), "{daily}");
     assert!(!daily.contains("[[src#^mv]]"), "{daily}");
 }
+
+#[test]
+fn command_settle_leaves_move_with_nothing_note_local() {
+    // Fixture proof for phase command-settle: the settled move postimages
+    // are a settle fixed point, so a follow-up reconcile plans nothing
+    // note-local (q4.3 pins reconcile's note-local pass to `settle_note`).
+    let source = area(
+        "## Tasks\n\n- [ ] #task Move me ^mv\n- [ ] #task Future work [scheduled:: 2099-01-01] ^future\n",
+    );
+    let dest = area("## Tasks\n");
+    let notes = [("src.md", source.as_str()), ("work.md", dest.as_str())];
+    let moved = plan(&notes, "src.md", "work.md", vec![block("mv")]);
+    let mut postimages = moved.postimages.clone();
+    let fired = crate::native::task_settle::tests::assert_command_settle_holds(
+        &mut postimages,
+    );
+    assert!(fired, "settle must regroup the move notes");
+    // The future-scheduled row left in the source settles to Blocked.
+    let settled_src = postimages
+        .get(Path::new("src.md"))
+        .expect("source postimage");
+    assert!(
+        settled_src.contains("- [?] #task Future work"),
+        "{settled_src}"
+    );
+    // The destination keeps the moved task; a lone Ready row in intake
+    // needs no regroup, so the settle fires on the source's Blocked row.
+    let settled_dest = postimages
+        .get(Path::new("work.md"))
+        .expect("dest postimage");
+    assert!(
+        settled_dest.contains("- [ ] #task Move me ^mv"),
+        "{settled_dest}"
+    );
+}
+
+#[test]
+fn command_settle_leaves_restore_with_nothing_note_local() {
+    // Restore shares the move write pipeline, so the same settle covers it.
+    let source = paired_source();
+    let archive =
+        paired_archive("- [x] #task Done thing [completion:: 2026-11-01] ^a\n");
+    let notes = [
+        ("work.md", source.as_str()),
+        ("done/work_done.md", archive.as_str()),
+    ];
+    let result = restore_plan(&notes, "done/work_done", "", vec![block("a")]);
+    let mut postimages = result.postimages.clone();
+    let fired = crate::native::task_settle::tests::assert_command_settle_holds(
+        &mut postimages,
+    );
+    assert!(fired, "settle must regroup the restore destination");
+    let settled_dest = postimages
+        .get(Path::new("work.md"))
+        .expect("dest postimage");
+    assert!(settled_dest.contains("Done thing"), "{settled_dest}");
+}

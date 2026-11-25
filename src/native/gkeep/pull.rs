@@ -675,13 +675,27 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     // blocks, before/after SHAs, and baseline multiplicity counts.
     let settings = note_tasks::read_settings(&bob_dir);
     let base_counts = baseline_counts(&target_contents, &settings, &writes);
+    // Settle the pull target before staging: imported tasks land grouped
+    // with badges and the local future-schedule Blocked rule applied, so
+    // a later reconcile plans nothing note-local.
+    let settle = crate::native::task_settle::SettleContext::for_vault(&bob_dir);
+    let settle_target = |contents: String| -> String {
+        let settled = settle.settle_written_note(&target_rel, &contents);
+        if settled.changed {
+            settled.contents
+        } else {
+            contents
+        }
+    };
     let (first_contents, _) = {
         let joined = writes
             .iter()
             .map(|item| item.markdown.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        capture::insert_task_line(&target_contents, &joined)
+        let (inserted, placement) =
+            capture::insert_task_line(&target_contents, &joined);
+        (settle_target(inserted), placement)
     };
     let mut prepared = build_prepared_transaction(
         &writes,
@@ -743,8 +757,9 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         .map(|item| item.markdown.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let (first_contents, _) =
+    let (inserted_contents, _) =
         capture::insert_task_line(&target_contents, &joined);
+    let first_contents = settle_target(inserted_contents);
     let perms = match fs::metadata(&target_path) {
         Ok(meta) => meta.permissions(),
         Err(error) => {
@@ -833,7 +848,9 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             .map(|item| item.markdown.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        let (replanned, _) = capture::insert_task_line(&fresh, &fresh_joined);
+        let (replanned_inserted, _) =
+            capture::insert_task_line(&fresh, &fresh_joined);
+        let replanned = settle_target(replanned_inserted);
         // Update the prepared record to the fresh input/output before the
         // second rename attempt, keeping the original transaction id so
         // recovery sees one batch, not two. An aborted CAS never leaves a

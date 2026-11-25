@@ -748,13 +748,17 @@ fn build_write_plan(
     scan: &Scan,
     plan: &MergePlan,
 ) -> Result<WritePlan, String> {
+    // Settle every staged note before staging so a later reconcile plans
+    // nothing note-local.
+    let mut settled = plan.postimages.clone();
+    crate::native::task_settle::settle_plan_postimages(vault, &mut settled);
     let order: BTreeMap<&PathBuf, usize> = plan
         .write_order
         .iter()
         .enumerate()
         .map(|(index, path)| (path, index))
         .collect();
-    let mut postimages = plan.postimages.iter().collect::<Vec<_>>();
+    let mut postimages = settled.iter().collect::<Vec<_>>();
     postimages.sort_by(|(left, _), (right, _)| {
         order
             .get(*left)

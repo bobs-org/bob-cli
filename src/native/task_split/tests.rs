@@ -652,3 +652,27 @@ fn req_candidates_list_every_depth_with_their_state() {
         ])
     );
 }
+
+#[test]
+fn command_settle_leaves_split_with_nothing_note_local() {
+    // Fixture proof for phase command-settle: the settled split postimages
+    // (source owner plus the new inbox task) are a settle fixed point, so a
+    // follow-up reconcile plans nothing note-local.
+    let source = "---\ntype: [[area]]\n---\n## Tasks\n\n- [ ] #task Big one ^owner\n  - [ ] First req\n  - [ ] Second req\n- [ ] #task Future [scheduled:: 2099-01-01] ^future\n";
+    let notes = [("work.md", source), ("inbox.md", "## Tasks\n")];
+    let planned = split(&notes, "work.md", 6, SplitSelection::Nth(vec![1]));
+    let mut postimages = planned.postimages.clone();
+    let fired = crate::native::task_settle::tests::assert_command_settle_holds(
+        &mut postimages,
+    );
+    assert!(fired, "settle must regroup the split source");
+    let settled_src = postimages
+        .get(&PathBuf::from("work.md"))
+        .expect("source postimage");
+    assert!(settled_src.contains("- [?] #task Future"), "{settled_src}");
+    // The split child stays in the owner note with its managed back-link.
+    assert!(
+        settled_src.contains("- [ ] #task First req"),
+        "{settled_src}"
+    );
+}

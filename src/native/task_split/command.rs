@@ -537,8 +537,12 @@ fn build_write_plan(
     scan: &Scan,
     plan: &SplitPlan,
 ) -> Result<WritePlan, String> {
+    // Settle every staged note before staging so a later reconcile plans
+    // nothing note-local.
+    let mut settled = plan.postimages.clone();
+    crate::native::task_settle::settle_plan_postimages(vault, &mut settled);
     let destination = plan.tasks.first().map(|task| PathBuf::from(&task.path));
-    let mut postimages = plan.postimages.iter().collect::<Vec<_>>();
+    let mut postimages = settled.iter().collect::<Vec<_>>();
     postimages.sort_by(|(left, _), (right, _)| {
         let rank = |path: &Path| {
             if destination.as_deref() == Some(path) {

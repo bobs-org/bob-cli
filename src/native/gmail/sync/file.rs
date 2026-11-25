@@ -1035,6 +1035,19 @@ fn defer_reopen(
     }
 }
 
+/// Map a reported 1-based task row through its note's settle line map.
+/// `path` is the vault-relative slash path the reports carry. Rows settle
+/// removed, or notes settle left untouched, keep their planned address.
+fn map_settled_line(
+    maps: &BTreeMap<PathBuf, BTreeMap<usize, usize>>,
+    path: &Path,
+    line: usize,
+) -> Option<usize> {
+    let index = line.checked_sub(1)?;
+    let map = maps.get(path)?;
+    map.get(&index).map(|mapped| mapped + 1)
+}
+
 fn build_attempt(
     vault: &Path,
     mail_folder: &Path,
@@ -1774,10 +1787,61 @@ fn build_attempt(
         &mut outcome,
         &mut health_events,
     );
+    // Settle every staged Markdown note before hashing: source, destination,
+    // mail, and link-repaired notes land grouped with badges and the local
+    // future-schedule Blocked rule applied, so a later reconcile plans
+    // nothing note-local. The reopen receipts below hash the settled
+    // postimages, keeping replay ownership proofs exact. Reported task rows
+    // resolve through each note's settle line map so post-regroup addresses
+    // stay exact.
+    let settle_maps: BTreeMap<PathBuf, BTreeMap<usize, usize>> = {
+        let settle =
+            crate::native::task_settle::SettleContext::for_vault(vault);
+        let mut maps = BTreeMap::new();
+        for file in staged.iter_mut() {
+            let is_markdown = file
+                .target
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+            if !is_markdown {
+                continue;
+            }
+            let Ok(relative) = file.target.strip_prefix(vault) else {
+                continue;
+            };
+            let settled =
+                settle.settle_written_note(relative, &file.updated_target);
+            if settled.changed {
+                file.updated_target = settled.contents;
+            }
+            maps.insert(relative.to_path_buf(), settled.line_map);
+        }
+        maps
+    };
+    for reopen in &mut outcome.reopen_outcomes {
+        let Some(target) = reopen.target.as_mut() else {
+            continue;
+        };
+        if let Some(mapped) =
+            map_settled_line(&settle_maps, Path::new(&target.path), target.line)
+        {
+            target.line = mapped;
+        }
+    }
     attach_reopen_postimages(vault, &staged, &plans, &mut reopen_pending);
     outcome.watch_threads = watch_plan.outcomes;
     outcome.watch_gone = watch_plan.gone;
     project_reopen_watch_rows(&mut outcome);
+    for thread in &mut outcome.watch_threads {
+        for task in &mut thread.tasks {
+            if let Some(mapped) =
+                map_settled_line(&settle_maps, Path::new(&task.path), task.line)
+            {
+                task.line = mapped;
+            }
+        }
+    }
     outcome.reopen_activity = reopen_activity;
     for key in &watch_deferred {
         if !outcome.deferred.contains(key) {
@@ -5528,8 +5592,15 @@ mod tests {
         assert_eq!(outcome.results[0].task_file.as_deref(), Some("job.md"));
         let task_note = fs::read_to_string(vault.join("job.md")).unwrap();
         let task_position = task_note.find("- [ ] #task").unwrap();
-        let next_position = task_note.find("### Next & In Progress").unwrap();
-        assert!(task_position < next_position, "{task_note}");
+        // The settle the filing stages prunes the area's empty groups, the
+        // same write reconcile would produce: the filed row stays in the
+        // intake ready block with no lingering empty sections.
+        assert!(!task_note.contains("### Next & In Progress"), "{task_note}");
+        assert!(!task_note.contains("### Done & Canceled"), "{task_note}");
+        assert!(
+            task_note.find("## Tasks").unwrap() < task_position,
+            "{task_note}"
+        );
         assert!(task_note.contains("[created::2026-11-07]"), "{task_note}");
         assert!(!task_note.contains("[fresh::"));
 

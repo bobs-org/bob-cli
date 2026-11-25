@@ -3255,3 +3255,38 @@ fn merge_into_canonical_task_keeps_owned_fields_and_draft() {
         .expect("edited fixture carries a digest");
     assert!(dest.contains(before_digest), "{dest}");
 }
+
+#[test]
+fn command_settle_leaves_merge_with_nothing_note_local() {
+    // Fixture proof for phase command-settle: the settled merge postimages
+    // (retired source plus destination) are a settle fixed point, so a
+    // follow-up reconcile plans nothing note-local.
+    let snapshot = snapshot(&[
+        (
+            "src.md",
+            "---\ntype: [[area]]\n---\n## Tasks\n\n- [ ] #task Source work ^src\n- [ ] #task Future [scheduled:: 2099-01-01] ^future\n",
+        ),
+        (
+            "dest.md",
+            "---\ntype: [[area]]\n---\n## Tasks\n\n- [ ] #task Target ^target\n",
+        ),
+    ]);
+    let planned = plan(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
+    )
+    .expect("merge plan");
+    let mut postimages = planned.postimages.clone();
+    let fired = crate::native::task_settle::tests::assert_command_settle_holds(
+        &mut postimages,
+    );
+    assert!(fired, "settle must regroup the merge notes");
+    let settled_src = postimages
+        .get(&PathBuf::from("src.md"))
+        .expect("source postimage");
+    assert!(settled_src.contains("- [?] #task Future"), "{settled_src}");
+    let settled_dest = postimages
+        .get(&PathBuf::from("dest.md"))
+        .expect("dest postimage");
+    assert!(settled_dest.contains("Source work"), "{settled_dest}");
+}

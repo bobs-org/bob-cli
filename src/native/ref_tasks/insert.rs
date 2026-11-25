@@ -160,6 +160,19 @@ pub(crate) fn insert_ref_task_with_preferred_id(
                 task_line,
             });
         }
+        // Settle the destination before staging: the reading task lands
+        // grouped with badges and the local future-schedule Blocked rule
+        // applied, so a later reconcile plans nothing note-local.
+        let updated = destination
+            .strip_prefix(bob_dir)
+            .ok()
+            .map(|relative| {
+                crate::native::task_settle::SettleContext::for_vault(bob_dir)
+                    .settle_written_note(relative, &updated)
+            })
+            .filter(|settled| settled.changed)
+            .map(|settled| settled.contents)
+            .unwrap_or(updated);
         let staged = StagedTextFile {
             target: destination.to_path_buf(),
             target_existed: existed,
