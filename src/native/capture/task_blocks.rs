@@ -509,6 +509,36 @@ impl TaskBlockTracker {
         }
     }
 
+    /// Forward tracked task lines and merge provenance through a final
+    /// note-local settle. The settle line map is zero-based and describes
+    /// the staged text immediately before and after this post-pass.
+    pub(super) fn remap_settled_note(
+        &mut self,
+        target: &Path,
+        line_map: &BTreeMap<usize, usize>,
+    ) {
+        for tracked in &mut self.tracked {
+            if tracked.target == target
+                && let Some(mapped) = line_map.get(&tracked.current)
+            {
+                tracked.current = *mapped;
+            }
+        }
+
+        let Some(origins) = self.merge_origins.remove(target) else {
+            return;
+        };
+        let mut remapped = BTreeMap::new();
+        for (line, origin) in origins {
+            if let Some(mapped) = line_map.get(&line) {
+                remapped.entry(*mapped).or_insert(origin);
+            }
+        }
+        if !remapped.is_empty() {
+            self.merge_origins.insert(target.to_path_buf(), remapped);
+        }
+    }
+
     /// Fold refs into tracked blocks by post-state target+line, or start
     /// a new tracked parent.
     fn merge_or_start(&mut self, refs: Vec<TaskBlockRef>) {

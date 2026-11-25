@@ -1159,6 +1159,12 @@ pub(super) fn plan_capture_batch_with_config_path(
         Path::new(&day_relative),
         today,
     );
+    settle_capture_notes(
+        &mut planner,
+        &request.bob_dir,
+        &mut task_tracker,
+        &mut items,
+    )?;
     let final_day = planner.peek_text(&day_file);
     let successor_reasons = surviving_successor_link_reasons(&items);
     let pomodoro_blocks = block_tracker.finish_with_successor_reasons(
@@ -1308,6 +1314,56 @@ pub(super) fn plan_capture_batch_with_config_path(
         req_outcomes: Vec::new(),
         mail_close,
     })
+}
+
+/// Settle every Markdown note changed by this capture after its final
+/// agreement pass and before any batch tracker freezes line coordinates.
+/// Dry-run and commit both consume the same planner postimages.
+fn settle_capture_notes(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    task_tracker: &mut TaskBlockTracker,
+    items: &mut [PlannedCaptureItem],
+) -> Result<(), CaptureError> {
+    let context = crate::native::task_settle::SettleContext::for_vault(bob_dir);
+    let changed_notes = planner
+        .files
+        .iter()
+        .filter(|file| {
+            file.present
+                && file.current != file.original
+                && file
+                    .path
+                    .extension()
+                    .is_some_and(|extension| extension == "md")
+        })
+        .map(|file| (file.path.clone(), file.current.clone()))
+        .collect::<Vec<_>>();
+
+    for (target, contents) in changed_notes {
+        let relative = target.strip_prefix(bob_dir).unwrap_or(&target);
+        let settled = context.settle_written_note(relative, &contents);
+        if !settled.changed {
+            continue;
+        }
+
+        task_tracker.remap_settled_note(&target, &settled.line_map);
+        for item in items.iter_mut() {
+            if Path::new(&item.result.target) != target {
+                continue;
+            }
+            // Capture's public 1-based parent coordinate is the per-item
+            // line field that must follow the same post-settle mapping.
+            if let Some(parent_line) = item.result.parent_line.as_mut()
+                && let Some(mapped) =
+                    settled.line_map.get(&parent_line.saturating_sub(1))
+            {
+                *parent_line = mapped + 1;
+            }
+        }
+        planner.stage(&target, settled.contents)?;
+    }
+    Ok(())
 }
 
 /// Final agreement stage: run the shared applier over every open entry

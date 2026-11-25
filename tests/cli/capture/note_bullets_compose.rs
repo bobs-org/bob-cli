@@ -703,3 +703,33 @@ fn same_note_mirrors_do_not_leave_stale_parent_lines() {
     assert!(line_of(&foo, "parent") > 2, "the parent moved:\n{foo}");
     assert_parent_agrees(&json, &foo, "parent");
 }
+
+#[test]
+fn capture_settles_note_and_forwards_parent_and_open_lines() {
+    let scene = scene("bob-cli-compose-settle-note");
+    write_file(
+        &scene.vault.join("foo.md"),
+        "---\ntype: [[area]]\n---\n## Tasks\n\n- [/] #task Parent ^parent\n",
+    );
+
+    let json = capture_pair(&scene, "@foo+parent\n- Added after settle", &[]);
+    let foo = read(&scene, "foo.md");
+    assert!(foo.contains("### Next & In Progress"), "{foo}");
+    assert_parent_agrees(&json, &foo, "parent");
+
+    let child_line = foo
+        .lines()
+        .position(|line| line.contains("Added after settle"))
+        .expect("captured child line")
+        + 1;
+    let opened = json["open_notes"]
+        .as_array()
+        .expect("open_notes")
+        .iter()
+        .find(|note| note["relative_path"] == "foo.md")
+        .expect("foo open note");
+    assert_eq!(
+        opened["line"], child_line,
+        "Open line vs settled bytes: {json}\n{foo}"
+    );
+}
