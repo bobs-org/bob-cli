@@ -10965,8 +10965,8 @@ singular and plural (`1 note`, `used in 12 notes · 3 days ago`, `Adds after
 "2 GB RAM" in NOTES`, `Creates Future Work under ^bar`); `creates` is
 true on `recent` and `new` rows; `refused` is the commit resolver's reason for
 a reserved, near-duplicate, or ambiguous choice. `replacement` is `#slug`,
-or a quoted `#"TITLE"` when the slug does not resolve back to exactly that
-drawer; it covers the `#` and the name, and `cursor_after` is the draft offset
+or a quoted `#"TITLE"` when the slug does not parse back to the row's
+title; it covers the `#` and the name, and `cursor_after` is the draft offset
 just past it. The response adds `target: {route, block_id, text}`, and a
 `query` holding the decoded drawer query. On a `^prj` parent the `task` rows
 are the note's eligible `##` sections instead of task-child drawers. At a

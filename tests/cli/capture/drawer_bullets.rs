@@ -419,6 +419,10 @@ fn reserved_new_task_drafts_agree_across_parse_preview_and_commit() {
         "Ship it\n- #schedule-log\n  - note",
         "Ship it\n- #\"Work Log\"\n  - note",
         "Ship it\n- #future-work\n  - fine\n- #tasks\n  - not fine",
+        // Structural H2 names a task drawer could never read back as.
+        "Ship it\n- #snoozed\n  - note",
+        "Ship it\n- #pomodoros\n  - note",
+        "Ship it\n- #\"Blocked\"\n  - note",
     ] {
         let temp = TempDir::new("bob-cli-drawer-reserved-new-task");
         let vault = temp.path().join("vault");

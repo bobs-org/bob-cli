@@ -3688,11 +3688,12 @@ fn attach_drawer_bullet_metadata(
         EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
     );
     let container_header_position = under_task || project_note_sections;
-    // Managed names (`TASKS`, `SCHEDULE LOG`, …) are refused as task
-    // drawers and as existing-target sections, but a newly created project
-    // note owns its structural headings, so `- TASKS` there is a valid
-    // merge. Structural `^prj` headings and near-duplicates depend on the
-    // vault and are left to the commit-time resolver.
+    // Managed names (`TASKS`, `SCHEDULE LOG`, …) and structural H2 names
+    // (`Snoozed`, `Pomodoros`, status groups) are refused as task drawers
+    // and as existing-target sections, but a newly created project note
+    // owns its structural headings, so `- TASKS` there is a valid merge.
+    // Near-duplicates depend on the vault and are left to the commit-time
+    // resolver.
     let reserved_applies = under_task
         && !matches!(
             *mode,

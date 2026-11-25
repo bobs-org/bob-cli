@@ -485,8 +485,8 @@ another thin client of that service (see `docs/capture.md`
   `new` row for a nonempty typed name no other row claims. Bob authors each
   row's `detail` (`2 notes`, `empty`, `used in 12 notes · 3 days ago`) and
   `consequence` (`Adds after "2 GB RAM" in NOTES`, `Creates Future Work
-  under ^bar`). A row's `replacement` is `#slug` only when the slug resolves
-  back to exactly that drawer on the whole target, else `#"TITLE"`. `refused` is
+  under ^bar`). A row's `replacement` is `#slug` only when the slug parses
+  back to the row's title (`#future-work` for `Future Work`), else `#"TITLE"`. `refused` is
   the commit's own reason for a reserved, near-duplicate, or ambiguous choice,
   so accepting a row and committing always agree. An empty query reports
   `initial_selection: "none"`; a missing, duplicate, or non-task target returns

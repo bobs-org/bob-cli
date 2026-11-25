@@ -411,8 +411,9 @@ fn drawers_complete_after_id_hash() {
     );
     assert_success(&output);
     let values = values(&output);
+    // A legacy title the slug would not recreate completes quoted.
     assert!(
-        values.contains(&"@cash+fix-sink#first-steps".to_string()),
+        values.contains(&"@cash+fix-sink#\"FIRST STEPS\"".to_string()),
         "{values:?}"
     );
     assert!(groups(&output).contains(&"drawers".to_string()));

@@ -178,24 +178,32 @@ pub(crate) fn is_reserved_drawer_key(key: &str) -> bool {
     reserved_drawer_keys().contains(key)
 }
 
+/// Whether a task drawer selector may never name `key`: a managed-line
+/// label, or a structural H2 (`## Snoozed`, `## Pomodoros`, a status group)
+/// that would never read back as a drawer. The commit-time task resolver
+/// and the lexical editor parse share this one predicate.
+pub(crate) fn is_task_drawer_unwritable_key(key: &str) -> bool {
+    is_reserved_drawer_key(key) || is_structural_h2_key(key)
+}
+
 /// The managed key a drawer selector would be refused for, if any. An exact
-/// exact literal selector has one key; a slug selector is
-/// checked under both its plain and hyphen-as-space spellings, in that
-/// order. The commit-time resolver and the lexical editor parse share this
-/// one rule so a reserved name never reads differently in each place.
+/// literal selector has one key; a slug selector is checked under both its
+/// plain and hyphen-as-space spellings, in that order. The commit-time
+/// resolver and the lexical editor parse share this one rule so a reserved
+/// name never reads differently in each place.
 pub(crate) fn reserved_selector_key(
     selector_text: &str,
     exact: bool,
 ) -> Option<String> {
     if exact {
         let key = drawer_key(selector_text);
-        return is_reserved_drawer_key(&key).then_some(key);
+        return is_task_drawer_unwritable_key(&key).then_some(key);
     }
     let key_plain = drawer_key(selector_text);
     let key_spaced = drawer_key(&selector_text.replace('-', " "));
     [key_plain, key_spaced]
         .into_iter()
-        .find(|key| is_reserved_drawer_key(key))
+        .find(|key| is_task_drawer_unwritable_key(key))
 }
 
 /// The task-drawer `reserved_drawer` refusal for a lexically reserved
@@ -1235,15 +1243,13 @@ pub(crate) fn resolve_drawer_for_write(
     // the snooze writer): a selector naming one is refused here so capture
     // never creates it as a `- **…**` user drawer. The created bullet
     // would never be recognized as a drawer anyway.
-    let is_task_unwritable =
-        |key: &str| is_reserved_drawer_key(key) || is_structural_h2_key(key);
     let outcome = match scope {
         DrawerScope::Task => TaskDrawer::resolve(
             selector_text,
             exact,
             &items,
             catalog,
-            is_task_unwritable,
+            is_task_drawer_unwritable_key,
         ),
         DrawerScope::ProjectSection => ProjectSection::resolve(
             selector_text,

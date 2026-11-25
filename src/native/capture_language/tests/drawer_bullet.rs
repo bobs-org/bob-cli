@@ -185,6 +185,11 @@ fn editor_flags_reserved_shortcuts_and_literals_under_a_task() {
         ),
         ("Ship it\n- #links\n  - note", "#links"),
         ("@foo+bar\n- #tasks\n  - note", "#tasks"),
+        // Structural H2 names are refused on task and `^prj` targets alike,
+        // so the lexical parse can flag them without the vault.
+        ("Ship it\n- #snoozed\n  - note", "#snoozed"),
+        ("@foo+bar\n- #pomodoros\n  - note", "#pomodoros"),
+        ("Ship it\n- #\"Blocked\"\n  - note", "#\"Blocked\""),
     ] {
         assert_eq!(
             reserved_ranges(raw),
@@ -233,7 +238,7 @@ fn reserved_ranges_are_utf8_byte_offsets() {
 }
 
 #[test]
-fn legal_controls_and_vault_dependent_names_stay_unflagged() {
+fn legal_controls_stay_unflagged() {
     for raw in [
         // An ordinary drawer, shortcut and literal.
         "Ship it\n- #future-work\n  - note",
@@ -246,9 +251,6 @@ fn legal_controls_and_vault_dependent_names_stay_unflagged() {
         // An escaped hash and a nested task-type marker are not drawers.
         "Ship it\n- \\#tasks\n  - note",
         "Ship it\n- check\n  - #tasks",
-        // A `^prj` structural heading is only reserved on a project note,
-        // which only the vault can tell.
-        "@foo+bar\n- #pomodoros\n  - note",
         // A same-line note is not an under-task position at all.
         "@foo+bar a note\n- TASKS\n  - note",
     ] {

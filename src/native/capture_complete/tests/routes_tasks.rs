@@ -434,7 +434,9 @@ fn three_component_marker_keeps_route_and_task_contexts() {
     let Candidates::Drawer(drawers) = &drawer.candidates else {
         panic!("expected drawer candidates");
     };
-    assert_eq!(drawers[0].replacement, "#requirements");
+    // `#requirements` would create `Requirements`, so the legacy title is
+    // quoted to parse back to the same drawer.
+    assert_eq!(drawers[0].replacement, "#\"REQUIREMENTS\"");
     assert_eq!(drawers[0].title, "REQUIREMENTS");
 }
 
