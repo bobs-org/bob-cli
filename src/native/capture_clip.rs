@@ -21,8 +21,8 @@ mod tests;
 
 pub(crate) use clipboard::{
     clipboard_status, read_clipboard, read_clipboard_history_with_current,
-    AgreedClipboardHistory, ClipboardHistoryError, ClipboardProviderStatus,
-    ClipboardStatusReport,
+    read_clipboard_raw, AgreedClipboardHistory, ClipboardHistoryError,
+    ClipboardProviderStatus, ClipboardStatusReport,
 };
 pub(crate) use files::{
     attachment_reference, hash_file, sanitize_file_name, sha256_hex,

@@ -186,7 +186,7 @@ See [task type suggestions](../task-types.md#pt12-type-vocabulary-and-display).
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `dependencies.blocks_lines` | Boolean | `true` | Controls display of generated BLOCKS mirror lines for open dependents. The Depends-On line remains the source of dependency truth. |
+| `dependencies.blocks_lines` | Boolean | `true` | Controls display of generated BLOCKS mirror lines for open dependents. |
 
 See [task dependency links](../task-dependencies.md#14-blocks-lines).
 
@@ -201,18 +201,16 @@ See [task dependency links](../task-dependencies.md#14-blocks-lines).
 | `relations.successor_labels` | List of relation labels | `[]` | Offer eligible source tasks when a Bob action parks or completes their target, if `plan.link_unblocked` is enabled. Adding the relation afterward makes no offer; linking requires explicit selection ([successor labels](../task-relations.md#20-successor-labels)). |
 | `relations.merge_labels` | List of relation labels | `[]` | Committing the label merges an existing open source into the target. Capture `>` and `<` use the first effective configured label, or `merged into` when empty. `bob task merge` uses `merged into` ([merge labels](../task-relations.md#21-merge-labels)). |
 
-Invalid `relations.linked_from_lines` or `relations.linked_from_mentions`
-values warn and fall back to `true`. See
+Invalid `linked_from_*` values warn and fall back to `true`. See
 [Task relations](../task-relations.md#12-kill-switch-outputs-and-warnings).
 
 The source owns the LINKS entry; the target is the task it names. Parking
 leaves the target In Progress (Pending) with no live Task Link today.
 
-All four label lists treat missing, `null`, and `[]` as empty. Non-lists warn
-and disable that list; invalid entries warn and are skipped; duplicate keys collapse.
-Warnings leave `linked_from_lines` unchanged. Shared label keys warn and are removed
-from conflicting lists. Hiding a label (capture's `||`) affects suggestions only;
-its configured effect still applies.
+Missing, `null`, and `[]` label lists are empty. Non-lists warn and disable
+that list; invalid entries are skipped; duplicate keys collapse. Shared keys
+warn and drop from conflicting lists. Hiding a label (capture's `||`) affects
+suggestions only; its configured effect still applies.
 
 ### `freshness`
 
@@ -238,10 +236,8 @@ accepts an interval or `null` to inherit the Ready cadence.
 
 `decay: false` disables asking while retaining keep counts and display. A
 rung's effective allowance is its `*_keeps` key, then `keeps`, then 3. The
-removed `stale_daily_budget` key is accepted only as a deprecated input for a
-transition period; use `rotten_daily_budget`. The freshness consumer has its
-own parser, so its validation and defaults are independent of the other
-sections. See [freshness fields and configuration](../freshness.md#2-fields-overrides-and-config).
+removed `stale_daily_budget` key is accepted as a deprecated input; use
+`rotten_daily_budget`. See [freshness fields and configuration](../freshness.md#2-fields-overrides-and-config).
 
 ### `highlights`
 
@@ -252,8 +248,8 @@ sections. See [freshness fields and configuration](../freshness.md#2-fields-over
 | `highlights.audio_library` | Path | `$XDG_DATA_HOME/sase-listen/library`, else `~/.local/share/sase-listen/library` | SASE Listen library searched for companion audio. |
 | `highlights.listen_command` | String command template | Unset | Optional `bob ref create --listen` command. It must be a direct `sase listen render {target} ... -o {audio}` invocation; Bob does not run a shell. |
 | `highlights.ingest_on_create` | Boolean | `true` | Whether create-time intake files the PDF and reference note immediately when safe. `BOB_HIGHLIGHTS_INGEST_ON_CREATE` overrides it. |
-| `highlights.podcasts.enrich` | `auto` or `off` | `auto` | After Spotify metadata, optionally add publisher notes, chapters, and transcripts. `off` skips iTunes and feed requests. Enrichment failures do not block capture; invalid settings are refused. See [Publisher feed](../highlights-create.md#publisher-feed). |
-| `highlights.coordinate_pdf_writes` | Boolean | `false` | When on, wrap each PDF marker write in a bounded macOS `.forMerging` coordination and hold when Highlights is in use or uncertain. Stays off until the Mac acceptance test passes. On Linux the key is accepted and inert for OS coordination. See [PDFs open in Highlights](../highlights-ref-sync.md#pdfs-open-in-highlights). |
+| `highlights.podcasts.enrich` | `auto` or `off` | `auto` | After Spotify metadata, optionally add publisher notes, chapters, and transcripts. `off` skips iTunes and feed requests. See [Publisher feed](../highlights-create.md#publisher-feed). |
+| `highlights.coordinate_pdf_writes` | Boolean | `false` | When on, wrap each PDF marker write in a bounded macOS `.forMerging` coordination and hold when Highlights is in use or uncertain. See [PDFs open in Highlights](../highlights-ref-sync.md#pdfs-open-in-highlights). |
 | `highlights.table_layout` | `auto`, `records`, or `grid` | `auto` | Global table default for `bob ref create` PDFs: prose tables print as single-column records, other tables stay grids. Per-table `bob-records`/`bob-grid` Divs and frontmatter `bob-tables` override it. See [Tables](../highlights-create.md#tables). |
 | `highlights.table_prose_words` | Integer 1–200 | `12` | Word threshold for the auto prose rule: a table is prose when some body-row cell in column 2 or later holds at least this many words. See [Tables](../highlights-create.md#tables). |
 | `highlights.url_routing.capture` | Boolean | `true` | Whether eligible bare links in capture queue a reference job. |
@@ -263,10 +259,6 @@ sections. See [freshness fields and configuration](../freshness.md#2-fields-over
 
 The old `highlights.pre_scan_command` key is rejected; use
 `pre_scan_hook`. Invalid URL-routing config warns and leaves the URL as a task.
-See [URL routing](../ref.md#url-routing),
-[reference audio](../highlights-ref-sync.md#companion-audio-on-scan),
-[PDFs open in Highlights](../highlights-ref-sync.md#pdfs-open-in-highlights), and
-[web article capture](../highlights-clip.md#hosts-and-browsers).
 
 ### `meetings`
 
@@ -277,8 +269,8 @@ See [URL routing](../ref.md#url-routing),
 | `meetings.status` | `next`, `ready`, `wip`, `read` | `next` | New reading-task status. |
 | `meetings.window_days` | Integer, 1–365 | `7` | Default lookback; `--window` overrides it. |
 
-Precedence is flag, then key, then default. Unknown keys are ignored;
-wrong types are setup errors. See [Meeting notes](../meeting-notes.md).
+Flag, key, then default. See [Meeting notes](../meeting-notes.md).
+
 
 ### `gkeep`
 

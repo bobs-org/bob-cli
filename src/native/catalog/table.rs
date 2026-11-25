@@ -1118,6 +1118,7 @@ pub(crate) const ENTRIES: &[Row] = &[
         slots: &[("EVENT", "text"), ("event", "text")],
         adapter: Some("ref-meet"),
         invalidates: &["references", "tasks"],
+        fixed: &["-c"],
         ..writes(
             "ref-meet",
             &["ref", "meet"],

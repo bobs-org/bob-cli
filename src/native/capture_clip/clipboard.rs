@@ -80,6 +80,14 @@ pub(crate) fn read_clipboard() -> Result<String, String> {
     normalize_clipboard_output(bytes)
 }
 
+/// Exact clipboard subprocess bytes before capture normalization.
+///
+/// Meeting-notes hashing needs the single raw snapshot; ordinary capture
+/// still goes through [`read_clipboard`].
+pub(crate) fn read_clipboard_raw() -> Result<Vec<u8>, String> {
+    clipboard_command_output()
+}
+
 /// Inspect the exact configured history path used by `%c<N>`, then add a
 /// one-row diagnostic read for every history provider known on this host.
 /// The returned report deliberately contains only booleans, paths, ages,

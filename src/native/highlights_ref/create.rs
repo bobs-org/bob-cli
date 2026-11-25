@@ -460,6 +460,7 @@ pub(super) fn finish_create_intake(
             dry_run: false,
             progress: Some(&progress),
             event_root_edit: None,
+            occurrence_guard: None,
         },
     );
     super::intake::print_outcome(config, plan, outcome)

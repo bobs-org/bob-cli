@@ -90,6 +90,39 @@ fn preview_and_fixed_options_exist_on_the_leaf() {
 }
 
 #[test]
+fn ref_meet_rows_supply_clipboard_source_and_list_flag() {
+    let meet = ENTRIES
+        .iter()
+        .find(|row| row.id == "ref-meet")
+        .expect("ref-meet row");
+    assert_eq!(meet.fixed, &["-c"]);
+    assert_eq!(meet.preview, Some(&["--dry-run"][..]));
+    assert_eq!(meet.adapter, Some("ref-meet"));
+    assert_eq!(meet.invalidates, &["references", "tasks"]);
+    let list = ENTRIES
+        .iter()
+        .find(|row| row.id == "ref-meet-list")
+        .expect("ref-meet-list row");
+    assert_eq!(list.fixed, &["-l"]);
+    assert_eq!(list.effect, Effect::Reads);
+    let catalog = document();
+    let assembled_meet = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id == "ref-meet")
+        .expect("assembled ref-meet");
+    assert_eq!(assembled_meet.fixed, vec!["-c"]);
+    assert_eq!(assembled_meet.preview, Some(vec!["--dry-run".to_string()]));
+    let assembled_list = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id == "ref-meet-list")
+        .expect("assembled ref-meet-list");
+    assert_eq!(assembled_list.fixed, vec!["-l"]);
+    assert_eq!(assembled_list.effect, "reads");
+}
+
+#[test]
 fn public_leaves_are_entries_or_excluded() {
     let catalog = document();
     let entry_paths: HashSet<Vec<String>> = catalog

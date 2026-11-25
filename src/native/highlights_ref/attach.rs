@@ -409,6 +409,7 @@ pub(super) fn run_attach(
             dry_run: false,
             progress: Some(&progress),
             event_root_edit: None,
+            occurrence_guard: None,
         },
     );
     match outcome {

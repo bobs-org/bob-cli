@@ -207,6 +207,10 @@ pub(crate) fn prepare_filing(
     } else {
         base_config.status.clone()
     };
+    let title_explicit = options
+        .title
+        .as_deref()
+        .is_some_and(|title| !title.trim().is_empty());
     let title = match options.title.as_deref() {
         Some(title) if !title.trim().is_empty() => title.trim().to_string(),
         Some(_) => {
@@ -216,7 +220,14 @@ pub(crate) fn prepare_filing(
                 1,
             ));
         }
-        None => derived_title(&meeting),
+        None => {
+            if let Some(existing) = existing.as_ref() {
+                live_reference_title(config, existing)
+                    .unwrap_or_else(|| derived_title(&meeting))
+            } else {
+                derived_title(&meeting)
+            }
+        }
     };
 
     let (mut notes, transcript) =
@@ -341,6 +352,7 @@ pub(crate) fn prepare_filing(
         status,
         status_explicit,
         title,
+        title_explicit,
         stem,
         target,
         note_path,
@@ -790,6 +802,33 @@ fn derive_meeting_stem(meeting: &MeetingRow) -> String {
         words.join("_")
     };
     format!("{}_{}", meeting.date.format("%y%m%d"), tail)
+}
+
+fn live_reference_title(
+    config: &Config,
+    existing: &ExistingReferenceSelection,
+) -> Option<String> {
+    let path = config.bob_dir.join(&existing.filed.note);
+    let note = super::super::frontmatter::read_note(&path).ok()?;
+    if let Some(title) = note
+        .frontmatter_value("title")
+        .and_then(|value| value.as_string().map(str::to_string))
+    {
+        let trimmed = title.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    for line in note.body.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("# ") {
+            let heading = heading.trim();
+            if !heading.is_empty() {
+                return Some(heading.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn derived_title(meeting: &MeetingRow) -> String {

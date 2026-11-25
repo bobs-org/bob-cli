@@ -14,6 +14,8 @@ pub(crate) enum NotesSource<'a> {
     Path(&'a Path),
     Stdin,
     Text(&'a str),
+    /// Exact source bytes, hashed before BOM/newline normalization.
+    Bytes(&'a [u8]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +87,7 @@ pub(crate) fn read_notes(
 ) -> Result<NotesInput, NotesError> {
     let bytes = match source {
         NotesSource::Text(text) => text.as_bytes().to_vec(),
+        NotesSource::Bytes(bytes) => bytes.to_vec(),
         NotesSource::Path(path) => read_path(path)?,
         NotesSource::Stdin => read_bounded(io::stdin().lock())
             .map_err(|source| NotesError::Io { source, path: None })?,

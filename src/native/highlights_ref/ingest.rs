@@ -1116,6 +1116,7 @@ fn apply_intake(
             dry_run: false,
             progress: request.progress,
             event_root_edit: None,
+            occurrence_guard: None,
         },
     );
     Ok(map_created_intake(

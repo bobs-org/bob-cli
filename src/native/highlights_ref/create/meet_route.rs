@@ -6,7 +6,9 @@
 //! ownership, task identity, LINKS, and recovery stay inside that
 //! transaction.
 
-use super::super::intake::{EventRootEdit, IntakeOutcome, IntakeRequest};
+use super::super::intake::{
+    EventRootEdit, IntakeOutcome, IntakeRequest, MeetingOccurrenceGuard,
+};
 use super::super::meet::{GuardedRootEdit, PreparedFiling};
 use super::super::overwrite::execute::{OverwriteResult, StagedOverwrite};
 use super::super::overwrite::OverwriteRequest;
@@ -167,6 +169,17 @@ pub(in crate::native::highlights_ref) fn file_meeting(
         .guarded_root_edit
         .as_ref()
         .map(|edit| root_edit_for(prepared, edit));
+    let occurrence_guard = prepared.meeting.block_id.as_ref().map(|block_id| {
+        MeetingOccurrenceGuard {
+            event_id: prepared.meeting.event_id.clone(),
+            path: prepared.meeting.path.clone(),
+            block_id: block_id.clone(),
+        }
+    });
+    let progress_warnings = std::cell::RefCell::new(Vec::new());
+    let progress = |line: &str| {
+        progress_warnings.borrow_mut().push(line.to_string());
+    };
     let outcome = super::super::intake::finish_intake(
         config,
         unit,
@@ -175,10 +188,12 @@ pub(in crate::native::highlights_ref) fn file_meeting(
             keep_reason: None,
             expected_source_pointer: source_pointer.as_deref(),
             dry_run: false,
-            progress: None,
+            progress: Some(&progress),
             event_root_edit: root_edit.clone(),
+            occurrence_guard,
         },
     );
+    warnings.extend(progress_warnings.into_inner());
     let (reroot_applied, skipped_reroot) = match &outcome {
         IntakeOutcome::Ingested { .. } => (
             root_edit
@@ -260,6 +275,7 @@ pub(in crate::native::highlights_ref) fn replace_meeting(
         explicit_status: prepared
             .status_explicit
             .then(|| prepared.status.clone()),
+        explicit_title: prepared.title_explicit.then(|| prepared.title.clone()),
         resolved_parent: prepared
             .parent
             .explicit
@@ -1170,6 +1186,99 @@ mod tests {
         assert!(
             prepared.note_path.is_file(),
             "drained filing writes the note"
+        );
+    }
+
+    #[test]
+    fn competing_filing_with_a_different_stem_refuses_after_pre_sync() {
+        let fixture = RouteFixture::new(default_config());
+        let url = "https://calendar.google.com/event?eid=cedar-event";
+        fixture.day(&cedar_row("[root:: job]", url));
+        fixture.commit_seed(&[], "seed");
+        let prepared = fixture.prepare(
+            "Cedar Labs quarterly review\n\n## Next Steps\n- (Ari) Ship it",
+            MeetingPrepareOptions {
+                selection: MeetingSelection::Token(
+                    "20261124#^cedar-review".to_string(),
+                ),
+                ..MeetingPrepareOptions::default()
+            },
+        );
+        assert_ne!(
+            prepared.stem, "other_host_stem",
+            "planned stem must differ from the competing live stem"
+        );
+        write_file(
+            &fixture.vault.join("ref/meetings/other_host_stem.md"),
+            concat!(
+                "---\ntype: [[ref]]\nstatus: next\n",
+                "event_id: cedar-event\n",
+                "event: \"[[20261124#^cedar-review]]\"\n---\n",
+                "# Other Host Filing\n",
+            ),
+        );
+        fixture.commit_seed(&[], "competing host filing");
+        let result = fixture.file(&prepared);
+        match &result.outcome {
+            IntakeOutcome::Queued { reason, detail, .. } => {
+                assert_eq!(
+                    *reason,
+                    super::super::super::intake::QueueReason::Refused
+                );
+                assert!(
+                    detail.contains("already filed"),
+                    "occurrence identity, not filename: {detail}"
+                );
+            }
+            other => panic!("competing occurrence must queue, got {other:?}"),
+        }
+        assert!(
+            !prepared.note_path.exists(),
+            "planned stem must stay unfiled when a different stem occupies the event"
+        );
+    }
+
+    #[test]
+    fn competing_stem_with_missing_root_leaves_the_daily_note_untouched() {
+        let fixture = RouteFixture::new(default_config());
+        fixture.day(
+            "- [*] #task **1400-1430** Cedar Labs quarterly review [📅](https://calendar.google.com/event?eid=cedar-event \"Open\") ^cedar-review",
+        );
+        fixture.commit_seed(&[], "seed");
+        let before =
+            fs::read(fixture.vault.join("2026/20261124.md")).expect("day");
+        let prepared = fixture.prepare(
+            "Cedar Labs quarterly review\n\n- note",
+            MeetingPrepareOptions {
+                selection: MeetingSelection::Token(
+                    "20261124#^cedar-review".to_string(),
+                ),
+                parent: Some("job".to_string()),
+                ..MeetingPrepareOptions::default()
+            },
+        );
+        assert!(prepared.guarded_root_edit.is_some());
+        write_file(
+            &fixture.vault.join("ref/meetings/other_host_stem.md"),
+            concat!(
+                "---\ntype: [[ref]]\nstatus: next\n",
+                "event_id: cedar-event\n",
+                "event: \"[[20261124#^cedar-review]]\"\n---\n",
+                "# Other Host Filing\n",
+            ),
+        );
+        fixture.commit_seed(&[], "competing host filing");
+        let result = fixture.file(&prepared);
+        assert!(
+            matches!(&result.outcome, IntakeOutcome::Queued { .. }),
+            "competing occurrence queues: {:?}",
+            result.outcome
+        );
+        assert_eq!(
+            before,
+            fs::read(fixture.vault.join("2026/20261124.md"))
+                .expect("day after"),
+            "incomplete/queued occurrence must not apply the prepared re-root"
         );
     }
 

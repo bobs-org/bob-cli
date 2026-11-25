@@ -412,6 +412,8 @@ fn status_defaults_and_overwrite_preserve_task_identity() {
     assert_eq!(replaced.parent.route, "job");
     assert_eq!(replaced.status, "next");
     assert!(!replaced.status_explicit);
+    assert!(!replaced.title_explicit);
+    assert_eq!(replaced.title, "Cedar Meeting");
 
     let explicit_status = prepare_filing(
         &fixture.config,

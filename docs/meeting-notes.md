@@ -48,7 +48,9 @@ List output is newest first with date, span, title, root, missing/filed
 state, and the EVENT token. The header counts meetings that need notes.
 `--day` uses the gcal note parser (`today`, `tomorrow`, `yesterday`,
 `YYYY-MM-DD`); `--window DAYS` defaults to the configured 7 days (1–365).
-Explicit query words filter the list.
+List queries resolve explicit identities (`note#^id`, wikilink, `note:id`,
+leading `~`, Google `eid` URL) through the event parser; a miss yields an
+empty list. Title-query words filter titles only.
 
 Filing destination is `--parent NOTE`, else the event root through parent
 resolution. An inbox, missing, unresolvable, or ineligible root needs a
@@ -180,11 +182,14 @@ bob ref meet -c -d 20261124#^cedar-review -b /path/to/synthetic-vault
 {"ok":true,"schema_version":1,"command":"ref meet","generated_at":"2026-11-24T15:00:00","outcome":"would_file","meeting":{…},"match":{"method":"explicit","evidence":[…]},"filing":{"parent":"job","parent_kind":"project","title":"…","stem":"261124_cedar_labs_review","note":"ref/meetings/261124_cedar_labs_review.md","pdf":"lib/meetings/261124_cedar_labs_review.pdf","task":{"destination":"job","block_id":"…","status":"next"},"relation":{"label":"notes from","target":"[[2026/20261124#^cedar-review]]"}},"notes":{"sha256":"…","shape":"wispr_plain_text","outline":{"tldr":"…","next_steps":[],"sections":[]},"transcript":"omitted"},"warnings":[]}
 ```
 
-Filed and queued receipts use `outcome: "filed"` or `"queued"` with
-`commit` or `queued: {path, reason, detail}`, plus `pages` and warnings.
-Errors use `error: {code, message, hint?}` with `root`, `candidates`,
-`parent_candidates`, or `existing` where relevant. Diagnostics go to stderr
-in JSON mode; stdout stays one envelope. See
+Filed and queued receipts use `outcome: "filed"` or `"queued"` with one
+copy of each key. Success overlays the committed note, PDF, task path, and
+block id, plus `commit`, optional `commit_warning` / `sync_status` /
+`push_pending`, `pages`, and warnings. Queued receipts add
+`queued: {path, reason, detail}`, clear `filing.reroot`, and warn that
+re-root was skipped. Errors use `error: {code, message, hint?}` with
+`root`, `candidates`, `parent_candidates`, or `existing` where relevant.
+Diagnostics go to stderr in JSON mode; stdout stays one envelope. See
 [JSON outputs](reference/json-outputs.md#ref-meet).
 
 ## Related

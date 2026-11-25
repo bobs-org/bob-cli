@@ -57,6 +57,7 @@ pub(crate) struct PreparedFiling {
     pub status: String,
     pub status_explicit: bool,
     pub title: String,
+    pub title_explicit: bool,
     pub stem: String,
     pub target: TargetPlan,
     pub note_path: PathBuf,

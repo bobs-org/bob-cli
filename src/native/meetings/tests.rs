@@ -307,6 +307,14 @@ fn intake_normalizes_bom_crlf_and_trailing_spaces_but_hashes_original_bytes() {
             .code(),
         "notes_unreadable"
     );
+    let bom_crlf = b"\xEF\xBB\xBFSample\r\nSecond \t\r\n";
+    let from_bytes =
+        read_notes(NotesSource::Bytes(bom_crlf)).expect("bytes source");
+    assert_eq!(
+        from_bytes.sha256,
+        hex::encode(sha2::Sha256::digest(bom_crlf))
+    );
+    assert_eq!(from_bytes.text, "Sample\nSecond");
 }
 
 proptest! {

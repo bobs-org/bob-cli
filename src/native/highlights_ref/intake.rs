@@ -157,6 +157,18 @@ pub(super) struct EventRootEdit {
     pub(super) expected_file_sha256: String,
 }
 
+/// Locked identity recheck for a fresh meeting ingest, independent of
+/// whether the filing also mutates the event root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MeetingOccurrenceGuard {
+    /// Google event id when known.
+    pub(super) event_id: Option<String>,
+    /// Vault-relative daily note of the Event Task.
+    pub(super) path: PathBuf,
+    /// The row's `^id`.
+    pub(super) block_id: String,
+}
+
 pub(super) struct IntakeRequest<'a> {
     pub(super) producer: &'a str,
     pub(super) keep_reason: Option<&'a str>,
@@ -164,6 +176,7 @@ pub(super) struct IntakeRequest<'a> {
     pub(super) dry_run: bool,
     pub(super) progress: Option<&'a dyn Fn(&str)>,
     pub(super) event_root_edit: Option<EventRootEdit>,
+    pub(super) occurrence_guard: Option<MeetingOccurrenceGuard>,
 }
 
 #[derive(Debug)]
@@ -330,6 +343,7 @@ fn file_unit(
         request.producer,
         request.expected_source_pointer,
         request.event_root_edit.as_ref(),
+        request.occurrence_guard.as_ref(),
     ) {
         Ok(mut ingested) => {
             ingested.sync_status = session.post_sync();
@@ -450,6 +464,7 @@ impl IntakeSession {
         producer: &str,
         expected_source_pointer: Option<&str>,
         event_root_edit: Option<&EventRootEdit>,
+        occurrence_guard: Option<&MeetingOccurrenceGuard>,
     ) -> std::result::Result<Ingested, IngestFailure> {
         // Locked reread recheck before any move/task/note mutation: when
         // another host filed the whole-bundle name after queue time,
@@ -540,6 +555,14 @@ impl IntakeSession {
                 QueueFailure::new(QueueReason::Refused, error.to_string()),
             );
         }
+        // Meeting identity recheck: every fresh meeting ingest rechecks
+        // Google event ID or resolved Event Task identity under the locks
+        // after pre-sync, whether or not a root edit is planned.
+        if let Some(guard) = occurrence_guard
+            && let Err(failure) = verify_meeting_occurrence(config, guard)
+        {
+            return rollback_or_queue(&mut moves, failure);
+        }
         // Meeting re-root preconditions, checked under the intake locks
         // after the pre-sync pull and before any mutation. A changed event
         // row, a newly filed meeting, an unresolvable parent, a dirty
@@ -615,17 +638,19 @@ impl IntakeSession {
         // The meeting re-root lands only on successful ingest, inside the
         // same scoped commit. Queued, held, or incomplete ingest leaves the
         // daily note untouched; the queued drain never replays the intent.
+        let mut applied_root: Option<Vec<u8>> = None;
         if let Some(edit) = event_root_edit {
             let daily_abs = config.bob_dir.join(&edit.path);
             path_set.insert(daily_abs.clone());
             if let Err(error) = apply_event_root_edit(&daily_abs, edit) {
                 // Restore the preimage so a failed in-place edit never
                 // leaves a half-written event row behind.
-                if let Some((restore_path, before)) = root_preimage {
-                    let _ = fs::write(&restore_path, &before);
+                if let Some((restore_path, before)) = root_preimage.as_ref() {
+                    let _ = fs::write(restore_path, before);
                 }
                 return Err(IngestFailure::Incomplete(error));
             }
+            applied_root = fs::read(&daily_abs).ok();
         }
 
         let note = plan.note_path.clone();
@@ -635,6 +660,10 @@ impl IntakeSession {
                     .frontmatter_value(FIELD_SOURCE_MARKDOWN)
                     .and_then(|value| value.as_string().map(str::to_string)),
                 Err(error) => {
+                    restore_event_root_if_unchanged(
+                        root_preimage.as_ref(),
+                        applied_root.as_deref(),
+                    );
                     return Err(IngestFailure::Incomplete(format!(
                         "saved-source pointer verification could not read the persisted reference note {}: {error}",
                         note.display()
@@ -646,6 +675,10 @@ impl IntakeSession {
                 expected,
                 persisted.as_deref(),
             ) {
+                restore_event_root_if_unchanged(
+                    root_preimage.as_ref(),
+                    applied_root.as_deref(),
+                );
                 return Err(IngestFailure::Incomplete(error));
             }
         }
@@ -1194,6 +1227,52 @@ fn intake_commit_subject(
     }
 }
 
+/// Recheck that no other host filed this occurrence after preparation.
+/// Identity is the Google event id or the Event Task `(path, ^id)`, never
+/// the notes filename.
+fn verify_meeting_occurrence(
+    config: &Config,
+    guard: &MeetingOccurrenceGuard,
+) -> std::result::Result<(), QueueFailure> {
+    let filed = crate::native::meetings::filed_notes_index(&config.bob_dir);
+    let already_filed = guard
+        .event_id
+        .as_deref()
+        .and_then(|event_id| filed.by_event_id.get(event_id))
+        .is_some()
+        || filed
+            .by_target
+            .contains_key(&(guard.path.clone(), guard.block_id.clone()));
+    if already_filed {
+        return Err(QueueFailure::new(
+            QueueReason::Refused,
+            "meeting notes are already filed for this occurrence".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Restore a meeting re-root only when the daily note still holds the
+/// bytes this transaction wrote. Independently changed bytes stay put.
+fn restore_event_root_if_unchanged(
+    preimage: Option<&(PathBuf, Vec<u8>)>,
+    applied: Option<&[u8]>,
+) {
+    let Some((path, before)) = preimage else {
+        return;
+    };
+    let Some(applied) = applied else {
+        return;
+    };
+    let Ok(current) = fs::read(path) else {
+        return;
+    };
+    if current != applied {
+        return;
+    }
+    let _ = fs::write(path, before);
+}
+
 /// Verify a meeting re-root before any vault mutation. The checks run
 /// under the intake locks after the pre-sync pull: the daily note must
 /// still contain the exact expected event row, the root transition must
@@ -1218,23 +1297,14 @@ fn verify_event_root_edit(
             edit.to
         )));
     }
-    // Meeting identity recheck: another host may have filed this
-    // occurrence after preparation but before the locked ingest.
-    let filed = crate::native::meetings::filed_notes_index(&config.bob_dir);
-    let already_filed = edit
-        .event_id
-        .as_deref()
-        .and_then(|event_id| filed.by_event_id.get(event_id))
-        .is_some()
-        || filed
-            .by_target
-            .contains_key(&(edit.path.clone(), edit.block_id.clone()));
-    if already_filed {
-        return Err(refused(
-            "meeting notes are already filed for this occurrence; re-root refused"
-                .to_string(),
-        ));
-    }
+    verify_meeting_occurrence(
+        config,
+        &MeetingOccurrenceGuard {
+            event_id: edit.event_id.clone(),
+            path: edit.path.clone(),
+            block_id: edit.block_id.clone(),
+        },
+    )?;
     let absolute = config.bob_dir.join(&edit.path);
     let before = fs::read(&absolute).map_err(|error| {
         refused(format!(
@@ -1683,7 +1753,14 @@ fn drain_queue(
                     .to_string(),
             }
         } else {
-            match session.ingest(config, &unit, DRAIN_PRODUCER, None, None) {
+            match session.ingest(
+                config,
+                &unit,
+                DRAIN_PRODUCER,
+                None,
+                None,
+                None,
+            ) {
                 Ok(ingested) => {
                     for path in &ingested.ignored_paths {
                         progress(&ignored_path_warning(path));
@@ -2181,6 +2258,31 @@ mod tests {
             )
             .as_deref(),
             Some("saved-source pointer mismatch in persisted reference note: expected expected.md, found other.md")
+        );
+    }
+
+    #[test]
+    fn restore_event_root_if_unchanged_restores_only_matching_bytes() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = temp.path().join("2026/20261124.md");
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        let before = b"# Day\n- [*] event\n";
+        let applied = b"# Day\n- [*] event [root:: job]\n";
+        fs::write(&path, applied).expect("write applied");
+        restore_event_root_if_unchanged(
+            Some(&(path.clone(), before.to_vec())),
+            Some(applied.as_slice()),
+        );
+        assert_eq!(fs::read(&path).expect("read restored"), before);
+
+        fs::write(&path, b"# Day\nindependent edit\n").expect("write other");
+        restore_event_root_if_unchanged(
+            Some(&(path.clone(), before.to_vec())),
+            Some(applied.as_slice()),
+        );
+        assert_eq!(
+            fs::read(&path).expect("read independent"),
+            b"# Day\nindependent edit\n"
         );
     }
 }

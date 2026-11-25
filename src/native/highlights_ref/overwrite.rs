@@ -186,7 +186,9 @@ impl OverwriteRefusal {
         if let Some(hint) = &self.hint {
             message.push_str(&format!("\nhint: {hint}"));
         }
-        CommandError::new(message).with_exit_code(self.exit_code)
+        CommandError::new(message)
+            .with_exit_code(self.exit_code)
+            .with_code(self.code)
     }
 }
 

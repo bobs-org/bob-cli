@@ -6,17 +6,16 @@ description: Machine-readable Bob output contracts.
 # JSON outputs
 
 Fixtures use this checkout's `bob`, isolated `HOME`/`XDG_*`, a synthetic
-vault, `BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`, `BOB_REF_JOBS_KICK=off`, and
-`BOB_GMAIL_KICK=off`; network, clipboard, sync, and hooks are stubbed. Only
-stdout `schema_version` counts.
+vault, `BOB_NOW=2026-10-20 12:00:00`, `TZ=UTC`, and job kicks off; network,
+clipboard, sync, and hooks are stubbed. Only stdout `schema_version` counts.
 
 ## Framing
 
 JSON goes to stdout, chatter to stderr; usage errors exit 2.
 
-Most versioned helpers include `ok` and `schema_version`; `tick` uses
-`exit_code` without `ok`. Some capture-helper errors return
-`{"ok":false,"error":"…"}` unversioned.
+Versioned helpers include `ok` and `schema_version`; `tick` uses
+`exit_code` without `ok`. Some capture-helper errors return unversioned
+`{"ok":false,"error":"…"}`.
 
 `…` marks omissions.
 
@@ -39,24 +38,26 @@ bob plan -f json -b /path/to/synthetic-vault
 `today_roots` sum to `today.count`; `hue` is null for `@unfiled`. See
 [Plan](../plan.md#lints).
 
+
 ## Capture and protocol helpers
 
-`bob capture` writes the vault; most `capture-*` helpers are read-only.
+`bob capture` writes; `capture-*` helpers are mostly read-only.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, the selected provider and entry ages on success, or a refusal `code` and message. Clipboard and history text are never included | `schema_version: 1` | [Capture](../capture.md#clipboard) |
-| `bob capture` | `-f json` | Capture effects, notebook/record results, file previews, and attachment warnings/refusals. Optional `requirements[]` reports owner, added count (including nested requirements), note filing, and summary. Preview lines add optional `req: {depth, state}`. Record creates report changed neighbours in `walk_files[]` | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [task requirements](../task-requirements.md#5-authoring), [Mail-close results](#mail-close-results) |
-| `bob capture-parse` | `-f json` | Per-item modes, spans, diagnostics, and needs (`grammar: 29`). Requirement markers carry `depth`; refusals include `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`. Notebook modes carry `notebook: true` spans | `schema_version: 1` | [Capture parse](../capture.md#bob-capture-parse) |
-| `bob capture-complete` | `-f json` | Contexts, candidates, replacement ranges, pickers, effects, and creation choices. `work_log` recalls Work Log phrases. `-L` completes prose wikilinks; `-T` adds `((` task links and `-S PATH` supplies same-note context (both require `-L`). `-n` offers the first missing required record field; `-F KEY` offers values for a named field. Neither edits the draft | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
+| `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, the selected provider and entry ages, or a refusal `code` and message. Clipboard text is omitted | `schema_version: 1` | [Capture](../capture.md#clipboard) |
+| `bob capture` | `-f json` | Capture effects, notebook/record results, file previews, and attachment warnings/refusals. Optional `requirements[]` reports owner, added count, note filing, and summary. Preview lines add optional `req: {depth, state}`. Record creates report changed neighbours in `walk_files[]` | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [task requirements](../task-requirements.md#5-authoring), [Mail-close results](#mail-close-results) |
+| `bob capture-parse` | `-f json` | Per-item modes, spans, diagnostics, and needs (`grammar: 29`). Requirement markers carry `depth`; refusals include `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`. Notebook modes carry `notebook: true` | `schema_version: 1` | [Capture parse](../capture.md#bob-capture-parse) |
+| `bob capture-complete` | `-f json` | Contexts, candidates, replacement ranges, pickers, effects, and creation choices. `work_log` recalls Work Log phrases. `-L` completes prose wikilinks; `-T` adds `((` task links and `-S PATH` supplies same-note context (both require `-L`). `-n` offers the first missing required field; `-F KEY` offers values for a named field | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
-| `bob capture-pomodoros` | `-f json` | Ledger entries, `warnings`, `max_task_link_count`, and optional `start_token`. `--tasks` adds `intentions[]` display strings, `headline` (first intention or `null`), task agendas, optional calendar `events`, event chips, off-clock data (`off_clock`, deprecated `untracked`, `clock_source`, `clock_note`), totals, and Event Task buffers. Agenda `items[].lines[]` add optional `req: {depth, state}` on requirement rows | `schema_version: 1` | [Capture](../capture.md), [Pomodoro homes](../pomodoro-homes.md) |
-| `bob capture-related` | `-f json` | Similar tasks or same-folder records, UTF-8 draft anchors, actions, and already-linked tasks; `--query` ranks task titles with scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
-| `bob capture-rewrite` | `-f json` | `input`, rewritten `text`, `changed`, `cursor`, `rule` (`collapse_global_destination` for glued `@@route` triggers, plus the alias/absorption rules), `edits`, and optional forward `alias`; unchanged cursor requests add an object or `null` `sigil_alias_tip` | `schema_version: 1` | [Capture-rewrite contract](../capture.md#bob-capture-rewrite) |
+| `bob capture-pomodoros` | `-f json` | Ledger entries, `warnings`, `max_task_link_count`, and optional `start_token`. `--tasks` adds `intentions[]`, `headline`, task agendas, optional calendar `events`, event chips, off-clock data (`off_clock`, deprecated `untracked`, `clock_source`, `clock_note`), totals, and Event Task buffers. Agenda `items[].lines[]` add optional `req: {depth, state}` | `schema_version: 1` | [Capture](../capture.md), [Pomodoro homes](../pomodoro-homes.md) |
+| `bob capture-related` | `-f json` | Similar tasks or same-folder records, UTF-8 draft anchors, actions, and already-linked tasks; `--query` ranks titles with scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
+| `bob capture-rewrite` | `-f json` | `input`, rewritten `text`, `changed`, `cursor`, `rule` (`collapse_global_destination` for glued `@@route` triggers, plus alias/absorption rules), `edits`, and optional forward `alias`; unchanged cursor requests add `sigil_alias_tip` | `schema_version: 1` | [Capture-rewrite contract](../capture.md#bob-capture-rewrite) |
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
-| `bob capture-targets` | `-f json` | `bob_dir`, `count`, `targets`; notebook `kind: "notebook"`. Record rows: `kind: "record"`, `type` (album noun), optional `emoji`, `count`. Albums add `title`, optional `summary`/`owner`, and `breadcrumb` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md#record-notes) |
+| `bob capture-targets` | `-f json` | `bob_dir`, `count`, `targets`; notebook `kind: "notebook"`. Record rows: `kind: "record"`, `type` (album noun), optional `emoji`, `count`. Albums add `title`, `summary`/`owner`, and `breadcrumb` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md#record-notes) |
 | `bob capture-task-id` | `-f json` | ID write (or `-d` plan) plus `note_path` and picker `*_replacement` strings; notebook notes add `item_kind: "note"` and `parent_replacement: "@nb+ID"` | `schema_version: 1` | [Capture](../capture.md) |
-| `bob capture-drawers` | `-f json` | Direct-child drawers plus catalog recents; drawer rows include `marker` (`legacy_caps` or `bold`) and project-note sections use `section` | `schema_version: 1` | [Task drawers](../task-drawers.md) |
+| `bob capture-drawers` | `-f json` | Direct-child drawers plus catalog recents; rows include `marker` (`legacy_caps` or `bold`) and project-note sections use `section` | `schema_version: 1` | [Task drawers](../task-drawers.md) |
+
 | `bob capture-tasks` | `-f json` | Open tasks of one note with block IDs and status names | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-templates list` | `-f json` | Saved-template shelf entries | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates save` | `-f json` | Saved definition plus shelf position | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
@@ -497,7 +498,7 @@ no `--format json` or `--json` flag.
 | `bob ref scan` | `-f json` | Scan report: `mode`, `write_pdfs`, `hook`, `intake`, `summary` (with `held`), `notes` (with `marker_write`, including `restored` when a stale save was restored), `failures`, `intake_only`, `queued`, `held`. Every writing scan that holds the writer lock also writes that exact line to `<state>/bob-cli/ref/last-scan.json` and (macOS) posts `org.bobs.bob.ref.scan-finished`. `--intake-only` files queued `xlib/` PDFs and audio only (no annotation pass); `ok` is then also false when a writing drain leaves `queued` nonempty. Hard failures use the error envelope (`error.code` / `hint` / `paths`) instead of `summary`/`notes`/`failures`, with no `held` field. | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [JSON output](../highlights-ref-sync.md#json-output) |
 | `bob ref today` | `-f json` | Pulls one reference's reading task into a Pomodoro (`mode` `dry_run` or `write`; `-d` plans without writing). Success carries `changed`, `ref`, `task`, `pomodoros`, and `capture`. This is not a listing of today's references. | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [bob ref today](../ref.md#bob-ref-today) |
 | `bob ref rename` | `-f json` | Rename plan and rewritten-link report | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
-| `bob ref meet` | `-f json` | Meeting list or filing receipt with typed error codes | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Meeting notes](../meeting-notes.md) |
+| `bob ref meet` | `-f json` | List or filing/queued receipt with unique keys and typed errors | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Meeting notes](../meeting-notes.md) |
 | `bob ref migrate-tasks` | `-f json` | Migration plan for open ref tasks | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref migrate-zorg` | `-f json` | Zorg-record migration plan | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref jobs list` | `-f json` | Queued background jobs plus a `summary` | `schema_version: 1` | [Ref jobs](../ref-jobs.md) |
