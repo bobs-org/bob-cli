@@ -146,6 +146,41 @@ pub(super) fn overlap_refusal(ancestor: &str, descendant: &str) -> SplitError {
     }
 }
 
+/// Insert a managed back-link line into a fresh task block at the
+/// managed-link zone slot (`task_block_layout`), so a fresh split is
+/// already tidy-clean. `fallback_indent` covers a childless block, whose
+/// slot indent has no child to copy.
+pub(super) fn insert_managed_back_link(
+    scratch: &str,
+    back_link: &str,
+    fallback_indent: &str,
+    settings: &NoteTaskSettings,
+) -> String {
+    let mut updated = scratch.to_string();
+    if let Some(task) = find_task(scratch, 0, settings) {
+        let slot =
+            insertion_offset(scratch, &task, ChildKind::ManagedLink, settings);
+        let has_children =
+            !TaskBlock::read(scratch, &task, &settings.global_filter)
+                .children
+                .is_empty();
+        let indent = if has_children {
+            slot.indent.as_str()
+        } else {
+            fallback_indent
+        };
+        let line = task_relations::format::format_linked_from_line(
+            indent,
+            &[(
+                back_link.to_string(),
+                Some(task_relations::MENTION_LABEL.to_string()),
+            )],
+        );
+        updated.insert_str(slot.offset, &with_newline(&line));
+    }
+    updated
+}
+
 /// The carried branch as a canonical task block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CarriedBlock {
@@ -178,28 +213,9 @@ pub(super) fn carried_block(
         scratch.push_str(&with_newline(child));
     }
     let original = scratch.clone();
-    if let Some(link) = back_link
-        && let Some(task) = find_task(&scratch, 0, settings)
-    {
-        let slot =
-            insertion_offset(&scratch, &task, ChildKind::ManagedLink, settings);
-        let has_children =
-            !TaskBlock::read(&scratch, &task, &settings.global_filter)
-                .children
-                .is_empty();
-        let indent = if has_children {
-            slot.indent.as_str()
-        } else {
-            fallback_indent
-        };
-        let line = task_relations::format::format_linked_from_line(
-            indent,
-            &[(
-                link.to_string(),
-                Some(task_relations::MENTION_LABEL.to_string()),
-            )],
-        );
-        scratch.insert_str(slot.offset, &with_newline(&line));
+    if let Some(link) = back_link {
+        scratch =
+            insert_managed_back_link(&scratch, link, fallback_indent, settings);
     }
     if let Some(task) = find_task(&scratch, 0, settings)
         && let Some(tidy) = plan_tidy(&scratch, &task, &TidyPolicy { settings })

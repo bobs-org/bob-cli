@@ -10,8 +10,8 @@ use regex::Regex;
 use serde::Serialize;
 
 use super::carry::{
-    carried_block, overlap_refusal, req_refusal, LineMove, ReqCandidate,
-    SplitCandidateReq,
+    carried_block, insert_managed_back_link, overlap_refusal, req_refusal,
+    LineMove, ReqCandidate, SplitCandidateReq,
 };
 use crate::native::{
     capture::list_item_body,
@@ -35,7 +35,7 @@ use crate::native::{
         },
         VaultSnapshot,
     },
-    task_relations, task_reqs,
+    task_reqs,
     vault_links::NoteIndex,
 };
 
@@ -337,8 +337,7 @@ pub(crate) fn plan_task_split(
             id
         );
         let base_indent = owner_indent(&source_lines[owner.line]);
-        let child_indent = format!("{base_indent}  ");
-        let mut children = rebase_children(
+        let children = rebase_children(
             &candidate.child_lines,
             &candidate.indent,
             &base_indent,
@@ -373,14 +372,21 @@ pub(crate) fn plan_task_split(
             );
             planned_moves.push(Some((candidate.line, block.moves)));
             block.lines.concat()
+        } else if let Some(link) = back_link {
+            // A plain split's back-link lands in the managed-link zone, as
+            // the req-carry path does, so the fresh block is already
+            // tidy-clean.
+            let unit = nesting_unit(&source_lines, candidate);
+            let mut scratch = task_line;
+            scratch.push_str(&children.concat());
+            planned_moves.push(None);
+            insert_managed_back_link(
+                &scratch,
+                &link,
+                &format!("{base_indent}{unit}"),
+                task_settings,
+            )
         } else {
-            if let Some(link) = back_link {
-                let mention = task_relations::format::format_linked_from_line(
-                    &child_indent,
-                    &[(link, Some(task_relations::MENTION_LABEL.to_string()))],
-                );
-                children.push(format!("{mention}\n"));
-            }
             planned_moves.push(None);
             let mut payload = task_line;
             payload.push_str(&children.concat());

@@ -69,7 +69,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - include pg_dump timing\n"
         },
         "tasks": [
           {
@@ -156,7 +156,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - include pg_dump timing\n"
         },
         "tasks": [
           {
@@ -207,7 +207,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - include pg_dump timing\n"
         },
         "tasks": [
           {
@@ -262,7 +262,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - include pg_dump timing\n"
         },
         "tasks": [
           {
@@ -367,7 +367,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - include pg_dump timing\n"
         },
         "tasks": [
           {
@@ -763,7 +763,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^draft-rollback|Draft the rollback runbook outline with timing notes]]\n- [ ] #task Draft the rollback runbook outline with timing notes [created:: 2026-11-03] ^draft-rollback\n  - REQUIREMENTS\n    - staging box with 64 GB\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^draft-rollback|Draft the rollback runbook outline with timing notes]]\n- [ ] #task Draft the rollback runbook outline with timing notes [created:: 2026-11-03] ^draft-rollback\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - REQUIREMENTS\n    - staging box with 64 GB\n"
         },
         "tasks": [
           {
@@ -806,7 +806,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n\t- [[#^ping-alice-about|Ping Alice about the cutover window]]\n\t- Write the rollback runbook\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n\t- [[#^ping-alice-about|Ping Alice about the cutover window]]\n\t- Write the rollback runbook\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n\t- 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
         },
         "tasks": [
           {
@@ -849,7 +849,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n    - [[#^ping-alice-about|Ping Alice about the cutover window]]\n    - Write the rollback runbook\n      - include pg_dump timing\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n    - [[#^ping-alice-about|Ping Alice about the cutover window]]\n    - Write the rollback runbook\n      - include pg_dump timing\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n    - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
         },
         "tasks": [
           {
@@ -2401,7 +2401,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^write-rollback|Write the rollback runbook]]\n  - Ping Alice about the cutover window\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Rotate the replica certs [created:: 2026-10-21] ^rotate\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^write-rollback|Write the rollback runbook]]\n  - Ping Alice about the cutover window\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - include pg_dump timing\n- [ ] #task Rotate the replica certs [created:: 2026-10-21] ^rotate\n"
         },
         "tasks": [
           {
@@ -2455,7 +2455,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **API Design**\n    - [[#^nested|Nested note]]\n- [ ] #task **Nested note** [created:: 2026-11-03] ^nested\n  - endpoint details\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **API Design**\n    - [[#^nested|Nested note]]\n- [ ] #task **Nested note** [created:: 2026-11-03] ^nested\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n  - endpoint details\n"
         },
         "tasks": [
           {
