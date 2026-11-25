@@ -269,6 +269,53 @@ const POMODORO_MEMBERS: &[Member] = &[
     },
 ];
 
+const SNOOZE_MEMBERS: &[Member] = &[
+    Member {
+        name: "add",
+        about: "Commit a task to today's Snoozed queue",
+        leaf: Leaf {
+            native_command: NativeCommand::SnoozeAdd,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "drop",
+        about: "Remove a task from today's Snoozed queue",
+        leaf: Leaf {
+            native_command: NativeCommand::SnoozeDrop,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List today's Snoozed queue (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::SnoozeList,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "wake",
+        about: "Wake due tasks, or selected tasks now",
+        leaf: Leaf {
+            native_command: NativeCommand::SnoozeWake,
+            script_command: None,
+        },
+    },
+];
+
+const SNOOZE_AFTER_HELP: &str = r"Bare `bob snooze` runs the read-only `list`.
+
+Examples:
+  bob snooze                 List today's queue
+  bob snooze add job:task 1530
+  bob snooze drop job:task
+  bob snooze wake            Wake due tasks
+  bob snooze wake job:task   Wake one task now
+
+See docs/snooze.md for the row grammar, time rules, and JSON contract.
+Run 'bob snooze <command> --help' for command options.";
+
 const TASK_AFTER_HELP: &str = "\
 Examples:
   bob task archive                 Archive done and canceled tasks
@@ -1100,6 +1147,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::NoteReady,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "snooze",
+        about: "List, add, drop, or wake today's Snoozed tasks",
+        section: Section::DailyWorkflow,
+        target: Target::Group(Group {
+            members: SNOOZE_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob snooze` runs the read-only list of today's queue.",
+            ),
+            after_help: SNOOZE_AFTER_HELP,
+            usage: "bob snooze [COMMAND]",
         }),
     },
     Subcommand {
@@ -2875,6 +2936,10 @@ mod tests {
             NativeCommand::Stats,
             NativeCommand::StatsMetrics,
             NativeCommand::StatsShow,
+            NativeCommand::SnoozeAdd,
+            NativeCommand::SnoozeDrop,
+            NativeCommand::SnoozeList,
+            NativeCommand::SnoozeWake,
             NativeCommand::TaskStatusHooks,
             NativeCommand::ThemesColor,
             NativeCommand::ThemesHide,

@@ -4,11 +4,13 @@
 //! layer ([`parse`], [`when`], [`state`]), the shared conformance-vector
 //! loader ([`vectors`]), and the pure mutation planners ([`plan`]).
 //!
-//! The CLI (`cli.rs`), receipts, and tick integration belong to later
-//! phases of the same child epic.
+//! The guarded CLI (`cli.rs`, `shell.rs`), receipts, and tick delivery are
+//! separate parts of the same child epic.
 
+pub(crate) mod cli;
 pub(crate) mod parse;
 pub(crate) mod plan;
+pub(crate) mod shell;
 pub(crate) mod state;
 pub(crate) mod vectors;
 pub(crate) mod when;

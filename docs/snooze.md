@@ -13,7 +13,8 @@ an unwoken row becomes history at midnight and the sticky Next lane returns
 the task to review; multi-day deferral is `[scheduled::]`.
 
 This page is the contract. The Rust side is `src/native/snooze/`
-(`parse.rs`, `when.rs`, `state.rs`, `plan.rs`, `vectors.rs`); the
+(`parse.rs`, `when.rs`, `state.rs`, `plan.rs`, `vectors.rs`, `cli.rs`,
+`shell.rs`); the
 JavaScript mirror lives in bob-ledger-tools and runs the shared fixture
 verbatim. The machine-readable parity vectors live in
 `tests/fixtures/snooze/vectors.json`, which both languages cite: Rust
@@ -155,7 +156,70 @@ shifted line offsets after a Ready→Next stamp.
 Ordinary link routing, MEET placement, and subtree-appending callers
 keep their defaults: `place(..., never_running: false)` and
 `SubtreeInsert::Append`. The guarded CLI, receipts, tick step, and
-writer audit land in later phases.
+receipt and tick delivery are separate follow-up phases.
+
+## CLI
+
+`bob snooze` is the read-only list command. The public commands are:
+
+```text
+bob snooze [--bob-dir DIR] [--format human|json] [--quiet]
+bob snooze add TASK WHEN [--bob-dir DIR] [--dry-run] [--format human|json] [--quiet]
+bob snooze drop TASK [--bob-dir DIR] [--dry-run] [--format human|json] [--quiet]
+bob snooze wake [TASK ...] [--bob-dir DIR] [--dry-run] [--format human|json] [--quiet]
+```
+
+`TASK` is `note:block-id` or `[[note#^block-id]]`. `WHEN` uses the time
+grammar above. `-b`, `-d`, `-f`, and `-q` are the short forms of
+`--bob-dir`, `--dry-run`, `--format`, and `--quiet`; `-h` shows help.
+The vault defaults to `BOB_DIR` (then `~/bob`), and `BOB_DAY_FILE` can
+select the daily note. `BOB_NOW` and Bob's configured timezone set the
+clock used by every command. `--quiet` suppresses successful human output;
+JSON output remains complete.
+
+List never takes the vault lock. Add, drop, and wake first validate and
+plan against a read snapshot. A dry run returns that plan without locking
+or writing. A real write waits at most ten seconds for the vault lock,
+refreshes its inputs and replans once if a preimage changed, and defers
+after a second drift or a day rollover. Add stages the task note and daily
+note in one rollback-capable batch. Drop and wake write only the daily
+note. An automatic wake sweep runs only on the configured writer host;
+`wake TASK` is an explicit request and works on any host. A skipped sweep
+does not mutate the vault or create state files. Exit status is 0 for
+success, no work, deferred, or skipped; 1 for runtime failures; and 2 for
+usage errors or refusals.
+
+Every JSON report has `schema_version: 1`, `date`, and RFC 3339 `now`.
+The list report adds `rows`, `next_wake_at`, and `plan`. Each row reports
+its source `line`, resolved `route` when available, `block_id`, task
+`title`, four-digit `target`, `state`, an ignored `reason` when present,
+and `woke_at` for history. `next_wake_at` is the earliest live target or
+null; blocked rows do not drive it. The plan reports current on-clock
+links, `cap`, and whether the ledger is over cap.
+
+Add reports `status` (`added` or `planned`), the task identity and title,
+the resolved target time and instant, the resulting lane, `daily_file`,
+the link-count plan, and `dry_run`. Drop reports `status` (`dropped` or
+`planned`), `daily_file`, and `dry_run`. Wake reports `status` (`woke`,
+`nothing_due`, `deferred`, or `skipped`), `woken`, `dropped`, `ignored`,
+`pending`, `next_wake_at`, `plan`, `daily_file`, `notified`, and
+`wake_id`. Until wake delivery is added, `notified` is `none` and
+`wake_id` is null. A wake batch reports each task's destination, target,
+actual wake time, and whether that insert crossed the link cap. No command
+forges a notification receipt.
+
+For example, `bob snooze list -f json` returns a stable envelope such as:
+
+```json
+{
+  "schema_version": 1,
+  "date": "2026-10-08",
+  "now": "2026-10-08T12:00:00-04:00",
+  "rows": [],
+  "next_wake_at": null,
+  "plan": { "count": 3, "cap": 10, "over": false }
+}
+```
 
 ## Conformance vectors
 

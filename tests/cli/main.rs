@@ -42,6 +42,7 @@ mod relations;
 mod relations_rename;
 mod relations_reverse;
 mod run_env;
+mod snooze;
 mod stats;
 mod stats_clock;
 mod support;

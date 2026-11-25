@@ -60,6 +60,13 @@ mod blocks_mirror;
 mod budget;
 pub(crate) mod cli;
 mod commit;
+
+#[cfg(test)]
+pub(crate) fn test_fail_rename_at(target: Option<&Path>) {
+    commit::RENAME_FAIL_TARGET.with(|slot| {
+        *slot.borrow_mut() = target.map(Path::to_path_buf);
+    });
+}
 mod dependencies;
 mod dependency_drop;
 mod ensure_next;

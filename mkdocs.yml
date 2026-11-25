@@ -248,6 +248,7 @@ nav:
               - "bob plan": reference/cli/plan.md
               - "bob pomodoro": reference/cli/pomodoro.md
               - "bob ready": reference/cli/ready.md
+              - "bob snooze": reference/cli/snooze.md
               - "bob stats": reference/cli/stats.md
               - "bob types": reference/cli/types.md
               - "bob walks": reference/cli/walks.md

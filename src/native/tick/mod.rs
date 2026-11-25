@@ -111,3 +111,11 @@ pub(super) fn now() -> Result<DateTime<Utc>, String> {
         Err(_) => Ok(Utc::now()),
     }
 }
+
+/// The writer pin and host identity used by automatic snooze sweeps. Keep
+/// these on the same source as `bob tick`: `tick.writer`, then
+/// `gcal.writer`, and the tick journal's hostname slug.
+pub(crate) fn snooze_writer() -> Result<(String, Option<String>), String> {
+    let config = config::Config::load()?;
+    Ok((crate::native::pref_journal::host_label(), config.writer))
+}

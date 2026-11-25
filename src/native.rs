@@ -36,7 +36,7 @@ pub(crate) mod capture_notebooks;
 mod capture_parse;
 mod capture_pomodoro_close;
 mod capture_pomodoro_name;
-mod capture_pomodoro_start;
+pub(crate) mod capture_pomodoro_start;
 mod capture_pomodoros;
 mod capture_pomodoros_agenda;
 mod capture_project_note;
@@ -247,6 +247,10 @@ pub(crate) enum NativeCommand {
     Plugins,
     Pomodoro,
     Projects,
+    SnoozeAdd,
+    SnoozeDrop,
+    SnoozeList,
+    SnoozeWake,
     PropsShow,
     PropsUpdate,
     Randomize,
@@ -373,6 +377,10 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Plugins => plugins::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Projects => projects::run(args),
+        NativeCommand::SnoozeAdd => snooze::cli::run_add(args),
+        NativeCommand::SnoozeDrop => snooze::cli::run_drop(args),
+        NativeCommand::SnoozeList => snooze::cli::run_list(args),
+        NativeCommand::SnoozeWake => snooze::cli::run_wake(args),
         NativeCommand::PropsShow => props::cli::run_show(args),
         NativeCommand::PropsUpdate => props::cli::run_update(args),
         NativeCommand::Randomize => randomize::run(args),

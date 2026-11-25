@@ -20,6 +20,11 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob pomodoro status`](pomodoro.md#bob-pomodoro-status) | Show the current Pomodoro status (default) |
 | [`bob pomodoro tmux`](pomodoro.md#bob-pomodoro-tmux) | Print the Pomodoro status and plan meter for tmux |
 | [`bob ready`](ready.md) | Show each area/project note's Ready lane against the per-note cap |
+| [`bob snooze`](snooze.md) | List, add, drop, or wake today's Snoozed tasks |
+| [`bob snooze add`](snooze.md#bob-snooze-add) | Commit a task to today's Snoozed queue |
+| [`bob snooze drop`](snooze.md#bob-snooze-drop) | Remove a task from today's Snoozed queue |
+| [`bob snooze list`](snooze.md#bob-snooze-list) | List today's Snoozed queue (default) |
+| [`bob snooze wake`](snooze.md#bob-snooze-wake) | Wake due tasks, or selected tasks now |
 | [`bob stats`](stats.md) | Show derived daily metrics as a glance, detail chart, or catalog |
 | [`bob stats metrics`](stats.md#bob-stats-metrics) | List metric ids, kinds, and definitions |
 | [`bob stats overview`](stats.md#bob-stats-overview) | Show the weekly glance (default) |
@@ -172,6 +177,7 @@ Daily workflow:
   pomodoro     Show Pomodoro status, print the tmux line, or notify on
                completion
   ready        Show each area/project note's Ready lane against the per-note cap
+  snooze       List, add, drop, or wake today's Snoozed tasks
   stats        Show derived daily metrics as a glance, detail chart, or catalog
   types        Manage task types and explain task suggestions
   walks        Show which bracket walks need attention: s review, w lanes, b

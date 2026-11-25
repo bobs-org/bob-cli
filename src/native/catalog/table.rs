@@ -20,6 +20,8 @@ pub(crate) const KNOWN_SLOTS: &[&str] = &[
     "ref-target",
     "record-type",
     "relation-label",
+    "snooze-when",
+    "task",
     "text",
     "theme",
     "url",
@@ -256,6 +258,55 @@ pub(crate) const ENTRIES: &[Row] = &[
         Presentation::Report,
         60,
     ),
+    Row {
+        slots: &[("TASK", "task"), ("WHEN", "snooze-when")],
+        invalidates: &["stats", "tasks"],
+        ..writes(
+            "snooze-add",
+            &["snooze", "add"],
+            "Snooze a task until a clock time",
+            &["snooze", "task", "until", "time", "reminder"],
+            Policy::Run,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
+        slots: &[("TASK", "task")],
+        invalidates: &["stats", "tasks"],
+        ..writes(
+            "snooze-drop",
+            &["snooze", "drop"],
+            "Remove a task from today's Snoozed queue",
+            &["snooze", "drop", "remove", "task"],
+            Policy::Run,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
+        ..reads(
+            "snooze-list",
+            &["snooze", "list"],
+            "List today's Snoozed queue",
+            &["snooze", "list", "asleep", "due", "woken", "task"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        slots: &[("TASK", "task")],
+        invalidates: &["stats", "tasks"],
+        ..writes(
+            "snooze-wake",
+            &["snooze", "wake"],
+            "Wake due or selected Snoozed tasks",
+            &["snooze", "wake", "task", "due", "reminder"],
+            Policy::Run,
+            Some(DRY_RUN),
+            60,
+        )
+    },
     Row {
         slots: &[("NOTE", "area-note"), ("note", "area-note")],
         ..reads(

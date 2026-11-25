@@ -175,6 +175,18 @@ impl NativeCommand {
                 crate::native::pomodoro::completion_descriptor()
             }
             NativeCommand::Projects => crate::native::projects::build_cli(),
+            NativeCommand::SnoozeAdd => {
+                crate::native::snooze::cli::build_cli_add()
+            }
+            NativeCommand::SnoozeDrop => {
+                crate::native::snooze::cli::build_cli_drop()
+            }
+            NativeCommand::SnoozeList => {
+                crate::native::snooze::cli::build_cli_list()
+            }
+            NativeCommand::SnoozeWake => {
+                crate::native::snooze::cli::build_cli_wake()
+            }
             NativeCommand::PropsShow => {
                 crate::native::props::cli::show_command()
             }

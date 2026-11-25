@@ -45,7 +45,7 @@ fn protocol_1_parses_with_schema_version_one() {
         ])
     );
     let entries = json["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 110);
+    assert_eq!(entries.len(), 114);
     assert!(entries.iter().any(|entry| {
         entry["id"] == "bank-config-show"
             && entry["path"] == serde_json::json!(["bank", "config", "show"])

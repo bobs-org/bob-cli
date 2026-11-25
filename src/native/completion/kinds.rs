@@ -809,6 +809,11 @@ const TABLE: &[Entry] = &[
         kind: Kind::Metric,
     },
     Entry {
+        path: &["snooze", "add"],
+        arg: "when",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &[],
         arg: "range",
         kind: Kind::FreeText,
