@@ -56,6 +56,8 @@
   location: /reference/capture-syntax/#at-route-any-section
 - query: "@route^block-id"
   location: /reference/capture-syntax/#at-route-caret
+- query: "whole-draft @route^block-id"
+  location: /reference/capture-syntax/#at-route-caret-goto
 - query: "@route:block-id"
   location: /reference/capture-syntax/#at-route-colon
 - query: "@route:block-id#pomodoro"
