@@ -426,6 +426,23 @@ fn parse_linked_from_gap(gap: &str, is_last: bool) -> Option<Option<String>> {
     rest.chars().all(char::is_whitespace).then_some(label)
 }
 
+/// Block-link spans backing an accepted LINKS line, in entry order.
+/// `None` when the line is not an accepted LINKS line (malformed,
+/// not-a-line, or empty).
+pub(crate) fn accepted_links_spans(line: &str) -> Option<Vec<BlockLinkSpan>> {
+    let Some(Ok(header)) = parse_header(line) else {
+        return None;
+    };
+    if header.kind != LineKind::Links {
+        return None;
+    }
+    let entries = parse_links_entries(line, &header)?;
+    if entries.is_empty() {
+        return None;
+    }
+    Some(relevant_spans(line, header.label_end))
+}
+
 fn relevant_spans(line: &str, label_end: usize) -> Vec<BlockLinkSpan> {
     block_link_spans(line)
         .into_iter()

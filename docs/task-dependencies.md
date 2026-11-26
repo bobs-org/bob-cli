@@ -277,6 +277,10 @@ with no R0 or D3.
   own reason. The hooks keep the final word.
 - **Closing.** Closing a planned prerequisite links the dependents it
   fully unblocked into its slot (§12).
+- **Plain links.** Adding a dependency absorbs the pair's plain links in
+  both directions; releasing it never resurrects them. The full tie
+  contract — vocabulary, invariant, writer table, tie fields, and PT
+  vectors — lives in [task-relations.md §22](task-relations.md#22-plain-links-and-dependencies).
 
 ## 6. The Depends on stage (navigation-hotkeys)
 

@@ -13,6 +13,7 @@ pub(crate) mod mentions;
 pub(crate) mod parse;
 pub(crate) mod plan;
 pub(crate) mod resolve;
+pub(crate) mod ties;
 
 #[cfg(test)]
 mod tests;

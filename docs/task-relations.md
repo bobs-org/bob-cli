@@ -40,6 +40,8 @@ vector, fix this doc first in the same change.
   mirrors the relations pointing at a task, and the inert text
   mentions of it: `🪢 **LINKED FROM:**`. Reconcile owns it; nothing
   reads it back as input.
+- **Plain link**: a LINKS entry with no label. An alias label
+  counts as a label (LK5).
 - **Task mention** (or **mention**): an inert, derived back-reference.
   Task S's own text contains a block link to task T. It is stored on
   T's LINKED FROM line as `[[S]] (💬 mentions)`, which reads "S
@@ -115,7 +117,7 @@ A relation write, a relation line, or a relation gesture never:
   label [offers its source when the target is parked or done](#20-successor-labels),
   but never fires when the relation is committed.
 
-A link that needs to block is a dependency (`&`, `b`).
+A link that needs to block is a dependency (`&`, `b`). A tie change that adds or removes a dependency is a dependency write, not a relation write (see [§22](#22-plain-links-and-dependencies)).
 
 ## 3. Grammar
 
@@ -358,8 +360,7 @@ failed follow-ups are repaired by reconcile.
 4. **Guarded output.** The edits are structural. They join the
    reconciled set, so the 2 s quiet interval, preimage checks,
    recovery snapshots, and `pre_reconcile` originals all apply.
-5. **Reconcile never edits a LINKS line.** It only reads, warns, and
-   mints.
+5. **Reconcile never edits a LINKS line except the [§22](#22-plain-links-and-dependencies) fold,** which drops plain entries on dependency-joined pairs. The fold is a narrow exception that must not grow into general relation rewriting. Otherwise reconcile only reads, warns, and mints.
 
 ## 8. Immediate writers
 
@@ -546,6 +547,13 @@ warns, in the same wording pattern.
 
 `--dry-run` previews all of it.
 
+**Plain-link tie fields (contract; emitters land in later phases).**
+The row shape and field names are pinned in
+[§22](#22-plain-links-and-dependencies): reconcile `absorbed_plain_links[]`,
+per-item capture `absorbed_plain_links[]` plus `subsumed_by: "dependency"` on
+subsumed `relation_updates[]` rows, and capture-complete `dependency_tie`
+(`"prerequisite" | "dependent"`) plus `plain_link` (`"to" | "from" | "both"`).
+
 **Capture JSON** (every `schema_version` stays 1; additive only):
 
 - `capture-parse`: span kinds `relation_sigil`, `relation_note`,
@@ -599,11 +607,15 @@ warns, in the same wording pattern.
    relabelling any relation, and adding or removing any mention,
    leaves every status, lane, field, schedule, Pomodoro section, and
    Depends-On / BLOCKS line byte-identical, apart from a minted
-   `^id`. The carve-outs are the commit-time cancel of
+   `^id`. A tie change that adds or removes a dependency is carved out:
+   it is a dependency write, so it follows dependency freshness and lane
+   rules (see [§22](#22-plain-links-and-dependencies)). The other carve-outs are the commit-time cancel of
    [§17](#17-cancel-labels) and the commit-time complete of
    [§18](#18-complete-labels).
-3. **Engine agreement (LW14, LK\*, MN22).** Rust and JS agree on
-   every LK, LW, LM, and MN vector, malformed cases included.
+3. **Engine agreement (LW14, LK\*, MN22, and PT).** Rust and JS agree on
+   every LK, LW, LM, MN, and PT vector, malformed cases included. The PT
+   vectors live in [§22](#22-plain-links-and-dependencies) and
+   `tests/fixtures/plain_link_ties/vectors.json`.
 4. **Live view (LC8).** Chips render from the live index, never from
    the stored mirror.
 5. **Convergence (LR3).** Canonical sorting makes two machines produce
@@ -1862,7 +1874,7 @@ same vectors.
   - If S's LINKS line has an accepted entry for T, the pair's entry
     is the **relation** entry with its label, as today.
   - Otherwise the pair gets the **mention** entry.
-  - Dependencies never suppress relation entries.
+  - Dependencies suppress unlabelled relation entries; labelled relations stay.
 - **M8 Scope.** Sources come from the same note set reconcile already
   scans for LINKS sources: active notes (writable, so they can be
   minted), the previous daily note (read-only), and every
@@ -2555,3 +2567,140 @@ preimage, the gesture, and the byte-exact postimage expectation.
 | ML6 | `new_task` refusal | `New task ~old:a` refused with a `~~` hint; vault byte-identical |
 | ML7 | already-closed | closed S gains the relation only (`already_closed`) |
 | ML8 | conflict | item `&`/`*` on S refused; merge plus cancel/complete refused |
+
+## 22. Plain links and dependencies
+
+> [!NOTE] Contract only: the reconcile fold, capture absorption, merge
+> pruning, capture-complete tie fields, and nav tie planner/writer/keys
+> phases land the emitters. Until then this section pins the contract
+> they must implement. The Rust primitives live in
+> `src/native/task_relations/ties.rs` (`drop_plain_link_entries` and
+> `PairTies`) and are pinned by the PT vectors below.
+
+### 22.1 Vocabulary
+
+- **Plain link:** a LINKS entry with no label. An alias label counts as
+  a label (LK5).
+- **Labelled relation:** any LINKS entry with a label.
+- **Tie:** the exclusive relationship between two tasks: a dependency
+  or a plain link, in either direction.
+- **Absorb:** adding a dependency removes the pair's plain links.
+- **Release:** turning a dependency back into a plain link.
+- **Reverse:** swapping which task waits on which.
+
+### 22.2 Invariant
+
+`D(A,B)` means A's Depends-On names B. `P(A,B)` means A's LINKS line
+holds a plain entry for B.
+
+```text
+Forbidden on LINKS lines of open tasks in writable notes:
+    (D(A,B) or D(B,A)) and (P(A,B) or P(B,A))
+Always legal: labelled relations beside a dependency; mentions (M7 unchanged).
+```
+
+The rule is structural, not keyed on status. A dependency on a
+completed prerequisite, or one whose Depends-On line sits in an
+archived note, still ties the pair.
+
+### 22.3 Writable scope and protected history
+
+The fold and the writers drop plain entries only on the LINKS line of
+an **open** task in an **active, writable, non-quiet-deferred** note.
+They never auto-edit:
+
+- `done/` or the previous daily note;
+- a closed task's own lines;
+- anything Bob is unsure about: malformed Depends-On or LINKS lines,
+  duplicate block ids, uncertain dependents, quiet-deferred notes;
+- an unresolved target.
+
+### 22.4 Asymmetry
+
+Adding a dependency absorbs a plain link in every writer. That loses
+nothing. Releasing a dependency can unblock a task, possibly not the
+one on screen, or a whole `^prj` project. So only an explicit Obsidian
+stage gesture releases, and only after its consequence is on screen.
+Capture, agents, hand edits, and reconcile never release.
+
+### 22.5 Writer table
+
+| Writer | Dependency added over a plain link | Plain link added over a dependency |
+| --- | --- | --- |
+| Nav Depends on / Blocks ↵, counted, marked, plugin api | absorb, same gesture | — |
+| Nav ⌃B / ⌃⇧B (any stage) | absorb (and reverse an opposite dependency) | — |
+| Nav ⌃L (and ⌃⇧L) / Links or Linked-from ↵ on a ⇄ row | — | release: chord commits on one press, ↵ arms a second press |
+| Nav ⌃↵ label stage, empty label | — | refused while a dependency ties the pair |
+| Capture `&` / `*` | absorb in the same all-or-nothing write | — |
+| Capture plain `~` / `~~` | — | reported no-op (`subsumed_by: "dependency"`) |
+| Capture `&T ~T` in one item | teaching error | teaching error |
+| `bob task merge` repoint | prune in the merge transaction | — |
+| `bob task reconcile` | fold: dependency wins, reported | — |
+| Hand edits | reconcile folds; nav shows one notice | reconcile folds; nav shows one notice |
+
+### 22.6 Key grammar
+
+Inside any of the four Task Card stages (Depends on, Blocks, Links,
+Linked from), Ctrl plus a Task Card key **sets the pair's tie** to that
+relationship: ⌃B waits on it, ⌃⇧B it waits on this task, ⌃L plain link
+out, ⌃⇧L plain link here. ↵ keeps each stage's native meaning and
+converts on ⇄ rows. Stage detail — pills, ⇄ badges, tie bands,
+subtitles, consequence strips, footers, arming, guards, and notices —
+lives in `docs/task-dependencies.md` §6 and §15 and in the
+bob-navigation-hotkeys plugin docs.
+
+### 22.7 JSON fields and row shapes
+
+Every addition is additive; every `schema_version` stays 1.
+
+- **Reconcile / merge `absorbed_plain_links[]`:**
+  `{path, line, source, target, dependency}`, where `dependency` is
+  `"source_waits_on_target"` or `"target_waits_on_source"`. Endpoints
+  are `{path, line, block_id?, text}`.
+- **Capture, per item:** `absorbed_plain_links[]` with the same row
+  shape (omitted when empty); `relation_updates[]` rows gain
+  `subsumed_by` (`"dependency"`, omitted otherwise).
+- **Capture-complete:** relation candidates gain
+  `dependency_tie: "prerequisite" | "dependent"` (omitted when none;
+  `also_prerequisite` stays as a deprecated alias); `&` / `*`
+  candidates gain `plain_link: "to" | "from" | "both"` (omitted when
+  none).
+
+### 22.8 Conformance vectors
+
+The executable cases live in
+`tests/fixtures/plain_link_ties/vectors.json` (`drop` and `pair`
+groups). Rust runs every vector in
+`src/native/task_relations/ties.rs`; the nav planner mirrors them byte
+for byte. PT22 and up are JS-only planner vectors defined by the
+nav-tie-planner phase (chords against each tie state, ⌃L with a
+labelled entry, ⌃L over an existing reverse plain, reversals, and
+eligibility refusals).
+
+| # | Input | Outcome |
+| --- | --- | --- |
+| PT1 | `🪢 **LINKS:** [[#^a]]`, drop ^a | line deleted |
+| PT2 | `[[#^a]] • see [[#^b]]`, drop ^a | `see [[#^b]]` |
+| PT3 | `see [[#^b]] • [[#^a]]`, drop ^a | `see [[#^b]]` |
+| PT4 | `see [[#^b]] • [[#^a]] • also [[#^c]]`, drop ^a | `see [[#^b]] • also [[#^c]]` |
+| PT5 | `follow-up of [[#^a]]`, drop ^a | unchanged (labelled) |
+| PT6 | `[[#^a\|merged into]]`, drop ^a | unchanged (alias label, LK5) |
+| PT7 | `see [[#^a]] • [[#^a]]`, drop ^a | `see [[#^a]]` (only the plain LK8 duplicate goes) |
+| PT8 | `~~[[#^a]]~~ • see [[#^b]]`, drop ^a | struck plain entry dropped |
+| PT8b | `![[#^a]] • see [[#^b]]`, drop ^a | embedded plain entry dropped |
+| PT9 | `[[#^a]], see [[#^b]]`, drop ^a | entry plus its own separator dropped; all other bytes kept |
+| PT9b | `[[#^a]] · see [[#^b]]`, drop ^a | entry plus its own separator dropped; all other bytes kept |
+| PT9c | `[[#^a]] see [[#^b]]`, drop ^a | entry plus its own separator dropped; all other bytes kept |
+| PT10 | `[[#^a]] • [[other#^a]]`, drop only `other#^a` | `[[#^a]]` kept; matched by resolved path + id |
+| PT11 | malformed `[[#^a]] until Friday`, drop ^a | untouched |
+| PT12 | 4-space child indent, CRLF, no final newline | indent and line ending preserved |
+| PT13 | none | untied, nothing to drop |
+| PT14 | plain O→X | `plain_out`, nothing to drop |
+| PT15 | plain X→O | `plain_in`, nothing to drop |
+| PT16 | O waits on X | `depends_out`, nothing to drop |
+| PT17 | X waits on O | `depends_in`, nothing to drop |
+| PT18 | O waits on X and O plain X | `depends_out`, drop O's entry |
+| PT19 | O waits on X and X plain O (the live `bob.md` shape) | `depends_out`, drop X's entry |
+| PT20 | O waits on X and O labelled X | `depends_out`, legal |
+| PT21 | O waits on X, O labelled X, and O plain X | `depends_out`, drop the plain entry only |
+| PT22+ | nav planner: chords, reversals, eligibility (nav-tie-planner defines) | reserved for the nav phase |

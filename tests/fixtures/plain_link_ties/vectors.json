@@ -1,0 +1,220 @@
+{
+  "version": 1,
+  "source": "bob-cli docs/task-relations.md §22 (contract phase tie-contract)",
+  "drop": [
+    {
+      "id": "PT1",
+      "line_in": "- 🪢 **LINKS:** [[#^a]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": null,
+      "outcome": "delete_line",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT2",
+      "line_in": "- 🪢 **LINKS:** [[#^a]] • see [[#^b]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT3",
+      "line_in": "- 🪢 **LINKS:** see [[#^b]] • [[#^a]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT4",
+      "line_in": "- 🪢 **LINKS:** see [[#^b]] • [[#^a]] • also [[#^c]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]] • also [[#^c]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT5",
+      "line_in": "- 🪢 **LINKS:** follow-up of [[#^a]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** follow-up of [[#^a]]",
+      "outcome": "unchanged",
+      "removed": []
+    },
+    {
+      "id": "PT6",
+      "line_in": "- 🪢 **LINKS:** [[#^a|merged into]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** [[#^a|merged into]]",
+      "outcome": "unchanged",
+      "removed": []
+    },
+    {
+      "id": "PT7",
+      "line_in": "- 🪢 **LINKS:** see [[#^a]] • [[#^a]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^a]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT8",
+      "line_in": "- 🪢 **LINKS:** ~~[[#^a]]~~ • see [[#^b]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT8b",
+      "line_in": "- 🪢 **LINKS:** ![[#^a]] • see [[#^b]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT9",
+      "line_in": "- 🪢 **LINKS:** [[#^a]], see [[#^b]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT9b",
+      "line_in": "- 🪢 **LINKS:** [[#^a]] · see [[#^b]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT9c",
+      "line_in": "- 🪢 **LINKS:** [[#^a]] see [[#^b]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    },
+    {
+      "id": "PT10",
+      "line_in": "- 🪢 **LINKS:** [[#^a]] • [[other#^a]]",
+      "tied": [{ "target": "other", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** [[#^a]]",
+      "outcome": "rewritten",
+      "removed": ["[[other#^a]]"]
+    },
+    {
+      "id": "PT11",
+      "line_in": "- 🪢 **LINKS:** [[#^a]] until Friday",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "- 🪢 **LINKS:** [[#^a]] until Friday",
+      "outcome": "malformed",
+      "removed": []
+    },
+    {
+      "id": "PT12",
+      "line_in": "    - 🪢 **LINKS:** see [[#^b]] • [[#^a]]",
+      "tied": [{ "target": "", "block_id": "a" }],
+      "line_out": "    - 🪢 **LINKS:** see [[#^b]]",
+      "outcome": "rewritten",
+      "removed": ["[[#^a]]"]
+    }
+  ],
+  "pair": [
+    {
+      "id": "PT13",
+      "owner_waits": false,
+      "other_waits": false,
+      "plain_out": false,
+      "plain_in": false,
+      "tie": "untied",
+      "drop_owner_plain": false,
+      "drop_other_plain": false
+    },
+    {
+      "id": "PT14",
+      "owner_waits": false,
+      "other_waits": false,
+      "plain_out": true,
+      "plain_in": false,
+      "tie": "plain_out",
+      "drop_owner_plain": false,
+      "drop_other_plain": false
+    },
+    {
+      "id": "PT15",
+      "owner_waits": false,
+      "other_waits": false,
+      "plain_out": false,
+      "plain_in": true,
+      "tie": "plain_in",
+      "drop_owner_plain": false,
+      "drop_other_plain": false
+    },
+    {
+      "id": "PT16",
+      "owner_waits": true,
+      "other_waits": false,
+      "plain_out": false,
+      "plain_in": false,
+      "tie": "depends_out",
+      "drop_owner_plain": false,
+      "drop_other_plain": false
+    },
+    {
+      "id": "PT17",
+      "owner_waits": false,
+      "other_waits": true,
+      "plain_out": false,
+      "plain_in": false,
+      "tie": "depends_in",
+      "drop_owner_plain": false,
+      "drop_other_plain": false
+    },
+    {
+      "id": "PT18",
+      "owner_waits": true,
+      "other_waits": false,
+      "plain_out": true,
+      "plain_in": false,
+      "tie": "depends_out",
+      "drop_owner_plain": true,
+      "drop_other_plain": false
+    },
+    {
+      "id": "PT19",
+      "owner_waits": true,
+      "other_waits": false,
+      "plain_out": false,
+      "plain_in": true,
+      "tie": "depends_out",
+      "drop_owner_plain": false,
+      "drop_other_plain": true
+    },
+    {
+      "id": "PT20",
+      "owner_waits": true,
+      "other_waits": false,
+      "plain_out": false,
+      "plain_in": false,
+      "labelled_out": true,
+      "tie": "depends_out",
+      "drop_owner_plain": false,
+      "drop_other_plain": false
+    },
+    {
+      "id": "PT21",
+      "owner_waits": true,
+      "other_waits": false,
+      "plain_out": true,
+      "plain_in": false,
+      "labelled_out": true,
+      "tie": "depends_out",
+      "drop_owner_plain": true,
+      "drop_other_plain": false
+    }
+  ]
+}
