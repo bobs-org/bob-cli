@@ -92,12 +92,16 @@ pub(super) fn build_result_for(
     let directive_owns_cursor = cursor_field
         .as_ref()
         .is_some_and(|field| field.context == CompletionContext::Directive);
+    let snooze_owns_cursor = cursor_field
+        .as_ref()
+        .is_some_and(|field| field.context == CompletionContext::Snooze);
     // `-n`/`-F` are record-field assists. A whole-draft `//` token is
     // `note_goto`; those flags must not steal the catalog snapshot.
     let note_goto_owns_cursor = cursor_field
         .as_ref()
         .is_some_and(|field| field.context == CompletionContext::NoteGoto);
     if !directive_owns_cursor
+        && !snooze_owns_cursor
         && let Some(mut result) = template_completion_gate(request)?
     {
         result.initial_selection = initial_selection(request.raw_text, &result);
@@ -263,6 +267,7 @@ fn wikilink_field_result(
         | CompletionContext::TaskComplete
         | CompletionContext::TaskType
         | CompletionContext::Directive
+        | CompletionContext::Snooze
         | CompletionContext::PomodoroSplitBase
         | CompletionContext::PomodoroSplitType
         | CompletionContext::PomodoroMergeSrc
@@ -814,6 +819,13 @@ fn build_result_inner(
             )?),
             Vec::new(),
         ),
+        CompletionContext::Snooze => (
+            Candidates::Snooze(super::snooze::candidates(
+                bob_dir,
+                &field.query,
+            )?),
+            Vec::new(),
+        ),
         CompletionContext::TaskDependency => {
             // Vault-wide prerequisite scan: the lexical owner of the
             // modifier under the cursor plus every complete `&note:id`
@@ -1131,6 +1143,7 @@ fn build_result_inner(
             | CompletionContext::TaskComplete
             | CompletionContext::TaskType
             | CompletionContext::Directive
+            | CompletionContext::Snooze
             | CompletionContext::Drawer
             | CompletionContext::NotebookSectionBullet
             | CompletionContext::RelationTo
@@ -1607,6 +1620,11 @@ fn initial_selection(
     }
     if matches!(result.context, Some(CompletionContext::PomodoroMergeSrc))
         && result.replacement.start == result.replacement.end
+    {
+        return Some("none");
+    }
+    if matches!(result.context, Some(CompletionContext::Snooze))
+        && result.query.as_deref() == Some("")
     {
         return Some("none");
     }

@@ -93,7 +93,7 @@ note (see [Lists](#lists-several-tasks-or-notes-at-once) and
 `@route#section` remains an empty section list. Each item is planned before
 anything is written, and any failure rolls the whole batch back.
 
-**`@` says where. `#` names a place or a task type. `%` says how to capture.**
+**`@` says where. `#` names a place or a task type. `%` says how to capture. `z:` snoozes a task until later today.**
 
 | Marker | Meaning |
 | --- | --- |
@@ -126,11 +126,15 @@ anything is written, and any failure rolls the whole batch back.
 | `- <task> ^<task-id>` (list bullet) | Same as the project-note bullet: name the task only |
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
 | `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; a future schedule (`s:<N>`, N ≥ 1) starts Blocked (`[?]`) and unlinked; the bare link lands in the Pomodoro the new task's type places |
+| `text @route z:<when>` or `text z:<when> @route` | Create a Next task and place its Task Link in today's `## Snoozed`; a missing block ID is minted through the normal capture ID helper |
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes); the bare start lands in the Pomodoro the new task's type places, creating a started `— T` entry when none fits |
 | `@route:block-id#pomodoro=<X>` / `@route:block-id=name` | Same under the named Pomodoro, starting that session (`@sase:deep-fix=bugs` links under `BUGS` and starts it, exactly like `@sase:deep-fix#bugs=`); under the shared suffix rule a link takes every spelling a lone start takes except drop lists (`=bugs3`, `=3bugs`, `=#deep-work`) |
 | `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); a task Blocked only by its own prerequisites drops them first; `=<X>` starts the resolved session atomically |
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
+| `@route:block-id z:<when>` | Snooze that existing task until a same-day time, without adding a Pomodoro link or dropping its dependencies |
+| Snoozed `@route:block-id` | Link the task now with ordinary placement and carry its snooze-row notes to the destination |
+| Snoozed `@route:block-id!` | Drop only the active snooze row; this is not the `@route+block-id!` Task Link toggle |
 | `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
 | `/<query>` | Incomplete: pick any open task to open in Obsidian (`capture-parse` needs `task_goto`); accepting opens the task, and execution never captures it |
 | `//<query>` | Incomplete: pick a living vault note to open in Obsidian (`capture-parse` needs `note_goto`); accepting opens the note, and execution never captures it |
@@ -660,6 +664,76 @@ To keep a trailing dollar amount as task text, escape it the same way as
 `Pay Bob \$3 $2 @cash` writes body `Pay Bob $3` at level 2 routed to
 `cash`. Elsewhere `\$` stays verbatim (`cost \$3 today` keeps the
 backslash).
+
+#### Snoozing until later today with `z:` {#capture-snooze}
+
+Append one lowercase terminal `z:<when>` at an item edge, before or after
+its route. It accepts the shared [snooze time grammar](snooze.md#time-grammar):
+`1530`, `15:30`, `3:30p`, `3p`, `19`, `+45m`, `+2h`, `+1h30m`, and the
+next-occurrence-today reading of bare `330`. Relative offsets round upward
+to five minutes. Bob resolves and validates the value through the same
+zoned clock used by `bob snooze`; `BOB_NOW` fixes that clock in tests, and
+`BOB_DAY_FILE` selects the daily note. Only a future time today is accepted.
+Past, tomorrow, daylight-saving gaps, duplicate `z:` markers, and
+combinations with `s:<N>`, `$<N>`, a Pomodoro name, session start/close, or
+another `!` operation refuse the whole draft before writes. For later days,
+use `s:<N>`.
+
+`@jobs:email-dan-eod z:1530` snoozes one existing eligible task. Ready tasks
+become Next; Next and In Progress task lines stay unchanged. A snooze does not
+pull a schedule forward or remove prerequisites, so locally or inherited
+Blocked tasks refuse. Event Tasks, completed or cancelled tasks, and
+non-task targets also refuse. Retime an active row with another `z:` time;
+the resolved task identity can have only one active row.
+
+`Fix sink @home z:19` creates a Next task and snoozes it without placing a
+Pomodoro link. `- Fix sink @home z:19` does the same for a routed task list
+item. The normal capture block-ID helper mints an ID when none was authored
+and preserves an authored ID. This form commits an ordinary routable task;
+notes, drawers, references, records, requirements, session operations, and
+navigation forms have no snoozable task target.
+
+While a task is snoozed, `@jobs:email-dan-eod` links it now using ordinary
+capture placement, carries the snooze row's child notes to the destination,
+and removes the active row. `@jobs:email-dan-eod!` drops only the active row;
+it does not wake, complete, cancel, or toggle the task. The drop spelling
+must stand alone and refuses when no active row exists. See
+[Snoozed tasks](snooze.md) for row editing, wake behavior, and the complete
+clock and refusal contract.
+
+`capture-parse` exposes the full `z:` token as a `spans[]` row with
+`kind: "snooze"` and UTF-8 byte offsets. `capture-complete` exposes a
+`snooze` context whose replacement range covers only the value after `z:`.
+Candidate `replacement` is a literal four-digit `HHMM`; `label` keeps its
+source, such as `15:30 · after Yogi interview` or `+1h · 16:00`. The menu
+orders future meeting ends first, then valid `+30m`, `+1h`, `+2h`, then future
+times already used in today's `## Snoozed` section. It deduplicates by minute,
+keeps the first label, and filters typed prefixes without changing source
+order. A bare `z:` opens with `initial_selection: "none"`; typed queries omit
+that field.
+
+Capture results add an optional `snooze` object for these operations:
+
+```json
+{
+  "snooze": {
+    "action": "add",
+    "time": "1300",
+    "wake_at": "2026-11-25T13:00:00-05:00",
+    "route": "home.md",
+    "block_id": "fix-sink",
+    "daily_file": "2026/20261125.md"
+  }
+}
+```
+
+`action` is `add`, `retime`, `link_now`, or `drop`. `time` and RFC 3339
+`wake_at` appear for `add` and `retime`; `row` is the final one-based daily
+note line when the active row remains. `route`, `block_id`, and `daily_file`
+identify the task and daily note for every action. Dry-run reports the same
+planned snooze object as a real capture, without writing. Human output says
+`snoozed until 13:00` or `dropped snooze`; link-now uses the ordinary link
+summary. See [JSON outputs](reference/json-outputs.md#capture-snooze).
 
 ### Typing tasks with `#<type>`
 
@@ -1320,7 +1394,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 32`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 33`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -9019,12 +9093,20 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 32` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 33` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse consults local metadata but never
 executes the draft; a successful parse does not guarantee a successful
 capture. Wikilink highlighting is syntax-only and additive; it does
 not change capture routing or diagnostics.
+
+Grammar 33 adds the terminal `z:<when>` task snooze marker. A recognized
+marker adds one full-token `spans[]` entry with `kind: "snooze"`; its
+half-open `start` and `end` are UTF-8 byte offsets into the original draft.
+The parser keeps the raw time grammar shared with capture and reports the
+same incomplete or incompatible marker diagnostics; time validation against
+today's clock happens when capture plans the transaction. See
+[Snoozing until later today](#capture-snooze).
 
 Grammar 8 added move bullets to sealed project-note items. Grammar 9 adds
 target runs. Grammar 10 adds `>` transfer lines: a complete transfer reports
@@ -10216,6 +10298,21 @@ character boundary within `TEXT`. It is not the same flag as `bob capture -c` /
 since cursor `0` against an empty draft is an ordinary interactive state, not a
 mistake.
 
+The terminal `z:<when>` value opens context `snooze` when the cursor is on
+the value after `z:`. Its half-open UTF-8 `replacement` range covers only
+that value, and `query` is the typed prefix before the cursor. Each candidate
+has `{replacement, label}`: `replacement` is a literal four-digit `HHMM`
+inserted after the preserved `z:`, while `label` explains its source (for
+example `15:30 · after Yogi interview` or `+1h · 16:00`). Bob reads today's
+Events with the Events parser, uses the meeting end rather than its buffer,
+then offers valid `+30m`, `+1h`, and `+2h` times, then future active times in
+today's `## Snoozed` section. Event ends rank chronologically; duplicate
+resolved minutes keep the earliest source label. Prefix filtering preserves
+that order. Closed/cancelled Event Tasks, all-day rows, malformed times, and
+non-future suggestions are omitted. Missing daily or Events data still leaves
+valid relative suggestions. The menu opens a bare `z:` with
+`initial_selection: "none"`; typed prefixes omit that field.
+
 For a blank-line-separated batch draft, completion always scopes to the item
 and physical line the cursor is on: only that item's first (parent) line
 offers a leading marker, matching `bob capture-parse`'s leading-wins
@@ -10620,9 +10717,9 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 32`; `schema_version` remains 1. An empty query opened by a
-bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
-unselected. The field is omitted for typed queries and other contexts.
+top-level `grammar: 33`; `schema_version` remains 1. An empty query opened by a
+bare `#`, `%`, or `z:` adds `initial_selection: "none"`, so clients leave every
+row unselected. The field is omitted for typed queries and other contexts.
 
 A marker-position `#` token also opens `task_type` completion, whether the item
 will create a task or target an existing task. A free-standing bare `#` at an

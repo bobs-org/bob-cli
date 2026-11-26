@@ -103,6 +103,73 @@ fn ready_commits_next_and_dry_run_has_identical_plan() {
 }
 
 #[test]
+fn completion_candidate_is_literal_and_both_parse_and_capture_accept_it() {
+    let f = Fixture::new("capture-snooze-completion-accept", "");
+    write_file(
+        &f.day,
+        concat!(
+            "## Events\n",
+            "- **1230-1300** Yogi interview\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [ ] (**1200-1230**) — RUNNING\n",
+            "- [ ] () — LATER\n",
+            "\n## Tail\nkeep tail bytes\n",
+        ),
+    );
+
+    let draft = "Fix sink @home z:";
+    let completion = bob_command()
+        .args(["capture-complete", "-b"])
+        .arg(&f.vault)
+        .args(["-c", &draft.len().to_string(), "-f", "json", "--"])
+        .arg(draft)
+        .env("BOB_DAY_FILE", &f.day)
+        .env("BOB_NOW", "2026-11-25 12:03:00")
+        .env("BOB_CONFIG_FILE", &f.config)
+        .output()
+        .expect("capture-complete");
+    assert_success(&completion);
+    let menu: Value = serde_json::from_str(stdout(&completion).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(menu["context"], "snooze");
+    assert_eq!(menu["replacement"]["start"], draft.len());
+    assert_eq!(menu["replacement"]["end"], draft.len());
+    let candidate = menu["candidates"][0]["replacement"]
+        .as_str()
+        .expect("literal candidate");
+    assert_eq!(candidate, "1300");
+    assert_eq!(
+        menu["candidates"][0]["label"],
+        "13:00 · after Yogi interview"
+    );
+    let mut accepted = draft.to_string();
+    let start = menu["replacement"]["start"].as_u64().unwrap() as usize;
+    let end = menu["replacement"]["end"].as_u64().unwrap() as usize;
+    accepted.replace_range(start..end, candidate);
+
+    let parsed = bob_command()
+        .args(["capture-parse", "-f", "json", "--"])
+        .arg(&accepted)
+        .env("BOB_NOW", "2026-11-25 12:03:00")
+        .env("BOB_CONFIG_FILE", &f.config)
+        .output()
+        .expect("capture-parse");
+    assert_success(&parsed);
+    let parsed: Value = serde_json::from_str(stdout(&parsed).trim())
+        .expect("capture-parse JSON");
+    assert!(parsed["spans"].as_array().unwrap().iter().any(|span| {
+        span["kind"] == "snooze"
+            && span["start"] == accepted.find("z:").unwrap() as u64
+            && span["end"] == accepted.len() as u64
+    }));
+
+    let dry_run = f.at(&accepted, true, "2026-11-25 12:03:00");
+    assert_success(&dry_run);
+    assert_eq!(json(&dry_run)["snooze"]["time"], "1300");
+}
+
+#[test]
 fn next_and_in_progress_task_bytes_do_not_change() {
     for (name, status) in [("next", '*'), ("progress", '/')] {
         let line = format!(

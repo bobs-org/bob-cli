@@ -13,6 +13,7 @@ mod pomodoros;
 mod records;
 mod render;
 mod shell;
+mod snooze;
 mod successor;
 mod support;
 mod task_types;

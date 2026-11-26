@@ -931,6 +931,20 @@ pub(crate) fn shell_completion(
             }
             return Ok(Some(ShellCompletion { marker_start, rows }));
         }
+        CompletionContext::Snooze => {
+            for item in super::snooze::candidates(bob_dir, "")
+                .map_err(|error| error.message)?
+            {
+                let full = format!("{marker_prefix}{}", item.replacement);
+                rows.push(ShellRow {
+                    nospace: false,
+                    full,
+                    description: item.label,
+                    group: "snooze times".to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
         CompletionContext::PomodoroBlockId => {
             // A `+` after a `:` block ID is the retired project-note
             // form, which offers nothing.

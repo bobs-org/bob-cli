@@ -152,6 +152,7 @@ mod retired_close;
 mod rewrite;
 mod section_bullet;
 mod sized_close;
+mod snooze_completion;
 mod target_runs;
 mod template;
 mod transfer;

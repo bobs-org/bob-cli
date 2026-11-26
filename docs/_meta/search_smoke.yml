@@ -176,6 +176,8 @@
   location: /reference/capture-syntax/#trailing-hash
 - query: "s:<N>"
   location: /reference/capture-syntax/#s-schedule
+- query: "z:<when>"
+  location: /reference/capture-syntax/#z-snooze
 - query: "$"
   location: /reference/capture-syntax/#dollar-priority
 - query: "$<N>"

@@ -986,6 +986,16 @@ pub(super) struct DirectiveCandidate {
     pub(super) cursor_after: usize,
 }
 
+/// A valid same-day snooze time. `replacement` is the literal four-digit
+/// value to insert after the draft's `z:`; `label` explains its source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct SnoozeCandidate {
+    pub(super) replacement: String,
+    pub(super) label: String,
+    #[serde(skip)]
+    pub(super) filter_aliases: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PickerKind {
@@ -1163,6 +1173,7 @@ pub(super) enum Candidates {
     TaskComplete(Vec<TaskCompleteCandidate>),
     TaskType(Vec<TaskTypeCandidate>),
     Directive(Vec<DirectiveCandidate>),
+    Snooze(Vec<SnoozeCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -1249,6 +1260,7 @@ impl Candidates {
             Self::TaskComplete(items) => items.len(),
             Self::TaskType(items) => items.len(),
             Self::Directive(items) => items.len(),
+            Self::Snooze(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),

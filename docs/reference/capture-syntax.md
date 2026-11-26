@@ -84,6 +84,7 @@ unknown alphabetic options fail. `--` makes `-o` and `--flag` text.
 | `@route+block-id!` | Toggle the task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
 | `%n` | Pomodoro note, or notebook with `@parent^id@` | [`%n`](#trailing-hash) |
 | `s:<N>` | Schedule N days ahead; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
+| `z:<when>` | Snooze | [`z:<when>`](#z-snooze) |
 | `$` / `$<N>` | Set priority and roll scheduled date | [`$`](#dollar-priority) |
 | `%c` / `%c<N>` | Capture clipboard as child bullets | [`%c`](#percent-clipboard) |
 | `#<type>` | Type a task or retype its target | [`#<type>`](#hash-type) |
@@ -1469,6 +1470,10 @@ bob capture 'File taxes @work s:1'
 ```
 
 Contract: [Scheduling and priority](../capture.md#scheduling-and-priority).
+
+### `z:<when>` {#z-snooze}
+
+`z:<when>`: future same-day time; see the [contract](../capture.md#capture-snooze).
 
 ### `$` / `$<N>` {#dollar-priority}
 

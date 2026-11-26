@@ -26,6 +26,8 @@ use std::collections::HashSet;
 pub(crate) enum CompletionContext {
     Route,
     Section,
+    /// A terminal `z:<when>` value; candidates replace only the value bytes.
+    Snooze,
     PomodoroBlockId,
     TaskBlockId,
     ProjectTaskBlockId,
@@ -2266,6 +2268,16 @@ pub(crate) fn completion_field_at_with(
     if let Some(field) = directive_completion_field_at(item, cursor) {
         return Some(field);
     }
+    // Snooze values are terminal markers, not routes or prose. Let the
+    // shared terminal-marker extractor decide whether this `z:` occupies a
+    // legal edge position, then expose only the value bytes after the sigil.
+    // The parent line owns snoozing; child bullets and drawer prose remain
+    // literal even when they end in `z:`.
+    if line_index == 0
+        && let Some(field) = snooze_completion_field_at(item, line, cursor)
+    {
+        return Some(field);
+    }
     // Claim the whole past token before generic `#`/`@` completion can
     // mistake a name or duration for a task marker. Child logs stay literal.
     // The segment suffix owns its bytes; the name field keeps ending at `~`.
@@ -2540,6 +2552,44 @@ pub(crate) fn completion_field_at_with(
     }
 
     marker_field_at_cursor(&token, cursor)
+}
+
+/// Complete the value of a terminal `z:<when>` marker. Extraction mirrors
+/// capture parsing, including dependency stripping and target-run marker
+/// ordering, so inline/code/URL prose cannot claim the same bytes.
+fn snooze_completion_field_at(
+    item: &CaptureItem<'_>,
+    line: RawLine<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let mut tokens = tokenize_line_with_spans(&line);
+    take_global_declarations(&mut tokens);
+    let (mut tokens, _) =
+        extract_line_dependencies(tokens, line.text, line.start, true);
+
+    let mut run_tokens = tokens.clone();
+    let (mut markers, _) =
+        super::target_runs::extract_terminal_markers_crossing_runs(
+            &mut run_tokens,
+        );
+    if markers.snooze.is_none() {
+        let (ordinary_markers, _) = extract_terminal_markers(&mut tokens);
+        markers = ordinary_markers;
+    }
+    let (start, end) = markers.snooze?.span?;
+    let value_start = start.checked_add(super::snooze::SNOOZE_PREFIX.len())?;
+    if cursor < value_start || cursor > end {
+        return None;
+    }
+    let query = item.source.get(value_start..cursor)?.to_string();
+    Some(CompletionField {
+        context: CompletionContext::Snooze,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (value_start, end),
+        bare_name: false,
+    })
 }
 
 /// Selects only a multi-member target run or its one inner-edge extension.

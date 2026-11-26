@@ -682,6 +682,10 @@ pub(super) fn candidate_lines(
                 (item.token.clone(), format!("{} · {detail}", item.summary))
             })
             .collect(),
+        Candidates::Snooze(items) => items
+            .iter()
+            .map(|item| (item.replacement.clone(), item.label.clone()))
+            .collect(),
         Candidates::PomodoroName(items) => items
             .iter()
             .map(|item| {
@@ -861,6 +865,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
     match context {
         CompletionContext::Route => "route",
         CompletionContext::Section => "section",
+        CompletionContext::Snooze => "snooze",
         CompletionContext::PomodoroBlockId => "pomodoro_block_id",
         CompletionContext::TaskBlockId => "task_block_id",
         CompletionContext::ProjectTaskBlockId => "project_task_block_id",

@@ -20,6 +20,7 @@ mod pomodoros;
 mod records;
 mod relations;
 mod routes_tasks;
+mod snooze;
 mod task_links;
 mod work_log;
 
