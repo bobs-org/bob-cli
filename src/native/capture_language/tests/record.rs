@@ -534,7 +534,7 @@ fn record_sections_require_bold_and_empty_bold_headers_refuse() {
         &strict_options(Some(&policy)),
     )
     .expect("plain uppercase record lines stay ordinary content");
-    let CaptureKind::RecordNote { intent } = plain.items[0].parsed.kind else {
+    let CaptureKind::RecordNote { intent } = &plain.items[0].parsed.kind else {
         panic!("not a record note: {plain:?}");
     };
     assert!(intent.notes.iter().all(|note| note.section.is_none()));
