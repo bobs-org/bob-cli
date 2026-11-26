@@ -52,6 +52,29 @@ every scan and nothing new is stored. Tag edits never change `^h-` IDs, and a PD
 no declaration renders unchanged. Not a Markdown `##` heading or a `bob capture`
 [Task Drawer](#task-drawer). See `docs/highlights-ref-sync.md`.
 
+### Area Card {#area-card}
+
+A [Property Card](#property-card) home card for a note typed `[[area]]`. Its AREA tile and
+kicker name the species; the title comes from the eligible H1, first alias, or
+file name, and parent links form clickable crumbs. An authored `summary` is
+the subtitle. The card shows only authored policy values and live readouts:
+the Ready count and cap, direct Today count, inbox pill when Bob reports it,
+and local lint. Missing report data stays absent, never zero. It does not show
+inherited policies or subtree counts.
+
+Area Settings require `props_contract_v1` on top of `props_v1`. One shared
+Properties foot shows `created` and the full drawer. `-` toggles the drawer,
+`_` folds the Area's own details, `==` opens Area Settings, and `+` opens the
+generic Property Editor. Paint reads local metadata, confirmed source, and
+cached reports; it never writes the vault or spawns bob.
+
+Native Properties hide only while the current source matches the cache and the
+required capabilities and editor routing are confirmed. Missing or damaged
+evidence, a failed mount, Source, embeds, hover, canvas, print, and mobile
+restore native rendering. `bank.md` is excluded by path because it is the
+taskless Bank hub, never an Area note, even if it carries an accidental Area
+type. See `docs/reference/plugins/area-and-project-cards.md`.
+
 ### Area Note {#area-note}
 
 A Bob vault Markdown file with frontmatter `type: "[[area]]"` for an ongoing sphere of
@@ -84,13 +107,19 @@ A read-only money summary that follows one [Day Strip](#day-strip) or [Stats Str
 
 A [Property Card](#property-card) view of bank state. `bob-bank` fences show the queue
 (`bank.md`), month (`bank/YYYY-MM.md`), and subscriptions (`subscriptions.md`).
-On `bank.md`, the card owns the note top and hides native Properties only while
-source/cache evidence, confirmed `props_v1`, and editor routing agree; otherwise
-native Properties and the existing per-row `bank` fallback return. Under
-`# 🏦 Bank`, it shows `bob bank config` categories, accounts, rules, and findings.
-Setup folds when healthy; `_` toggles it, and `==`, ⊞ Setup, or Command Mode
-opens the editor. Painting never writes; mobile remains read-only. Not the
-[Bank Badge](#bank-badge), Bank Period Charts, or a Stats fact. See `docs/bank.md`.
+`bank.md` is the untyped, path-canonical hub under cash; its parent is display
+affinity, not an Area edge, and the note never holds tasks. Exactly one
+title-slot Bank Card owns it, gated by source/cache evidence, confirmed
+`props_v1`, and working editor routing. Otherwise native Properties and the
+existing per-row `bank` fallback return. The card's Setup section shows
+`bob bank config` categories, accounts, rules, and findings; its title block
+keeps the bank identity and cash breadcrumb. Setup folds when healthy; `_`
+toggles it, `==` opens Bank Setup, and `+` opens the generic Property Editor.
+The `bank` row hands off to `==`; the card has no Area Settings, including when
+older Bob reports the former hybrid contract. The shared foot is the only
+Properties drawer, toggled with `-`. Painting never writes; mobile remains
+read-only. Not the [Bank Badge](#bank-badge), Bank Period Charts, or a Stats fact. See
+`docs/bank.md` and [Bank Hub Is Path Canonical Never Area](../develop/decisions.md#bank-hub-is-path-canonical-never-area).
 
 ### Bank Closing {#bank-closing}
 
@@ -703,6 +732,30 @@ grouping, not a note level. Not a daily note, an [Area Note](#area-note), or a
 
 A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily file, representing one timed session, on the clock (`[t::]`) or off it (`[off::]`, an [Off-Clock Pomodoro](#off-clock-pomodoro)). Its body is either a timespan such as `(**0920-0950** [t:: 30m])` or an empty `()` placeholder; an optional ` — NAME` suffix (em dash plus ALL-CAPS name) makes it a named Pomodoro. Past Pomodoros are closed with timespans, current Pomodoros are open with timespans, and planned Pomodoros are open placeholders. Child bullets log the session's work, usually with a task link. On a sub-bullet, `N<ctrl+shift+m>` moves it and the next N siblings into another open Pomodoro, or into a new named one below.
 
+### Project Card {#project-card}
+
+A [Property Card](#property-card) home card for a note typed `[[project]]`. Its PROJECT tile
+and kicker name the species; the title comes from the eligible H1, first
+alias, or file name, and parent links form clickable crumbs. A ROOT pill
+appears for `root: true`. The top-level recognized `^prj` task supplies the
+WIP, SCHEDULED, BLOCKED, DONE, or CANCELED lifecycle. The task stays directly
+below the card as its editable control; the card never rewrites or duplicates
+it. Missing or invalid `^prj` rows show repair guidance.
+
+The card shows authored policy values, project open and Today readouts, local
+lint, and report-backed blocking reasons or close dates when available.
+Unavailable reports hide those details instead of showing zero. Project
+Settings require `props_contract_v1` on top of `props_v1`; the card does not
+infer parent policies. One shared Properties foot shows `created` and the
+full drawer. `-` toggles the drawer, `_` folds the card's own details, `==`
+opens Project Settings, and `+` opens the generic Property Editor.
+
+Paint reads local metadata, confirmed source, and cached reports; it never
+writes the vault or spawns bob. Native Properties hide only while the source,
+cache, capability, and editor-routing gates are confirmed. Missing or damaged
+evidence, a failed mount, Source, embeds, hover, canvas, print, and mobile
+restore native rendering. See `docs/reference/plugins/area-and-project-cards.md`.
+
 ### Project Note {#project-note}
 
 *Aliases: prj note.*
@@ -776,25 +829,27 @@ without that tag remain recognized. See `docs/projects.md` and
 
 *Aliases: card family.*
 
-The shared family of note-top album, record, day, period, and bank cards, built
-on the bob-ledger-tools kit. The kit owns `.bob-property-card` chrome, the `==`
-dispatcher registry (bank → album → record → day/period, then extensions), row
-and whole-frontmatter ownership, mount lifecycle, and title block. Desktop Live
-Preview or Reading card-and-foot mounts replace native Properties only when
-valid source matches the cache, `props_v1` is confirmed for the current bob, and
-editor routing works; `bank.md` qualifies under the same gate. The foot shows
-`created` and the full Properties drawer; `==` opens the species editor, `-`
-toggles the drawer, `_` folds its section, and `+` opens Property Editor in Live
-Preview Vim normal mode. Album, record, day, period, and bank cards own one
-visible title: a species tile and kicker name it; hue does not. The inline title
-and recognized H1/nav lines hide at render time; a Live Preview cursor or
-selection reveals raw Markdown. Title ownership is distinct from row and
-whole-frontmatter ownership. "Card" means the panel; "card editor" means what
-`==` opens. Painting reads cached metadata and confirmed source, never spawns bob
-or writes the vault. Uncertain evidence restores native Properties and the
-existing per-row fallback; failed mounts, Source, denied contexts, and unload do
-the same. Add file property opens Add mode on owned notes; the File Properties
-sidebar stays native. See `docs/develop/plugins/architecture.md` and
+The shared family of title-slot album, record, day, period, [Area Card](#area-card),
+[Project Card](#project-card), and [Bank Card](#bank-card) views, built on the bob-ledger-tools kit.
+The kit owns `.bob-property-card` chrome, the `==` species-editor dispatcher,
+row and whole-frontmatter ownership, mount lifecycle, and title block. Album,
+record, and temporal cards use `props_v1`; Area and Project settings require
+`props_contract_v1` on top of `props_v1`. The path-canonical `bank.md` hub is
+untyped and taskless; its one Bank Card uses `props_v1` and never has Area
+semantics. The foot shows `created` and the full Properties drawer; `-` toggles
+the drawer, `_` folds the card's own section, `==` opens the species editor,
+and `+` opens the generic Property Editor in Live Preview Vim normal mode.
+Every card owns one visible title: its species tile and kicker name it; hue
+does not. The inline title and recognized H1/nav lines hide at render time; a
+Live Preview cursor or selection reveals raw Markdown. Title ownership is
+distinct from row and whole-frontmatter ownership. "Card" means the panel;
+"card editor" means what `==` opens. Painting reads cached metadata and
+confirmed source, never spawns bob or writes the vault. Uncertain evidence
+restores native Properties and the existing per-row fallback; failed mounts,
+Source, denied contexts, and unload do the same. Add file property opens Add
+mode on owned notes; the File Properties sidebar stays native. See
+`docs/reference/plugins/area-and-project-cards.md`,
+`docs/develop/plugins/architecture.md`, and
 `docs/reference/plugins/property-editor.md`.
 
 ### Record Card {#record-card}

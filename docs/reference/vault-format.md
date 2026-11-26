@@ -485,12 +485,11 @@ Contract: [Albums and record notes](../records.md).
 
 ### Bank notes
 
-The bank hub is `bank.md` at the vault root (untyped,
-`parent: "[[cash]]"`) with a nested `bank:` mapping for accounts,
-categories, rules, and `stale_after`. Month notes live at
-`bank/YYYY-MM.md` with `type: "[[bank_month]]"`, `parent: "[[bank]]"`, and
-`month: YYYY-MM`. The filename is authoritative. Other files in `bank/`
-are ignored.
+`bank.md` is path-canonical, untyped, and taskless; `parent: "[[cash]]"` is
+display-only, not Area ancestry. `@bank` refuses task capture; money tasks use
+`@cash`; the subscriptions album stays under `cash`. Month notes use
+`bank/YYYY-MM.md` (`type: "[[bank_month]]"`, `parent: "[[bank]]"`,
+`month: YYYY-MM`); the filename decides, and other `bank/` files are ignored.
 
 Each month note is a statement: one `##` heading per day, oldest first,
 canonical `## Thu Nov 12` (also `Nov 12`, `2026-11-12`, `2026-11-12 Thu`).

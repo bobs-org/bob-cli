@@ -85,11 +85,14 @@ hooks, and the Tasks plugin's `#task` global filter.
 
 ## `bank.md`
 
-The hub is an untyped bank hub (`parent: "[[cash]]"`, no `type:`). It holds
-the `bank:` configuration and later a queue card. It holds no tasks; money
-tasks live in `cash.md` (`@cash`). A task capture routed at `@bank` refuses
-with `bank_holds_no_tasks`. The subscriptions album lives under cash, not
-under the hub.
+The hub is the untyped, path-canonical `bank.md` (`parent: "[[cash]]"`, no
+`type:`). Its `parent` supplies display affinity with cash; it does not put the
+hub in the Area graph. The single title-slot Bank Card shows its bank setup,
+queue, and navigation. The hub holds no tasks; money tasks live in `cash.md`
+(`@cash`). A task capture routed at `@bank` refuses with
+`bank_holds_no_tasks`. The subscriptions album lives under cash, not under the
+hub. The Bank Card uses `props_v1`; it has no Area Settings, and `+` opens the
+generic Property Editor.
 
 ```markdown
 ---

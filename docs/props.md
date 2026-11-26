@@ -190,8 +190,9 @@ for generic value edits, YAML fragments, rename destinations, and typed
 setting gestures. Validation examines the addressed value, so unrelated
 legacy values do not prevent another property from being edited.
 
-`bank.md` is an untyped hub: its `note_kind` remains `bank`, its `bank` key stays
-card-owned with editor `==`, and it exposes no settings contract. `setting.*`
+`bank.md` is the untyped, path-canonical Bank hub: its `note_kind` remains `bank`,
+its `bank` key stays card-owned with editor `==`, and it exposes no settings contract.
+The Bank Card is gated by `props_v1` and ignores any legacy Area contract. `setting.*`
 ops on `bank.md` refuse with `prop_setting_disabled`.
 
 Settings have this stable order:
