@@ -251,6 +251,7 @@ class ClassifyTests(unittest.TestCase):
             "removed_duplicate_lines": [{}],
             "settled": [{}],
             "healed_dependency_links": [{}],
+            "absorbed_plain_links": [{}],
             "unblocked_fields_written": [{}],
             "marked_next": [{}],
         }
@@ -262,7 +263,7 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(counts["linked_from_mention_strip"], 1)
         self.assertEqual(counts["midnight_wake_or_unblock"], 1)
         self.assertEqual(counts["ledger_hygiene"], 2)
-        self.assertEqual(counts["dependency_or_field_healing"], 3)
+        self.assertEqual(counts["dependency_or_field_healing"], 4)
         self.assertEqual(counts["other"], 2)
 
     def test_empty_payload_is_zero(self) -> None:

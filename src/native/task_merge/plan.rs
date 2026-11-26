@@ -761,6 +761,7 @@ fn build_records(
                 prerequisites_left: report.prerequisites_left,
                 successors_orphaned: report.successors_orphaned,
                 links_pruned: report.links_pruned,
+                absorbed_plain_links: report.absorbed_plain_links,
                 consequences,
                 offers: Vec::new(),
                 message,

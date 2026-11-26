@@ -57,7 +57,7 @@ stay in the parent).
 | S's authored body (continuation paragraphs, tables, fences, and authored children) | Copied under the title bullet with relative structure kept, including bytes before the first child and body text without a list wrapper. S keeps the originals. Copies strip only live `^id` anchors and live `[id::]` fields outside inline and fenced code; inline-code and fenced-code bytes (including literal `[id:: ...]`, `^id`, wiki links, and Markdown links) are preserved byte-for-byte, and ordinary non-task prose containing `#task` is never treated as a task row. Same-note block links in the copy (`[[#^x]]`, `(#^x)`) name S's note. Same-named drawers are **not** flattened into T's drawers. |
 | S's open nested tasks | The merge is refused (`merge_source_open_subtasks`). |
 | S's managed children: Depends-On, BLOCKS, LINKS, LINKED FROM, and the Schedule, Work, Rotten, and Cancel logs | Stay on S as history. An existing Cancel Log gets `*date* — 🪢 merged into [[T]]` prepended, as relation cancels do today. |
-| Open tasks that depend on S (other than T) | The production dependency graph finds direct and inherited project dependents. Resolved Depends-On links to any source are replaced with T and deduplicated; unresolved or ambiguous links stay byte-for-byte and are reported, with their field IDs retained as breadcrumbs. A dependent without a block ID refuses the merge because it cannot be safely rewritten. BLOCKS mirrors follow the configured relation policy. A resulting cycle refuses the whole operation (`merge_dependency_cycle`). Re-pointing happens before the cancel, so cancel recovery never releases them. |
+| Open tasks that depend on S (other than T) | The production dependency graph finds direct and inherited project dependents. Resolved Depends-On links to any source are replaced with T and deduplicated; unresolved or ambiguous links stay byte-for-byte and are reported, with their field IDs retained as breadcrumbs. When repointing joins a dependent and T, plain LINKS entries between them are removed in both directions in the same staged merge; labelled relations stay. A dependent without a block ID refuses the merge because it cannot be safely rewritten. BLOCKS mirrors follow the configured relation policy. A resulting cycle refuses the whole operation (`merge_dependency_cycle`). Re-pointing happens before the cancel, so cancel recovery never releases them. |
 | T depending on S | Left in place. Cancel's existing recovery then treats it exactly as it would any cancelled prerequisite, which may recover T with `[unblocked::]`. |
 | S's own open prerequisites | Not transferred. Reported in `prerequisites_left[]`, with a hint to add them by hand. |
 | `starts after` successors pointing at S | Untouched. Reported in `successors_orphaned[]`, with a warning. |
@@ -227,7 +227,10 @@ bob task merge [OPTIONS] -i <TASK|NOTE> [-D TITLE | -s TITLE] <TASK>...
       (the source's status after the merge: `-`, Cancelled, using the vault's names);
     - `moved_lines`, `moved_notes` (copied line and note counts; field names stay);
     - `dependents_repointed[]`, `prerequisites_left[]`,
-      `successors_orphaned[]`;
+      `successors_orphaned[]`, and `absorbed_plain_links[]` (the same
+      `{path, line, source, target, dependency}` row shape as reconcile;
+      each removed LINKS entry is attributed to its authored source and
+      reports which endpoint waits on the other);
     - `links_pruned`, `consequences[]` (`{kind, tone, text, keys}` with titled
       Bob-authored sentences, never keys), `offers[]`;
     - `message` (Bob-authored, byte-identical).
@@ -341,6 +344,7 @@ expectation. The implementation tests live in
 | MG18 | Nightly archive | A tombstone archived by `bob task archive` keeps T's _merged from_ entry rewritten to the `done/` path |
 | MG19 | Label in two effect lists | A key in `merge_labels` and any of `cancel_labels`, `complete_labels`, or `successor_labels` has no effect and is dropped from all lists with one warning |
 | MG20 | Payload order | Several sources land as separate groups in typed order after the container's existing entries |
+| MG21 | Tie absorption after repoint | Plain LINKS entries between a repointed dependent and T disappear in both directions and reconcile is a no-op |
 
 The current test names for those vectors are:
 
@@ -366,6 +370,7 @@ The current test names for those vectors are:
 | MG18 | `mg18_archive_planner_repairs_merged_from_to_tombstone_archive` |
 | MG19 | `mg19_shared_key_with_merge_labels_drops_everywhere_once`, `mg19_three_list_warnings_stay_byte_identical` |
 | MG20 | `mg20_source_groups_keep_typed_order_after_existing_entries` |
+| MG21 | `mg21_repoint_absorbs_plain_links_and_reconcile_is_a_noop` |
 
 The JSON wire shape is pinned by
 `merge_record_and_offer_json_use_snake_case_and_omit_absent_fields`.

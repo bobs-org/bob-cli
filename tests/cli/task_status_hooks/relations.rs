@@ -100,6 +100,10 @@ fn linked_from_updates(json: &Value) -> &[Value] {
     json["linked_from_line_updates"].as_array().unwrap()
 }
 
+fn absorbed_plain_links(json: &Value) -> &[Value] {
+    json["absorbed_plain_links"].as_array().unwrap()
+}
+
 fn minted_ids(json: &Value) -> &[Value] {
     json["minted_relation_source_block_ids"].as_array().unwrap()
 }
@@ -975,6 +979,329 @@ fn lr24_prj_target_gets_the_mirror() {
 }
 
 #[test]
+fn lr27_same_note_dependency_absorbs_plain_out_link() {
+    let temp = TempDir::new("bob-cli-relations-lr27");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Source ^s\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+        "  - 🪢 **LINKS:** [[#^t]]\n",
+        "- [ ] #task Target ^t\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let dry = dry_run_json(&vault, &daily);
+    let absorbed = absorbed_plain_links(&dry);
+    assert_eq!(absorbed.len(), 1, "{}", dry);
+    assert_eq!(absorbed[0]["path"], "tasks.md");
+    assert_eq!(absorbed[0]["line"], 3);
+    assert_eq!(absorbed[0]["source"]["block_id"], "s");
+    assert_eq!(absorbed[0]["target"]["block_id"], "t");
+    assert_eq!(absorbed[0]["dependency"], "source_waits_on_target");
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+
+    let applied = apply_json(&vault, &daily);
+    assert_eq!(applied["absorbed_plain_links"], dry["absorbed_plain_links"]);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert!(!after.contains("🪢 **LINKS:**"), "{after}");
+    assert!(after.contains("DEPENDS ON"), "{after}");
+}
+
+#[test]
+fn lr28_cross_note_reverse_plain_link_is_absorbed() {
+    let temp = TempDir::new("bob-cli-relations-lr28");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let source = vault.join("source.md");
+    let target = vault.join("target.md");
+    write_file(
+        &source,
+        "- [ ] #task Source ^s\n  - ⛓️ **DEPENDS ON:** [[target#^t]]\n",
+    );
+    write_file(
+        &target,
+        "- [ ] #task Target ^t\n  - 🪢 **LINKS:** [[source#^s]]\n",
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry = dry_run_json(&vault, &daily);
+    let absorbed = absorbed_plain_links(&dry);
+    assert_eq!(absorbed.len(), 1, "{}", dry);
+    assert_eq!(absorbed[0]["path"], "target.md");
+    assert_eq!(absorbed[0]["dependency"], "target_waits_on_source");
+    apply_reconcile(&vault, &daily);
+    let after = fs::read_to_string(&target).unwrap();
+    assert!(!after.contains("🪢 **LINKS:**"), "{after}");
+}
+
+#[test]
+fn lr29_labelled_relation_survives_plain_link_absorption() {
+    let temp = TempDir::new("bob-cli-relations-lr29");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+            "  - 🪢 **LINKS:** [[#^t]] • follow-up of [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry = dry_run_json(&vault, &daily);
+    assert_eq!(absorbed_plain_links(&dry).len(), 1, "{}", dry);
+    apply_reconcile(&vault, &daily);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert!(
+        after.contains("🪢 **LINKS:** follow-up of [[#^t]]\n"),
+        "{after}"
+    );
+}
+
+#[test]
+fn lr30_deleting_last_link_reprojects_linked_from_in_the_same_pass() {
+    let temp = TempDir::new("bob-cli-relations-lr30");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+            "  - 🪢 **LINKS:** [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+            "  - 🪢 **LINKED FROM:** [[#^s]]\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry = dry_run_json(&vault, &daily);
+    assert_eq!(absorbed_plain_links(&dry).len(), 1, "{}", dry);
+    assert!(
+        linked_from_updates(&dry).iter().any(|row| {
+            row["path"] == "tasks.md" && row["kind"] == "removed"
+        }),
+        "{}",
+        dry["linked_from_line_updates"]
+    );
+    apply_reconcile(&vault, &daily);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert!(!after.contains("🪢 **LINKS:**"), "{after}");
+    assert!(!after.contains("🪢 **LINKED FROM:**"), "{after}");
+}
+
+#[test]
+fn lr31_uncertain_or_unresolved_pairs_are_not_folded() {
+    let cases = [
+        (
+            "source-duplicate",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+                "  - 🪢 **LINKS:** [[#^t]]\n",
+                "- [ ] #task Twin ^s\n",
+                "- [ ] #task Target ^t\n",
+            ),
+        ),
+        (
+            "target-duplicate",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+                "  - 🪢 **LINKS:** [[#^t]]\n",
+                "- [ ] #task Target ^t\n",
+                "- [ ] #task Twin ^t\n",
+            ),
+        ),
+        (
+            "source-dependency-malformed",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]] extra\n",
+                "  - 🪢 **LINKS:** [[#^t]]\n",
+                "- [ ] #task Target ^t\n",
+            ),
+        ),
+        (
+            "target-dependency-malformed",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+                "  - 🪢 **LINKS:** [[#^t]]\n",
+                "- [ ] #task Target ^t\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^s]] extra\n",
+            ),
+        ),
+        (
+            "links-malformed",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+                "  - 🪢 **LINKS:** [[#^t]] extra\n",
+                "- [ ] #task Target ^t\n",
+            ),
+        ),
+        (
+            "target-unresolved",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+                "  - 🪢 **LINKS:** [[#^missing]]\n",
+                "- [ ] #task Target ^t\n",
+            ),
+        ),
+    ];
+    for (case, contents) in cases {
+        let temp = TempDir::new(&format!("bob-cli-relations-lr31-{case}"));
+        let vault = temp.path().join("vault");
+        let daily = write_daily(&vault);
+        let tasks = vault.join("tasks.md");
+        write_file(&tasks, contents);
+        write_blocked_tasks_settings(&vault);
+
+        let dry = dry_run_json(&vault, &daily);
+        assert!(
+            absorbed_plain_links(&dry).is_empty(),
+            "{case}: {}",
+            dry["absorbed_plain_links"]
+        );
+        assert_eq!(fs::read_to_string(tasks).unwrap(), contents, "{case}");
+    }
+}
+
+#[test]
+fn lr32_closed_previous_daily_and_archived_owners_are_not_folded() {
+    let temp = TempDir::new("bob-cli-relations-lr32");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let previous = vault.join("2026/20260715.md");
+    let tasks = vault.join("tasks.md");
+    let closed = concat!(
+        "- [x] #task Closed owner ^closed\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+        "  - 🪢 **LINKS:** [[#^t]]\n",
+        "- [ ] #task Target ^t\n",
+    );
+    let previous_text = concat!(
+        "- [ ] #task Previous owner ^prev\n",
+        "  - ⛓️ **DEPENDS ON:** [[tasks#^t]]\n",
+        "  - 🪢 **LINKS:** [[tasks#^t]]\n",
+    );
+    let archived_text = concat!(
+        "- [x] #task Archived owner ^archived\n",
+        "  - ⛓️ **DEPENDS ON:** [[tasks#^t]]\n",
+        "  - 🪢 **LINKS:** [[tasks#^t]]\n",
+    );
+    write_file(&tasks, closed);
+    write_file(&previous, previous_text);
+    write_file(&vault.join("done/old_done.md"), archived_text);
+    write_blocked_tasks_settings(&vault);
+
+    let dry = dry_run_json(&vault, &daily);
+    assert!(absorbed_plain_links(&dry).is_empty(), "{}", dry);
+    apply_reconcile(&vault, &daily);
+    assert!(
+        fs::read_to_string(&tasks)
+            .unwrap()
+            .contains("🪢 **LINKS:** [[#^t]]"),
+        "closed owner's link must stay"
+    );
+    assert_eq!(fs::read_to_string(previous).unwrap(), previous_text);
+    assert_eq!(
+        fs::read_to_string(vault.join("done/old_done.md")).unwrap(),
+        archived_text
+    );
+}
+
+#[test]
+fn lr33_archived_dependency_evidence_still_absorbs_active_plain_link() {
+    let temp = TempDir::new("bob-cli-relations-lr33");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        "- [ ] #task Source ^s\n  - 🪢 **LINKS:** [[done/old_done#^t]]\n",
+    );
+    write_file(
+        &vault.join("done/old_done.md"),
+        "- [x] #task Archived target ^t\n  - ⛓️ **DEPENDS ON:** [[tasks#^s]]\n",
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry = dry_run_json(&vault, &daily);
+    assert_eq!(absorbed_plain_links(&dry).len(), 1, "{}", dry);
+    assert_eq!(
+        absorbed_plain_links(&dry)[0]["dependency"],
+        "target_waits_on_source"
+    );
+    apply_reconcile(&vault, &daily);
+    assert!(
+        !fs::read_to_string(tasks).unwrap().contains("🪢 **LINKS:**"),
+        "active plain link should be folded"
+    );
+}
+
+#[test]
+fn lr34_relations_kill_switch_disables_the_fold() {
+    let temp = TempDir::new("bob-cli-relations-lr34");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Source ^s\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+        "  - 🪢 **LINKS:** [[#^t]]\n",
+        "- [ ] #task Target ^t\n",
+    );
+    write_file(&config, "relations:\n  linked_from_lines: false\n");
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let (dry, _) = dry_run_with_config(&vault, &daily, &config);
+    assert!(absorbed_plain_links(&dry).is_empty(), "{}", dry);
+    apply_with_config(&vault, &daily, &config);
+    assert!(
+        fs::read_to_string(tasks)
+            .unwrap()
+            .contains("🪢 **LINKS:** [[#^t]]"),
+        "kill switch must leave LINKS untouched"
+    );
+}
+
+#[test]
+fn lr35_dry_run_absorption_matches_apply_and_next_run_is_clean() {
+    let temp = TempDir::new("bob-cli-relations-lr35");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+            "  - 🪢 **LINKS:** [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry = dry_run_json(&vault, &daily);
+    let applied = apply_json(&vault, &daily);
+    assert_eq!(applied["absorbed_plain_links"], dry["absorbed_plain_links"]);
+    let clean = dry_run_json(&vault, &daily);
+    assert!(absorbed_plain_links(&clean).is_empty(), "{}", clean);
+    assert_relations_clean(&clean);
+}
+
+#[test]
 fn lr_human_output_includes_knot_group() {
     let temp = TempDir::new("bob-cli-relations-human");
     let vault = temp.path().join("vault");
@@ -1000,6 +1327,35 @@ fn lr_human_output_includes_knot_group() {
     let text = stdout(&output);
     assert!(text.contains("LINKED FROM"), "{text}");
     assert!(text.contains("🪢") || text.contains("Relations:"), "{text}");
+}
+
+#[test]
+fn lr_human_output_counts_absorbed_plain_links() {
+    let temp = TempDir::new("bob-cli-relations-human-absorption");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+            "  - 🪢 **LINKS:** [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let output = bob_command()
+        .args(["task", "reconcile", "--dry-run"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("human dry-run");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("−1 plain (⛓)"), "{text}");
+    assert!(text.contains("plain LINKS entries absorbed"), "{text}");
 }
 
 fn setup_mention_vector(

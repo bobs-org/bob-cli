@@ -1165,6 +1165,8 @@ the source task's 🪢 **LINKS:** line and mirrored on the target task's generat
 (`(💬 mentions)` entries), which are not relations. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
 gestures. A relation is distinct from a Pomodoro [Task Link](#task-link): it never blocks a task,
 counts as a Pomodoro Task Link, or changes its schedule, priority, or freshness.
+A plain link cannot coexist with a [Task Dependency Link](#task-dependency-link) for the same task pair
+in either direction; reconcile and merge absorb the redundant plain link.
 Committing a configured cancel, complete, or merge label through capture or the Links
 stage cancels the source, completes it, or merges it into the target by copying its notes
 and cancelling it, respectively, at commit time; see [Task Merge](#task-merge).

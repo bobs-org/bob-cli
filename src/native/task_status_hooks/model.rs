@@ -308,6 +308,8 @@ pub(super) struct SyncResult {
     pub(super) dependency_warnings: Vec<DependencyWarning>,
     pub(super) blocks_line_updates: Vec<BlocksLineUpdate>,
     pub(super) minted_dependent_block_ids: Vec<MintedDependentBlockId>,
+    pub(super) absorbed_plain_links:
+        Vec<super::super::task_relations::ties::AbsorbedPlainLink>,
     pub(super) linked_from_line_updates: Vec<BlocksLineUpdate>,
     pub(super) minted_relation_source_block_ids: Vec<MintedDependentBlockId>,
     pub(super) relation_warnings: Vec<RelationWarning>,

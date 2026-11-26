@@ -8,6 +8,26 @@
 use super::parse::{accepted_links_spans, links_label_spans, parse_links_line};
 use super::{LinksLine, RelationEntry};
 
+/// One endpoint in the additive reconcile/merge plain-link absorption report.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct TaskRelationEndpoint {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) block_id: Option<String>,
+    pub(crate) text: String,
+}
+
+/// One plain LINKS entry removed because a dependency joins the same pair.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct AbsorbedPlainLink {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) source: TaskRelationEndpoint,
+    pub(crate) target: TaskRelationEndpoint,
+    pub(crate) dependency: String,
+}
+
 /// What [`drop_plain_link_entries`] decided about one LINKS line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DropOutcome {

@@ -741,6 +741,15 @@ subsumed `relation_updates[]` rows, and capture-complete `dependency_tie`
 | LR22 | S archived by `bob task archive` | T's entry already rewritten to `[[done/…#^s]]` by link repair; reconcile keeps it unchanged |
 | LR23 | S's note has a duplicate `^s` | S not listed; `duplicate_block_id` warning |
 | LR24 | target is a `^prj` task | the `^prj` line gets the mirror like any task |
+| LR27 | same-note dependency O→X plus plain O→X | reconcile drops the plain entry and reports `source_waits_on_target` |
+| LR28 | cross-note dependency O→X plus reverse plain X→O | reconcile drops X's entry and reports `target_waits_on_source` |
+| LR29 | plain and labelled entries share a dependency-joined pair | plain entry drops; labelled relation stays byte-identical |
+| LR30 | the absorbed plain entry is the only LINKS entry | the LINKS line is deleted and T's LINKED FROM is removed in the same pass |
+| LR31 | duplicate IDs, malformed Depends-On or LINKS, unresolved target, or uncertain target | leave the affected plain entry untouched |
+| LR32 | closed owner, previous daily owner, or `done/` owner | leave the overlap untouched |
+| LR33 | dependency evidence is in an archived note | active writable plain entry still folds |
+| LR34 | `relations.linked_from_lines: false` | skip the fold and leave LINKS unchanged |
+| LR35 | dry-run then apply | `absorbed_plain_links[]` rows match; the next dry-run is clean |
 
 ### LX — capture execution
 

@@ -513,30 +513,40 @@ lose the line; targets in `done/` or the previous daily note are never
 written. Sources without a `^block-id` are minted silently in the same
 pass (no `[id::]`, no `[fresh::]`), except when the owning note is
 quiet-deferred — that source is skipped until the next run and never
-listed on uncertainty (malformed LINKS, duplicate block ids).
-Reconcile never edits a LINKS line: it only reads, warns, and mints. The
-only writer that moves a LINKS entry between notes, including in `done/`,
-is `bob relations rename --reverse` ([Task relations](task-relations.md) §16
-RV10); reconcile stays read-only there.
+listed on uncertainty (malformed LINKS, duplicate block ids). Before
+collecting relation edges, reconcile folds unlabelled LINKS entries
+whose task pair is joined by a dependency in either direction. It only
+folds entries on open tasks in writable, non-quiet-deferred notes, and
+skips malformed or unresolved pairs, duplicate block ids, and uncertain
+targets. Labelled relations stay. This narrow repair is the §22
+exception; the only writer that moves a LINKS entry between notes,
+including in `done/`, is `bob relations rename --reverse`
+([Task relations](task-relations.md) §16 RV10).
 
 `relations.linked_from_lines: false` removes every LINKED FROM line on
-a writable task, mints nothing, and leaves LINKS alone.
+a writable task, mints nothing, and disables the plain-link fold as well;
+other LINKS entries stay untouched.
 `relations.linked_from_mentions: false` removes only `(💬 mentions)`
 entries on writable tasks, deleting a line left empty, and mints
 nothing for mentions.
 
-JSON reports the additive `linked_from_line_updates`,
+JSON reports the additive `absorbed_plain_links[]`,
+`linked_from_line_updates`,
 `minted_relation_source_block_ids`, and `relation_warnings[]`
 (`{kind, path, line, message}`) arrays. Warning kinds are
 `malformed_links_line`, `malformed_linked_from_line`,
 `unresolved_relation_link`, `relation_target_not_task`,
 `self_relation`, and `duplicate_block_id`. `linked_from_line_updates[]`
-rows gain `mentions_added` and `mentions_removed`, the mention subsets
+`absorbed_plain_links[]` rows have `{path, line, source, target,
+dependency}`; endpoints are `{path, line, block_id?, text}`, and
+`dependency` says `source_waits_on_target` or `target_waits_on_source`.
+`linked_from_line_updates[]` rows gain `mentions_added` and `mentions_removed`, the mention subsets
 of `added` and `removed`. `minted_relation_source_block_ids[]` rows
 gain `reason: "relation" | "mention"`; a source minted for both
 reports `relation`. Top-level `mention_edges` counts listed mention
-entries. Human output adds a `🪢` group in the dependency style, with
-mention counts in that group (for example `+2 💬`), and `--dry-run`
+entries. Human output adds an absorbed-plain-links row group and counts
+`🪢 −N plain (⛓)` on the Relations line, alongside the `🪢` mirror group
+in the dependency style, with mention counts (for example `+2 💬`), and `--dry-run`
 previews all of it. A second run over a reconciled vault reports no
 relation changes.
 
@@ -1431,6 +1441,25 @@ JSON mode prints one object on stdout with these stable fields:
       "removed": []
     }
   ],
+  "absorbed_plain_links": [
+    {
+      "path": "dev.md",
+      "line": 36,
+      "source": {
+        "path": "dev.md",
+        "line": 34,
+        "block_id": "fix-retries",
+        "text": "Design a retry policy"
+      },
+      "target": {
+        "path": "dev.md",
+        "line": 42,
+        "block_id": "write-tests",
+        "text": "Write tests"
+      },
+      "dependency": "source_waits_on_target"
+    }
+  ],
   "minted_relation_source_block_ids": [
     {
       "path": "inbox.md",
@@ -1560,7 +1589,9 @@ shape, with `mentions_added` / `mentions_removed` naming the mention
 subsets of `added` / `removed`; `minted_relation_source_block_ids` lists
 each source `^block-id` minted so a LINKED FROM entry can name it, with
 `reason: "relation" | "mention"`; `mention_edges` counts listed mention
-entries; `relation_warnings` lists
+entries; `absorbed_plain_links` lists each plain LINKS entry folded because
+a dependency joins the pair; its endpoint and direction shape is documented
+above; `relation_warnings` lists
 `{kind, path, line, message}` rows (`malformed_links_line`,
 `malformed_linked_from_line`, `unresolved_relation_link`,
 `relation_target_not_task`, `self_relation`, `duplicate_block_id`). The

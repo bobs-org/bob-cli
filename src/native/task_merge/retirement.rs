@@ -31,8 +31,13 @@ use super::{
         task_move::VaultSnapshot,
         task_relations::{
             self as task_relations, format as relation_format,
-            label::normalize_relation_label, parse as relation_parse,
-            plan as relation_plan,
+            label::normalize_relation_label,
+            parse as relation_parse, plan as relation_plan,
+            resolve::resolve_relation_target_path,
+            ties::{
+                drop_plain_link_entries, AbsorbedPlainLink, DropOutcome,
+                TaskRelationEndpoint,
+            },
         },
         task_status_hooks::{self, scan_pomodoros},
         vault_links::{LinkResolution, NoteIndex},
@@ -71,6 +76,7 @@ pub(crate) struct RetirementReports {
     pub(crate) successors_orphaned: Vec<String>,
     pub(crate) dependents_repointed: Vec<String>,
     pub(crate) links_pruned: usize,
+    pub(crate) absorbed_plain_links: Vec<AbsorbedPlainLink>,
     pub(crate) pruned_entries: Vec<String>,
     pub(crate) warnings: Vec<String>,
 }
@@ -1595,6 +1601,164 @@ pub(crate) fn cancel_source(
     })
 }
 
+/// Remove plain LINKS entries between one repointed dependent and the
+/// merge target. `owner` is the task whose LINKS child is being examined;
+/// `other` is the paired task. The dependency direction is from the owner's
+/// point of view and is copied into each additive report row.
+fn absorb_plain_links_between(
+    staged: &mut BTreeMap<PathBuf, String>,
+    owner: &(PathBuf, String),
+    other: &(PathBuf, String),
+    dependency: &'static str,
+    context: &MergeContext<'_>,
+) -> Vec<AbsorbedPlainLink> {
+    if owner == other {
+        return Vec::new();
+    }
+    let Some(owner_contents) = staged.get(&owner.0).cloned() else {
+        return Vec::new();
+    };
+    let Some(other_contents) = staged.get(&other.0) else {
+        return Vec::new();
+    };
+    let owner_scan = note_tasks::scan(&owner_contents, context.task_settings);
+    let mut owner_tasks = owner_scan
+        .tasks()
+        .iter()
+        .filter(|task| task.block_id.as_deref() == Some(owner.1.as_str()));
+    let Some(owner_task) = owner_tasks.next() else {
+        return Vec::new();
+    };
+    if owner_tasks.next().is_some() {
+        return Vec::new();
+    }
+    let other_scan = note_tasks::scan(other_contents, context.task_settings);
+    let mut other_tasks = other_scan
+        .tasks()
+        .iter()
+        .filter(|task| task.block_id.as_deref() == Some(other.1.as_str()));
+    let Some(other_task) = other_tasks.next() else {
+        return Vec::new();
+    };
+    if other_tasks.next().is_some() {
+        return Vec::new();
+    }
+
+    let lines = task_status_hooks::logical_lines(&owner_contents);
+    let line_refs: Vec<&str> = lines.to_vec();
+    let fenced =
+        task_status_hooks::fenced_lines(&line_refs, 0..line_refs.len());
+    let children = relation_parse::links_children_of(
+        &line_refs,
+        &fenced,
+        owner_task.line_index,
+    );
+    if children.is_empty() {
+        return Vec::new();
+    }
+    let note_index = context.note_index.with_additional(staged.keys().cloned());
+    let source_endpoint = TaskRelationEndpoint {
+        path: owner.0.to_string_lossy().replace('\\', "/"),
+        line: owner_task.line_index + 1,
+        block_id: Some(owner.1.clone()),
+        text: owner_task.description.clone(),
+    };
+    let target_endpoint = TaskRelationEndpoint {
+        path: other.0.to_string_lossy().replace('\\', "/"),
+        line: other_task.line_index + 1,
+        block_id: Some(other.1.clone()),
+        text: other_task.description.clone(),
+    };
+    let mut edits = Vec::<(usize, Option<String>)>::new();
+    let mut reports = Vec::new();
+    for child in children {
+        let Some(line) = line_refs.get(child.line_index) else {
+            continue;
+        };
+        let child_reports = match &child.parsed {
+            task_relations::LinksLine::Accepted { entries, .. } => entries
+                .iter()
+                .filter(|entry| entry.label.is_none())
+                .filter(|entry| {
+                    resolve_relation_target_path(
+                        &owner.0,
+                        &entry.target,
+                        &note_index,
+                        |path| staged.contains_key(path),
+                    )
+                    .is_some_and(|path| {
+                        path == other.0 && entry.block_id == other.1
+                    })
+                })
+                .map(|_| AbsorbedPlainLink {
+                    path: owner.0.to_string_lossy().replace('\\', "/"),
+                    line: child.line_index + 1,
+                    source: source_endpoint.clone(),
+                    target: target_endpoint.clone(),
+                    dependency: dependency.to_string(),
+                })
+                .collect::<Vec<_>>(),
+            task_relations::LinksLine::Empty
+            | task_relations::LinksLine::Malformed
+            | task_relations::LinksLine::NotALine => Vec::new(),
+        };
+        if child_reports.is_empty() {
+            continue;
+        }
+        let outcome = drop_plain_link_entries(line, |entry| {
+            entry.label.is_none()
+                && resolve_relation_target_path(
+                    &owner.0,
+                    &entry.target,
+                    &note_index,
+                    |path| staged.contains_key(path),
+                )
+                .is_some_and(|path| {
+                    path == other.0 && entry.block_id == other.1
+                })
+        });
+        match outcome {
+            DropOutcome::Rewritten { line, .. } => {
+                edits.push((child.line_index, Some(line)));
+                reports.extend(child_reports);
+            }
+            DropOutcome::DeleteLine { .. } => {
+                edits.push((child.line_index, None));
+                reports.extend(child_reports);
+            }
+            DropOutcome::Unchanged | DropOutcome::Malformed => {}
+        }
+    }
+    if edits.is_empty() {
+        return Vec::new();
+    }
+    let ending = dependency_format::note_line_ending(&owner_contents);
+    let final_newline = dependency_format::has_final_newline(&owner_contents);
+    let mut rewritten: Vec<String> =
+        lines.iter().map(|line| line.to_string()).collect();
+    edits.sort_by(|left, right| right.0.cmp(&left.0));
+    for (line_index, replacement) in edits {
+        if line_index >= rewritten.len() {
+            continue;
+        }
+        if let Some(line) = replacement {
+            rewritten[line_index] = line;
+        } else {
+            rewritten.remove(line_index);
+        }
+    }
+    let joined = rewritten.join(ending);
+    staged.insert(
+        owner.0.clone(),
+        if final_newline {
+            format!("{joined}{ending}")
+        } else {
+            joined
+        },
+    );
+    reports
+}
+
 /// Full retirement step used by the integration phase and covered by
 /// the MG5–MG9, MG13, and MG16 tests: repoint, provenance, cancel,
 /// and reports over the payload's staged map.
@@ -1706,6 +1870,7 @@ pub(crate) fn apply_retirement(
         let orphans = successor_orphans(&staged, &identity, context);
         let mut links_pruned = 0usize;
         let mut pruned_entries = Vec::new();
+        let mut absorbed_plain_links = Vec::new();
         if let Some(target) = &target_identity {
             stage_task_provenance(
                 &mut staged,
@@ -1714,6 +1879,38 @@ pub(crate) fn apply_retirement(
                 &label,
                 context,
             )?;
+            for dependent in &dependents {
+                let Some(block_id) = dependent.block_id.as_deref() else {
+                    continue;
+                };
+                let dependent_identity =
+                    (dependent.path.clone(), block_id.to_string());
+                if dependent_identity == *target
+                    || !pre_repoint_waited_on(
+                        snapshot,
+                        &dependent.path,
+                        block_id,
+                        &identity,
+                        context,
+                    )
+                {
+                    continue;
+                }
+                absorbed_plain_links.extend(absorb_plain_links_between(
+                    &mut staged,
+                    &dependent_identity,
+                    target,
+                    "source_waits_on_target",
+                    context,
+                ));
+                absorbed_plain_links.extend(absorb_plain_links_between(
+                    &mut staged,
+                    target,
+                    &dependent_identity,
+                    "target_waits_on_source",
+                    context,
+                ));
+            }
             let reason = format!(
                 "🪢 {label} [[{}#^{}]]",
                 target.0.with_extension("").to_string_lossy().into_owned(),
@@ -1803,6 +2000,7 @@ pub(crate) fn apply_retirement(
             successors_orphaned: orphans,
             dependents_repointed: repointed_here,
             links_pruned,
+            absorbed_plain_links,
             pruned_entries,
             warnings: std::mem::take(&mut graph_warnings),
         });

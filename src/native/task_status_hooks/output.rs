@@ -42,6 +42,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.unblocked_fields_pruned.len()
         + result.blocks_line_updates.len()
         + result.minted_dependent_block_ids.len()
+        + result.absorbed_plain_links.len()
         + result.linked_from_line_updates.len()
         + result.minted_relation_source_block_ids.len()
         + result.settled.len()
@@ -186,16 +187,18 @@ pub(super) fn print_human_result(result: &SyncResult) {
     );
     if result.mention_edges > 0 {
         println!(
-            "Relations: {} \u{1FAA2} LINKED FROM, {} minted, {} warnings, {} \u{1F4AC}",
+        "Relations: {} \u{1FAA2} LINKED FROM, \u{1FAA2} −{} plain (⛓), {} minted, {} warnings, {} \u{1F4AC}",
             result.linked_from_line_updates.len(),
+        result.absorbed_plain_links.len(),
             result.minted_relation_source_block_ids.len(),
             result.relation_warnings.len(),
             result.mention_edges
         );
     } else {
         println!(
-            "Relations: {} \u{1FAA2} LINKED FROM, {} minted, {} warnings",
+            "Relations: {} \u{1FAA2} LINKED FROM, \u{1FAA2} −{} plain (⛓), {} minted, {} warnings",
             result.linked_from_line_updates.len(),
+            result.absorbed_plain_links.len(),
             result.minted_relation_source_block_ids.len(),
             result.relation_warnings.len()
         );
@@ -381,6 +384,27 @@ pub(super) fn print_relation_line_sections(
     styler: &Styler,
     result: &SyncResult,
 ) {
+    if !result.absorbed_plain_links.is_empty() {
+        println!();
+        println!(
+            "  {} plain LINKS entries absorbed by dependencies",
+            if result.dry_run {
+                "would remove"
+            } else {
+                "removed"
+            }
+        );
+        for entry in &result.absorbed_plain_links {
+            println!(
+                "    {}  line {}  {} → {}  ({})",
+                styler.cyan(&entry.path),
+                entry.line,
+                entry.source.text,
+                entry.target.text,
+                entry.dependency.replace('_', " ")
+            );
+        }
+    }
     if !result.linked_from_line_updates.is_empty() {
         println!();
         println!(

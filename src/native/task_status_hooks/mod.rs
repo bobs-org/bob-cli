@@ -480,6 +480,7 @@ pub(crate) fn reconcile_merge_snapshot_for_tests(
         settings,
         None,
         &empty,
+        &dependencies.uncertain_dependents,
         true,
         true,
     );

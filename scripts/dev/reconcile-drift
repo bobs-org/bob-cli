@@ -92,6 +92,7 @@ DEP_FIELDS = (
     "adopted_dependency_lines",
     "healed_dependency_links",
     "canonicalized_dependency_lines",
+    "absorbed_plain_links",
     "blocks_line_updates",
     "minted_dependent_block_ids",
     "minted_relation_source_block_ids",

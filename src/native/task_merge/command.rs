@@ -1097,6 +1097,7 @@ fn json_document(report: &Report) -> Value {
                         "prerequisites_left": record.prerequisites_left,
                         "successors_orphaned": record.successors_orphaned,
                         "links_pruned": record.links_pruned,
+                        "absorbed_plain_links": record.absorbed_plain_links,
                         "consequences": record.consequences,
                         "offers": record.offers,
                         "message": record.message,

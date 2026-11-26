@@ -14,6 +14,7 @@ use super::super::{
     task_complete::SuccessorSelection,
     task_locator::{LocatedTask, TaskLocator},
     task_move::transplant::{RenameRecord, RepairedFile},
+    task_relations::ties::AbsorbedPlainLink,
     vault_links::NoteIndex,
 };
 
@@ -296,6 +297,7 @@ pub(crate) struct MergeRecord {
     pub(crate) prerequisites_left: Vec<String>,
     pub(crate) successors_orphaned: Vec<String>,
     pub(crate) links_pruned: usize,
+    pub(crate) absorbed_plain_links: Vec<AbsorbedPlainLink>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) consequences: Vec<MergeConsequence>,
     pub(crate) offers: Vec<MergeOffer>,

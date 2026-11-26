@@ -284,6 +284,7 @@ mod tests {
             dependency_warnings: Vec::new(),
             blocks_line_updates: Vec::new(),
             minted_dependent_block_ids: Vec::new(),
+            absorbed_plain_links: Vec::new(),
             linked_from_line_updates: Vec::new(),
             minted_relation_source_block_ids: Vec::new(),
             relation_warnings: Vec::new(),

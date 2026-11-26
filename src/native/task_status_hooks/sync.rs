@@ -674,6 +674,7 @@ pub(super) fn sync_task_statuses(
         &settings,
         previous_daily_file,
         &quiet_deferred,
+        &reconcile.uncertain_dependents,
         relations_enabled,
         mentions_enabled,
     );
@@ -1135,6 +1136,7 @@ pub(super) fn sync_task_statuses(
         dependency_warnings,
         blocks_line_updates: blocks.updates,
         minted_dependent_block_ids: blocks.mints,
+        absorbed_plain_links: relations.absorbed_plain_links,
         linked_from_line_updates: relations.updates,
         minted_relation_source_block_ids: relations.mints,
         relation_warnings: relations.warnings,

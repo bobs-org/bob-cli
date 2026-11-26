@@ -2487,6 +2487,64 @@ fn mg17_production_reconciliation_is_a_noop_after_merge() {
 }
 
 #[test]
+fn mg21_repoint_absorbs_plain_links_and_reconcile_is_a_noop() {
+    let before = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "dest.md",
+            "- [ ] #task Target ^dst\n\t- 🪢 **LINKS:** [[dep#^dep]]\n",
+        ),
+        (
+            "dep.md",
+            "- [ ] #task Dependent ^dep\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n\t- 🪢 **LINKS:** [[dest#^dst]]\n",
+        ),
+    ]);
+    let request =
+        request(&["src:src"], MergeContainer::Task(locator("dest:dst")));
+    let merge = plan(&before, &request).expect("merge plan");
+    let report = &merge.records[0].absorbed_plain_links;
+    assert_eq!(report.len(), 2, "{report:?}");
+    assert!(report.iter().any(|row| {
+        row.path == "dep.md"
+            && row.dependency == "source_waits_on_target"
+            && row.source.block_id.as_deref() == Some("dep")
+            && row.target.block_id.as_deref() == Some("dst")
+    }));
+    assert!(report.iter().any(|row| {
+        row.path == "dest.md"
+            && row.dependency == "target_waits_on_source"
+            && row.source.block_id.as_deref() == Some("dst")
+            && row.target.block_id.as_deref() == Some("dep")
+    }));
+    let json = serde_json::to_value(&merge.records[0]).expect("record JSON");
+    assert_eq!(json["absorbed_plain_links"].as_array().unwrap().len(), 2);
+
+    let dependent = merge
+        .postimages
+        .get(Path::new("dep.md"))
+        .expect("repointed dependent postimage");
+    assert!(
+        dependent.contains("DEPENDS ON:** [[dest#^dst]]"),
+        "{dependent}"
+    );
+    assert!(!dependent.contains("🪢 **LINKS:**"), "{dependent}");
+    let target = merge
+        .postimages
+        .get(Path::new("dest.md"))
+        .expect("target postimage");
+    assert!(!target.contains("🪢 **LINKS:**"), "{target}");
+
+    let mut merged = before.notes.clone();
+    merged.extend(merge.postimages);
+    let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
+    let reconciled =
+        crate::native::task_status_hooks::reconcile_merge_snapshot_for_tests(
+            &merged, &settings,
+        );
+    assert_eq!(reconciled, merged);
+}
+
+#[test]
 fn mg17_closed_nested_task_copy_strips_identity_and_reconcile_is_noop() {
     let before = snapshot(&[
         (
