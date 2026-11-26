@@ -171,10 +171,18 @@ write.
 Bob Mac Capture is a thin client: Bob owns drawer grammar, completion, preview
 data, and writes, and the app decodes and presents them. Preview
 `task_blocks[].lines[]` drawer headers carry an additive
-`drawer: {title, key, marker, empty}` object with `marker` one of `bold` or
-`section`; per-item drawer summaries carry the same verbatim `title` plus
-`key`, `created`, and additive `marker`. Missing, malformed, or unknown drawer
-fields decode away and leave the existing verbatim preview. Transfer and
-merge-in destinations keep the drawer title verbatim and never uppercase it.
-Capture fixtures in the Mac repository are generated from a clean bob-cli
-checkout at grammar 32 and record source revision, version, and inputs.
+`drawer: {title, key, marker, empty}` object with `marker` one of `bold`,
+`legacy_caps`, or `section`; per-item drawer summaries carry the same verbatim
+`title` plus `key`, `created`, and additive `marker`. Missing, malformed, or
+unknown drawer fields decode away and leave the existing verbatim preview.
+Transfer and merge-in destinations keep the drawer title verbatim and never
+uppercase it. The app renders an annotated header as an outline tray plus the
+verbatim title (muted when `empty`), and paints draft titles semibold in the
+section color with dimmed `**` delimiters. Typing `*` where Bob admits a drawer
+expands to `- **|**` through `expand_drawer_marker` as one undoable edit;
+Backspace on an empty `****` removes all four stars. At a drawer title end,
+Shift-Return, Option-Return, or Ctrl-J nests a note after the closing pair, a
+typed `*` steps over it, and Return keeps its capture meaning. Capture fixtures
+in the Mac repository are generated from clean bob-cli checkouts (preview
+fixtures at grammar 31, rewrite and skeleton fixtures at grammar 33) and
+record source revision, version, and inputs.
