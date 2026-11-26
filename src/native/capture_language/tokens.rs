@@ -525,9 +525,9 @@ pub(super) fn note_goto_query_token<'a>(
 /// charset; the bytes after `^` are empty or block-ID bytes
 /// (`collect_done::is_block_id_byte`). `@@` is never a caret address.
 /// `block_id` may be empty (`@route^`); parse and execution use
-/// [`caret_goto_token`], which requires a non-empty ID. Completion
-/// eligibility in a later phase uses this predicate. Nothing else may
-/// re-derive the rule.
+/// [`caret_goto_token`], which requires a non-empty ID. Completion's
+/// scoped-browse eligibility (`caret_browse_route_at`) uses this
+/// predicate. Nothing else may re-derive the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CaretAddressToken<'a> {
     pub(super) token: Token<'a>,

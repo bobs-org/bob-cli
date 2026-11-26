@@ -79,7 +79,7 @@ pub(crate) struct BlockIdField {
     pub(crate) suggestions: Vec<String>,
     pub(crate) used: Vec<UsedBlockId>,
     /// Additive scoped-browse Go rows for a whole-draft `@route^` /
-    /// `@route^partial` (cli-browse). Omitted for every other draft, so
+    /// `@route^partial`. Omitted for every other draft, so
     /// old Mac apps keep today's composer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) goto: Option<capture_caret_goto::CaretBrowse>,

@@ -98,7 +98,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 /// Scoped-browse payload for the additive `block_id.goto` completion
-/// object (cli-browse): every uniquely identified block in the living
+/// object: every uniquely identified block in the living
 /// note in document order, then the paired archive's unique blocks
 /// flagged `archived`. IDs that occur more than once are omitted; the
 /// parse card explains them. The rows are unfiltered; the Mac filters

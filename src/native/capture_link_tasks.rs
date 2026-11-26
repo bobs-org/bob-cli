@@ -1073,7 +1073,7 @@ mod tests {
 
     #[test]
     fn ranker_matches_caret_address_queries() {
-        // cli-browse indexes `route^block-id` beside `route:block-id`
+        // The `/` index carries `route^block-id` beside `route:block-id`
         // so `/bob^…` finds the task.
         fn candidate(
             text: &str,
