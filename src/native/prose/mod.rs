@@ -1,6 +1,6 @@
 //! Article notes: bob-owned section numbers and layout.
 //!
-//! Pure core: text in, [`ArticlePlan`] out. The CLI wires vault I/O around
+//! Pure core: text in, [`ProsePlan`] out. The CLI wires vault I/O around
 //! this engine, while the plugin phase consumes the JSON contract.
 
 pub(crate) mod cli;
@@ -21,11 +21,9 @@ mod verify;
 mod tests;
 
 use findings::Finding;
-use plan::{
-    line_edits, sha256_hex, ArticlePlan, ArticlePlanResponse, ArticleStatus,
-};
+use plan::{line_edits, sha256_hex, ProsePlan, ProsePlanResponse, ProseStatus};
 
-pub(crate) use plan::ArticleContext;
+pub(crate) use plan::ProseContext;
 pub(crate) use scan::split_physical_lines;
 #[cfg(test)]
 pub(crate) use sections::strip_section_number;
@@ -41,16 +39,16 @@ pub(crate) fn completion_candidates(
     vault::completion_candidates(bob_dir)
 }
 
-pub(crate) fn adopt(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
+pub(crate) fn adopt(text: &str, ctx: &ProseContext<'_>) -> ProsePlan {
     let sha256 = sha256_hex(text);
     let input_document = scan::classify(text);
     match marker::adopt_decision(text, ctx.path, &input_document.lines) {
         marker::AdoptDecision::Refuse(reason) => {
-            ArticlePlan::skipped(ctx.path, sha256, reason)
+            ProsePlan::skipped(ctx.path, sha256, reason)
         }
-        marker::AdoptDecision::AlreadyArticle => ArticlePlan {
+        marker::AdoptDecision::AlreadyProse => ProsePlan {
             path: ctx.path.to_path_buf(),
-            status: ArticleStatus::Unchanged,
+            status: ProseStatus::Unchanged,
             reason: None,
             sha256,
             formatted: None,
@@ -65,12 +63,12 @@ pub(crate) fn adopt(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
             numbering: true,
         },
         marker::AdoptDecision::Insert => {
-            let insert = marker::with_article_type(text);
+            let insert = marker::with_prose_type(text);
             let mut planned = format(&insert.text, ctx);
             planned.sha256 = sha256;
             if matches!(
                 planned.status,
-                ArticleStatus::Skipped | ArticleStatus::Error
+                ProseStatus::Skipped | ProseStatus::Error
             ) {
                 return planned;
             }
@@ -91,9 +89,9 @@ pub(crate) fn adopt(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
                 .collect();
             planned.edits = line_edits(&original_lines, &formatted_lines);
             planned.status = if formatted == text {
-                ArticleStatus::Unchanged
+                ProseStatus::Unchanged
             } else {
-                ArticleStatus::Changed
+                ProseStatus::Changed
             };
             planned.formatted = Some(formatted);
             planned.notice = adopt_notice(&planned.notice);
@@ -103,14 +101,14 @@ pub(crate) fn adopt(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
     }
 }
 
-pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
+pub(crate) fn format(text: &str, ctx: &ProseContext<'_>) -> ProsePlan {
     let sha256 = sha256_hex(text);
     let input_document = scan::classify(text);
     if ctx.require_marker
         && let Some(reason) =
             marker::skip_reason(text, ctx.path, &input_document.lines)
     {
-        return ArticlePlan::skipped(ctx.path, sha256, reason);
+        return ProsePlan::skipped(ctx.path, sha256, reason);
     }
     let options = marker::parse_options(text);
     let initial_numbering =
@@ -205,7 +203,7 @@ pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
     if let Some(reason) =
         verify::words_changed_reason(&input_tokens, &output_tokens)
     {
-        return ArticlePlan::error(
+        return ProsePlan::error(
             ctx.path,
             sha256,
             reason,
@@ -216,7 +214,7 @@ pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
 
     let second = format_once(&formatted, ctx.path, options.numbering);
     if second != formatted {
-        return ArticlePlan::error(
+        return ProsePlan::error(
             ctx.path,
             sha256,
             verify::not_idempotent(),
@@ -226,12 +224,12 @@ pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
     }
 
     let status = if formatted == text {
-        ArticleStatus::Unchanged
+        ProseStatus::Unchanged
     } else {
-        ArticleStatus::Changed
+        ProseStatus::Changed
     };
     let notice = format_notice(&changes, &numbering.headings);
-    ArticlePlan {
+    ProsePlan {
         path: ctx.path.to_path_buf(),
         status,
         reason: None,
@@ -249,32 +247,30 @@ pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
     }
 }
 
-pub(crate) fn response(notes: Vec<ArticlePlan>) -> ArticlePlanResponse {
-    ArticlePlanResponse::new(notes)
+pub(crate) fn response(notes: Vec<ProsePlan>) -> ProsePlanResponse {
+    ProsePlanResponse::new(notes)
 }
 
 /// Report-only `format --all --check` used by `bob nightly`. Exit 1 from
 /// "needs formatting" is treated as success; only real failures return 2.
 pub(crate) fn nightly_check(root: &std::path::Path) -> i32 {
-    let articles = match vault::discover_articles(root) {
-        Ok(articles) => articles,
+    let prose = match vault::discover_prose(root) {
+        Ok(prose) => prose,
         Err(error) => {
             eprintln!("bob nightly: {error}");
             return 2;
         }
     };
-    let sources = articles
+    let sources = prose
         .iter()
-        .map(|article| article.text.clone())
+        .map(|prose| prose.text.clone())
         .collect::<Vec<_>>();
-    let plans = articles
+    let plans = prose
         .iter()
-        .map(|article| {
-            format(&article.text, &ArticleContext::new(&article.path))
-        })
+        .map(|prose| format(&prose.text, &ProseContext::new(&prose.path)))
         .collect::<Vec<_>>();
     let failed = plans.iter().any(|plan| {
-        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+        matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error)
     });
     render::format_human(
         &plans,
@@ -347,7 +343,7 @@ fn adopt_notice(format_notice: &str) -> String {
     }
 }
 
-fn remap_adopt_lines(plan: &mut ArticlePlan, at: usize, count: usize) {
+fn remap_adopt_lines(plan: &mut ProsePlan, at: usize, count: usize) {
     if count == 0 {
         return;
     }
@@ -448,9 +444,9 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 }
 
 #[cfg(test)]
-pub(crate) fn format_as_article(text: &str) -> ArticlePlan {
+pub(crate) fn format_as_prose(text: &str) -> ProsePlan {
     format(
         text,
-        &ArticleContext::bypass_marker(std::path::Path::new("note.md")),
+        &ProseContext::bypass_marker(std::path::Path::new("note.md")),
     )
 }

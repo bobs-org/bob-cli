@@ -13,9 +13,7 @@ use clap::{
     ArgMatches, Command as ClapCommand,
 };
 
-use super::{
-    adopt, format, inbound, render, vault, ArticleContext, ArticleStatus,
-};
+use super::{adopt, format, inbound, render, vault, ProseContext, ProseStatus};
 use crate::native::{env as bob_env, style::Styler};
 
 const COMMAND_NAME: &str = "bob articles";
@@ -261,13 +259,13 @@ fn run_adopt(matches: &ArgMatches) -> i32 {
         }
     };
 
-    let mut plans = vec![adopt(&source, &ArticleContext::new(&path))];
+    let mut plans = vec![adopt(&source, &ProseContext::new(&path))];
     let index = match inbound::attach(&bob_dir, &mut plans, from_stdin) {
         Ok(index) => index,
         Err(error) => return print_vault_error(error),
     };
     let plan_failed = plans.iter().any(|plan| {
-        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+        matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error)
     });
 
     if !plan_failed && write && !from_stdin {
@@ -278,10 +276,7 @@ fn run_adopt(matches: &ArgMatches) -> i32 {
             eprintln!("{COMMAND_NAME}: {message}");
             return 2;
         }
-        if plans
-            .iter()
-            .all(|plan| plan.status == ArticleStatus::Changed)
-        {
+        if plans.iter().all(|plan| plan.status == ProseStatus::Changed) {
             inbound::fold_into_formatted(
                 &mut plans,
                 std::slice::from_ref(&source),
@@ -308,7 +303,7 @@ fn run_adopt(matches: &ArgMatches) -> i32 {
     }
 
     let plan_failed = plans.iter().any(|plan| {
-        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+        matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error)
     });
     if plan_failed {
         2
@@ -343,18 +338,18 @@ fn run_format(matches: &ArgMatches) -> i32 {
     }
 
     let (sources, paths) = if all {
-        let articles = match vault::discover_articles(&bob_dir) {
-            Ok(articles) => articles,
+        let prose = match vault::discover_prose(&bob_dir) {
+            Ok(prose) => prose,
             Err(error) => return print_vault_error(error),
         };
         (
-            articles
+            prose
                 .iter()
-                .map(|article| article.text.clone())
+                .map(|prose| prose.text.clone())
                 .collect::<Vec<_>>(),
-            articles
+            prose
                 .into_iter()
-                .map(|article| article.path)
+                .map(|prose| prose.path)
                 .collect::<Vec<_>>(),
         )
     } else {
@@ -396,7 +391,7 @@ fn run_format(matches: &ArgMatches) -> i32 {
     let mut plans = sources
         .iter()
         .zip(&paths)
-        .map(|(source, path)| format(source, &ArticleContext::new(path)))
+        .map(|(source, path)| format(source, &ProseContext::new(path)))
         .collect::<Vec<_>>();
     let index = match inbound::attach(&bob_dir, &mut plans, all || from_stdin) {
         Ok(index) => index,
@@ -424,7 +419,7 @@ fn run_format(matches: &ArgMatches) -> i32 {
     }
 
     let plan_failed = plans.iter().any(|plan| {
-        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+        matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error)
     });
     match output_format {
         OutputFormat::Json => render::format_json(plans.clone()),
@@ -445,7 +440,7 @@ fn run_format(matches: &ArgMatches) -> i32 {
     if check
         && plans
             .iter()
-            .any(|plan| matches!(plan.status, ArticleStatus::Changed))
+            .any(|plan| matches!(plan.status, ProseStatus::Changed))
     {
         return 1;
     }
@@ -454,15 +449,13 @@ fn run_format(matches: &ArgMatches) -> i32 {
 
 fn run_list(matches: &ArgMatches) -> i32 {
     let bob_dir = bob_dir_from_matches(matches);
-    let articles = match vault::discover_articles(&bob_dir) {
-        Ok(articles) => articles,
+    let prose = match vault::discover_prose(&bob_dir) {
+        Ok(prose) => prose,
         Err(error) => return print_vault_error(error),
     };
-    let plans = articles
+    let plans = prose
         .iter()
-        .map(|article| {
-            format(&article.text, &ArticleContext::new(&article.path))
-        })
+        .map(|prose| format(&prose.text, &ProseContext::new(&prose.path)))
         .collect::<Vec<_>>();
     match output_format(matches) {
         OutputFormat::Human => {
@@ -492,8 +485,8 @@ fn run_outline(matches: &ArgMatches) -> i32 {
             return 2;
         }
     };
-    let plan = format(&source, &ArticleContext::new(&path));
-    if matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error) {
+    let plan = format(&source, &ProseContext::new(&path));
+    if matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error) {
         if output_format(matches) == OutputFormat::Json {
             render::outline_json(&plan);
         }

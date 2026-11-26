@@ -41,7 +41,7 @@ const STEPS: &[Step] = &[
     Step {
         name: "articles",
         blurb: "Report articles that need formatting",
-        run: run_articles_step,
+        run: run_prose_step,
     },
     Step {
         name: "period notes",
@@ -207,8 +207,8 @@ fn run_collect_done_step(child_env: &ChildEnv) -> i32 {
     collect_done::run_collection(collect_done::NO_MINIMUM_BATCH, child_env)
 }
 
-fn run_articles_step(_child_env: &ChildEnv) -> i32 {
-    super::articles::nightly_check(&bob_env::bob_dir())
+fn run_prose_step(_child_env: &ChildEnv) -> i32 {
+    super::prose::nightly_check(&bob_env::bob_dir())
 }
 
 fn run_period_notes_step(_child_env: &ChildEnv) -> i32 {

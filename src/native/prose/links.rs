@@ -584,7 +584,7 @@ fn hex(byte: u8) -> Option<u8> {
 }
 
 /// One article whose heading fragments other notes may need rewritten.
-pub(crate) struct InboundArticle<'a> {
+pub(crate) struct InboundProse<'a> {
     pub index: usize,
     pub path: &'a Path,
     pub headings: &'a [PlannedHeading],
@@ -606,10 +606,10 @@ pub(crate) fn rewrite_inbound_line(
     current_path: &Path,
     line: usize,
     index: &NoteIndex,
-    articles: &[InboundArticle<'_>],
+    prose: &[InboundProse<'_>],
 ) -> InboundLineResult {
     let mut result = InboundLineResult::default();
-    if protects_links(region) || articles.is_empty() {
+    if protects_links(region) || prose.is_empty() {
         return result;
     }
     let mut updated = content.to_owned();
@@ -639,9 +639,8 @@ pub(crate) fn rewrite_inbound_line(
         if resolved == current_path {
             continue;
         }
-        let Some(article) = articles
-            .iter()
-            .find(|article| article.path == resolved.as_path())
+        let Some(prose) =
+            prose.iter().find(|prose| prose.path == resolved.as_path())
         else {
             continue;
         };
@@ -652,8 +651,7 @@ pub(crate) fn rewrite_inbound_line(
         let decoded = percent_decode(
             &target_content[fragment_span.start..fragment_span.end],
         );
-        let target_headings = match resolve_heading(&decoded, article.headings)
-        {
+        let target_headings = match resolve_heading(&decoded, prose.headings) {
             Ok(headings) => headings,
             Err(failure) => {
                 let loc = source_loc(current_path, line);
@@ -667,7 +665,7 @@ pub(crate) fn rewrite_inbound_line(
                 };
                 line_findings.push((
                     span.target_start,
-                    article.index,
+                    prose.index,
                     Finding::warning(
                         "inbound-heading-link",
                         1,
@@ -685,7 +683,7 @@ pub(crate) fn rewrite_inbound_line(
             target_headings
                 .iter()
                 .map(|heading| {
-                    heading.number.as_deref().filter(|_| article.numbering)
+                    heading.number.as_deref().filter(|_| prose.numbering)
                 })
                 .collect(),
             fragment_span.markdown,
@@ -722,7 +720,7 @@ pub(crate) fn rewrite_inbound_line(
     result.findings.extend(
         line_findings
             .into_iter()
-            .map(|(_, article, finding)| (article, finding)),
+            .map(|(_, prose, finding)| (prose, finding)),
     );
     result
 }

@@ -19,9 +19,7 @@ impl NativeCommand {
     /// `NativeCommand` cannot compile without a tree entry.
     pub(crate) fn command(self) -> ClapCommand {
         match self {
-            NativeCommand::Articles => {
-                crate::native::articles::cli::build_cli()
-            }
+            NativeCommand::Prose => crate::native::prose::cli::build_cli(),
             NativeCommand::AlbumsCheck => {
                 crate::native::albums::build_cli_check()
             }

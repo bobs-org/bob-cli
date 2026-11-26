@@ -6,15 +6,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{format, plan::ArticlePlan, ArticleContext};
+use super::{format, plan::ProsePlan, ProseContext};
 use crate::native::{
     collect_done, is_always_excluded_note_directory_name,
-    projects::{frontmatter_is_article, is_markdown_file, parse_frontmatter},
+    projects::{frontmatter_is_prose, is_markdown_file, parse_frontmatter},
     vault_links::{target_to_markdown_path, LinkResolution, VaultLinkResolver},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ArticleFile {
+pub(crate) struct ProseFile {
     pub(crate) path: PathBuf,
     pub(crate) text: String,
 }
@@ -48,11 +48,11 @@ pub(crate) fn list_markdown(root: &Path) -> Result<Vec<PathBuf>, VaultError> {
 
 /// Discover marked article notes under the vault root. The directory
 /// exclusions match article formatting's refusal list.
-pub(crate) fn discover_articles(
+pub(crate) fn discover_prose(
     root: &Path,
-) -> Result<Vec<ArticleFile>, VaultError> {
+) -> Result<Vec<ProseFile>, VaultError> {
     let paths = list_markdown(root)?;
-    let mut articles = Vec::new();
+    let mut prose = Vec::new();
     for path in paths {
         let text = match fs::read_to_string(root.join(&path)) {
             Ok(text) => text,
@@ -67,11 +67,11 @@ pub(crate) fn discover_articles(
                 });
             }
         };
-        if text_is_article(&text) {
-            articles.push(ArticleFile { path, text });
+        if text_is_prose(&text) {
+            prose.push(ProseFile { path, text });
         }
     }
-    Ok(articles)
+    Ok(prose)
 }
 
 /// Resolve an article NOTE as an exact vault-relative path, or as a
@@ -116,10 +116,10 @@ pub(crate) fn resolve_note(root: &Path, note: &str) -> Result<PathBuf, String> {
 /// install each changed note with the shared atomic writer.
 pub(crate) fn preflight_plans(
     root: &Path,
-    plans: &mut [ArticlePlan],
+    plans: &mut [ProsePlan],
 ) -> Result<(), String> {
     for plan in plans {
-        if !matches!(plan.status, super::plan::ArticleStatus::Changed) {
+        if !matches!(plan.status, super::plan::ProseStatus::Changed) {
             continue;
         }
         let absolute = root.join(&plan.path);
@@ -142,12 +142,12 @@ pub(crate) fn preflight_plans(
 
 pub(crate) fn write_plans(
     root: &Path,
-    plans: &mut [ArticlePlan],
+    plans: &mut [ProsePlan],
 ) -> Result<(), String> {
     preflight_plans(root, plans)?;
     let mut writes = Vec::new();
     for plan in plans {
-        if !matches!(plan.status, super::plan::ArticleStatus::Changed) {
+        if !matches!(plan.status, super::plan::ProseStatus::Changed) {
             continue;
         }
         let absolute = root.join(&plan.path);
@@ -165,12 +165,12 @@ pub(crate) fn write_plans(
     Ok(())
 }
 
-fn mark_preimage_changed(plan: &mut ArticlePlan) {
+fn mark_preimage_changed(plan: &mut ProsePlan) {
     let message = format!(
         "{} changed since the article plan was made; not written",
         plan.path.display()
     );
-    plan.status = super::plan::ArticleStatus::Error;
+    plan.status = super::plan::ProseStatus::Error;
     plan.reason = Some(super::plan::Refusal {
         code: "preimage-changed".to_string(),
         message: message.clone(),
@@ -188,15 +188,14 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 /// Completion values are extensionless vault-relative paths paired with
 /// their current section counts.
 pub(crate) fn completion_candidates(root: &Path) -> Vec<(String, String)> {
-    let Ok(articles) = discover_articles(root) else {
+    let Ok(prose) = discover_prose(root) else {
         return Vec::new();
     };
-    articles
+    prose
         .iter()
-        .map(|article| {
-            let plan =
-                format(&article.text, &ArticleContext::new(&article.path));
-            let value = article
+        .map(|prose| {
+            let plan = format(&prose.text, &ProseContext::new(&prose.path));
+            let value = prose
                 .path
                 .with_extension("")
                 .to_string_lossy()
@@ -269,10 +268,10 @@ fn relative_or_root(root: &Path, path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn text_is_article(text: &str) -> bool {
+fn text_is_prose(text: &str) -> bool {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     if let Some(frontmatter) = parse_frontmatter(text) {
-        return frontmatter_is_article(&frontmatter);
+        return frontmatter_is_prose(&frontmatter);
     }
 
     // Keep an article with an unclosed frontmatter marker in the `--all`
@@ -285,7 +284,7 @@ fn text_is_article(text: &str) -> bool {
         let mut closed = text.trim_end_matches(['\n', '\r']).to_owned();
         closed.push_str("\n---\n");
         return parse_frontmatter(&closed)
-            .is_some_and(|frontmatter| frontmatter_is_article(&frontmatter));
+            .is_some_and(|frontmatter| frontmatter_is_prose(&frontmatter));
     }
     false
 }
@@ -300,14 +299,14 @@ mod tests {
         let path = PathBuf::from("draft.md");
         let source = "---\ntype: [[article]]\n---\n\n## Old\n";
         fs::write(root.path().join(&path), source).expect("write source");
-        let plan = format(source, &ArticleContext::new(&path));
+        let plan = format(source, &ProseContext::new(&path));
         let changed = "newer source\n";
         fs::write(root.path().join(&path), changed).expect("change source");
 
         let mut plans = vec![plan];
         write_plans(root.path(), &mut plans)
             .expect("stale source is reported per note");
-        assert_eq!(plans[0].status, super::super::plan::ArticleStatus::Error);
+        assert_eq!(plans[0].status, super::super::plan::ProseStatus::Error);
         assert_eq!(
             plans[0].reason.as_ref().map(|reason| reason.code.as_str()),
             Some("preimage-changed")

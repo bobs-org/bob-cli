@@ -3,8 +3,8 @@ use super::*;
 
 use std::collections::BTreeSet;
 
-use crate::native::articles::{heading_identity, heading_plain_identity};
-use crate::native::projects::{frontmatter_is_article, parse_frontmatter};
+use crate::native::projects::{frontmatter_is_prose, parse_frontmatter};
+use crate::native::prose::{heading_identity, heading_plain_identity};
 
 #[cfg(test)]
 pub(super) fn parse_capture_text(
@@ -174,14 +174,14 @@ pub(super) fn insert_bullet_line(
 ) -> (String, Placement) {
     let lines = line_spans(contents);
     let headings = markdown_headings(&lines);
-    let article = destination_is_article(contents);
+    let prose = destination_is_prose(contents);
     let reserved = task_status_groups::reserved_group_heading_lines(contents);
     let section = target_bullet_section(
         &lines,
         &headings,
         section_prefix,
         exact,
-        article,
+        prose,
         &reserved,
     );
 
@@ -238,7 +238,7 @@ pub(super) fn target_bullet_section(
     headings: &[MarkdownHeading<'_>],
     section_prefix: Option<&str>,
     exact: bool,
-    article: bool,
+    prose: bool,
     reserved: &BTreeSet<usize>,
 ) -> MarkdownSection {
     // Prefer the first matching non-H1 heading, falling back to the first
@@ -260,10 +260,10 @@ pub(super) fn target_bullet_section(
             && raw_heading_matches(heading.title, section_prefix, exact)
     };
     let identity = |heading: &MarkdownHeading<'_>| {
-        article
+        prose
             && bullet(heading)
             && section_prefix.is_some_and(|selector| {
-                article_heading_matches(heading.title, selector, exact)
+                prose_heading_matches(heading.title, selector, exact)
             })
     };
     // Raw title, then article identity, then (non-exact only) whole-slug
@@ -332,12 +332,12 @@ pub(super) fn heading_matches_bullet_selector(
     title: &str,
     section_prefix: Option<&str>,
     exact: bool,
-    article: bool,
+    prose: bool,
 ) -> bool {
     raw_heading_matches(title, section_prefix, exact)
-        || article
+        || prose
             && section_prefix.is_some_and(|selector| {
-                article_heading_matches(title, selector, exact)
+                prose_heading_matches(title, selector, exact)
             })
 }
 
@@ -360,12 +360,12 @@ fn raw_heading_matches(
     }
 }
 
-fn destination_is_article(contents: &str) -> bool {
+fn destination_is_prose(contents: &str) -> bool {
     parse_frontmatter(contents)
-        .is_some_and(|frontmatter| frontmatter_is_article(&frontmatter))
+        .is_some_and(|frontmatter| frontmatter_is_prose(&frontmatter))
 }
 
-fn article_heading_matches(title: &str, selector: &str, exact: bool) -> bool {
+fn prose_heading_matches(title: &str, selector: &str, exact: bool) -> bool {
     let heading = [heading_identity(title), heading_plain_identity(title)];
     let selector =
         [heading_identity(selector), heading_plain_identity(selector)];
@@ -406,14 +406,14 @@ fn resolved_bullet_heading_line(
 ) -> Option<usize> {
     let lines = line_spans(contents);
     let headings = markdown_headings(&lines);
-    let article = destination_is_article(contents);
+    let prose = destination_is_prose(contents);
     let reserved = task_status_groups::reserved_group_heading_lines(contents);
     let section = target_bullet_section(
         &lines,
         &headings,
         Some(selector),
         exact,
-        article,
+        prose,
         &reserved,
     );
     section.heading_end?;

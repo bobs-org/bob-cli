@@ -17,7 +17,6 @@ pub(crate) fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
 
 pub(crate) mod albums;
 pub(crate) mod areas;
-mod articles;
 pub(crate) mod attachments;
 pub(crate) mod bank;
 mod capture;
@@ -65,6 +64,7 @@ pub(crate) mod desktop_notify;
 pub(crate) mod done_archive;
 pub(crate) mod env;
 mod event_task;
+mod prose;
 // The executor phase (bob-cli-at.3) will connect this primitive to PDF writes.
 #[allow(dead_code)]
 pub(crate) mod file_coordination;
@@ -176,7 +176,7 @@ pub(crate) mod yaml_spans;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
-    Articles,
+    Prose,
     AlbumsCheck,
     AlbumsCreate,
     AlbumsList,
@@ -296,7 +296,7 @@ pub(crate) fn command_for_script(
 
 pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
-        NativeCommand::Articles => articles::run(args),
+        NativeCommand::Prose => prose::run(args),
         NativeCommand::AlbumsCheck => albums::cli::run_check(args),
         NativeCommand::AlbumsCreate => albums::cli::run_create(args),
         NativeCommand::AlbumsList => albums::cli::run_list(args),

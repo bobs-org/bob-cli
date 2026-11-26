@@ -525,7 +525,7 @@ impl<'a> Walk<'a> {
             | Kind::AlbumRoot
             | Kind::AlbumParent
             | Kind::AlbumStem
-            | Kind::ArticleNote => {
+            | Kind::ProseNote => {
                 // Vault slots read the words before the cursor for
                 // `--bob-dir`, `--route`, `--task`, and `--repo`, so
                 // short clusters and `--opt=value` behave as at

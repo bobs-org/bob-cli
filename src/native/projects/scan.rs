@@ -361,7 +361,7 @@ pub(crate) fn frontmatter_is_area(frontmatter: &Frontmatter<'_>) -> bool {
         && frontmatter_has_type(frontmatter, "[[area]]")
 }
 
-pub(crate) fn frontmatter_is_article(frontmatter: &Frontmatter<'_>) -> bool {
+pub(crate) fn frontmatter_is_prose(frontmatter: &Frontmatter<'_>) -> bool {
     frontmatter_has_type(frontmatter, "[[article]]")
 }
 

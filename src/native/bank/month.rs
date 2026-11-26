@@ -2,11 +2,11 @@
 
 use chrono::{NaiveDate, NaiveDateTime};
 
-use crate::native::articles::split_physical_lines;
 use crate::native::markdown::{atx_heading, fenced_lines};
 use crate::native::projects::{
     frontmatter_has_type, frontmatter_top_level_value, parse_frontmatter,
 };
+use crate::native::prose::split_physical_lines;
 
 use super::config::month_from_filename;
 use super::grammar::{

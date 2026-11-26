@@ -8,15 +8,15 @@ use similar::{ChangeTag, TextDiff};
 
 use super::findings::Severity;
 use super::inbound;
-use super::plan::{ArticlePlan, ArticleStatus};
+use super::plan::{ProsePlan, ProseStatus};
 use crate::native::style::{pad_right, Styler};
 use crate::native::vault_links::NoteIndex;
 
-pub(crate) fn format_json(plans: Vec<ArticlePlan>) {
+pub(crate) fn format_json(plans: Vec<ProsePlan>) {
     println!("{}", json_line(&super::response(plans)));
 }
 
-pub(crate) fn list_json(plans: Vec<ArticlePlan>) {
+pub(crate) fn list_json(plans: Vec<ProsePlan>) {
     let mut value = serde_json::to_value(super::response(plans))
         .expect("article response serializes");
     if let Some(notes) = value["notes"].as_array_mut() {
@@ -29,7 +29,7 @@ pub(crate) fn list_json(plans: Vec<ArticlePlan>) {
     println!("{value}");
 }
 
-pub(crate) fn outline_json(plan: &ArticlePlan) {
+pub(crate) fn outline_json(plan: &ProsePlan) {
     println!(
         "{}",
         serde_json::to_string(&plan.outline).unwrap_or_default()
@@ -37,13 +37,13 @@ pub(crate) fn outline_json(plan: &ArticlePlan) {
 }
 
 pub(crate) fn adopt_human(
-    plan: &ArticlePlan,
+    plan: &ProsePlan,
     source: &str,
     styler: &Styler,
     write: bool,
 ) {
     match plan.status {
-        ArticleStatus::Skipped | ArticleStatus::Error => {
+        ProseStatus::Skipped | ProseStatus::Error => {
             let message = plan
                 .reason
                 .as_ref()
@@ -51,7 +51,7 @@ pub(crate) fn adopt_human(
                 .unwrap_or("note could not be adopted");
             eprintln!("bob articles: {}: {message}", display_path(&plan.path));
         }
-        ArticleStatus::Unchanged => {
+        ProseStatus::Unchanged => {
             println!(
                 "{} {} · {}",
                 styler.green("✓"),
@@ -59,7 +59,7 @@ pub(crate) fn adopt_human(
                 plan.notice
             );
         }
-        ArticleStatus::Changed if write => {
+        ProseStatus::Changed if write => {
             let detail = plan
                 .notice
                 .strip_prefix("Adopted as an article")
@@ -73,7 +73,7 @@ pub(crate) fn adopt_human(
             println!("{} {}", styler.green("✓"), line);
             print_findings(plan, styler);
         }
-        ArticleStatus::Changed => {
+        ProseStatus::Changed => {
             println!("{}", styler.cyan(&plan.notice));
             print_diff(plan, source, styler);
             println!("{}", styler.cyan("Numbers replaced"));
@@ -101,7 +101,7 @@ fn source_line(source: &str, line: usize) -> &str {
 }
 
 pub(crate) fn format_human(
-    plans: &[ArticlePlan],
+    plans: &[ProsePlan],
     sources: &[String],
     root: &Path,
     index: &NoteIndex,
@@ -111,7 +111,7 @@ pub(crate) fn format_human(
 ) {
     for (plan_index, plan) in plans.iter().enumerate() {
         match plan.status {
-            ArticleStatus::Changed => {
+            ProseStatus::Changed => {
                 if dry_run {
                     print_diff(
                         plan,
@@ -142,8 +142,8 @@ pub(crate) fn format_human(
                 }
                 print_findings(plan, styler);
             }
-            ArticleStatus::Unchanged => {}
-            ArticleStatus::Skipped | ArticleStatus::Error => {
+            ProseStatus::Unchanged => {}
+            ProseStatus::Skipped | ProseStatus::Error => {
                 let message = plan
                     .reason
                     .as_ref()
@@ -162,7 +162,7 @@ pub(crate) fn format_human(
 }
 
 pub(crate) fn list_human(
-    plans: &[ArticlePlan],
+    plans: &[ProsePlan],
     root: &std::path::Path,
     styler: &Styler,
 ) {
@@ -193,7 +193,7 @@ pub(crate) fn list_human(
             )
         })
         .collect::<Vec<_>>();
-    let article_width = rows
+    let prose_width = rows
         .iter()
         .map(|row| row.0.chars().count())
         .max()
@@ -207,7 +207,7 @@ pub(crate) fn list_human(
         .max(5);
     println!(
         "{}  {}  {}  {}  {}  STATE",
-        pad_right("ARTICLE", article_width),
+        pad_right("ARTICLE", prose_width),
         pad_right("SECTIONS", 8),
         pad_right("WORDS", 5),
         pad_right("TODO", 4),
@@ -216,7 +216,7 @@ pub(crate) fn list_human(
     for row in &rows {
         println!(
             "{}  {}  {}  {}  {}  {}",
-            pad_right(&row.0, article_width),
+            pad_right(&row.0, prose_width),
             pad_right(&row.1, 8),
             pad_right(&row.2, 5),
             pad_right(&row.3, 4),
@@ -226,7 +226,7 @@ pub(crate) fn list_human(
     }
     let needs_format = plans
         .iter()
-        .filter(|plan| matches!(plan.status, ArticleStatus::Changed))
+        .filter(|plan| matches!(plan.status, ProseStatus::Changed))
         .count();
     println!(
         "{}",
@@ -238,7 +238,7 @@ pub(crate) fn list_human(
     );
 }
 
-pub(crate) fn outline_human(plan: &ArticlePlan, styler: &Styler) {
+pub(crate) fn outline_human(plan: &ProsePlan, styler: &Styler) {
     let sections = &plan.outline.sections;
     let stubs = sections.iter().filter(|section| section.stub).count();
     println!(
@@ -292,17 +292,17 @@ pub(crate) fn outline_human(plan: &ArticlePlan, styler: &Styler) {
     }
 }
 
-fn json_line(response: &super::plan::ArticlePlanResponse) -> String {
+fn json_line(response: &super::plan::ProsePlanResponse) -> String {
     serde_json::to_string(response).unwrap_or_else(|_| {
         "{\"schema_version\":1,\"notes\":[],\"summary\":{\"articles\":0,\"changed\":0,\"unchanged\":0,\"skipped\":0,\"errors\":1}}".to_string()
     })
 }
 
-fn list_state(plan: &ArticlePlan) -> String {
+fn list_state(plan: &ProsePlan) -> String {
     match plan.status {
-        ArticleStatus::Changed => "● needs format".to_string(),
-        ArticleStatus::Unchanged => "✓ formatted".to_string(),
-        ArticleStatus::Skipped | ArticleStatus::Error => {
+        ProseStatus::Changed => "● needs format".to_string(),
+        ProseStatus::Unchanged => "✓ formatted".to_string(),
+        ProseStatus::Skipped | ProseStatus::Error => {
             let message = plan
                 .reason
                 .as_ref()
@@ -313,7 +313,7 @@ fn list_state(plan: &ArticlePlan) -> String {
     }
 }
 
-fn print_findings(plan: &ArticlePlan, styler: &Styler) {
+fn print_findings(plan: &ProsePlan, styler: &Styler) {
     for finding in &plan.findings {
         let prefix = match finding.severity {
             Severity::Warning => styler.warning_prefix(),
@@ -336,7 +336,7 @@ fn plural_count(count: usize, singular: &str, plural: &str) -> String {
 }
 
 fn print_inbound_diffs(
-    plans: &[ArticlePlan],
+    plans: &[ProsePlan],
     root: &Path,
     index: &NoteIndex,
     styler: &Styler,
@@ -361,7 +361,7 @@ fn print_inbound_diffs(
     }
 }
 
-fn print_diff(plan: &ArticlePlan, source: &str, styler: &Styler) {
+fn print_diff(plan: &ProsePlan, source: &str, styler: &Styler) {
     let Some(formatted) = plan.formatted.as_deref() else {
         return;
     };

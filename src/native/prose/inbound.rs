@@ -7,8 +7,8 @@ use std::{
 };
 
 use super::findings::Finding;
-use super::links::{self, InboundArticle};
-use super::plan::{sha256_hex, ArticlePlan, ArticleStatus, InboundLink};
+use super::links::{self, InboundProse};
+use super::plan::{sha256_hex, InboundLink, ProsePlan, ProseStatus};
 use super::scan;
 use super::vault::{self, VaultError};
 use crate::native::{collect_done, vault_links::NoteIndex};
@@ -18,7 +18,7 @@ use crate::native::{collect_done, vault_links::NoteIndex};
 /// headings did not change, so stale links from earlier runs are repaired.
 pub(crate) fn attach(
     root: &Path,
-    plans: &mut [ArticlePlan],
+    plans: &mut [ProsePlan],
     always: bool,
 ) -> Result<NoteIndex, VaultError> {
     let paths = vault::list_markdown(root)?;
@@ -68,7 +68,7 @@ pub(crate) fn attach(
     }
 
     for hit in hits {
-        let plan = &mut plans[hit.article];
+        let plan = &mut plans[hit.prose];
         plan.findings.extend(hit.findings);
         plan.inbound.extend(hit.inbound);
     }
@@ -88,7 +88,7 @@ fn target_index(active: &[usize], plan_index: usize) -> Option<usize> {
 /// Apply inbound fragment rewrites to article `formatted` text in this
 /// batch so `--all` can repair cross-article links in one write.
 pub(crate) fn fold_into_formatted(
-    plans: &mut [ArticlePlan],
+    plans: &mut [ProsePlan],
     sources: &[String],
     index: &NoteIndex,
 ) {
@@ -100,16 +100,14 @@ pub(crate) fn fold_into_formatted(
         return;
     }
     for (plan_index, plan) in plans.iter_mut().enumerate() {
-        if matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
-        {
+        if matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error) {
             continue;
         }
         let Some(formatted) = plan.formatted.clone() else {
             continue;
         };
-        let articles = inbound_articles(&owned);
-        let rewritten =
-            rewrite_document(&formatted, &plan.path, index, &articles);
+        let prose = inbound_prose(&owned);
+        let rewritten = rewrite_document(&formatted, &plan.path, index, &prose);
         if rewritten == formatted {
             continue;
         }
@@ -122,8 +120,8 @@ pub(crate) fn fold_into_formatted(
             output.lines.iter().map(|line| line.content).collect();
         plan.edits = super::plan::line_edits(&original_lines, &output_lines);
         plan.formatted = Some(rewritten);
-        if plan.status == ArticleStatus::Unchanged {
-            plan.status = ArticleStatus::Changed;
+        if plan.status == ProseStatus::Unchanged {
+            plan.status = ProseStatus::Changed;
         }
     }
 }
@@ -132,7 +130,7 @@ pub(crate) fn fold_into_formatted(
 /// changed articles. A linking file whose preimage drifted is skipped.
 pub(crate) fn write_others(
     root: &Path,
-    plans: &[ArticlePlan],
+    plans: &[ProsePlan],
     index: &NoteIndex,
 ) -> Vec<String> {
     let owned = owned_targets(plans);
@@ -141,14 +139,13 @@ pub(crate) fn write_others(
     }
     let written = plans
         .iter()
-        .filter(|plan| plan.status == ArticleStatus::Changed)
+        .filter(|plan| plan.status == ProseStatus::Changed)
         .map(|plan| plan.path.clone())
         .collect::<BTreeSet<_>>();
     let mut skips = Vec::new();
     let mut seen = BTreeSet::new();
     for plan in plans {
-        if matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
-        {
+        if matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error) {
             continue;
         }
         for inbound in &plan.inbound {
@@ -175,9 +172,9 @@ pub(crate) fn write_others(
                 ));
                 continue;
             }
-            let articles = inbound_articles(&owned);
+            let prose = inbound_prose(&owned);
             let rewritten =
-                rewrite_document(&current, &inbound.path, index, &articles);
+                rewrite_document(&current, &inbound.path, index, &prose);
             if rewritten == current {
                 continue;
             }
@@ -198,16 +195,16 @@ pub(crate) fn write_others(
 pub(crate) fn rewritten_file(
     text: &str,
     path: &Path,
-    plans: &[ArticlePlan],
+    plans: &[ProsePlan],
     index: &NoteIndex,
 ) -> String {
     let owned = owned_targets(plans);
-    let articles = inbound_articles(&owned);
-    rewrite_document(text, path, index, &articles)
+    let prose = inbound_prose(&owned);
+    rewrite_document(text, path, index, &prose)
 }
 
 struct ScanHit {
-    article: usize,
+    prose: usize,
     inbound: Vec<InboundLink>,
     findings: Vec<Finding>,
 }
@@ -231,7 +228,7 @@ fn scan_file(
         if target.path == path {
             continue;
         }
-        let articles = [InboundArticle {
+        let prose = [InboundProse {
             index: plan_index,
             path: &target.path,
             headings: &target.headings,
@@ -246,7 +243,7 @@ fn scan_file(
                 path,
                 line.index + 1,
                 index,
-                &articles,
+                &prose,
             );
             for (_, mut finding) in result.findings {
                 finding.line = 1;
@@ -265,7 +262,7 @@ fn scan_file(
         }
         if !inbound.is_empty() || !findings.is_empty() {
             hits.push(ScanHit {
-                article: plan_index,
+                prose: plan_index,
                 inbound,
                 findings,
             });
@@ -274,15 +271,13 @@ fn scan_file(
     hits
 }
 
-fn active_indices(plans: &[ArticlePlan], always: bool) -> Vec<usize> {
+fn active_indices(plans: &[ProsePlan], always: bool) -> Vec<usize> {
     plans
         .iter()
         .enumerate()
         .filter(|(_, plan)| {
-            !matches!(
-                plan.status,
-                ArticleStatus::Skipped | ArticleStatus::Error
-            ) && !plan.headings.is_empty()
+            !matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error)
+                && !plan.headings.is_empty()
                 && (always || plan.headings_text_changed())
         })
         .map(|(index, _)| index)
@@ -295,14 +290,12 @@ struct OwnedTarget {
     numbering: bool,
 }
 
-fn owned_targets(plans: &[ArticlePlan]) -> Vec<OwnedTarget> {
+fn owned_targets(plans: &[ProsePlan]) -> Vec<OwnedTarget> {
     plans
         .iter()
         .filter(|plan| {
-            !matches!(
-                plan.status,
-                ArticleStatus::Skipped | ArticleStatus::Error
-            ) && !plan.headings.is_empty()
+            !matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error)
+                && !plan.headings.is_empty()
         })
         .map(|plan| OwnedTarget {
             path: plan.path.clone(),
@@ -313,7 +306,7 @@ fn owned_targets(plans: &[ArticlePlan]) -> Vec<OwnedTarget> {
 }
 
 fn owned_targets_for(
-    plans: &[ArticlePlan],
+    plans: &[ProsePlan],
     active: &[usize],
 ) -> Vec<OwnedTarget> {
     active
@@ -326,11 +319,11 @@ fn owned_targets_for(
         .collect()
 }
 
-fn inbound_articles(owned: &[OwnedTarget]) -> Vec<InboundArticle<'_>> {
+fn inbound_prose(owned: &[OwnedTarget]) -> Vec<InboundProse<'_>> {
     owned
         .iter()
         .enumerate()
-        .map(|(index, target)| InboundArticle {
+        .map(|(index, target)| InboundProse {
             index,
             path: &target.path,
             headings: &target.headings,
@@ -343,7 +336,7 @@ fn rewrite_document(
     text: &str,
     current_path: &Path,
     index: &NoteIndex,
-    articles: &[InboundArticle<'_>],
+    prose: &[InboundProse<'_>],
 ) -> String {
     let document = scan::classify(text);
     let mut replacements = vec![None; document.lines.len()];
@@ -354,7 +347,7 @@ fn rewrite_document(
             current_path,
             line.index + 1,
             index,
-            articles,
+            prose,
         );
         if let Some(updated) = result.updated {
             replacements[line.index] = Some(updated);
@@ -391,17 +384,17 @@ fn stem_of(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::articles::{format, ArticleContext};
+    use crate::native::prose::{format, ProseContext};
     use std::fs;
 
-    fn article_text() -> &'static str {
+    fn prose_text() -> &'static str {
         "---\ntype: \"[[article]]\"\n---\n\n# Draft\n\n## 9. First\n\nTODO\n"
     }
 
     fn vault() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().expect("temporary vault");
         let root = temp.path().to_path_buf();
-        fs::write(root.join("draft.md"), article_text()).expect("article");
+        fs::write(root.join("draft.md"), prose_text()).expect("article");
         (temp, root)
     }
 
@@ -417,7 +410,7 @@ mod tests {
 
         let source = fs::read_to_string(root.join("draft.md")).unwrap();
         let mut plans =
-            vec![format(&source, &ArticleContext::new(Path::new("draft.md")))];
+            vec![format(&source, &ProseContext::new(Path::new("draft.md")))];
         attach(&root, &mut plans, false).expect("scan inbound");
 
         let inbound = &plans[0].inbound;
@@ -454,7 +447,7 @@ mod tests {
 
         let source = fs::read_to_string(root.join("note.md")).unwrap();
         let mut plans =
-            vec![format(&source, &ArticleContext::new(Path::new("note.md")))];
+            vec![format(&source, &ProseContext::new(Path::new("note.md")))];
         attach(root, &mut plans, false).expect("scan inbound");
 
         let exact = plans[0]
@@ -477,7 +470,7 @@ mod tests {
             .expect("journal");
         let source = fs::read_to_string(root.join("draft.md")).unwrap();
         let mut plans =
-            vec![format(&source, &ArticleContext::new(Path::new("draft.md")))];
+            vec![format(&source, &ProseContext::new(Path::new("draft.md")))];
         let index = attach(&root, &mut plans, false).expect("scan inbound");
         fs::write(root.join("journal.md"), "changed in the meantime\n")
             .expect("race");
@@ -509,11 +502,9 @@ mod tests {
         fs::write(root.join("journal.md"), "See [[draft#1. First]].\n")
             .expect("stale");
 
-        let mut plans = vec![format(
-            formatted,
-            &ArticleContext::new(Path::new("draft.md")),
-        )];
-        assert_eq!(plans[0].status, ArticleStatus::Unchanged);
+        let mut plans =
+            vec![format(formatted, &ProseContext::new(Path::new("draft.md")))];
+        assert_eq!(plans[0].status, ProseStatus::Unchanged);
         attach(root, &mut plans, false).expect("no scan");
         assert!(plans[0].inbound.is_empty());
 

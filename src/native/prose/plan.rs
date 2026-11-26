@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ArticleContext<'a> {
+pub(crate) struct ProseContext<'a> {
     pub(crate) path: &'a Path,
     pub(crate) require_marker: bool,
 }
 
-impl<'a> ArticleContext<'a> {
+impl<'a> ProseContext<'a> {
     pub(crate) fn new(path: &'a Path) -> Self {
         Self {
             path,
@@ -29,7 +29,7 @@ impl<'a> ArticleContext<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ArticleStatus {
+pub(crate) enum ProseStatus {
     Changed,
     Unchanged,
     Skipped,
@@ -68,9 +68,9 @@ pub(crate) struct ReplacedToken {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct ArticlePlan {
+pub(crate) struct ProsePlan {
     pub(crate) path: PathBuf,
-    pub(crate) status: ArticleStatus,
+    pub(crate) status: ProseStatus,
     pub(crate) reason: Option<Refusal>,
     pub(crate) sha256: String,
     #[serde(skip_serializing)]
@@ -80,7 +80,7 @@ pub(crate) struct ArticlePlan {
     pub(crate) replaced: Vec<ReplacedToken>,
     pub(crate) notice: String,
     pub(crate) findings: Vec<super::findings::Finding>,
-    pub(crate) outline: super::outline::ArticleOutline,
+    pub(crate) outline: super::outline::ProseOutline,
     pub(crate) inbound: Vec<InboundLink>,
     #[serde(skip_serializing)]
     pub(crate) headings: Vec<super::sections::PlannedHeading>,
@@ -88,7 +88,7 @@ pub(crate) struct ArticlePlan {
     pub(crate) numbering: bool,
 }
 
-impl ArticlePlan {
+impl ProsePlan {
     pub(crate) fn skipped(
         path: &Path,
         sha256: String,
@@ -97,7 +97,7 @@ impl ArticlePlan {
         let notice = format!("Article skipped · {}", reason.message);
         Self {
             path: path.to_path_buf(),
-            status: ArticleStatus::Skipped,
+            status: ProseStatus::Skipped,
             reason: Some(reason),
             sha256,
             formatted: None,
@@ -118,12 +118,12 @@ impl ArticlePlan {
         sha256: String,
         reason: Refusal,
         findings: Vec<super::findings::Finding>,
-        outline: super::outline::ArticleOutline,
+        outline: super::outline::ProseOutline,
     ) -> Self {
         let notice = format!("Article formatting failed · {}", reason.message);
         Self {
             path: path.to_path_buf(),
-            status: ArticleStatus::Error,
+            status: ProseStatus::Error,
             reason: Some(reason),
             sha256,
             formatted: None,
@@ -160,14 +160,15 @@ pub(crate) struct InboundLink {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct ArticlePlanResponse {
+pub(crate) struct ProsePlanResponse {
     pub(crate) schema_version: u8,
-    pub(crate) notes: Vec<ArticlePlan>,
+    pub(crate) notes: Vec<ProsePlan>,
     pub(crate) summary: PlanSummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PlanSummary {
+    // Legacy wire name: the JSON contract keeps `summary.articles`.
     pub(crate) articles: usize,
     pub(crate) changed: usize,
     pub(crate) unchanged: usize,
@@ -175,8 +176,8 @@ pub(crate) struct PlanSummary {
     pub(crate) errors: usize,
 }
 
-impl ArticlePlanResponse {
-    pub(crate) fn new(notes: Vec<ArticlePlan>) -> Self {
+impl ProsePlanResponse {
+    pub(crate) fn new(notes: Vec<ProsePlan>) -> Self {
         let mut summary = PlanSummary {
             articles: notes.len(),
             changed: 0,
@@ -186,10 +187,10 @@ impl ArticlePlanResponse {
         };
         for note in &notes {
             match note.status {
-                ArticleStatus::Changed => summary.changed += 1,
-                ArticleStatus::Unchanged => summary.unchanged += 1,
-                ArticleStatus::Skipped => summary.skipped += 1,
-                ArticleStatus::Error => summary.errors += 1,
+                ProseStatus::Changed => summary.changed += 1,
+                ProseStatus::Unchanged => summary.unchanged += 1,
+                ProseStatus::Skipped => summary.skipped += 1,
+                ProseStatus::Error => summary.errors += 1,
             }
         }
         Self {

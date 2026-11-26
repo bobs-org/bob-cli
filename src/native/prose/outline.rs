@@ -8,16 +8,16 @@ use super::scan::{classify, ClassifiedLine, Document, Region};
 use super::sections::PlannedHeading;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct ArticleOutline {
+pub(crate) struct ProseOutline {
     pub(crate) title: String,
     pub(crate) numbering: bool,
     pub(crate) words: usize,
-    pub(crate) preamble: ArticlePreamble,
+    pub(crate) preamble: ProsePreamble,
     pub(crate) sections: Vec<OutlineSection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct ArticlePreamble {
+pub(crate) struct ProsePreamble {
     pub(crate) line: usize,
     pub(crate) words: usize,
 }
@@ -44,7 +44,7 @@ pub(crate) fn build(
     title: Option<&str>,
     numbering: bool,
     path: &Path,
-) -> ArticleOutline {
+) -> ProseOutline {
     let display_title = title
         .filter(|title| !title.trim().is_empty())
         .map(ToOwned::to_owned)
@@ -59,7 +59,7 @@ pub(crate) fn build(
         .map_or(input.lines.len(), |heading| heading.line);
     let words = count_range(&input.lines, 0, input.lines.len());
     let preamble_line = first_body_line(&input.lines);
-    let preamble = ArticlePreamble {
+    let preamble = ProsePreamble {
         line: preamble_line,
         words: count_range(
             &input.lines,
@@ -117,7 +117,7 @@ pub(crate) fn build(
         })
         .collect();
 
-    ArticleOutline {
+    ProseOutline {
         title: display_title,
         numbering,
         words,
@@ -126,8 +126,8 @@ pub(crate) fn build(
     }
 }
 
-pub(crate) fn empty_outline(path: &Path, numbering: bool) -> ArticleOutline {
-    ArticleOutline {
+pub(crate) fn empty_outline(path: &Path, numbering: bool) -> ProseOutline {
+    ProseOutline {
         title: path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -135,7 +135,7 @@ pub(crate) fn empty_outline(path: &Path, numbering: bool) -> ArticleOutline {
             .to_owned(),
         numbering,
         words: 0,
-        preamble: ArticlePreamble { line: 1, words: 0 },
+        preamble: ProsePreamble { line: 1, words: 0 },
         sections: Vec::new(),
     }
 }

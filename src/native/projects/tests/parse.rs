@@ -248,7 +248,7 @@ fn type_forms_all_match_project_and_area() {
 }
 
 #[test]
-fn type_forms_match_article_and_keep_project_area() {
+fn type_forms_match_prose_and_keep_project_area() {
     for contents in [
         "---\ntype: \"[[article]]\"\n---\n",
         "---\ntype: '[[article]]'\n---\n",
@@ -262,7 +262,7 @@ fn type_forms_match_article_and_keep_project_area() {
         let frontmatter =
             parse_frontmatter(contents).expect("frontmatter parses");
         assert!(
-            frontmatter_is_article(&frontmatter),
+            frontmatter_is_prose(&frontmatter),
             "article type form should match: {contents:?}"
         );
         assert!(!frontmatter_is_project(&frontmatter));
@@ -271,12 +271,12 @@ fn type_forms_match_article_and_keep_project_area() {
     let project = parse_frontmatter("---\ntype: [[project]]\n---\n")
         .expect("project parses");
     assert!(frontmatter_is_project(&project));
-    assert!(!frontmatter_is_article(&project));
+    assert!(!frontmatter_is_prose(&project));
     let mixed = parse_frontmatter(
         "---\ntype: [\"[[article]]\", \"[[project]]\"]\n---\n",
     )
     .expect("mixed list parses");
-    assert!(frontmatter_is_article(&mixed));
+    assert!(frontmatter_is_prose(&mixed));
     assert!(frontmatter_is_project(&mixed));
     assert_eq!(
         frontmatter_type_names(&mixed),

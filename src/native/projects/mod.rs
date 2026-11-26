@@ -416,8 +416,8 @@ pub(crate) use scan::{
     frontmatter_is_record, frontmatter_top_level_value,
 };
 pub(crate) use scan::{
-    frontmatter_is_area, frontmatter_is_article, frontmatter_is_notebook,
-    frontmatter_is_project, frontmatter_scalar, frontmatter_type_names,
+    frontmatter_is_area, frontmatter_is_notebook, frontmatter_is_project,
+    frontmatter_is_prose, frontmatter_scalar, frontmatter_type_names,
     frontmatter_value, is_excluded_directory, is_markdown_file,
     list_item_content, parse_frontmatter, parse_offclock_types,
     project_is_finished, project_name_aliases, trim_yaml_scalar,

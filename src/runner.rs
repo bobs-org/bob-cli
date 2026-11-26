@@ -1285,7 +1285,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
         about: "Format and inspect article notes with bob-owned section numbers",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
-            native_command: NativeCommand::Articles,
+            native_command: NativeCommand::Prose,
             script_command: None,
         }),
     },
@@ -2847,7 +2847,7 @@ mod tests {
         );
 
         let expected = [
-            NativeCommand::Articles,
+            NativeCommand::Prose,
             NativeCommand::AlbumsCheck,
             NativeCommand::AlbumsCreate,
             NativeCommand::AlbumsList,

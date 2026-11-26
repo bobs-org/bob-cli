@@ -5,12 +5,12 @@ use std::path::{Component, Path};
 use super::plan::Refusal;
 use crate::native::is_always_excluded_note_directory_name;
 use crate::native::projects::{
-    contains_task_tag, frontmatter_is_article, frontmatter_type_names,
+    contains_task_tag, frontmatter_is_prose, frontmatter_type_names,
     parse_frontmatter, trim_yaml_scalar, Frontmatter,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ArticleOptions {
+pub(crate) struct ProseOptions {
     pub(crate) title: Option<String>,
     pub(crate) numbering: bool,
     pub(crate) bad_option_line: Option<usize>,
@@ -38,10 +38,10 @@ pub(crate) fn skip_reason(
         });
     }
     let Some(frontmatter) = parse_frontmatter(text) else {
-        return Some(not_article());
+        return Some(not_prose());
     };
-    if !frontmatter_is_article(&frontmatter) {
-        return Some(not_article());
+    if !frontmatter_is_prose(&frontmatter) {
+        return Some(not_prose());
     }
     let types = frontmatter_type_names(&frontmatter);
     if types.iter().any(|name| name != "article") {
@@ -55,7 +55,7 @@ pub(crate) fn skip_reason(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AdoptDecision {
-    AlreadyArticle,
+    AlreadyProse,
     Insert,
     Refuse(Refusal),
 }
@@ -84,11 +84,11 @@ pub(crate) fn adopt_decision(
     }
     if let Some(frontmatter) = parse_frontmatter(text) {
         let types = frontmatter_type_names(&frontmatter);
-        if frontmatter_is_article(&frontmatter) {
+        if frontmatter_is_prose(&frontmatter) {
             if types.iter().any(|name| name != "article") {
                 return AdoptDecision::Refuse(mixed_type_refusal(&types));
             }
-            return AdoptDecision::AlreadyArticle;
+            return AdoptDecision::AlreadyProse;
         }
         if !types.is_empty() {
             return AdoptDecision::Refuse(Refusal {
@@ -107,7 +107,7 @@ pub(crate) fn adopt_decision(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ArticleTypeInsert {
+pub(crate) struct ProseTypeInsert {
     pub(crate) text: String,
     pub(crate) at: usize,
     pub(crate) count: usize,
@@ -117,7 +117,7 @@ const TYPE_LINE: &str = "type: \"[[article]]\"";
 
 /// Insert `type: "[[article]]"` after `parent:`, before the closing
 /// `---` when there is no parent, or as a new frontmatter block.
-pub(crate) fn with_article_type(text: &str) -> ArticleTypeInsert {
+pub(crate) fn with_prose_type(text: &str) -> ProseTypeInsert {
     let (bom, rest) = match text.strip_prefix('\u{feff}') {
         Some(rest) => (true, rest),
         None => (false, text),
@@ -129,7 +129,7 @@ pub(crate) fn with_article_type(text: &str) -> ArticleTypeInsert {
     insert
 }
 
-fn insert_type_line(text: &str) -> ArticleTypeInsert {
+fn insert_type_line(text: &str) -> ProseTypeInsert {
     let physical = super::scan::split_physical_lines(text);
     let default_ending = physical
         .iter()
@@ -147,7 +147,7 @@ fn insert_type_line(text: &str) -> ArticleTypeInsert {
         out.push_str(default_ending);
         out.push_str(default_ending);
         out.push_str(text);
-        return ArticleTypeInsert {
+        return ProseTypeInsert {
             text: out,
             at: 0,
             count: 4,
@@ -157,7 +157,7 @@ fn insert_type_line(text: &str) -> ArticleTypeInsert {
     let Some(close) = physical.iter().enumerate().skip(1).find_map(
         |(index, (content, _))| (content.trim_end() == "---").then_some(index),
     ) else {
-        return ArticleTypeInsert {
+        return ProseTypeInsert {
             text: text.to_owned(),
             at: 0,
             count: 0,
@@ -188,7 +188,7 @@ fn insert_type_line(text: &str) -> ArticleTypeInsert {
         out.push_str(content);
         out.push_str(ending);
     }
-    ArticleTypeInsert {
+    ProseTypeInsert {
         text: out,
         at: insert_at,
         count: 1,
@@ -210,10 +210,10 @@ fn mixed_type_refusal(types: &[String]) -> Refusal {
     }
 }
 
-pub(crate) fn parse_options(text: &str) -> ArticleOptions {
+pub(crate) fn parse_options(text: &str) -> ProseOptions {
     let text = strip_bom(text);
     let Some(frontmatter) = parse_frontmatter(text) else {
-        return ArticleOptions {
+        return ProseOptions {
             title: None,
             numbering: true,
             bad_option_line: None,
@@ -226,7 +226,7 @@ pub(crate) fn parse_options(text: &str) -> ArticleOptions {
             .map(ToOwned::to_owned);
     let (numbering, bad_option_line) =
         parse_section_numbers(&frontmatter, text);
-    ArticleOptions {
+    ProseOptions {
         title,
         numbering,
         bad_option_line,
@@ -269,7 +269,7 @@ fn section_numbers_line(text: &str) -> usize {
     1
 }
 
-fn not_article() -> Refusal {
+fn not_prose() -> Refusal {
     Refusal {
         code: "not-article".to_string(),
         message: "not an article; run `bob articles adopt`".to_string(),

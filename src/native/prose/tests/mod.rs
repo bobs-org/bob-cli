@@ -3,13 +3,13 @@
 use std::path::Path;
 
 use super::{
-    adopt, format, format_as_article, heading_identity, heading_plain_identity,
-    strip_section_number, ArticleContext,
+    adopt, format, format_as_prose, heading_identity, heading_plain_identity,
+    strip_section_number, ProseContext,
 };
-use crate::native::projects::{frontmatter_is_article, parse_frontmatter};
+use crate::native::projects::{frontmatter_is_prose, parse_frontmatter};
 
-fn article(text: &str) -> String {
-    let plan = format(text, &ArticleContext::new(Path::new("article.md")));
+fn prose(text: &str) -> String {
+    let plan = format(text, &ProseContext::new(Path::new("article.md")));
     match plan.formatted {
         Some(formatted) => formatted,
         None => panic!("format refused or errored: {:?}", plan.reason),
@@ -17,12 +17,12 @@ fn article(text: &str) -> String {
 }
 
 fn assert_pair(input: &str, expected: &str) {
-    let formatted = article(input);
+    let formatted = prose(input);
     assert_eq!(
         formatted, expected,
         "formatted output mismatch\n=== got ===\n{formatted}=== expected ===\n{expected}"
     );
-    let again = article(&formatted);
+    let again = prose(&formatted);
     assert_eq!(again, formatted, "second pass was not a no-op");
 }
 
@@ -71,7 +71,7 @@ fn layout_whitespace_crlf_and_bom() {
 fn layout_crlf_file() {
     let input =
         "---\r\ntype: \"[[article]]\"\r\n---\r\n\r\n# Title\r\n\r\nbody\r\n";
-    let formatted = article(input);
+    let formatted = prose(input);
     assert!(formatted.contains("\r\n"), "{formatted:?}");
     assert_eq!(
         formatted,
@@ -82,7 +82,7 @@ fn layout_crlf_file() {
 #[test]
 fn layout_bom_and_final_newline() {
     let input = "\u{feff}---\ntype: [[article]]\n---\n\n# Title";
-    let formatted = article(input);
+    let formatted = prose(input);
     assert!(formatted.starts_with('\u{feff}'));
     assert!(formatted.ends_with('\n'));
     assert!(formatted.contains("# 1. Title"));
@@ -100,7 +100,7 @@ fn fences_spacing_and_unclosed() {
 fn heading_levels_and_depth() {
     let plan = format(
         include_str!("fixtures/levels.md"),
-        &ArticleContext::new(Path::new("article.md")),
+        &ProseContext::new(Path::new("article.md")),
     );
     let formatted = plan.formatted.expect("levels format");
     assert_eq!(formatted, include_str!("fixtures/levels.expected.md"));
@@ -112,7 +112,7 @@ fn heading_levels_and_depth() {
     assert_eq!(plan.changes.promoted, 2);
 
     let first_deep =
-        article("---\ntype: [[article]]\n---\n\n### First\n\n## Second\n");
+        prose("---\ntype: [[article]]\n---\n\n### First\n\n## Second\n");
     assert!(first_deep.contains("## 1. First"), "{first_deep}");
     assert!(first_deep.contains("## 2. Second"), "{first_deep}");
 }
@@ -121,10 +121,10 @@ fn heading_levels_and_depth() {
 fn numbers_off_and_round_trip() {
     let off = include_str!("fixtures/numbers_off.md");
     assert_pair(off, include_str!("fixtures/numbers_off.expected.md"));
-    let stripped = article(off);
+    let stripped = prose(off);
     let on =
         stripped.replace("section_numbers: false", "section_numbers: true");
-    let restored = article(&on);
+    let restored = prose(&on);
     assert!(restored.contains("# 1. Taxes"), "{restored}");
     assert!(restored.contains("## 1.1 30 Burger"), "{restored}");
 }
@@ -154,13 +154,13 @@ fn strip_section_number_keeps_bare_numbers_and_escapes() {
 #[test]
 fn heading_links_follow_new_numbers_and_keep_aliases_and_encoding() {
     let input = "---\ntype: [[article]]\n---\n\n## One\n\n## Two\n\n## Three\n\n## Four\n\n## Five\n\n## Six\n\n## Beads\n\n[[#Beads]]\n";
-    let plan = format(input, &ArticleContext::new(Path::new("stem.md")));
+    let plan = format(input, &ProseContext::new(Path::new("stem.md")));
     let output = plan.formatted.expect("formatted article");
     assert!(output.contains("[[#7. Beads]]"), "{output}");
     assert_eq!(plan.changes.links, 1);
 
     let input = "---\ntype: [[article]]\n---\n\n# 2024 taxes\n\n[[stem#2024 taxes|alias]]\n[encoded](stem.md#2024%20taxes)\n";
-    let plan = format(input, &ArticleContext::new(Path::new("stem.md")));
+    let plan = format(input, &ProseContext::new(Path::new("stem.md")));
     let output = plan.formatted.expect("formatted article");
     assert!(output.contains("[[stem#1. 2024 taxes|alias]]"), "{output}");
     assert!(
@@ -173,7 +173,7 @@ fn heading_links_follow_new_numbers_and_keep_aliases_and_encoding() {
 #[test]
 fn heading_embeds_refresh_and_preserve_aliases_and_blocks() {
     let input = "---\ntype: [[article]]\n---\n\n# Root\n\n## Beta\n\n![[#Beta]]\n![[note#Beta|alias]]\n![[#^id]]\n";
-    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(input, &ProseContext::new(Path::new("note.md")));
     let output = plan.formatted.expect("formatted article");
     assert!(output.contains("![[#1.1 Beta]]"), "{output}");
     assert!(output.contains("![[note#1.1 Beta|alias]]"), "{output}");
@@ -184,7 +184,7 @@ fn heading_embeds_refresh_and_preserve_aliases_and_blocks() {
 #[test]
 fn heading_links_resolve_preformat_titles_before_ambiguous_identities() {
     let duplicate = "---\ntype: [[article]]\n---\n\n## 9. Examples\n\n## 8. Examples\n\n[[#9. Examples]]\n";
-    let plan = format(duplicate, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(duplicate, &ProseContext::new(Path::new("note.md")));
     let output = plan.formatted.expect("duplicate titles format");
     assert!(output.contains("[[#1. Examples]]"), "{output}");
     assert!(!plan
@@ -193,7 +193,7 @@ fn heading_links_resolve_preformat_titles_before_ambiguous_identities() {
         .any(|f| f.code == "ambiguous-heading-link"));
 
     let ambiguous = "---\ntype: [[article]]\n---\n\n## 9. Example\n\n## 2. Example\n\n[[#Example]]\n";
-    let plan = format(ambiguous, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(ambiguous, &ProseContext::new(Path::new("note.md")));
     assert!(plan.formatted.is_some());
     assert!(plan
         .findings
@@ -204,7 +204,7 @@ fn heading_links_resolve_preformat_titles_before_ambiguous_identities() {
 #[test]
 fn heading_links_leave_blocks_and_protected_code_alone() {
     let input = "---\ntype: [[article]]\n---\n\n## Section\n\n[[#^block]]\n`[[#Section]]`\nInline $[[#Section]]$ math.\nInline %% [[#Section]] %% comment.\n\n```md\n[[#Section]]\n```\n";
-    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(input, &ProseContext::new(Path::new("note.md")));
     let output = plan.formatted.expect("formatted article");
     assert!(output.contains("[[#^block]]"), "{output}");
     assert!(output.contains("`[[#Section]]`"), "{output}");
@@ -220,7 +220,7 @@ fn heading_links_leave_blocks_and_protected_code_alone() {
 #[test]
 fn indented_code_links_and_blank_runs_are_preserved() {
     let input = "---\ntype: [[article]]\n---\n\n## Alpha\n\n    code [[#Alpha]]\n\n\n    more code\n";
-    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(input, &ProseContext::new(Path::new("note.md")));
     let output = plan.formatted.expect("formatted article");
     assert!(
         output.contains("    code [[#Alpha]]\n\n\n    more code"),
@@ -238,7 +238,7 @@ fn heading_spacing_surrounds_protected_blocks() {
         "# Html comment\n<!--\ncomment\n-->\n",
         "# Html block\n<div>\nbody\n</div>\n",
     );
-    let output = article(input);
+    let output = prose(input);
     for (heading, block) in [
         ("# 1. Math", "$$"),
         ("# 2. Comment", "%%"),
@@ -256,28 +256,28 @@ fn heading_spacing_surrounds_protected_blocks() {
 fn section_number_counts_and_notice_plurals_reflect_actual_changes() {
     let single = format(
         "---\ntype: [[article]]\n---\n\n## One\n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
     assert_eq!(single.changes.numbered, 1);
     assert_eq!(single.notice, "Article formatted · 1 section numbered");
 
     let formatted = single.formatted.unwrap();
     let unchanged =
-        format(&formatted, &ArticleContext::new(Path::new("note.md")));
+        format(&formatted, &ProseContext::new(Path::new("note.md")));
     assert_eq!(unchanged.changes.numbered, 0);
     assert_eq!(unchanged.changes.renumbered, 0);
     assert_eq!(unchanged.notice, "Article formatted");
 
     let layout_only = format(
         "---\ntype: [[article]]\n---\n\n# 1. One   \n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
     assert_eq!(layout_only.changes.numbered, 0);
     assert_eq!(layout_only.notice, "Article formatted");
 
     let promoted = format(
         "---\ntype: [[article]]\n---\n\n## Parent\n#### Child\n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
     assert!(promoted.notice.contains("1 heading promoted (#### → ###)"));
 }
@@ -292,7 +292,7 @@ fn pseudo_footnotes_only_exclude_url_like_destinations() {
         "[z]: #heading\n",
         "[mail]: MAILTO:person@example.test\n",
     );
-    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(input, &ProseContext::new(Path::new("note.md")));
     let findings = plan
         .findings
         .iter()
@@ -305,22 +305,22 @@ fn pseudo_footnotes_only_exclude_url_like_destinations() {
 #[test]
 fn lazy_list_continuation_is_not_a_setext_heading() {
     let input = "---\ntype: [[article]]\n---\n\n- foo\nbar\n---\n";
-    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(input, &ProseContext::new(Path::new("note.md")));
     let output = plan.formatted.expect("formatted article");
     assert!(output.contains("- foo\nbar\n---"), "{output:?}");
     assert!(plan.headings.is_empty());
 }
 
 #[test]
-fn frontmatter_only_article_does_not_gain_an_extra_blank_line() {
+fn frontmatter_only_prose_does_not_gain_an_extra_blank_line() {
     let input = "---\ntype: [[article]]\n---\n";
-    assert_eq!(article(input), input);
+    assert_eq!(prose(input), input);
 }
 
 #[test]
 fn invalid_section_numbers_finding_uses_the_option_line() {
     let input = "---\ntype: [[article]]\ntitle: Example\nsection_numbers: maybe\n---\n\n# Heading\n";
-    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(input, &ProseContext::new(Path::new("note.md")));
     let finding = plan
         .findings
         .iter()
@@ -332,7 +332,7 @@ fn invalid_section_numbers_finding_uses_the_option_line() {
 #[test]
 fn nested_heading_paths_rewrite_every_segment_and_numbers_off_removes_them() {
     let nested = "---\ntype: [[article]]\n---\n\n# Parent\n\n## Child\n\n### Grandchild\n\n[[#Parent#Child#Grandchild]]\n";
-    let plan = format(nested, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(nested, &ProseContext::new(Path::new("note.md")));
     let output = plan.formatted.expect("nested article format");
     assert!(
         output.contains("[[#1. Parent#1.1 Child#1.1.1 Grandchild]]"),
@@ -340,7 +340,7 @@ fn nested_heading_paths_rewrite_every_segment_and_numbers_off_removes_them() {
     );
 
     let unnumbered = "---\ntype: [[article]]\nsection_numbers: false\n---\n\n## 8. Section\n\n[[#8. Section]]\n";
-    let plan = format(unnumbered, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(unnumbered, &ProseContext::new(Path::new("note.md")));
     let output = plan.formatted.expect("numbering-off format");
     assert!(output.contains("## Section"), "{output}");
     assert!(output.contains("[[#Section]]"), "{output}");
@@ -349,7 +349,7 @@ fn nested_heading_paths_rewrite_every_segment_and_numbers_off_removes_them() {
 #[test]
 fn report_only_findings_include_pseudo_footnote_broken_and_title() {
     let input = "---\ntype: [[article]]\n---\n\n[1]: TODO reference\n\n# 1. Article\n\n[[#missing]]\n";
-    let plan = format(input, &ArticleContext::new(Path::new("article.md")));
+    let plan = format(input, &ProseContext::new(Path::new("article.md")));
     assert!(plan.findings.iter().any(|f| f.code == "pseudo-footnote"));
     assert!(plan
         .findings
@@ -362,7 +362,7 @@ fn report_only_findings_include_pseudo_footnote_broken_and_title() {
 fn outline_counts_words_and_marks_stubs() {
     let plan = format(
         include_str!("fixtures/blog_draft.md"),
-        &ArticleContext::new(Path::new("sase_blog_contents.md")),
+        &ProseContext::new(Path::new("sase_blog_contents.md")),
     );
     let outline = plan.outline;
     assert_eq!(
@@ -389,17 +389,17 @@ fn outline_counts_words_and_marks_stubs() {
 #[test]
 fn outline_word_counts_skip_fences_math_and_comments() {
     let input = "---\ntype: [[article]]\n---\n\nVisible words. Inline $ignored math$ prose.\n\n```md\nignored words\n```\n\n$$\nignored math words\n$$\n\n%%\nignored comment words\n%%\n\n<!-- hidden words -->\n\n# Section\n\nBody words.\n";
-    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let plan = format(input, &ProseContext::new(Path::new("note.md")));
     assert_eq!(plan.outline.words, 8);
     assert_eq!(plan.outline.preamble.words, 4);
     assert_eq!(plan.outline.sections[0].words, 2);
 }
 
 #[test]
-fn article_plan_json_matches_schema_v1_shape() {
+fn prose_plan_json_matches_schema_v1_shape() {
     let plan = format(
         "---\ntype: [[article]]\n---\n\n## Alpha\n\nText.\n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
     let response = super::response(vec![plan]);
     let json = serde_json::to_value(&response).unwrap();
@@ -429,7 +429,7 @@ fn article_plan_json_matches_schema_v1_shape() {
 #[test]
 fn refusals() {
     let skip = |text: &str, path: &str| {
-        format(text, &ArticleContext::new(Path::new(path)))
+        format(text, &ProseContext::new(Path::new(path)))
             .reason
             .map(|r| r.code)
     };
@@ -510,13 +510,13 @@ fn refusals() {
 #[test]
 fn adopt_inserts_type_after_parent_and_formats() {
     let input = "---\nparent: \"[[sase_blog]]\"\ncreated: 2026-10-15\n---\n\n# Draft\n\n## First\n";
-    let plan = adopt(input, &ArticleContext::new(Path::new("draft.md")));
+    let plan = adopt(input, &ProseContext::new(Path::new("draft.md")));
     let formatted = plan.formatted.expect("adopt formats");
     assert!(formatted.contains("parent: \"[[sase_blog]]\""));
     assert!(formatted.contains("type: \"[[article]]\""));
     assert!(formatted.contains("# 1. Draft"));
     assert!(formatted.contains("## 1.1 First"));
-    assert_eq!(plan.status, super::ArticleStatus::Changed);
+    assert_eq!(plan.status, super::ProseStatus::Changed);
     assert!(plan.notice.starts_with("Adopted as an article"));
     assert!(!plan.edits.is_empty());
     let type_line = formatted
@@ -533,14 +533,14 @@ fn adopt_inserts_type_after_parent_and_formats() {
 #[test]
 fn adopt_creates_frontmatter_when_missing_and_inserts_before_close() {
     let no_frontmatter =
-        adopt("# Title\n", &ArticleContext::new(Path::new("note.md")));
+        adopt("# Title\n", &ProseContext::new(Path::new("note.md")));
     let formatted = no_frontmatter.formatted.expect("adopted");
     assert!(formatted.starts_with("---\ntype: \"[[article]]\"\n---\n"));
     assert!(formatted.contains("# 1. Title"));
 
     let no_parent = adopt(
         "---\ncreated: 2026-10-15\n---\n\n# Title\n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
     let formatted = no_parent.formatted.expect("adopted");
     let lines: Vec<&str> = formatted.lines().collect();
@@ -551,20 +551,20 @@ fn adopt_creates_frontmatter_when_missing_and_inserts_before_close() {
 }
 
 #[test]
-fn adopt_already_article_is_noop_and_other_type_is_refused() {
+fn adopt_already_prose_is_noop_and_other_type_is_refused() {
     let already = adopt(
         "---\ntype: \"[[article]]\"\n---\n\n# Title\n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
-    assert_eq!(already.status, super::ArticleStatus::Unchanged);
+    assert_eq!(already.status, super::ProseStatus::Unchanged);
     assert_eq!(already.notice, "already an article");
     assert!(already.edits.is_empty());
 
     let restaurant = adopt(
         "---\ntype: \"[[restaurant]]\"\n---\n\n# Title\n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
-    assert_eq!(restaurant.status, super::ArticleStatus::Skipped);
+    assert_eq!(restaurant.status, super::ProseStatus::Skipped);
     assert_eq!(
         restaurant
             .reason
@@ -582,7 +582,7 @@ fn adopt_already_article_is_noop_and_other_type_is_refused() {
 
     let tasks = adopt(
         "---\nparent: \"[[home]]\"\n---\n\n- [ ] #task move me\n",
-        &ArticleContext::new(Path::new("note.md")),
+        &ProseContext::new(Path::new("note.md")),
     );
     assert_eq!(
         tasks.reason.as_ref().map(|reason| reason.code.as_str()),
@@ -594,7 +594,7 @@ fn adopt_already_article_is_noop_and_other_type_is_refused() {
 fn bad_option_and_number_replaced_findings() {
     let plan = format(
         "---\ntype: [[article]]\nsection_numbers: maybe\n---\n\n## 1.5 Title\n",
-        &ArticleContext::new(Path::new("article.md")),
+        &ProseContext::new(Path::new("article.md")),
     );
     assert!(
         plan.findings.iter().any(|f| f.code == "bad-option"),
@@ -610,9 +610,9 @@ fn bad_option_and_number_replaced_findings() {
 }
 
 #[test]
-fn article_type_forms_are_detected() {
+fn prose_type_forms_are_detected() {
     let fm = parse_frontmatter("---\ntype: [[article]]\n---\n").unwrap();
-    assert!(frontmatter_is_article(&fm));
+    assert!(frontmatter_is_prose(&fm));
 }
 
 #[test]
@@ -621,7 +621,7 @@ fn mutation_idempotent_and_words() {
     let mut rng = Lcg(0xC0FF_EE42);
     for _ in 0..32 {
         let mutated = mutate(seed, &mut rng);
-        let plan = format_as_article(&mutated);
+        let plan = format_as_prose(&mutated);
         assert!(
             plan.reason.as_ref().is_none_or(
                 |r| r.code != "words-changed" && r.code != "not-idempotent"
@@ -630,7 +630,7 @@ fn mutation_idempotent_and_words() {
             plan.reason
         );
         if let Some(formatted) = plan.formatted {
-            let again = format_as_article(&formatted);
+            let again = format_as_prose(&formatted);
             assert_eq!(again.formatted.as_deref(), Some(formatted.as_str()));
         }
     }
@@ -690,7 +690,7 @@ fn corpus_no_panic_idempotent_and_words() {
             continue;
         };
         let relative = path.strip_prefix(root).unwrap_or(path);
-        let plan = format(&text, &ArticleContext::bypass_marker(relative));
+        let plan = format(&text, &ProseContext::bypass_marker(relative));
         if let Some(reason) = &plan.reason
             && matches!(
                 reason.code.as_str(),

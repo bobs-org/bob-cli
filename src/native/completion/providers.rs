@@ -47,7 +47,7 @@ pub(crate) fn vault_lines(
         Kind::RecordStem => Some(record_stems(context)),
         Kind::RecordSet => Some(record_sets(context)),
         Kind::VaultNote => Some(vault_notes(context)),
-        Kind::ArticleNote => Some(article_notes(context)),
+        Kind::ProseNote => Some(prose_notes(context)),
         Kind::NotebookRoot => Some(notebook_roots(&context.bob_dir)),
         Kind::AlbumRoot => Some(album_roots(&context.bob_dir)),
         Kind::AlbumParent => Some(album_parents(&context.bob_dir)),
@@ -643,8 +643,8 @@ fn vault_notes(context: &Context) -> Vec<String> {
 
 /// Article notes complete by their vault-relative stem and expose the
 /// current section count in the candidate description.
-fn article_notes(context: &Context) -> Vec<String> {
-    crate::native::articles::completion_candidates(&context.bob_dir)
+fn prose_notes(context: &Context) -> Vec<String> {
+    crate::native::prose::completion_candidates(&context.bob_dir)
         .iter()
         .filter_map(|(path, description)| {
             protocol::candidate_line(
