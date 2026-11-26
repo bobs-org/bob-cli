@@ -166,7 +166,7 @@
   location: /reference/capture-syntax/#plus-toggle
 - query: "- #Section selects a heading"
   location: /capture/#section-bullets
-- query: "- #Section"
+- query: "- #Section with nested notes"
   location: /reference/capture-syntax/#drawer-bullets
 - query: "- #drawer with nested notes"
   location: /reference/capture-syntax/#drawer-bullets
