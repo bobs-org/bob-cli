@@ -310,6 +310,46 @@ fn capture_pomodoro_link_on_tagged_child_is_not_linked() {
     assert!(json.get("block_link").is_none(), "{json}");
 }
 
+#[test]
+fn guarded_pomodoro_link_still_files_authored_notes() {
+    let temp = TempDir::new("bob-cli-link-guard-notes-land");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_tagged_child_tree(&vault, &day_file);
+
+    let preview = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("@child:work\n- follow up")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run guarded note preview");
+    assert_success(&preview);
+    let preview = stdout(&preview);
+    let not_linked = preview.find("was not linked").expect("guard output");
+    let note = preview.find("follow up").expect("authored note output");
+    assert!(not_linked < note, "{preview}");
+
+    let json = capture_json(&vault, &day_file, "@child:work\n- follow up");
+    assert_eq!(json["kind"], "link_guard", "{json}");
+    assert_eq!(json["notes"][0]["text"], "follow up", "{json}");
+    assert!(json.get("block_link").is_none(), "{json}");
+    let task =
+        fs::read_to_string(vault.join("child.md")).expect("read child task");
+    assert!(
+        task.contains("- [?] #task Work #prj_is_blocked ^work"),
+        "{task}"
+    );
+    assert!(task.contains("\t- follow up"), "{task}");
+    assert!(!fs::read_to_string(day_file)
+        .expect("read day")
+        .contains("[[child#^work]]"));
+}
+
 // PDG16 (§13.15): a new `:` task captured into a tagged project lands
 // `[?]` plus the tag, stays unlinked, and reports the ancestor reason.
 #[test]

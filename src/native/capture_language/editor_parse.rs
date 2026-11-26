@@ -5816,7 +5816,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             let conflict = if item_dependencies.has_entries() {
                 // Relationship extras use `relationship_needs_text`.
                 None
-            } else if !sub_bullets.is_empty() {
+            } else if !sub_bullets.is_empty() && pomodoro_close.is_some() {
                 Some(POMODORO_LINK_CHILD_CONFLICT_ERROR)
             } else if seen.schedule && !close_defers_schedule {
                 Some(POMODORO_LINK_SCHEDULE_CONFLICT_ERROR)

@@ -265,7 +265,9 @@ Capture uses `insert_reqs` for existing-task requirements. A note-less
 are inserted in one write before its notes are planned, so the first-req
 scoop sees only loose notes already on the task. The same-line form
 `@route+id [ ] text` inserts that requirement and its authored children as
-one block. Later notes in the same draft use the task's `NOTES` drawer.
+one block. A non-close `@route:id` or `^route:id` link followed by bullets
+uses the same requirement grammar after the task link is staged. Later notes
+in the same draft use the task's `NOTES` drawer.
 
 | Code              | Refused when                                                              |
 | ----------------- | ------------------------------------------------------------------------- |

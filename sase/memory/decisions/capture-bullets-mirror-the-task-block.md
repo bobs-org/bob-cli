@@ -13,6 +13,7 @@ metadata:
   decided: 2026-11-02
   superseded_by:
     - decisions:task-reqs-are-met-with-their-task
+    - decisions:existing-task-links-carry-notes
     - decisions:drawers-keep-their-names
 ---
 
@@ -59,3 +60,5 @@ Superseded in part: a drawer bullet is now a true-case `- **Title**`, the bullet
 inserts `**Title**`, and ALL-CAPS is no longer drawer structure. The first-level bullet
 and non-drawer capture rules remain in force — see
 [[decisions:drawers-keep-their-names]].
+
+Superseded in part: a note-less existing-task link `@route:id` followed by bullets is also an under-task position — see [[decisions:existing-task-links-carry-notes]].

@@ -2984,7 +2984,11 @@ fn parse_capture_item_masked<'a>(
                         .to_string(),
                 );
             }
-            if !sub_bullets.is_empty() {
+            if matches!(
+                aggregate.route.as_ref().map(|route| &route.token.kind),
+                Some(CaptureKind::Pomodoro { close: Some(_), .. })
+            ) && !sub_bullets.is_empty()
+            {
                 return Err(
                     "Pomodoro link capture cannot be combined with authored child bullets".to_string(),
                 );
@@ -3031,6 +3035,19 @@ fn parse_capture_item_masked<'a>(
             close,
             spelling,
         };
+        super::drawer_bullet::finish_execution_drawer_bullets(
+            &link_kind,
+            &parent_outcome.body,
+            &mut sub_bullets,
+        )?;
+        apply_execution_reqs(
+            &link_kind,
+            &parent_outcome.body,
+            REQ_FREE_LEVELS,
+            &mut sub_bullets,
+            &sub_bullet_lines,
+            &sub_bullet_marks,
+        )?;
         // Bare `@route:id` / `^route:id` aliases select the same existing
         // dependent as `@route+id`; a suffixed link rejects.
         let (dependencies, dependency_target) = execution_item_dependencies(
@@ -3051,7 +3068,7 @@ fn parse_capture_item_masked<'a>(
                 scheduled_offset: None,
                 priority_level: None,
                 snooze: aggregate.snooze.clone(),
-                sub_bullets: Vec::new(),
+                sub_bullets,
                 dependencies,
                 blocked_tasks: execution_blocked_tasks(&item_dependencies),
                 relations: execution_relations(&item_dependencies),

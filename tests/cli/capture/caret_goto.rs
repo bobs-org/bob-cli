@@ -166,7 +166,7 @@ fn line_of(contents: &str, needle: &str) -> usize {
 fn assert_claimed_parse(json: &serde_json::Value, route: &str, block_id: &str) {
     assert_eq!(json["ok"], true, "{json}");
     assert_eq!(json["schema_version"], 1, "{json}");
-    assert_eq!(json["grammar"], 33, "{json}");
+    assert_eq!(json["grammar"], 34, "{json}");
     assert_eq!(json["mode"], "task_goto", "{json}");
     assert_eq!(json["needs"], serde_json::json!([]), "{json}");
     assert_eq!(json["body"], "", "{json}");

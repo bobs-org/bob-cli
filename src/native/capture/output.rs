@@ -4280,6 +4280,9 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        if !result.notes.is_empty() {
+            print_human_multi_note_notes(result, &styler);
+        }
         print_req_card(reqs.take(), result.dry_run, &styler);
         print_consumed_links(result, &styler);
         return;
@@ -4293,6 +4296,9 @@ pub(super) fn print_human_item_success(
         println!("{prefix} not linked  {ordinal}{target_label}");
         println!("  {}", styler.dim(&format!("{id} was not linked")));
         print_human_link_guard(result, &styler);
+        if !result.notes.is_empty() {
+            print_human_multi_note_notes(result, &styler);
+        }
         if result.consumed_links.is_empty()
             && let Some(count) =
                 result.removed_pomodoro_links.filter(|n| *n > 0)
@@ -4526,6 +4532,9 @@ pub(super) fn print_human_item_success(
         println!("  {}", styler.dim(&result.task_line));
     }
     print_human_link_guard(result, &styler);
+    if !result.notes.is_empty() {
+        print_human_multi_note_notes(result, &styler);
+    }
     if result.kind == "pomodoro_task"
         && let Some(destination) = result.pomodoro_link_destination.as_ref()
     {

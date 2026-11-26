@@ -68,7 +68,7 @@ fn snooze_vault(
 #[test]
 fn capture_parse_reports_snooze_spans_for_existing_and_new_tasks() {
     let existing = parse_json("@job:email-dan-eod z:1530");
-    assert_eq!(existing["grammar"], 33);
+    assert_eq!(existing["grammar"], 34);
     assert_eq!(existing["mode"], "pomodoro_link");
     assert_eq!(existing["body"], "");
     assert_eq!(existing["route"], "job");
@@ -122,7 +122,7 @@ fn capture_parse_reports_snooze_spans_for_existing_and_new_tasks() {
 #[test]
 fn capture_parse_reports_drop_span_and_keeps_the_toggle_distinct() {
     let drop = parse_json("@job:email-dan-eod!");
-    assert_eq!(drop["grammar"], 33);
+    assert_eq!(drop["grammar"], 34);
     assert_eq!(drop["mode"], "pomodoro_link");
     assert_eq!(drop["body"], "");
     assert_eq!(drop["diagnostics"], serde_json::json!([]));
@@ -152,7 +152,7 @@ fn capture_parse_reports_drop_span_and_keeps_the_toggle_distinct() {
 fn capture_parse_reports_numeric_route_drop_like_strict_execution() {
     for raw in ["@20261125:here!", "@2026:here!"] {
         let drop = parse_json(raw);
-        assert_eq!(drop["grammar"], 33, "{raw}");
+        assert_eq!(drop["grammar"], 34, "{raw}");
         assert_eq!(drop["mode"], "pomodoro_link", "{raw}");
         assert_eq!(drop["body"], "", "{raw}");
         assert_eq!(

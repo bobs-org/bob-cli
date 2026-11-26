@@ -263,7 +263,12 @@ pub(super) fn reject_pomodoro_link_conflicts(
             "Pomodoro link capture cannot be combined with $<N>",
         ));
     }
-    if !parsed.sub_bullets.is_empty() {
+    if !parsed.sub_bullets.is_empty()
+        && matches!(
+            &parsed.kind,
+            CaptureKind::PomodoroLink { close: Some(_), .. }
+        )
+    {
         return Err(CaptureError::usage(
             "Pomodoro link capture cannot be combined with authored child bullets",
         ));

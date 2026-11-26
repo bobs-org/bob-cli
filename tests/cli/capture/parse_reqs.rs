@@ -60,7 +60,7 @@ fn at(text: &str, needle: &str) -> u64 {
 fn nested_requirements_report_req_marker_spans_with_depths() {
     let text = "Fix export\n- [ ] Handles CRLF\n  - [ ] Windows\n    - [ ] Mixed files\n      - seen in March\n        - twice\n- see the ticket";
     let value = parse(text);
-    assert_eq!(value["grammar"], 33, "{value}");
+    assert_eq!(value["grammar"], 34, "{value}");
     assert_eq!(value["mode"], "task", "{value}");
     assert!(diagnostics(&value).is_empty(), "{value}");
     let first = at(text, "[ ] Handles");

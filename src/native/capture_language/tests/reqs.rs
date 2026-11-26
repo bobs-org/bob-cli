@@ -364,6 +364,14 @@ fn hosts_map_from_kinds_and_modes_alike() {
             exact: false,
         }),
     };
+    let link = CaptureKind::PomodoroLink {
+        block_id: "ex".to_string(),
+        pomodoro_name: None,
+        pomodoro_name_is_literal: false,
+        start: None,
+        close: None,
+        spelling: PomodoroLinkSpelling::At,
+    };
     for (kind, mode, body, section, host) in [
         (
             CaptureKind::Task,
@@ -375,6 +383,13 @@ fn hosts_map_from_kinds_and_modes_alike() {
         (
             existing.clone(),
             EditorMode::SubBullet,
+            "",
+            None,
+            ReqHost::ExistingTask,
+        ),
+        (
+            link,
+            EditorMode::PomodoroLink,
             "",
             None,
             ReqHost::ExistingTask,

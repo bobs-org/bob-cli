@@ -69,6 +69,9 @@ impl ReqHost {
             | CaptureKind::TaskWithBlockId { .. }
             | CaptureKind::Pomodoro { close: None, .. } => Self::NewTask,
             CaptureKind::ProjectNote { .. } => Self::ProjectNote,
+            CaptureKind::PomodoroLink { close: None, .. } => {
+                Self::sub_bullet(false, body)
+            }
             CaptureKind::SubBullet { section, .. } => {
                 Self::sub_bullet(section.is_some(), body)
             }
@@ -89,6 +92,7 @@ impl ReqHost {
             EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => {
                 Self::ProjectNote
             }
+            EditorMode::PomodoroLink => Self::sub_bullet(false, body),
             EditorMode::SubBullet => Self::sub_bullet(
                 glued_section.is_some_and(|section| !section.is_empty()),
                 body,

@@ -5247,7 +5247,7 @@ record:
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 33);
+        assert_eq!(value["grammar"], 34);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -5314,7 +5314,7 @@ record:
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 33);
+        assert_eq!(value["grammar"], 34);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());
@@ -6165,10 +6165,10 @@ record:
     }
 
     #[test]
-    fn json_reports_merge_in_wire_shape_and_grammar_27() {
+    fn json_reports_merge_in_wire_shape_and_grammar_34() {
         let value = json("New task < @a+x @b+y");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 33);
+        assert_eq!(value["grammar"], 34);
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["mode"], "task");
         let merge_in = value.get("merge_in").expect("merge_in");

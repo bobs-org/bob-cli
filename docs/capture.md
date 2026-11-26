@@ -131,8 +131,9 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes); the bare start lands in the Pomodoro the new task's type places, creating a started `— T` entry when none fits |
 | `@route:block-id#pomodoro=<X>` / `@route:block-id=name` | Same under the named Pomodoro, starting that session (`@sase:deep-fix=bugs` links under `BUGS` and starts it, exactly like `@sase:deep-fix#bugs=`); under the shared suffix rule a link takes every spelling a lone start takes except drop lists (`=bugs3`, `=3bugs`, `=#deep-work`) |
-| `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); a task Blocked only by its own prerequisites drops them first; `=<X>` starts the resolved session atomically |
-| `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
+| `@route:block-id[#pomodoro][=<X>]` with no other text, optionally followed by note bullets | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); a task Blocked only by its own prerequisites drops them first; `=<X>` starts the resolved session atomically; child bullets file as notes under that task |
+| `^route:block-id[#pomodoro][=<X>]` with no other text, optionally followed by note bullets | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks; child bullets file as notes under that task |
+| `@route:block-id` / `^route:block-id` followed by `- note` bullets | Link the existing task, then file each first-level bullet and its nested children as a note; drawer and requirement bullets keep the multi-note grammar |
 | `@route:block-id z:<when>` | Snooze that existing task until a same-day time, without adding a Pomodoro link or dropping its dependencies |
 | Snoozed `@route:block-id` | Link the task now with ordinary placement and carry its snooze-row notes to the destination |
 | Snoozed `@route:block-id!` | Drop only the active snooze row; this is not the `@route+block-id!` Task Link toggle |
@@ -1407,7 +1408,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 33`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 34`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -1949,9 +1950,9 @@ atomically. `bob ref today` reuses this planner for a reference's reading
 task; its exact-name (`-e`) and entry-ref (`-P`) targets are
 `bob ref today`-only and the capture grammar is unchanged. For example, `bob capture '^sase:deep-fix='` links the existing
 `^deep-fix` task in `sase.md` and starts its session, and
-`bob capture '@sase:deep-fix=bugs'` links it under `BUGS` and starts that session. The marker must be the
-entire capture item: no body text, no authored child bullets, no `%`/`--clip`,
-no `s:<N>`/`$<N>`, and no forced destination flags. A token with the complete
+`bob capture '@sase:deep-fix=bugs'` links it under `BUGS` and starts that session. The link marker occupies the whole first line and has no body text. A non-close link may be followed by authored child bullets, which use the same multi-note grammar as `@route+block-id`: each first-level bullet and its nested children becomes a note, `- **Title**` and `- #drawer` target drawers, and `- [ ] text` adds a requirement. The link stages first, including any retype, safe prerequisite drop, pull-forward, Pomodoro link, and optional session start; notes are then planned against the staged task text. Both writes commit atomically.
+
+For example, `@cash:goog-exit` followed by `- Call Morgan` and `- **Future Work**` with a nested note links the existing task, then files those notes under it. If the project guard leaves the task unlinked, capture still files and reports the notes after its `not linked` output. Link-close forms such as `@route:id=x` and `^route:id=x` continue to refuse child bullets. Snooze links with children, `%c`, `s:<N>`, `$<N>`, forced destination flags, and relationship modifiers keep their existing refusals. A token with the complete
 `^route:block-id…` shape claims its item; anything else on the item fails with
 an `invalid_pomodoro_link` error instead of becoming task text. Partial shapes
 (`^`, `^fragment`, `^route:`, `^route:block-id#`) are incomplete editing
@@ -7392,6 +7393,10 @@ parent task. For example,
   - Called Morgan Stanley today.
 ```
 
+The same child-note placement applies when `@<route>:<block-id>` or
+`^<route>:<block-id>` links that task into today's Pomodoro and is followed by
+authored bullets; see [Linking and starting existing tasks](#linking-and-starting-existing-tasks).
+
 When the selected task already has a direct-child Schedule Log, Work Log, or
 Rotten Log, the complete new child — including any authored children, clipboard
 children, or a `$<N>`-generated Schedule Log nested under that child — is
@@ -7647,7 +7652,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 32. Grammar 32 retires ALL-CAPS drawer structure: plain uppercase bullets remain ordinary content, while `capture-parse` can report the nonblocking `caps_drawer_retired` warning for a catalog-key match. Grammar 31 claims a whole-draft `@route^id` as mode `task_goto` with an additive `goto` payload. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; it adds `drawer_marker` and title-only `drawer_bullet` spans. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
+`capture-parse` and `capture-complete` report grammar revision 34. Grammar 34 admits authored child bullets under note-less existing-task links as notes, drawers, and requirements. Grammar 32 retires ALL-CAPS drawer structure: plain uppercase bullets remain ordinary content, while `capture-parse` can report the nonblocking `caps_drawer_retired` warning for a catalog-key match. Grammar 31 claims a whole-draft `@route^id` as mode `task_goto` with an additive `goto` payload. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; it adds `drawer_marker` and title-only `drawer_bullet` spans. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
 refuses an operator-only first-line body after an existing-task link start,
 teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,
@@ -9113,14 +9118,16 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 33` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 34` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse consults local metadata but never
 executes the draft; a successful parse does not guarantee a successful
 capture. Wikilink highlighting is syntax-only and additive; it does
 not change capture routing or diagnostics.
 
-Grammar 33 adds the terminal `z:<when>` task snooze marker. A recognized
+Grammar 34 admits authored child bullets under a note-less existing-task link
+(`@route:id` or `^route:id`) as task notes, drawers, and requirements; link
+closes continue to refuse children. Grammar 33 adds the terminal `z:<when>` task snooze marker. A recognized
 marker adds one full-token `spans[]` entry with `kind: "snooze"`; its
 half-open `start` and `end` are UTF-8 byte offsets into the original draft.
 The parser keeps the raw time grammar shared with capture and reports the
@@ -10737,7 +10744,7 @@ space), label `🍽️ New restaurant · 92`, and the same next-field
 continuation. See [Guided fields](#guided-fields).
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 33`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 34`; `schema_version` remains 1. An empty query opened by a
 bare `#`, `%`, or `z:` adds `initial_selection: "none"`, so clients leave every
 row unselected. The field is omitted for typed queries and other contexts.
 

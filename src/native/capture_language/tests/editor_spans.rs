@@ -601,13 +601,16 @@ fn editor_reports_solo_at_pomodoro_links() {
     assert_eq!(task.mode, EditorMode::PomodoroTask);
     assert_eq!(task.body, "Do work");
 
-    // Anything else on a solo item is an `invalid_pomodoro_link`
-    // conflict, not a new task.
+    // Child bullets on a non-close link share the task-note grammar.
+    let with_note = editor("@sase:deep-fix\n- child");
+    assert_eq!(with_note.mode, EditorMode::PomodoroLink);
+    assert!(with_note.diagnostics.is_empty());
+    assert_eq!(with_note.sub_bullets.len(), 1);
+    assert_eq!(with_note.sub_bullets[0].body, "child");
+
+    // Other unsupported additions keep their `invalid_pomodoro_link`
+    // conflicts, and close forms continue to refuse authored children.
     for (raw, message) in [
-        (
-            "@sase:deep-fix\n- child",
-            "Pomodoro link capture cannot be combined with authored child bullets",
-        ),
         (
             "@sase:deep-fix s:2",
             "Pomodoro link capture cannot be combined with s:<N>",
@@ -619,6 +622,10 @@ fn editor_reports_solo_at_pomodoro_links() {
         (
             "@sase:deep-fix %c",
             "Pomodoro link capture cannot be combined with %c",
+        ),
+        (
+            "@sase:deep-fix=x\n- child",
+            "Pomodoro link capture cannot be combined with authored child bullets",
         ),
     ] {
         let parse = editor(raw);
@@ -812,7 +819,7 @@ fn editor_reports_caret_near_misses_and_conflicts() {
             "Pomodoro link `^route:block-id!` is a task toggle",
         ),
         (
-            "^sase:deep-fix\n- child",
+            "^sase:deep-fix=x\n- child",
             "Pomodoro link capture cannot be combined with authored child bullets",
         ),
         (
@@ -848,6 +855,12 @@ fn editor_reports_caret_near_misses_and_conflicts() {
             "{raw}"
         );
     }
+
+    let with_note = editor("^sase:deep-fix\n- child");
+    assert_eq!(with_note.mode, EditorMode::PomodoroLink);
+    assert!(with_note.diagnostics.is_empty());
+    assert_eq!(with_note.sub_bullets.len(), 1);
+    assert_eq!(with_note.sub_bullets[0].body, "child");
 }
 
 #[test]

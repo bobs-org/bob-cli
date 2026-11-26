@@ -77,7 +77,9 @@ mod type_marker;
 /// forms. Revision 22 makes sized `Nx` closes execute (see
 /// `sized_pomodoro_close.md`); older clients parse the size as literal
 /// task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 33;
+/// Revision 34 admits child bullets under a note-less existing-task link
+/// as notes, drawers, and requirements; previously these links refused them.
+pub(crate) const GRAMMAR_REVISION: u32 = 34;
 
 #[cfg(test)]
 mod tests;

@@ -123,7 +123,7 @@ fn parse_json(text: &str) -> serde_json::Value {
 fn assert_note_goto_picker(json: &serde_json::Value, end: usize) {
     assert_eq!(json["ok"], true, "{json}");
     assert_eq!(json["schema_version"], 1, "{json}");
-    assert_eq!(json["grammar"], 33, "{json}");
+    assert_eq!(json["grammar"], 34, "{json}");
     assert_eq!(json["context"], "note_goto", "{json}");
     assert_eq!(
         json["replacement"],
@@ -263,7 +263,7 @@ fn capture_parse_note_goto_query_reports_incomplete_note_goto() {
         let json = parse_json(text);
         assert_eq!(json["ok"], true);
         assert_eq!(json["schema_version"], 1);
-        assert_eq!(json["grammar"], 33);
+        assert_eq!(json["grammar"], 34);
         assert_eq!(json["mode"], "incomplete");
         assert_eq!(json["needs"], serde_json::json!(["note_goto"]));
         assert_eq!(json["body"], "");

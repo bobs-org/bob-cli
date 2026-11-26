@@ -3453,6 +3453,7 @@ fn plan_capture_item_inner(
             Some(task_theme_context),
             marker_retype.is_some(),
         )?;
+        let marker_retype_applied = marker_retype.is_some();
         if let Some((original, applied)) = marker_retype {
             let marker = parsed.type_marker.as_ref().ok_or_else(|| {
                 CaptureError::io(
@@ -3473,11 +3474,13 @@ fn plan_capture_item_inner(
                 now,
                 warnings,
             )?;
-            return Ok(planned);
         }
         // This capture-only boundary keeps `bob ref today` on the shared
         // link planner's explicit never-deliberate path.
-        if pomodoro_name.is_some() && planned.result.link_guard.is_none() {
+        if !marker_retype_applied
+            && pomodoro_name.is_some()
+            && planned.result.link_guard.is_none()
+        {
             let previous_task_line = planned
                 .result
                 .previous_task_line
@@ -3537,6 +3540,19 @@ fn plan_capture_item_inner(
                 }
             }
         }
+        plan_link_note_bullets(
+            request,
+            &parsed,
+            parsed_item.index,
+            block_id,
+            now,
+            today,
+            planner,
+            warnings,
+            dependency_ctx,
+            task_theme_context,
+            &mut planned,
+        )?;
         return Ok(planned);
     }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
@@ -5908,6 +5924,75 @@ fn relationship_only_existing_owner(
         } => Some(target.clone()),
         _ => None,
     }
+}
+
+/// File the child bullets carried by a non-close existing-task link through
+/// the same multi-note planner used by `@route+id`. Planning this after the
+/// link means note placement sees the staged post-link task, while the batch
+/// still commits both writes atomically.
+#[allow(clippy::too_many_arguments)]
+fn plan_link_note_bullets(
+    request: &CaptureRequest,
+    parsed: &ParsedCaptureText,
+    parsed_index: usize,
+    block_id: &str,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    warnings: &mut Vec<CaptureWarning>,
+    dependency_ctx: &mut DependencyContext,
+    task_theme_context: &mut CaptureTaskThemeContext,
+    link_plan: &mut PlannedCaptureItem,
+) -> Result<(), CaptureError> {
+    if parsed.sub_bullets.is_empty() {
+        return Ok(());
+    }
+
+    let mut note_item = parsed.clone();
+    note_item.body.clear();
+    note_item.kind = CaptureKind::SubBullet {
+        target: SubBulletTarget::BlockId(block_id.to_string()),
+        section: None,
+    };
+    note_item.clip = None;
+    note_item.scheduled_offset = None;
+    note_item.priority_level = None;
+    note_item.snooze = None;
+    note_item.dependencies.clear();
+    note_item.blocked_tasks.clear();
+    note_item.relations.clear();
+    note_item.dependency_target = None;
+    // A free `#type` on the link was already applied before linking.
+    note_item.type_marker = None;
+    note_item.merge_in = None;
+
+    let notes_plan = plan_multi_note_sub_bullet_item(
+        request,
+        note_item,
+        parsed_index,
+        now,
+        today,
+        planner,
+        warnings,
+        dependency_ctx,
+        task_theme_context,
+        None,
+    )?;
+    link_plan.result.notes = notes_plan.result.notes;
+    link_plan.result.drawers = notes_plan.result.drawers;
+    link_plan.result.drawer = notes_plan.result.drawer;
+    link_plan
+        .result
+        .requirements
+        .extend(notes_plan.result.requirements);
+    link_plan.result.parent_line = notes_plan.result.parent_line;
+    link_plan.result.parent_text = notes_plan.result.parent_text;
+    link_plan.result.parent_status_symbol =
+        notes_plan.result.parent_status_symbol;
+    link_plan.result.parent_status_name = notes_plan.result.parent_status_name;
+    link_plan.task_block_refs.extend(notes_plan.task_block_refs);
+    link_plan.pomodoro_refs.extend(notes_plan.pomodoro_refs);
+    Ok(())
 }
 
 /// N for a `*` pass: an existing `@route+id` owner, else the new task

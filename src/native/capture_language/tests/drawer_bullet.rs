@@ -407,6 +407,13 @@ fn bullet_drawer_target_follows_the_item_shape() {
         })
     );
     assert_eq!(
+        at("@foo:bar\n- #"),
+        Some(DrawerBulletTarget::ExistingTask {
+            route: "foo".to_string(),
+            block_id: "bar".to_string(),
+        })
+    );
+    assert_eq!(
         at("Ship it\n- #"),
         Some(DrawerBulletTarget::NewTask {
             route: None,

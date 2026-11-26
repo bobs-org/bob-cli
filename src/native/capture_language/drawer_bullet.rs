@@ -138,11 +138,10 @@ pub(crate) fn is_multi_note_sub_bullet(
     if !parent_body.trim().is_empty() {
         return false;
     }
-    let CaptureKind::SubBullet { section, .. } = kind else {
-        return false;
-    };
-    if section.is_some() {
-        return false;
+    match kind {
+        CaptureKind::SubBullet { section, .. } if section.is_none() => {}
+        CaptureKind::PomodoroLink { close: None, .. } => {}
+        _ => return false,
     }
     sub_bullets.iter().any(|item| item.depth.is_first())
 }
@@ -152,6 +151,7 @@ pub(crate) fn is_under_task_mode(mode: EditorMode) -> bool {
         mode,
         EditorMode::Task
             | EditorMode::PomodoroTask
+            | EditorMode::PomodoroLink
             | EditorMode::ProjectNote
             | EditorMode::PomodoroProjectNote
     )
@@ -202,7 +202,9 @@ pub(crate) fn classify_target(
                 text: parent_body.trim().to_string(),
             })
         }
-        EditorMode::SubBullet | EditorMode::TaskToggle => {
+        EditorMode::SubBullet
+        | EditorMode::TaskToggle
+        | EditorMode::PomodoroLink => {
             let glued =
                 glued_section.is_some_and(|section| !section.is_empty());
             if !parent_body.trim().is_empty()
@@ -447,6 +449,7 @@ pub(crate) fn finish_execution_drawer_bullets(
                 CaptureKind::Task
                     | CaptureKind::TaskWithBlockId { .. }
                     | CaptureKind::Pomodoro { close: None, .. }
+                    | CaptureKind::PomodoroLink { close: None, .. }
                     | CaptureKind::SubBullet { .. }
             );
         if is_task_drawer

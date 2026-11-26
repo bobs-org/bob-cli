@@ -133,6 +133,7 @@ mod task_complete_parse;
 mod task_goto;
 mod task_id;
 mod task_link;
+mod task_link_notes;
 mod task_marker;
 mod task_theme_writes;
 mod task_toggle;

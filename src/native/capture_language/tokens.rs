@@ -2728,13 +2728,19 @@ pub(super) fn classify_caret_item<'a>(
             close_complete,
             close_drop,
         } => {
-            let conflict = caret_item_conflict(
-                &parent_tokens,
-                solo_parent,
-                single_line,
-                has_clip,
-                has_relations,
-            );
+            let conflict = if close.is_none() && solo_parent && !single_line {
+                // A non-close existing-task link may carry child notes.
+                // Close links keep the child conflict below.
+                None
+            } else {
+                caret_item_conflict(
+                    &parent_tokens,
+                    solo_parent,
+                    single_line,
+                    has_clip,
+                    has_relations,
+                )
+            };
             Some(CaretItem {
                 token: *first,
                 solo_parent,
@@ -2872,10 +2878,12 @@ fn caret_item_conflict(
 /// Whole-item `^route:block-id[#pomodoro][=<X>]` grammar.
 ///
 /// Returns `Ok(None)` when the item does not start with `^` and ordinary
-/// parsing should continue. Returns `Ok(Some(outcome))` for an exact solo
-/// link. Returns `Err` for complete-shape near misses, partial solo shapes,
-/// and solo conflicts. Partial shapes followed by other text, and lookalikes
-/// (`^_^`, `^^`, `^.`, …), stay ordinary prose (`Ok(None)`).
+/// parsing should continue. Non-close links with authored children also
+/// defer to the shared item parser, which applies the task-note grammar.
+/// Returns `Ok(Some(outcome))` for an exact solo link. Returns `Err` for
+/// complete-shape near misses, partial solo shapes, and solo conflicts.
+/// Partial shapes followed by other text, and lookalikes (`^_^`, `^^`,
+/// `^.`, …), stay ordinary prose (`Ok(None)`).
 pub(super) fn parse_pomodoro_link_item<'a>(
     item: &CaptureItem<'a>,
     parent_line: &ItemLine<'a>,
@@ -3094,6 +3102,14 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                         ));
                     }
                     return Err(super::snooze::snooze_existing_children_error());
+                }
+                if item.lines.len() > 1
+                    && trailing.is_empty()
+                    && parts.close.is_none()
+                {
+                    // The execution item parser owns authored child
+                    // bullets so caret and at spellings share one grammar.
+                    return Ok(None);
                 }
                 return Err(
                     "Pomodoro link capture cannot be combined with authored child bullets"
