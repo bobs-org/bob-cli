@@ -487,7 +487,11 @@ fn load_roles(
     contents: &str,
 ) -> crate::native::props::roles::RoleContext {
     let records = RecordContext::discover(vault);
-    resolve_note_context(vault, relative, contents, &records)
+    let configured_ref_dir =
+        crate::native::ref_library::configured_ref_dir(vault);
+    let ref_dir =
+        fs::canonicalize(&configured_ref_dir).unwrap_or(configured_ref_dir);
+    resolve_note_context(vault, &ref_dir, relative, contents, &records)
 }
 
 fn inspect_note(

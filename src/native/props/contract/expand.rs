@@ -32,6 +32,36 @@ pub(crate) fn expand(
                 "Use a setting defined for this area or project.",
             )
         })?;
+    if context.roles.note_kind == super::super::roles::NoteKind::Reference
+        && matches!(id, "reading" | "parent" | "file_name")
+    {
+        return Err(error(
+            "prop_setting_disabled",
+            id,
+            index,
+            format!("setting {id:?} is owned elsewhere"),
+            match id {
+                "file_name" => "Use `bob ref rename` to change the file name.",
+                _ => "Use the reading task to change this value.",
+            },
+        ));
+    }
+    if context.roles.note_kind == super::super::roles::NoteKind::Reference
+        && matches!(id, "title" | "source")
+        && value.is_none()
+    {
+        return Err(error(
+            "prop_setting_disabled",
+            id,
+            index,
+            format!("setting {id:?} cannot be cleared"),
+            if id == "title" {
+                "Set a nonblank title; clear it through YAML only when recovery requires it."
+            } else {
+                "A reference source can be replaced but not cleared through this setting."
+            },
+        ));
+    }
     if value.is_none() {
         for key in setting.keys {
             validate::removal(context, key, index)?;
@@ -39,6 +69,9 @@ pub(crate) fn expand(
         return Ok(clear(document, setting.keys));
     }
     let value = value.expect("set value");
+    if id == "title" {
+        return Ok(vec![op.clone()]);
+    }
     if id == "ready_cap"
         && !(value.as_u64().is_some()
             || value
@@ -54,11 +87,16 @@ pub(crate) fn expand(
     if id == "clock" {
         return clock(context, document, value, index);
     }
+    let key = if id == "source" {
+        settings::source_key(document)
+    } else {
+        setting.keys[0]
+    };
     let yaml = serde_yaml::to_value(value)
         .map_err(|_| validate::bad(id, index, "Use a JSON setting value."))?;
     let (canonical, _) =
-        validate::value(context, &document.source, id, &yaml, index)?;
-    let mut ops = vec![set(id, canonical)];
+        validate::value(context, &document.source, key, &yaml, index)?;
+    let mut ops = vec![set(key, canonical)];
     if id == "task_type" {
         ops.extend(clear(document, &["theme"]));
     }

@@ -37,7 +37,7 @@ bob __catalog --protocol <N>
   "ok": true,
   "protocol": 1,
   "bob_version": "0.3.1",
-  "features": ["clicolor-force", "progress-env", "props_contract_v1", "props_v1", "run-receipt"],
+  "features": ["clicolor-force", "progress-env", "props_contract_v1", "props_ref_contract_v1", "props_v1", "run-receipt"],
   "sections": [{"id": "daily", "title": "Daily workflow"}],
   "roots": ["articles", "capture"],
   "aliases": [{"from": ["task-status-hooks"], "to": ["task", "reconcile"]}],
@@ -56,7 +56,8 @@ environment knobs this binary honors without a TTY:
 | `run-receipt` | `BOB_RUN_RECEIPT` | Path of an atomic JSON exit receipt written after the process chooses an exit code. |
 
 Protocol capabilities also appear in `features`: `props_v1` for the property
-writer and `props_contract_v1` for the area/project settings contract. Clients
+writer, `props_contract_v1` for area/project settings, and
+`props_ref_contract_v1` for reference settings. Clients
 ignore unknown feature names. See
 [Configuration](reference/configuration.md) for the variables.
 

@@ -1,4 +1,4 @@
-//! The `contract` block on `bob props show` for area and project notes.
+//! The `contract` block on `bob props show` for area, project, and reference notes.
 
 use std::path::{Path, PathBuf};
 
@@ -54,6 +54,12 @@ pub(crate) struct SettingReport {
     pub(crate) issues: Vec<issues::ContractIssue>,
     pub(crate) help: String,
     pub(crate) disabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) route: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -197,10 +203,15 @@ pub(crate) fn build(
 }
 
 pub(crate) fn capabilities(kind: NoteKind) -> Vec<&'static str> {
-    if settings::for_kind(kind).is_empty() {
-        vec![crate::native::props::show::CAPABILITY]
-    } else {
-        vec![crate::native::props::show::CAPABILITY, CONTRACT_CAPABILITY]
+    match kind {
+        NoteKind::Reference => vec![
+            crate::native::props::show::CAPABILITY,
+            crate::native::props::show::REF_CONTRACT_CAPABILITY,
+        ],
+        NoteKind::Area | NoteKind::Project => {
+            vec![crate::native::props::show::CAPABILITY, CONTRACT_CAPABILITY]
+        }
+        _ => vec![crate::native::props::show::CAPABILITY],
     }
 }
 
@@ -254,6 +265,9 @@ fn setting_report(
     note_issues: &[issues::ContractIssue],
     used_by: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> SettingReport {
+    if kind == NoteKind::Reference {
+        return reference_setting_report(setting, path, contents, document);
+    }
     let declared = setting
         .keys
         .iter()
@@ -301,6 +315,113 @@ fn setting_report(
         issues,
         help: help_for(setting.id, kind),
         disabled,
+        reason: None,
+        route: None,
+        target: None,
+    }
+}
+
+fn reference_setting_report(
+    setting: &Setting,
+    path: &Path,
+    contents: &str,
+    document: &PropsDocument,
+) -> SettingReport {
+    let declared = setting
+        .keys
+        .iter()
+        .any(|key| document.entries.iter().any(|entry| entry.key == *key));
+    let mut value = declared_value(setting, document);
+    let body = contents.get(document.body_range.clone()).unwrap_or("");
+    let managed_embed = crate::native::ref_tasks::find_managed_embed(body);
+    let has_task = managed_embed.is_some()
+        || !crate::native::ref_tasks::find_trackers(body).is_empty();
+    let managed_target = managed_embed
+        .map(|embed| format!("![[{}#^{}]]", embed.target, embed.block_id));
+    let (effective_value, source, label, disabled, reason, route, target) =
+        match setting.id {
+            "reading" => (
+                value.clone(),
+                if has_task { "task" } else { "none" },
+                if has_task {
+                    "Owned by the reading task"
+                } else {
+                    "No managed reading-task tracker"
+                }
+                .to_owned(),
+                true,
+                Some("Reading state belongs to the reading task checkbox."),
+                Some("reading_task"),
+                managed_target.clone(),
+            ),
+            "parent" => (
+                value.clone(),
+                if has_task { "task" } else { "none" },
+                if has_task {
+                    "Follows the reading task's residence"
+                } else {
+                    "No reading-task residence"
+                }
+                .to_owned(),
+                true,
+                Some("Residence is projected from where the reading task lives; move the task."),
+                Some("reading_task"),
+                managed_target.clone(),
+            ),
+            "file_name" => {
+                value = json!(View::stem(path));
+                (
+                    value.clone(),
+                    "path",
+                    "Rename through bob ref rename".to_owned(),
+                    true,
+                    Some("Rename the reference with `bob ref rename`."),
+                    Some("ref_rename"),
+                    None,
+                )
+            }
+            _ => (
+                value.clone(),
+                if declared { "self" } else { "none" },
+                if declared { "set on this note" } else { "not set" }
+                    .to_owned(),
+                false,
+                None,
+                None,
+                None,
+            ),
+        };
+    SettingReport {
+        id: setting.id,
+        label: setting.label,
+        keys: setting.keys,
+        stage: setting.stage,
+        declared,
+        value,
+        effective: Effective {
+            value: effective_value,
+            source,
+            from: None,
+            label,
+        },
+        choices: Vec::new(),
+        issues: Vec::new(),
+        help: match setting.id {
+            "title" => "Set one nonblank line; a matching first H1 follows this title.".to_owned(),
+            "summary" => "Set or clear one line of note-local text.".to_owned(),
+            "author" => "Set or clear one line; syncs to the PDF marker at the next writing scan.".to_owned(),
+            "published" => "Set or clear YYYY, YYYY-MM, or YYYY-MM-DD.".to_owned(),
+            "source" => "Set an HTTP(S) URL; legacy url notes keep that key.".to_owned(),
+            "aliases" => "Set or clear a list of aliases.".to_owned(),
+            "reading" => "Open the reading task to change reading state.".to_owned(),
+            "parent" => "Move the reading task to change its residence.".to_owned(),
+            "file_name" => "Use bob ref rename to change the file name.".to_owned(),
+            _ => String::new(),
+        },
+        disabled,
+        reason: reason.map(str::to_owned),
+        route,
+        target,
     }
 }
 

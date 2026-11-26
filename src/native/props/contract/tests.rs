@@ -17,6 +17,14 @@ use crate::native::{
 };
 
 fn context(kind: NoteKind, note: &str) -> InspectContext {
+    let reference_has_task = if kind == NoteKind::Reference {
+        let document = PropsDocument::parse(note);
+        let body = &note[document.body_range.clone()];
+        crate::native::ref_tasks::find_managed_embed(body).is_some()
+            || !crate::native::ref_tasks::find_trackers(body).is_empty()
+    } else {
+        false
+    };
     let files: BTreeMap<PathBuf, String> = [
         ("area.md", "# Areas\n"),
         (
@@ -55,6 +63,7 @@ fn context(kind: NoteKind, note: &str) -> InspectContext {
         roles: RoleContext {
             note_kind: kind,
             record_fields: None,
+            reference_has_task,
             diagnostics: Vec::new(),
         },
         contract: Some(Context {
@@ -646,4 +655,263 @@ fn bank_show_has_no_contract_but_keeps_card_owned_bank_key() {
         .code,
         "prop_setting_disabled"
     );
+}
+
+#[test]
+fn reference_contract_reports_routes_capability_and_managed_target() {
+    let note = "---\ntype: '[[ref]]'\ntitle: Old\nstatus: wip\nparent: '[[reading]]'\n---\n# Old\n\n![[reading#^ref-modern]]\n";
+    let report = inspect(note, &context(NoteKind::Reference, note)).report;
+    assert_eq!(report.note_kind, "reference");
+    assert_eq!(
+        report.capabilities,
+        vec!["props_v1", "props_ref_contract_v1"]
+    );
+    let contract = report.contract.as_ref().expect("reference contract");
+    assert_eq!(contract.kind, "reference");
+    assert_eq!(
+        contract
+            .settings
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        [
+            "title",
+            "summary",
+            "author",
+            "published",
+            "source",
+            "aliases",
+            "reading",
+            "parent",
+            "file_name"
+        ]
+    );
+    for id in ["reading", "parent"] {
+        let row = setting(&report, id);
+        assert!(row.disabled);
+        assert_eq!(row.route, Some("reading_task"));
+        assert_eq!(row.target.as_deref(), Some("![[reading#^ref-modern]]"));
+        assert!(row.reason.is_some());
+    }
+    let file_name = setting(&report, "file_name");
+    assert!(file_name.disabled);
+    assert_eq!(file_name.route, Some("ref_rename"));
+    assert!(file_name.target.is_none());
+    assert!(!setting(&report, "title").disabled);
+    assert!(setting(&report, "title").target.is_none());
+    let status = report
+        .properties
+        .iter()
+        .find(|row| row.key == "status")
+        .unwrap();
+    assert_eq!(
+        status.role,
+        Some(crate::native::props::roles::Role::Derived)
+    );
+    assert_eq!(status.owner.as_deref(), Some("reading task"));
+    let renamed = run(
+        note,
+        NoteKind::Reference,
+        json!([{"op":"setting.set","setting":"title","value":"New"}]),
+    )
+    .unwrap();
+    assert!(renamed.effects.iter().any(|effect| {
+        effect.setting == "title" && effect.kind == "reading_task_link_text"
+    }));
+    let taskless = "---\ntype: '[[ref]]'\nstatus: wip\n---\n# Legacy\n";
+    let taskless_report =
+        inspect(taskless, &context(NoteKind::Reference, taskless)).report;
+    assert_eq!(
+        setting(&taskless_report, "reading").effective.source,
+        "none"
+    );
+    assert_eq!(
+        taskless_report
+            .properties
+            .iter()
+            .find(|row| row.key == "status")
+            .unwrap()
+            .role,
+        Some(crate::native::props::roles::Role::Loose)
+    );
+}
+
+#[test]
+fn reference_contract_validates_settings_and_reports_marker_syncs() {
+    let note = "---\ntype: '[[ref]]'\ntitle: Old\nauthor: Writer\npublished: 2020\nsource_url: https://example.com\naliases: [Old]\nhighlights_marker_base: marker-v1\n---\n# Old\n";
+    for (setting_id, value) in [
+        ("title", json!("  ")),
+        ("title", json!("two\nlines")),
+        ("author", json!("two\nlines")),
+        ("published", json!("2024-13")),
+        ("published", json!("24")),
+        ("source", json!("file:///tmp/paper.pdf")),
+        ("aliases", json!(["valid", " "])),
+    ] {
+        assert_eq!(
+            run(
+                note,
+                NoteKind::Reference,
+                json!([{"op":"setting.set","setting":setting_id,"value":value}])
+            )
+            .unwrap_err()
+            .code,
+            "prop_bad_value",
+            "{setting_id}: {value}"
+        );
+    }
+    for setting_id in ["reading", "parent", "file_name", "title"] {
+        assert_eq!(
+            run(
+                note,
+                NoteKind::Reference,
+                json!([{"op":"setting.clear","setting":setting_id}])
+            )
+            .unwrap_err()
+            .code,
+            "prop_setting_disabled",
+            "{setting_id} cannot be cleared"
+        );
+    }
+    assert_eq!(
+        run(
+            note,
+            NoteKind::Reference,
+            json!([{"op":"setting.clear","setting":"source"}]),
+        )
+        .unwrap_err()
+        .code,
+        "prop_setting_disabled"
+    );
+    let result = run(
+        note,
+        NoteKind::Reference,
+        json!([
+            {"op":"setting.set","setting":"title","value":"New"},
+            {"op":"setting.set","setting":"author","value":"New Writer"},
+            {"op":"setting.set","setting":"published","value":"2024-02-29"},
+            {"op":"setting.set","setting":"source","value":"https://new.example/paper"}
+        ]),
+    )
+    .unwrap();
+    for id in ["title", "author", "published", "source"] {
+        assert!(
+            result.effects.iter().any(|effect| {
+                effect.setting == id
+                    && effect.kind == "syncs"
+                    && effect.syncs == ["pdf_marker"]
+            }),
+            "missing marker effect for {id}: {:?}",
+            result.effects
+        );
+    }
+    assert!(result
+        .candidate
+        .contains("source_url: https://new.example/paper"));
+    let legacy = "---\ntype: '[[ref]]'\nurl: https://old.example/paper\n---\n";
+    let updated = roundtrip(
+        legacy,
+        NoteKind::Reference,
+        json!([{"op":"setting.set","setting":"source","value":"https://new.example/paper"}]),
+    );
+    assert!(updated.candidate.contains("url: https://new.example/paper"));
+    assert!(!updated.candidate.contains("source_url:"));
+}
+
+#[test]
+fn reference_title_retargets_only_matching_first_h1_and_undoes_exactly() {
+    let crlf_bom = "\u{feff}---\r\ntype: '[[ref]]'\r\ntitle: Old\r\n---\r\n# Old ###\r\n\r\nText\r\n";
+    let changed = roundtrip(
+        crlf_bom,
+        NoteKind::Reference,
+        json!([{"op":"setting.set","setting":"title","value":"New"}]),
+    );
+    assert!(changed.candidate.starts_with("\u{feff}---\r\n"));
+    assert!(changed.candidate.contains("# New ###\r\n\r\nText\r\n"));
+
+    for (note, expected_body) in [
+        (
+            "---\ntype: '[[ref]]'\ntitle: Old\n---\n# Different\n\nBody\n",
+            "# Different\n\nBody\n",
+        ),
+        (
+            "---\ntype: '[[ref]]'\ntitle: Old\n---\n```md\n# Old\n```\n",
+            "```md\n# Old\n```\n",
+        ),
+        (
+            "---\ntype: '[[ref]]'\ntitle: Old\n---\n<!--\n# Old\n-->\n## Intro\n# Old\n",
+            "<!--\n# Old\n-->\n## Intro\n# New\n",
+        ),
+        (
+            "---\ntype: '[[ref]]'\n---\n# Stem\n",
+            "# New\n",
+        ),
+        (
+            "---\ntype: '[[ref]]'\ntitle: Old\n---\n# Old",
+            "# New",
+        ),
+    ] {
+        let result = roundtrip(
+            note,
+            NoteKind::Reference,
+            json!([{"op":"setting.set","setting":"title","value":"New"}]),
+        );
+        let parsed = PropsDocument::parse(&result.candidate);
+        assert_eq!(
+            &result.candidate[parsed.body_range],
+            expected_body,
+            "{note}"
+        );
+    }
+}
+
+#[test]
+fn reference_owned_fields_refuse_every_generic_mutation_path() {
+    let note = "---\ntype: '[[ref]]'\nid: ref-old\nref_type: article\nsource_pdf: old.pdf\nsource_pdf_sha256: abc\npipeline_version: v1\nhighlights_marker_base: marker\naudio: recording.mp3\nreturn_links: []\nearlier: []\nrecaptured: false\nsource_markdown: old.md\nsource_note: old\nsource_block: block\nsource_blocks: []\nsource_id: old-id\nsource_path: old/path\nsource_line_start: 1\nsource_line_end: 2\nevent: event\nevent_id: event-id\nmeeting_start: start\nmeeting_end: end\nnotes_producer: producer\nstatus: wip\nparent: '[[reading]]'\ntitle: Old\nspare: value\n---\n# Old\n\n![[reading#^ref-old]]\n";
+    let protected = [
+        ("id", "prop_identity"),
+        ("ref_type", "prop_identity"),
+        ("source_pdf", "prop_derived"),
+        ("source_pdf_sha256", "prop_derived"),
+        ("pipeline_version", "prop_derived"),
+        ("highlights_marker_base", "prop_derived"),
+        ("audio", "prop_derived"),
+        ("return_links", "prop_derived"),
+        ("earlier", "prop_derived"),
+        ("recaptured", "prop_derived"),
+        ("source_markdown", "prop_derived"),
+        ("source_note", "prop_derived"),
+        ("source_block", "prop_derived"),
+        ("source_blocks", "prop_derived"),
+        ("source_id", "prop_derived"),
+        ("source_path", "prop_derived"),
+        ("source_line_start", "prop_derived"),
+        ("source_line_end", "prop_derived"),
+        ("event", "prop_derived"),
+        ("event_id", "prop_derived"),
+        ("meeting_start", "prop_derived"),
+        ("meeting_end", "prop_derived"),
+        ("notes_producer", "prop_derived"),
+        ("status", "prop_derived"),
+        ("parent", "prop_derived"),
+    ];
+    for (key, code) in protected {
+        let expected = PropsDocument::parse(note).fingerprint.unwrap();
+        let raw = format!("{key}: replacement\n");
+        let ops = [
+            json!({"op":"prop.set","key":key,"value":"replacement"}),
+            json!({"op":"prop.set_yaml","key":key,"yaml":"replacement"}),
+            json!({"op":"prop.unset","key":key}),
+            json!({"op":"prop.rename","key":key,"to":"renamed"}),
+            json!({"op":"prop.move","key":key,"after":"title"}),
+            json!({"op":"prop.restore","key":key,"raw":raw}),
+        ];
+        for op in ops {
+            let envelope = parse_envelope(&json!({"schema_version":1,"expect":expected,"ops":[op.clone()]}).to_string()).unwrap();
+            let error =
+                plan(note, &context(NoteKind::Reference, note), &envelope)
+                    .unwrap_err();
+            assert_eq!(error.code, code, "{key}: {op}");
+        }
+    }
 }

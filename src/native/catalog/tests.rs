@@ -453,6 +453,7 @@ fn document_shape() {
             "clicolor-force",
             "progress-env",
             "props_contract_v1",
+            "props_ref_contract_v1",
             "props_v1",
             "run-receipt",
         ]

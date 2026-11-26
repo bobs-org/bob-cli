@@ -119,6 +119,45 @@ pub(crate) struct RefIndex {
     pub ref_tasks: crate::native::ref_tasks::RefTaskIndex,
 }
 
+/// Resolve the library directory with the same environment/default policy as
+/// `bob ref list`. `bob props` has no `--ref-dir` option, so it uses the
+/// configured environment value or the library's default.
+pub(crate) fn configured_ref_dir(bob_dir: &Path) -> PathBuf {
+    crate::native::highlights_ref::configured_path_from(
+        None,
+        crate::native::highlights_ref::ENV_REF_DIR,
+        "ref",
+        bob_dir,
+    )
+}
+
+/// Whether `path` would be a member of the `bob ref list` note walk.
+/// Directory and filename rules are shared with `collect_member_files`.
+pub(crate) fn is_library_member_path(ref_dir: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(ref_dir) else {
+        return false;
+    };
+    let components: Vec<_> = relative.components().collect();
+    let Some((file, directories)) = components.split_last() else {
+        return false;
+    };
+    let Some(file_name) = file.as_os_str().to_str() else {
+        return false;
+    };
+    if !library_markdown_name(file_name)
+        || !std::fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+    {
+        return false;
+    }
+    directories.iter().all(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(library_directory_name)
+    })
+}
+
 impl RefIndex {
     #[cfg(test)]
     pub(crate) fn row_by_path(&self, path: &str) -> Option<&RefRow> {
@@ -242,7 +281,7 @@ fn collect_member_files(
         if file_type.is_dir() {
             let name =
                 path.file_name().and_then(OsStr::to_str).unwrap_or_default();
-            if name.starts_with('.') || name.ends_with(".assets") {
+            if !library_directory_name(name) {
                 *skipped += count_markdown_under(&path);
                 continue;
             }
@@ -271,6 +310,16 @@ fn collect_member_files(
         files.push(path);
     }
     Ok(())
+}
+
+fn library_directory_name(name: &str) -> bool {
+    !name.starts_with('.') && !name.ends_with(".assets")
+}
+
+fn library_markdown_name(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("md"))
+        && !crate::native::ref_tasks::is_conflict_copy_name(name)
 }
 
 fn count_markdown_under(dir: &Path) -> usize {

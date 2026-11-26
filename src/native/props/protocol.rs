@@ -33,6 +33,13 @@ pub(crate) struct Framing {
     pub(crate) prior: String,
 }
 
+/// Exact body preimage for the matching-H1 part of a reversible title edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BodyRestore {
+    pub(crate) expected: String,
+    pub(crate) prior: String,
+}
+
 /// Property span operations and typed setting gestures.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
@@ -70,6 +77,7 @@ pub(crate) enum Op {
         raw: Option<String>,
         position: Option<Position>,
         framing: Option<Framing>,
+        body: Option<BodyRestore>,
     },
 }
 
@@ -164,6 +172,7 @@ impl Op {
                 raw,
                 position,
                 framing,
+                body,
             } => {
                 mapping
                     .insert("key".to_owned(), JsonValue::String(key.clone()));
@@ -181,6 +190,15 @@ impl Op {
                         serde_json::json!({
                             "expected": framing.expected,
                             "prior": framing.prior,
+                        }),
+                    );
+                }
+                if let Some(body) = body {
+                    mapping.insert(
+                        "body".to_owned(),
+                        serde_json::json!({
+                            "expected": body.expected,
+                            "prior": body.prior,
                         }),
                     );
                 }
@@ -336,7 +354,7 @@ fn parse_setting(
     )?;
     let setting = required_string(mapping, index, "setting")?;
     if !super::contract::settings::known_id(&setting) {
-        return Err(super::contract::error("prop_bad_value", &setting, index, format!("unknown setting {setting:?}"), "Use summary, parent, color, task_type, clock, root, ready_cap, task_refresh, or project_name_aliases."));
+        return Err(super::contract::error("prop_bad_value", &setting, index, format!("unknown setting {setting:?}"), "Use an area, project, or reference setting id such as summary, parent, color, task_type, clock, root, ready_cap, task_refresh, project_name_aliases, title, author, published, source, aliases, reading, or file_name."));
     }
     if set {
         let value = mapping.get("value").cloned().ok_or_else(|| {
@@ -430,7 +448,7 @@ fn parse_restore(
 ) -> Result<Op, PropsError> {
     reject_unknown_op_keys(
         mapping,
-        &["op", "key", "raw", "before", "after", "framing"],
+        &["op", "key", "raw", "before", "after", "framing", "body"],
         index,
     )?;
     let key = required_key(mapping, index)?;
@@ -454,12 +472,62 @@ fn parse_restore(
     };
     let position = optional_position(mapping, index)?;
     let framing = optional_framing(mapping, index)?;
+    let body = optional_body_restore(mapping, index)?;
     Ok(Op::Restore {
         key,
         raw,
         position,
         framing,
+        body,
     })
+}
+
+fn optional_body_restore(
+    mapping: &serde_json::Map<String, JsonValue>,
+    index: usize,
+) -> Result<Option<BodyRestore>, PropsError> {
+    let Some(value) = mapping.get("body") else {
+        return Ok(None);
+    };
+    let object = value.as_object().ok_or_else(|| {
+        op_error("envelope_wrong_type", index, "body must be an object")
+    })?;
+    if object.len() != 2
+        || object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "expected" | "prior"))
+    {
+        return Err(op_error(
+            "envelope_unknown_key",
+            index,
+            "body restore requires exactly expected and prior strings",
+        ));
+    }
+    let expected = object
+        .get("expected")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            op_error(
+                "envelope_wrong_type",
+                index,
+                "body.expected must be a string",
+            )
+        })?;
+    let prior =
+        object
+            .get("prior")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| {
+                op_error(
+                    "envelope_wrong_type",
+                    index,
+                    "body.prior must be a string",
+                )
+            })?;
+    Ok(Some(BodyRestore {
+        expected: expected.to_owned(),
+        prior: prior.to_owned(),
+    }))
 }
 
 fn optional_framing(

@@ -111,6 +111,7 @@ pub(crate) fn document() -> Catalog {
             "clicolor-force".to_string(),
             "progress-env".to_string(),
             "props_contract_v1".to_string(),
+            "props_ref_contract_v1".to_string(),
             "props_v1".to_string(),
             "run-receipt".to_string(),
         ],

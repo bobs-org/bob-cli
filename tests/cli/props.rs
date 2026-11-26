@@ -31,6 +31,7 @@ fn show(vault: &Path, note: &str, extra: &[&str]) -> std::process::Output {
     command
         .args(["props", "show", note, "-f", "json"])
         .env("BOB_DIR", vault)
+        .env("BOB_HIGHLIGHTS_REF_DIR", "ref")
         .env("BOB_VAULT_SYNC_LOCK_FILE", vault.join("vault.lock"))
         .env("NO_COLOR", "1")
         .args(extra);
@@ -50,6 +51,7 @@ fn update(
         .args(["props", "update", note, "-i"])
         .arg(&input)
         .env("BOB_DIR", vault)
+        .env("BOB_HIGHLIGHTS_REF_DIR", "ref")
         .env("BOB_VAULT_SYNC_LOCK_FILE", vault.join("vault.lock"))
         .env("NO_COLOR", "1")
         .args(extra);

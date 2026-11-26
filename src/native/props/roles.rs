@@ -103,6 +103,9 @@ pub(crate) struct PropertyRole {
 pub(crate) struct RoleContext {
     pub(crate) note_kind: NoteKind,
     pub(crate) record_fields: Option<BTreeSet<String>>,
+    /// Reference task ownership is local evidence from the managed embed or
+    /// legacy `^ref` tracker; this deliberately does not trigger a library walk.
+    pub(crate) reference_has_task: bool,
     /// Any nonempty diagnostic makes writes unsafe until discovery succeeds.
     pub(crate) diagnostics: Vec<String>,
 }
@@ -129,6 +132,74 @@ impl RoleContext {
                 "`title` identifies the album and its schema source.",
             );
         }
+        if self.note_kind == NoteKind::Reference {
+            match key {
+                "id" => {
+                    return locked(
+                        Role::Identity,
+                        "Follows the file stem; rename the reference with `bob ref rename`.",
+                    );
+                }
+                "ref_type" => {
+                    return locked(
+                        Role::Identity,
+                        "Follows the library folder its PDF lives in.",
+                    );
+                }
+                "status" if self.reference_has_task => {
+                    return owned_derived(
+                        "reading task",
+                        "Mirrors the reading task's checkbox.",
+                    );
+                }
+                "parent" if self.reference_has_task => {
+                    return owned_derived(
+                        "reading task",
+                        "Projected from where the reading task lives; move the task.",
+                    );
+                }
+                "source_pdf" | "source_pdf_sha256" | "pipeline_version" => {
+                    return owned_derived(
+                        "Highlights sync",
+                        "Sync bookkeeping; `bob ref scan` maintains it.",
+                    );
+                }
+                "audio" | "return_links" | "earlier" | "recaptured"
+                | "source_markdown" => {
+                    let owner = if matches!(key, "earlier" | "recaptured") {
+                        "reread lineage"
+                    } else {
+                        "reference importer"
+                    };
+                    return owned_derived(
+                        owner,
+                        "The reference importer or reread lineage maintains this field.",
+                    );
+                }
+                "source_note" | "source_block" | "source_blocks"
+                | "source_id" | "source_path" | "source_line_start"
+                | "source_line_end" => {
+                    return owned_derived(
+                        "Zorg migration",
+                        "`bob ref migrate-zorg` maintains this source provenance.",
+                    );
+                }
+                "event" | "event_id" | "meeting_start" | "meeting_end"
+                | "notes_producer" => {
+                    return owned_derived(
+                        "bob ref meet",
+                        "`bob ref meet` maintains this meeting metadata.",
+                    );
+                }
+                _ if key.starts_with("highlights_") => {
+                    return owned_derived(
+                        "Highlights sync",
+                        "Sync bookkeeping; `bob ref scan` maintains it.",
+                    );
+                }
+                _ => {}
+            }
+        }
         if self.note_kind.is_temporal() && key == "parent" {
             return PropertyRole {
                 role: Some(Role::Derived),
@@ -150,8 +221,6 @@ impl RoleContext {
             return role;
         }
         if is_derived_key(key)
-            || (self.note_kind == NoteKind::Reference
-                && key == "source_markdown")
             || (self.note_kind == NoteKind::Project
                 && matches!(key, "status" | "scheduled"))
         {
@@ -209,6 +278,7 @@ impl RoleContext {
 /// diagnostic so a caller can report it and refuse dependent writes.
 pub(crate) fn resolve_note_context(
     vault: &Path,
+    ref_dir: &Path,
     relative_path: &str,
     markdown: &str,
     records: &RecordContext,
@@ -223,6 +293,7 @@ pub(crate) fn resolve_note_context(
         return RoleContext {
             note_kind: NoteKind::Bank,
             record_fields: None,
+            reference_has_task: false,
             diagnostics,
         };
     }
@@ -236,6 +307,7 @@ pub(crate) fn resolve_note_context(
             return RoleContext {
                 note_kind: NoteKind::Album,
                 record_fields: None,
+                reference_has_task: false,
                 diagnostics,
             };
         }
@@ -243,6 +315,7 @@ pub(crate) fn resolve_note_context(
             return RoleContext {
                 note_kind: NoteKind::Area,
                 record_fields: None,
+                reference_has_task: false,
                 diagnostics,
             };
         }
@@ -250,6 +323,7 @@ pub(crate) fn resolve_note_context(
             return RoleContext {
                 note_kind: NoteKind::Project,
                 record_fields: None,
+                reference_has_task: false,
                 diagnostics,
             };
         }
@@ -257,14 +331,32 @@ pub(crate) fn resolve_note_context(
             return RoleContext {
                 note_kind: NoteKind::Notebook,
                 record_fields: None,
+                reference_has_task: false,
                 diagnostics,
             };
         }
         let type_names = frontmatter_type_names(frontmatter);
-        if type_names.iter().any(|name| name == "ref") {
+        let member_path = std::fs::canonicalize(vault)
+            .unwrap_or_else(|_| vault.to_path_buf())
+            .join(path);
+        let canonical_ref_dir = std::fs::canonicalize(ref_dir)
+            .unwrap_or_else(|_| ref_dir.to_path_buf());
+        if type_names.iter().any(|name| name == "ref")
+            && crate::native::ref_library::is_library_member_path(
+                &canonical_ref_dir,
+                &member_path,
+            )
+        {
+            let document = super::document::PropsDocument::parse(markdown);
+            let body = &markdown[document.body_range.clone()];
+            let reference_has_task =
+                crate::native::ref_tasks::find_managed_embed(body).is_some()
+                    || !crate::native::ref_tasks::find_trackers(body)
+                        .is_empty();
             return RoleContext {
                 note_kind: NoteKind::Reference,
                 record_fields: None,
+                reference_has_task,
                 diagnostics,
             };
         }
@@ -294,6 +386,7 @@ pub(crate) fn resolve_note_context(
             return RoleContext {
                 note_kind: NoteKind::Record,
                 record_fields,
+                reference_has_task: false,
                 diagnostics,
             };
         }
@@ -314,6 +407,7 @@ pub(crate) fn resolve_note_context(
             return RoleContext {
                 note_kind: NoteKind::Record,
                 record_fields: None,
+                reference_has_task: false,
                 diagnostics,
             };
         }
@@ -325,6 +419,7 @@ pub(crate) fn resolve_note_context(
                     return RoleContext {
                         note_kind: NoteKind::Record,
                         record_fields: Some(record_fields),
+                        reference_has_task: false,
                         diagnostics,
                     };
                 }
@@ -335,6 +430,7 @@ pub(crate) fn resolve_note_context(
                     return RoleContext {
                         note_kind: NoteKind::Record,
                         record_fields: None,
+                        reference_has_task: false,
                         diagnostics,
                     };
                 }
@@ -372,6 +468,7 @@ pub(crate) fn resolve_note_context(
     RoleContext {
         note_kind: NoteKind::Note,
         record_fields: None,
+        reference_has_task: false,
         diagnostics,
     }
 }
@@ -380,6 +477,7 @@ fn temporal_context(note_kind: NoteKind) -> RoleContext {
     RoleContext {
         note_kind,
         record_fields: None,
+        reference_has_task: false,
         diagnostics: Vec::new(),
     }
 }
@@ -552,6 +650,16 @@ fn locked(role: Role, reason: &str) -> PropertyRole {
     }
 }
 
+fn owned_derived(owner: &str, reason: &str) -> PropertyRole {
+    PropertyRole {
+        role: Some(Role::Derived),
+        owner: Some(owner.to_owned()),
+        editor: None,
+        reason: Some(reason.to_owned()),
+        diagnostic: None,
+    }
+}
+
 fn card(owner: &str) -> PropertyRole {
     PropertyRole {
         role: Some(Role::Card),
@@ -590,6 +698,7 @@ mod tests {
                     .map(|field| (*field).to_owned())
                     .collect::<BTreeSet<_>>()
             }),
+            reference_has_task: false,
             diagnostics: Vec::new(),
         }
     }
@@ -607,9 +716,33 @@ mod tests {
         assert_eq!(day.classify("created").role, Some(Role::Loose));
 
         let reference = context(NoteKind::Reference, None);
+        assert_eq!(reference.classify("id").role, Some(Role::Identity));
+        assert_eq!(reference.classify("ref_type").role, Some(Role::Identity));
         assert_eq!(
             reference.classify("source_markdown").role,
             Some(Role::Derived)
+        );
+        assert_eq!(
+            reference.classify("source_pdf").owner.as_deref(),
+            Some("Highlights sync")
+        );
+        assert_eq!(
+            reference.classify("highlights_marker_hash").role,
+            Some(Role::Derived)
+        );
+        assert_eq!(reference.classify("status").role, Some(Role::Loose));
+        assert_eq!(reference.classify("parent").role, Some(Role::Loose));
+        assert_eq!(reference.classify("title").role, Some(Role::Loose));
+        assert_eq!(reference.classify("custom").role, Some(Role::Loose));
+        let mut tracked_reference = reference.clone();
+        tracked_reference.reference_has_task = true;
+        assert_eq!(
+            tracked_reference.classify("status").role,
+            Some(Role::Derived)
+        );
+        assert_eq!(
+            tracked_reference.classify("parent").owner.as_deref(),
+            Some("reading task")
         );
 
         let album = context(NoteKind::Album, None);
@@ -628,6 +761,7 @@ mod tests {
         let unknown = RoleContext {
             note_kind: NoteKind::Record,
             record_fields: None,
+            reference_has_task: false,
             diagnostics: vec!["album schema unreadable".to_owned()],
         };
         assert_eq!(unknown.classify("rating").role, None);
@@ -724,6 +858,7 @@ mod tests {
     fn canonical_record_type_resolves_its_album_and_fails_closed_without_it() {
         let temp = tempfile::tempdir().expect("fixture vault");
         let vault = temp.path();
+        let ref_dir = vault.join("ref");
         fs::write(vault.join("body.md"), "---\ntype: [[area]]\n---\n").unwrap();
         fs::write(
             vault.join("eat.md"),
@@ -733,8 +868,13 @@ mod tests {
         let record = "---\ntype: \"[[record]]\"\nparent: \"[[eat]]\"\ntitle: Ramen\nrating: 5\n---\n";
         fs::write(vault.join("eat/ramen.md"), record).unwrap();
         let records = RecordContext::discover(vault);
-        let resolved =
-            resolve_note_context(vault, "eat/ramen.md", record, &records);
+        let resolved = resolve_note_context(
+            vault,
+            &ref_dir,
+            "eat/ramen.md",
+            record,
+            &records,
+        );
         assert_eq!(resolved.note_kind, NoteKind::Record);
         assert_eq!(resolved.classify("rating").role, Some(Role::Card));
         assert_eq!(
@@ -748,22 +888,32 @@ mod tests {
         // grant generic write access to schema-owned fields.
         for path in ["ramen.md", "elsewhere/ramen.md", "eat/nested/ramen.md"] {
             let unresolved =
-                resolve_note_context(vault, path, record, &records);
+                resolve_note_context(vault, &ref_dir, path, record, &records);
             assert_eq!(unresolved.note_kind, NoteKind::Record);
             assert_eq!(unresolved.classify("rating").role, None);
             assert!(!unresolved.writes_are_safe());
         }
         let other = tempfile::tempdir().unwrap();
         let foreign = RecordContext::discover(other.path());
-        let unresolved =
-            resolve_note_context(vault, "eat/ramen.md", record, &foreign);
+        let unresolved = resolve_note_context(
+            vault,
+            &ref_dir,
+            "eat/ramen.md",
+            record,
+            &foreign,
+        );
         assert_eq!(unresolved.classify("rating").role, None);
         assert!(!unresolved.writes_are_safe());
 
         fs::write(vault.join("eat.md"), "---\ntype: [[album]]\nparent: [[body]]\nrecord:\n  noun: restaurant\n  fields: broken\n---\n").unwrap();
         let broken = RecordContext::discover(vault);
-        let unresolved =
-            resolve_note_context(vault, "eat/ramen.md", record, &broken);
+        let unresolved = resolve_note_context(
+            vault,
+            &ref_dir,
+            "eat/ramen.md",
+            record,
+            &broken,
+        );
         assert_eq!(unresolved.note_kind, NoteKind::Record);
         assert_eq!(unresolved.classify("rating").role, None);
         assert!(!unresolved.writes_are_safe());
@@ -781,6 +931,8 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("fixture vault");
         let vault = temp.path();
+        let ref_dir = vault.join("ref");
+        fs::create_dir_all(&ref_dir).unwrap();
         write(vault, "body.md", "---\ntype: [[area]]\n---\n# Body\n");
         write(
             vault,
@@ -793,7 +945,29 @@ mod tests {
             "---\ntype: [[album]]\nparent: [[dev]]\ntitle: Restaurants\nrecord:\n  noun: restaurant\n  fields:\n    rating:\n      values: number\n---\n# Restaurants\n",
         );
         write(vault, "notebook.md", "---\ntype: [[notebook]]\n---\n");
-        write(vault, "reference.md", "---\ntype: [[ref]]\n---\n");
+        write(vault, "ref/reference.md", "---\ntype: [[ref]]\n---\n");
+        write(
+            vault,
+            "ref/papers/modern.md",
+            "---\ntype: [[ref]]\nid: modern\n---\n# Modern\n\n![[reading#^ref-modern]]\n",
+        );
+        write(
+            vault,
+            "ref/papers/v1.md",
+            "---\ntype: [[ref]]\nid: v1\n---\n- [ ] Read ^ref\n",
+        );
+        write(
+            vault,
+            "ref/papers/legacy.md",
+            "---\ntype: [[ref]]\nid: legacy\n---\n# Legacy\n",
+        );
+        write(vault, "ai_ref.md", "---\ntype: [[ref]]\n---\n");
+        write(
+            vault,
+            "ref/papers/excluded.assets/asset.md",
+            "---\ntype: [[ref]]\n---\n",
+        );
+        write(vault, "ref_history/old.md", "---\ntype: [[ref]]\n---\n");
         let record = "---\ntype: [[restaurant]]\nparent: [[eat]]\ntitle: Ramen\nrating: 5\ncreated: 2026-11-22\n---\n# Ramen\n";
         write(vault, "eat/ramen.md", record);
         let bank = "---\nparent: [[cash]]\nbank: {accounts: {}}\n---\n# Bank\n";
@@ -802,6 +976,7 @@ mod tests {
         let records = RecordContext::discover(vault);
         let album = resolve_note_context(
             vault,
+            &ref_dir,
             "eat.md",
             &fs::read_to_string(vault.join("eat.md")).unwrap(),
             &records,
@@ -810,8 +985,13 @@ mod tests {
         assert_eq!(album.classify("record").owner.as_deref(), Some("album"));
         assert_eq!(album.classify("parent").role, Some(Role::Identity));
 
-        let record_context =
-            resolve_note_context(vault, "eat/ramen.md", record, &records);
+        let record_context = resolve_note_context(
+            vault,
+            &ref_dir,
+            "eat/ramen.md",
+            record,
+            &records,
+        );
         assert_eq!(record_context.note_kind, NoteKind::Record);
         assert_eq!(
             record_context.classify("rating").owner.as_deref(),
@@ -824,7 +1004,7 @@ mod tests {
         assert_eq!(record_context.classify("created").role, Some(Role::Loose));
 
         let bank_context =
-            resolve_note_context(vault, "bank.md", bank, &records);
+            resolve_note_context(vault, &ref_dir, "bank.md", bank, &records);
         assert_eq!(bank_context.note_kind, NoteKind::Bank);
         assert_eq!(
             bank_context.classify("bank").owner.as_deref(),
@@ -837,6 +1017,7 @@ mod tests {
 
         let area = resolve_note_context(
             vault,
+            &ref_dir,
             "body.md",
             &fs::read_to_string(vault.join("body.md")).unwrap(),
             &records,
@@ -849,6 +1030,7 @@ mod tests {
 
         let bom_area = resolve_note_context(
             vault,
+            &ref_dir,
             "body.md",
             "\u{feff}---\ntype: [[area]]\n---\n# Body\n",
             &records,
@@ -857,6 +1039,7 @@ mod tests {
 
         let project = resolve_note_context(
             vault,
+            &ref_dir,
             "dev.md",
             &fs::read_to_string(vault.join("dev.md")).unwrap(),
             &records,
@@ -865,6 +1048,7 @@ mod tests {
 
         let notebook = resolve_note_context(
             vault,
+            &ref_dir,
             "notebook.md",
             &fs::read_to_string(vault.join("notebook.md")).unwrap(),
             &records,
@@ -873,14 +1057,59 @@ mod tests {
 
         let reference = resolve_note_context(
             vault,
-            "reference.md",
-            &fs::read_to_string(vault.join("reference.md")).unwrap(),
+            &ref_dir,
+            "ref/reference.md",
+            &fs::read_to_string(vault.join("ref/reference.md")).unwrap(),
             &records,
         );
         assert_eq!(reference.note_kind, NoteKind::Reference);
+        assert!(!reference.reference_has_task);
         assert_eq!(
             reference.classify("source_markdown").role,
             Some(Role::Derived)
         );
+
+        let modern = resolve_note_context(
+            vault,
+            &ref_dir,
+            "ref/papers/modern.md",
+            &fs::read_to_string(vault.join("ref/papers/modern.md")).unwrap(),
+            &records,
+        );
+        assert!(modern.reference_has_task);
+        assert_eq!(modern.classify("status").role, Some(Role::Derived));
+        assert_eq!(modern.classify("parent").role, Some(Role::Derived));
+        let legacy = resolve_note_context(
+            vault,
+            &ref_dir,
+            "ref/papers/legacy.md",
+            &fs::read_to_string(vault.join("ref/papers/legacy.md")).unwrap(),
+            &records,
+        );
+        assert!(!legacy.reference_has_task);
+        assert_eq!(legacy.classify("status").role, Some(Role::Loose));
+        let v1 = resolve_note_context(
+            vault,
+            &ref_dir,
+            "ref/papers/v1.md",
+            &fs::read_to_string(vault.join("ref/papers/v1.md")).unwrap(),
+            &records,
+        );
+        assert!(v1.reference_has_task);
+        for excluded in [
+            "ai_ref.md",
+            "ref/papers/excluded.assets/asset.md",
+            "ref_history/old.md",
+        ] {
+            let note = fs::read_to_string(vault.join(excluded)).unwrap();
+            assert_eq!(
+                resolve_note_context(
+                    vault, &ref_dir, excluded, &note, &records
+                )
+                .note_kind,
+                NoteKind::Note,
+                "{excluded} is outside ref list coverage"
+            );
+        }
     }
 }

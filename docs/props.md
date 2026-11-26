@@ -61,7 +61,7 @@ report with exit 0; `update` refuses that document.
   "ok": true,
   "path": "notes/groceries.md",
   "note_kind": "note",
-  "capabilities": ["props_v1"]
+  "capabilities": ["props_v1"],
   "fingerprint": "sha256:…",
   "frontmatter": {"state": "ok", "start_line": 1, "end_line": 5},
   "properties": [
@@ -140,20 +140,25 @@ body, spacing, comment, and order changes; semantic changes alter the digest.
 
 `roles` is the authority for both `show` and every update operation. Kinds
 resolve from canonical subjects, canonical records and albums through the
-existing rules, bank from the bank hub rule, and area/project/notebook/
-reference from the existing predicates; otherwise the kind is `note`. The wire
+existing rules, bank from the bank hub rule, and area/project/notebook through
+the existing predicates. A `type: [[ref]]` note is `reference` only when it is
+a Markdown member of the configured reference-library coverage used by
+`bob ref list`; hubs outside that directory, `ref_history/`, and excluded
+`.assets/` content remain ordinary notes. Otherwise the kind is `note`. The wire
 kind names are `day`, `week`, `quarter`, `year`, `all_time`, `record`,
 `album`, `bank`, `area`, `project`, `notebook`, `reference`, and `note`.
 
 | Role     | Keys/context                                                                                                            | Owner or action           |
 | -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | identity | `type`; record/album `parent`; album `title`                                                                            | locked with reason        |
-| derived  | `*_digest`, `*_drafted`, `review_*`, `zorg_*`, `generated_from_zorg*`; day/period `parent`; reference `source_markdown`; `done_tasks`; project `status`/`scheduled` | writer name and reason    |
+| derived  | `*_digest`, `*_drafted`, `review_*`, `zorg_*`, `generated_from_zorg*`; day/period `parent`; `done_tasks`; project `status`/`scheduled` | writer name and reason    |
+| derived  | Reference `highlights_*`, `source_pdf*`, `pipeline_version`, importer and reread fields, Zorg provenance, meeting metadata; `status`/`parent` when a reading task is present | owning writer and reason |
+| identity | Reference `id`, `ref_type`                                                                                              | locked; use `bob ref rename` for the file stem |
 | card     | record schema fields                                                                                                    | `record`, editor `==`     |
 | card     | day/period `intentions`, `summary`, `reflection`                                                                        | `intentions`, editor `==` |
 | card     | album `record`                                                                                                          | `album`, editor `==`      |
 | card     | bank hub `bank`                                                                                                         | `bank`, editor `==`       |
-| loose    | area/project settings, retired `task_count`/`open_task_count`, and remaining keys including `created` and `template`                                                                      | editable here             |
+| loose    | area/project settings, reference reading metadata not owned by a reading task, retired `task_count`/`open_task_count`, and remaining keys including `created` and `template` | editable here |
 
 Audit sources for the derived list: intention writers under
 `intentions/` and `periods/`, record and album writers under `records/` and
@@ -194,6 +199,37 @@ legacy values do not prevent another property from being edited.
 its `bank` key stays card-owned with editor `==`, and it exposes no settings contract.
 The Bank Card is gated by `props_v1` and ignores any legacy Area contract. `setting.*`
 ops on `bank.md` refuse with `prop_setting_disabled`.
+
+## Reference settings
+
+Covered reference notes expose `props_ref_contract_v1` and a `contract` with
+these settings in order: Title, Summary, Authors, Published, Source, Aliases,
+Reading, Lives under, and File name. Title, summary, author, published,
+`source_url` (or an existing legacy `url`), and aliases can be edited through
+`setting.set` / `setting.clear`, subject to each row's validation. Source must
+be HTTP(S); Published accepts `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`; aliases are
+lists of nonblank strings. Title cannot be cleared through this setting.
+
+Reading state and residence are projections owned by a reading task. Their
+disabled rows route to `reading_task` and include the managed embed target when
+one is present. File name is the path stem; its disabled row routes to
+`ref_rename`. The same identity and derived roles protect generic `prop.set`,
+`prop.unset`, `prop.rename`, `prop.set_yaml`, and `prop.restore` operations,
+including the YAML escape hatch. Reference `id` and `ref_type` are identity;
+Highlights sync bookkeeping, importer/reread fields, Zorg provenance, and
+meeting fields remain owned by their writers. `status` and `parent` are
+protected only when a managed or legacy reading-task tracker is present.
+
+Changing a reference title also retitles the first body H1 only when its text
+matches the previous title (frontmatter title, otherwise the current first H1,
+otherwise the file stem). Fenced and HTML-commented headings are skipped. The
+frontmatter and H1 change share one atomic write and one exact undo operation;
+the rest of the note stays byte-preserved, including its BOM and line endings. If a
+matching managed reading-task embed exists, the response reports that its link
+text still needs a separate task edit. Title, author, published, and source
+writes report `syncs: ["pdf_marker"]` when the note has a Highlights marker
+base. These settings update reference Markdown only; they do not write PDFs,
+scan references, create tasks, or move bundles.
 
 Settings have this stable order:
 
@@ -291,7 +327,8 @@ leaves the note unchanged.
 ### Settings contract
 
 `bob props show -f json` on an area or project note adds a `contract`
-block and the `props_contract_v1` capability. Ordinary notes omit both.
+block and the `props_contract_v1` capability. Covered references add a
+reference-kind `contract` and `props_ref_contract_v1`. Ordinary notes omit both.
 
 ```json
 {
@@ -345,7 +382,7 @@ report that they apply to tasks living in this note only. Text update output
 prints the same messages.
 
 Successful `bob props update -f json` also returns the planned post-image
-`contract` on area and project notes, using the same shape as
+`contract` on area, project, and covered reference notes, using the same shape as
 `props show`. Preview reports the candidate; apply and restore report the
 confirmed result. Semantic no-ops include it too. Ordinary notes omit the
 field. The schema version stays `1`.
@@ -449,8 +486,8 @@ write or change mtime.
 Update output includes `ok`, `schema_version`, `path`, `dry_run`, `changed`,
 `fingerprint_before`, `fingerprint_after`, `inverse_ops`, `changes` as a
 frontmatter-only line diff, `warnings`, `effects` from setting writes, the
-post-image `properties`, and the post-image `contract` on area, project, and
-bank notes. Invalid input reports the shared typed error, including the
+post-image `properties`, and the post-image `contract` on area, project,
+and covered reference notes. Invalid input reports the shared typed error, including the
 failing operation where known.
 
 Exit codes: 0 for success (including recovery `show` and no-op updates);
@@ -460,13 +497,14 @@ lock contention, and stale guarded writes that fail under the lock.
 ## Capability probe
 
 `props_v1` appears in every `show` capability array. Area and project
-notes also report `props_contract_v1` once the settings contract is present.
-Both names appear in the vault-independent `__catalog` feature handshake, so
+notes also report `props_contract_v1`; covered references report
+`props_ref_contract_v1` once the settings contract is present. All three
+names appear in the vault-independent `__catalog` feature handshake, so
 plugins probe once without selecting a note:
 
 ```sh
 bob __catalog --protocol 1 | jq '.features'
-# ["clicolor-force", "progress-env", "props_contract_v1", "props_v1", "run-receipt"]
+# ["clicolor-force", "progress-env", "props_contract_v1", "props_ref_contract_v1", "props_v1", "run-receipt"]
 ```
 
 `props show` is a read catalog row; `props update` is excluded from command

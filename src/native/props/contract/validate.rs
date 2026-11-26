@@ -52,6 +52,13 @@ pub(crate) fn value(
     let facts = NoteFacts::parse(&text);
     let mut warnings = Vec::new();
     let canonical = match key {
+        "title" if context.roles.note_kind == crate::native::props::roles::NoteKind::Reference => {
+            let title = value.as_str().ok_or_else(|| bad(key, index, "Use one nonblank line of text."))?;
+            if title.trim().is_empty() || title.contains(['\n', '\r']) {
+                return Err(bad(key, index, "Use one nonblank line of text."));
+            }
+            value.clone()
+        }
         "summary" => {
             let summary = value.as_str().ok_or_else(|| bad(key, index, "Use one line of text, at most 140 characters recommended."))?;
             if summary.contains(['\n', '\r']) {
@@ -59,6 +66,39 @@ pub(crate) fn value(
             }
             if summary.chars().count() > 140 {
                 warnings.push(error("area_summary_long", key, index, "summary exceeds 140 characters", "Keep the catalog summary to at most 140 characters."));
+            }
+            value.clone()
+        }
+        "author" if context.roles.note_kind == crate::native::props::roles::NoteKind::Reference => {
+            let author = value.as_str().ok_or_else(|| bad(key, index, "Use one line of text."))?;
+            if author.contains(['\n', '\r']) {
+                return Err(bad(key, index, "Use one line of text."));
+            }
+            value.clone()
+        }
+        "published" if context.roles.note_kind == crate::native::props::roles::NoteKind::Reference => {
+            let date = value.as_str().ok_or_else(|| bad(key, index, "Use YYYY, YYYY-MM, or YYYY-MM-DD."))?;
+            if !valid_published(date) {
+                return Err(bad(key, index, "Use YYYY, YYYY-MM, or YYYY-MM-DD."));
+            }
+            value.clone()
+        }
+        "source_url" | "url" if context.roles.note_kind == crate::native::props::roles::NoteKind::Reference => {
+            let source = value.as_str().ok_or_else(|| bad(key, index, "Use one HTTP(S) URL."))?;
+            let parsed = url::Url::parse(source)
+                .map_err(|_| bad(key, index, "Use one HTTP(S) URL."))?;
+            if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                return Err(bad(key, index, "Use one HTTP(S) URL."));
+            }
+            value.clone()
+        }
+        "aliases" if context.roles.note_kind == crate::native::props::roles::NoteKind::Reference => {
+            if !value.as_sequence().is_some_and(|items| {
+                items.iter().all(|item| {
+                    item.as_str().is_some_and(|text| !text.trim().is_empty())
+                })
+            }) {
+                return Err(bad(key, index, "Use a list of nonblank alias strings."));
             }
             value.clone()
         }
@@ -149,6 +189,32 @@ pub(crate) fn value(
         _ => value.clone(),
     };
     Ok((canonical, warnings))
+}
+
+fn valid_published(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    match bytes.len() {
+        4 if bytes.iter().all(u8::is_ascii_digit) => {
+            value.parse::<i32>().ok().is_some_and(|year| {
+                year > 0
+                    && chrono::NaiveDate::from_ymd_opt(year, 1, 1).is_some()
+            })
+        }
+        7 if bytes[4] == b'-'
+            && bytes[..4].iter().all(u8::is_ascii_digit)
+            && bytes[5..].iter().all(u8::is_ascii_digit) =>
+        {
+            let year = value[..4].parse::<i32>().ok();
+            let month = value[5..].parse::<u32>().ok();
+            year.zip(month).is_some_and(|(year, month)| {
+                chrono::NaiveDate::from_ymd_opt(year, month, 1).is_some()
+            })
+        }
+        10 if bytes[4] == b'-' && bytes[7] == b'-' => {
+            chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+        }
+        _ => false,
+    }
 }
 
 fn scalar(value: &Value) -> Option<String> {

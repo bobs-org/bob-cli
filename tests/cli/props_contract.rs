@@ -122,6 +122,100 @@ fn bank_no_contract_and_refused_batches_never_write() {
 }
 
 #[test]
+fn reference_contract_is_scoped_to_library_and_title_undo_restores_body() {
+    let vault = vault("reference-contract");
+    let reference = "---\ntype: '[[ref]]'\ntitle: Old\nhighlights_marker_base: marker-v1\n---\r\n# Old\r\n\r\nBody\r\n";
+    write_note(vault.path(), "ref/paper.md", reference);
+    write_note(vault.path(), "outside.md", "---\ntype: '[[ref]]'\n---\n");
+    write_note(
+        vault.path(),
+        "ref/.assets/asset.md",
+        "---\ntype: '[[ref]]'\n---\n",
+    );
+    write_note(
+        vault.path(),
+        "ref_history/old.md",
+        "---\ntype: '[[ref]]'\n---\n",
+    );
+
+    let shown = show(vault.path(), "ref/paper.md", &[]);
+    assert_success(&shown);
+    let shown = report(&shown);
+    assert_eq!(shown["note_kind"], "reference");
+    assert_eq!(
+        shown["capabilities"],
+        json!(["props_v1", "props_ref_contract_v1"])
+    );
+    assert_eq!(shown["contract"]["kind"], "reference");
+    assert_eq!(
+        shown["contract"]["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|setting| setting["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "title",
+            "summary",
+            "author",
+            "published",
+            "source",
+            "aliases",
+            "reading",
+            "parent",
+            "file_name"
+        ]
+    );
+
+    let input = envelope(
+        vault.path(),
+        "ref/paper.md",
+        json!([{"op":"setting.set","setting":"title","value":"New"}]),
+    );
+    let updated = update(vault.path(), "ref/paper.md", &input, &["-f", "json"]);
+    assert_success(&updated);
+    let updated = report(&updated);
+    assert_eq!(
+        fs::read_to_string(vault.path().join("ref/paper.md")).unwrap(),
+        "---\ntype: '[[ref]]'\ntitle: New\nhighlights_marker_base: marker-v1\n---\r\n# New\r\n\r\nBody\r\n"
+    );
+    assert!(updated["effects"].as_array().unwrap().iter().any(|effect| {
+        effect["setting"] == "title"
+            && effect["kind"] == "syncs"
+            && effect["syncs"] == json!(["pdf_marker"])
+    }));
+    assert_eq!(
+        updated["inverse_ops"][0]["body"]["expected"],
+        "# New\r\n\r\nBody\r\n"
+    );
+    let undo = json!({
+        "schema_version": 1,
+        "expect": updated["fingerprint_after"],
+        "ops": updated["inverse_ops"]
+    });
+    let undone = update(
+        vault.path(),
+        "ref/paper.md",
+        &undo.to_string(),
+        &["-f", "json"],
+    );
+    assert_success(&undone);
+    assert_eq!(
+        fs::read_to_string(vault.path().join("ref/paper.md")).unwrap(),
+        reference
+    );
+
+    for note in ["outside.md", "ref/.assets/asset.md", "ref_history/old.md"] {
+        let output = show(vault.path(), note, &[]);
+        assert_success(&output);
+        let payload = report(&output);
+        assert_eq!(payload["note_kind"], "note", "{note}");
+        assert_eq!(payload["capabilities"], json!(["props_v1"]), "{note}");
+        assert!(payload.get("contract").is_none(), "{note}: {payload}");
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn parent_validation_reloads_the_destination_and_ancestry_under_lock() {
     for changed in [

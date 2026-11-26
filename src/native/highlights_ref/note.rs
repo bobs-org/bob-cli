@@ -710,14 +710,25 @@ pub(crate) fn configured_path(
     let configured = matches
         .get_one::<OsString>(arg_name)
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+        .map(PathBuf::from);
+    configured_path_from(configured, env_name, default_value, bob_dir)
+}
+
+/// Resolve a configured directory using the shared CLI/environment/default
+/// precedence. Callers without a dedicated CLI option pass `None`.
+pub(crate) fn configured_path_from(
+    configured: Option<PathBuf>,
+    env_name: &str,
+    default_value: &str,
+    bob_dir: &Path,
+) -> PathBuf {
+    let configured = configured
         .or_else(|| {
             bob_env::var_os(env_name)
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         })
         .unwrap_or_else(|| PathBuf::from(default_value));
-
     resolve_under_bob(bob_dir, &configured)
 }
 

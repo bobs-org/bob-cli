@@ -11,6 +11,7 @@ use super::{
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 pub(crate) const CAPABILITY: &str = "props_v1";
 pub(crate) const CONTRACT_CAPABILITY: &str = "props_contract_v1";
+pub(crate) const REF_CONTRACT_CAPABILITY: &str = "props_ref_contract_v1";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct ShowReport {
@@ -145,6 +146,7 @@ mod tests {
         let roles = RoleContext {
             note_kind: NoteKind::Note,
             record_fields: Some(BTreeSet::new()),
+            reference_has_task: false,
             diagnostics: Vec::new(),
         };
         let report = build_report("notes/a.md", &document, &roles);

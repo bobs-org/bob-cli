@@ -152,6 +152,7 @@ mod tests {
             roles: RoleContext {
                 note_kind: kind,
                 record_fields: Some(BTreeSet::new()),
+                reference_has_task: false,
                 diagnostics: Vec::new(),
             },
         }

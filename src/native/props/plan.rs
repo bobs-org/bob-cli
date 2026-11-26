@@ -117,7 +117,7 @@ pub(crate) fn plan(
             let (next, inverse) =
                 apply_one(&current, context, &primitive, index, setting)?;
             let after_op = PropsDocument::parse(&next);
-            verify_op(&before_op, &after_op, &primitive, index)?;
+            verify_op(&before_op, &after_op, context, &primitive, index)?;
             warnings.extend(validate::operation(
                 context, &after_op, &primitive, index,
             )?);
@@ -171,8 +171,15 @@ fn apply_one(
     let document = PropsDocument::parse(contents);
     refuse_unwritable(&document, Some(index))?;
     match op {
+        Op::SettingSet { setting, value }
+            if setting == "title"
+                && context.roles.note_kind
+                    == super::roles::NoteKind::Reference =>
+        {
+            apply_reference_title(contents, &document, context, value, index)
+        }
         Op::SettingSet { .. } | Op::SettingClear { .. } => {
-            unreachable!("settings expand before span planning")
+            unreachable!("non-title settings expand before span planning")
         }
         Op::Set {
             key,
@@ -217,6 +224,7 @@ fn apply_one(
             raw,
             position,
             framing,
+            body,
         } => apply_restore(
             contents,
             &document,
@@ -225,6 +233,7 @@ fn apply_one(
             raw.as_deref(),
             position.as_ref(),
             framing.as_ref(),
+            body.as_ref(),
             index,
         ),
     }
@@ -301,6 +310,146 @@ fn apply_set(
             )],
         ))
     }
+}
+
+fn apply_reference_title(
+    contents: &str,
+    document: &PropsDocument,
+    context: &InspectContext,
+    value: &JsonValue,
+    index: usize,
+) -> Result<(String, Vec<Op>), PropsError> {
+    let typed = typed_from_json("title", value, None, index)?;
+    let old_title =
+        reference_title(contents, document, &context.normalized_path);
+    let (mut candidate, mut inverses) = apply_set(
+        contents, document, context, "title", value, None, None, index,
+    )?;
+    let Some(old_title) = old_title else {
+        return Ok((candidate, inverses));
+    };
+    let Some(new_title) = typed.yaml.as_str() else {
+        return Ok((candidate, inverses));
+    };
+    let old_body = &contents[document.body_range.clone()];
+    let candidate_document = PropsDocument::parse(&candidate);
+    let candidate_body = &candidate[candidate_document.body_range.clone()];
+    let new_body =
+        retitle_matching_first_h1(candidate_body, &old_title, new_title);
+    if new_body == candidate_body {
+        return Ok((candidate, inverses));
+    }
+    candidate = replace_range(
+        &candidate,
+        candidate_document.body_range.clone(),
+        &new_body,
+    );
+    let Some(Op::Restore { body, .. }) = inverses.first_mut() else {
+        return Err(verify_failed(
+            "Reference title edit did not produce an undo operation",
+            Some("title".to_owned()),
+            Some(index),
+        ));
+    };
+    *body = Some(super::protocol::BodyRestore {
+        expected: new_body,
+        prior: old_body.to_owned(),
+    });
+    Ok((candidate, inverses))
+}
+
+fn reference_title(
+    contents: &str,
+    document: &PropsDocument,
+    path: &str,
+) -> Option<String> {
+    if let Some(title) = document
+        .entries
+        .iter()
+        .find(|entry| entry.key == "title")
+        .and_then(|entry| entry.value.as_str())
+        .filter(|title| !title.trim().is_empty())
+    {
+        return Some(title.to_owned());
+    }
+    let body = &contents[document.body_range.clone()];
+    first_body_h1(body)
+        .map(|(title, _)| title)
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| {
+            std::path::Path::new(path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_owned)
+        })
+}
+
+fn retitle_matching_first_h1(
+    body: &str,
+    old_title: &str,
+    new_title: &str,
+) -> String {
+    let Some((heading, range)) = first_body_h1(body) else {
+        return body.to_owned();
+    };
+    if heading != old_title {
+        return body.to_owned();
+    }
+    replace_range(body, range, new_title)
+}
+
+fn first_body_h1(body: &str) -> Option<(String, Range<usize>)> {
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    let logical: Vec<&str> = lines
+        .iter()
+        .map(|line| crate::native::markdown::split_line_ending(line).0)
+        .collect();
+    let fenced =
+        crate::native::markdown::fenced_lines(&logical, 0..logical.len());
+    let comments = crate::native::markdown::multiline_comment_lines(&logical);
+    let mut offset = 0;
+    for (index, line) in logical.iter().enumerate() {
+        let full_line = lines[index];
+        if !fenced.contains(&index)
+            && !comments.contains(&index)
+            && crate::native::markdown::atx_heading(line)
+                .is_some_and(|(level, _)| level == 1)
+        {
+            let (_, title) = crate::native::markdown::atx_heading(line)?;
+            let indentation =
+                line.bytes().take_while(|byte| *byte == b' ').count();
+            let hash_count = line[indentation..]
+                .bytes()
+                .take_while(|byte| *byte == b'#')
+                .count();
+            let tail_start = indentation + hash_count;
+            let tail = &line[tail_start..];
+            let title_start =
+                tail_start + (tail.len() - tail.trim_start().len());
+            let title_range = if title.is_empty() {
+                title_start..title_start
+            } else {
+                let start = line[title_start..].find(title)? + title_start;
+                start..start + title.len()
+            };
+            return Some((
+                title.to_owned(),
+                offset + title_range.start..offset + title_range.end,
+            ));
+        }
+        offset += full_line.len();
+    }
+    None
+}
+
+fn is_title_only_body_change(current: &str, prior: &str) -> bool {
+    let Some((prior_title, _)) = first_body_h1(prior) else {
+        return false;
+    };
+    let Some((_, current_range)) = first_body_h1(current) else {
+        return false;
+    };
+    replace_range(current, current_range, &prior_title) == prior
 }
 
 fn apply_set_yaml(
@@ -423,6 +572,7 @@ fn apply_rename(
                 raw: None,
                 position: None,
                 framing: None,
+                body: None,
             },
             original,
         ],
@@ -461,6 +611,7 @@ fn apply_restore(
     raw: Option<&str>,
     position: Option<&Position>,
     framing: Option<&Framing>,
+    body_restore: Option<&super::protocol::BodyRestore>,
     index: usize,
 ) -> Result<(String, Vec<Op>), PropsError> {
     validate_key(key, index)?;
@@ -472,7 +623,7 @@ fn apply_restore(
     if let Some(framing) = framing {
         validate_framing(framing, index)?;
     }
-    match raw {
+    let (mut next, mut inverses) = match raw {
         Some(raw) => {
             if let Some(entry) = find_entry(document, key) {
                 refuse_opaque(entry, index)?;
@@ -521,6 +672,7 @@ fn apply_restore(
                             expected: framing.prior.clone(),
                             prior: framing.expected.clone(),
                         }),
+                        body: None,
                     }],
                 ))
             } else {
@@ -531,11 +683,63 @@ fn apply_restore(
                         raw: None,
                         position: None,
                         framing: None,
+                        body: None,
                     }],
                 ))
             }
         }
+    }?;
+    if let Some(body_restore) = body_restore {
+        if key != "title"
+            || context.roles.note_kind != super::roles::NoteKind::Reference
+        {
+            return Err(PropsError {
+                code: "prop_restore_body_disabled".to_owned(),
+                message:
+                    "body restoration is reserved for a Reference title undo"
+                        .to_owned(),
+                hint: "Restore the frontmatter property without a body field."
+                    .to_owned(),
+                key: Some(key.to_owned()),
+                line: None,
+                op_index: Some(index),
+            });
+        }
+        let next_document = PropsDocument::parse(&next);
+        let current_body = next[next_document.body_range.clone()].to_owned();
+        if current_body != body_restore.expected
+            || !is_title_only_body_change(&current_body, &body_restore.prior)
+        {
+            return Err(PropsError {
+                code: "prop_stale".to_owned(),
+                message: "title undo body no longer matches its expected H1"
+                    .to_owned(),
+                hint: "Re-read the note and retry with a fresh preview."
+                    .to_owned(),
+                key: Some(key.to_owned()),
+                line: None,
+                op_index: Some(index),
+            });
+        }
+        let prior_body = body_restore.prior.clone();
+        next =
+            replace_range(&next, next_document.body_range.clone(), &prior_body);
+        let inverse_body = super::protocol::BodyRestore {
+            expected: prior_body,
+            prior: current_body,
+        };
+        match inverses.first_mut() {
+            Some(Op::Restore { body, .. }) => *body = Some(inverse_body),
+            _ => {
+                return Err(verify_failed(
+                    "body restoration did not produce a reversible property operation",
+                    Some(key.to_owned()),
+                    Some(index),
+                ));
+            }
+        }
     }
+    Ok((next, inverses))
 }
 
 fn emit_new_entry(
@@ -871,6 +1075,7 @@ fn restore_bytes(
         raw: Some(raw),
         position,
         framing: None,
+        body: None,
     }
 }
 
@@ -909,6 +1114,7 @@ fn restore_absence(
         raw: None,
         position: None,
         framing,
+        body: None,
     }
 }
 
@@ -1118,7 +1324,11 @@ fn verify(
 ) -> Result<(), PropsError> {
     let original_body = &original.source[original.body_range.clone()];
     let candidate_body = &candidate.source[candidate.body_range.clone()];
-    if original_body != candidate_body {
+    let body_operation = ops.iter().any(|op| {
+        matches!(op, Op::SettingSet { setting, .. } if setting == "title")
+            || matches!(op, Op::Restore { body: Some(_), .. })
+    });
+    if original_body != candidate_body && !body_operation {
         return Err(verify_failed("operation changed body bytes", None, None));
     }
     let original_bom = original
@@ -1176,12 +1386,40 @@ fn verify(
 fn verify_op(
     before: &PropsDocument,
     after: &PropsDocument,
+    context: &InspectContext,
     op: &Op,
     index: usize,
 ) -> Result<(), PropsError> {
     match op {
+        Op::SettingSet { setting, value } if setting == "title" => {
+            let typed = typed_from_json("title", value, None, index)?;
+            verify_expected_value(after, "title", &typed.yaml, index)?;
+            let Some(old_title) = reference_title(
+                &before.source,
+                before,
+                &context.normalized_path,
+            ) else {
+                return Ok(());
+            };
+            let Some(new_title) = typed.yaml.as_str() else {
+                return Ok(());
+            };
+            let expected = retitle_matching_first_h1(
+                &before.source[before.body_range.clone()],
+                &old_title,
+                new_title,
+            );
+            if expected != after.source[after.body_range.clone()] {
+                return Err(verify_failed(
+                    "Reference title changed body bytes outside its matching first H1",
+                    Some("title".to_owned()),
+                    Some(index),
+                ));
+            }
+            Ok(())
+        }
         Op::SettingSet { .. } | Op::SettingClear { .. } => {
-            unreachable!("settings expand before span planning")
+            unreachable!("non-title settings expand before span planning")
         }
         Op::Set {
             key,
@@ -1234,27 +1472,46 @@ fn verify_op(
             raw,
             position,
             framing: _,
-        } => match raw {
-            Some(raw) => {
-                let wrapped = wrap_restore_raw(raw);
-                let parsed = PropsDocument::parse(&wrapped);
-                let Some(expected) = parsed
-                    .entries
-                    .first()
-                    .and_then(|entry| entry.raw_value.as_ref())
-                else {
-                    return Ok(());
-                };
-                verify_expected_value(after, key, expected, index)?;
-                if find_entry(before, key).is_none()
-                    && let Some(position) = position
-                {
-                    verify_position(after, key, position, index)?;
+            body,
+        } => {
+            let result = match raw {
+                Some(raw) => {
+                    let wrapped = wrap_restore_raw(raw);
+                    let parsed = PropsDocument::parse(&wrapped);
+                    let Some(expected) = parsed
+                        .entries
+                        .first()
+                        .and_then(|entry| entry.raw_value.as_ref())
+                    else {
+                        return Ok(());
+                    };
+                    verify_expected_value(after, key, expected, index)?;
+                    if find_entry(before, key).is_none()
+                        && let Some(position) = position
+                    {
+                        verify_position(after, key, position, index)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
+                None => verify_absent(after, key, index),
+            };
+            result?;
+            if let Some(body) = body {
+                let before_body = &before.source[before.body_range.clone()];
+                let after_body = &after.source[after.body_range.clone()];
+                if before_body != body.expected
+                    || after_body != body.prior
+                    || !is_title_only_body_change(before_body, after_body)
+                {
+                    return Err(verify_failed(
+                        "body restore changed bytes outside the matching first H1",
+                        Some(key.clone()),
+                        Some(index),
+                    ));
+                }
             }
-            None => verify_absent(after, key, index),
-        },
+            Ok(())
+        }
     }
 }
 
@@ -1757,6 +2014,7 @@ mod tests {
             roles: RoleContext {
                 note_kind,
                 record_fields: Some(BTreeSet::new()),
+                reference_has_task: false,
                 diagnostics: Vec::new(),
             },
         }

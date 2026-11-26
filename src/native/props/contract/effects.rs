@@ -49,6 +49,15 @@ pub(crate) fn collect(
         read::build_view(&before_view, path, before, kind, &before_doc);
     let after_block =
         read::build_view(&after_view, path, after, kind, &after_doc);
+    if kind == NoteKind::Reference {
+        return reference_effects(
+            path,
+            before,
+            after,
+            &before_block.settings,
+            &after_block.settings,
+        );
+    }
     let note = Path::new(path);
     let mut effects = Vec::new();
     for (old, new) in before_block.settings.iter().zip(&after_block.settings) {
@@ -87,6 +96,60 @@ pub(crate) fn collect(
                 syncs: Vec::new(),
             }),
             _ => {}
+        }
+    }
+    effects
+}
+
+fn reference_effects(
+    _path: &str,
+    before: &str,
+    after: &str,
+    before_settings: &[SettingReport],
+    after_settings: &[SettingReport],
+) -> Vec<Effect> {
+    let before_doc = PropsDocument::parse(before);
+    let after_doc = PropsDocument::parse(after);
+    let has_marker = ["highlights_marker_base"].iter().any(|key| {
+        before_doc.entries.iter().any(|entry| entry.key == *key)
+            || after_doc.entries.iter().any(|entry| entry.key == *key)
+    });
+    let mut effects = Vec::new();
+    for (old, new) in before_settings.iter().zip(after_settings) {
+        if old.id != new.id || !setting_changed(old, new) {
+            continue;
+        }
+        if has_marker
+            && matches!(new.id, "title" | "author" | "published" | "source")
+        {
+            effects.push(Effect {
+                setting: new.id,
+                kind: "syncs",
+                message: "Syncs to the PDF marker at the next writing scan"
+                    .to_owned(),
+                from: Some(old.effective.value.clone()),
+                to: Some(new.effective.value.clone()),
+                count: None,
+                syncs: vec!["pdf_marker".to_owned()],
+            });
+        }
+        if new.id == "title"
+            && crate::native::ref_tasks::find_managed_embed(
+                &before[before_doc.body_range.clone()],
+            )
+            .is_some()
+        {
+            effects.push(Effect {
+                setting: "title",
+                kind: "reading_task_link_text",
+                message:
+                    "The reading task keeps its link text; open it to retitle."
+                        .to_owned(),
+                from: Some(old.effective.value.clone()),
+                to: Some(new.effective.value.clone()),
+                count: None,
+                syncs: Vec::new(),
+            });
         }
     }
     effects

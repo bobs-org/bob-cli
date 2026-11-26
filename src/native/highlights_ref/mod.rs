@@ -216,7 +216,7 @@ pub(crate) use marker::{
     ref_task_mark_status, ref_task_mark_target_status,
 };
 pub(crate) use model::{Config, Result, UnresolvedImageNoteState};
-pub(crate) use note::configured_path;
+pub(crate) use note::{configured_path, configured_path_from};
 pub(crate) use reading_plan::apply_v2_migration_note;
 pub(crate) use region::{
     is_marker_mirror_text, parse_follow_up_task, parse_managed_region,
