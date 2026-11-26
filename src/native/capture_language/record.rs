@@ -61,6 +61,10 @@ pub(crate) const ALBUM_SCHEMA_INVALID_CODE: &str = "album_schema_invalid";
 /// Teaching refusal for a bare album route used as a task home. Albums
 /// hold no tasks; the rewrite points at the record route instead.
 pub(crate) const ALBUM_HOLDS_NO_TASKS_CODE: &str = "album_holds_no_tasks";
+/// Teaching refusal for the bank hub route. `bank.md` is an untyped,
+/// path-canonical hub under cash and holds no tasks; money tasks go to
+/// `@cash`.
+pub(crate) const BANK_HOLDS_NO_TASKS_CODE: &str = "bank_holds_no_tasks";
 /// Additive assist contract for named-field addressing and `record.edit`.
 /// Present on parse record objects and record completion metadata.
 pub(crate) const RECORD_ASSIST_VERSION: u32 = 1;

@@ -55,7 +55,7 @@ fn real_shape(root: &Path) {
         ("job", "area"),
         ("love", "area"),
         ("meet", "area"),
-        ("bank", "cash"),
+        ("garden", "cash"),
         ("recur", "cash"),
         ("gtd_daily", "gtd"),
         ("inbox", "gtd"),
@@ -99,11 +99,11 @@ fn real_vault_shape_plans_the_five_nested_catalogs() {
     let expected = [
         (
             "area.md",
-            "> [!areas]\n>\n> - **[[body]]**\n> - **[[cash]]**\n>   - **[[bank]]**\n>   - **[[recur]]**\n> - **[[dev]]**\n> - **[[gtd]]**\n>   - **[[gtd_daily]]**\n>   - **[[inbox]]**\n>     - **[[gkeep_inbox]]**\n>     - **[[gmail_inbox]]**\n>     - **[[mac_inbox]]**\n> - **[[job]]**\n> - **[[love]]**\n>   - **[[abby]]**\n>   - **[[family]]**\n>   - **[[fun]]**\n>   - **[[kelly]]**\n>   - **[[vacation]]**\n> - **[[meet]]**",
+            "> [!areas]\n>\n> - **[[body]]**\n> - **[[cash]]**\n>   - **[[garden]]**\n>   - **[[recur]]**\n> - **[[dev]]**\n> - **[[gtd]]**\n>   - **[[gtd_daily]]**\n>   - **[[inbox]]**\n>     - **[[gkeep_inbox]]**\n>     - **[[gmail_inbox]]**\n>     - **[[mac_inbox]]**\n> - **[[job]]**\n> - **[[love]]**\n>   - **[[abby]]**\n>   - **[[family]]**\n>   - **[[fun]]**\n>   - **[[kelly]]**\n>   - **[[vacation]]**\n> - **[[meet]]**",
         ),
         (
             "cash.md",
-            "> [!areas]\n>\n> - **[[bank]]**\n> - **[[recur]]**",
+            "> [!areas]\n>\n> - **[[garden]]**\n> - **[[recur]]**",
         ),
         (
             "gtd.md",
@@ -135,7 +135,7 @@ fn real_vault_shape_plans_the_five_nested_catalogs() {
         "dev",
         "job",
         "meet",
-        "bank",
+        "garden",
         "recur",
         "gtd_daily",
         "gkeep_inbox",

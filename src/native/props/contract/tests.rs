@@ -424,25 +424,25 @@ fn home_and_bank_roles_match_the_editor_contract() {
         NoteKind::Project,
         json!([{"op":"prop.unset","key":"task_count"},{"op":"prop.unset","key":"open_task_count"}]),
     );
-    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Banking\nbank: {currency: USD}\n---\n# Bank\n";
+    let bank = "---\nparent: '[[cash]]'\nsummary: Banking\nbank: {currency: USD}\n---\n# Bank\n";
     let bank_report = inspect(bank, &context(NoteKind::Bank, bank)).report;
     assert_eq!(bank_report.note_kind, "bank");
-    assert_eq!(bank_report.properties[2].setting, Some("summary"));
-    assert_eq!(bank_report.properties[3].owner.as_deref(), Some("bank"));
-    roundtrip(
-        bank,
-        NoteKind::Bank,
-        json!([{"op":"setting.set","setting":"summary","value":"Household finances"}]),
+    assert_eq!(bank_report.capabilities, vec!["props_v1"]);
+    assert!(bank_report.contract.is_none());
+    assert_eq!(bank_report.properties[2].owner.as_deref(), Some("bank"));
+    assert_eq!(
+        bank_report.properties[2].setting, None,
+        "bank hub exposes no settings contract"
     );
     assert_eq!(
         run(
             bank,
             NoteKind::Bank,
-            json!([{"op":"prop.set","key":"color","value":"nope"}])
+            json!([{"op":"setting.set","setting":"summary","value":"Household finances"}])
         )
         .unwrap_err()
         .code,
-        "prop_bad_value"
+        "prop_setting_disabled"
     );
     assert_eq!(
         run(
@@ -623,14 +623,27 @@ fn parent_rehome_names_syncs_and_inherited_settings_name_scope() {
 }
 
 #[test]
-fn bank_show_uses_the_area_contract() {
-    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Banking\nbank: {currency: USD}\n---\n# Bank\n";
+fn bank_show_has_no_contract_but_keeps_card_owned_bank_key() {
+    let bank = "---\nparent: '[[cash]]'\nsummary: Banking\nbank: {currency: USD}\n---\n# Bank\n";
     let report = inspect(bank, &context(NoteKind::Bank, bank)).report;
     assert_eq!(report.note_kind, "bank");
-    assert_eq!(report.capabilities, vec!["props_v1", "props_contract_v1"]);
-    assert_eq!(report.contract.as_ref().unwrap().kind, "bank");
+    assert_eq!(report.capabilities, vec!["props_v1"]);
+    assert!(report.contract.is_none());
+    let owned = report
+        .properties
+        .iter()
+        .find(|property| property.key == "bank")
+        .expect("bank key");
+    assert_eq!(owned.owner.as_deref(), Some("bank"));
+    assert_eq!(owned.setting, None);
     assert_eq!(
-        setting(&report, "summary").effective.value,
-        json!("Banking")
+        run(
+            bank,
+            NoteKind::Bank,
+            json!([{"op":"setting.set","setting":"summary","value":"x"}])
+        )
+        .unwrap_err()
+        .code,
+        "prop_setting_disabled"
     );
 }

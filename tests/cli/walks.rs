@@ -8,7 +8,7 @@ use std::path::Path;
 const NOW: &str = "2026-11-17T12:00:00";
 const DATE: &str = "2026-11-17";
 
-const BANK_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: Groceries\n---\n\n# 🏦 Bank\n";
+const BANK_HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: Groceries\n---\n\n# 🏦 Bank\n";
 
 fn vault_dir(temp: &TempDir) -> std::path::PathBuf {
     temp.path().join("vault")

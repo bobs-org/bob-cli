@@ -1433,7 +1433,7 @@ mod tests {
     }
 
     fn valid_hub() -> &'static str {
-        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n  categories:\n    groceries: 🛒 Groceries\n  rules:\n    - match: VENMO\n      cat: transfer\n  stale_after: 10\n---\n# Bank\n"
+        "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n  categories:\n    groceries: 🛒 Groceries\n  rules:\n    - match: VENMO\n      cat: transfer\n  stale_after: 10\n---\n# Bank\n"
     }
 
     #[test]

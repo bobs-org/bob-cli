@@ -109,7 +109,7 @@ fn write(root: &Path, rel: &str, body: &str) {
 }
 
 fn valid_hub() -> &'static str {
-    "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n"
+    "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n"
 }
 
 fn report_for(root: &Path) -> CheckReport {
@@ -163,6 +163,63 @@ fn hub_missing_when_bank_mapping_absent() {
     let report = report_for(&root);
     assert!(has_code(&report, "bank_hub_missing"));
     assert_eq!(report.exit_code(), 1);
+}
+
+#[test]
+fn hub_area_type_is_a_warning_and_keeps_check_green() {
+    let _guard = guard();
+    let root = temp_vault("hub-area");
+    write(
+        root.as_path(),
+        "bank.md",
+        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n  categories:\n    groceries: Groceries\n---\n\n# Bank\n",
+    );
+    let report = report_for(&root);
+    let finding = report
+        .findings
+        .iter()
+        .find(|finding| finding.code == "bank_hub_area_type")
+        .expect("area-typed hub finding");
+    assert_eq!(finding.severity, super::check::Severity::Warning);
+    assert_eq!(finding.path, "bank.md");
+    assert!(report.ok());
+    assert_eq!(report.exit_code(), 0);
+}
+
+#[test]
+fn hub_project_type_is_a_warning() {
+    let _guard = guard();
+    let root = temp_vault("hub-project");
+    write(
+        root.as_path(),
+        "bank.md",
+        "---\nparent: \"[[cash]]\"\ntype: \"[[project]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n---\n\n# Bank\n",
+    );
+    let report = report_for(&root);
+    assert!(has_code(&report, "bank_hub_area_type"));
+    assert!(report.ok());
+}
+
+#[test]
+fn hub_task_is_a_warning_outside_fences_only() {
+    let _guard = guard();
+    let root = temp_vault("hub-task");
+    write(
+        root.as_path(),
+        "bank.md",
+        "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n---\n\n# Bank\n\n- [ ] #task Dispute charge\n\n```\n- [ ] #task Fenced example\n```\n",
+    );
+    let report = report_for(&root);
+    let tasks: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.code == "bank_hub_task")
+        .collect();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].severity, super::check::Severity::Warning);
+    assert!(tasks[0].hint.as_deref().unwrap_or("").contains("@cash"));
+    assert!(report.ok());
+    assert_eq!(report.exit_code(), 0);
 }
 
 #[test]
@@ -239,7 +296,7 @@ fn hidden_category_stays_valid_in_check_and_totals() {
     write(
         root.as_path(),
         "bank.md",
-        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      kind: checking\n      start: 2026-11-12\n  categories:\n    kids: { label: 🧸 Kids, hidden: true }\n    groceries: 🛒 Groceries\n---\n# Bank\n",
+        "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      kind: checking\n      start: 2026-11-12\n  categories:\n    kids: { label: 🧸 Kids, hidden: true }\n    groceries: 🛒 Groceries\n---\n# Bank\n",
     );
     let mut body =
         canonical_template(month(), "2026-11-12T07:30:00-05:00", today());
@@ -376,7 +433,7 @@ fn bank_rows_are_invisible_to_task_scanners() {
 }
 
 fn cli_hub_with_cash() -> &'static str {
-    "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n"
+    "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n"
 }
 
 fn totals_body() -> String {
@@ -604,7 +661,7 @@ fn report_periods_and_breakdown() {
 
 fn hub_starting(start: &str) -> String {
     format!(
-        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: {start}\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n"
+        "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: {start}\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n"
     )
 }
 
@@ -1199,7 +1256,7 @@ fn report_coverage_tracks_history_and_imports() {
     write(
         cash_only.as_path(),
         "bank.md",
-        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    pocket:\n      label: Pocket cash\n      kind: cash\n---\n\n# 🏦 Bank\n",
+        "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    pocket:\n      label: Pocket cash\n      kind: cash\n---\n\n# 🏦 Bank\n",
     );
     write(
         cash_only.as_path(),

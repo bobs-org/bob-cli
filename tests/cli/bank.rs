@@ -11,11 +11,11 @@ use std::{
 const NOW: &str = "2026-11-12T12:00:00";
 const HOST: &str = "bank-e2e";
 
-const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n    cash:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n  rules:\n    - match: VENMO\n      cat: transfer\n---\n\n# 🏦 Bank\n\n```bob-bank\nview: queue\n```\n";
+const HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n    cash:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n  rules:\n    - match: VENMO\n      cat: transfer\n---\n\n# 🏦 Bank\n\n```bob-bank\nview: queue\n```\n";
 
-const TWO_ACCOUNT_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n    card:\n      label: Credit card\n      kind: credit\n      start: 2026-11-12\n    cash:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
+const TWO_ACCOUNT_HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-12\n    card:\n      label: Credit card\n      kind: credit\n      start: 2026-11-12\n    cash:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
 
-const EARLY_START_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n---\n\n# 🏦 Bank\n";
+const EARLY_START_HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n---\n\n# 🏦 Bank\n";
 
 struct BankVault {
     _temp: TempDir,
@@ -40,6 +40,11 @@ fn syncable(hub: &str) -> BankVault {
     let temp = TempDir::new("bob-cli-bank-e2e");
     let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
     allow_journal(&vault);
+    write_file(&vault.join("area.md"), "# Areas\n");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\nparent: \"[[area]]\"\n---\n\n# Cash\n",
+    );
     write_file(&vault.join("bank.md"), hub);
     commit_all(&vault, "bank hub");
     BankVault {
@@ -749,7 +754,7 @@ fn malformed_file_refuses_the_batch() {
     assert_eq!(stdout(&git_in(&vault.path, ["rev-parse", "HEAD"])), head);
 }
 
-const MAPPING_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }\n    kids: { label: 🧸 Kids, hidden: true }\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
+const MAPPING_HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }\n    kids: { label: 🧸 Kids, hidden: true }\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
 
 #[test]
 fn mapping_categories_report_hotkeys_and_hidden_stays_valid() {
@@ -864,7 +869,7 @@ fn config_show_reports_effective_setup_usage_and_fingerprint() {
 #[test]
 fn invalid_rule_diagnostics_keep_all_lines_in_read_envelopes() {
     let hub = concat!(
-        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n",
+        "---\nparent: \"[[cash]]\"\nbank:\n",
         "  accounts:\n    checking:\n      label: Checking\n",
         "      kind: checking\n      start: 2026-11-01\n",
         "  categories:\n    coffee: ☕ Coffee\n  rules:\n",
@@ -886,9 +891,9 @@ fn invalid_rule_diagnostics_keep_all_lines_in_read_envelopes() {
         );
         assert_eq!(payload["findings"].as_array().unwrap().len(), 2);
         assert_eq!(payload["findings"][0]["key_path"], "bank.rules.0.cat");
-        assert_eq!(payload["findings"][0]["line"], 14);
+        assert_eq!(payload["findings"][0]["line"], 13);
         assert_eq!(payload["findings"][1]["key_path"], "bank.rules.1.cat");
-        assert_eq!(payload["findings"][1]["line"], 15);
+        assert_eq!(payload["findings"][1]["line"], 14);
         assert!(payload["config_fingerprint"]
             .as_str()
             .unwrap()
@@ -911,7 +916,7 @@ fn invalid_rule_diagnostics_keep_all_lines_in_read_envelopes() {
         .collect::<Vec<_>>();
     assert_eq!(config_findings.len(), 2);
     assert_eq!(config_findings[1]["key_path"], "bank.rules.1.cat");
-    assert_eq!(config_findings[1]["line"], 15);
+    assert_eq!(config_findings[1]["line"], 14);
 
     let ensured = run(&vault, &["ensure", "-f", "json"]);
     assert_eq!(
@@ -947,6 +952,40 @@ fn rule_with_masked_digits_is_a_warning_in_check_and_config_report() {
         .unwrap()
         .iter()
         .any(|finding| finding["code"] == "bank_rule_read_time_dead"));
+}
+
+#[test]
+fn hub_area_type_and_task_are_warnings_and_keep_check_green() {
+    let typed = HUB.replace(
+        "parent: \"[[cash]]\"\nbank:",
+        "parent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:",
+    );
+    let vault = syncable(&typed);
+    let checked = run(&vault, &["check", "-f", "json"]);
+    assert_success(&checked);
+    let payload = json(&checked);
+    assert_eq!(payload["ok"], true);
+    let codes = findings(&payload);
+    assert!(
+        codes.contains(&"bank_hub_area_type".to_owned()),
+        "{payload}"
+    );
+
+    let tasked =
+        HUB.replace("# 🏦 Bank\n", "# 🏦 Bank\n\n- [ ] #task Dispute charge\n");
+    let vault = syncable(&tasked);
+    let checked = run(&vault, &["check", "-f", "json"]);
+    assert_success(&checked);
+    let payload = json(&checked);
+    assert_eq!(payload["ok"], true);
+    let task = payload["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["code"] == "bank_hub_task")
+        .expect("hub task warning");
+    assert_eq!(task["severity"], "warning");
+    assert!(task["hint"].as_str().unwrap_or_default().contains("@cash"));
 }
 
 #[test]
@@ -1120,7 +1159,7 @@ fn report_balance_target_uses_heading_month_start_or_null() {
     assert!(absent["balances"][0]["target"].is_null());
 }
 
-const CHARTS_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
+const CHARTS_HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
 
 const CHARTS_MONTH: &str = "---\nparent: \"[[bank]]\"\ntype: \"[[bank_month]]\"\nmonth: 2026-11\ncreated: 2026-11-12T07:30:00-05:00\n---\n\n# 🏦 November 2026\n\n```bob-bank\nview: month\n```\n\n## Wed Nov 11\n\n- [x] $13.71 Smashburger [cat:: dining]\n- [x] +$15.00 Refund [cat:: refund]\n- [x] $100.00 Card payment [cat:: transfer]\n\n## Thu Nov 12\n\n- [ ] $61.20 ShopRite [cat:: groceries]\n- [x] +$1,250.00 Payroll [cat:: income]\n";
 
@@ -1302,7 +1341,7 @@ fn report_charts_refuses_periods_without_children() {
     }
 }
 
-const SUB_HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n    cash:\n      label: Pocket cash\n      kind: cash\n  categories:\n    streaming: Streaming\n    dining: 🍽️ Dining\n    kids: { label: 🧸 Kids, hidden: true }\n  rules:\n    - match: TUNELY\n      cat: dining\n---\n\n# 🏦 Bank\n";
+const SUB_HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n    cash:\n      label: Pocket cash\n      kind: cash\n  categories:\n    streaming: Streaming\n    dining: 🍽️ Dining\n    kids: { label: 🧸 Kids, hidden: true }\n  rules:\n    - match: TUNELY\n      cat: dining\n---\n\n# 🏦 Bank\n";
 
 fn subscription_album(stem: &str, parent: &str, title: &str) -> String {
     format!(
@@ -1340,7 +1379,7 @@ fn row_with_payee<'a>(rows: &'a [&Value], needle: &str) -> &'a Value {
 fn write_renamed_subscription_album(vault: &BankVault) {
     write_file(
         &vault.path.join("media.md"),
-        &subscription_album("media", "bank", "Media"),
+        &subscription_album("media", "cash", "Media"),
     );
     fs::create_dir_all(vault.path.join("media")).unwrap();
     write_file(
@@ -1353,7 +1392,7 @@ fn write_renamed_subscription_album(vault: &BankVault) {
     );
     write_file(
         &vault.path.join("restaurants.md"),
-        "---\nparent: \"[[bank]]\"\ntype: [[album]]\nsummary: Restaurants.\nemoji: \"🍽️\"\nrecord:\n  noun: eat\n  label: Restaurant\n  fields: {}\n---\n\n# Restaurants\n",
+        "---\nparent: \"[[cash]]\"\ntype: [[album]]\nsummary: Restaurants.\nemoji: \"🍽️\"\nrecord:\n  noun: eat\n  label: Restaurant\n  fields: {}\n---\n\n# Restaurants\n",
     );
     fs::create_dir_all(vault.path.join("restaurants")).unwrap();
     write_file(
@@ -1586,7 +1625,7 @@ fn invalid_subscription_album_warns_once_and_nulls_projection() {
     let vault = syncable(SUB_HUB);
     write_file(
         &vault.path.join("media.md"),
-        "---\ntype: [[album]]\nparent: \"[[bank]]\"\nrecord: {noun: subscription, fields: {amount: {values: [invalid]}}}\n---\n# Media\n",
+        "---\ntype: [[album]]\nparent: \"[[cash]]\"\nrecord: {noun: subscription, fields: {amount: {values: [invalid]}}}\n---\n# Media\n",
     );
     assert_success(&run(&vault, &["ensure", "-D", "2026-11-12", "-f", "json"]));
     commit_all(&vault.path, "invalid subscription album");
@@ -1652,7 +1691,7 @@ fn invalid_subscription_album_warns_once_and_nulls_projection() {
 
 #[test]
 fn subscriptions_reports_records_and_teaches_without_an_album() {
-    const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-09-01\n  categories:\n    streaming: 📡 Streaming\n---\n\n# 🏦 Bank\n";
+    const HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-09-01\n  categories:\n    streaming: 📡 Streaming\n---\n\n# 🏦 Bank\n";
     let vault = syncable(HUB);
 
     let human = run(&vault, &["subscriptions"]);
@@ -1670,7 +1709,7 @@ fn subscriptions_reports_records_and_teaches_without_an_album() {
 
     write_file(
         &vault.path.join("subscriptions.md"),
-        "---\nparent: \"[[bank]]\"\ntype: \"[[album]]\"\nsummary: What we pay for on repeat.\nemoji: 🔁\nindex_by: category\nindex_facets: [amount, cadence]\nrecord:\n  noun: subscription\n  label: Subscription\n  plural: subscriptions\n  dated_notes: true\n  legacy: [recur_id]\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: ✂️ To cancel\n        to_decide: 🤔 To decide\n        active: 💚 Active\n        cancelled: 🚫 Cancelled\n    amount: { required: true, values: number, min: 0, label: Charged }\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every 4 weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    pricing:\n      default: fixed\n      values: { fixed: 📌 Fixed, variable: 📈 Usage }\n    match: { list: true, label: Shows up as }\n    category: { suggest: true }\n    url: { values: url, label: Manage }\n    renews: { values: date }\n    ended: { values: date }\n---\n\n# Subscriptions\n",
+        "---\nparent: \"[[cash]]\"\ntype: \"[[album]]\"\nsummary: What we pay for on repeat.\nemoji: 🔁\nindex_by: category\nindex_facets: [amount, cadence]\nrecord:\n  noun: subscription\n  label: Subscription\n  plural: subscriptions\n  dated_notes: true\n  legacy: [recur_id]\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: ✂️ To cancel\n        to_decide: 🤔 To decide\n        active: 💚 Active\n        cancelled: 🚫 Cancelled\n    amount: { required: true, values: number, min: 0, label: Charged }\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every 4 weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    pricing:\n      default: fixed\n      values: { fixed: 📌 Fixed, variable: 📈 Usage }\n    match: { list: true, label: Shows up as }\n    category: { suggest: true }\n    url: { values: url, label: Manage }\n    renews: { values: date }\n    ended: { values: date }\n---\n\n# Subscriptions\n",
     );
     write_file(
         &vault.path.join("subscriptions/tunely.md"),
@@ -1702,7 +1741,7 @@ fn subscriptions_reports_records_and_teaches_without_an_album() {
 #[test]
 fn subscriptions_reports_every_located_config_finding() {
     let hub = concat!(
-        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n",
+        "---\nparent: \"[[cash]]\"\nbank:\n",
         "  accounts:\n    checking:\n      label: Checking\n",
         "      kind: checking\n      start: 2026-11-01\n",
         "  categories:\n    coffee: ☕ Coffee\n  rules:\n",
@@ -1712,7 +1751,7 @@ fn subscriptions_reports_every_located_config_finding() {
     let vault = syncable(hub);
     write_file(
         &vault.path.join("subscriptions.md"),
-        "---\nparent: \"[[bank]]\"\ntype: \"[[album]]\"\nemoji: 🔁\nrecord:\n  noun: subscription\n  label: Subscription\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: To cancel\n        to_decide: To decide\n        active: Active\n        cancelled: Cancelled\n    amount: { required: true, values: number, min: 0 }\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every 4 weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    match: { list: true }\n    category: { suggest: true }\n---\n\n# Subscriptions\n",
+        "---\nparent: \"[[cash]]\"\ntype: \"[[album]]\"\nemoji: 🔁\nrecord:\n  noun: subscription\n  label: Subscription\n  fields:\n    status:\n      required: true\n      values:\n        to_cancel: To cancel\n        to_decide: To decide\n        active: Active\n        cancelled: Cancelled\n    amount: { required: true, values: number, min: 0 }\n    cadence:\n      required: true\n      values:\n        monthly: Monthly\n        four_weekly: Every 4 weeks\n        quarterly: Quarterly\n        yearly: Yearly\n    match: { list: true }\n    category: { suggest: true }\n---\n\n# Subscriptions\n",
     );
 
     let payload = json(&run(&vault, &["subscriptions", "-f", "json"]));
@@ -1724,9 +1763,9 @@ fn subscriptions_reports_every_located_config_finding() {
         .collect::<Vec<_>>();
     assert_eq!(config_findings.len(), 2, "{payload}");
     assert_eq!(config_findings[0]["key_path"], "bank.rules.0.cat");
-    assert_eq!(config_findings[0]["line"], 14);
+    assert_eq!(config_findings[0]["line"], 13);
     assert_eq!(config_findings[1]["key_path"], "bank.rules.1.cat");
-    assert_eq!(config_findings[1]["line"], 15);
+    assert_eq!(config_findings[1]["line"], 14);
     assert!(payload["config_fingerprint"]
         .as_str()
         .unwrap_or_else(|| panic!("{payload}"))
@@ -1735,7 +1774,7 @@ fn subscriptions_reports_every_located_config_finding() {
 
 #[test]
 fn report_balances_settle_across_imports() {
-    const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-09-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
+    const HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-09-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n\n# 🏦 Bank\n";
     let vault = syncable(HUB);
     // A quiet September week settles Q3 at its end.
     let september = write_qfx(

@@ -6,7 +6,11 @@ use std::path::Path;
 use chrono::NaiveDate;
 use serde_json::{json, Value};
 
+use crate::native::markdown::{fenced_lines, strictly_closed_frontmatter_end};
 use crate::native::pref_journal::MAX_MALFORMED_WARNINGS;
+use crate::native::projects::{
+    contains_task_tag, frontmatter_has_type, parse_frontmatter,
+};
 
 use super::{
     balance,
@@ -169,6 +173,10 @@ pub(crate) fn lint(
         ));
     }
 
+    if let Some(hub) = &scan.hub {
+        lint_hub(hub, &mut findings);
+    }
+
     let mut id_seen: HashMap<String, (String, usize)> = HashMap::new();
     for month in &scan.months {
         let note = parse_month_note(&month.path, &month.contents, month.month);
@@ -266,6 +274,86 @@ pub(crate) fn lint(
         io_errors: scan.io_errors.clone(),
         note_count,
     }
+}
+
+fn lint_hub(hub: &super::scan::HubFile, findings: &mut Vec<Finding>) {
+    if let Some(frontmatter) = parse_frontmatter(&hub.contents)
+        && (frontmatter_has_type(&frontmatter, "[[area]]")
+            || frontmatter_has_type(&frontmatter, "[[project]]"))
+    {
+        findings.push(finding(
+            "bank_hub_area_type",
+            Severity::Warning,
+            "bank.md",
+            None,
+            "bank.md has an area/project type: the bank hub is untyped",
+            Some(
+                "Remove the type: line; bank.md is an untyped hub under [[cash]]."
+                    .to_owned(),
+            ),
+            None,
+        ));
+    }
+    let lines: Vec<&str> = hub.contents.lines().collect();
+    let front_end = strictly_closed_frontmatter_end(&lines).unwrap_or(0);
+    let body_start = if front_end == 0 { 0 } else { front_end + 1 };
+    if body_start >= lines.len() {
+        return;
+    }
+    let fenced = fenced_lines(&lines, body_start..lines.len());
+    for (index, line) in lines.iter().enumerate().skip(body_start) {
+        if fenced.contains(&index) {
+            continue;
+        }
+        if is_task_checkbox_line(line) && contains_task_tag(line) {
+            findings.push(finding(
+                "bank_hub_task",
+                Severity::Warning,
+                "bank.md",
+                Some(index + 1),
+                "#task in the bank hub",
+                Some(
+                    "Money tasks live in cash.md (@cash); the bank hub holds no tasks."
+                        .to_owned(),
+                ),
+                None,
+            ));
+        }
+    }
+}
+
+fn is_task_checkbox_line(line: &str) -> bool {
+    let mut rest = line.trim_start();
+    while let Some(after_quote) = rest.strip_prefix('>') {
+        rest = after_quote.trim_start_matches([' ', '\t']);
+    }
+    let marker_end = if rest.starts_with(['-', '*', '+']) {
+        1
+    } else {
+        let digits = rest
+            .char_indices()
+            .take_while(|(_, c)| c.is_ascii_digit())
+            .map(|(i, c)| i + c.len_utf8())
+            .last();
+        match digits {
+            Some(end)
+                if rest[end..].starts_with('.')
+                    || rest[end..].starts_with(')') =>
+            {
+                end + 1
+            }
+            _ => return false,
+        }
+    };
+    let after_marker = &rest[marker_end..];
+    if !after_marker.starts_with([' ', '\t']) {
+        return false;
+    }
+    let after_marker = after_marker.trim_start_matches([' ', '\t']);
+    let inner = after_marker.strip_prefix('[').unwrap_or("");
+    let mark = inner.chars().next().unwrap_or(' ');
+    matches!(mark, ' ' | 'x' | 'X' | '/' | '-' | '>' | '?' | '!')
+        && inner.chars().nth(1) == Some(']')
 }
 
 fn lint_month(

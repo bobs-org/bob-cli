@@ -317,6 +317,17 @@ pub(crate) fn album_holds_no_tasks_error(
     }
 }
 
+pub(crate) fn bank_holds_no_tasks_error() -> String {
+    "bank.md is the bank hub and holds no tasks — capture money tasks with @cash"
+        .to_owned()
+}
+
+/// The vault-root bank hub route (`bank.md`), whatever its frontmatter says.
+/// Bank identity is path-canonical, never type-based.
+pub(crate) fn is_bank_hub_route(route: &str) -> bool {
+    route.eq_ignore_ascii_case("bank")
+}
+
 pub(super) fn notebook_marker_unsupported_error(
     marker: &str,
     route: &str,

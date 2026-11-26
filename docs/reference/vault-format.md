@@ -485,7 +485,7 @@ Contract: [Albums and record notes](../records.md).
 
 ### Bank notes
 
-The bank hub is `bank.md` at the vault root (`type: "[[area]]"`,
+The bank hub is `bank.md` at the vault root (untyped,
 `parent: "[[cash]]"`) with a nested `bank:` mapping for accounts,
 categories, rules, and `stale_after`. Month notes live at
 `bank/YYYY-MM.md` with `type: "[[bank_month]]"`, `parent: "[[bank]]"`, and

@@ -506,7 +506,7 @@ mod tests {
         let vault = dir.path();
         write(vault, "area.md", "# Area root\n");
         write(vault, "cash.md", &area("area"));
-        write(vault, "bank.md", &area("cash"));
+        write(vault, "garden.md", &area("cash"));
         let snapshot = VaultSnapshot::load(vault);
         assert!(snapshot.io_errors.is_empty());
         let graph = build_area_graph(&snapshot);

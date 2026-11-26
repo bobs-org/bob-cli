@@ -109,6 +109,7 @@ anything is written, and any failure rolls the whole batch back.
 | `Title @dir/^stem` | Same, with an explicit filename stem |
 | `Title @dir/stem` | Reserved: refused until capture can append to an existing note |
 | `Title @eat` | An album route refuses with `album_holds_no_tasks` and teaches `@eat/` |
+| `Buy stamps @bank` | The bank hub holds no tasks: `@bank` refuses with `bank_holds_no_tasks` and teaches `@cash` |
 | `@route+id @route+id <note>` | Apply the same note, child bullets, and item operations to each named existing task (see [Several tasks on one line](#several-tasks-on-one-line)) |
 | `@route` alone on its line, with no bullets or other markers | Pull the note's unlinked, unblocked Pending, Next, and Ready tasks into today's Pomodoros through the explicit Pull-In choice; see [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) |
 | `- ^<id>` in a sealed project-note item | Move that open top-level task from the parent note into this slot in the new project's `## Tasks` section; see [Moving parent tasks in](#moving-parent-tasks-in) |
@@ -7165,6 +7166,13 @@ parent text as the update's first note.
 replaces only the route token with `@eat/`. Applying that rewrite parses as
 record creation. Heading, task-ID, escaped, and forced-literal routes do not
 get the refusal.
+
+`bank.md` is the untyped bank hub under cash and holds no tasks. A task routed
+at `@bank` — `--route bank`, a draft-wide `@@bank`, an inline `@bank`, or a
+Pomodoro-link/snooze drop at `@bank` — refuses with `bank_holds_no_tasks`
+("bank.md is the bank hub and holds no tasks — capture money tasks with @cash")
+and writes nothing. `capture-parse` reports the same code with an `@cash`
+rewrite. Money tasks go to `@cash`.
 
 `--dry-run` prints `would create` or `would update` plus the exact Markdown
 that commit writes. Album-backed drafts also print the staged album index

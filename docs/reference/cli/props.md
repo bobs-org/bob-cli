@@ -39,7 +39,7 @@ Run 'bob props <command> --help' for more information on a command.
 Show ordered frontmatter properties for one note
 
 ```text title="bob props show --help"
-Show the ordered frontmatter properties for one vault note: source order, line numbers, typed values, kinds, styles, and the owning card or writer for each key, plus the semantic fingerprint. Area, project, and bank notes also report the settings contract (stage, choices, declared and effective values, and ^prj facts). NOTE is a vault-relative Markdown path (the `.md` suffix is optional) or an absolute Markdown path inside the vault. Damaged YAML still reports its recovery state. The command is read-only. See docs/props.md for the report contract and kind/style rules.
+Show the ordered frontmatter properties for one vault note: source order, line numbers, typed values, kinds, styles, and the owning card or writer for each key, plus the semantic fingerprint. Area and project notes also report the settings contract (stage, choices, declared and effective values, and ^prj facts). NOTE is a vault-relative Markdown path (the `.md` suffix is optional) or an absolute Markdown path inside the vault. Damaged YAML still reports its recovery state. The command is read-only. See docs/props.md for the report contract and kind/style rules.
 
 Usage: bob props show [OPTIONS] <NOTE>
 

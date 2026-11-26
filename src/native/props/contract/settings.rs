@@ -1,4 +1,5 @@
-//! Stable setting order and key membership. Bank's non-bank keys use Area.
+//! Stable setting order and key membership. Only area and project notes have
+//! settings; the bank hub is untyped and exposes no settings contract.
 
 use serde::Serialize;
 
@@ -79,7 +80,7 @@ const ALIASES: Setting = Setting {
 
 pub(crate) fn for_kind(kind: NoteKind) -> &'static [Setting] {
     match kind {
-        NoteKind::Area | NoteKind::Bank => {
+        NoteKind::Area => {
             &[SUMMARY, PARENT, COLOR, TYPE, CLOCK, CAP, REVIEW, ALIASES]
         }
         NoteKind::Project => {

@@ -702,6 +702,25 @@ fn symlinked_vault_root_keeps_library_tiers_hidden() {
     );
 }
 
+#[test]
+fn area_typed_bank_hub_still_classifies_as_bank() {
+    let (_config, _guard) = scan_env("2026-11-12T12:00:00");
+    let vault = tempfile::tempdir().expect("vault");
+    let root = vault.path();
+    md(
+        root,
+        "bank.md",
+        "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      kind: checking\n      start: 2026-11-01\n---\n\n# Bank\n",
+    );
+    let catalog = scan(root);
+    let bank = catalog
+        .rows
+        .iter()
+        .find(|row| row.note_path == "bank.md")
+        .expect("bank.md row");
+    assert_eq!(bank.kind, NoteKindKey::Bank);
+}
+
 /// Live-vault budget probe (ignored by default): row count, warm scan
 /// time, and JSON size. Run with `BOB_DIR` set against the real vault.
 #[test]

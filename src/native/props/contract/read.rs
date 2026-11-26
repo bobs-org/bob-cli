@@ -1,4 +1,4 @@
-//! The `contract` block on `bob props show` for area, project, and bank notes.
+//! The `contract` block on `bob props show` for area and project notes.
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +30,7 @@ use crate::native::{
     vault_links::NoteIndex,
 };
 
-/// Show-report contract block present on area, project, and bank.md notes.
+/// Show-report contract block present on area and project notes.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct ContractBlock {
     pub(crate) kind: String,

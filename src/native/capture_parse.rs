@@ -3642,9 +3642,6 @@ fn collection_route_diagnostics(
     items: &[EditorItemParse],
     policy: Option<&capture_language::RecordRoutePolicy>,
 ) -> Vec<Diagnostic> {
-    let Some(policy) = policy else {
-        return Vec::new();
-    };
     items
         .iter()
         .filter_map(|item| {
@@ -3665,6 +3662,23 @@ fn collection_route_diagnostics(
             if token != format!("@{route}") {
                 return None;
             }
+            // Bank hub refuses as a task home before policy logic: identity
+            // is the vault-root `bank` route, whatever its frontmatter says.
+            if capture_language::is_bank_hub_route(route) {
+                return Some(Diagnostic {
+                    severity: Severity::Error,
+                    code: capture_language::BANK_HOLDS_NO_TASKS_CODE,
+                    message: capture_language::bank_holds_no_tasks_error(),
+                    range: Some((span.start, span.end)),
+                    rewrite: Some(DiagnosticRewrite {
+                        start: span.start,
+                        end: span.end,
+                        replacement: "@cash".to_owned(),
+                        label: "Capture money tasks with @cash".to_owned(),
+                    }),
+                });
+            }
+            let policy = policy.as_ref()?;
             // Album bare routes refuse as task homes before config logic:
             // the album owns its stem entirely.
             match policy.route_decision(route) {

@@ -795,7 +795,7 @@ mod tests {
         write(vault, "reference.md", "---\ntype: [[ref]]\n---\n");
         let record = "---\ntype: [[restaurant]]\nparent: [[eat]]\ntitle: Ramen\nrating: 5\ncreated: 2026-11-22\n---\n# Ramen\n";
         write(vault, "eat/ramen.md", record);
-        let bank = "---\ntype: [[area]]\nbank: {accounts: {}}\n---\n# Bank\n";
+        let bank = "---\nparent: [[cash]]\nbank: {accounts: {}}\n---\n# Bank\n";
         write(vault, "bank.md", bank);
 
         let records = RecordContext::discover(vault);

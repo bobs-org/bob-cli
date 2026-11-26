@@ -633,7 +633,6 @@ pub(crate) fn print_teaching_empty(today: NaiveDate) {
     println!();
     println!("---");
     println!("parent: \"[[cash]]\"");
-    println!("type: \"[[area]]\"");
     println!("bank:");
     println!("  accounts:");
     println!("    checking:");

@@ -1594,7 +1594,7 @@ mod tests {
 
     fn hub_with(rules_yaml: &str, start: &str) -> BankConfig {
         let text = format!(
-            "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: {start}\n    savings:\n      label: WF Savings\n      kind: savings\n      start: {start}\n  categories:\n    groceries: Groceries\n    dining: Dining\n    fees: Fees\n    transfer: Transfer\n    cash: Cash out\n{rules_yaml}---\n# Bank\n"
+            "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: {start}\n    savings:\n      label: WF Savings\n      kind: savings\n      start: {start}\n  categories:\n    groceries: Groceries\n    dining: Dining\n    fees: Fees\n    transfer: Transfer\n    cash: Cash out\n{rules_yaml}---\n# Bank\n"
         );
         match parse_bank_config(&text) {
             ConfigParse::Ok(config) => config,

@@ -329,28 +329,34 @@ pub(super) fn plan_capture_batch_with_config_path(
     // Albums never host tasks: an explicit `--route`, a draft-wide
     // `@@route`, or an inline `@route` naming an album refuses before
     // anything stages, leaving files unchanged.
-    if let Some(route) = request.forced_route.as_deref()
-        && let Some(error) = album_task_home_refusal(
+    if let Some(route) = request.forced_route.as_deref() {
+        if let Some(error) = album_task_home_refusal(
             &request.bob_dir,
             record_context.policy(),
             route,
-        )
-    {
-        return Err(error);
+        ) {
+            return Err(error);
+        }
+        if let Some(error) = bank_task_home_refusal(route) {
+            return Err(error);
+        }
     }
     if let Some(global) = parsed_draft.global.as_ref() {
         let inherits = parsed_items.iter().any(|item| {
             item.parsed.route.is_none()
                 && is_album_guarded_task_kind(&item.parsed.kind)
         });
-        if inherits
-            && let Some(error) = album_task_home_refusal(
+        if inherits {
+            if let Some(error) = album_task_home_refusal(
                 &request.bob_dir,
                 record_context.policy(),
                 &global.route,
-            )
-        {
-            return Err(error);
+            ) {
+                return Err(error);
+            }
+            if let Some(error) = bank_task_home_refusal(&global.route) {
+                return Err(error);
+            }
         }
     }
     let gmail_context = parsed_items
@@ -2083,6 +2089,19 @@ fn album_task_home_refusal(
     }
 }
 
+/// Refuse a task routed at the bank hub (`bank.md`). Identity is the
+/// vault-root route `bank`, whatever its frontmatter says. The hub holds no
+/// tasks; money tasks go to `@cash`.
+fn bank_task_home_refusal(route: &str) -> Option<CaptureError> {
+    if !capture_language::is_bank_hub_route(route) {
+        return None;
+    }
+    Some(CaptureError::usage_code(
+        capture_language::bank_holds_no_tasks_error(),
+        capture_language::BANK_HOLDS_NO_TASKS_CODE,
+    ))
+}
+
 /// Whether an item kind writes its body to its route's note (or targets
 /// tasks in it). Record, notebook, transfer, ref-parent, project-note,
 /// and note-pull items own their destinations elsewhere and are excluded
@@ -2695,14 +2714,17 @@ pub(super) fn plan_capture_item(
         if let CaptureKind::PomodoroLink { block_id, .. } =
             &parsed_item.parsed.kind
         {
-            if let Some(route) = parsed_item.parsed.route.as_deref()
-                && let Some(error) = album_task_home_refusal(
+            if let Some(route) = parsed_item.parsed.route.as_deref() {
+                if let Some(error) = album_task_home_refusal(
                     &request.bob_dir,
                     record_context.policy(),
                     route,
-                )
-            {
-                return Err(error);
+                ) {
+                    return Err(error);
+                }
+                if let Some(error) = bank_task_home_refusal(route) {
+                    return Err(error);
+                }
             }
             return super::snooze::plan_existing(
                 request,
@@ -2800,13 +2822,17 @@ fn plan_capture_item_inner(
     let timezone = crate::native::day_timezone().ok().flatten();
     if is_album_guarded_task_kind(&parsed_item.parsed.kind)
         && let Some(route) = parsed_item.parsed.route.as_deref()
-        && let Some(error) = album_task_home_refusal(
+    {
+        if let Some(error) = album_task_home_refusal(
             &request.bob_dir,
             record_context.policy(),
             route,
-        )
-    {
-        return Err(error);
+        ) {
+            return Err(error);
+        }
+        if let Some(error) = bank_task_home_refusal(route) {
+            return Err(error);
+        }
     }
     if matches!(
         parsed_item.parsed.kind,

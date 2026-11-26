@@ -783,7 +783,7 @@ mod tests {
 
     fn hub(extra: &str) -> BankConfig {
         let text = format!(
-            "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: \u{1f6d2} Groceries\n    dining: \u{1f37d}\u{fe0f} Dining\n    fees: \u{1f9fe} Fees\n    transfer: \u{2194}\u{fe0f} Transfer\n    cash: \u{1f3e7} Cash out\n{extra}---\n# Bank\n"
+            "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: \u{1f6d2} Groceries\n    dining: \u{1f37d}\u{fe0f} Dining\n    fees: \u{1f9fe} Fees\n    transfer: \u{2194}\u{fe0f} Transfer\n    cash: \u{1f3e7} Cash out\n{extra}---\n# Bank\n"
         );
         match super::super::config::parse_bank_config(&text) {
             super::super::config::ConfigParse::Ok(config) => config,
@@ -933,7 +933,7 @@ mod tests {
         assert_eq!(xfer.category.as_deref(), Some("transfer"));
 
         // Undeclared categories never leak into a name.
-        let minimal_text = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: \u{1f6d2} Groceries\n---\n# Bank\n";
+        let minimal_text = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: \u{1f6d2} Groceries\n---\n# Bank\n";
         let bare = match super::super::config::parse_bank_config(minimal_text) {
             super::super::config::ConfigParse::Ok(config) => config,
             other => panic!("minimal hub should parse: {other:?}"),

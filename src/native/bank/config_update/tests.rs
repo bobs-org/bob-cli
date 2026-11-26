@@ -26,7 +26,6 @@ fn live_flow() -> &'static str {
     concat!(
         "---\n",
         "parent: \"[[cash]]\"\n",
-        "type: \"[[area]]\"\n",
         "summary: Keep me\n",
         "bank:\n",
         "  accounts:\n",
@@ -52,7 +51,6 @@ fn block_shape() -> &'static str {
     concat!(
         "---\n",
         "parent: \"[[cash]]\"\n",
-        "type: \"[[area]]\"\n",
         "bank:\n",
         "  accounts:\n",
         "    checking:\n",
@@ -80,7 +78,6 @@ fn scalar_docs() -> &'static str {
     concat!(
         "---\n",
         "parent: \"[[cash]]\"\n",
-        "type: \"[[area]]\"\n",
         "bank:\n",
         "  accounts:\n",
         "    checking:\n",

@@ -1,6 +1,7 @@
 //! Capture command tests.
 
 mod authored;
+mod bank_hub;
 mod bare;
 mod batch;
 mod blocked_tasks;

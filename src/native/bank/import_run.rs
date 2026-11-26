@@ -1260,7 +1260,7 @@ mod tests {
         host_catalog::apply_and_commit,
     };
 
-    const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n# Bank\n";
+    const HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-11-01\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n---\n# Bank\n";
     const CSV: &str = "11/12/2026,-13.71,*,,\"SMASHBURGER CARD 1234\"\n";
 
     #[test]

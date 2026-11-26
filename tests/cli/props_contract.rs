@@ -72,32 +72,48 @@ fn home_settings_preview_apply_and_undo_preserve_bytes() {
 }
 
 #[test]
-fn bank_hybrid_and_refused_batches_never_write() {
+fn bank_no_contract_and_refused_batches_never_write() {
     let vault = vault("bank-settings");
     homes(vault.path());
-    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
+    let bank = "---\nparent: '[[cash]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
     write_note(vault.path(), "bank.md", bank);
     let shown = report(&show(vault.path(), "bank.md", &[]));
     assert_eq!(shown["note_kind"], "bank");
-    assert_eq!(shown["properties"][2]["setting"], "summary");
-    assert_eq!(shown["properties"][3]["role"], "card");
+    assert_eq!(shown["capabilities"], json!(["props_v1"]));
+    assert!(shown.get("contract").is_none(), "{shown}");
+    let owned = shown["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["key"] == "bank")
+        .expect("bank key");
+    assert_eq!(owned["role"], "card");
+    assert_eq!(owned["owner"], "bank");
+    assert!(owned.get("setting").is_none(), "{owned}");
     for op in [
-        json!({"op":"prop.set_yaml","key":"ready_cap","yaml":"1000"}),
-        json!({"op":"prop.set","key":"task_refresh","value":0}),
-        json!({"op":"prop.unset","key":"parent"}),
+        json!({"op":"setting.set","setting":"summary","value":"Household finances"}),
+        json!({"op":"setting.set","setting":"color","value":"red"}),
+        json!({"op":"setting.clear","setting":"summary"}),
         json!({"op":"setting.set","setting":"root","value":true}),
-        json!({"op":"prop.set","key":"bank","value":{}}),
     ] {
-        let input = envelope(
-            vault.path(),
-            "bank.md",
-            json!([
-                {"op":"setting.set","setting":"color","value":"red"}, op
-            ]),
-        );
+        let input = envelope(vault.path(), "bank.md", json!([op]));
         let output = update(vault.path(), "bank.md", &input, &["-f", "json"]);
         assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
-        assert_eq!(report(&output)["error"]["op_index"], 1);
+        assert_eq!(report(&output)["error"]["code"], "prop_setting_disabled");
+        assert_eq!(report(&output)["error"]["op_index"], 0);
+        assert_eq!(
+            fs::read_to_string(vault.path().join("bank.md")).unwrap(),
+            bank
+        );
+    }
+    for op in [
+        json!({"op":"prop.set","key":"bank","value":{}}),
+        json!({"op":"prop.unset","key":"bank"}),
+    ] {
+        let input = envelope(vault.path(), "bank.md", json!([op]));
+        let output = update(vault.path(), "bank.md", &input, &["-f", "json"]);
+        assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+        assert_eq!(report(&output)["error"]["code"], "prop_owned");
         assert_eq!(
             fs::read_to_string(vault.path().join("bank.md")).unwrap(),
             bank
@@ -200,16 +216,12 @@ fn show_contract_covers_inherited_hue_shadowed_clock_inbox_and_bank() {
     assert_eq!(cap["effective"]["value"], "off");
     assert_eq!(cap["effective"]["source"], "self");
 
-    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
+    let bank = "---\nparent: '[[cash]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
     write_note(vault.path(), "bank.md", bank);
     let shown = report(&show(vault.path(), "bank.md", &[]));
     assert_eq!(shown["note_kind"], "bank");
-    assert_eq!(
-        shown["capabilities"],
-        json!(["props_v1", "props_contract_v1"])
-    );
-    assert_eq!(shown["contract"]["kind"], "bank");
-    assert_eq!(setting(&shown, "summary")["effective"]["value"], "Bank");
+    assert_eq!(shown["capabilities"], json!(["props_v1"]));
+    assert!(shown.get("contract").is_none(), "{shown}");
 }
 
 #[test]
@@ -267,7 +279,7 @@ fn update_json_returns_candidate_contract_after_clear_apply_and_undo() {
     write_note(vault.path(), "child.md", child);
     let groceries = "---\ntitle: Groceries\ncount: 3\n---\n\n# Groceries\n";
     write_note(vault.path(), "notes/groceries.md", groceries);
-    let bank = "---\ntype: '[[area]]'\nparent: '[[dev]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
+    let bank = "---\nparent: '[[cash]]'\nsummary: Bank\nbank: {currency: USD}\n---\n# 🏦 Bank\n";
     write_note(vault.path(), "bank.md", bank);
 
     let noop = envelope(vault.path(), "child.md", json!([]));
@@ -366,11 +378,8 @@ fn update_json_returns_candidate_contract_after_clear_apply_and_undo() {
         fs::read_to_string(vault.path().join("bank.md")).unwrap(),
         bank
     );
-    assert_eq!(bank_preview["contract"]["kind"], "bank");
-    assert_eq!(
-        setting(&bank_preview, "summary")["effective"]["value"],
-        "Bank"
-    );
+    assert!(bank_preview.get("contract").is_none(), "{bank_preview}");
+    assert_eq!(bank_preview["note_kind"], "bank");
 
     let ordinary = envelope(
         vault.path(),

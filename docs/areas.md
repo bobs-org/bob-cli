@@ -96,7 +96,7 @@ same shape the Notebooks and Projects callouts use.
 >
 > - **[[body]]**
 > - **[[cash]]**
->   - **[[bank]]**
+>   - **[[garden]]**
 >   - **[[recur]]**
 ```
 
@@ -221,7 +221,7 @@ human preamble. List and check share one report shape; `check` uses
       "top": "cash",
       "hue": "magenta",
       "hue_source": "color",
-      "children": ["bank.md"],
+      "children": ["garden.md"],
       "projects": { "direct": 2, "subtree": 2 },
       "today": { "direct": 0, "subtree": 1 },
       "issues": [],
@@ -235,7 +235,7 @@ human preamble. List and check share one report shape; `check` uses
       "kind": "area",
       "state": "current",
       "rows": [
-        { "path": "bank.md", "link": "bank", "depth": 0 }
+        { "path": "garden.md", "link": "garden", "depth": 0 }
       ],
       "issues": []
     }

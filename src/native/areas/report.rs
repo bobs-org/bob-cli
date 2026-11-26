@@ -547,7 +547,7 @@ mod tests {
         let root = temp.path();
         write(root, "area.md", "# Area root\n");
         write(root, "cash.md", &area("area", "color: magenta\n"));
-        write(root, "bank.md", &area("cash", ""));
+        write(root, "garden.md", &area("cash", ""));
         write(root, "body.md", &area("area", ""));
         write(root, "orphan.md", &area("missing", ""));
         let report = report_of(root);
@@ -556,9 +556,9 @@ mod tests {
             .iter()
             .map(|entry| entry.stem.as_str())
             .collect();
-        assert_eq!(stems, ["body", "cash", "bank", "orphan"]);
+        assert_eq!(stems, ["body", "cash", "garden", "orphan"]);
         assert_eq!(entry(&report, "cash").depth, Some(1));
-        assert_eq!(entry(&report, "bank").depth, Some(2));
+        assert_eq!(entry(&report, "garden").depth, Some(2));
         assert_eq!(entry(&report, "orphan").depth, None);
         assert_eq!(entry(&report, "orphan").top, None);
         assert_eq!(
@@ -612,18 +612,18 @@ mod tests {
         let root = temp.path();
         write(root, "area.md", "# Area root\n");
         write(root, "cash.md", &area("area", ""));
-        write(root, "bank.md", &area("cash", ""));
+        write(root, "garden.md", &area("cash", ""));
         write(root, "direct.md", &project("cash", "wip"));
         write(root, "nested.md", &project("direct", "wip"));
-        write(root, "bank_pr.md", &project("bank", "wip"));
+        write(root, "garden_pr.md", &project("garden", "wip"));
         write(root, "done.md", &project("cash", "done"));
         let report = report_of(root);
         let cash = entry(&report, "cash");
-        let bank = entry(&report, "bank");
+        let garden = entry(&report, "garden");
         assert_eq!(cash.projects.direct, 2, "direct + nested under cash");
         assert_eq!(cash.projects.subtree, 3);
-        assert_eq!(bank.projects.direct, 1);
-        assert_eq!(bank.projects.subtree, 1);
+        assert_eq!(garden.projects.direct, 1);
+        assert_eq!(garden.projects.subtree, 1);
     }
 
     #[test]

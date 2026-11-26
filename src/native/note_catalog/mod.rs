@@ -1132,6 +1132,9 @@ fn classify(
     if is_inbox_file(relative) {
         return Some(ClassifiedKind::Inbox);
     }
+    if is_bank_note(relative) {
+        return Some(ClassifiedKind::Bank);
+    }
     if facts.is_area {
         return Some(ClassifiedKind::Area);
     }
@@ -1153,9 +1156,6 @@ fn classify(
     }
     if is_period_note(&stem, facts.is_day_type) {
         return Some(ClassifiedKind::Period);
-    }
-    if is_bank_note(relative) {
-        return Some(ClassifiedKind::Bank);
     }
     if under_dir(relative, &context.gmail_folder) {
         return Some(ClassifiedKind::Mail);

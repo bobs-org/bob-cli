@@ -52,7 +52,7 @@ pub(crate) fn show_command() -> ClapCommand {
             "Show the ordered frontmatter properties for one vault note: \
              source order, line numbers, typed values, kinds, styles, and \
              the owning card or writer for each key, plus the semantic \
-             fingerprint. Area, project, and bank notes also report the \
+             fingerprint. Area and project notes also report the \
              settings contract (stage, choices, declared and effective \
              values, and ^prj facts). NOTE is a vault-relative Markdown \
              path (the `.md` suffix is optional) or an absolute Markdown \

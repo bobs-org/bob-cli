@@ -190,10 +190,11 @@ for generic value edits, YAML fragments, rename destinations, and typed
 setting gestures. Validation examines the addressed value, so unrelated
 legacy values do not prevent another property from being edited.
 
-`bank.md` is a hybrid: its `note_kind` remains `bank`, its `bank` key stays
-card-owned with editor `==`, and its other keys use the area contract.
+`bank.md` is an untyped hub: its `note_kind` remains `bank`, its `bank` key stays
+card-owned with editor `==`, and it exposes no settings contract. `setting.*`
+ops on `bank.md` refuse with `prop_setting_disabled`.
 
-Settings have this stable order (bank uses the area order):
+Settings have this stable order:
 
 - Area: Summary, Lives under, Hue, Default type, Clock, Ready cap, Review,
   Capture names.
@@ -288,7 +289,7 @@ leaves the note unchanged.
 
 ### Settings contract
 
-`bob props show -f json` on an area, project, or bank note adds a `contract`
+`bob props show -f json` on an area or project note adds a `contract`
 block and the `props_contract_v1` capability. Ordinary notes omit both.
 
 ```json
@@ -343,7 +344,7 @@ report that they apply to tasks living in this note only. Text update output
 prints the same messages.
 
 Successful `bob props update -f json` also returns the planned post-image
-`contract` on area, project, and bank notes, using the same shape as
+`contract` on area and project notes, using the same shape as
 `props show`. Preview reports the candidate; apply and restore report the
 confirmed result. Semantic no-ops include it too. Ordinary notes omit the
 field. The schema version stays `1`.
@@ -457,7 +458,7 @@ lock contention, and stale guarded writes that fail under the lock.
 
 ## Capability probe
 
-`props_v1` appears in every `show` capability array. Area, project, and bank
+`props_v1` appears in every `show` capability array. Area and project
 notes also report `props_contract_v1` once the settings contract is present.
 Both names appear in the vault-independent `__catalog` feature handshake, so
 plugins probe once without selecting a note:

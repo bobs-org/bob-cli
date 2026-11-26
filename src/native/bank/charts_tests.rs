@@ -15,7 +15,7 @@ use crate::native::bank::{
 
 type Headings = HashMap<(String, NaiveDate), (String, usize)>;
 
-const HUB: &str = "---\nparent: \"[[cash]]\"\ntype: \"[[area]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-10-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n    fuel: ⛽ Fuel\n    books: 📚 Books\n    gifts: 🎁 Gifts\n    pets: 🐶 Pets\n    games: 🎲 Games\n---\n\n# 🏦 Bank\n";
+const HUB: &str = "---\nparent: \"[[cash]]\"\nbank:\n  accounts:\n    checking:\n      label: WF Checking\n      kind: checking\n      start: 2026-10-01\n    pocket:\n      label: Pocket cash\n      kind: cash\n  categories:\n    groceries: 🛒 Groceries\n    dining: 🍽️ Dining\n    fuel: ⛽ Fuel\n    books: 📚 Books\n    gifts: 🎁 Gifts\n    pets: 🐶 Pets\n    games: 🎲 Games\n---\n\n# 🏦 Bank\n";
 
 fn date(text: &str) -> NaiveDate {
     NaiveDate::parse_from_str(text, "%Y-%m-%d").expect("test date")

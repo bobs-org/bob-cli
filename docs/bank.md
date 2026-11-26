@@ -85,14 +85,15 @@ hooks, and the Tasks plugin's `#task` global filter.
 
 ## `bank.md`
 
-The hub is a sub-area (`type: "[[area]]"`, `parent: "[[cash]]"`). It holds
-the `bank:` configuration, later a queue card, and bank tasks such as
-disputes.
+The hub is an untyped bank hub (`parent: "[[cash]]"`, no `type:`). It holds
+the `bank:` configuration and later a queue card. It holds no tasks; money
+tasks live in `cash.md` (`@cash`). A task capture routed at `@bank` refuses
+with `bank_holds_no_tasks`. The subscriptions album lives under cash, not
+under the hub.
 
 ```markdown
 ---
 parent: "[[cash]]"
-type: "[[area]]"
 bank:
   accounts:
     checking:
@@ -1015,6 +1016,8 @@ follows the envelope below. `issues` counts errors and warnings (not info).
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `bank_hub_missing` | error | `bank/` exists without `bank.md`, or `bank.md` has no `bank:` mapping |
+| `bank_hub_area_type` | warning | `bank.md` carries an area/project `type:`; the hub is untyped |
+| `bank_hub_task` | warning | A `#task` checkbox line in `bank.md` outside fenced code; money tasks live in `cash.md` (`@cash`) |
 | `bank_config_invalid` | error | Any `bank:` problem (file, line, key path) |
 | `bank_rule_read_time_dead` | warning | A rule match has a run of four or more digits; it still applies during import, but digit-masked journal descriptions prevent read-time matches |
 | `bank_day_invalid` | error | A date-shaped day heading outside the note's month, or an impossible date |
