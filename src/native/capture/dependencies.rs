@@ -3782,6 +3782,7 @@ pub(super) fn plan_dependency_only_item(
     )?;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

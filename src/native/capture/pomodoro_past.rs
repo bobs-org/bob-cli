@@ -1771,6 +1771,7 @@ pub(super) fn record_one_member(
     let past_name = past_json.name.clone();
     Ok(super::plan::PlannedCaptureItem {
         result: super::output::CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

@@ -928,6 +928,7 @@ pub(super) fn notebook_item_result(
     kind: &'static str,
 ) -> crate::native::capture::output::CaptureItemResult {
     crate::native::capture::output::CaptureItemResult {
+        snooze: None,
         ok: true,
         dry_run: request.dry_run,
         routed: true,

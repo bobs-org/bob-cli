@@ -3394,7 +3394,7 @@ fn parse_capture_item_masked<'a>(
         kind
     };
     // A recognized snooze intent rides the item into the capture dispatch
-    // guard, which refuses it until the mutation phase consumes it. Only
+    // adapter, which stages it in the shared batch transaction. Only
     // task shapes carry it: every other kind refuses here with snooze
     // teaching copy so no intent falls through to ordinary writes.
     if let Some(snooze) = aggregate.snooze.as_ref() {

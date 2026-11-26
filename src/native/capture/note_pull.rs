@@ -367,6 +367,7 @@ pub(super) fn plan_note_pull_item(
                 let kind_label = capture_kind_label(&parsed.kind);
                 return Ok(PlannedCaptureItem {
                     result: CaptureItemResult {
+                        snooze: None,
                         ok: true,
                         dry_run: request.dry_run,
                         routed: true,
@@ -636,6 +637,7 @@ pub(super) fn plan_note_pull_item(
         let kind_label = capture_kind_label(&parsed.kind);
         return Ok(PlannedCaptureItem {
             result: CaptureItemResult {
+                snooze: None,
                 ok: true,
                 dry_run: request.dry_run,
                 routed: true,
@@ -1121,6 +1123,7 @@ pub(super) fn plan_note_pull_item(
     let kind_label = capture_kind_label(&parsed.kind);
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,

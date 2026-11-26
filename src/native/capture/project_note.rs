@@ -1782,6 +1782,7 @@ pub(super) fn plan_project_note_item(
     let prj_text = parsed.body.trim().to_string();
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

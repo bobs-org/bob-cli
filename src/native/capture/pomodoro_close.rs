@@ -1471,6 +1471,7 @@ fn plan_reset_link_item(
     let _ = today;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -1640,6 +1641,7 @@ fn plan_reset_task_item(
     );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -1781,6 +1783,7 @@ fn plan_reset_whole_item(
     let _ = parsed;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -2300,6 +2303,7 @@ pub(super) fn plan_pomodoro_close_item(
             .unwrap_or_else(|_| day_file.clone());
         return Ok(PlannedCaptureItem {
             result: CaptureItemResult {
+                snooze: None,
                 note_pull: None,
                 record_note: None,
                 notebook: None,
@@ -2491,6 +2495,7 @@ pub(super) fn plan_pomodoro_close_item(
         .unwrap_or_else(|_| day_file.clone());
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -3374,6 +3379,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         Some(format!("{}-{}", summary.closed.start, summary.closed.end));
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -3786,6 +3792,7 @@ pub(super) fn plan_pomodoro_close_task_item(
         );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

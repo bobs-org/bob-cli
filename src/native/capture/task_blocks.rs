@@ -16,6 +16,7 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub(super) enum TaskBlockRole {
     SubBullet,
+    Snoozed,
     Dependency,
     DependencyTarget,
     DependencyDropped,

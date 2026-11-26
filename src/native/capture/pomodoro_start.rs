@@ -1129,6 +1129,7 @@ pub(super) fn plan_pomodoro_start_item(
     );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -1391,6 +1392,7 @@ fn plan_override_restart_item(
     );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -2012,6 +2014,7 @@ fn plan_override_swap_item(
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -2813,6 +2816,7 @@ fn plan_named_pomodoro_start_item(
     );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

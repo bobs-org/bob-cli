@@ -1,7 +1,5 @@
 //! Capture snooze grammar contract (`z:<when>` and `@route:id!`): spans,
-//! diagnostics, strict/editor agreement, and the transitional execution
-//! guard. The mutation phase consumes these intents; until then every
-//! recognized intent parses cleanly but refuses at the dispatch boundary.
+//! diagnostics, strict/editor agreement, and executable dry-run intents.
 
 use crate::support::*;
 use std::fs;
@@ -151,8 +149,15 @@ fn capture_parse_reports_drop_span_and_keeps_the_toggle_distinct() {
 }
 
 #[test]
-fn capture_dry_run_guards_recognized_snooze_intents_without_writing() {
-    let (_temp, vault, day_file) = snooze_vault("bob-cli-capture-snooze-guard");
+fn capture_dry_run_executes_recognized_snooze_intents_without_writing() {
+    let (_temp, vault, day_file) =
+        snooze_vault("bob-cli-capture-snooze-preview");
+    write_file(
+        &vault.join("job.md"),
+        "- [*] #task Email Dan ^email-dan-eod\n",
+    );
+    write_file(&vault.join("home.md"), "# Home\n");
+    write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n\n## Snoozed\n\n- **1500** [[job#^email-dan-eod]]\n");
     let before = fs::read_to_string(&day_file).expect("read day");
     for draft in [
         "@job:email-dan-eod z:1530",
@@ -162,21 +167,9 @@ fn capture_dry_run_guards_recognized_snooze_intents_without_writing() {
         "@job:email-dan-eod!",
     ] {
         let output = dry_run(&vault, &day_file, draft);
-        let error = dry_error(&output);
-        assert!(
-            error.contains("parsed but not yet executable"),
-            "{draft}: {error}"
-        );
-        assert!(
-            error.contains("z:<when>"),
-            "{draft} teaches the snooze spelling: {error}"
-        );
+        assert_success(&output);
     }
-    assert_eq!(
-        fs::read_to_string(&day_file).expect("read day"),
-        before,
-        "guarded intents stage nothing"
-    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), before);
 }
 
 #[test]

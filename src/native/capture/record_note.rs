@@ -959,6 +959,7 @@ fn record_item_result(
     placement: Placement,
 ) -> CaptureItemResult {
     CaptureItemResult {
+        snooze: None,
         note_pull: None,
         record_note: Some(summary),
         notebook: None,

@@ -118,6 +118,7 @@ mod req_close;
 mod req_placement;
 pub(crate) mod sections;
 pub(crate) mod shell_guard;
+mod snooze;
 mod start_output;
 mod sub_bullet;
 mod task_blocks;

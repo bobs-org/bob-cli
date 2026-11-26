@@ -303,6 +303,57 @@ pub(crate) fn plan_drop(
     Ok(DropPlan { day: buf.render() })
 }
 
+/// First active row coordinate for capture's settled output.
+pub(crate) fn active_row_line(
+    day: &str,
+    identity: &TaskIdentity,
+    identities: &IdentityMap,
+) -> Option<usize> {
+    active_rows_for(day, identity, identities)
+        .first()
+        .map(|(line, _)| line + 1)
+}
+
+/// Finish an ordinary capture link: move snooze notes beneath the actual
+/// destination link and prune only active rows. No wake receipt/history is made.
+/// `destination_line` is the one-based entry coordinate after ordinary placement.
+pub(crate) fn plan_link_now(
+    day: &str,
+    identity: &TaskIdentity,
+    identities: &IdentityMap,
+    destination_line: usize,
+) -> Option<String> {
+    let rows = active_rows_for(day, identity, identities);
+    if rows.is_empty() {
+        return None;
+    }
+    let hit = collect_live_hits(day, identity, identities)
+        .into_iter()
+        .find(|hit| hit.entry_line + 1 == destination_line)?;
+    let mut buf = NoteBuf::from(day);
+    let indent = leading_spaces_or_tabs_len(&buf.lines[hit.line_index]);
+    let indent = buf.lines[hit.line_index][..indent].to_string();
+    let mut children = Vec::new();
+    for (start, end) in &rows {
+        let subtree = extract_range(day, *start, *end);
+        let shifted = reindent_subtree(&subtree, "", &indent);
+        children.extend(logical_lines(&shifted).into_iter().skip(1));
+    }
+    // Descending splices preserve coordinates even when a hand-written
+    // Snoozed section precedes the ledger.
+    let mut edits: Vec<_> = rows
+        .into_iter()
+        .map(|(start, end)| (start, end + 1, Vec::<String>::new()))
+        .collect();
+    edits.push((hit.subtree_end + 1, hit.subtree_end + 1, children));
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    for (start, end, lines) in edits {
+        buf.lines.splice(start..end, lines);
+    }
+    drop_empty_section(&mut buf);
+    Some(buf.render())
+}
+
 /// Wake due (or explicit) live rows into never-running destinations.
 ///
 /// A wake whose never-running destination cannot be placed refuses the whole
@@ -842,27 +893,47 @@ fn upsert_active_row(
     let section =
         parse::parse_section(&parsed).ok_or(AddRefusal::NoPomodorosSection)?;
     let mut buf = NoteBuf::from(&rendered);
-    let active = section.rows.iter().find(|row| {
-        row.kind == SnoozeRowKind::Active
-            && row_matches(row, identity, identities)
-    });
+    let active: Vec<_> = section
+        .rows
+        .iter()
+        .filter(|row| {
+            row.kind == SnoozeRowKind::Active
+                && row_matches(row, identity, identities)
+        })
+        .collect();
     let history = section.rows.iter().rev().find(|row| {
         row.kind == SnoozeRowKind::History
             && row_matches(row, identity, identities)
     });
-    if let Some(row) = active {
-        let start = row.line_index;
-        let end = row.children_end.saturating_sub(1).max(row.line_index);
-        buf.remove_range(start, end);
-        return Ok(insert_sorted_row(&buf.render(), when, link_text, notes));
+    // Retime carries every active row's notes. A duplicate spelling must not
+    // leave a second active row or discard the prose beneath it.
+    let mut carried = notes.to_vec();
+    if carried.is_empty() {
+        carried.push(format_active(&when.hhmm, link_text));
     }
-    if let Some(row) = history {
-        let start = row.line_index;
-        let end = row.children_end.saturating_sub(1).max(row.line_index);
-        buf.remove_range(start, end);
-        return Ok(insert_sorted_row(&buf.render(), when, link_text, notes));
+    for row in &active {
+        carried.extend(
+            buf.lines[row.line_index + 1..row.children_end]
+                .iter()
+                .cloned(),
+        );
     }
-    Ok(insert_sorted_row(&buf.render(), when, link_text, notes))
+    if active.is_empty() {
+        if let Some(row) = history {
+            buf.remove_range(
+                row.line_index,
+                row.children_end.saturating_sub(1).max(row.line_index),
+            );
+        }
+    } else {
+        for row in active.into_iter().rev() {
+            buf.remove_range(
+                row.line_index,
+                row.children_end.saturating_sub(1).max(row.line_index),
+            );
+        }
+    }
+    Ok(insert_sorted_row(&buf.render(), when, link_text, &carried))
 }
 
 fn insert_snoozed_heading(buf: &mut NoteBuf) -> Result<(), AddRefusal> {

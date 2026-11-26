@@ -415,6 +415,13 @@ pub(super) fn plan_capture_batch_with_config_path(
     let today = now.date();
     let roll_seed = config::roll_seed();
     let mut planner = CaptureBatchPlanner::default();
+    if parsed_items.iter().any(|item| item.parsed.snooze.is_some()) {
+        super::snooze::guard_settings(
+            &mut planner,
+            &request.bob_dir,
+            config_path,
+        )?;
+    }
     for (relative, source) in notebook_policy.metadata_sources() {
         planner
             .guard_merge_read(&request.bob_dir.join(relative), source.clone());
@@ -1164,6 +1171,12 @@ pub(super) fn plan_capture_batch_with_config_path(
         &request.bob_dir,
         &mut task_tracker,
         &mut items,
+    )?;
+    super::snooze::refresh_results(
+        &mut items,
+        &mut planner,
+        &request.bob_dir,
+        &dependency_ctx,
     )?;
     let final_day = planner.peek_text(&day_file);
     let successor_reasons = surviving_successor_link_reasons(&items);
@@ -1978,6 +1991,7 @@ fn plan_ref_item(
     };
     let planned = PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -2211,6 +2225,114 @@ fn apply_existing_marker_after_gesture(
 
 pub(super) fn plan_capture_item(
     request: &CaptureRequest,
+    mut parsed_item: ParsedCaptureItem,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+    roll_seed: u64,
+    planner: &mut CaptureBatchPlanner,
+    clip_reservations: &mut capture_clip::ClipReservations,
+    clip_snapshot: &mut ClipSnapshot,
+    warnings: &mut Vec<CaptureWarning>,
+    dependency_ctx: &mut DependencyContext,
+    config_path: Option<&Path>,
+    record_context: &mut super::super::capture_record::CaptureRecordContext,
+    notebook_policy: &mut super::super::capture_language::NotebookRoutePolicy,
+    task_theme_context: &mut CaptureTaskThemeContext,
+    earlier_items: &[PlannedCaptureItem],
+    project_moves: &[ProjectMoveLanding],
+) -> Result<PlannedCaptureItem, CaptureError> {
+    let intent = parsed_item.parsed.snooze.clone();
+    let clock = intent
+        .as_ref()
+        .map(|_| super::snooze::clock(now))
+        .transpose()?;
+    let when = match (intent.as_ref(), clock) {
+        (Some(intent), Some(clock)) if !intent.drop => {
+            Some(super::snooze::resolve_time(&intent.raw, clock)?)
+        }
+        _ => None,
+    };
+    if intent.is_some() {
+        if let CaptureKind::PomodoroLink { block_id, .. } =
+            &parsed_item.parsed.kind
+        {
+            if let Some(route) = parsed_item.parsed.route.as_deref()
+                && let Some(error) = album_task_home_refusal(
+                    &request.bob_dir,
+                    record_context.policy(),
+                    route,
+                )
+            {
+                return Err(error);
+            }
+            return super::snooze::plan_existing(
+                request,
+                &parsed_item.parsed,
+                block_id,
+                clock.expect("snooze clock"),
+                when.as_ref(),
+                planner,
+                dependency_ctx,
+                task_theme_context,
+                warnings,
+            );
+        }
+        // Reuse ordinary task construction, including children, typing and ID
+        // collisions. Commitment happens in plan_add, with no intermediate link.
+        if let CaptureKind::Pomodoro { block_id, .. } = &parsed_item.parsed.kind
+        {
+            parsed_item.parsed.kind = CaptureKind::TaskWithBlockId {
+                block_id: block_id.clone(),
+            };
+        }
+    }
+    let link_now = intent.is_none()
+        && matches!(
+            parsed_item.parsed.kind,
+            CaptureKind::PomodoroLink { close: None, .. }
+        );
+    let mut planned = plan_capture_item_inner(
+        request,
+        parsed_item,
+        now,
+        today,
+        roll_seed,
+        planner,
+        clip_reservations,
+        clip_snapshot,
+        warnings,
+        dependency_ctx,
+        config_path,
+        record_context,
+        notebook_policy,
+        task_theme_context,
+        earlier_items,
+        project_moves,
+    )?;
+    if let (Some(clock), Some(when)) = (clock, when.as_ref()) {
+        super::snooze::add_to_item(
+            request,
+            &mut planned,
+            clock,
+            when,
+            planner,
+            dependency_ctx,
+            task_theme_context,
+            warnings,
+        )?;
+    } else if link_now {
+        super::snooze::finish_link_now(
+            request,
+            &mut planned,
+            planner,
+            dependency_ctx,
+        )?;
+    }
+    Ok(planned)
+}
+
+fn plan_capture_item_inner(
+    request: &CaptureRequest,
     parsed_item: ParsedCaptureItem,
     now: chrono::NaiveDateTime,
     today: NaiveDate,
@@ -2236,16 +2358,6 @@ pub(super) fn plan_capture_item(
     // and project-note stamps resolve their offset in that same zone so
     // UTC-clock hosts do not stamp `+0000`.
     //
-    // Grammar-phase execution guard: a recognized snooze intent (`z:<when>`
-    // or the narrow `@route:id!` drop) parses cleanly but must never fall
-    // through to ordinary writes. The mutation phase removes this refusal
-    // once every accepted intent reaches a complete planner branch.
-    if parsed_item.parsed.snooze.is_some() {
-        return Err(CaptureError::usage(
-            crate::native::capture_language::snooze
-                ::snooze_not_yet_executable_error(),
-        ));
-    }
     let timezone = crate::native::day_timezone().ok().flatten();
     if is_album_guarded_task_kind(&parsed_item.parsed.kind)
         && let Some(route) = parsed_item.parsed.route.as_deref()
@@ -2674,6 +2786,7 @@ pub(super) fn plan_capture_item(
         };
         let mut planned = PlannedCaptureItem {
             result: CaptureItemResult {
+                snooze: None,
                 note_pull: None,
                 record_note: None,
                 notebook: None,
@@ -3027,6 +3140,9 @@ pub(super) fn plan_capture_item(
             .as_ref()
             .and_then(|resolved| resolved.rolled_offset)
     });
+    if parsed.snooze.is_some() && scheduled_offset.is_some() {
+        return Err(CaptureError::usage("snooze z:<when> cannot be combined with a schedule; remove s: or the scheduled priority"));
+    }
     let scheduled = scheduled_offset
         .map(|offset| scheduled_date_string(today, offset))
         .transpose()?;
@@ -3037,7 +3153,8 @@ pub(super) fn plan_capture_item(
     let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
         Vec::new();
     let needs_new_task_id = matches!(parsed.kind, CaptureKind::Task)
-        && (!parsed.blocked_tasks.is_empty()
+        && (parsed.snooze.is_some()
+            || !parsed.blocked_tasks.is_empty()
             || parsed
                 .relations
                 .iter()
@@ -3778,6 +3895,7 @@ pub(super) fn plan_capture_item(
             };
             return Ok(PlannedCaptureItem {
                 result: CaptureItemResult {
+                    snooze: None,
                     note_pull: None,
                     record_note: None,
                     notebook: None,
@@ -4739,6 +4857,7 @@ pub(super) fn plan_capture_item(
         .map(str::to_string);
     let mut planned = PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -6103,6 +6222,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let _ = parsed_index;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

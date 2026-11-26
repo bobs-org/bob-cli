@@ -298,6 +298,7 @@ fn tasks_heading_at_eof_inserts_after_blank_line() {
 fn json_success_shape_is_stable() {
     let result = CaptureResult::from_items(
         vec![CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

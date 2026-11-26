@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    fs, iter,
+    iter,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -12,7 +12,6 @@ use std::{
 use std::{cell::RefCell, collections::VecDeque};
 
 use chrono::{NaiveDate, NaiveDateTime, TimeZone, Timelike};
-use chrono_tz::Tz;
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,
@@ -1526,7 +1525,7 @@ fn ensure_today(day: &Day, now: &ClockNow) -> Result<(), CliError> {
 fn clock_now() -> Result<ClockNow, CliError> {
     let wall = next_test_clock().unwrap_or_else(bob_env::current_datetime);
     let zone = bob_env::configured_timezone()
-        .or_else(host_timezone)
+        .or_else(super::host_timezone)
         .ok_or_else(|| {
             CliError::runtime(
                 "cannot identify the host timezone; set timezone in Bob's config",
@@ -1553,24 +1552,6 @@ fn clock_now() -> Result<ClockNow, CliError> {
         },
         rfc3339,
     })
-}
-
-fn host_timezone() -> Option<Tz> {
-    if let Some(zone) = bob_env::var("TZ")
-        .ok()
-        .and_then(|name| name.parse::<Tz>().ok())
-    {
-        return Some(zone);
-    }
-    if let Ok(name) = fs::read_to_string("/etc/timezone")
-        && let Ok(zone) = name.trim().parse::<Tz>()
-    {
-        return Some(zone);
-    }
-    let localtime = fs::read_link("/etc/localtime").ok()?;
-    let path = localtime.to_string_lossy();
-    let (_, name) = path.split_once("/zoneinfo/")?;
-    name.parse::<Tz>().ok()
 }
 
 fn absolute(path: &Path) -> PathBuf {

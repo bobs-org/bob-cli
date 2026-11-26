@@ -789,8 +789,8 @@ pub(crate) struct ParsedCaptureText {
     pub(crate) priority_level: Option<u64>,
     /// Optional raw `z:<when>` snooze specification plus its source range,
     /// or a narrow `@route:id!` drop. `None` for every older input, so
-    /// lexing stays independent of filesystem state. Execution refuses any
-    /// recognized intent until the mutation phase consumes it.
+    /// lexing stays independent of filesystem state. The capture adapter
+    /// resolves the time and stages the operation atomically.
     pub(crate) snooze: Option<super::snooze::SnoozeIntent>,
     /// Normalized authored-child bodies plus their semantic depth, in source
     /// order, with their source marker and item-wide markers already removed.

@@ -327,6 +327,7 @@ pub(super) fn plan_transfer_item(
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

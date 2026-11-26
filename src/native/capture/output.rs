@@ -839,6 +839,8 @@ pub(super) struct ProjectNoteSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CaptureItemResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) snooze: Option<super::snooze::SnoozeJson>,
     pub(super) ok: bool,
     pub(super) dry_run: bool,
     pub(super) routed: bool,
@@ -4212,6 +4214,23 @@ pub(super) fn print_human_item_success(
     let ordinal = ordinal
         .map(|(index, total)| format!("{index}/{total}  "))
         .unwrap_or_default();
+    if let Some(snooze) = &result.snooze
+        && snooze.action != "link_now"
+    {
+        let action = if snooze.action == "drop" {
+            "dropped snooze"
+        } else {
+            "snoozed"
+        };
+        let time = snooze
+            .time
+            .as_deref()
+            .map(|time| format!(" until {}:{}", &time[..2], &time[2..]))
+            .unwrap_or_default();
+        println!("{prefix} {action}{time}  {ordinal}{target_label}");
+        println!("  {}", result.task_line);
+        return;
+    }
     if let Some(reset) = result.pomodoro_reset.as_ref() {
         print_human_pomodoro_reset_success(
             result,
@@ -8831,6 +8850,7 @@ mod tests {
 
     fn minimal_result() -> CaptureItemResult {
         CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

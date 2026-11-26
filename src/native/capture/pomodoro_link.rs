@@ -832,6 +832,7 @@ fn planned_item_from_pomodoro_link_plan(
     let relative_target = relative_target(Some(route));
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

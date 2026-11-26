@@ -67,6 +67,7 @@ pub(super) fn plan_task_complete_item(
         outcome.previous_status_symbol != outcome.final_status_symbol;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

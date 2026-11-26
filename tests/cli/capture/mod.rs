@@ -118,6 +118,7 @@ mod retype_closeout;
 mod rewrite;
 mod routing;
 mod sections;
+mod snooze;
 mod sub_bullet;
 mod successor_compatibility;
 mod successor_integration;

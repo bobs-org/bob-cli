@@ -411,6 +411,7 @@ pub(super) fn plan_pomodoro_adjust_item(
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,
@@ -633,6 +634,7 @@ pub(super) fn plan_pomodoro_shift_item(
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            snooze: None,
             note_pull: None,
             record_note: None,
             notebook: None,

@@ -23,3 +23,22 @@ pub(crate) mod shell;
 pub(crate) mod state;
 pub(crate) mod vectors;
 pub(crate) mod when;
+
+/// Shared shell-level zone fallback; pure time parsing takes an injected clock.
+pub(crate) fn host_timezone() -> Option<chrono_tz::Tz> {
+    if let Some(zone) = crate::native::env::var("TZ")
+        .ok()
+        .and_then(|name| name.parse::<chrono_tz::Tz>().ok())
+    {
+        return Some(zone);
+    }
+    if let Ok(name) = std::fs::read_to_string("/etc/timezone")
+        && let Ok(zone) = name.trim().parse::<chrono_tz::Tz>()
+    {
+        return Some(zone);
+    }
+    let localtime = std::fs::read_link("/etc/localtime").ok()?;
+    let path = localtime.to_string_lossy();
+    let (_, name) = path.split_once("/zoneinfo/")?;
+    name.parse::<chrono_tz::Tz>().ok()
+}

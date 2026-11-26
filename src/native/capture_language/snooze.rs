@@ -1,9 +1,7 @@
 //! Shared terminal `z:<when>` snooze intent and the narrow `@route:id!`
 //! snooze-drop spelling.
 //!
-//! The grammar phase only lexes these shapes and carries the raw intent
-//! through to the capture dispatch boundary, which refuses every
-//! recognized snooze intent until the mutation phase consumes it.
+//! Lex these shapes and carry raw intent to the capture transaction adapter.
 //! Clock-dependent validation (past, next-day, DST gap, malformed times)
 //! belongs to the shared time-resolution boundary the mutation phase
 //! calls, never to a second lexer here: a claimed `z:<non-empty>` token
@@ -178,13 +176,6 @@ pub(crate) fn snooze_existing_clip_error() -> String {
 /// Snooze takes one task: a multi-target run cannot share one `z:`.
 pub(crate) fn snooze_multi_target_error() -> String {
     "snooze `z:<when>` takes one task; put each `@route+id` target on its own item"
-        .to_string()
-}
-
-/// Transitional execution refusal at the capture dispatch boundary. The
-/// grammar recognizes the intent; the mutation phase consumes it.
-pub(crate) fn snooze_not_yet_executable_error() -> String {
-    "snooze is parsed but not yet executable (`z:<when>` and `@route:id!` land with the mutation phase); capture without the snooze marker for now"
         .to_string()
 }
 
