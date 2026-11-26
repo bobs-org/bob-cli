@@ -1,8 +1,9 @@
-//! Post-commit wake receipt and Darwin `org.bobs.bob.snooze.woken` post.
+//! Post-commit wake receipt and notification ownership record.
 //!
 //! Written only after a successful vault commit with a nonempty `woken[]`.
-//! The Darwin notification is posted only once the matching receipt is
-//! readable. Failures warn on stderr and never roll back the wake.
+//! A Mac Capture Darwin post may follow only when the selected owner is
+//! `mac_capture` and the matching receipt is readable. Failures never roll
+//! back the wake.
 
 use std::{
     fs,
@@ -27,6 +28,8 @@ const SCHEMA_VERSION: u32 = 1;
 thread_local! {
     static TEST_DARWIN: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static TEST_DARWIN_READABLE: std::cell::RefCell<Vec<bool>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     static TEST_DARWIN_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -37,6 +40,8 @@ pub(crate) struct WakeReceipt {
     pub date: String,
     pub woken_at: String,
     pub host: String,
+    pub notification_channel: String,
+    pub vault_root: String,
     pub daily_file: String,
     pub tasks: Vec<Value>,
     pub plan: Value,
@@ -70,12 +75,15 @@ static RECEIPT_NONCE: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn from_report(
     report: &Value,
     daily_file: &Path,
+    vault_root: &Path,
+    notification_channel: &str,
     woken_at: &str,
 ) -> Option<WakeReceipt> {
     let woken = report.get("woken")?.as_array()?;
     if woken.is_empty() {
         return None;
     }
+    let vault_root = fs::canonicalize(vault_root).ok()?;
     let tasks = woken.iter().map(receipt_task).collect::<Vec<_>>();
     Some(WakeReceipt {
         schema_version: SCHEMA_VERSION,
@@ -87,6 +95,8 @@ pub(crate) fn from_report(
             .to_string(),
         woken_at: woken_at.to_string(),
         host: pref_journal::host_label(),
+        notification_channel: notification_channel.to_string(),
+        vault_root: vault_root.to_string_lossy().into_owned(),
         daily_file: daily_file.to_string_lossy().into_owned(),
         tasks,
         plan: report.get("plan").cloned().unwrap_or(json!({})),
@@ -181,6 +191,11 @@ pub(crate) fn is_readable(wake_id: &str) -> bool {
 pub(crate) fn post_darwin() -> bool {
     #[cfg(test)]
     {
+        let readable = fs::read_to_string(last_wake_path())
+            .ok()
+            .and_then(|text| serde_json::from_str::<WakeReceipt>(&text).ok())
+            .is_some_and(|receipt| is_readable(&receipt.wake_id));
+        TEST_DARWIN_READABLE.with(|checks| checks.borrow_mut().push(readable));
         TEST_DARWIN.with(|calls| {
             calls.borrow_mut().push(WOKEN_NOTIFICATION.to_string());
         });
@@ -200,6 +215,12 @@ pub(crate) fn post_darwin() -> bool {
 #[cfg(test)]
 pub(crate) fn take_darwin_posts() -> Vec<String> {
     TEST_DARWIN.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
+}
+
+#[cfg(test)]
+pub(crate) fn take_darwin_readable_checks() -> Vec<bool> {
+    TEST_DARWIN_READABLE
+        .with(|checks| std::mem::take(&mut *checks.borrow_mut()))
 }
 
 #[cfg(test)]
@@ -244,6 +265,8 @@ mod tests {
         let receipt = from_report(
             &sample_report(),
             Path::new("2026/20261008.md"),
+            Path::new("."),
+            "desktop",
             "2026-10-08T12:00:00-04:00",
         )
         .expect("nonempty woken");
@@ -270,11 +293,25 @@ mod tests {
         assert_eq!(on_disk.tasks[0]["destination"], "WRITE");
         assert_eq!(on_disk.tasks[0]["line"], 3);
         assert_eq!(on_disk.daily_file, "2026/20261008.md");
+        assert_eq!(on_disk.notification_channel, "desktop");
+        assert_eq!(
+            on_disk.vault_root,
+            std::env::current_dir()
+                .expect("current directory")
+                .to_string_lossy()
+        );
     }
 
     #[test]
     fn empty_woken_builds_no_receipt() {
         let report = json!({"woken": [], "plan": {}});
-        assert!(from_report(&report, Path::new("day.md"), "now").is_none());
+        assert!(from_report(
+            &report,
+            Path::new("day.md"),
+            Path::new("."),
+            "off",
+            "now"
+        )
+        .is_none());
     }
 }

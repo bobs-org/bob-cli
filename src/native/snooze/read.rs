@@ -12,6 +12,7 @@ use super::{
 };
 use crate::native::{
     capture::{line_spans, nearest_shallower_list_item_parent},
+    capture_dependency_tasks,
     capture_pomodoros::{self, PomodoroState},
     event_task, markdown, note_tasks, pomodoro,
     task_dependencies::block_link_spans,
@@ -30,6 +31,8 @@ pub(crate) struct RowDetail {
     pub(crate) parsed: SnoozeRow,
     pub(crate) identity: Option<TaskIdentity>,
     pub(crate) title: Option<String>,
+    pub(crate) effectively_blocked: bool,
+    pub(crate) wake_notice_eligible: bool,
 }
 
 pub(crate) struct ReadView {
@@ -104,6 +107,7 @@ fn read_with_lookup<'a>(
             let mut title = None;
             let mut resolution = ResolutionKind::Missing;
             let mut fact = None;
+            let mut effectively_blocked = false;
             if let (Some(target), Some(id)) =
                 (row.target.as_deref(), row.block_id.as_deref())
             {
@@ -135,15 +139,22 @@ fn read_with_lookup<'a>(
                                     resolution = ResolutionKind::Found;
                                     let is_task = task.status_type
                                         != TaskStatusType::NonTask;
+                                    let status = normalized_status(
+                                        task.status_symbol,
+                                        task.status_type,
+                                        &settings.done_statuses,
+                                    );
+                                    let raw_line = contents
+                                        .lines()
+                                        .nth(task.line_index)
+                                        .unwrap_or("");
+                                    effectively_blocked = status == '?'
+                                    || capture_dependency_tasks::has_prj_is_blocked_tag(raw_line);
                                     if is_task {
                                         title = Some(task.description.clone());
                                     }
                                     fact = Some(TaskState {
-                                        status: normalized_status(
-                                            task.status_symbol,
-                                            task.status_type,
-                                            &settings.done_statuses,
-                                        ),
+                                        status,
                                         is_task,
                                         is_event: is_task
                                             && event_task::event_task_at(
@@ -193,8 +204,36 @@ fn read_with_lookup<'a>(
                 parsed: row,
                 identity,
                 title,
+                effectively_blocked,
+                wake_notice_eligible: false,
             });
         }
+    }
+    let active_identities = details
+        .iter()
+        .filter(|detail| {
+            detail.parsed.kind == SnoozeRowKind::Active
+                && detail.parsed.minutes.is_some()
+        })
+        .filter_map(|detail| detail.identity.clone())
+        .collect::<BTreeSet<_>>();
+    for (detail, row) in details.iter_mut().zip(&rows) {
+        detail.wake_notice_eligible = note_date == clock.date
+            && detail.parsed.kind == SnoozeRowKind::History
+            && detail.parsed.woke_minutes.is_some()
+            && !row.malformed
+            && row.resolution == ResolutionKind::Found
+            && row.task.is_some_and(|task| {
+                task.is_task
+                    && !task.is_event
+                    && matches!(task.status, '*' | '/')
+            })
+            && !detail.effectively_blocked
+            && row.has_live_link
+            && detail
+                .identity
+                .as_ref()
+                .is_some_and(|identity| !active_identities.contains(identity));
     }
     ReadView {
         rows: details,

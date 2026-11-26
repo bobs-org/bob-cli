@@ -1,7 +1,7 @@
-//! Wake nudge arbitration: Mac Capture claim, desktop fallback, `off`.
+//! Wake notification ownership and dispatch: Mac Capture, desktop, or `off`.
 //!
-//! The durable receipt protocol is independent of `snooze.notify`. This
-//! module only chooses the post-commit nudge and the `notified` report.
+//! A route is selected once after the wake commit, recorded in the receipt,
+//! then used for dispatch so delivery never changes owners mid-wake.
 
 use std::fs;
 
@@ -31,6 +31,24 @@ pub(crate) enum Notified {
     None,
 }
 
+/// The channel selected to own this wake, before its receipt is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotificationChannel {
+    MacCapture,
+    Desktop,
+    Off,
+}
+
+impl NotificationChannel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MacCapture => "mac_capture",
+            Self::Desktop => "desktop",
+            Self::Off => "off",
+        }
+    }
+}
+
 impl Notified {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -55,19 +73,33 @@ pub(crate) struct Delivery {
 pub(crate) fn deliver(
     report: &Value,
     daily_file: &std::path::Path,
+    vault_root: &std::path::Path,
     woken_at: &str,
     mode: NotifyMode,
 ) -> Delivery {
-    let Some(receipt) = receipt::from_report(report, daily_file, woken_at)
-    else {
+    let channel = select_channel(mode);
+    let Some(vault_root) = fs::canonicalize(vault_root).ok() else {
+        eprintln!("bob snooze: could not resolve canonical vault root");
         return Delivery {
             notified: Notified::None,
             wake_id: Value::Null,
         };
     };
-    match write_and_post(&receipt) {
+    let Some(receipt) = receipt::from_report(
+        report,
+        daily_file,
+        &vault_root,
+        channel.as_str(),
+        woken_at,
+    ) else {
+        return Delivery {
+            notified: Notified::None,
+            wake_id: Value::Null,
+        };
+    };
+    match write_receipt(&receipt) {
         Ok(()) => Delivery {
-            notified: nudge(mode, report),
+            notified: dispatch(channel, report),
             wake_id: json!(receipt.wake_id),
         },
         Err(message) => {
@@ -80,32 +112,44 @@ pub(crate) fn deliver(
     }
 }
 
-fn write_and_post(receipt: &WakeReceipt) -> Result<(), String> {
+fn write_receipt(receipt: &WakeReceipt) -> Result<(), String> {
     receipt::write_atomic(receipt)
         .map_err(|error| format!("could not write wake receipt: {error}"))?;
     if !receipt::is_readable(&receipt.wake_id) {
         return Err("wake receipt is not readable".into());
     }
-    if !receipt::post_darwin() {
-        eprintln!(
-            "bob snooze: could not post wake notification: {}",
-            receipt::WOKEN_NOTIFICATION
-        );
-    }
     Ok(())
 }
 
-fn nudge(mode: NotifyMode, report: &Value) -> Notified {
+fn select_channel(mode: NotifyMode) -> NotificationChannel {
     match mode {
-        NotifyMode::Off => Notified::None,
-        NotifyMode::Desktop => send_desktop_nudge(report),
+        NotifyMode::Off => NotificationChannel::Off,
+        NotifyMode::Desktop => NotificationChannel::Desktop,
         NotifyMode::Auto => {
             if live_mac_claim() {
-                Notified::MacCapture
+                NotificationChannel::MacCapture
             } else {
-                send_desktop_nudge(report)
+                NotificationChannel::Desktop
             }
         }
+    }
+}
+
+fn dispatch(channel: NotificationChannel, report: &Value) -> Notified {
+    match channel {
+        NotificationChannel::MacCapture => {
+            if receipt::post_darwin() {
+                Notified::MacCapture
+            } else {
+                eprintln!(
+                    "bob snooze: could not post wake notification: {}",
+                    receipt::WOKEN_NOTIFICATION
+                );
+                Notified::None
+            }
+        }
+        NotificationChannel::Desktop => send_desktop_nudge(report),
+        NotificationChannel::Off => Notified::None,
     }
 }
 
@@ -345,6 +389,7 @@ mod tests {
         let delivery = deliver(
             &report(),
             Path::new("2026/20261008.md"),
+            Path::new("."),
             "2026-10-08T15:32:00-04:00",
             NotifyMode::Auto,
         );
@@ -354,6 +399,16 @@ mod tests {
         assert!(delivery.wake_id.as_str().is_some());
         assert!(take_desktop_calls().is_empty());
         assert_eq!(receipt::take_darwin_posts(), [receipt::WOKEN_NOTIFICATION]);
+        assert_eq!(receipt::take_darwin_readable_checks(), [true]);
+        let stored: Value = serde_json::from_slice(
+            &fs::read(receipt::last_wake_path()).expect("receipt"),
+        )
+        .expect("receipt JSON");
+        assert_eq!(stored["notification_channel"], "mac_capture");
+        assert_eq!(
+            stored["vault_root"],
+            std::env::current_dir().unwrap().to_string_lossy().as_ref()
+        );
     }
 
     #[test]
@@ -371,6 +426,7 @@ mod tests {
             let delivery = deliver(
                 &report(),
                 Path::new("day.md"),
+                Path::new("."),
                 "now",
                 NotifyMode::Auto,
             );
@@ -380,8 +436,13 @@ mod tests {
             r#"{"schema_version":1,"pid":9,"app":"x","version":"1","started_at":"t"}"#,
         );
         set_pid_alive(Some(never_alive));
-        let delivery =
-            deliver(&report(), Path::new("day.md"), "now", NotifyMode::Auto);
+        let delivery = deliver(
+            &report(),
+            Path::new("day.md"),
+            Path::new("."),
+            "now",
+            NotifyMode::Auto,
+        );
         set_pid_alive(None);
         set_desktop_result(None);
         assert_eq!(delivery.notified, Notified::Desktop);
@@ -396,25 +457,52 @@ mod tests {
         write_claim(
             r#"{"schema_version":1,"pid":7,"app":"x","version":"1","started_at":"t"}"#,
         );
-        let desktop =
-            deliver(&report(), Path::new("day.md"), "now", NotifyMode::Desktop);
+        let desktop = deliver(
+            &report(),
+            Path::new("day.md"),
+            Path::new("."),
+            "now",
+            NotifyMode::Desktop,
+        );
         assert_eq!(desktop.notified, Notified::Desktop);
         assert_eq!(take_desktop_calls().len(), 1);
-        let off =
-            deliver(&report(), Path::new("day.md"), "now", NotifyMode::Off);
+        let desktop_receipt: Value = serde_json::from_slice(
+            &fs::read(receipt::last_wake_path()).expect("desktop receipt"),
+        )
+        .expect("desktop receipt JSON");
+        assert_eq!(desktop_receipt["notification_channel"], "desktop");
+        assert!(receipt::take_darwin_posts().is_empty());
+        let off = deliver(
+            &report(),
+            Path::new("day.md"),
+            Path::new("."),
+            "now",
+            NotifyMode::Off,
+        );
         set_pid_alive(None);
         set_desktop_result(None);
         assert_eq!(off.notified, Notified::None);
         assert!(take_desktop_calls().is_empty());
         assert!(off.wake_id.as_str().is_some());
+        let off_receipt: Value = serde_json::from_slice(
+            &fs::read(receipt::last_wake_path()).expect("off receipt"),
+        )
+        .expect("off receipt JSON");
+        assert_eq!(off_receipt["notification_channel"], "off");
+        assert!(receipt::take_darwin_posts().is_empty());
     }
 
     #[test]
     fn desktop_failure_reports_none_and_keeps_receipt() {
         let (_temp, _guard) = isolate();
         set_desktop_result(Some(false));
-        let delivery =
-            deliver(&report(), Path::new("day.md"), "now", NotifyMode::Desktop);
+        let delivery = deliver(
+            &report(),
+            Path::new("day.md"),
+            Path::new("."),
+            "now",
+            NotifyMode::Desktop,
+        );
         set_desktop_result(None);
         assert_eq!(delivery.notified, Notified::None);
         assert!(delivery.wake_id.as_str().is_some());
@@ -422,15 +510,30 @@ mod tests {
     }
 
     #[test]
-    fn darwin_failure_still_reports_wake_id_when_receipt_is_readable() {
+    fn failed_mac_dispatch_reports_none_and_keeps_the_owned_receipt() {
         let (_temp, _guard) = isolate();
+        set_pid_alive(Some(always_alive));
+        write_claim(
+            r#"{"schema_version":1,"pid":4242,"app":"Bob Mac Capture","version":"1.0","started_at":"2026-10-08T12:00:00Z"}"#,
+        );
         receipt::set_darwin_fail(true);
-        set_desktop_result(Some(true));
-        let delivery =
-            deliver(&report(), Path::new("day.md"), "now", NotifyMode::Desktop);
+        let delivery = deliver(
+            &report(),
+            Path::new("day.md"),
+            Path::new("."),
+            "now",
+            NotifyMode::Auto,
+        );
         receipt::set_darwin_fail(false);
-        set_desktop_result(None);
-        assert_eq!(delivery.notified, Notified::Desktop);
+        set_pid_alive(None);
+        assert_eq!(delivery.notified, Notified::None);
         assert!(delivery.wake_id.as_str().is_some());
+        assert!(take_desktop_calls().is_empty());
+        assert_eq!(receipt::take_darwin_readable_checks(), [true]);
+        let stored: Value = serde_json::from_slice(
+            &fs::read(receipt::last_wake_path()).expect("receipt"),
+        )
+        .expect("receipt JSON");
+        assert_eq!(stored["notification_channel"], "mac_capture");
     }
 }

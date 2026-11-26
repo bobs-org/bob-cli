@@ -41,6 +41,15 @@ fn json_output(output: &std::process::Output) -> Value {
     serde_json::from_str(stdout(output).trim()).expect("snooze JSON")
 }
 
+fn history_list_value(prefix: &str, daily: &str, task: &str) -> Value {
+    let (temp, _) = snooze_vault(prefix, daily, task);
+    let output = snooze_command(&temp, &["-f", "json"])
+        .output()
+        .expect("list snoozed history");
+    assert_success(&output);
+    json_output(&output)
+}
+
 #[test]
 fn bare_command_lists_read_only_with_stable_json() {
     let (temp, daily_path) = snooze_vault(
@@ -56,12 +65,133 @@ fn bare_command_lists_read_only_with_stable_json() {
     assert_success(&output);
     let report = json_output(&output);
     assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["wake_notice_version"], 1);
+    assert_eq!(
+        report["vault_root"],
+        fs::canonicalize(temp.path().join("vault"))
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
     assert_eq!(report["date"], "2026-10-08");
     assert_eq!(report["rows"][0]["state"], "asleep");
+    assert_eq!(report["rows"][0]["wake_notice_eligible"], false);
     assert_eq!(report["rows"][0]["target"], "1530");
     assert_eq!(report["rows"][0]["title"], "Review the launch plan");
     assert!(!report["next_wake_at"].as_str().unwrap().is_empty());
     assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+}
+
+#[test]
+fn wake_notice_eligibility_requires_current_open_actionable_linked_task() {
+    let open_link = "## Pomodoros\n- [ ] () — FOCUS\n  - [[jobs#^job]]\n";
+    let history = "## Snoozed\n- ~~**1100** [[jobs#^job]]~~ · woke 12:00\n";
+    let make_daily = |ledger: &str, snoozed: &str| {
+        format!("# 2026-10-08\n\n{ledger}\n{snoozed}")
+    };
+
+    let eligible = history_list_value(
+        "bob-cli-snooze-notice-eligible",
+        &make_daily(open_link, history),
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    assert_eq!(eligible["rows"][0]["state"], "woken");
+    assert_eq!(eligible["rows"][0]["wake_notice_eligible"], true);
+
+    let task_cases = [
+        ("done", "- [x] #task Review the launch plan ^job\n"),
+        ("cancelled", "- [-] #task Review the launch plan ^job\n"),
+        ("released", "- [ ] #task Review the launch plan ^job\n"),
+        ("blocked", "- [?] #task Review the launch plan ^job\n"),
+        (
+            "project-blocked",
+            "- [*] #task Review the launch plan #prj_is_blocked ^job\n",
+        ),
+        ("missing", "- [*] #task A different task ^other\n"),
+        (
+            "ambiguous",
+            "- [*] #task First task ^job\n- [*] #task Second task ^job\n",
+        ),
+        ("non-task", "- [*] A note without a task marker ^job\n"),
+    ];
+    for (name, task) in task_cases {
+        let listed = history_list_value(
+            &format!("bob-cli-snooze-notice-{name}"),
+            &make_daily(open_link, history),
+            task,
+        );
+        assert_eq!(
+            listed["rows"][0]["wake_notice_eligible"], false,
+            "{name}: {listed}"
+        );
+    }
+
+    for (name, ledger) in [
+        ("unlinked", "## Pomodoros\n- [ ] () — FOCUS\n"),
+        (
+            "closed-ledger",
+            "## Pomodoros\n- [x] (**0900-1000** [t:: 60m]) — FOCUS\n  - [[jobs#^job]]\n",
+        ),
+    ] {
+        let listed = history_list_value(
+            &format!("bob-cli-snooze-notice-{name}"),
+            &make_daily(ledger, history),
+            "- [*] #task Review the launch plan ^job\n",
+        );
+        assert_eq!(listed["rows"][0]["wake_notice_eligible"], false, "{name}");
+    }
+
+    let replacement = history_list_value(
+        "bob-cli-snooze-notice-re-snoozed",
+        &make_daily(
+            open_link,
+            "## Snoozed\n- **1530** [[jobs#^job]]\n- ~~**1100** [[jobs#^job]]~~ · woke 12:00\n",
+        ),
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    assert_eq!(replacement["rows"][1]["state"], "woken");
+    assert_eq!(replacement["rows"][1]["wake_notice_eligible"], false);
+
+    let (temp, _) = snooze_vault(
+        "bob-cli-snooze-notice-old-day",
+        "# 2026-10-08\n\n## Pomodoros\n\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let old_day = temp.path().join("vault/2026/20261007.md");
+    write_file(
+        &old_day,
+        "# 2026-10-07\n\n## Pomodoros\n- [ ] () — FOCUS\n  - [[jobs#^job]]\n\n## Snoozed\n- ~~**1100** [[jobs#^job]]~~ · woke 12:00\n",
+    );
+    let output = snooze_command(&temp, &["-f", "json"])
+        .env("BOB_DAY_FILE", &old_day)
+        .output()
+        .expect("list prior-day history");
+    assert_success(&output);
+    let old_day = json_output(&output);
+    assert_eq!(old_day["rows"][0]["state"], "woken");
+    assert_eq!(old_day["rows"][0]["wake_notice_eligible"], false);
+}
+
+#[test]
+fn wake_notice_eligibility_rejects_event_task_history() {
+    let (temp, _) = snooze_vault(
+        "bob-cli-snooze-notice-event",
+        concat!(
+            "# 2026-10-08\n\n## Events\n",
+            "- [*] #task **1100-1200** Interview ^event\n\n",
+            "## Pomodoros\n- [ ] () — FOCUS\n  - [[#^event]]\n\n",
+            "## Snoozed\n- ~~**1000** [[#^event]]~~ · woke 12:00\n",
+        ),
+        "- [*] #task Placeholder ^other\n",
+    );
+    let output = snooze_command(&temp, &["-f", "json"])
+        .output()
+        .expect("list event history");
+    assert_success(&output);
+    let report = json_output(&output);
+    assert_eq!(report["rows"][0]["state"], "woken");
+    assert!(report["rows"][0]["title"].as_str().is_some());
+    assert_eq!(report["rows"][0]["wake_notice_eligible"], false);
 }
 
 #[test]
@@ -160,6 +290,14 @@ fn wake_moves_due_subtree_and_records_history() {
     .expect("parse wake receipt");
     assert_eq!(receipt["wake_id"], wake_id);
     assert_eq!(receipt["schema_version"], 1);
+    assert_eq!(receipt["notification_channel"], "desktop");
+    assert_eq!(
+        receipt["vault_root"],
+        fs::canonicalize(temp.path().join("vault"))
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
     assert_eq!(receipt["tasks"][0]["title"], "Review the launch plan");
     assert_eq!(receipt["tasks"][0]["block_id"], "job");
     let sink: Value = serde_json::from_str(
@@ -486,12 +624,15 @@ fn dry_run_and_no_work_leave_the_prior_receipt_untouched() {
     assert_eq!(dry_report["notified"], "none");
     assert!(dry_report["wake_id"].is_null());
     assert!(!receipt_path(&temp).exists());
+    assert!(!temp.path().join("notify.json").exists());
 
     let woke = snooze_command(&temp, &["wake", "-f", "json"])
         .output()
         .expect("wake once");
     assert_success(&woke);
     let prior = fs::read(receipt_path(&temp)).expect("receipt after wake");
+    let prior_notification =
+        fs::read(temp.path().join("notify.json")).expect("desktop notice");
     let daily = fs::read_to_string(&daily_path).unwrap();
 
     let noop = snooze_command(&temp, &["wake", "-f", "json"])
@@ -500,6 +641,10 @@ fn dry_run_and_no_work_leave_the_prior_receipt_untouched() {
     assert_success(&noop);
     assert_eq!(json_output(&noop)["status"], "nothing_due");
     assert_eq!(fs::read(receipt_path(&temp)).unwrap(), prior);
+    assert_eq!(
+        fs::read(temp.path().join("notify.json")).unwrap(),
+        prior_notification
+    );
     assert_eq!(fs::read_to_string(&daily_path).unwrap(), daily);
 }
 
@@ -527,6 +672,11 @@ fn live_mac_claim_reports_mac_capture_without_desktop() {
     let report = json_output(&output);
     assert_eq!(report["notified"], "mac_capture", "{report}");
     assert!(report["wake_id"].as_str().is_some());
+    let receipt: Value = serde_json::from_slice(
+        &fs::read(receipt_path(&temp)).expect("wake receipt"),
+    )
+    .expect("parse wake receipt");
+    assert_eq!(receipt["notification_channel"], "mac_capture");
     assert!(!temp.path().join("notify.json").exists());
 }
 
@@ -551,6 +701,11 @@ fn notify_off_still_writes_receipt_and_desktop_failure_keeps_the_wake() {
     assert_eq!(report["status"], "woke");
     assert_eq!(report["notified"], "none");
     assert!(receipt_path(&temp).exists());
+    let receipt: Value = serde_json::from_slice(
+        &fs::read(receipt_path(&temp)).expect("wake receipt"),
+    )
+    .expect("parse wake receipt");
+    assert_eq!(receipt["notification_channel"], "off");
     assert!(!temp.path().join("notify.json").exists());
     assert!(fs::read_to_string(&daily_path)
         .unwrap()
@@ -570,6 +725,29 @@ fn notify_off_still_writes_receipt_and_desktop_failure_keeps_the_wake() {
     assert_eq!(report["status"], "woke", "{report}");
     assert_eq!(report["notified"], "none");
     assert!(report["wake_id"].as_str().is_some());
+    assert!(fs::read_to_string(daily_path)
+        .unwrap()
+        .contains("~~**1100**"));
+}
+
+#[test]
+fn receipt_failure_keeps_wake_committed_without_notification() {
+    let (temp, daily_path) = snooze_vault(
+        "bob-cli-snooze-notice-receipt-fail",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    write_file(&temp.path().join("state"), "state path is a file");
+    let output = snooze_command(&temp, &["wake", "-f", "json"])
+        .output()
+        .expect("wake with receipt write failure");
+    assert_success(&output);
+    let report = json_output(&output);
+    assert_eq!(report["status"], "woke");
+    assert_eq!(report["notified"], "none");
+    assert!(report["wake_id"].is_null());
+    assert!(!receipt_path(&temp).exists());
+    assert!(!temp.path().join("notify.json").exists());
     assert!(fs::read_to_string(daily_path)
         .unwrap()
         .contains("~~**1100**"));
@@ -687,4 +865,5 @@ fn skipped_sweep_does_not_write_a_receipt() {
     assert_success(&sweep);
     assert_eq!(json_output(&sweep)["status"], "skipped");
     assert!(!receipt_path(&temp).exists());
+    assert!(!temp.path().join("notify.json").exists());
 }

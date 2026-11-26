@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 
 use crate::native::{
     capture::line_spans,
+    capture_dependency_tasks,
     config::{self, NotifyMode, PlanConfig},
     env as bob_env, event_task, note_tasks,
     plan_budget::{self, off_clock::DiskCloseVault},
@@ -353,6 +354,10 @@ impl Request {
 }
 
 fn list(request: &Request) -> Result<Value, CliError> {
+    let vault_root =
+        std::fs::canonicalize(&request.bob_dir).map_err(|error| {
+            CliError::runtime(format!("resolve canonical vault root: {error}"))
+        })?;
     let snapshot = read_snapshot(&request.bob_dir)?;
     let now = clock_now()?;
     let day = day(&request.bob_dir, &snapshot, &now)?;
@@ -374,6 +379,8 @@ fn list(request: &Request) -> Result<Value, CliError> {
         .collect::<Vec<_>>();
     Ok(json!({
         "schema_version": SCHEMA_VERSION,
+        "wake_notice_version": 1,
+        "vault_root": vault_root,
         "date": now.clock.date.to_string(),
         "now": now.rfc3339,
         "rows": rows,
@@ -710,6 +717,7 @@ fn wake(request: &Request, task_texts: &[String]) -> Result<Value, CliError> {
                         &fresh.off_clock,
                     ),
                     &day,
+                    &request.bob_dir,
                     &now,
                     notify_mode,
                 ));
@@ -1203,7 +1211,8 @@ fn task_fact(
         TaskThemeState::Set { value, .. } => Some(value),
         _ => type_key.as_ref().map(|key| key.to_ascii_uppercase()),
     };
-    let blocked = status == '?';
+    let blocked =
+        status == '?' || capture_dependency_tasks::has_prj_is_blocked_tag(line);
     let target = if path == day_path {
         String::new()
     } else {
@@ -1324,6 +1333,7 @@ fn load_notify_mode() -> Result<NotifyMode, CliError> {
 fn attach_wake_delivery(
     mut report: Value,
     day: &Day,
+    vault_root: &Path,
     now: &ClockNow,
     mode: NotifyMode,
 ) -> Value {
@@ -1336,8 +1346,13 @@ fn attach_wake_delivery(
     {
         return report;
     }
-    let delivery =
-        super::notify::deliver(&report, &day.relative, &now.rfc3339, mode);
+    let delivery = super::notify::deliver(
+        &report,
+        &day.relative,
+        vault_root,
+        &now.rfc3339,
+        mode,
+    );
     report["notified"] = json!(delivery.notified.as_str());
     report["wake_id"] = delivery.wake_id;
     report
@@ -1434,6 +1449,7 @@ fn row_json(detail: &RowDetail, classified: &state::ClassifiedRow) -> Value {
         "state": state_name,
         "reason": reason,
         "woke_at": detail.parsed.woke_hhmm,
+        "wake_notice_eligible": detail.wake_notice_eligible,
     })
 }
 
@@ -1846,5 +1862,53 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(day).unwrap(), DAY_BEFORE);
         assert_eq!(fs::read_to_string(task).unwrap(), TASK_BEFORE);
+    }
+
+    #[test]
+    fn deferred_and_skipped_reports_do_not_dispatch_notifications() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("vault directory");
+        let _env = crate::native::env::TestEnvGuard::set(&[(
+            "XDG_STATE_HOME",
+            Some(temp.path().join("state").as_os_str()),
+        )]);
+        super::notify::set_desktop_result(Some(true));
+        let _ = super::notify::take_desktop_calls();
+        let _ = super::receipt::take_darwin_posts();
+        let day = Day {
+            absolute: vault.join("2026/20261008.md"),
+            relative: PathBuf::from("2026/20261008.md"),
+            date: NaiveDate::from_ymd_opt(2026, 10, 8).expect("date"),
+            contents: String::new(),
+        };
+        let now = ClockNow {
+            clock: SnoozeClock {
+                date: day.date,
+                now_minutes: 12 * 60,
+                zone: chrono_tz::UTC,
+            },
+            rfc3339: "2026-10-08T12:00:00Z".to_string(),
+        };
+
+        for status in ["deferred", "skipped"] {
+            let report = json!({
+                "status": status,
+                "woken": [{"title": "Email Dan"}],
+            });
+            let attached = attach_wake_delivery(
+                report.clone(),
+                &day,
+                &vault,
+                &now,
+                NotifyMode::Desktop,
+            );
+            assert_eq!(attached, report);
+        }
+
+        super::notify::set_desktop_result(None);
+        assert!(super::notify::take_desktop_calls().is_empty());
+        assert!(super::receipt::take_darwin_posts().is_empty());
+        assert!(!super::receipt::last_wake_path().exists());
     }
 }

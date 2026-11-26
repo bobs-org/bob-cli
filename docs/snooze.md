@@ -207,12 +207,20 @@ same way. Exit status is 0 for success, no work, deferred, or skipped; 1
 for runtime failures; and 2 for usage errors or refusals.
 
 Every JSON report has `schema_version: 1`, `date`, and RFC 3339 `now`.
-The list report adds `rows`, `next_wake_at`, and `plan`. Each row reports
-its source `line`, resolved `route` when available, `block_id`, task
-`title`, four-digit `target`, `state`, an ignored `reason` when present,
-and `woke_at` for history. `next_wake_at` is the earliest live target or
-null; blocked rows do not drive it. The plan reports current on-clock
-links, `cap`, and whether the ledger is over cap.
+The list report adds `rows`, `next_wake_at`, `plan`, canonical absolute
+`vault_root`, and `wake_notice_version: 1`. The version is the capability
+probe for wake-notice ownership and eligibility fields; a client should
+publish a notifier claim only after seeing version 1. Each row reports its
+source `line`, resolved `route` when available, `block_id`, task `title`,
+four-digit `target`, `state`, an ignored `reason` when present, and `woke_at`
+for history. `wake_notice_eligible` is true only for today's valid struck
+history whose identity uniquely resolves to an ordinary committed open,
+unblocked task that still has a dedicated Task Link under an open Pomodoro,
+with no replacement active Snoozed row for that identity. It is false for
+every other row. This read-only field does not alter `state` or history
+display. `next_wake_at` is the earliest live target or null; blocked rows do
+not drive it. The plan reports current on-clock links, `cap`, and whether the
+ledger is over cap.
 
 Add reports `status` (`added` or `planned`), the task identity and title,
 the resolved target time and instant, the resulting lane, `daily_file`,
@@ -222,22 +230,29 @@ the link-count plan, and `dry_run`. Drop reports `status` (`dropped` or
 `pending`, `next_wake_at`, `plan`, `daily_file`, `notified`, and
 `wake_id`. After a successful commit with a nonempty `woken[]`, wake
 writes `$XDG_STATE_HOME/bob-cli/snooze/last-wake.json` (mode 0600 from
-creation, then an atomic rename) and posts `org.bobs.bob.snooze.woken`
-on Darwin once that file is readable. The receipt and the command
-report share one `wake_id`. The file carries `schema_version`,
-`wake_id`, `date`, `woken_at`, `host`, `daily_file`, `tasks[]`
-(`title`, `route`, `block_id`, `target`, `woke_at`, `destination`,
-`line`), and `plan`. `snooze.notify` is `auto` (default), `desktop`,
-or `off`; an invalid value is exit 2 before any mutation. `notified`
-is `mac_capture` when `auto` finds a live Mac Capture claim in the
-sibling `notifier.json`; `desktop` when the desktop helper sent; and
-`none` when the preference is `off`, the send failed, or no tasks
-woke. A receipt write failure leaves `wake_id` null, skips Darwin, and
-does not roll back the vault. Dry runs, deferred writes, skipped
-sweeps, prune-only installs, and nothing-due wakes leave the prior
-receipt unchanged. A wake batch reports each task's destination,
-target, actual wake time, and whether that insert crossed the link
-cap. No command forges a notification receipt.
+creation, then an atomic rename). Before that write, Bob selects one
+notification owner: `auto` selects `mac_capture` when the sibling
+`notifier.json` contains a live claim, and otherwise selects `desktop`;
+explicit `desktop` always selects `desktop`; `off` selects `off`. The
+receipt records the intended `notification_channel` plus canonical
+absolute `vault_root`; `daily_file` remains vault-relative. The receipt
+and command report share one `wake_id`. Darwin notification
+`org.bobs.bob.snooze.woken` is posted only for the `mac_capture` owner,
+after the receipt is readable. The file carries `schema_version`,
+`wake_id`, `date`, `woken_at`, `host`, `notification_channel`,
+`vault_root`, `daily_file`, `tasks[]` (`title`, `route`, `block_id`,
+`target`, `woke_at`, `destination`, `line`), and `plan`. The channel
+records ownership, not proof that operating-system delivery succeeded.
+`notified` reports actual dispatch: `mac_capture` after a successful
+Darwin post, `desktop` after the desktop helper sent, and `none` when
+dispatch failed, the owner is `off`, or no tasks woke. A failed desktop
+send does not reroute to Mac Capture. An unreadable or failed receipt
+leaves `wake_id` null, skips every notification, and does not roll back
+the vault. Dry runs, deferred writes, skipped sweeps, prune-only
+installs, and nothing-due wakes leave the prior receipt unchanged. A
+wake batch reports each task's destination, target, actual wake time,
+and whether that insert crossed the link cap. No command forges a
+notification receipt.
 
 `bob capture-pomodoros --tasks` also publishes this read-only section as
 `snoozed: {rows, next_wake_at}` in its schema-1 agenda payload. It includes
@@ -262,6 +277,8 @@ For example, `bob snooze list -f json` returns a stable envelope such as:
 ```json
 {
   "schema_version": 1,
+  "wake_notice_version": 1,
+  "vault_root": "/home/bryan/bob",
   "date": "2026-10-08",
   "now": "2026-10-08T12:00:00-04:00",
   "rows": [],
