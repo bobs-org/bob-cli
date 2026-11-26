@@ -112,7 +112,10 @@ phase: `planned` holds live-or-blocked identities (the exclusion set for
 `]s` scope, recurring and decide rules, the seed, `]w`, walks counts,
 and dash queries), and `blocked` distinguishes the parked subset. Ready,
 history, duplicate, and ignored rows never enter planned-today. Readers
-that mean workable now keep Today.
+that mean workable now keep Today. The plan forecast
+(`docs/plan.md#snoozed-forecast`) reuses this set for its `count` meter
+and narrows it to on-clock Asleep/Due rows for its nonbinding wake
+forecast.
 
 ## Mutations
 

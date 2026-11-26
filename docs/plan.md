@@ -135,6 +135,7 @@ one applies:
 | `themes_config_invalid` | the `types:` block (or legacy `themes:` alias) is invalid, or both keys are present; the catalog degrades to no configured types |
 | `default_type_not_configured` | `plan.default_type` is outside a configured `types:` vocabulary; it still applies to task suggestions |
 | `type_mismatch` | only what reconcile refuses: a MEET mismatch, an unconfigured type, or an unknown link (an unresolved target or a type field that needs repair); read-only, one per link at its ledger line; repaired shapes and tasks with no effective type yield no lint because reconcile fixes today's open names and an untyped task agrees with any entry |
+| `snooze_wake_would_exceed_cap` | the nonbinding wake forecast exceeds `max_links`; never changes `status`, nothing is refused |
 
 ## Today
 
@@ -285,6 +286,61 @@ wear a tinted pill, places wear a dot.
 
 Out of scope: a root cap, toggling the line off, and a Bob Mac Capture agenda
 roots row.
+
+## Snoozed forecast
+
+Planned-today is `is_today || is_snoozed_today`: the ledger-derived Today
+set plus the snoozed reader's `planned` set (Asleep, Due, and Blocked).
+Today stays ledger-derived — snoozed identities never enter `today_tasks` —
+and planned-today applies only at review and lane-walk exclusion sites
+(`docs/freshness.md`, `docs/walks.md`). The whole-lane NEXT/PENDING meters
+keep Today included, so they never swing during the day.
+
+`bob plan` (and `bob task reconcile`'s `plan_budget`) carries an additive
+`snoozed` block:
+
+```json
+"snoozed": {
+  "count": 2,
+  "due": 0,
+  "blocked": 0,
+  "on_clock": 2,
+  "next_wake_at": "2026-11-05T15:30:00-05:00",
+  "forecast": { "count": 3, "cap": 10, "over": false }
+}
+```
+
+`count` is unique planned identities (live plus blocked); `due` and
+`blocked` count those states. `on_clock` counts only Asleep/Due identities
+whose current on-clock link-budget classification is on-clock, using the
+same link-clock resolver as the ledger budget (explicit `#on`/`#off`,
+inherited boolean and type-filtered defaults, and current type resolution).
+Ignored, history, duplicate, already-linked, and off-clock snoozed rows
+never join the addition. Blocked rows stay visible in the meter but never
+join the automatic-wake forecast until eligible again.
+
+The forecast is `links.count + snoozed.on_clock` against `max_links`
+(`over` when strictly over; exactly at the cap is fine). It never changes
+`status`, `links`, `today`, `today_tasks`, or the whole-lane meters, and
+nothing is ever refused. When the forecast exceeds the cap, one advisory
+`snooze_wake_would_exceed_cap` lint is appended; wake placement still runs.
+
+Human output adds one line under `ROOTS` when the meter is nonzero:
+
+```text
+  SNOOZED 2 · next 19:00 · TODAY 11/13 when all wake
+```
+
+`next` is the earliest live wake in `HH:MM` (omitted when no live row
+remains); a due count wears amber (`1 due`) and a blocked count is dimmed
+(`1 blocked`). `TODAY a/b` is current Today over Today plus the on-clock
+addition. A missing daily note yields an empty snoozed view; a Snoozed
+section without a Pomodoros section still reads.
+
+The dashboard keeps its own exclusion: the dash PENDING/NEXT sections and
+the daily `bob-plan` block must exclude planned-today (owned by the outer
+plugin phase, not here). No vault dashboard edit belongs here. See
+[reader contract](snooze.md#rows-time-and-identity) for `live_targets`.
 
 ## Lanes (NEXT and PENDING)
 
@@ -865,6 +921,13 @@ shows all report fields for one open type and one exempt entry:
     }
   ],
   "warnings": [],
+  "snoozed": {
+    "count": 0,
+    "due": 0,
+    "blocked": 0,
+    "on_clock": 0,
+    "forecast": { "count": 3, "cap": 10, "over": false }
+  },
   "ok": true,
   "schema_version": 3
 }
@@ -880,6 +943,9 @@ Open entries are forecasts. `today_tasks` is
 in ledger order of first occurrence; `today.count` is its length.
 `today_roots` is the additive [Today roots](#today-roots) array (`[]` when
 empty); its `tasks` sum to `today.count`, and it keeps `schema_version: 3`.
+`snoozed` is the additive [Snoozed forecast](#snoozed-forecast) block;
+`next_wake_at` is omitted when no live row remains, and it also keeps
+`schema_version: 3`.
 
 Human output:
 
@@ -895,6 +961,13 @@ bob plan · Thu 2026-10-01 · 2026/20261001.md
   TODAY
     [*] sase#^fix-it        Fix it
     [/] bob#^capture-stop   Better capture stop
+```
+
+With snoozed rows waiting, one additive line follows `ROOTS` (omitted at
+zero):
+
+```text
+  SNOOZED 2 · next 19:00 · TODAY 11/13 when all wake
 ```
 
 An unnamed entry prints the same dim homes chip with its dot that

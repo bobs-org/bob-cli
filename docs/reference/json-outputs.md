@@ -402,7 +402,7 @@ candidate eligibility, and error behavior.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob plan` | `-f json` | Date, status, caps, Today tasks and root counts, lane counts, and `warnings` | `schema_version: 3` | [Plan](../plan.md) |
+| `bob plan` | `-f json` | Date, status, caps, Today tasks and root counts, lane counts, additive `snoozed` meter/forecast, and `warnings` | `schema_version: 3` | [Plan](../plan.md#snoozed-forecast) |
 | `bob ready` | `-f json` | Per-note Ready lane against `max_ready_per_note` | `schema_version: 1` | [Plan](../plan.md) |
 | `bob freshness` and `bob freshness list` | `-f json` | Review queue (`config` stages/limits; per-row `keeps`/`decide`/`stage`/`stage_rank`/`stage_total`) | `schema_version: 16` | [Freshness](../freshness.md) |
 | `bob freshness seed` | `-f json` | Seed dry-run: stamped counts, buckets, skipped | `schema_version: 16` | [Freshness](../freshness.md) |

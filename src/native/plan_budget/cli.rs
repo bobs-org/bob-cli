@@ -25,6 +25,7 @@ use super::{
     },
     assemble_report, count_lanes,
     roots::human_roots,
+    snoozed::with_snoozed_forecast,
     today::{today_tasks, TodayResult},
     with_configured_theme_lints, with_entry_homes, with_theme_refs,
     with_today_roots, with_type_mismatch_lints, Lanes, LedgerBudget,
@@ -243,6 +244,14 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
         &lanes,
         &today_result,
     );
+    // Snoozed forecast runs outside the Pomodoros `has_section` guard: a
+    // Snoozed section without a Pomodoros section still reads.
+    let report = with_snoozed_forecast(
+        report,
+        &request.bob_dir,
+        &relative_day_file,
+        Some(&contents),
+    );
     let report = if has_section {
         with_today_roots(
             with_entry_homes(
@@ -417,6 +426,9 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
             human_roots(&report.today_roots, styler)
         ));
     }
+    if let Some(line) = human_snoozed(report, styler) {
+        output.push_str(&format!("  {line}\n"));
+    }
     output.push('\n');
 
     if !report.entries.is_empty() {
@@ -518,6 +530,41 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
     }
 
     output
+}
+
+/// The additive `SNOOZED` meter line: `SNOOZED 2 · next 19:00 · TODAY
+/// 11/13 when all wake`. Omitted when the meter is zero so existing
+/// zero-snooze reports read exactly as before. Due text wears amber; a
+/// blocked-only meter names its parked rows; a meter with no next wake omits
+/// the `next` cell. `TODAY a/b` is current Today over Today plus the
+/// on-clock forecast addition.
+fn human_snoozed(report: &PlanReport, styler: &Styler) -> Option<String> {
+    let snoozed = &report.snoozed;
+    if snoozed.count == 0 {
+        return None;
+    }
+    let sep = styler.separator();
+    let mut cells = vec![format!("SNOOZED {}", snoozed.count)];
+    if let Some(next) = snoozed
+        .next_wake_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|zoned| zoned.format("%H:%M").to_string())
+    {
+        cells.push(format!("next {next}"));
+    }
+    if snoozed.due > 0 {
+        cells.push(styler.yellow(&format!("{} due", snoozed.due)));
+    }
+    if snoozed.blocked > 0 {
+        cells.push(styler.dim(&format!("{} blocked", snoozed.blocked)));
+    }
+    let projected = report.today.count.saturating_add(snoozed.on_clock);
+    cells.push(format!(
+        "TODAY {}/{} when all wake",
+        report.today.count, projected
+    ));
+    Some(cells.join(&format!(" {sep} ")))
 }
 
 fn pad(text: &str, width: usize) -> String {

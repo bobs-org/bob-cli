@@ -197,6 +197,12 @@ pub(super) fn plan_budget_for_sync(
         &lanes,
         &today_result,
     );
+    let report = plan_budget::with_snoozed_forecast(
+        report,
+        bob_dir,
+        &daily_file,
+        Some(daily_contents),
+    );
     let report =
         plan_budget::with_today_roots(report, bob_dir, Path::new(&daily_file));
     Some(

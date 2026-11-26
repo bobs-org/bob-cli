@@ -8,9 +8,11 @@
 pub(crate) mod cli;
 pub(crate) mod off_clock;
 pub(crate) mod roots;
+pub(crate) mod snoozed;
 pub(crate) mod today;
 
 pub(crate) use roots::{with_today_roots, TodayRoot};
+pub(crate) use snoozed::{with_snoozed_forecast, SnoozedBudget};
 pub(crate) use today::{TodayResult, TodayTask};
 
 use std::{
@@ -42,6 +44,8 @@ pub(crate) const LINT_THEMES_CONFIG_INVALID: &str =
 pub(crate) const LINT_DEFAULT_TYPE_NOT_CONFIGURED: &str =
     "default_type_not_configured";
 pub(crate) const LINT_TYPE_MISMATCH: &str = "type_mismatch";
+pub(crate) const LINT_SNOOZE_WAKE_WOULD_EXCEED_CAP: &str =
+    "snooze_wake_would_exceed_cap";
 
 /// Display name used when an unnamed open entry holds counted links.
 pub(crate) const UNNAMED_THEME: &str = "(unnamed)";
@@ -168,6 +172,10 @@ pub(crate) struct PlanReport {
     pub(crate) theme_refs: Vec<ThemeRef>,
     pub(crate) entries: Vec<PlanEntry>,
     pub(crate) warnings: Vec<PlanLint>,
+    /// Snoozed meter and nonbinding wake forecast (`docs/plan.md`
+    /// § Snoozed forecast). Filled by [`with_snoozed_forecast`]; empty
+    /// until then. Additive: `bob plan` stays at schema 3.
+    pub(crate) snoozed: SnoozedBudget,
 }
 
 impl PlanReport {
@@ -227,6 +235,7 @@ pub(crate) fn assemble_report(
         });
     }
     let status = ledger.status;
+    let snoozed = SnoozedBudget::empty(ledger.links.count, config.max_links());
     PlanReport {
         date: today.format("%Y-%m-%d").to_string(),
         daily_file: daily_file.to_string(),
@@ -244,6 +253,7 @@ pub(crate) fn assemble_report(
         theme_refs: Vec::new(),
         entries: ledger.entries.clone(),
         warnings,
+        snoozed,
     }
 }
 

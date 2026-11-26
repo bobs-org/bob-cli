@@ -31,6 +31,7 @@ mod periods;
 mod periods_update;
 mod plan;
 mod plan_off_clock;
+mod plan_snoozed;
 mod plugins;
 mod pomodoro;
 mod projects;
