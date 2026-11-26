@@ -41,7 +41,7 @@ use super::{
     parse::{self, SnoozeRow, SnoozeRowKind},
     plan::{
         self, AddInput, AddRefusal, DropInput, DropRefusal, FilePostimage,
-        TaskFact, WakeInput, WakePlan,
+        TaskFact, WakeInput, WakePlan, WakeRefusal,
     },
     shell::{self, InputSnapshot, InstallError, LockOutcome},
     state::{
@@ -988,7 +988,8 @@ fn wake_plan(
             config,
         )),
         max_links: Some(config.max_links as usize),
-    });
+    })
+    .map_err(wake_refusal)?;
     let off_clock = evaluation.off_clock.clone();
     Ok(WakeEvaluation {
         plan,
@@ -1475,6 +1476,18 @@ fn drop_refusal(refusal: DropRefusal) -> CliError {
             CliError::refusal("not_snoozed", "TASK has no active Snoozed row")
         }
     }
+}
+
+fn wake_refusal(refusal: WakeRefusal) -> CliError {
+    let message = match refusal {
+        WakeRefusal::NoPomodorosSection => {
+            "today's note has no ## Pomodoros section"
+        }
+        WakeRefusal::MultipleOpenTimedEntries => {
+            "today's ledger has more than one running Pomodoro — close one before waking"
+        }
+    };
+    CliError::refusal(refusal.as_str(), message)
 }
 
 fn add_report(

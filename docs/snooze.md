@@ -149,7 +149,10 @@ shifted line offsets after a Ready→Next stamp.
   children are stripped. Wake never edits a task line, never refuses
   on `plan.max_links` (over-cap is reported), and prunes
   done/cancelled/already_linked rows in the same pass. Blocked rows
-  stay. An immediate second wake is empty.
+  stay. An immediate second wake is empty. A wake whose never-running
+  destination cannot be placed refuses the whole batch with
+  `no_pomodoros` or `multiple_open_timed`, exit 2, and writes nothing;
+  a wake that wakes nothing never refuses for a malformed ledger.
 - `plan_cleanup` is the capture/plugin reuse of that prune: drop
   done, cancelled, and already-linked active rows; leave blocked,
   Ready, Event, malformed, and history.
@@ -187,9 +190,11 @@ after a second drift or a day rollover. Add settles each note it rewrites
 daily note in one rollback-capable batch. Drop and wake write only the daily
 note. An automatic wake sweep runs only on the configured writer host;
 `wake TASK` is an explicit request and works on any host. A skipped sweep
-does not mutate the vault or create state files. Exit status is 0 for
-success, no work, deferred, or skipped; 1 for runtime failures; and 2 for
-usage errors or refusals.
+does not mutate the vault or create state files. A wake whose never-running
+destination cannot be placed refuses the whole batch with `no_pomodoros`
+or `multiple_open_timed`, exit 2, and writes nothing; dry runs refuse the
+same way. Exit status is 0 for success, no work, deferred, or skipped; 1
+for runtime failures; and 2 for usage errors or refusals.
 
 Every JSON report has `schema_version: 1`, `date`, and RFC 3339 `now`.
 The list report adds `rows`, `next_wake_at`, and `plan`. Each row reports

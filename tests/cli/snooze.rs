@@ -460,6 +460,68 @@ fn invalid_notify_exits_two_before_mutating() {
 }
 
 #[test]
+fn wake_refuses_typed_destination_with_two_running_pomodoros() {
+    let daily = "# 2026-10-08\n\n## Pomodoros\n- [ ] (**1100-1200** [t:: 60m]) — WORK\n- [ ] (**1130-1230** [t:: 60m]) — BUILD\n\n## Snoozed\n- **1130** [[jobs#^job]]\n  - keep this note\n";
+    let task = "- [*] #task Review the launch plan [type:: WRITE] ^job\n";
+    let (temp, daily_path) =
+        snooze_vault("bob-cli-snooze-wake-refuse-timed", daily, task);
+    let before = fs::read_to_string(&daily_path).unwrap();
+    let output = snooze_command(&temp, &["wake", "-f", "json"])
+        .output()
+        .expect("run refused wake");
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    let report = json_output(&output);
+    assert_eq!(report["error"]["kind"], "multiple_open_timed", "{report}");
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+    assert!(!receipt_path(&temp).exists());
+    assert!(!temp.path().join("notify.json").exists());
+
+    let dry = snooze_command(&temp, &["wake", "--dry-run", "-f", "json"])
+        .output()
+        .expect("dry-run refused wake");
+    assert_eq!(dry.status.code(), Some(2), "{}", stdout(&dry));
+    assert_eq!(json_output(&dry)["error"]["kind"], "multiple_open_timed");
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+
+    let explicit = snooze_command(&temp, &["wake", "jobs:job", "-f", "json"])
+        .output()
+        .expect("explicit refused wake");
+    assert_eq!(explicit.status.code(), Some(2), "{}", stdout(&explicit));
+    assert_eq!(
+        json_output(&explicit)["error"]["kind"],
+        "multiple_open_timed"
+    );
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+    assert!(!receipt_path(&temp).exists());
+    assert!(!temp.path().join("notify.json").exists());
+}
+
+#[test]
+fn wake_refuses_when_daily_note_has_no_pomodoros_section() {
+    let daily = "# 2026-10-08\n\n## Snoozed\n- **1130** [[jobs#^job]]\n  - keep this note\n";
+    let task = "- [*] #task Review the launch plan [type:: WRITE] ^job\n";
+    let (temp, daily_path) =
+        snooze_vault("bob-cli-snooze-wake-refuse-nopomo", daily, task);
+    let before = fs::read_to_string(&daily_path).unwrap();
+    let output = snooze_command(&temp, &["wake", "-f", "json"])
+        .output()
+        .expect("run refused wake");
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    let report = json_output(&output);
+    assert_eq!(report["error"]["kind"], "no_pomodoros", "{report}");
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+    assert!(!receipt_path(&temp).exists());
+    assert!(!temp.path().join("notify.json").exists());
+
+    let dry = snooze_command(&temp, &["wake", "--dry-run", "-f", "json"])
+        .output()
+        .expect("dry-run refused wake");
+    assert_eq!(dry.status.code(), Some(2), "{}", stdout(&dry));
+    assert_eq!(json_output(&dry)["error"]["kind"], "no_pomodoros");
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+}
+
+#[test]
 fn skipped_sweep_does_not_write_a_receipt() {
     let (temp, _) = snooze_vault(
         "bob-cli-snooze-skipped-receipt",

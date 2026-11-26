@@ -186,6 +186,31 @@ pub(crate) struct WakePlan {
     pub(crate) over_cap: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WakeRefusal {
+    NoPomodorosSection,
+    MultipleOpenTimedEntries,
+}
+
+impl WakeRefusal {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::NoPomodorosSection => "no_pomodoros",
+            Self::MultipleOpenTimedEntries => "multiple_open_timed",
+        }
+    }
+}
+
+fn wake_refusal_from_insert(
+    error: crate::native::capture_task_toggle::LinkRelocationError,
+) -> WakeRefusal {
+    use crate::native::capture_task_toggle::LinkRelocationError as E;
+    match error {
+        E::MultipleOpenTimedEntries => WakeRefusal::MultipleOpenTimedEntries,
+        _ => WakeRefusal::NoPomodorosSection,
+    }
+}
+
 /// Inputs for [`plan_cleanup`].
 #[derive(Debug, Clone)]
 pub(crate) struct CleanupInput<'a> {
@@ -279,7 +304,13 @@ pub(crate) fn plan_drop(
 }
 
 /// Wake due (or explicit) live rows into never-running destinations.
-pub(crate) fn plan_wake(input: &WakeInput<'_>) -> WakePlan {
+///
+/// A wake whose never-running destination cannot be placed refuses the whole
+/// batch with `WakeRefusal` and writes nothing. A wake that wakes nothing
+/// (no due rows, or prune only) never refuses for a malformed ledger.
+pub(crate) fn plan_wake(
+    input: &WakeInput<'_>,
+) -> Result<WakePlan, WakeRefusal> {
     let classified = classify_snapshot(
         input.day,
         input.day_path,
@@ -379,7 +410,7 @@ pub(crate) fn plan_wake(input: &WakeInput<'_>) -> WakePlan {
             job.type_key.as_deref(),
             job.type_name.as_deref(),
             input.exempt,
-        );
+        )?;
         day = after_create;
         let key = dest_key(&dest);
         let already = inserted_lines.get(&key).copied().unwrap_or(0);
@@ -398,7 +429,7 @@ pub(crate) fn plan_wake(input: &WakeInput<'_>) -> WakePlan {
         };
         let (updated, _) = if already == 0 {
             insert_subtree_into_entry(&day, dest_index, &subtree, position)
-                .unwrap_or_else(|_| (day.clone(), crate::native::capture_task_toggle::LinkPlacement::Inserted))
+                .map_err(wake_refusal_from_insert)?
         } else {
             let lines = line_spans(&day);
             let content =
@@ -448,7 +479,7 @@ pub(crate) fn plan_wake(input: &WakeInput<'_>) -> WakePlan {
             contents: fact.contents.clone(),
         });
     }
-    WakePlan {
+    Ok(WakePlan {
         files,
         woken,
         dropped,
@@ -456,7 +487,7 @@ pub(crate) fn plan_wake(input: &WakeInput<'_>) -> WakePlan {
         pending,
         next_wake_at: after.next_wake_at,
         over_cap,
-    }
+    })
 }
 
 /// Remove done, cancelled, and already-linked active rows. Blocked,
@@ -1128,7 +1159,7 @@ fn resolve_or_create_destination(
     type_key: Option<&str>,
     type_name: Option<&str>,
     exempt: &[String],
-) -> (String, Dest, bool) {
+) -> Result<(String, Dest, bool), WakeRefusal> {
     let scan = capture_pomodoros::scan(day);
     let entries: Vec<PlaceEntry<'_>> = scan
         .entries
@@ -1153,27 +1184,27 @@ fn resolve_or_create_destination(
         }) {
             PlaceOutcome::Entry(index) => {
                 let entry = &scan.entries[index];
-                (
+                Ok((
                     day.to_string(),
                     Dest {
                         line: entry.line,
                         name: entry.name.clone(),
                     },
                     false,
-                )
+                ))
             }
             PlaceOutcome::Create { name } => {
                 let (content, created, canonical) =
                     insert_named_placeholder(day, &name, true)
-                        .unwrap_or_else(|_| (day.to_string(), 0, name.clone()));
-                (
+                        .map_err(wake_refusal_from_insert)?;
+                Ok((
                     content,
                     Dest {
                         line: created + 1,
                         name: Some(canonical),
                     },
                     true,
-                )
+                ))
             }
             PlaceOutcome::NoType | PlaceOutcome::AlreadyQueued => {
                 untyped_destination(day, &scan)
@@ -1186,29 +1217,29 @@ fn resolve_or_create_destination(
 fn untyped_destination(
     day: &str,
     scan: &capture_pomodoros::PomodoroScan,
-) -> (String, Dest, bool) {
+) -> Result<(String, Dest, bool), WakeRefusal> {
     if let Some(entry) = scan.entries.iter().find(|entry| {
         entry.state == PomodoroState::Open && entry.time_range.is_none()
     }) {
-        return (
+        return Ok((
             day.to_string(),
             Dest {
                 line: entry.line,
                 name: entry.name.clone(),
             },
             false,
-        );
+        ));
     }
-    let (content, created) = insert_unnamed_placeholder(day)
-        .unwrap_or_else(|_| (day.to_string(), 0));
-    (
+    let (content, created) =
+        insert_unnamed_placeholder(day).map_err(wake_refusal_from_insert)?;
+    Ok((
         content,
         Dest {
             line: created + 1,
             name: None,
         },
         true,
-    )
+    ))
 }
 
 fn ledger_subtree(
@@ -1462,6 +1493,144 @@ mod tests {
         assert!(write < new && new < old && old < fix, "{moved}");
     }
 
+    fn wake_setup(
+        day: &str,
+        type_key: Option<&str>,
+        type_name: Option<&str>,
+    ) -> (Vec<TaskFact>, IdentityMap, SnoozeClock) {
+        let fact = TaskFact {
+            identity: identity("jobs.md", "job"),
+            path: PathBuf::from("jobs.md"),
+            contents: "- [*] #task Review the launch plan ^job\n".to_string(),
+            line_index: 0,
+            state: TaskState {
+                status: '*',
+                is_task: true,
+                is_event: false,
+            },
+            blocked: false,
+            type_key: type_key.map(str::to_string),
+            type_name: type_name.map(str::to_string),
+            link_text: "[[jobs#^job]]".to_string(),
+        };
+        let mut identities = IdentityMap::new();
+        identities.insert(
+            ("jobs".to_string(), "job".to_string()),
+            fact.identity.clone(),
+        );
+        let clock = SnoozeClock {
+            date: date_of("2026-10-08"),
+            now_minutes: minutes_of("12:00"),
+            zone: chrono_tz::Tz::from_str("America/New_York").expect("zone"),
+        };
+        let _ = day;
+        (vec![fact], identities, clock)
+    }
+
+    #[test]
+    fn wake_refuses_when_no_pomodoros_section() {
+        let day = "# 2026-10-08\n\n## Snoozed\n- **1100** [[jobs#^job]]\n  - keep this note\n";
+        let (facts, identities, clock) = wake_setup(day, None, None);
+        let before = day.to_string();
+        let result = plan_wake(&WakeInput {
+            day_path: &day_path(),
+            day,
+            clock,
+            facts: &facts,
+            identities: &identities,
+            exempt: &[],
+            explicit: None,
+            link_count: None,
+            max_links: None,
+        });
+        let Err(refusal) = result else {
+            panic!("expected no_pomodoros refusal");
+        };
+        assert_eq!(refusal, WakeRefusal::NoPomodorosSection);
+        assert_eq!(refusal.as_str(), "no_pomodoros");
+        assert_eq!(day, before, "refusal leaves no postimage");
+    }
+
+    #[test]
+    fn wake_refuses_typed_destination_with_two_running_pomodoros() {
+        let day = "## Pomodoros\n\n- [ ] (**1100-1200** [t:: 60m]) — WORK\n- [ ] (**1130-1230** [t:: 60m]) — BUILD\n\n## Snoozed\n\n- **1130** [[jobs#^job]]\n  - keep this note\n";
+        let (facts, identities, clock) =
+            wake_setup(day, Some("WRITE"), Some("WRITE"));
+        let before = day.to_string();
+        let result = plan_wake(&WakeInput {
+            day_path: &day_path(),
+            day,
+            clock,
+            facts: &facts,
+            identities: &identities,
+            exempt: &[],
+            explicit: None,
+            link_count: None,
+            max_links: None,
+        });
+        let Err(refusal) = result else {
+            panic!("expected multiple_open_timed refusal");
+        };
+        assert_eq!(refusal, WakeRefusal::MultipleOpenTimedEntries);
+        assert_eq!(refusal.as_str(), "multiple_open_timed");
+        assert_eq!(day, before, "refusal leaves no postimage");
+    }
+
+    #[test]
+    fn wake_untyped_with_two_running_pomodoros_lands_after_first() {
+        let day = "## Pomodoros\n\n- [ ] (**1100-1200** [t:: 60m]) — WORK\n- [ ] (**1130-1230** [t:: 60m]) — BUILD\n\n## Snoozed\n\n- **1130** [[jobs#^job]]\n  - keep this note\n";
+        let (facts, identities, clock) = wake_setup(day, None, None);
+        let plan = plan_wake(&WakeInput {
+            day_path: &day_path(),
+            day,
+            clock,
+            facts: &facts,
+            identities: &identities,
+            exempt: &[],
+            explicit: None,
+            link_count: None,
+            max_links: None,
+        })
+        .expect("untyped wake succeeds with two running entries");
+        assert_eq!(plan.woken.len(), 1, "one row wakes");
+        let dest = &plan.woken[0].destination;
+        assert_eq!(dest.name, None, "unnamed destination");
+        assert!(dest.created, "placeholder is created");
+        let postimage = &plan
+            .files
+            .iter()
+            .find(|file| file.path == day_path())
+            .expect("day postimage")
+            .contents;
+        let running: Vec<usize> = postimage
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("**1100-1200**"))
+            .map(|(index, _)| index)
+            .collect();
+        let woken_link = postimage
+            .lines()
+            .enumerate()
+            .find(|(_, line)| {
+                line.contains("[[jobs#^job]]") && !line.contains("~~")
+            })
+            .map(|(index, _)| index)
+            .expect("woken link lands in the ledger");
+        let running_index = running.into_iter().next().expect("running entry");
+        assert!(
+            woken_link > running_index,
+            "woken link sits after the first timed entry:\n{postimage}"
+        );
+        assert!(
+            !postimage
+                .lines()
+                .nth(woken_link)
+                .unwrap_or_default()
+                .contains("**1100-1200**"),
+            "woken link is never inside the timed entry itself:\n{postimage}"
+        );
+    }
+
     #[test]
     fn snooze_wake_cleanup_vectors() {
         let fixture = load_fixture().expect("load snooze fixture");
@@ -1624,6 +1793,27 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         });
+        if let Some(refusal) = vector.expected["refusal"].as_str() {
+            let Err(got) = plan_wake(&WakeInput {
+                day_path: &day_path(),
+                day: vector.input["day"].as_str().expect(id),
+                clock,
+                facts: &facts,
+                identities: &identities,
+                exempt: &[],
+                explicit,
+                link_count: vector.input["link_count"]
+                    .as_u64()
+                    .map(|n| n as usize),
+                max_links: vector.input["max_links"]
+                    .as_u64()
+                    .map(|n| n as usize),
+            }) else {
+                panic!("{id}: expected refusal {refusal}");
+            };
+            assert_eq!(got.as_str(), refusal, "{id}: refusal");
+            return;
+        }
         let plan = plan_wake(&WakeInput {
             day_path: &day_path(),
             day: vector.input["day"].as_str().expect(id),
@@ -1634,6 +1824,9 @@ mod tests {
             explicit,
             link_count: vector.input["link_count"].as_u64().map(|n| n as usize),
             max_links: vector.input["max_links"].as_u64().map(|n| n as usize),
+        })
+        .unwrap_or_else(|error| {
+            panic!("{id}: wake refused {}", error.as_str())
         });
 
         let day = plan
@@ -1702,6 +1895,9 @@ mod tests {
                 explicit: None,
                 link_count: None,
                 max_links: None,
+            })
+            .unwrap_or_else(|error| {
+                panic!("{id}: second wake refused {}", error.as_str())
             });
             assert!(again.woken.is_empty(), "{id}: second wake");
         }
