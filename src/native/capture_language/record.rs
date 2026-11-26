@@ -874,17 +874,6 @@ pub(crate) fn classify_record_item(
                 last_first_level = Some(LastFirstLevel::Note);
                 continue;
             }
-            if super::drawer_bullet::is_all_caps_drawer_title(body)
-                && record_header_has_group_content(item, line_index)
-            {
-                let title = body.trim();
-                let start = body_start + body.len() - body.trim_start().len();
-                return Some(RecordClaim::refused(
-                    "caps_drawer_retired",
-                    super::drawer_bullet::caps_drawer_retired_error(title),
-                    Some((start, start + title.len())),
-                ));
-            }
             let group = current_group.get_or_insert_with(|| RecordNoteGroup {
                 section: None,
                 section_range: None,
@@ -972,9 +961,6 @@ fn record_header_has_group_content(
                     authored.body_start,
                 )
                 .is_some()
-                    || super::drawer_bullet::is_all_caps_drawer_title(
-                        authored.body,
-                    )
                 {
                     return false;
                 }

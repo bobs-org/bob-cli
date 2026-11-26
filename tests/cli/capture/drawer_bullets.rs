@@ -297,7 +297,7 @@ fn preview_and_commit(
 }
 
 #[test]
-fn drawer_reports_carry_marker_provenance_and_preview_annotations() {
+fn drawer_reports_bold_marker_and_preview_annotations() {
     let temp = TempDir::new("bob-cli-drawer-marker-json");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -305,13 +305,13 @@ fn drawer_reports_carry_marker_provenance_and_preview_annotations() {
         &vault.join("foo.md"),
         concat!(
             "- [ ] #task Parent [created:: 2026-01-01] ^bar\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- first\n",
         ),
     );
 
-    // An existing legacy drawer reports its own marker; dry-run and commit
-    // describe the same destination.
+    // A bold drawer reports its marker; dry-run and commit describe the same
+    // destination.
     let (preview, commit) =
         preview_and_commit(&vault, "@foo+bar\n- #notes\n  - second");
     let preview = preview.unwrap_or_else(|error| panic!("preview: {error}"));
@@ -320,9 +320,9 @@ fn drawer_reports_carry_marker_provenance_and_preview_annotations() {
         assert_eq!(
             json["notes"][0]["drawer"],
             serde_json::json!({
-                "title": "NOTES",
+                "title": "Notes",
                 "key": "NOTES",
-                "marker": "legacy_caps",
+                "marker": "bold",
                 "created": false,
             }),
             "{json}"
@@ -333,14 +333,14 @@ fn drawer_reports_carry_marker_provenance_and_preview_annotations() {
         .as_array()
         .expect("lines array")
         .iter()
-        .find(|row| row["text"] == "\t- NOTES")
-        .expect("legacy header line");
+        .find(|row| row["text"] == "\t- **Notes**")
+        .expect("bold header line");
     assert_eq!(
         header["drawer"],
         serde_json::json!({
-            "title": "NOTES",
+            "title": "Notes",
             "key": "NOTES",
-            "marker": "legacy_caps",
+            "marker": "bold",
             "empty": false,
         }),
         "{block}"
@@ -500,18 +500,17 @@ fn legal_drawer_controls_agree_across_parse_preview_and_commit() {
 }
 
 #[test]
-fn legacy_caps_container_drafts_are_refused() {
-    let temp = TempDir::new("bob-cli-drawer-legacy-caps-refuse");
+fn uppercase_container_drafts_remain_ordinary_notes() {
+    let temp = TempDir::new("bob-cli-drawer-uppercase-note");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    let refusal = capture_error(&vault, "Ship it\n- FUTURE WORK\n  - note");
-    assert_eq!(refusal["code"], "caps_drawer_retired", "{refusal}");
-    assert!(
-        refusal["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("**FUTURE WORK**")),
-        "{refusal}"
-    );
+    let (preview, commit) =
+        preview_and_commit(&vault, "Ship it\n- FUTURE WORK\n  - note");
+    preview.unwrap_or_else(|error| panic!("preview: {error}"));
+    commit.unwrap_or_else(|error| panic!("commit: {error}"));
+    let contents = fs::read_to_string(vault.join("inbox.md")).expect("inbox");
+    assert!(contents.contains("- FUTURE WORK\n\t- note"), "{contents}");
+    assert!(!contents.contains("**FUTURE WORK**"), "{contents}");
 }
 
 #[test]
@@ -542,13 +541,18 @@ fn new_project_note_structural_sections_stay_legal_everywhere() {
 }
 
 #[test]
-fn legacy_caps_project_section_drafts_are_refused() {
+fn uppercase_project_note_children_remain_tasks() {
     let temp = TempDir::new("bob-cli-project-note-legacy-caps-refuse");
     let vault = temp.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: [[area]]\n---\n");
-    let refusal = capture_error(
+    let (preview, commit) = preview_and_commit(
         &vault,
         "Parent @cash^p1@\n- FUTURE WORK\n  - nested detail",
     );
-    assert_eq!(refusal["code"], "caps_drawer_retired", "{refusal}");
+    preview.unwrap_or_else(|error| panic!("preview: {error}"));
+    commit.unwrap_or_else(|error| panic!("commit: {error}"));
+    let contents =
+        fs::read_to_string(vault.join("cash_p1.md")).expect("project note");
+    assert!(contents.contains("#task FUTURE WORK"), "{contents}");
+    assert!(!contents.contains("## Future Work"), "{contents}");
 }

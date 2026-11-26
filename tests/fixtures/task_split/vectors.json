@@ -92,7 +92,7 @@
       "title": "cursor on a drawer entry stays inside its drawer",
       "input": {
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - FUTURE WORK\n    - Try logical replication\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **FUTURE WORK**\n    - Try logical replication\n"
         },
         "owner": {
           "path": "db.md",
@@ -112,7 +112,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - FUTURE WORK\n    - [[#^try-logical|Try logical replication]]\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **FUTURE WORK**\n    - [[#^try-logical|Try logical replication]]\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
         },
         "tasks": [
           {
@@ -740,7 +740,7 @@
     },
     {
       "id": "SP17",
-      "title": "ALL-CAPS child travels as the new drawer",
+      "title": "uppercase child remains plain content under the new task",
       "input": {
         "files": {
           "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Draft the rollback runbook outline with timing notes\n    - REQUIREMENTS\n      - staging box with 64 GB\n"
@@ -1301,7 +1301,7 @@
       "title": "punctuated drawer entry splits inside its drawer",
       "input": {
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - WHAT IS SASE?\n    - Try logical replication\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **WHAT IS SASE?**\n    - Try logical replication\n"
         },
         "owner": {
           "path": "db.md",
@@ -1321,7 +1321,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - WHAT IS SASE?\n    - [[#^try-logical|Try logical replication]]\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **WHAT IS SASE?**\n    - [[#^try-logical|Try logical replication]]\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
         },
         "tasks": [
           {
@@ -1400,7 +1400,7 @@
       "title": "a leaf req's notes stay loose under the back-link",
       "input": {
         "files": {
-          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles Windows files\n    - Fixture: windows.csv\n    - Ask Morgan for a sample\n  - NOTES\n    - Morgan reported the original issue.\n"
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Handles Windows files\n    - Fixture: windows.csv\n    - Ask Morgan for a sample\n  - **NOTES**\n    - Morgan reported the original issue.\n"
         },
         "owner": {
           "line": 1,
@@ -1420,7 +1420,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^handles-windows|Handles Windows files]]\n  - NOTES\n    - Morgan reported the original issue.\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - Fixture: windows.csv\n  - Ask Morgan for a sample\n"
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^handles-windows|Handles Windows files]]\n  - **NOTES**\n    - Morgan reported the original issue.\n- [ ] #task Handles Windows files [created:: 2026-11-03] ^handles-windows\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n  - Fixture: windows.csv\n  - Ask Morgan for a sample\n"
         },
         "tasks": [
           {
@@ -2038,7 +2038,7 @@
       "title": "a note and a req split together keep their own stubs",
       "input": {
         "files": {
-          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Docs cover every flag\n  - NOTES\n    - Ping Morgan about the release\n"
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [ ] Docs cover every flag\n  - **NOTES**\n    - Ping Morgan about the release\n"
         },
         "owner": {
           "line": 1,
@@ -2061,7 +2061,7 @@
       "expect": {
         "ok": true,
         "files": {
-          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^docs-cover-every|Docs cover every flag]]\n  - NOTES\n    - [[#^ping-morgan-about|Ping Morgan about the release]]\n- [ ] #task Docs cover every flag [created:: 2026-11-03] ^docs-cover-every\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n- [ ] #task Ping Morgan about the release [created:: 2026-11-03] ^ping-morgan-about\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
+          "db.md": "- [ ] #task Ship the exporter [created:: 2026-10-20] ^export\n  - [>] [[#^docs-cover-every|Docs cover every flag]]\n  - **NOTES**\n    - [[#^ping-morgan-about|Ping Morgan about the release]]\n- [ ] #task Docs cover every flag [created:: 2026-11-03] ^docs-cover-every\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n- [ ] #task Ping Morgan about the release [created:: 2026-11-03] ^ping-morgan-about\n  - 🪢 **LINKED FROM:** [[#^export]] (💬 mentions)\n"
         },
         "tasks": [
           {

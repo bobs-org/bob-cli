@@ -1263,8 +1263,8 @@ pub(super) struct NotePullSummaryJson {
 
 /// Per-item drawer report: the matched or created drawer title, its key,
 /// the header marker that describes the resolved destination (`bold` for a
-/// task `- **Title**` header, `legacy_caps` for an existing ALL-CAPS
-/// drawer, `section` for a project `## Title` heading), and whether this
+/// task `- **Title**` header or `section` for a project `## Title` heading),
+/// and whether this
 /// item created it. `None` serializes as `null` for a plain child.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct DrawerJson {

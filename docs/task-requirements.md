@@ -74,7 +74,7 @@ A req **may have**:
 - child notes, child reqs, a trailing `^anchor`, and a ❌ CANCEL LOG child
   when dropped.
 
-Drawer recognition and the dual-read migration are defined in the
+Drawer recognition and title rules are defined in the
 [task drawer contract](task-drawers.md).
 
 The moment a req needs any of the "never has" items, it is carried into a
@@ -129,8 +129,8 @@ The zones, in order:
 2. **Managed links.** DEPENDS ON, BLOCKS, SUB-PROJECTS, LINKS, LINKED FROM.
 3. **Reqs.** Each req moves with its whole subtree.
 4. **Authored.** Loose notes and nested `#task` subtasks, in authored order.
-5. **Drawers.** `NOTES` comes first (writers create `- **Notes**`; a legacy
-   `- NOTES` header is reused as-is), then the other drawers in authored
+5. **Drawers.** `NOTES` comes first (writers create `- **Notes**`; an existing
+   bold Notes header is reused as-is), then the other drawers in authored
    order.
 6. **Logs.** SCHEDULE, WORK, ROTTEN, in their existing relative order.
 
@@ -341,8 +341,8 @@ is one approved run of it; it is not a one-off script.
   reserved name or a title with `*` or a trailing `:`) and an OLD that names a
   managed line exit 2 before the vault is read.
 - **Case-only respelling.** OLD and NEW may have the same drawer key. Each
-  matching header is respelled in place; a legacy ALL-CAPS task drawer becomes
-  `- **NEW**`, and a bold drawer remains bold. Matching project sections become
+  matching bold header is respelled in place. Project sections become
+  `## NEW`, and links to those sections are repaired. Matching project sections become
   `## NEW`, and links to those sections are repaired. Repeated same-key headers
   stay separate and are never merged by this operation.
 - **Scope.** Every `#task` drawer, whether its task is open, done, cancelled,
@@ -381,11 +381,6 @@ is one approved run of it; it is not a one-off script.
   makes one commit `bob task rename-drawer: OLD → NEW ({n} notes)`,
   post-syncs only when it committed, and refreshes the drawer catalog. A
   second run reports nothing.
-- **Inventory.** `-l, --legacy` takes no OLD or NEW and cannot be combined with
-  `-a`. It is read-only and reports legacy ALL-CAPS drawers, empty bold task
-  drawers, bold trailing-colon leads for information, and duplicate drawer or
-  project-section identities. `-f json` returns the same inventory as
-  `schema_version: 1`.
 
 ## 4. Rendering
 
@@ -701,8 +696,7 @@ mark, `[>]` stubs become `## Notes` lines verbatim, and loose notes plus
 
 `bob task rename-drawer REQUIREMENTS Notes` (§3.5) retires the old name
 everywhere (open, closed, and archived tasks, plus `^prj` `## Requirements`
-sections, which become `## Notes`), preserving content; legacy drawer headers
-become bold. Where the owner already has a different-key `Notes` drawer or
+sections, which become `## Notes`), preserving content. Where the owner already has a different-key `Notes` drawer or
 section, the dry run previews the merge before apply, and heading links are
 repaired. One `bob task tidy` pass (§3.4)
 then repairs open task blocks into canonical order. Both run as gated,

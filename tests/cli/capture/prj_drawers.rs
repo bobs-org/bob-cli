@@ -568,7 +568,7 @@ fn capture_drawers_lists_h2_sections_for_prj_parent() {
 
 #[test]
 fn capture_prj_drawer_promotion_round_trip() {
-    // A drawer capture writes a plain entry under an ALL-CAPS child; the
+    // A drawer capture writes a plain entry under a whole-bold child; the
     // plugins promote that drawer to a `## Title Case` section with the
     // entry copied verbatim. A later `@proj+prj#same-key` capture appends
     // after the promoted section's existing content.

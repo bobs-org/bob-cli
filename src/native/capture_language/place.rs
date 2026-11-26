@@ -94,12 +94,9 @@ pub(crate) enum PlaceOutcome {
 /// Loading the catalog stays with the caller.
 pub(crate) trait PlaceCatalog {
     /// Preferred **explicit** create spelling for `slug` (bold drawer or
-    /// project `##` heading), else the notebook create-title rule. A
-    /// legacy-only catalog key never seeds a new drawer from its legacy
-    /// spelling.
+    /// project `##` heading), else the notebook create-title rule.
     fn spelling_for_slug(&self, slug: &str) -> String;
     fn near_title(&self, new_key: &str) -> Option<String>;
-    fn is_legacy_title(&self, title: &str) -> bool;
 }
 
 /// Opening `#` on a first-level body, including a leading `\#` escape.
@@ -385,8 +382,7 @@ where
     if let Some(near) = find_key_near_duplicate(items, &slug) {
         let intended = catalog.spelling_for_slug(&slug);
         let suggestion = if !is_place_slug(&near.slug) {
-            quoted_legacy_suggestion(&near.title, catalog)
-                .unwrap_or_else(|| format!("#{}", near.slug))
+            format!("#\"{}\"", near.title)
         } else {
             format!("#{}", near.slug)
         };
@@ -484,16 +480,6 @@ fn ambiguous_drawer(
             "{noun} `{shown}` matches more than one {noun} (lines {lines}); {hint}"
         ),
     }
-}
-
-fn quoted_legacy_suggestion<C: PlaceCatalog>(
-    title: &str,
-    catalog: &C,
-) -> Option<String> {
-    let canonical = normalize_task_text(title).to_ascii_uppercase();
-    catalog
-        .is_legacy_title(&canonical)
-        .then(|| format!("#\"{canonical}\""))
 }
 
 /// Unique nearby drawer for a failed slug: strict key prefix or edit

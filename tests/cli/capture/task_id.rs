@@ -264,10 +264,10 @@ fn capture_drawers_json_and_human_list_sections() {
         concat!(
             "# Tasks\n",
             "- [ ] #task Parent ^bar\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- existing\n",
-            "\t- FUTURE WORK\n",
-            "\t- NOTES\n",
+            "\t- **Future Work**\n",
+            "\t- **Notes**\n",
             "\t- **API Design**\n",
             "\t\t- review endpoint\n",
         ),
@@ -317,16 +317,16 @@ fn capture_drawers_json_and_human_list_sections() {
     assert_eq!(json["route"], "foo");
     assert_eq!(json["block_id"], "bar");
     assert_eq!(json["count"], 4);
-    assert_eq!(json["drawers"][0]["title"], "REQUIREMENTS");
+    assert_eq!(json["drawers"][0]["title"], "Requirements");
     assert_eq!(json["drawers"][0]["key"], "REQUIREMENTS");
     assert_eq!(json["drawers"][0]["slug"], "requirements");
-    assert_eq!(json["drawers"][0]["marker"], "legacy_caps");
+    assert_eq!(json["drawers"][0]["marker"], "bold");
     assert_eq!(json["drawers"][0]["line"], 3);
     assert_eq!(json["drawers"][0]["entry_count"], 1);
-    assert_eq!(json["drawers"][1]["title"], "FUTURE WORK");
+    assert_eq!(json["drawers"][1]["title"], "Future Work");
     assert_eq!(json["drawers"][1]["key"], "FUTURE WORK");
     assert_eq!(json["drawers"][1]["slug"], "future-work");
-    assert_eq!(json["drawers"][2]["title"], "NOTES");
+    assert_eq!(json["drawers"][2]["title"], "Notes");
     assert_eq!(json["drawers"][2]["entry_count"], 0);
     assert_eq!(json["drawers"][3]["title"], "API Design");
     assert_eq!(json["drawers"][3]["key"], "API DESIGN");
@@ -353,9 +353,9 @@ fn capture_drawers_json_and_human_list_sections() {
     assert!(text.contains("Capture drawers"), "{text}");
     assert!(text.contains("foo.md"), "{text}");
     assert!(text.contains("^bar"), "{text}");
-    assert!(text.contains("REQUIREMENTS"), "{text}");
+    assert!(text.contains("Requirements"), "{text}");
     assert!(text.contains("requirements"), "{text}");
-    assert!(text.contains("FUTURE WORK"), "{text}");
+    assert!(text.contains("Future Work"), "{text}");
     assert!(text.contains("4 drawers"), "{text}");
 }
 
@@ -373,7 +373,7 @@ fn capture_drawers_empty_and_error_paths() {
         "- [ ] #task Same\n",
         "- [ ] #task Empty ^empty-id\n",
         "- [ ] #task Parent\n",
-        "\t- REQUIREMENTS\n",
+        "\t- **Requirements**\n",
     );
     write_file(&vault.join("foo.md"), original);
     let parent_ref = capture_task_ref("- [ ] #task Parent");
@@ -416,7 +416,7 @@ fn capture_drawers_empty_and_error_paths() {
         serde_json::from_str(stdout(&by_ref).trim()).expect("json");
     assert!(ref_json["block_id"].is_null(), "{ref_json}");
     assert_eq!(ref_json["count"], 1);
-    assert_eq!(ref_json["drawers"][0]["title"], "REQUIREMENTS");
+    assert_eq!(ref_json["drawers"][0]["title"], "Requirements");
 
     let cases: &[(&str, i32, &str, &[&str])] = &[
         (

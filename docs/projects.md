@@ -195,8 +195,7 @@ status-group titles, Pomodoros, Events, and Highlights) are never drawers.
 
 When a capture creates a new project note, a first-level whole-bold container
 such as `- **API Design**` with nested notes becomes a `## API Design` section.
-The title keeps its authored spelling. Nested ALL-CAPS section drafts are
-refused with `caps_drawer_retired`.
+The title keeps its authored spelling. Plain uppercase section bullets remain ordinary content.
 
 The same `^prj` line doubles as the project's freshness tracker: while
 sync leaves it visible (no `#hide`), the morning review reminds Bryan
@@ -477,9 +476,8 @@ an `[x]` row, and a carried `[>]` stub becomes a `## Notes` line verbatim.
 Loose notes and the Notes drawer merge into one `## Notes` section, even on
 requirement-less tasks. A bold drawer becomes a `##` section that keeps its
 authored title byte for byte (`API Design`, `C++ Notes`, `Q1: Goals`, `Café`),
-including an eligible empty drawer; a legacy ALL-CAPS qualifying bullet still
-maps with Title Case (`FUTURE WORK` becomes `Future Work`) and reuses a
-matching `##` header when one exists. Unmarked children — images and Gmail
+including an eligible empty drawer. Plain uppercase bullets remain tasks or
+notes and do not create sections. Unmarked children — images and Gmail
 links included — become `## Notes`, never `#task` rows. A task with no
 requirements promotes to an empty `## Tasks` with the notice `No requirements
 to promote — Ctrl+] marks one`. The receipt reads `Promoted “{S}” · {t} tasks

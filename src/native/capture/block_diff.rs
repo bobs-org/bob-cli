@@ -714,7 +714,7 @@ mod tests {
                 None,
                 Some(drawer("Notes", DrawerMarker::Bold, false)),
                 None,
-                Some(drawer("STALE", DrawerMarker::LegacyCaps, false)),
+                Some(drawer("Stale", DrawerMarker::Bold, false)),
                 None,
                 Some(drawer("Ideas", DrawerMarker::Bold, false)),
                 None,

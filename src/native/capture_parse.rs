@@ -53,6 +53,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
         has_global_destination: false,
         record_policy: None,
         notebook_policy: None,
+        known_drawer_keys: None,
         global_route: None,
     };
     let parsed = CaptureParseResult::new(draft, &options);
@@ -133,11 +134,20 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let notebook_policy = super::capture_notebooks::notebook_policy_for_draft(
         &bob_dir, &raw_text,
     );
+    let drawer_catalog =
+        super::capture_drawers::load_drawer_catalog(&bob_dir).ok();
+    let known_drawer_keys = drawer_catalog.as_ref().map(|catalog| {
+        catalog
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>()
+    });
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
         record_policy: Some(&record_policy),
         notebook_policy: Some(&notebook_policy),
+        known_drawer_keys: known_drawer_keys.as_ref(),
         global_route: None,
     };
     let mut result = CaptureParseResult::new(raw_text, &options);
@@ -196,7 +206,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 31` for the capture-language revision while \
+Success JSON reports `grammar: 32` for the capture-language revision while \
 `schema_version` stays 1. An admitted requirement bullet's checkbox (`[ ] ` \
 under a task or requirement) reports a `req_marker` span with its \
 requirement `depth`; refused positions report `req_in_drawer`, \
@@ -4590,6 +4600,7 @@ record:
             has_global_destination: false,
             record_policy: Some(&policy),
             notebook_policy: None,
+            known_drawer_keys: None,
             global_route: None,
         };
         CaptureParseResult::new(input.to_string(), &options)
@@ -4739,6 +4750,7 @@ record:
             has_global_destination: false,
             record_policy: Some(&policy),
             notebook_policy: None,
+            known_drawer_keys: None,
             global_route: None,
         };
         let parsed = CaptureParseResult::new(input.to_string(), &options);
@@ -4778,6 +4790,7 @@ record:
             has_global_destination: false,
             record_policy: Some(&policy),
             notebook_policy: None,
+            known_drawer_keys: None,
             global_route: None,
         };
         let parsed = CaptureParseResult::new(input.to_string(), &options);
@@ -5253,6 +5266,7 @@ record:
             has_global_destination: false,
             record_policy: None,
             notebook_policy: None,
+            known_drawer_keys: None,
             global_route: None,
         };
         let result = CaptureParseResult::new(raw.to_string(), &options);

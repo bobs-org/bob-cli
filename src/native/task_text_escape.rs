@@ -25,7 +25,7 @@ pub(crate) fn escape_task_text(text: &str) -> String {
 
 /// Escape free text for a child bullet: the task-line escaping plus the
 /// leading-marker and bullet-start checkbox rules, since a child starts a
-/// fresh list item. It also defuses whole-line drawer lookalikes.
+/// fresh list item. It also defuses whole-line bold drawer lookalikes.
 pub(crate) fn escape_child_text(text: &str) -> String {
     let escaped = escape_leading_marker(&escape_bullet_start_checkbox(
         &escape_task_text(text),
@@ -33,9 +33,9 @@ pub(crate) fn escape_child_text(text: &str) -> String {
     defuse_drawer_header(&escaped)
 }
 
-/// Keep imported child text inert under the task drawer dual-reader. A body
-/// that would be recognized as either a legacy or bold drawer becomes the
-/// same visibly bold, escaped note. Whitespace around the body is preserved.
+/// Keep imported child text inert under the task drawer reader. A whole-bold
+/// body becomes the same visibly bold, escaped note. Whitespace around the
+/// body is preserved.
 pub(crate) fn defuse_drawer_header(body: &str) -> String {
     let start = body.len() - body.trim_start().len();
     let end = body.trim_end().len();
@@ -45,11 +45,7 @@ pub(crate) fn defuse_drawer_header(body: &str) -> String {
     else {
         return body.to_string();
     };
-    if !matches!(
-        marker,
-        crate::native::capture_drawers::DrawerMarker::Bold
-            | crate::native::capture_drawers::DrawerMarker::LegacyCaps
-    ) {
+    if marker != crate::native::capture_drawers::DrawerMarker::Bold {
         return body.to_string();
     }
     let key = crate::native::capture_drawers::drawer_key(title);
@@ -452,12 +448,10 @@ mod tests {
     }
 
     #[test]
-    fn child_text_defuses_legacy_and_bold_drawer_headers_idempotently() {
+    fn child_text_defuses_only_bold_drawer_headers_idempotently() {
         for (input, expected) in [
-            ("AGENDA", "__AGENDA__"),
             ("**Agenda**", "__Agenda__"),
             ("  **API Design**  ", "  __API Design__  "),
-            ("NOTES", "__NOTES__"),
         ] {
             let escaped = defuse_drawer_header(input);
             assert_eq!(escaped, expected);
@@ -468,6 +462,8 @@ mod tests {
             );
         }
         for body in [
+            "AGENDA",
+            "NOTES",
             "__API Design__",
             "**Note:**",
             "**API Design** trailing",
@@ -478,7 +474,7 @@ mod tests {
         for reserved in ["TASKS", "**Tasks**"] {
             assert_eq!(defuse_drawer_header(reserved), reserved);
         }
-        assert_eq!(escape_child_text("AGENDA"), "__AGENDA__");
+        assert_eq!(escape_child_text("AGENDA"), "AGENDA");
         assert_eq!(escape_child_text("**Agenda**"), "__Agenda__");
     }
 

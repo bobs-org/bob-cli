@@ -331,18 +331,17 @@ fn create_bold_and_hash_sections_merge() {
 }
 
 #[test]
-fn create_seed_refuses_legacy_caps_container_drafts() {
+fn create_seed_keeps_uppercase_bullets_as_notes() {
     let raw = "Notes @dev^nvim@ %n\n- KEYMAPS\n  - x";
-    let policy = policy();
-    let error = parse_capture_draft_with_options_coded(
-        raw,
-        None,
-        None,
-        &strict_options(Some(&policy)),
-    )
-    .expect_err("legacy container syntax is retired");
-    assert_eq!(error.code, Some("caps_drawer_retired"));
-    assert!(error.message.contains("**KEYMAPS**"), "{error:?}");
+    let draft = split_capture_draft(raw);
+    match plan_create_item(&draft.items[0], "dev_nvim") {
+        NotebookBodyOutcome::Ready(plan) => {
+            assert!(plan.sections.is_empty());
+            assert_eq!(plan.top_notes.len(), 1);
+            assert_eq!(plan.top_notes[0].text, "KEYMAPS");
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

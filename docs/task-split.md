@@ -64,7 +64,7 @@ These are never splittable, and each gets a teaching notice or code:
     links to it now resolve to a task. Otherwise the ID is minted with
     `mint_block_id` against the destination note's used IDs.
   - The bullet's children travel byte-for-byte, re-based one level up. An
-    ALL-CAPS child with notes therefore naturally becomes the new task's
+    plain uppercase child with notes therefore remains ordinary content under the new task's
     drawer.
   - Nothing is inherited from P: no priority, schedule, dependencies, lane,
     freshness, or explicit type. Content is never re-parsed as capture
@@ -274,7 +274,7 @@ bob-plugins copies the file byte-for-byte; bob-cli is authoritative.
 | SP14 | Wikilinks and Markdown links flatten to display text in the alias; the mint uses the flattened words |
 | SP15 | Emphasis (`**`, `__`, `==`, `~~`, backticks) is stripped in the alias only |
 | SP16 | An 80+ character title truncates on a word boundary with `…` in the alias |
-| SP17 | An ALL-CAPS child with notes becomes the new task's drawer |
+| SP17 | An uppercase child with notes remains ordinary content under the new task |
 | SP18 | Tab-indented notes re-base to the destination indent unit |
 | SP19 | Space-indented notes keep relative structure under a tab-indented parent |
 | SP20 | A daily-note Event Task owner routes new tasks to P's `[root::]` note `## Tasks` |

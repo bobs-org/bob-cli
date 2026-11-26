@@ -4,7 +4,7 @@
   "cases": [
     {
       "id": "DV1",
-      "title": "dual readers preserve true-case titles and byte ranges",
+      "title": "bold-only readers preserve true-case titles and byte ranges",
       "eol": "crlf",
       "owner": "parent",
       "source_lines": [
@@ -34,7 +34,6 @@
         {"title": "C++ Notes", "key": "C++ NOTES", "marker": "bold", "line": 4, "header_range": [60, 76], "title_range": [65, 74]},
         {"title": "Q1: Goals", "key": "Q1: GOALS", "marker": "bold", "line": 5, "header_range": [78, 95], "title_range": [84, 93]},
         {"title": "Café", "key": "CAFÉ", "marker": "bold", "line": 6, "header_range": [97, 110], "title_range": [103, 108]},
-        {"title": "NOTES", "key": "NOTES", "marker": "legacy_caps", "line": 7, "header_range": [112, 121], "title_range": [116, 121]},
         {"title": "Notes", "key": "NOTES", "marker": "bold", "line": 8, "header_range": [123, 136], "title_range": [129, 134]}
       ]
     },
@@ -102,7 +101,7 @@
     {"id": "DV6", "body": "**C++ Notes**", "title": "C++ Notes", "marker": "bold"},
     {"id": "DV7", "body": "**Q1: Goals**", "title": "Q1: Goals", "marker": "bold"},
     {"id": "DV8", "body": "**Café**", "title": "Café", "marker": "bold"},
-    {"id": "DV9", "body": "OPTIONS:", "title": "OPTIONS:", "marker": "legacy_caps"},
+    {"id": "DV9", "body": "OPTIONS:", "excluded": true},
     {"id": "DV10", "body": "** Title**", "excluded": true},
     {"id": "DV11", "body": "**Title **", "excluded": true},
     {"id": "DV12", "body": "****", "excluded": true},

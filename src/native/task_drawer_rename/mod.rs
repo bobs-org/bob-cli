@@ -459,7 +459,7 @@ fn rename_task_drawers(
 }
 
 /// Respelling is intentionally not a merge: duplicate identities stay as
-/// separate containers and each legacy header becomes a bold header.
+/// separate bold containers.
 fn respell_task_drawers(
     contents: &str,
     owner: &DrawerOwner,

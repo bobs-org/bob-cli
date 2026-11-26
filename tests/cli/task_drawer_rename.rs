@@ -9,17 +9,17 @@ use std::{
     process::{Command, Output},
 };
 
-/// An open task whose REQUIREMENTS meets an existing NOTES, and a done
-/// task with a lone REQUIREMENTS drawer.
+/// An open task whose bold Requirements meets an existing bold Notes, and a
+/// done task with a lone Requirements drawer.
 const BOB: &str = "\
 ## Tasks
 - [ ] #task Ship the exporter ^export
-\t- REQUIREMENTS
+\t- **Requirements**
 \t\t- Handles supported inputs ^inputs
-\t- NOTES
+\t- **Notes**
 \t\t- Morgan reported the issue.
 - [x] #task Shipped ✅ 2026-11-20
-\t- REQUIREMENTS
+\t- **Requirements**
 \t\t- [x] checkbox bytes stay
 ";
 
@@ -36,7 +36,7 @@ const BOB_RENAMED: &str = "\
 
 const DONE: &str = "\
 - [x] #task Archived ✅ 2026-01-02
-\t- REQUIREMENTS
+\t- **Requirements**
 \t\t- archived entry
 ";
 
@@ -83,8 +83,9 @@ type: \"[[project]]\"
 ";
 
 const TEMPLATE: &str = "---\ntype: \"[[project]]\"\n---\n## Requirements\n";
-const GENERATED: &str = "- [ ] #task Generated\n\t- REQUIREMENTS\n\t\t- x\n";
-const CLEAN: &str = "- [ ] #task Already clean\n\t- NOTES\n\t\t- a\n";
+const GENERATED: &str =
+    "- [ ] #task Generated\n\t- **Requirements**\n\t\t- x\n";
+const CLEAN: &str = "- [ ] #task Already clean\n\t- **Notes**\n\t\t- a\n";
 
 fn write(vault: &Path, path: &str, contents: &str) {
     write_file(&vault.join(path), contents);
@@ -193,7 +194,7 @@ fn bare_run_is_a_dry_run_with_an_inventory() {
     for expected in [
         "bob.md (2 drawers · 1 merge)",
         "L2 Ship the exporter (open) · REQUIREMENTS + NOTES → Notes (merged)",
-        "    - \t- REQUIREMENTS",
+        "    - \t- **Requirements**",
         "    + \t- **Notes**",
         "done/bob_done.md (1 drawer) archive",
         "proj.md (1 section)",
@@ -379,7 +380,7 @@ fn apply_prints_a_summary_per_note() {
 }
 
 #[test]
-fn case_only_respelling_converts_legacy_drawers_and_repairs_section_links() {
+fn case_only_respelling_updates_bold_drawers_and_repairs_section_links() {
     let temp = TempDir::new("rename-drawer-case-only");
     let vault = fixture(&temp);
     let output = run(
@@ -395,86 +396,40 @@ fn case_only_respelling_converts_legacy_drawers_and_repairs_section_links() {
     assert_eq!(payload["counts"]["merges"], 0);
     assert_eq!(
         read(&vault, "bob.md"),
-        BOB.replace("\t- REQUIREMENTS", "\t- **requirements**")
+        BOB.replace("**Requirements**", "**requirements**")
     );
     assert_eq!(
         read(&vault, "done/bob_done.md"),
-        DONE.replace("REQUIREMENTS", "**requirements**")
+        DONE.replace("**Requirements**", "**requirements**")
     );
     assert!(read(&vault, "proj.md").contains("## requirements"));
     assert!(read(&vault, "links.md").contains("[[proj#requirements]]"));
 }
 
 #[test]
-fn legacy_inventory_is_read_only_and_reports_migration_categories() {
-    let temp = TempDir::new("rename-drawer-inventory");
+fn removed_legacy_inventory_flag_is_rejected_without_writing() {
+    let temp = TempDir::new("rename-drawer-legacy-option");
     let vault = fixture(&temp);
-    write(
-        &vault,
-        "inventory.md",
-        "- [ ] #task Prepare migration ^inventory\n\
-         \t- LEGACY NOTES\n\
-         \t\t- old entry\n\
-         \t- **WHY?**\n\
-         \t- **Important:**\n\
-         \t\t- labeled detail\n\
-         \t- **API Design**\n\
-         \t\t- first identity\n\
-         \t- **API DESIGN**\n\
-         \t\t- duplicate identity\n",
-    );
-    write(
-        &vault,
-        "done/archived_drawers.md",
-        "- [x] #task Archived ✅ 2026-01-02 ^history\n\
-         \t- RETIRED NOTES\n\
-         \t\t- archived entry\n",
-    );
     let before = head(&vault);
+    let output = run(&vault, &temp, &["--legacy"]);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(stderr(&output).contains("unexpected argument '--legacy'"));
+    assert_eq!(head(&vault), before);
+    assert_eq!(read(&vault, "bob.md"), BOB);
+}
 
-    let human = run(&vault, &temp, &["-l"]);
-    assert_eq!(human.status.code(), Some(0), "{}", format_output(&human));
-    let human_text = stdout(&human);
-    for expected in [
-        "Drawer migration inventory (read-only)",
-        "Legacy ALL-CAPS drawers (",
-        "Empty bold drawers (",
-        "Bold trailing-colon leads (information only) (1)",
-        "Duplicate identities (1)",
-        "inventory.md:",
-        "done/archived_drawers.md:",
-    ] {
-        assert!(
-            human_text.contains(expected),
-            "missing {expected:?}:\n{human_text}"
-        );
-    }
-
-    let output = run(&vault, &temp, &["--legacy", "--format", "json"]);
+#[test]
+fn plain_uppercase_bullets_are_not_renamed_as_drawers() {
+    let temp = TempDir::new("rename-drawer-plain-uppercase");
+    let vault = fixture(&temp);
+    let plain =
+        "- [ ] #task Plain text ^plain\n\t- REQUIREMENTS\n\t\t- still text\n";
+    write(&vault, "plain.md", plain);
+    let output = run(&vault, &temp, &["requirements", "Notes", "-f", "json"]);
     assert_eq!(output.status.code(), Some(0), "{}", format_output(&output));
     let payload = json_of(&output);
-    assert_eq!(payload["mode"], "legacy_inventory");
-    assert_eq!(payload["read_only"], true);
-    assert_eq!(payload["counts"]["legacy_drawers"], 7);
-    assert_eq!(payload["counts"]["empty_bold_drawers"], 1);
-    assert_eq!(payload["counts"]["bold_trailing_colon_leads"], 1);
-    assert_eq!(payload["counts"]["duplicate_identities"], 1);
-    assert!(payload["legacy_drawers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| {
-            item["path"] == "done/archived_drawers.md"
-                && item["status"] == "closed"
-                && item["archive"] == true
-        }));
-    assert_eq!(payload["empty_bold_drawers"][0]["title"], "WHY?");
-    assert_eq!(
-        payload["bold_trailing_colon_leads"][0]["title"],
-        "Important:"
-    );
-    assert_eq!(payload["duplicate_identities"][0]["key"], "API DESIGN");
-    assert_eq!(head(&vault), before);
+    assert_eq!(payload["counts"]["notes_changed"], 4);
+    assert_eq!(read(&vault, "plain.md"), plain);
 }
 
 #[test]

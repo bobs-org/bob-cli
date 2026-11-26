@@ -3662,14 +3662,14 @@ fn attach_drawer_bullet_metadata(
     spans: &mut Vec<Span>,
     diagnostics: &mut Vec<Diagnostic>,
     sub_bullets: &mut [AuthoredSubBullet],
+    known_drawer_keys: Option<&std::collections::HashSet<String>>,
 ) {
     use super::drawer_bullet::{
-        bold_container_parts, caps_drawer_retired_error,
-        editor_drawer_bullet_position_error, empty_bold_container_error,
-        first_level_groups, is_all_caps_drawer_title, is_under_task_mode,
+        bold_container_parts, editor_drawer_bullet_position_error,
+        empty_bold_container_error, first_level_groups, is_under_task_mode,
         scan_leading, DrawerBulletHit,
     };
-    use crate::native::capture_drawers::reserved_selector_error;
+    use crate::native::capture_drawers::{drawer_key, reserved_selector_error};
 
     let has_first_level =
         sub_bullets.iter().any(|bullet| bullet.depth.is_first());
@@ -3799,23 +3799,23 @@ fn attach_drawer_bullet_metadata(
             Some(DrawerBulletHit::Invalid { .. })
             | Some(DrawerBulletHit::Escaped { .. })
             | None => {
-                if container_header_position
-                    && nested
-                    && is_all_caps_drawer_title(body_text)
-                {
-                    let title = body_text.trim();
+                let title = body_text.trim();
+                let key_matches_catalog = known_drawer_keys
+                    .is_some_and(|keys| keys.contains(&drawer_key(title)));
+                if container_header_position && nested && key_matches_catalog {
                     let leading =
                         body_text.len() - body_text.trim_start().len();
                     let start = body_start + leading;
                     let end = start + title.len();
                     diagnostics.push(Diagnostic {
-                        severity: Severity::Error,
+                        severity: Severity::Warning,
                         code: "caps_drawer_retired",
-                        message: caps_drawer_retired_error(title),
+                        message: format!(
+                            "plain bullet `{title}` matches a known drawer name; write `- **{title}**` with nested notes if you intend a drawer"
+                        ),
                         range: Some((start, end)),
                         rewrite: None,
                     });
-                    continue;
                 }
                 if under_task {
                     let trimmed = body_text.trim();
@@ -6625,6 +6625,7 @@ pub(super) fn parse_editor_item_inner<'a>(
         &mut spans,
         &mut diagnostics,
         &mut sub_bullets,
+        options.known_drawer_keys,
     );
     let drawer_bullet_target = super::drawer_bullet::classify_target(
         entry_mode,

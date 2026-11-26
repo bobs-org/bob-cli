@@ -95,6 +95,9 @@ pub(crate) struct EditorParseOptions<'a> {
     /// Immutable notebook route policy, shared with the strict parser.
     pub(crate) notebook_policy:
         Option<&'a super::notebook::NotebookRoutePolicy>,
+    /// Keys from the vault drawer catalog, used only to warn when plain
+    /// capture text looks like a known drawer title.
+    pub(crate) known_drawer_keys: Option<&'a std::collections::HashSet<String>>,
     /// Resolved draft-wide `@@route`, when the declaration is a complete
     /// route. Notebook claiming reads this before task/ref parse.
     pub(crate) global_route: Option<&'a str>,
@@ -108,6 +111,7 @@ impl<'a> EditorParseOptions<'a> {
             has_global_destination: false,
             record_policy: None,
             notebook_policy: None,
+            known_drawer_keys: None,
             global_route: None,
         }
     }

@@ -92,7 +92,7 @@ fn nested_hash_still_types_and_first_level_does_not() {
 }
 
 #[test]
-fn editor_reports_drawer_needs_bold_spans_and_retired_caps() {
+fn editor_reports_drawer_needs_bold_spans_and_catalog_warnings() {
     let incomplete = editor("Ship it\n- #");
     assert_eq!(incomplete.mode, EditorMode::Incomplete);
     assert!(incomplete.needs.contains(&Need::Drawer), "{incomplete:?}");
@@ -116,10 +116,29 @@ fn editor_reports_drawer_needs_bold_spans_and_retired_caps() {
         drawer.exact && drawer.text == "Future Work"
     }));
 
-    let retired = editor("Ship it\n- FUTURE WORK\n  - try replication");
-    assert_eq!(retired.diagnostics[0].code, "caps_drawer_retired");
-    assert!(retired.diagnostics[0].message.contains("**FUTURE WORK**"));
-    assert!(retired.sub_bullets[0].drawer.is_none());
+    let raw = "Ship it\n- FUTURE WORK\n  - try replication";
+    let plain = editor(raw);
+    assert!(plain.diagnostics.is_empty(), "{plain:?}");
+    assert!(plain.sub_bullets[0].drawer.is_none());
+
+    let known_drawer_keys =
+        std::collections::HashSet::from(["FUTURE WORK".to_string()]);
+    let options = EditorParseOptions {
+        known_drawer_keys: Some(&known_drawer_keys),
+        ..EditorParseOptions::routing_off()
+    };
+    let warned =
+        super::super::editor_parse::parse_for_editor_with(raw, &options);
+    assert_eq!(warned.diagnostics[0].code, "caps_drawer_retired");
+    assert_eq!(warned.diagnostics[0].severity, Severity::Warning);
+    assert!(warned.diagnostics[0].message.contains("**FUTURE WORK**"));
+    assert!(warned.sub_bullets[0].drawer.is_none());
+
+    let unrelated = super::super::editor_parse::parse_for_editor_with(
+        "Ship it\n- LOCAL LABEL\n  - note",
+        &options,
+    );
+    assert!(unrelated.diagnostics.is_empty(), "{unrelated:?}");
 
     let childless_caps = editor("Plan trip\n- NYC");
     assert!(!span_kinds(&childless_caps).contains(&SpanKind::DrawerBullet));
@@ -234,7 +253,7 @@ fn reserved_ranges_are_utf8_byte_offsets() {
     );
     let literal = "Ship caf\u{e9} \u{1f680}\n- TASKS\n  - note";
     assert!(reserved_ranges(literal).is_empty());
-    assert!(codes(&editor(literal)).contains(&"caps_drawer_retired"));
+    assert!(!codes(&editor(literal)).contains(&"caps_drawer_retired"));
 }
 
 #[test]
@@ -307,7 +326,7 @@ fn execution_files_a_shortcut_under_a_new_task() {
 }
 
 #[test]
-fn execution_admits_bold_titles_and_refuses_legacy_container_drafts() {
+fn execution_admits_bold_titles_and_keeps_plain_uppercase_content() {
     let parsed = execute("Ship it\n- **API Design**\n  - review")
         .expect("bold drawer parses");
     assert_eq!(parsed.sub_bullets[0].body, "**API Design**");
@@ -323,13 +342,10 @@ fn execution_admits_bold_titles_and_refuses_legacy_container_drafts() {
         .expect_err("capture cannot create an empty drawer");
     assert!(empty.contains("has no nested notes"), "{empty}");
 
-    let retired = execute("Ship it\n- API DESIGN\n  - review")
-        .expect_err("legacy ALL-CAPS container drafts are retired");
-    assert!(
-        retired.contains("legacy ALL-CAPS container draft"),
-        "{retired}"
-    );
-    assert!(retired.contains("**API DESIGN**"), "{retired}");
+    let plain = execute("Ship it\n- API DESIGN\n  - review")
+        .expect("plain uppercase bullet is ordinary content");
+    assert_eq!(plain.sub_bullets[0].body, "API DESIGN");
+    assert!(plain.sub_bullets[0].drawer.is_none());
 }
 
 #[test]

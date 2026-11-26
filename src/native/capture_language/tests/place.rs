@@ -19,10 +19,6 @@ impl PlaceCatalog for EmptyCatalog {
     fn near_title(&self, _: &str) -> Option<String> {
         None
     }
-
-    fn is_legacy_title(&self, title: &str) -> bool {
-        crate::native::capture_drawers::is_legacy_drawer_title(title)
-    }
 }
 
 struct MarkerCatalog {
@@ -40,10 +36,6 @@ impl PlaceCatalog for MarkerCatalog {
 
     fn near_title(&self, _: &str) -> Option<String> {
         None
-    }
-
-    fn is_legacy_title(&self, title: &str) -> bool {
-        crate::native::capture_drawers::is_legacy_drawer_title(title)
     }
 }
 

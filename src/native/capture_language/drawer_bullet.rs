@@ -19,8 +19,7 @@ use super::place::{
 };
 use super::project_tasks::split_leading_checkbox;
 use crate::native::capture_drawers::{
-    drawer_key, is_drawer_slug, is_legacy_drawer_title,
-    normalize_drawer_literal,
+    drawer_key, is_drawer_slug, normalize_drawer_literal,
 };
 use std::ops::Range;
 
@@ -60,20 +59,6 @@ pub(crate) fn bold_container_parts(
 pub(crate) fn empty_bold_container_error(title: &str) -> String {
     format!(
         "`- **{title}**` names a container but has no nested notes; nest them as `  - …`, or write `__{title}__` for a bold note"
-    )
-}
-
-pub(crate) fn caps_drawer_retired_error(title: &str) -> String {
-    let replacement = format_notebook_section_create_title(title);
-    caps_drawer_retired_error_with_replacement(title, &replacement)
-}
-
-pub(crate) fn caps_drawer_retired_error_with_replacement(
-    title: &str,
-    replacement: &str,
-) -> String {
-    format!(
-        "legacy ALL-CAPS container draft `{title}` is retired; write `- **{replacement}**` and nest its notes beneath it"
     )
 }
 
@@ -383,8 +368,6 @@ beneath `- {title}`"
 pub(crate) fn code_for_message(message: &str) -> Option<&'static str> {
     if message == drawer_bullet_text_error() {
         Some("drawer_bullet_text")
-    } else if message.starts_with("legacy ALL-CAPS container draft `") {
-        Some("caps_drawer_retired")
     } else if message == empty_drawer_bullet_error()
         || message.starts_with("`- **")
             && message.contains("names a container but has no nested notes")
@@ -445,8 +428,7 @@ pub(crate) fn authored_level_groups(
 }
 
 /// Apply container-header grouping after `CaptureKind` is known: position
-/// errors, childless-shortcut `empty_drawer_bullet`, and retired ALL-CAPS
-/// container bullets with nested notes.
+/// errors and childless-shortcut `empty_drawer_bullet`.
 pub(crate) fn finish_execution_drawer_bullets(
     kind: &CaptureKind,
     parent_body: &str,
@@ -455,25 +437,10 @@ pub(crate) fn finish_execution_drawer_bullets(
     let multi_note = is_multi_note_sub_bullet(kind, parent_body, sub_bullets);
     let under_task = is_under_task_kind(kind) || multi_note;
     let project_note_sections = matches!(kind, CaptureKind::ProjectNote { .. });
-    let defer_caps_refusal =
-        multi_note && matches!(kind, CaptureKind::SubBullet { .. });
     let groups = first_level_groups(sub_bullets);
     for (start, end) in groups {
         let nested = end.saturating_sub(start) > 1;
         let body = &sub_bullets[start].body;
-        if sub_bullets[start].drawer.is_none()
-            && (under_task || project_note_sections)
-            && nested
-            && is_all_caps_drawer_title(body)
-        {
-            // Existing-task multi-note captures resolve the matching target
-            // spelling in the writer, where the destination note is loaded.
-            // Other container positions have no existing target spelling.
-            if !defer_caps_refusal {
-                return Err(caps_drawer_retired_error(body.trim()));
-            }
-            continue;
-        }
         if sub_bullets[start].drawer.is_some() {
             if !under_task {
                 return Err(drawer_bullet_position_error(kind, parent_body));
@@ -528,14 +495,6 @@ pub(crate) fn unescape_escaped_body(body: &str) -> String {
     } else {
         body.to_string()
     }
-}
-
-pub(crate) fn is_all_caps_drawer_title(body: &str) -> bool {
-    let trimmed = body.trim();
-    if split_leading_checkbox(trimmed).0.is_some() {
-        return false;
-    }
-    is_legacy_drawer_title(trimmed)
 }
 
 fn parse_hit(

@@ -1355,7 +1355,7 @@ Contract: [Merging tasks into a new task with `<`](../capture.md#merging-tasks-i
 ### `@route+block-id#drawer` {#plus-child-section}
 
 Child bullet inside a task. `@route+block-id#drawer` selects by normalized
-key and accepts legacy ALL-CAPS or bold stored headers; `#future-work` matches
+key and accepts whole-bold stored headers; `#future-work` matches
 `FUTURE WORK`. It requires note text, children, or `%c`. Missing names create
 with the catalog's explicit spelling or the notebook create-title rule
 unless a prefix or near-duplicate exists; quote `#"Title"` to preserve
@@ -1382,8 +1382,7 @@ creates or selects it. Existing targets keep title and marker; creation
 prefers explicit catalog spelling, then notebook title rules. See [task drawer
 rules](../task-drawers.md) for matching.
 
-Nested ALL-CAPS containers refuse with `caps_drawer_retired`; childless
-ALL-CAPS stays text. New empty shortcuts/headers refuse with
+Plain uppercase bullets remain ordinary content; `capture-parse` can warn when a nested plain bullet matches a known drawer key. New empty shortcuts/headers refuse with
 `empty_drawer_bullet`; stored empty headers can be filled. In route-only
 notebook lists, `- #Section` with nested notes selects `##`; bold notes stay
 notes. Note-less `@route+id` files drawer groups; `@route+id#drawer` files all bullets there.

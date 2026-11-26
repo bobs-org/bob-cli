@@ -79,12 +79,12 @@ fn spec_refuses_reserved_or_invalid_new_titles_and_allows_case_only_names() {
 fn a_lone_drawer_is_retitled_in_place() {
     let contents = note(&[
         "- [ ] #task Ship the exporter ^export",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- [ ] not a req: still a drawer entry",
         "\t\t- Handles Windows files ^win",
         "- [x] #task Shipped ✅ 2026-11-20",
         "\t- requirements",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- done already",
     ]);
     let pass = renamed(&contents);
@@ -120,11 +120,11 @@ fn a_lone_drawer_is_retitled_in_place() {
 fn an_existing_new_drawer_merges_at_the_earliest_position() {
     let contents = note(&[
         "- [ ] #task Ship",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- first",
         "\t\t\t- nested ^keep",
         "\t- a loose note",
-        "\t- NOTES",
+        "\t- **NOTES**",
         "\t\t- second",
         "\t\t- first",
         "\t- 🛠️ **WORK LOG**",
@@ -156,11 +156,11 @@ fn an_existing_new_drawer_merges_at_the_earliest_position() {
 fn old_after_new_appends_to_new_and_twice_old_merges_too() {
     let contents = note(&[
         "- [ ] #task Ship",
-        "\t- NOTES",
+        "\t- **NOTES**",
         "\t\t- kept first",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- appended",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- appended again",
         "",
         "Trailing paragraph.",
@@ -194,7 +194,7 @@ fn nested_owners_report_their_original_lines() {
         "\t\t\t- child entry",
         "\t\t- NOTES",
         "\t\t\t- child note",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- parent entry",
     ]);
     let pass = renamed(&contents);
@@ -222,9 +222,9 @@ fn nested_owners_report_their_original_lines() {
 fn merged_entries_take_the_kept_drawers_indentation() {
     let contents = note(&[
         "- [ ] #task Ship",
-        "    - NOTES",
+        "    - **NOTES**",
         "        - kept",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- moved",
         "\t\t\t- deeper",
     ]);
@@ -246,7 +246,7 @@ fn merged_entries_take_the_kept_drawers_indentation() {
 
 #[test]
 fn crlf_and_a_missing_final_newline_are_kept() {
-    let contents = "- [ ] #task Ship\r\n\t- NOTES\r\n\t\t- a\r\n\t- REQUIREMENTS\r\n\t\t- b";
+    let contents = "- [ ] #task Ship\r\n\t- **NOTES**\r\n\t\t- a\r\n\t- **REQUIREMENTS**\r\n\t\t- b";
     let pass = renamed(contents);
     assert_eq!(
         pass.updated.as_deref(),
@@ -258,9 +258,9 @@ fn crlf_and_a_missing_final_newline_are_kept() {
 fn a_last_drawer_keeps_the_blank_line_that_parts_the_block() {
     let contents = note(&[
         "- [ ] #task Ship",
-        "\t- NOTES",
+        "\t- **NOTES**",
         "\t\t- a",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- b",
         "",
         "## Next",
@@ -284,16 +284,16 @@ fn a_last_drawer_keeps_the_blank_line_that_parts_the_block() {
 
 #[test]
 fn a_note_without_old_plans_nothing() {
-    let contents = note(&["- [ ] #task Ship", "\t- NOTES", "\t\t- a"]);
+    let contents = note(&["- [ ] #task Ship", "\t- **NOTES**", "\t\t- a"]);
     assert_eq!(renamed(&contents), NoteRename::default());
 }
 
 #[test]
-fn case_only_task_respelling_converts_headers_without_merging_duplicates() {
+fn case_only_task_respelling_keeps_duplicate_headers_separate() {
     let contents = note(&[
         "- [ ] #task Design the API",
-        "\t- API DESIGN",
-        "\t\t- legacy note",
+        "\t- **API DESIGN**",
+        "\t\t- uppercase title note",
         "\t- **Api Design**",
         "\t\t- bold note",
         "\t- **API design**",
@@ -307,7 +307,7 @@ fn case_only_task_respelling_converts_headers_without_merging_duplicates() {
             note(&[
                 "- [ ] #task Design the API",
                 "\t- **API design**",
-                "\t\t- legacy note",
+                "\t\t- uppercase title note",
                 "\t- **API design**",
                 "\t\t- bold note",
                 "\t- **API design**",
@@ -509,7 +509,7 @@ fn a_heading_left_ambiguous_refuses_the_note() {
     // A refused note keeps its task drawers too: no partial note writes.
     let pass = renamed(&project(&[
         "- [ ] #task Ship ^prj",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "\t\t- a",
         "## Requirements",
         "# Requirements",
@@ -570,7 +570,7 @@ fn other_heading_levels_in_a_project_note_are_excluded() {
 fn templates_report_headings_and_drawers_outside_fences() {
     let contents = note(&[
         "- [ ] <% tp.file.title %> #task",
-        "\t- REQUIREMENTS",
+        "\t- **REQUIREMENTS**",
         "## Requirements",
         "```",
         "## Requirements",
@@ -579,7 +579,7 @@ fn templates_report_headings_and_drawers_outside_fences() {
     assert_eq!(
         template_lookalikes(&contents, &spec()),
         [
-            (2, "drawer", "- REQUIREMENTS".to_string()),
+            (2, "drawer", "- **REQUIREMENTS**".to_string()),
             (3, "heading", "## Requirements".to_string()),
         ]
     );
@@ -591,16 +591,20 @@ fn templates_report_headings_and_drawers_outside_fences() {
 
 #[test]
 fn content_check_refuses_a_dropped_or_invented_line() {
-    let before = note(&["- [ ] #task Ship", "\t- REQUIREMENTS", "\t\t- a"]);
+    let before = note(&["- [ ] #task Ship", "\t- **REQUIREMENTS**", "\t\t- a"]);
     let pass = rename_note(&before, &spec(), &settings());
-    let dropped = note(&["- [ ] #task Ship", "\t- NOTES"]);
+    let dropped = note(&["- [ ] #task Ship", "\t- **NOTES**"]);
     assert!(content_preserved(&before, &dropped, &spec(), &pass)
         .unwrap_err()
         .contains("drop the line \"- a\""));
-    let invented = note(&["- [ ] #task Ship", "\t- NOTES", "\t\t- [ ] a"]);
+    let invented = note(&["- [ ] #task Ship", "\t- **NOTES**", "\t\t- [ ] a"]);
     assert!(content_preserved(&before, &invented, &spec(), &pass).is_err());
-    let doubled =
-        note(&["- [ ] #task Ship", "\t- NOTES", "\t\t- a", "\t- NOTES"]);
+    let doubled = note(&[
+        "- [ ] #task Ship",
+        "\t- **NOTES**",
+        "\t\t- a",
+        "\t- **NOTES**",
+    ]);
     assert!(content_preserved(&before, &doubled, &spec(), &pass)
         .unwrap_err()
         .contains("drawer headers"));

@@ -5599,61 +5599,6 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let groups = crate::native::capture_language::drawer_bullet_groups(
         &parsed.sub_bullets,
     );
-    if glued_section.is_none()
-        && let Some((header, _nested)) = groups
-            .iter()
-            .map(|(start, end)| {
-                (
-                    &parsed.sub_bullets[*start],
-                    &parsed.sub_bullets[*start + 1..*end],
-                )
-            })
-            .find(|(header, nested)| {
-                header.drawer.is_none()
-                    && !nested.is_empty()
-                    && capture_language::is_all_caps_drawer_title(&header.body)
-            })
-    {
-        let contents = planner.read_existing(&target)?;
-        let settings = note_tasks::read_settings(&request.bob_dir);
-        let scan = note_tasks::scan(&contents, &settings);
-        let parent = match &effective_target {
-            SubBulletTarget::BlockId(block_id) => {
-                match scan.by_block_id(block_id) {
-                    BlockIdLookup::Found(task) => Some(task),
-                    _ => None,
-                }
-            }
-            SubBulletTarget::Ref { line, digest } => {
-                match scan.by_ref(*line, digest) {
-                    RefLookup::Found(task) => Some(task),
-                    _ => None,
-                }
-            }
-        };
-        let title = header.body.trim();
-        let existing_title = parent.and_then(|parent| {
-            let key = capture_drawers::drawer_key(title);
-            let matches = if capture_drawers::is_prj_parent(&contents, parent) {
-                capture_drawers::project_h2_drawers(&contents)
-            } else {
-                capture_drawers::drawers(&contents, parent)
-            };
-            let mut found = matches.iter().filter(|drawer| drawer.key == key);
-            let first = found.next()?.title.clone();
-            found.next().is_none().then_some(first)
-        });
-        let replacement = existing_title.unwrap_or_else(|| {
-            capture_language::place::format_notebook_section_create_title(title)
-        });
-        return Err(CaptureError::usage_code(
-            capture_language::caps_drawer_retired_error_with_replacement(
-                title,
-                &replacement,
-            ),
-            "caps_drawer_retired",
-        ));
-    }
     let mut notes: Vec<crate::native::capture::SubBulletNoteJson> = Vec::new();
     let mut drawers: Vec<DrawerJson> = Vec::new();
     let mut seen_drawer_keys: std::collections::BTreeSet<String> =
@@ -5698,8 +5643,8 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                 continue;
             }
             // In a glued drawer item every first-level bullet is already
-            // inside the drawer: ALL-CAPS stays plain and a drawer
-            // shortcut was already refused as `drawer_bullet_position`.
+            // inside the drawer, and drawer shortcuts are refused as
+            // `drawer_bullet_position`.
             let text = header.body.trim().to_string();
             if text.is_empty() {
                 continue;
@@ -5829,69 +5774,6 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                 let header_text = header.body.trim().to_string();
                 if header_text.is_empty() {
                     continue;
-                }
-                let is_childless = nested.is_empty();
-                if is_childless
-                    && capture_language::is_all_caps_drawer_title(&header_text)
-                {
-                    // A childless literal ALL-CAPS bullet that repeats a
-                    // drawer the target already has is refused so a
-                    // duplicate header is never written.
-                    let contents = planner.read_existing(&target)?;
-                    let settings = note_tasks::read_settings(&request.bob_dir);
-                    let scan = note_tasks::scan(&contents, &settings);
-                    let parent_task = match &effective_target {
-                        SubBulletTarget::BlockId(block_id) => {
-                            match scan.by_block_id(block_id) {
-                                BlockIdLookup::Found(task) => Some(task),
-                                _ => None,
-                            }
-                        }
-                        SubBulletTarget::Ref { line, digest } => {
-                            match scan.by_ref(*line, digest) {
-                                RefLookup::Found(task) => Some(task),
-                                _ => None,
-                            }
-                        }
-                    };
-                    if let Some(parent) = parent_task {
-                        let key =
-                            capture_drawers::drawer_key(header_text.trim());
-                        let already_has = if capture_drawers::is_prj_parent(
-                            &contents, parent,
-                        ) {
-                            capture_drawers::project_h2_drawers(&contents)
-                                .iter()
-                                .any(|d| d.key == key)
-                        } else {
-                            capture_drawers::drawers(&contents, parent)
-                                .iter()
-                                .any(|d| d.key == key)
-                        };
-                        if already_has {
-                            let block_label = parent
-                                .block_id
-                                .as_deref()
-                                .map(|id| id.to_string())
-                                .unwrap_or_default();
-                            let message = if block_label.is_empty() {
-                                format!(
-                                    "`{}` is already a drawer on the task; nest the notes to add beneath `- {}`",
-                                    header_text.trim(),
-                                    header_text.trim()
-                                )
-                            } else {
-                                crate::native::capture_language::existing_drawer_empty_error(
-                                    header_text.trim(),
-                                    &block_label,
-                                )
-                            };
-                            return Err(CaptureError::usage_code(
-                                message,
-                                "empty_drawer_bullet",
-                            ));
-                        }
-                    }
                 }
                 let mut capture_block = format!("- {header_text}");
                 let sub_json = render_nested_sub_bullets(

@@ -392,7 +392,7 @@ fn resolve_section_title(
         let normalized = capture_language::normalize_task_text(
             &selector.text.replace('-', " "),
         );
-        capture_project_note::format_project_section_title(&normalized)
+        capture_project_note::format_project_section_create_title(&normalized)
     };
     let new_key = capture_drawers::drawer_key(&title);
     if capture_drawers::is_reserved_drawer_key(&new_key)

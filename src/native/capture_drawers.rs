@@ -35,7 +35,6 @@ use super::{
             PlaceCatalog, PlaceOutcome, ProjectSection, TaskDrawer,
         },
     },
-    capture_project_note::format_project_section_title,
     env as bob_env,
     markdown::fenced_lines,
     note_tasks::{self, BlockIdLookup, NoteTask, RefLookup, TaskRef},
@@ -57,7 +56,6 @@ use super::{
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DrawerMarker {
     Bold,
-    LegacyCaps,
     Section,
 }
 
@@ -65,7 +63,6 @@ impl DrawerMarker {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Bold => "bold",
-            Self::LegacyCaps => "legacy_caps",
             Self::Section => "section",
         }
     }
@@ -96,8 +93,7 @@ impl Drawer {
 }
 
 /// Body of a created task-drawer header: the resolved title in bold.
-/// Titles never carry markers: bold titles reject `*` and legacy titles
-/// cannot contain it, so wrapping is never doubled.
+/// Titles never carry markers: bold titles reject `*`, so wrapping is never doubled.
 pub(crate) fn drawer_header_body(title: &str) -> String {
     format!("**{title}**")
 }
@@ -115,17 +111,13 @@ pub(crate) struct DrawerInsertion {
 }
 
 /// Canonical title for a quoted drawer literal: whitespace collapsed,
-/// capitalization preserved, and valid as a bold or legacy drawer title.
-/// Legacy-only titles such as `NOTES:` remain selectable; creation still
-/// requires a valid bold header.
+/// capitalization preserved, and valid as a bold drawer title.
 pub(crate) fn normalize_drawer_literal(decoded: &str) -> Option<String> {
     let canonical = capture_language::normalize_task_text(decoded);
     if canonical.is_empty() {
         return None;
     }
-    (normalize_bold_drawer_title(&canonical).is_some()
-        || is_legacy_drawer_title(&canonical))
-    .then_some(canonical)
+    normalize_bold_drawer_title(&canonical).map(|_| canonical)
 }
 
 /// Validate a title for direct whole-bold container syntax while preserving
@@ -222,7 +214,7 @@ pub(crate) fn reserved_selector_error(
 // Cached drawer catalog (relation_labels/scan.rs precedent).
 // ---------------------------------------------------------------------------
 
-pub(crate) const DRAWER_CATALOG_VERSION: u32 = 3;
+pub(crate) const DRAWER_CATALOG_VERSION: u32 = 4;
 const DRAWER_SNAPSHOT_TTL_SECS: u64 = 60;
 const DRAWER_STALE_TMP_SECS: u64 = 10 * 60;
 const DRAWER_RECENT_DAYS: u64 = 90;
@@ -279,10 +271,6 @@ impl PlaceCatalog for BTreeMap<String, DrawerCatalogRecord> {
 
     fn near_title(&self, new_key: &str) -> Option<String> {
         near_catalog_title(new_key, self)
-    }
-
-    fn is_legacy_title(&self, title: &str) -> bool {
-        is_legacy_drawer_title(title)
     }
 }
 
@@ -696,8 +684,7 @@ fn project_h2_entries(contents: &str) -> Vec<DrawerCatalogEntry> {
         if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
             continue;
         }
-        // Skip drawer-looking prose? H2s that are already ALL-CAPS
-        // drawers are still catalogued (they share the key space).
+        // Project H2 sections share the drawer catalog key space.
         entries.push(DrawerCatalogEntry {
             key: key.clone(),
             title: title.to_string(),
@@ -1114,9 +1101,9 @@ fn catalog_spelling_marker(
 ) -> DrawerMarker {
     let markers = record.spelling_markers.get(title);
     let Some(markers) = markers else {
-        return DrawerMarker::LegacyCaps;
+        return DrawerMarker::Bold;
     };
-    let selected = ["bold", "legacy_caps", "section"]
+    let selected = ["bold", "section"]
         .into_iter()
         .filter_map(|name| markers.get(name).map(|count| (name, *count)))
         .max_by(|left, right| {
@@ -1126,7 +1113,7 @@ fn catalog_spelling_marker(
     match selected {
         Some("bold") => DrawerMarker::Bold,
         Some("section") => DrawerMarker::Section,
-        _ => DrawerMarker::LegacyCaps,
+        _ => DrawerMarker::Bold,
     }
 }
 
@@ -1320,9 +1307,7 @@ fn explicit_spelling_count(record: &DrawerCatalogRecord, title: &str) -> u64 {
 }
 
 /// Preferred explicit spelling on one catalog key: bold or section
-/// markers only, highest explicit count, then smallest title. A frequent
-/// legacy spelling cannot defeat an available explicit one; marker
-/// metadata, not the spelling's appearance, decides eligibility.
+/// markers only, highest explicit count, then smallest title.
 pub(crate) fn preferred_explicit_spelling(
     record: &DrawerCatalogRecord,
 ) -> Option<String> {
@@ -1349,8 +1334,7 @@ pub(crate) fn preferred_explicit_spelling(
 }
 
 /// Create-title for a catalog record: explicit spelling when any bold or
-/// section marker exists, else the notebook rule on the record's slug so
-/// a legacy-only key never reseeds ALL-CAPS.
+/// section marker exists, else the notebook rule on the record's slug.
 pub(crate) fn preferred_create_title(record: &DrawerCatalogRecord) -> String {
     preferred_explicit_spelling(record).unwrap_or_else(|| {
         let slug = if record.slug.is_empty() {
@@ -1561,9 +1545,6 @@ pub(crate) fn drawer_body_title(body: &str) -> Option<(&str, DrawerMarker)> {
         return None;
     }
     let trimmed = body.trim();
-    if is_legacy_drawer_title(trimmed) {
-        return Some((trimmed, DrawerMarker::LegacyCaps));
-    }
     let inner = trimmed.strip_prefix("**")?.strip_suffix("**")?;
     if inner.is_empty()
         || inner
@@ -1611,8 +1592,7 @@ fn valid_bold_drawer_title(title: &str) -> bool {
 }
 
 /// Validate a new drawer name and its required content independently of
-/// recognition. Capture creation remains nonempty during the dual-read
-/// window.
+/// recognition. Capture creation still requires content beneath the header.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn can_create_drawer(
     title: &str,
@@ -1631,13 +1611,11 @@ pub(crate) fn can_create_drawer(
     Ok(())
 }
 
-/// Map a drawer header to its project-note H2 spelling. Bold titles are
-/// lossless; only the legacy compatibility branch keeps the old Title Case
-/// conversion during dual-read.
+/// Map a drawer header to its project-note H2 spelling without changing the
+/// authored title.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn heading_for_drawer(title: &str, marker: DrawerMarker) -> String {
     match marker {
-        DrawerMarker::LegacyCaps => format_project_section_title(title),
         DrawerMarker::Bold | DrawerMarker::Section => title.to_string(),
     }
 }
@@ -1698,18 +1676,9 @@ pub(crate) fn recognize_drawer_header(
     {
         return None;
     }
-    let (title, marker) = drawer_body_title(body)?;
+    let (title, _) = drawer_body_title(body)?;
     let key = drawer_key(title);
-    // Keep the old plain ALL-CAPS spellings of task log labels readable as
-    // drawers. The rendered, managed log rows are excluded above; only a
-    // bold header would collide with the managed label's reserved key.
-    let legacy_log_label = marker == DrawerMarker::LegacyCaps
-        && crate::native::capture::MANAGED_TASK_LOG_LABELS
-            .iter()
-            .any(|(label, _)| drawer_key(label) == key);
-    if (is_reserved_drawer_key(&key) && !legacy_log_label)
-        || is_structural_h2_key(&key)
-    {
+    if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
         return None;
     }
     let line_offset = line_start(&lines, line_index);
@@ -1739,34 +1708,6 @@ fn parse_drawer_title(body: &str) -> Option<&str> {
     drawer_body_title(body).map(|(title, _)| title)
 }
 
-/// Whether `title` matches the original ALL-CAPS drawer grammar.
-///
-/// Shared base: lead `A-Z` or `0-9`, rest from `A-Z`, `0-9`, space, tab,
-/// and `& ' ( ) , . / -`, with at least one `A-Z`. Drawer titles add `?`,
-/// `!`, and `;` anywhere after the lead, plus `:` only as the title's
-/// final character (so `OPTIONS:` qualifies but `NOTE: X`, `KEY:: VALUE`,
-/// and `OPTIONS::` do not). `+` stays out because
-/// [`parse_drawer_title`] uses this predicate to decide whether an
-/// ordinary child bullet is a drawer.
-pub(crate) fn is_legacy_drawer_title(title: &str) -> bool {
-    let mut chars = title.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !is_legacy_drawer_title_first(first) {
-        return false;
-    }
-    let mut has_letter = first.is_ascii_uppercase();
-    let rest: Vec<char> = chars.collect();
-    for (index, character) in rest.iter().enumerate() {
-        if !is_legacy_drawer_rest(*character, index + 1 == rest.len()) {
-            return false;
-        }
-        has_letter |= character.is_ascii_uppercase();
-    }
-    has_letter
-}
-
 /// Whether `name` is a canonical Pomodoro name.
 ///
 /// Shared base: lead `A-Z` or `0-9`, rest from `A-Z`, `0-9`, space, tab,
@@ -1778,7 +1719,7 @@ pub(crate) fn is_pomodoro_name(name: &str) -> bool {
     let Some(first) = chars.next() else {
         return false;
     };
-    if !is_legacy_drawer_title_first(first) {
+    if !is_pomodoro_name_first(first) {
         return false;
     }
     let mut has_letter = first.is_ascii_uppercase();
@@ -1791,31 +1732,12 @@ pub(crate) fn is_pomodoro_name(name: &str) -> bool {
     has_letter
 }
 
-fn is_legacy_drawer_title_first(character: char) -> bool {
+fn is_pomodoro_name_first(character: char) -> bool {
     character.is_ascii_uppercase() || character.is_ascii_digit()
 }
 
-fn is_legacy_drawer_rest(character: char, is_last: bool) -> bool {
-    if is_legacy_drawer_title_first(character) {
-        return true;
-    }
-    if matches!(
-        character,
-        ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
-    ) {
-        return true;
-    }
-    if matches!(character, '?' | '!' | ';') {
-        return true;
-    }
-    if character == ':' {
-        return is_last;
-    }
-    false
-}
-
 fn is_pomodoro_rest(character: char) -> bool {
-    is_legacy_drawer_title_first(character)
+    is_pomodoro_name_first(character)
         || matches!(
             character,
             ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
@@ -1956,7 +1878,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "List the direct-child drawer bullets of one task in a \
 routed Bob note.\n\n\
-Task drawers include legacy ALL-CAPS headers and whole-bold titles.\n\n\
+Task drawers are direct-child whole-bold titles.\n\n\
 The command is read-only and reports every qualifying drawer in document \
 order with its original title, key, whitespace-free slug, marker, line, and \
 entry count, plus recent catalog drawers absent from the task. When the parent is \
@@ -2687,26 +2609,26 @@ mod tests {
     }
 
     #[test]
-    fn catalog_v3_rebuilds_v2_and_keeps_marker_provenance_per_spelling() {
-        assert_eq!(DRAWER_CATALOG_VERSION, 3);
-        let temp = TempDir::new("bob-cli-drawer-catalog-v3");
+    fn catalog_v4_rebuilds_v3_and_ignores_plain_uppercase_bullets() {
+        assert_eq!(DRAWER_CATALOG_VERSION, 4);
+        let temp = TempDir::new("bob-cli-drawer-catalog-v4");
         fs::write(
             temp.path().join("one.md"),
-            "- [ ] #task Parent\n  - **Future Work**\n    - note\n  - FUTURE WORK\n",
+            "- [ ] #task Parent\n  - **Future Work**\n    - note\n  - FUTURE WORK\n    - note\n",
         )
         .expect("write note");
-        let v3_path = drawer_cache_path(temp.path());
-        let v2_name = v3_path
+        let v4_path = drawer_cache_path(temp.path());
+        let v3_name = v4_path
             .file_name()
             .and_then(|name| name.to_str())
             .expect("cache filename")
-            .replacen("catalog-v3-", "catalog-v2-", 1);
-        let v2_path = v3_path.with_file_name(v2_name);
-        fs::create_dir_all(v2_path.parent().unwrap()).expect("cache dir");
+            .replacen("catalog-v4-", "catalog-v3-", 1);
+        let v3_path = v4_path.with_file_name(v3_name);
+        fs::create_dir_all(v3_path.parent().unwrap()).expect("cache dir");
         fs::write(
-            &v2_path,
+            &v3_path,
             serde_json::to_string(&DrawerScanCache {
-                version: 2,
+                version: 3,
                 vault: drawer_vault_key(temp.path()),
                 last_scan_unix: drawer_now_unix(),
                 files: BTreeMap::new(),
@@ -2719,14 +2641,13 @@ mod tests {
         let records = load_drawer_catalog(temp.path()).expect("rebuild cache");
         let record = &records["FUTURE WORK"];
         assert_eq!(record.spellings["Future Work"], 1);
-        assert_eq!(record.spellings["FUTURE WORK"], 1);
         assert_eq!(record.spelling_markers["Future Work"]["bold"], 1);
-        assert_eq!(record.spelling_markers["FUTURE WORK"]["legacy_caps"], 1);
+        assert!(!record.spellings.contains_key("FUTURE WORK"));
         let cached: DrawerScanCache = serde_json::from_str(
-            &fs::read_to_string(v3_path).expect("v3 cache exists"),
+            &fs::read_to_string(v4_path).expect("v4 cache exists"),
         )
-        .expect("v3 cache JSON");
-        assert_eq!(cached.version, 3);
+        .expect("v4 cache JSON");
+        assert_eq!(cached.version, 4);
 
         let mut explicit_only = BTreeMap::new();
         explicit_only.insert(
@@ -2758,47 +2679,18 @@ mod tests {
         };
         assert_eq!(title, "Future Work");
 
-        let mut legacy_only = BTreeMap::new();
-        legacy_only.insert(
-            "NON-GOALS".to_string(),
-            DrawerCatalogRecord {
-                key: "NON-GOALS".to_string(),
-                title: "NON-GOALS".to_string(),
-                slug: "non-goals".to_string(),
-                spellings: HashMap::from([("NON-GOALS".to_string(), 9)]),
-                spelling_markers: HashMap::from([(
-                    "NON-GOALS".to_string(),
-                    HashMap::from([("legacy_caps".to_string(), 9)]),
-                )]),
-                ..DrawerCatalogRecord::default()
-            },
-        );
-        let created = resolve_drawer_for_write(
-            &[],
-            "non-goals",
-            false,
-            &legacy_only,
-            "one",
-            Some("parent"),
-            DrawerScope::Task,
-        )
-        .expect("legacy-only falls back to the notebook rule");
-        let DrawerResolveOutcome::Create { title, .. } = created.outcome else {
-            panic!("new task drawer should be created")
-        };
-        assert_eq!(title, "Non Goals");
     }
 
     #[test]
     fn last_entry_text_is_the_direct_entry_a_capture_lands_after() {
         let contents = concat!(
             "- [ ] #task Parent ^p\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **REQUIREMENTS**\n",
             "\t\t- first\n",
             "\t\t- last   entry\n",
             "\t\t\t- nested\n",
             "\t\t- \u{1f5d3}\u{fe0f} **SCHEDULE LOG**\n",
-            "\t- EMPTY\n",
+            "\t- **EMPTY**\n",
         );
         let found = drawers_of(contents);
         assert_eq!(
@@ -2867,23 +2759,31 @@ mod tests {
     }
 
     #[test]
-    fn title_whitelist_edges() {
+    fn plain_uppercase_bullets_are_not_drawers() {
         assert_eq!(
-            parse_drawer_title("1 REQUIREMENTS"),
+            parse_drawer_title("**1 REQUIREMENTS**"),
             Some("1 REQUIREMENTS")
         );
         assert_eq!(
-            parse_drawer_title("Q&A (DRAFT), V2.0/OK-GO"),
+            parse_drawer_title("**Q&A (DRAFT), V2.0/OK-GO**"),
             Some("Q&A (DRAFT), V2.0/OK-GO")
         );
-        assert_eq!(parse_drawer_title("WHAT'S NEXT"), Some("WHAT'S NEXT"));
-        assert_eq!(parse_drawer_title("FUTURE  WORK"), Some("FUTURE  WORK"));
+        assert_eq!(parse_drawer_title("**WHAT'S NEXT**"), Some("WHAT'S NEXT"));
         assert_eq!(
-            parse_drawer_title("  REQUIREMENTS  "),
-            Some("REQUIREMENTS")
+            parse_drawer_title("**Future  Work**"),
+            Some("Future  Work")
+        );
+        assert_eq!(
+            parse_drawer_title("  **Requirements**  "),
+            Some("Requirements")
         );
 
         for body in [
+            "1 REQUIREMENTS",
+            "Q&A (DRAFT), V2.0/OK-GO",
+            "WHAT'S NEXT",
+            "FUTURE  WORK",
+            "NOTES",
             "SNAKE_CASE",
             "requirements",
             "Requirements",
@@ -2905,29 +2805,18 @@ mod tests {
         assert!(is_pomodoro_name("C++"));
         assert!(is_pomodoro_name("BOB+SASE"));
         assert!(is_pomodoro_name("A+B"));
-        assert!(!is_legacy_drawer_title("C++"));
-        assert!(!is_legacy_drawer_title("BOB+SASE"));
-        assert!(!is_legacy_drawer_title("A+B"));
-        // Depends-On lines are never drawers
-        // (`docs/task-dependencies.md` §2.4).
-        for title in [
-            "⛓️ **DEPENDS ON:** [[#^a]]",
-            "🔗 **DEPENDENCIES:** [[#^a]]",
-            "**DEPENDS ON:** [[#^a]]",
-            "⛓ **DEPENDS ON:**",
-        ] {
-            assert!(!is_legacy_drawer_title(title), "{title}");
-        }
         for invalid in ["+", "+A", "++"] {
             assert!(!is_pomodoro_name(invalid), "{invalid}");
-            assert!(!is_legacy_drawer_title(invalid), "{invalid}");
         }
 
         let contents = concat!(
             "- [ ] #task Parent\n",
             "\t- 1 REQUIREMENTS\n",
+            "\t\t- nested note\n",
             "\t- Q&A (DRAFT), V2.0/OK-GO\n",
+            "\t\t- nested note\n",
             "\t- FUTURE  WORK\n",
+            "\t\t- nested note\n",
             "\t- SNAKE_CASE\n",
             "\t- requirements\n",
             "\t- 123\n",
@@ -2937,60 +2826,33 @@ mod tests {
             "\t- `CODE`\n",
             "\t- A+B\n",
             "\t- NOTES\n",
+            "\t\t- nested note\n",
         );
-        assert_eq!(
-            titles_of(contents),
-            [
-                "1 REQUIREMENTS",
-                "Q&A (DRAFT), V2.0/OK-GO",
-                "FUTURE  WORK",
-                "NOTES"
-            ]
-        );
-        assert_eq!(
-            drawers_of(contents)
-                .into_iter()
-                .map(|drawer| drawer.slug)
-                .collect::<Vec<_>>(),
-            [
-                "1-requirements",
-                "q&a-(draft),-v2.0/ok-go",
-                "future-work",
-                "notes"
-            ]
-        );
+        assert!(titles_of(contents).is_empty());
+        assert!(drawers_of(contents).is_empty());
     }
 
     #[test]
-    fn sentence_punctuation_drawer_titles_qualify() {
-        // `punctuation = sentence`: `?`, `!`, `;` anywhere after the lead,
-        // `:` only as the final character.
+    fn whole_bold_titles_replace_uppercase_grammar() {
         for title in [
             "WHAT IS SASE?",
             "WOW!",
             "WHAT'S NEXT?",
             "A;B",
-            "OPTIONS:",
-            "WHAT NEXT:",
+            "Phase 1: Auth",
         ] {
-            assert!(is_legacy_drawer_title(title), "{title:?}");
-            assert_eq!(parse_drawer_title(title), Some(title), "{title:?}");
+            let body = format!("**{title}**");
+            assert_eq!(parse_drawer_title(&body), Some(title), "{title:?}");
         }
-        for title in [
-            "?WHY",
-            "!WOW",
-            ";LEAD",
-            ":LEAD",
-            "NOTE: X",
-            "PHONE: (609) 597-4111",
-            "KEY:: VALUE",
-            "OPTIONS::",
-            "C++",
-            "A+B",
-            "FOO:BAR",
+        for body in [
+            "WHAT IS SASE?",
+            "WOW!",
+            "OPTIONS:",
+            "**Options:**",
+            "**Note:**",
+            "**API Design** trailing",
         ] {
-            assert!(!is_legacy_drawer_title(title), "{title:?}");
-            assert_eq!(parse_drawer_title(title), None, "{title:?}");
+            assert_eq!(parse_drawer_title(body), None, "{body:?}");
         }
         // Pomodoro names never take the drawer punctuation.
         assert!(!is_pomodoro_name("WHY?"));
@@ -3004,11 +2866,7 @@ mod tests {
             "\t- WHAT IS SASE?\n",
             "\t\t- a note\n",
         );
-        let found = drawers_of(contents);
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].title, "WHAT IS SASE?");
-        assert_eq!(found[0].key, "WHAT IS SASE?");
-        assert_eq!(found[0].slug, "what-is-sase?");
+        assert!(drawers_of(contents).is_empty());
     }
 
     #[test]
@@ -3051,10 +2909,6 @@ mod tests {
             assert_eq!(heading, title);
             assert_eq!(drawer_for_heading(&heading), Ok(title.to_string()));
         }
-        assert_eq!(
-            heading_for_drawer("API DESIGN", DrawerMarker::LegacyCaps),
-            format_project_section_title("API DESIGN")
-        );
         assert_eq!(drawer_for_heading(""), Ok(String::new()));
         assert_eq!(heading_for_drawer("", DrawerMarker::Bold), "");
         for title in ["***", "Label:", "!!!"] {
@@ -3112,14 +2966,7 @@ mod tests {
                 .iter()
                 .map(|drawer| drawer.title.as_str())
                 .collect::<Vec<_>>(),
-            [
-                "API Design",
-                "C++ Notes",
-                "Q1: Goals",
-                "Café",
-                "NOTES",
-                "Notes"
-            ]
+            ["API Design", "C++ Notes", "Q1: Goals", "Café", "Notes"]
         );
         let api = drawer_named(&found, "API Design");
         assert_eq!(&contents[api.header_range.clone()], "  - **API Design**");
@@ -3127,10 +2974,7 @@ mod tests {
         let cafe = drawer_named(&found, "Café");
         assert_eq!(&contents[cafe.title_range.clone()], "Café");
         let notes = found.iter().filter(|drawer| drawer.key == "NOTES").count();
-        assert_eq!(
-            notes, 2,
-            "case twins remain visible for ambiguity handling"
-        );
+        assert_eq!(notes, 1, "only explicit bold titles are drawers");
     }
 
     #[test]
@@ -3139,7 +2983,7 @@ mod tests {
         // `WHAT IS SASE?`; it refuses with a quoted suggestion.
         let contents = concat!(
             "- [ ] #task Parent\n",
-            "\t- WHAT IS SASE?\n",
+            "\t- **WHAT IS SASE?**\n",
             "\t\t- existing\n",
         );
         let found = drawers_of(contents);
@@ -3162,7 +3006,7 @@ mod tests {
     }
 
     #[test]
-    fn checkboxed_all_caps_children_are_not_drawers() {
+    fn plain_uppercase_children_are_not_drawers() {
         assert_eq!(parse_drawer_title("[ ] REQUIREMENTS"), None);
         assert_eq!(parse_drawer_title("[x] REQUIREMENTS"), None);
         assert_eq!(parse_drawer_title("[/] REQUIREMENTS"), None);
@@ -3174,16 +3018,16 @@ mod tests {
             "\t- [x] REQUIREMENTS\n",
             "\t- FUTURE WORK\n",
         );
-        assert_eq!(titles_of(contents), ["FUTURE WORK"]);
+        assert!(titles_of(contents).is_empty());
     }
 
     #[test]
     fn grandchild_is_not_a_direct_child_drawer() {
         let contents = concat!(
             "- [ ] #task Parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **REQUIREMENTS**\n",
             "\t\t- GRANDCHILD\n",
-            "\t- FUTURE WORK\n",
+            "\t- **FUTURE WORK**\n",
         );
         let drawers = drawers_of(contents);
         assert_eq!(
@@ -3201,8 +3045,8 @@ mod tests {
     fn empty_drawer_bullet_still_qualifies() {
         let contents = concat!(
             "- [ ] #task Parent\n",
-            "\t- REQUIREMENTS\n",
-            "\t- FUTURE WORK\n",
+            "\t- **REQUIREMENTS**\n",
+            "\t- **FUTURE WORK**\n",
         );
         let drawers = drawers_of(contents);
         assert_eq!(drawers.len(), 2);
@@ -3215,10 +3059,10 @@ mod tests {
     fn ordered_and_star_plus_markers_qualify() {
         let contents = concat!(
             "- [ ] #task Parent\n",
-            "\t1. REQUIREMENTS\n",
-            "\t* FUTURE WORK\n",
-            "\t+ NOTES\n",
-            "\t2) Q&A\n",
+            "\t1. **REQUIREMENTS**\n",
+            "\t* **FUTURE WORK**\n",
+            "\t+ **NOTES**\n",
+            "\t2) **Q&A**\n",
         );
         assert_eq!(
             titles_of(contents),
@@ -3230,9 +3074,9 @@ mod tests {
     fn tab_two_space_four_space_and_mixed_indentation() {
         let tab = concat!(
             "- [ ] #task Parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **REQUIREMENTS**\n",
             "\t\t- existing\n",
-            "\t- FUTURE WORK\n",
+            "\t- **FUTURE WORK**\n",
         );
         let tab_drawers = drawers_of(tab);
         assert_eq!(
@@ -3247,9 +3091,9 @@ mod tests {
 
         let two_space = concat!(
             "- [ ] #task Parent\n",
-            "  - REQUIREMENTS\n",
+            "  - **REQUIREMENTS**\n",
             "    - existing\n",
-            "  - FUTURE WORK\n",
+            "  - **FUTURE WORK**\n",
         );
         let two_space_drawers = drawers_of(two_space);
         assert_eq!(two_space_drawers[0].indentation, "  ");
@@ -3260,9 +3104,9 @@ mod tests {
 
         let four_space = concat!(
             "- [ ] #task Parent\n",
-            "    - REQUIREMENTS\n",
+            "    - **REQUIREMENTS**\n",
             "        - existing\n",
-            "    - FUTURE WORK\n",
+            "    - **FUTURE WORK**\n",
         );
         let four_space_drawers = drawers_of(four_space);
         assert_eq!(four_space_drawers[0].indentation, "    ");
@@ -3275,8 +3119,8 @@ mod tests {
         // ancestry; do not collapse to the plugin's shallowest-only rule.
         let mixed = concat!(
             "- [ ] #task Parent\n",
-            "    - REQUIREMENTS\n",
-            "  - FUTURE WORK\n",
+            "    - **REQUIREMENTS**\n",
+            "  - **FUTURE WORK**\n",
         );
         assert_eq!(titles_of(mixed), ["REQUIREMENTS", "FUTURE WORK"]);
     }
@@ -3301,7 +3145,8 @@ mod tests {
             "\t3) 🥀 **ROTTEN LOG:**",
         ];
         for marker in recognized {
-            let contents = format!("- [ ] #task Parent\n{marker}\n\t- NOTES\n");
+            let contents =
+                format!("- [ ] #task Parent\n{marker}\n\t- **NOTES**\n");
             assert_eq!(titles_of(&contents), ["NOTES"], "{marker}");
         }
 
@@ -3311,10 +3156,7 @@ mod tests {
             "\t- WORK LOG\n",
             "\t- ROTTEN LOG\n",
         );
-        assert_eq!(
-            titles_of(plain),
-            ["SCHEDULE LOG", "WORK LOG", "ROTTEN LOG"]
-        );
+        assert!(titles_of(plain).is_empty());
     }
 
     #[test]
@@ -3322,8 +3164,8 @@ mod tests {
         let empty = BTreeMap::new();
         let contents = concat!(
             "- [ ] #task Parent\n",
-            "\t- FUTURE WORKFLOW\n",
-            "\t- FUTURE WORK\n",
+            "\t- **FUTURE WORKFLOW**\n",
+            "\t- **FUTURE WORK**\n",
         );
         let drawers = drawers_of(contents);
         let resolved = resolve_drawer_for_write(
@@ -3375,10 +3217,10 @@ mod tests {
         let empty = BTreeMap::new();
         let contents = concat!(
             "- [ ] #task Parent\n",
-            "\t- REQUIREMENTS\n",
-            "\t- FUTURE WORK\n",
-            "\t- NOTES\n",
-            "\t- NOTE\n",
+            "\t- **REQUIREMENTS**\n",
+            "\t- **FUTURE WORK**\n",
+            "\t- **NOTES**\n",
+            "\t- **NOTE**\n",
         );
         let drawers = drawers_of(contents);
         let error = resolve_drawer_for_write(
@@ -3399,11 +3241,11 @@ mod tests {
     fn insertion_geometry_for_middle_last_blank_and_managed_log() {
         let middle = concat!(
             "- [ ] #task Parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **REQUIREMENTS**\n",
             "\t\t- existing\n",
-            "\t- FUTURE WORK\n",
+            "\t- **FUTURE WORK**\n",
             "\t\t- later\n",
-            "\t- NOTES\n",
+            "\t- **NOTES**\n",
         );
         let drawers = drawers_of(middle);
         let requirements = drawer_named(&drawers, "REQUIREMENTS");
@@ -3411,33 +3253,33 @@ mod tests {
         let notes = drawer_named(&drawers, "NOTES");
         assert_eq!(
             drawer_insertion(middle, requirements).offset,
-            middle.find("\t- FUTURE WORK").expect("middle sibling")
+            middle.find("\t- **FUTURE WORK**").expect("middle sibling")
         );
         assert_eq!(
             drawer_insertion(middle, future).offset,
-            middle.find("\t- NOTES").expect("last-but-one sibling")
+            middle.find("\t- **NOTES**").expect("last-but-one sibling")
         );
         assert_eq!(drawer_insertion(middle, notes).offset, middle.len());
         assert_eq!(notes.entry_count, 0);
 
         let blank = concat!(
             "- [ ] #task Parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **REQUIREMENTS**\n",
             "\n",
-            "\t- FUTURE WORK\n",
+            "\t- **FUTURE WORK**\n",
         );
         let blank_drawers = drawers_of(blank);
         assert_eq!(
             drawer_insertion(blank, &blank_drawers[0]).offset,
-            blank.find("\t- FUTURE WORK").expect("after blank")
+            blank.find("\t- **FUTURE WORK**").expect("after blank")
         );
 
         let managed = concat!(
             "- [ ] #task Parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **REQUIREMENTS**\n",
             "\t\t- 🗓️ **SCHEDULE LOG**\n",
             "\t\t\t- *2026-08-01* — scheduled\n",
-            "\t- FUTURE WORK\n",
+            "\t- **FUTURE WORK**\n",
         );
         let managed_drawers = drawers_of(managed);
         let managed_requirements =
@@ -3459,16 +3301,16 @@ mod tests {
     fn insertion_geometry_preserves_crlf_offsets() {
         let contents = concat!(
             "- [ ] #task Parent\r\n",
-            "\t- REQUIREMENTS\r\n",
+            "\t- **REQUIREMENTS**\r\n",
             "\t\t- existing\r\n",
-            "\t- FUTURE WORK\r\n",
+            "\t- **FUTURE WORK**\r\n",
         );
         let drawers = drawers_of(contents);
         let requirements = drawer_named(&drawers, "REQUIREMENTS");
         let offset = drawer_insertion(contents, requirements).offset;
         assert_eq!(
             offset,
-            contents.find("\t- FUTURE WORK").expect("crlf sibling")
+            contents.find("\t- **FUTURE WORK**").expect("crlf sibling")
         );
         assert!(contents[..offset].ends_with("\r\n"));
         assert_eq!(
@@ -3492,10 +3334,10 @@ mod tests {
             concat!(
                 "# Tasks\n",
                 "- [ ] #task Parent ^bar\n",
-                "\t- REQUIREMENTS\n",
+                "\t- **REQUIREMENTS**\n",
                 "\t\t- existing\n",
-                "\t- FUTURE WORK\n",
-                "\t- NOTES\n",
+                "\t- **FUTURE WORK**\n",
+                "\t- **NOTES**\n",
             ),
         );
 
@@ -3655,8 +3497,11 @@ mod tests {
     fn task_ref_resolves_a_task_without_a_block_id() {
         let temp = TempDir::new("bob-cli-capture-drawers-ref");
         write_settings(temp.path());
-        let original =
-            concat!("# Tasks\n", "- [ ] #task Parent\n", "\t- REQUIREMENTS\n",);
+        let original = concat!(
+            "# Tasks\n",
+            "- [ ] #task Parent\n",
+            "\t- **REQUIREMENTS**\n",
+        );
         write_file(&temp.path().join("foo.md"), original);
         let task_ref = task_ref_for(original, "Parent");
 
@@ -3734,10 +3579,10 @@ mod tests {
             task_ref: "2:abcd1234".to_string(),
             count: 1,
             drawers: vec![ListedDrawer {
-                title: "REQUIREMENTS".to_string(),
+                title: "Requirements".to_string(),
                 key: "REQUIREMENTS".to_string(),
                 slug: "requirements".to_string(),
-                marker: DrawerMarker::LegacyCaps,
+                marker: DrawerMarker::Bold,
                 line: 3,
                 entry_count: 1,
             }],

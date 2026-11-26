@@ -18,8 +18,8 @@
 //! Section mapping follows `buildProjectSeedFromChildBullets` in
 //! `plugins/bob-navigation-hotkeys/main.js`: a first-level whole-bold
 //! authored bullet is a section when it has at least one nested bullet;
-//! ordinary bullets remain tasks. Legacy ALL-CAPS container drafts are
-//! refused by capture before rendering. Nested checkbox bullets
+//! ordinary bullets remain tasks. Plain uppercase container bullets remain
+//! ordinary task content. Nested checkbox bullets
 //! under a task row are that row's requirements: the row is canonicalized
 //! so reqs sit in the reqs zone and loose notes file into `NOTES` (created
 //! only when a note lands). Rows without reqs, sections, moves, and the
@@ -229,21 +229,9 @@ where
         })
 }
 
-/// Whether a trimmed authored body is a project-note section title.
-///
-/// Delegates to [`crate::native::capture_drawers::is_legacy_drawer_title`] so the
-/// two grammars never drift: drawer sentence punctuation (`?`, `!`, `;`,
-/// trailing `:`) qualifies here too.
-#[cfg(test)]
-pub(crate) fn is_project_section_title(body: &str) -> bool {
-    crate::native::capture_drawers::is_legacy_drawer_title(body.trim())
-}
-
-/// Lowercase the whole body, then uppercase the first character of every
-/// alphanumeric run: `FUTURE WORK` becomes `Future Work`, `NON-GOALS` becomes
-/// `Non-Goals`, and acronyms are not preserved, so `API DESIGN` becomes
-/// `Api Design`. Mirrors `formatProjectSectionTitle`.
-pub(crate) fn format_project_section_title(body: &str) -> String {
+/// Title-case an unquoted project-section selector. Exact quoted section
+/// titles keep their authored spelling.
+pub(crate) fn format_project_section_create_title(body: &str) -> String {
     let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
     let lower = collapsed.to_lowercase();
     let mut rendered = String::with_capacity(lower.len());
@@ -1045,10 +1033,19 @@ mod tests {
     }
 
     #[test]
-    fn acronym_titles_do_not_preserve_capitals() {
-        assert_eq!(format_project_section_title("API DESIGN"), "Api Design");
-        assert_eq!(format_project_section_title("NON-GOALS"), "Non-Goals");
-        assert_eq!(format_project_section_title("FUTURE WORK"), "Future Work");
+    fn unquoted_section_selectors_title_case_by_word() {
+        assert_eq!(
+            format_project_section_create_title("API DESIGN"),
+            "Api Design"
+        );
+        assert_eq!(
+            format_project_section_create_title("NON-GOALS"),
+            "Non-Goals"
+        );
+        assert_eq!(
+            format_project_section_create_title("FUTURE WORK"),
+            "Future Work"
+        );
     }
 
     #[test]
@@ -1098,20 +1095,6 @@ mod tests {
     }
 
     #[test]
-    fn section_title_shape_allows_sentence_punctuation() {
-        assert!(is_project_section_title("FUTURE WORK"));
-        assert!(is_project_section_title("Q&A"));
-        assert!(is_project_section_title("WHAT'S NEXT?"));
-        assert!(is_project_section_title("WHAT IS SASE?"));
-        assert!(is_project_section_title("OPTIONS:"));
-        assert!(!is_project_section_title("Future Work"));
-        assert!(!is_project_section_title("NOTE: X"));
-        assert!(!is_project_section_title("KEY:: VALUE"));
-        assert!(!is_project_section_title("OPTIONS::"));
-        assert!(!is_project_section_title("123"));
-        assert!(!is_project_section_title(""));
-    }
-
     #[test]
     fn managed_log_shaped_bullets_are_not_special_cased() {
         let sub_bullets = vec![

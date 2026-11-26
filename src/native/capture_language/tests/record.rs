@@ -524,17 +524,19 @@ fn sections_group_and_nested_notes_attach() {
 }
 
 #[test]
-fn record_sections_refuse_legacy_caps_and_empty_bold_headers() {
+fn record_sections_require_bold_and_empty_bold_headers_refuse() {
     let policy = configured_policy();
-    let legacy = parse_capture_draft_with_options_coded(
+    let plain = parse_capture_draft_with_options_coded(
         "@eat/ Ramen\n- VISIT NOTES\n- Great broth",
         None,
         None,
         &strict_options(Some(&policy)),
     )
-    .expect_err("legacy record container syntax is retired");
-    assert_eq!(legacy.code, Some("caps_drawer_retired"));
-    assert!(legacy.message.contains("**VISIT NOTES**"), "{legacy:?}");
+    .expect("plain uppercase record lines stay ordinary content");
+    let CaptureKind::RecordNote { intent } = plain.kind else {
+        panic!("not a record note: {plain:?}");
+    };
+    assert!(intent.notes.iter().all(|note| note.section.is_none()));
 
     let empty = parse_capture_draft_with_options_coded(
         "@eat/ Ramen\n- **Visit Notes**",

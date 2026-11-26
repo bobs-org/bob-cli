@@ -13,8 +13,8 @@ Plugin twins update bob-cli first, then copy this file byte for byte.
   source `marker`, one-based `line`, and optional half-open UTF-8 byte
   `header_range` and `title_range` in the complete note. Empty expectations
   prove the listed lookalikes stay notes.
-- `body_cases[]`: pure body-shape vectors. `marker` is `bold` or
-  `legacy_caps`; `excluded: true` means the body is not drawer-shaped.
+- `body_cases[]`: pure body-shape vectors. `marker` is `bold`;
+  `excluded: true` means the body is not drawer-shaped.
 - `heading_mappings[]`: `DH` round-trip vectors for verbatim titles and the
   empty H2 section.
 

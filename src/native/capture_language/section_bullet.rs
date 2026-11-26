@@ -403,14 +403,6 @@ fn plan_create_lines(
                 if authored.depth == AuthoredDepth::FIRST =>
             {
                 let hit = scan_leading(authored.body, authored.body_start);
-                let nested_follows =
-                    item.lines.get(index + 1).is_some_and(|next| {
-                        matches!(
-                            classify_authored_line_capped(next.raw, TWO_LEVEL_CAP),
-                            super::draft::AuthoredLineClass::Item(child)
-                                if child.depth == AuthoredDepth::NESTED
-                        )
-                    });
                 let section_group =
                     match &hit {
                         Some(SectionBulletHit::Complete {
@@ -421,11 +413,7 @@ fn plan_create_lines(
                             authored.body,
                             authored.body_start,
                         )
-                        .is_some()
-                            || (nested_follows
-                                && super::drawer_bullet::is_all_caps_drawer_title(
-                                    authored.body,
-                                )) =>
+                        .is_some() =>
                         {
                             true
                         }
@@ -606,19 +594,6 @@ fn group_from_first_level(
                 note_from_body(&text, source_range, line_number, true);
             note.detail = notes;
             PlannedGroup::Top(note)
-        }
-        None if bold_as_section
-            && !notes.is_empty()
-            && super::drawer_bullet::is_all_caps_drawer_title(body) =>
-        {
-            let title = body.trim();
-            let leading = body.len() - body.trim_start().len();
-            let start = body_start + leading;
-            PlannedGroup::Failed(NotebookBodyOutcome::failed(error_at(
-                "caps_drawer_retired",
-                super::drawer_bullet::caps_drawer_retired_error(title),
-                Some((start, start + title.len())),
-            )))
         }
         None if bold_as_section
             && super::drawer_bullet::bold_container_parts(body, body_start)

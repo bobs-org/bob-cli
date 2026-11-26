@@ -4,7 +4,7 @@
 bob-cli and bob-plugins (`docs/task-split.md` §6). Its cases are `SP1`–`SP52`,
 covering cursor, count, clamped count, line-range, non-contiguous `nth`, and
 `match` selection; anchor reuse; silent owner mint; alias flattening (`|`,
-`]]`, `#`, links, emphasis); 80-character truncation; ALL-CAPS drawers;
+`]]`, `#`, links, emphasis); 80-character truncation; bold drawers;
 tab- and space-indented notes; daily-note routing to a root note and to the
 inbox; section bullets routed to `## Tasks` (created when missing); disabled
 mentions; every refusal code in §5.1; and requirement carry

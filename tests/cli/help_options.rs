@@ -285,7 +285,7 @@ fn capture_drawers_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("Task drawers include legacy ALL-CAPS headers and whole-bold titles.")
+        help.contains("Task drawers use whole-bold titles.")
             && help.contains("Exactly one of -i/--block-id or -t/--task-ref")
             && help.contains("successful empty list"),
         "expected capture-drawers long help:\n{help}"
