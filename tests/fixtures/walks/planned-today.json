@@ -57,7 +57,8 @@
       "tier": "new",
       "lane_count": 0,
       "today": 0,
-      "snooze_state": "ready",
+      "snooze_state": "ignored",
+      "snooze_reason": "ready",
       "plan_next": 0,
       "plan_pending": 0,
       "ledger": true
@@ -72,7 +73,8 @@
       "tier": "pre",
       "lane_count": 0,
       "today": 1,
-      "snooze_state": "already_linked",
+      "snooze_state": "ignored",
+      "snooze_reason": "already_linked",
       "plan_next": 1,
       "plan_pending": 0,
       "ledger": true
@@ -132,7 +134,8 @@
       "tier": "next",
       "lane_count": 1,
       "today": 0,
-      "snooze_state": "previous_day",
+      "snooze_state": "ignored",
+      "snooze_reason": "previous_day",
       "plan_next": 1,
       "plan_pending": 0,
       "ledger": true
@@ -192,7 +195,8 @@
       "tier": null,
       "lane_count": 0,
       "today": 1,
-      "snooze_state": "already_linked",
+      "snooze_state": "ignored",
+      "snooze_reason": "already_linked",
       "plan_next": 1,
       "plan_pending": 0,
       "ledger": true

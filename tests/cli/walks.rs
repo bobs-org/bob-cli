@@ -747,6 +747,10 @@ fn snoozed_planned_today_vectors_agree_across_freshness_walks_and_plan() {
                 snooze["rows"][0]["state"], vector["snooze_state"],
                 "{id}: {snooze}"
             );
+            assert_eq!(
+                snooze["rows"][0]["reason"], vector["snooze_reason"],
+                "{id}: {snooze}"
+            );
         }
         assert_eq!(fs::read_to_string(&day).unwrap(), daily, "{id}");
         assert_eq!(
