@@ -421,23 +421,27 @@ unchanged.
 4. **If preparation fails**, the dependent is untouched. An unused
    target id is acceptable; a link to an unprepared target is not.
 5. **Absorb plain links on every add** (`docs/task-relations.md` §22).
-   Same-note LINKS drops (the dependent's and any same-note target's,
-   plus LINKED FROM courtesy) fold into the one transaction. Cross-note
-   drops ride that note's BLOCKS follow-up write when one exists, else a
-   standalone tie follow-up, always after the dependency commits. A note
-   that cannot be absorbed (unwritable, malformed, uncertain) keeps its
-   entry for reconcile. The notice gains `· replaced the 🪢 link`, or the
-   honest `· 🪢 link not removed (reconcile will fold it)` suffix.
+   Counted and marked adds absorb the same way as single adds. Same-note
+   LINKS drops (the dependent's and any same-note target's, plus LINKED FROM
+   courtesy) fold into the one transaction. Cross-note drops ride that note's
+   BLOCKS follow-up write when one exists, else a standalone tie follow-up,
+   always after the dependency commits. A note that cannot be absorbed
+   (unwritable, malformed, uncertain) keeps its entry for reconcile. The
+   notice gains `· replaced the 🪢 link`, or the honest
+   `· 🪢 link not removed (reconcile will fold it)` suffix.
 
 **Tie conversions.** `applyTieChange` re-reads the pair and checks the
 stage snapshots before writing. It uses this guarded Depends-on writer for
 owner-waits changes and the Blocks writer for other-waits changes. Same-note
 LINKS changes and their LINKED FROM mirror fold into the dependency writer's
-transaction. Across notes, it commits the dependency side first; a failed
-dependency write leaves the relation side untouched, while a successful
-release adds the plain link through `applyRelationEdit`. If that later link
-write fails, the dependency remains released and the notice says
-`· 🪢 link not added`.
+transaction, so one Ctrl+Z restores the prior tie. A same-note reversal
+commits both dependency edits in that one transaction. Across notes, it
+commits the dependency side first; a failed dependency write leaves the
+relation side untouched, while a successful release adds the plain link
+through `applyRelationEdit`. If that later link write fails, the dependency
+remains released and the notice says `· 🪢 link not added`. A cross-note
+reversal removes first, then adds, reporting
+`· dependency reversal incomplete` on a partial failure.
 Dependency-add absorption keeps its existing reconcile-fold failure notice.
 
 Nav applies editor writes as line-level edits, never a whole-note
@@ -5824,20 +5828,25 @@ landing is the one intended exception.
 
 The forward writer and its existing tests remain byte-identical,
 besides the shared duplicate-preparation fix covered by RBW6 and the
-tie absorption both writers share (RBP12–RBP13): each T note's own
-LINKS drops fold into its write (same-note sources fold into the one
-transaction), while a pure source note's drops become a follow-up after
-that T commits — skipped when the T write fails. Only added edges
-absorb; removals never touch LINKS lines.
+tie absorption both writers share (RBP12–RBP13): counted and marked adds
+absorb the same way as single adds. Each T note's own LINKS drops fold
+into its write (same-note sources fold into the one transaction), while a
+pure source note's drops become a follow-up after that T commits — skipped
+when the T write fails. Only added edges absorb; removals never touch LINKS
+lines.
 
 **Tie conversions.** `applyTieChange` re-reads the pair and checks the
 stage snapshots before writing. Same-note LINKS changes and their LINKED
 FROM mirror fold into the guarded Depends-on or Blocks transaction, so one
-Ctrl+Z restores the prior tie. Across notes, the dependency side commits
+Ctrl+Z restores the prior tie. A same-note reversal commits both dependency
+edits in that one transaction. Across notes, the dependency side commits
 first; a failed dependency write leaves the relation side untouched. A
 successful release adds the plain link through `applyRelationEdit`; if that
 later write fails, the dependency remains released and the notice says
-`· 🪢 link not added`.
+`· 🪢 link not added`. A cross-note reversal removes first, then adds,
+reporting `· dependency reversal incomplete` on a partial failure. Chord
+refusals name the pressed chord (⌃B, ⌃⇧B, ⌃L, or ⌃⇧L); an ID-less row or
+owner goes through the `＋ id` prompt, and Esc writes nothing.
 Dependency adds absorb plain links as above, with the honest reconcile
 notice when a cross-note drop cannot be completed.
 
