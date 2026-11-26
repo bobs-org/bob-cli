@@ -134,6 +134,7 @@ fn fixture_row(
         lane_visible: scheduled.is_none_or(|date| date <= today),
         is_daily_note: false,
         is_today: false,
+        is_snoozed_today: false,
         scheduled,
         due: None,
         start: None,

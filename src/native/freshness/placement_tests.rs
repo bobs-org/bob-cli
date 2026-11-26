@@ -793,6 +793,7 @@ fn unblock_scope() -> UnblockScope {
         hidden: false,
         is_daily_note: false,
         is_today: false,
+        is_snoozed_today: false,
     }
 }
 
@@ -1050,5 +1051,23 @@ fn root_field_survives_keep_preserve_and_unblock() {
     assert_eq!(
         marked,
         "- [ ] #task Recovered (root::  sase) [fresh:: 2026-10-01] [unblocked:: 2026-10-08] [scheduled:: 2026-10-09] ^t"
+    );
+}
+
+/// SP14: a snoozed Blocked-to-Ready row takes no automatic freshness field.
+#[test]
+fn snoozed_planned_today_skips_unblocked_placement() {
+    let scope = UnblockScope {
+        is_snoozed_today: true,
+        ..unblock_scope()
+    };
+    assert_eq!(
+        mark_unblocked(
+            "- [ ] #task Work [fresh:: 2026-10-01]",
+            day(),
+            ' ',
+            &scope
+        ),
+        None
     );
 }

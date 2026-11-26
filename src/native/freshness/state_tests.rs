@@ -89,6 +89,7 @@ fn row(line: &str) -> FreshnessRow {
         lane_visible: true,
         is_daily_note: false,
         is_today: false,
+        is_snoozed_today: false,
         scheduled: None,
         due: None,
         start: None,
@@ -367,6 +368,7 @@ fn stamped_row(
         lane_visible: is_todo,
         is_daily_note: false,
         is_today: false,
+        is_snoozed_today: false,
         scheduled: None,
         due: None,
         start: None,
@@ -491,6 +493,7 @@ fn lane_row(
         lane_visible: true,
         is_daily_note: false,
         is_today: false,
+        is_snoozed_today: false,
         scheduled: None,
         due: None,
         start: None,
@@ -1641,6 +1644,7 @@ fn recurring_row(
         lane_visible: true,
         is_daily_note: false,
         is_today: false,
+        is_snoozed_today: false,
         scheduled,
         due,
         start,
@@ -2022,4 +2026,56 @@ fn ub15_prj_schedule_return_walks_projects() {
     assert_eq!(evaluated.tier, Some(Tier::Projects));
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 7)));
     assert_eq!(evaluated.returned_by, Some(ReturnedBy::Scheduled));
+}
+
+/// SP1/SP2/SP6-SP8: planned-today excludes ordinary and overlay tiers.
+#[test]
+fn snoozed_planned_today_excludes_every_review_overlay() {
+    let config = decay_config(3, true);
+    for status in [' ', '*', '/'] {
+        for checklist in
+            [None, Some(ChecklistKind::Pre), Some(ChecklistKind::Post)]
+        {
+            for recurring in [false, true] {
+                let mut task =
+                    lane_row("jobs.md", 1, status, Some("2026-09-20"), None);
+                task.is_todo = status == ' ';
+                task.checklist = checklist;
+                task.recurring = recurring;
+                task.due = Some(active_day());
+                task.raw_line = format!(
+                    "- [{status}] #task Work [fresh:: 2026-09-20] [keeps:: 9]"
+                );
+                task.is_snoozed_today = true;
+                let evaluated = evaluate(&task, active_day(), &config);
+                assert!(
+                    evaluated.tier.is_none(),
+                    "{status} {checklist:?} recurring={recurring}"
+                );
+                assert!(evaluated.state.is_none());
+                assert!(!evaluated.decide);
+                assert!(
+                    !task.is_today,
+                    "snoozed membership never changes Today"
+                );
+            }
+        }
+    }
+}
+
+/// SP5: a live ledger link wins, and ordinary Today checklist rows still walk.
+#[test]
+fn snoozed_linked_wins_preserves_today_checklist_exception() {
+    for kind in [ChecklistKind::Pre, ChecklistKind::Post] {
+        let mut task = lane_row("jobs.md", 1, '*', None, None);
+        task.checklist = Some(kind);
+        task.is_today = true;
+        assert!(evaluate(&task, active_day(), &FreshnessConfig::default())
+            .tier
+            .is_some());
+        task.is_snoozed_today = true;
+        assert!(evaluate(&task, active_day(), &FreshnessConfig::default())
+            .tier
+            .is_none());
+    }
 }

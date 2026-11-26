@@ -211,7 +211,9 @@ where
 }
 
 fn counts_in_lane(row: &RowCtx) -> bool {
-    !row.is_today && !is_vault_root_dash(&row.task.path)
+    !row.is_today
+        && !row.is_snoozed_today
+        && !is_vault_root_dash(&row.task.path)
 }
 
 fn is_vault_root_dash(path: &str) -> bool {

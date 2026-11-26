@@ -364,8 +364,8 @@ pub(super) fn sync_task_statuses(
         SyncError::io("scan vault", &request.bob_dir, error)
     })?;
     let scan_paths = markdown_files.clone();
-    let anchor =
-        daily_anchor_date(&daily_path, bob_env::current_datetime().date());
+    let now = bob_env::current_datetime();
+    let anchor = daily_anchor_date(&daily_path, now.date());
     let previous_daily_path =
         previous_daily_path(&request.bob_dir, &markdown_files, anchor);
     let canonical_daily_path = daily_path.canonicalize().ok();
@@ -405,6 +405,22 @@ pub(super) fn sync_task_statuses(
 
     let original_note_index = NoteIndex::from_paths(
         files.iter().map(|file| file.relative_path.clone()),
+    );
+    let snoozed = super::super::snooze::read::planned_from_snapshot(
+        &daily_contents,
+        daily_path
+            .strip_prefix(&request.bob_dir)
+            .unwrap_or(&daily_path),
+        anchor,
+        now.date(),
+        &original_note_index,
+        &settings,
+        |path| {
+            files
+                .iter()
+                .find(|file| file.relative_path == path)
+                .map(|file| file.contents.as_str())
+        },
     );
     let original_task_blocks = task_blocks(&files);
     let daily_relative = daily_path.strip_prefix(&request.bob_dir).ok();
@@ -967,6 +983,14 @@ pub(super) fn sync_task_statuses(
                     anchor,
                     is_daily_note,
                     &direct_desired,
+                    task.block_id.as_ref().is_some_and(|id| {
+                        snoozed.contains(
+                            &super::super::snooze::state::TaskIdentity {
+                                route: file.relative_path.clone(),
+                                block_id: id.clone(),
+                            },
+                        )
+                    }),
                     &mut prj_is_blocked_tags_added,
                     &mut prj_is_blocked_tags_stripped,
                     &mut unblocked_fields_written,
@@ -1222,6 +1246,7 @@ pub(super) fn plan_task_line_rewrite(
     anchor: NaiveDate,
     is_daily_note: bool,
     direct_desired: &BTreeSet<(PathBuf, String)>,
+    is_snoozed_today: bool,
     tags_added: &mut Vec<ProjectBlockedTagChange>,
     tags_stripped: &mut Vec<ProjectBlockedTagChange>,
     fields_written: &mut Vec<UnblockedFieldChange>,
@@ -1271,6 +1296,7 @@ pub(super) fn plan_task_line_rewrite(
             hidden: has_hide_tag(&line),
             is_daily_note,
             is_today,
+            is_snoozed_today,
         };
         if let Some(marked) = mark_unblocked(
             &line,

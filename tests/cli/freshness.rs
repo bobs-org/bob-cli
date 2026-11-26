@@ -1936,3 +1936,40 @@ fn list_unblocked_tickler_reports_return_source() {
         "scheduled tickler copy:\n{human}"
     );
 }
+
+/// SP17: the isolated seed keeps planned work in its established today bucket.
+#[test]
+fn snoozed_seed_preserves_today_bucket_counters_and_idempotence() {
+    let temp = TempDir::new("bob-cli-snoozed-seed");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    let mut tasks: String = (0..7)
+        .map(|i| format!("- [ ] #task Backlog {i} ^backlog-{i}\n"))
+        .collect();
+    tasks.push_str("- [ ] #task Linked ^linked\n- [*] #task Next ^next\n- [/] #task Pending ^pending\n- [?] #task Blocked ^blocked\n- [ ] #task Ignored Ready ^ready\n");
+    write_file(&vault.join("jobs.md"), &tasks);
+    let daily = "## Pomodoros\n- [ ] ()\n  - [[jobs#^linked]]\n\n## Snoozed\n- **1530** [[jobs#^next]]\n- **1530** [[jobs#^pending]]\n- **1530** [[jobs#^blocked]]\n- **1530** [[jobs#^ready]]\n";
+    write_file(&vault.join("2026/20261008.md"), daily);
+    let (output, first) = seed_json(&temp, &[]);
+    assert_success(&output);
+    assert_eq!(first["stamped"]["ready"], 8);
+    assert_eq!(first["stamped"]["other"], 4);
+    let seeded = fs::read_to_string(vault.join("jobs.md")).unwrap();
+    for id in ["linked", "next", "pending", "blocked"] {
+        let line = seeded
+            .lines()
+            .find(|line| line.ends_with(&format!("^{id}")))
+            .unwrap();
+        assert!(line.contains("[fresh:: 2026-10-08]"), "{line}");
+    }
+    assert_eq!(
+        fs::read_to_string(vault.join("2026/20261008.md")).unwrap(),
+        daily
+    );
+    let (output, again) = seed_json(&temp, &[]);
+    assert_success(&output);
+    assert_eq!(again["stamped"]["ready"], 0);
+    assert_eq!(again["stamped"]["other"], 0);
+    assert_eq!(again["skipped"]["already_stamped"], 12);
+    assert_eq!(fs::read_to_string(vault.join("jobs.md")).unwrap(), seeded);
+}

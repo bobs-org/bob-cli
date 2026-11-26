@@ -239,8 +239,12 @@ where
                 // recovery lands Ready and `is_today` scope reads false:
                 // the UB4 landing skip still applies structurally through
                 // the recovered status.
-                let scope =
-                    unblock_scope_for(&file.relative_path, &flipped, false);
+                let scope = unblock_scope_for(
+                    &file.relative_path,
+                    &flipped,
+                    false,
+                    false,
+                );
                 apply_recovery_writes(&flipped, today, ' ', &scope)
             } else {
                 let stripped = normalize_prj_is_blocked_tag(&trimmed, false);

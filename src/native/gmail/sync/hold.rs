@@ -521,6 +521,8 @@ pub(crate) fn unblock_scope_for(
         hidden: has_hide_token(line),
         is_daily_note: is_canonical_daily_note(relative_path),
         is_today,
+        // This adapter has no Snoozed snapshot; reopen targets are terminal.
+        is_snoozed_today: false,
     }
 }
 
@@ -906,6 +908,7 @@ mod tests {
             hidden: false,
             is_daily_note: false,
             is_today: false,
+            is_snoozed_today: false,
         }
     }
 

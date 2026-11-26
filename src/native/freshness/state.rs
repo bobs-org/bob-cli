@@ -173,7 +173,8 @@ pub(crate) fn lane_for_row(status: char, is_todo: bool) -> Option<Lane> {
 /// done, not dependency-blocked, not under `_templates` or
 /// `_conflicts`, no scheduled date after today, no `#hide`),
 /// `is_daily_note` is a canonical daily note (`YYYY/YYYYMMDD.md`),
-/// and `is_today` is membership in today's open Pomodoro Task Links.
+/// `is_today` is membership in today's open Pomodoro Task Links, and
+/// `is_snoozed_today` is the separate live-or-blocked Snoozed membership.
 ///
 /// Every row uses the ordinary lane-visible predicate with no `#hide`
 /// exemption — including exact `^ref` rows (whose transitional bypass
@@ -190,6 +191,7 @@ pub(crate) struct FreshnessRow {
     pub(crate) lane_visible: bool,
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
+    pub(crate) is_snoozed_today: bool,
     pub(crate) scheduled: Option<NaiveDate>,
     pub(crate) due: Option<NaiveDate>,
     pub(crate) start: Option<NaiveDate>,
@@ -276,20 +278,20 @@ pub(crate) struct Evaluated {
 /// The predicate is `enabled && limit(lane) is "ask at L" &&
 /// keeps >= L && due tier for that lane`: PENDING for pending, NEXT
 /// for next, ROTTEN/TICKLER for ready. Unblock ticklers, PROJECTS,
-/// recurring, and checklist overlays never decide. Today-linked
+/// recurring, and checklist overlays never decide. Planned-today
 /// rows never decide either, even if they could carry a due tier.
 pub(crate) fn decide_for(
     lane: Option<Lane>,
     tier: Option<Tier>,
     keeps: u32,
     returned_by: Option<ReturnedBy>,
-    is_today: bool,
+    is_planned_today: bool,
     config: &FreshnessConfig,
 ) -> bool {
     if returned_by == Some(ReturnedBy::Unblocked) {
         return false;
     }
-    if is_today {
+    if is_planned_today {
         return false;
     }
     if matches!(
@@ -418,6 +420,7 @@ fn checklist_in_scope(row: &FreshnessRow) -> bool {
     row.checklist.is_some()
         && matches!(row.status, ' ' | '*' | '/' | '?')
         && row.lane_visible
+        && !row.is_snoozed_today
 }
 
 fn overlay_checklist(
@@ -468,7 +471,7 @@ fn overlay_recurring(
     if evaluated.lane.is_none() || !row.lane_visible {
         return evaluated;
     }
-    if row.is_daily_note || row.is_today {
+    if row.is_daily_note || row.is_today || row.is_snoozed_today {
         return evaluated;
     }
     let Some(occurs) = occurs_on(row) else {
@@ -546,7 +549,8 @@ fn evaluate_without_checklist(
         && row.lane_visible
         && !row.recurring
         && !row.is_daily_note
-        && !row.is_today;
+        && !row.is_today
+        && !row.is_snoozed_today;
 
     // Lane due date for walked ordinary lanes: fresh + lane interval,
     // or none when never stamped. Project trackers use their own lane
@@ -585,7 +589,8 @@ fn evaluate_without_checklist(
         && row.lane_visible
         && !row.recurring
         && !row.is_daily_note
-        && !row.is_today;
+        && !row.is_today
+        && !row.is_snoozed_today;
 
     // Effective return date: the latest of the inline schedule
     // (`fresh < scheduled ≤ today`) and the recorded unblock date
@@ -728,10 +733,16 @@ fn evaluate_without_checklist(
 
     // A choice is due — never permission to act — for a due row at
     // or over its rung's keep limit. Unblock ticklers, PROJECTS,
-    // recurring, checklist, and Today-linked rows never decide.
+    // recurring, checklist, and planned-today rows never decide.
     let keeps = read.keeps;
-    let decide =
-        decide_for(lane, tier, keeps, returned_by, row.is_today, config);
+    let decide = decide_for(
+        lane,
+        tier,
+        keeps,
+        returned_by,
+        row.is_today || row.is_snoozed_today,
+        config,
+    );
 
     // Per-row dates: lane rows use the lane due date; Ready rows use
     // the state due date. Lane tracker rows keep their actual lane

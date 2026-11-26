@@ -99,6 +99,7 @@ pub(crate) struct UnblockScope {
     pub(crate) hidden: bool,
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
+    pub(crate) is_snoozed_today: bool,
 }
 
 /// Stamp `line` with `date`, keeping the first valid existing
@@ -245,7 +246,11 @@ pub(crate) fn mark_unblocked(
     recovered_status: char,
     scope: &UnblockScope,
 ) -> Option<String> {
-    if scope.recurring || scope.hidden || scope.is_daily_note || scope.is_today
+    if scope.recurring
+        || scope.hidden
+        || scope.is_daily_note
+        || scope.is_today
+        || scope.is_snoozed_today
     {
         return None;
     }

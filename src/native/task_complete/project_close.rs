@@ -141,17 +141,20 @@ pub(crate) fn has_own_remaining_reason(
 /// Freshness scope for one recovered line (`docs/freshness.md` §10b).
 /// `is_today` is membership in today's open Pomodoro Task Links,
 /// which close planners read off the post-gesture day text; engines
-/// without a day text pass false.
+/// without a day text pass false for both membership flags.
+/// `is_snoozed_today` comes from the pre-recovery task snapshot.
 pub(crate) fn unblock_scope_for(
     relative_path: &Path,
     line: &str,
     is_today: bool,
+    is_snoozed_today: bool,
 ) -> UnblockScope {
     UnblockScope {
         recurring: is_recurring_task_line(line),
         hidden: has_hide_tag(line),
         is_daily_note: canonical_daily_date(relative_path).is_some(),
         is_today,
+        is_snoozed_today,
     }
 }
 

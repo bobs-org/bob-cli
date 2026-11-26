@@ -3603,6 +3603,32 @@ fn apply_verdicts(
     let post_live =
         DayView::parse(&inserted_base, &input.day_relative, input.index);
 
+    let snoozed = super::super::snooze::read::planned_from_snapshot(
+        &inserted_base,
+        &input.day_relative,
+        super::super::task_status_hooks::daily_anchor_date(
+            &input.day_relative,
+            input.today,
+        ),
+        input.today,
+        input.index,
+        input.note_settings,
+        |path| {
+            files
+                .iter()
+                .find(|file| file.relative_path == path)
+                .map(|file| file.contents.as_str())
+        },
+    );
+    let is_snoozed = |file: &FileScan, task: &TaskLine| {
+        task.block_id.as_ref().is_some_and(|id| {
+            snoozed.contains(&super::super::snooze::state::TaskIdentity {
+                route: file.relative_path.clone(),
+                block_id: id.clone(),
+            })
+        })
+    };
+
     // Apply note edits: successor statuses plus mints, then recovered
     // ranks with project-close writes. No line is added or removed
     // (in-place status swaps plus field and tag edits), so snapshot
@@ -3719,7 +3745,12 @@ fn apply_verdicts(
                 continue;
             }
             let preview = pull_in_preview_line(&raw, landed);
-            let scope = unblock_scope_for(&file.relative_path, &preview, live);
+            let scope = unblock_scope_for(
+                &file.relative_path,
+                &preview,
+                live,
+                is_snoozed(file, task),
+            );
             let recovery = (task.status == '?' && landed == ' ')
                 .then_some((input.today, scope));
             edit_line(
@@ -3758,6 +3789,7 @@ fn apply_verdicts(
             &file.relative_path,
             &raw_task_line(&file.contents, task.line_index),
             live,
+            is_snoozed(file, task),
         );
         let recovery = (landed == ' ').then_some((input.today, scope));
         edit_line(

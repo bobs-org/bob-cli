@@ -51,7 +51,7 @@ count.
 
 ### w — lanes
 
-Uses the same snapshot. Lane counts are off-Today membership of the `]w`
+Uses the same snapshot. Lane counts exclude planned-today membership of the `]w`
 walk, not due-for-review counts:
 
 - **pending**: `snapshot.pending` rows
@@ -59,7 +59,7 @@ walk, not due-for-review counts:
 - **ready**: `snapshot.ready` rows whose review bucket is neither `new`
   nor `rotten`
 
-All three exclude Today-linked rows (`is_today`) and the vault-root
+All three exclude planned-today rows (`is_today || is_snoozed_today`) and the vault-root
 `dash.md` (case-insensitive). Caps come from `plan.max_pending` (10),
 `plan.max_next` (15), and `plan.max_ready` (100). **over** iff
 `count > cap`; exactly at cap is not attention. **attention** iff any
@@ -68,6 +68,12 @@ it is the fewest task changes that silence `w`. **attention** iff
 `excess > 0`. **tier** is `over`. **label** lists over lanes only, in
 lane order: `Lanes over limit: WIP 12/10 · NEXT 16/15`. `counts.excess`
 is the Mac `w` count.
+
+Snoozed membership comes from resolved Asleep, Due, or Blocked rows in today's
+note. It excludes recurring and PRE/POST review rows as well. Ready and ignored
+rows add no membership; live ledger links win. `Today` remains ledger-only, and
+`bob plan`'s full NEXT/PENDING meters are independent of these walk exclusions.
+Both `s` attention/first tier and `w` excess are derived after filtering.
 
 ### b — bank
 
@@ -195,3 +201,14 @@ JS tests do the same in a later phase. Goldens live in
 - [Plan budget, Today, and lanes](plan.md)
 - [Bank](bank.md)
 - [`bob walks`](reference/cli/walks.md)
+
+
+### Planned-today vectors
+
+[Freshness SP1–SP17](freshness.md#planned-today-conformance-sp) specifies the shared
+reader/review contract, backed by `tests/fixtures/walks/planned-today.json` and
+executable CLI tests. The fixture checks `bob freshness list`, `bob walks`,
+`bob plan`, and `bob snooze` against the same task and daily note. In particular,
+SP5 preserves the Today-linked checklist exception, SP13 tests the wake transition,
+and SP16 proves that holding one of 11 Pending tasks removes lane attention at a
+cap of 10 while the full plan meter remains 11. Schema 1 is unchanged.

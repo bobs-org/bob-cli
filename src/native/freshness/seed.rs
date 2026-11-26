@@ -184,11 +184,12 @@ pub(crate) fn run_seed(
             }
             None => {
                 // Ready candidates are in-scope Ready tasks: engine
-                // lane-visible and neither a daily note nor Today.
+                // lane-visible and neither a daily note nor planned today.
                 // Every other open task — Next, Pending, Blocked, and
                 // out-of-scope Ready — lands in the today bucket.
                 if ready_set.contains(&(row.task.path.clone(), row.task.line))
                     && !row.is_today
+                    && !row.is_snoozed_today
                 {
                     ready_candidates.push(row);
                 } else {
@@ -622,6 +623,7 @@ mod tests {
             note_refresh_raw: None,
             is_daily_note: false,
             is_today: false,
+            is_snoozed_today: false,
         }
     }
 

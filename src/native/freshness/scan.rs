@@ -16,11 +16,13 @@ use chrono::NaiveDate;
 use super::super::{
     config::{self, ConfigError, FreshnessConfig},
     dataview::{self, DataviewError, RichTask, TaskFormat},
-    env as bob_env,
+    env as bob_env, note_tasks,
     plan_budget::today::today_tasks,
     pomodoro,
     projects::{frontmatter_value, parse_frontmatter},
-    task_status_hooks::canonical_daily_date,
+    snooze,
+    task_status_hooks::{canonical_daily_date, daily_anchor_date},
+    vault_links::VaultLinkResolver,
 };
 use super::{
     placement::read_freshness,
@@ -44,6 +46,7 @@ pub(crate) struct RowCtx {
     pub(crate) note_refresh_raw: Option<String>,
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
+    pub(crate) is_snoozed_today: bool,
 }
 
 impl RowCtx {
@@ -64,6 +67,7 @@ impl RowCtx {
             lane_visible,
             is_daily_note: self.is_daily_note,
             is_today: self.is_today,
+            is_snoozed_today: self.is_snoozed_today,
             scheduled: self.task.scheduled,
             due: self.task.due,
             start: self.task.start,
@@ -202,36 +206,71 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
 
     let day_file = pomodoro::day_file_for(bob_dir);
     let daily_relative = relative_path(&day_file, bob_dir);
-    let (today_blocks, today_lines, today_warnings) =
-        read_today(bob_dir, &day_file, &daily_relative)?;
-
-    let mut notes: HashMap<String, Option<String>> = HashMap::new();
     let mut file_contents: HashMap<String, String> = HashMap::new();
+    for task in &all_tasks {
+        if !file_contents.contains_key(&task.path) {
+            let contents = fs::read_to_string(bob_dir.join(&task.path))
+                .map_err(|error| {
+                    ScanError::Io(format!("read {}: {error}", task.path))
+                })?;
+            file_contents.insert(task.path.clone(), contents);
+        }
+    }
+    let day_read = file_contents
+        .get(&daily_relative)
+        .cloned()
+        .map_or_else(|| fs::read_to_string(&day_file), Ok);
+    let day_contents = match day_read {
+        Ok(contents) => {
+            file_contents.insert(daily_relative.clone(), contents.clone());
+            contents
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(ScanError::Io(format!(
+                "read {}: {error}",
+                day_file.display()
+            )))
+        }
+    };
+    let (today_blocks, today_lines, today_warnings) =
+        read_today(bob_dir, &daily_relative, &day_contents);
+    let resolver = VaultLinkResolver::new(bob_dir);
+    let planned = snooze::read::planned_from_snapshot(
+        &day_contents,
+        Path::new(&daily_relative),
+        daily_anchor_date(&day_file, today),
+        today,
+        resolver.note_index(),
+        &note_tasks::read_settings(bob_dir),
+        |path| {
+            file_contents
+                .get(&path.to_string_lossy().replace('\\', "/"))
+                .map(String::as_str)
+        },
+    );
+    let mut notes: HashMap<String, Option<String>> = HashMap::new();
     let mut context = |task: &RichTask| -> Result<RowCtx, ScanError> {
         let note_refresh_raw = match notes.get(&task.path) {
             Some(cached) => cached.clone(),
             None => {
-                let value = read_note_refresh(bob_dir, &task.path)?;
+                let value = read_note_refresh(&file_contents[&task.path]);
                 notes.insert(task.path.clone(), value.clone());
                 value
             }
         };
-        if !file_contents.contains_key(&task.path) {
-            let contents = fs::read_to_string(bob_dir.join(&task.path))
-                .map_err(|error| {
-                    ScanError::Io(format!(
-                        "read {}: {error}",
-                        bob_dir.join(&task.path).display()
-                    ))
-                })?;
-            file_contents.insert(task.path.clone(), contents);
-        }
         Ok(RowCtx {
             task: task.clone(),
             note_refresh_raw,
             is_daily_note: canonical_daily_date(Path::new(&task.path))
                 .is_some(),
             is_today: is_today_task(task, &today_blocks, &today_lines),
+            is_snoozed_today: task.block_id.as_ref().is_some_and(|id| {
+                planned.contains(&snooze::state::TaskIdentity {
+                    route: task.path.clone().into(),
+                    block_id: id.clone(),
+                })
+            }),
         })
     };
 
@@ -669,23 +708,10 @@ fn is_today_task(
 
 fn read_today(
     bob_dir: &Path,
-    day_file: &Path,
     daily_relative: &str,
-) -> Result<TodayScan, ScanError> {
-    let contents = match fs::read_to_string(day_file) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            // An absent daily note means an empty Today.
-            return Ok((BTreeSet::new(), BTreeSet::new(), Vec::new()));
-        }
-        Err(error) => {
-            return Err(ScanError::Io(format!(
-                "read daily note {}: {error}",
-                day_file.display()
-            )));
-        }
-    };
-    let result = today_tasks(bob_dir, daily_relative, &contents);
+    contents: &str,
+) -> TodayScan {
+    let result = today_tasks(bob_dir, daily_relative, contents);
     let mut blocks = BTreeSet::new();
     let mut lines = BTreeSet::new();
     for task in &result.tasks {
@@ -707,23 +733,14 @@ fn read_today(
             message: warning.message.clone(),
         })
         .collect();
-    Ok((blocks, lines, warnings))
+    (blocks, lines, warnings)
 }
 
-fn read_note_refresh(
-    bob_dir: &Path,
-    relative: &str,
-) -> Result<Option<String>, ScanError> {
-    let path = bob_dir.join(relative);
-    let contents = fs::read_to_string(&path).map_err(|error| {
-        ScanError::Io(format!("read {}: {error}", path.display()))
-    })?;
-    let Some(frontmatter) = parse_frontmatter(&contents) else {
-        return Ok(None);
-    };
-    Ok(frontmatter_value(&frontmatter, "task_refresh")
+fn read_note_refresh(contents: &str) -> Option<String> {
+    let frontmatter = parse_frontmatter(contents)?;
+    frontmatter_value(&frontmatter, "task_refresh")
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty()))
+        .filter(|value| !value.is_empty())
 }
 
 fn relative_path(path: &Path, bob_dir: &Path) -> String {

@@ -1,7 +1,7 @@
 //! Public `bob snooze` commands over the shared row model and planners.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     ffi::OsString,
     fs, iter,
     path::{Path, PathBuf},
@@ -20,34 +20,29 @@ use clap::{
 use serde_json::{json, Value};
 
 use crate::native::{
-    capture::{line_spans, nearest_shallower_list_item_parent},
-    capture_pomodoros::{self, PomodoroState},
+    capture::line_spans,
     config::{self, NotifyMode, PlanConfig},
-    env as bob_env, event_task, markdown, note_tasks,
+    env as bob_env, event_task, note_tasks,
     plan_budget::{self, off_clock::DiskCloseVault},
     pomodoro,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
     pomodoro_themes,
     style::Styler,
-    task_dependencies::block_link_spans,
     task_locator::TaskLocator,
     task_settle::SettleContext,
     task_status_hooks::TaskStatusType,
     task_theme::{parse_task_theme, TaskThemeState},
-    vault_links::{LinkResolution, NoteIndex},
+    vault_links::LinkResolution,
 };
 
 use super::{
-    parse::{self, SnoozeRow, SnoozeRowKind},
     plan::{
         self, AddInput, AddRefusal, DropInput, DropRefusal, FilePostimage,
         TaskFact, WakeInput, WakePlan, WakeRefusal,
     },
+    read::{ledger_identities, normalized_status, RowDetail},
     shell::{self, InputSnapshot, InstallError, LockOutcome},
-    state::{
-        self, ClassifiedRows, ClassifyInput, ClassifyRow, ResolutionKind,
-        RowState, TaskIdentity, TaskState,
-    },
+    state::{self, ClassifiedRows, RowState, TaskIdentity, TaskState},
     when::{parse_snooze_when, ResolvedTime, SnoozeClock},
 };
 
@@ -110,13 +105,6 @@ struct ResolvedTask {
     fact: TaskFact,
     title: String,
     off_clock: bool,
-}
-
-#[derive(Debug, Clone)]
-struct RowDetail {
-    parsed: SnoozeRow,
-    identity: Option<TaskIdentity>,
-    title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1121,235 +1109,64 @@ fn evaluate(
     now: &ClockNow,
     config: &PlanConfig,
 ) -> Result<Evaluation, CliError> {
-    let lines: Vec<&str> = day.contents.lines().collect();
-    let section = parse::parse_section(&lines);
-    let note_index = snapshot.note_index();
     let settings = note_tasks::read_settings(root);
-    let (mut identities, live_links) =
-        ledger_identities(&day.contents, &day.relative, &note_index);
-    let mut details = Vec::new();
+    let view = super::read::read(
+        &day.contents,
+        &day.relative,
+        day.date,
+        &now.clock,
+        &snapshot.note_index(),
+        &settings,
+        |path| snapshot.notes.get(path).map(String::as_str),
+    );
     let mut facts_by_identity = BTreeMap::<TaskIdentity, ResolvedTask>::new();
-
-    if let Some(section) = &section {
-        for row in &section.rows {
-            let mut identity = None;
-            let mut title = None;
-            if let (Some(target), Some(block_id)) =
-                (row.target.as_deref(), row.block_id.as_deref())
-            {
-                match note_index.resolve_detailed(Some(&day.relative), target) {
-                    LinkResolution::Found(path) => {
-                        let resolved_identity = TaskIdentity {
-                            route: path.clone(),
-                            block_id: block_id.to_string(),
-                        };
-                        identities.insert(
-                            (target.to_string(), block_id.to_string()),
-                            resolved_identity.clone(),
-                        );
-                        identity = Some(resolved_identity.clone());
-                        if let Some(contents) = snapshot.notes.get(&path) {
-                            let scan = note_tasks::scan(contents, &settings);
-                            match scan.by_block_id(block_id) {
-                                note_tasks::BlockIdLookup::Found(task)
-                                    if task.status_type
-                                        != TaskStatusType::NonTask =>
-                                {
-                                    let resolved = task_fact(
-                                        root,
-                                        contents,
-                                        &path,
-                                        &day.relative,
-                                        &day.contents,
-                                        &resolved_identity,
-                                        task,
-                                        &settings,
-                                        config,
-                                    );
-                                    title = Some(resolved.title.clone());
-                                    facts_by_identity
-                                        .entry(resolved_identity)
-                                        .or_insert(resolved);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    LinkResolution::Ambiguous | LinkResolution::Missing => {}
-                }
-            }
-            details.push(RowDetail {
-                parsed: row.clone(),
-                identity,
-                title,
-            });
+    for detail in &view.rows {
+        let Some(identity) = &detail.identity else {
+            continue;
+        };
+        if facts_by_identity.contains_key(identity) {
+            continue;
+        }
+        let Some(contents) = snapshot.notes.get(&identity.route) else {
+            continue;
+        };
+        let scan = note_tasks::scan(contents, &settings);
+        if let note_tasks::BlockIdLookup::Found(task) =
+            scan.by_block_id(&identity.block_id)
+            && task.status_type != TaskStatusType::NonTask
+        {
+            facts_by_identity.insert(
+                identity.clone(),
+                task_fact(
+                    root,
+                    contents,
+                    &identity.route,
+                    &day.relative,
+                    &day.contents,
+                    identity,
+                    task,
+                    &settings,
+                    config,
+                ),
+            );
         }
     }
-
-    let mut classify_rows = Vec::with_capacity(details.len());
-    for detail in &details {
-        let row = &detail.parsed;
-        let is_history = row.kind == SnoozeRowKind::History;
-        let malformed = row.kind == SnoozeRowKind::Malformed;
-        let (resolution, task) = if malformed {
-            (ResolutionKind::Missing, None)
-        } else if let (Some(identity), Some(block_id)) =
-            (&detail.identity, row.block_id.as_deref())
-        {
-            if let Some(contents) = snapshot.notes.get(&identity.route) {
-                match note_tasks::scan(contents, &settings)
-                    .by_block_id(block_id)
-                {
-                    note_tasks::BlockIdLookup::Found(task)
-                        if task.status_type != TaskStatusType::NonTask =>
-                    {
-                        let is_event = event_task::event_task_at(
-                            &identity.route,
-                            contents,
-                            task.line_index,
-                        )
-                        .is_some();
-                        let status = normalized_status(
-                            task.status_symbol,
-                            task.status_type,
-                            &settings.done_statuses,
-                        );
-                        (
-                            ResolutionKind::Found,
-                            Some(TaskState {
-                                status,
-                                is_task: true,
-                                is_event,
-                            }),
-                        )
-                    }
-                    note_tasks::BlockIdLookup::Found(task) => (
-                        ResolutionKind::Found,
-                        Some(TaskState {
-                            status: task.status_symbol,
-                            is_task: false,
-                            is_event: false,
-                        }),
-                    ),
-                    note_tasks::BlockIdLookup::NotATask { .. } => (
-                        ResolutionKind::Found,
-                        Some(TaskState {
-                            status: ' ',
-                            is_task: false,
-                            is_event: false,
-                        }),
-                    ),
-                    note_tasks::BlockIdLookup::Duplicate(_) => {
-                        (ResolutionKind::Ambiguous, None)
-                    }
-                    note_tasks::BlockIdLookup::Missing => {
-                        (ResolutionKind::Missing, None)
-                    }
-                }
-            } else {
-                (ResolutionKind::Missing, None)
-            }
-        } else if row.target.is_some() && row.block_id.is_some() {
-            let target = row.target.as_deref().unwrap_or("");
-            match note_index.resolve_detailed(Some(&day.relative), target) {
-                LinkResolution::Ambiguous => (ResolutionKind::Ambiguous, None),
-                _ => (ResolutionKind::Missing, None),
-            }
-        } else {
-            (ResolutionKind::Missing, None)
-        };
-        let has_live_link = detail
-            .identity
-            .as_ref()
-            .is_some_and(|identity| live_links.contains(identity));
-        classify_rows.push(ClassifyRow {
-            line: row.line,
-            minutes: row.minutes,
-            is_history,
-            malformed,
-            resolution,
-            identity: detail.identity.clone(),
-            task,
-            has_live_link,
-        });
-    }
-    let classified = state::classify_rows(&ClassifyInput {
-        today: now.clock.date,
-        note_date: day.date,
-        now_minutes: now.clock.now_minutes,
-        zone: now.clock.zone,
-        rows: classify_rows,
-    });
-
     let mut off_clock = BTreeMap::new();
     let mut titles = BTreeMap::new();
     let mut facts = Vec::new();
     for (identity, resolved) in facts_by_identity {
         off_clock.insert(identity.clone(), resolved.off_clock);
-        titles.insert(identity.clone(), resolved.title.clone());
+        titles.insert(identity.clone(), resolved.title);
         facts.push(resolved.fact);
     }
     Ok(Evaluation {
-        rows: details,
-        classified,
+        rows: view.rows,
+        classified: view.classified,
         facts,
         titles,
         off_clock,
-        identities,
+        identities: view.identities,
     })
-}
-
-fn ledger_identities(
-    day: &str,
-    day_path: &Path,
-    note_index: &NoteIndex,
-) -> (plan::IdentityMap, BTreeSet<TaskIdentity>) {
-    let mut identities = BTreeMap::new();
-    let mut live = BTreeSet::new();
-    let lines = line_spans(day);
-    let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
-    let Some(section) = pomodoro::pomodoros_section_range(&line_text) else {
-        return (identities, live);
-    };
-    let fenced = markdown::fenced_lines(&line_text, section.clone());
-    for entry in capture_pomodoros::scan(day).entries {
-        if entry.state != PomodoroState::Open {
-            continue;
-        }
-        let entry_index = entry.line.saturating_sub(1);
-        let range = capture_pomodoros::pomodoro_block_range(
-            &line_text,
-            entry_index,
-            section.end,
-        );
-        for index in range.start.saturating_add(1)..range.end {
-            if fenced.contains(&index)
-                || nearest_shallower_list_item_parent(&lines, index)
-                    != Some(entry_index)
-            {
-                continue;
-            }
-            let text = line_text[index];
-            for span in block_link_spans(text) {
-                if span.struck {
-                    continue;
-                }
-                let LinkResolution::Found(path) =
-                    note_index.resolve_detailed(Some(day_path), &span.target)
-                else {
-                    continue;
-                };
-                let identity = TaskIdentity {
-                    route: path,
-                    block_id: span.block_id.clone(),
-                };
-                identities
-                    .insert((span.target, span.block_id), identity.clone());
-                live.insert(identity);
-            }
-        }
-    }
-    (identities, live)
 }
 
 fn task_fact(
@@ -1429,28 +1246,6 @@ fn task_fact(
         fact,
         title: task.description.clone(),
         off_clock,
-    }
-}
-
-fn normalized_status(
-    status: char,
-    kind: TaskStatusType,
-    done: &BTreeSet<char>,
-) -> char {
-    match kind {
-        TaskStatusType::Done => 'x',
-        TaskStatusType::Cancelled => '-',
-        // Bob's Tasks config uses ON_HOLD for both Next (`*`) and
-        // Blocked (`?`); only the actual blocked symbol is blocked.
-        TaskStatusType::OnHold => status,
-        TaskStatusType::NonTask | TaskStatusType::Empty => status,
-        TaskStatusType::Todo | TaskStatusType::InProgress => {
-            if done.contains(&status) {
-                'x'
-            } else {
-                status
-            }
-        }
     }
 }
 

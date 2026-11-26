@@ -17,6 +17,7 @@ pub(crate) mod cli;
 pub(crate) mod notify;
 pub(crate) mod parse;
 pub(crate) mod plan;
+pub(crate) mod read;
 pub(crate) mod receipt;
 pub(crate) mod shell;
 pub(crate) mod state;

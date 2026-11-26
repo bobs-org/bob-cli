@@ -662,3 +662,158 @@ fn goldens_clear_all_and_bank_unavailable() {
     let (_, unavailable_json) = walks_json(&unavailable);
     check_golden("walks-bank-unavailable.json", &unavailable_json);
 }
+
+fn planned_json(temp: &TempDir, day: &Path, args: &[&str]) -> Value {
+    let output = bob_command()
+        .args(args)
+        .args(["-f", "json"])
+        .env("BOB_DIR", vault_dir(temp))
+        .env("BOB_DAY_FILE", day)
+        .env("BOB_NOW", NOW)
+        .env("TZ", "UTC")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", temp.path().join("vault.lock"))
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .env("BOB_SNOOZE_NOTIFY_SINK", temp.path().join("notify.json"))
+        .output()
+        .expect("planned-today command");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("planned-today JSON")
+}
+
+/// SP1-SP12/SP15 are also the stable vectors for the plugin evaluator.
+#[test]
+fn snoozed_planned_today_vectors_agree_across_freshness_walks_and_plan() {
+    let vectors: Value = serde_json::from_str(
+        &fs::read_to_string(fixture("walks/planned-today.json")).unwrap(),
+    )
+    .unwrap();
+    for vector in vectors["vectors"].as_array().unwrap() {
+        let id = vector["id"].as_str().unwrap();
+        let temp = empty_vault(&format!("bob-cli-planned-{id}"));
+        let vault = vault_dir(&temp);
+        let day = vault.join(vector["day"].as_str().unwrap());
+        let task = vector["task"].as_str().unwrap();
+        write_file(&vault.join("jobs.md"), task);
+        let mut daily = String::new();
+        if vector["ledger"] == true {
+            daily.push_str("## Pomodoros\n- [ ] ()\n");
+            if vector["linked"] == true {
+                daily.push_str("  - [[jobs#^job|Live alias]]\n");
+            }
+        }
+        daily.push_str("\n## Snoozed\n");
+        daily.push_str(vector["row"].as_str().unwrap());
+        write_file(&day, &daily);
+        let review = planned_json(&temp, &day, &["freshness", "list"]);
+        let walks = planned_json(&temp, &day, &["walks"]);
+        let plan = planned_json(&temp, &day, &["plan"]);
+        let s = family(&walks, "s");
+        let w = family(&walks, "w");
+        let count = if vector["tier"].is_null() { 0 } else { 1 };
+        assert_eq!(review["schema_version"], 16, "{id}");
+        assert_eq!(walks["schema_version"], 1, "{id}");
+        assert_eq!(review["counts"]["walk"], count, "{id}: {review}");
+        assert_eq!(s["counts"]["walk"], count, "{id}: {walks}");
+        assert_eq!(s["attention"], count > 0, "{id}");
+        assert_eq!(s["tier"], vector["tier"], "{id}");
+        if count > 0 {
+            assert_eq!(review["queue"][0]["tier"], vector["tier"], "{id}");
+        }
+        let lane_count: u64 = w["lanes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|lane| lane["count"].as_u64().unwrap())
+            .sum();
+        assert_eq!(
+            lane_count,
+            vector["lane_count"].as_u64().unwrap(),
+            "{id}: {w}"
+        );
+        assert_eq!(
+            plan["today_tasks"].as_array().unwrap().len() as u64,
+            vector["today"].as_u64().unwrap(),
+            "{id}: {plan}"
+        );
+        assert_eq!(plan["next"]["count"], vector["plan_next"], "{id}: {plan}");
+        assert_eq!(
+            plan["pending"]["count"], vector["plan_pending"],
+            "{id}: {plan}"
+        );
+        // snooze list refuses old note overrides; freshness/walks ignore those rows.
+        if id != "SP9" {
+            let snooze = planned_json(&temp, &day, &["snooze"]);
+            assert_eq!(
+                snooze["rows"][0]["state"], vector["snooze_state"],
+                "{id}: {snooze}"
+            );
+        }
+        assert_eq!(fs::read_to_string(&day).unwrap(), daily, "{id}");
+        assert_eq!(
+            fs::read_to_string(vault.join("jobs.md")).unwrap(),
+            task,
+            "{id}"
+        );
+        assert!(!temp.path().join("notify.json").exists(), "{id}");
+        assert!(
+            !temp
+                .path()
+                .join("state/bob-cli/snooze/last-wake.json")
+                .exists(),
+            "{id}"
+        );
+    }
+}
+
+/// SP13: wake swaps the snoozed exclusion for ordinary ledger Today membership.
+#[test]
+fn snoozed_wake_returns_to_ordinary_today_without_freshness_mutation() {
+    let temp = empty_vault("bob-cli-planned-wake");
+    let vault = vault_dir(&temp);
+    let day = vault.join("2026/20261117.md");
+    let task = "- [*] #task Work [fresh:: 2026-10-01] [keeps:: 3] ^job\n";
+    write_file(&vault.join("jobs.md"), task);
+    write_file(&day, "## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n  - Bring notes\n");
+    let before = planned_json(&temp, &day, &["plan"]);
+    assert_eq!(before["today_tasks"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        planned_json(&temp, &day, &["freshness", "list"])["counts"]["walk"],
+        0
+    );
+    planned_json(&temp, &day, &["snooze", "wake"]);
+    let after = planned_json(&temp, &day, &["plan"]);
+    assert_eq!(after["today_tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(before["next"], after["next"]);
+    assert_eq!(
+        planned_json(&temp, &day, &["freshness", "list"])["counts"]["walk"],
+        0
+    );
+    let walks = planned_json(&temp, &day, &["walks"]);
+    assert_eq!(family(&walks, "w")["lanes"][1]["count"], 0);
+    assert_eq!(fs::read_to_string(vault.join("jobs.md")).unwrap(), task);
+    let woke = fs::read_to_string(&day).unwrap();
+    assert!(woke.contains("woke 12:00"), "{woke}");
+    planned_json(&temp, &day, &["snooze", "wake"]);
+    assert_eq!(fs::read_to_string(&day).unwrap(), woke);
+}
+
+/// SP16: lane excess and attention derive from the filtered counts.
+#[test]
+fn snoozed_lane_excess_drops_without_changing_whole_plan_lane() {
+    let temp = empty_vault("bob-cli-planned-excess");
+    let vault = vault_dir(&temp);
+    let day = vault.join("2026/20261117.md");
+    write_file(
+        &vault.join("jobs.md"),
+        &format!("{}- [/] #task Held ^job\n", n_lines("Pending", "/", 10, "")),
+    );
+    write_file(
+        &day,
+        "## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1530** [[jobs#^job]]\n",
+    );
+    let walks = planned_json(&temp, &day, &["walks"]);
+    assert_eq!(family(&walks, "w")["lanes"][0]["count"], 10);
+    assert_eq!(family(&walks, "w")["counts"]["excess"], 0);
+    assert_eq!(family(&walks, "w")["attention"], false);
+    assert_eq!(planned_json(&temp, &day, &["plan"])["pending"]["count"], 11);
+}

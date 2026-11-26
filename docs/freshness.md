@@ -6,8 +6,9 @@ priority, project, schedule, and dependencies. A visible, non-recurring Ready
 task that was never confirmed, whose scheduled deferral returned after its
 last confirmation, which was automatically unblocked after its stamp, or
 whose review interval expired is due for review.
-Today-linked tasks and canonical daily-note tasks are outside this review
-scope. The morning review then costs roughly "pool ÷ interval +
+Planned-today tasks (Today-linked or snoozed for today) and canonical daily-note
+tasks are outside the ordinary review scope. Snoozed PRE/POST rows are also held;
+ordinary Today-linked PRE/POST rows retain their checklist exception. The morning review then costs roughly "pool ÷ interval +
 arrivals" glances instead of the whole pool. Recurring
 tasks are never stamped; once a recurring occurrence's date arrives it walks in the
 RECURRING tier until it is completed, rescheduled, linked to Today, or cancelled.
@@ -311,7 +312,7 @@ older or missing navigation shows pips without a card promise.
 "ask at L" && keeps >= L && due tier for that lane`, where the due
 tier is PENDING for pending, NEXT for next, and ROTTEN/TICKLER for
 ready. Unblock ticklers, PROJECTS, recurring, checklist overlays,
-and Today-linked rows never decide. The annotation means a choice is
+and planned-today rows never decide. The annotation means a choice is
 due, not permission to execute an action. The shared approved-decay
 action planner (`planFreshnessDecayCard` in bob-navigation-hotkeys)
 turns that flag into stable previewed rung decisions — WIP → Next →
@@ -397,6 +398,16 @@ streak while stamping. Every stamp (Rust stamp helpers; JS
 Computed at read time, never stored. `today` is the vault's local
 calendar date (`BOB_NOW` in tests).
 
+`is_today` stays membership in dedicated Task Links under today's open Pomodoros.
+`is_snoozed_today` is membership in the shared Snoozed classifier's planned set:
+resolved Asleep, Due, or Blocked rows in today's note. Their union is
+`planned_today`. Ready, terminal, Event, malformed, unresolved, ambiguous,
+duplicate-loser, struck-history, and previous-day rows add no snoozed membership.
+A live ledger link wins over an unstruck Snoozed row. Identity is resolved
+vault-relative path plus block ID, including aliases, embeds, and same-note links.
+These inputs are read-only: review never wakes rows, stamps tasks, or emits notices.
+A missing note/section is empty; Snoozed-only notes need no Pomodoros heading.
+
 ```text
 tags'(t)      = t's tags, lowercased, compared as whole tokens
                 (#gtd/pre ≠ #gtd, #pressed_juice ≠ #pre)
@@ -409,6 +420,7 @@ checklist_scope(t)
                 ∧ ¬dependency-blocked ∧ ¬(scheduled > today)
                 ∧ ¬hidden (the existing #hide predicate, case-insensitive substring, unchanged)
                 ∧ path has no _templates / _conflicts segment (existing predicate)
+                ∧ ¬is_snoozed_today(t)
                 (recurring, canonical daily note, and Today-linked are NOT exclusions here)
 stages(k)      = normalized freshness.pre_stages (k = pre) | freshness.post_stages (k = post);
                 [] when absent, null, or rejected (§2)
@@ -422,7 +434,7 @@ stage_rank(t)  = 1-based position of t among queue rows of the same tier and sta
 stage_total(t) = number of queue rows of the same tier and stage; none when unstaged
                 (both computed over the full queue, before --limit)
 in_scope(t)   = status type TODO ("[ ]") ∧ lane-visible ∧ ¬recurring
-                ∧ ¬in a canonical daily note (YYYY/YYYYMMDD.md) ∧ ¬Today(t)
+                ∧ ¬in a canonical daily note (YYYY/YYYYMMDD.md) ∧ ¬planned_today(t)
                   lane-visible = the NEXT/PENDING lane predicate on each side: not done,
                   not dependency-blocked, not under _templates or _conflicts,
                   no scheduled date after today, no #hide
@@ -446,7 +458,7 @@ lane(t)       = pending if status symbol "/"
               | next    if status symbol "*"
               | ready   if status type TODO ("[ ]")
               | none    otherwise (Blocked, closed, custom non-TODO)
-walk_scope(t) = lane(t) ≠ none ∧ lane-visible ∧ ¬recurring ∧ ¬canonical daily note ∧ ¬Today(t)
+walk_scope(t) = lane(t) ≠ none ∧ lane-visible ∧ ¬recurring ∧ ¬canonical daily note ∧ ¬planned_today(t)
 lane_interval = pending_interval (pending) | next_interval (next);
                 default 1; false = that lane is not walked
 interval(t)   = identity(t)=prj with project_interval: project_interval, source project
@@ -482,7 +494,7 @@ recurring_scope(t) = recurring(t) ∧ checklist(t) = none
                      ∧ lane(t) ≠ none                       (status ` `/TODO type, `*`, or `/`; `[?]` and closed rows stay out)
                      ∧ lane-visible                         (the existing predicate: not dependency-blocked, no #hide,
                                                              not under _templates/_conflicts, no scheduled > today)
-                     ∧ ¬canonical daily note ∧ ¬Today(t)
+                     ∧ ¬canonical daily note ∧ ¬planned_today(t)
 recurring_due(t)   = recurring_scope(t) ∧ occurs_on(t) exists ∧ occurs_on(t) ≤ today
 tier(t)            = checklist(t)   if checklist_scope(t)              (unchanged; beats everything)
                    | recurring      if recurring_due(t)                 (beats every other rule; trackers included)
@@ -684,7 +696,7 @@ applying the WRITE skips, so a nudge-due Ready row still qualifies
 blocker-free Ready result marks unblocked with the same skips (UB19).
 Skip when any of:
 
-- the row is outside freshness scope (recurring, hidden, daily note, …);
+- the row is outside freshness scope (recurring, hidden, daily note, planned-today, …);
 - it has no `[fresh::]` (NEW is already due);
 - `fresh(t) < scheduled(t) ≤ today` (already a scheduled tickler);
 - the recovery lands in Next or Pending (the lane walk covers it).
@@ -956,7 +968,9 @@ break by path, then bucket index. Bucket `k` (1–7) lands on `today −
 1, scheduled(t) when due)` so nothing is due on cutover day and
 nothing arrives RESURFACED, and clamped to today. Every other eligible open,
 non-recurring task without a valid stamp gets today, including Today-linked
-tasks. Tasks tagged `#hide` and tasks in daily notes, `_templates`,
+and snoozed tasks. Planned-today prevents assigning a spread-out backlog date; it
+does not skip the seed stamp or its counters. A Ready row ignored by the Snoozed
+classifier still uses ordinary backlog placement. Tasks tagged `#hide` and tasks in daily notes, `_templates`,
 `_conflicts`, or dot-directories are excluded. "Without a valid stamp"
 includes missing, malformed, and future-dated `fresh` values.
 
@@ -1863,3 +1877,42 @@ write exists and none is planned. There is no off-switch; at about
 0.6 prompts a morning a plugin rollback is enough. An older nav
 without the registered grammar would convert the marker into a task
 during project conversion, so roll forward rather than back.
+
+
+### Planned-today conformance (SP)
+
+The executable cross-command inputs are in
+`tests/fixtures/walks/planned-today.json`, run by
+`tests/cli/walks.rs::snoozed_planned_today_vectors_agree_across_freshness_walks_and_plan`.
+The plugin reader/evaluator should mirror these stable IDs. Unless overridden, the
+clock is 2026-11-17 12:00 UTC; `jobs.md` has one unstamped `[*] #task Work ^job`,
+and today's Snoozed row targets 15:30. A held row has no review tier, no decay
+choice, and no `w` lane membership. It creates no Today membership. Full plan
+NEXT/PENDING counts keep their usual lane predicate.
+
+| ID | Input or change | Expected review / lane behavior |
+| --- | --- | --- |
+| SP1 | Asleep Next | no tier, `w` count 0; plan NEXT 1, Today 0 |
+| SP2 | Pending with 11:00 target (Due) | no tier, `w` count 0; plan PENDING 1, Today 0 |
+| SP3 | Blocked `#gtd #pre` | no PRE tier; remains outside lanes |
+| SP4 | Ready `[ ]` with Snoozed row | row ignored; NEW tier, Today 0 |
+| SP5 | Next PRE plus live ledger link | snooze ignored as already linked; PRE still walks; Today 1 |
+| SP6 | Next recurring occurrence due today | no RECURRING tier |
+| SP7 | Next `#gtd #pre` | no PRE tier |
+| SP8 | Pending `#gtd #post` | no POST tier |
+| SP9 | Read previous day's note with today's clock | snooze ignored; NEXT tier, `w` count 1 |
+| SP10 | Struck `woke 11:00` history without a live link | NEXT tier, `w` count 1, Today 0 |
+| SP11 | Embedded aliased link to the task | same result as SP1 |
+| SP12 | Snoozed-only daily note | same exclusions as SP1, Today 0 |
+| SP13 | Wake a Due Next row; wake again | no review tier before/after; Today 0→1; task fields unchanged; second wake is a no-op |
+| SP14 | Placement receives `is_snoozed_today=true` on a Ready recovery | no automatic `[unblocked::]` write |
+| SP15 | Ordinary Next plus live ledger link | no tier, Today 1; snooze ignored as already linked |
+| SP16 | 11 Pending, one snoozed, cap 10 | `w` count 10, excess 0, no attention; plan PENDING 11 |
+| SP17 | Isolated seed: 7 backlog Ready, linked Ready, snoozed Next/Pending/Blocked, ignored Ready | 8 backlog stamps, 4 today stamps; repeat writes none and reports 12 already stamped |
+
+SP13/SP16 are executable CLI lifecycle/count tests in `tests/cli/walks.rs`;
+SP14 is a placement unit test; SP17 runs in `tests/cli/freshness.rs` on a temporary
+vault. State unit tests also apply the snoozed flag to each ordinary lane,
+recurring overlay, and PRE/POST overlay, preserving the separate Today flag.
+The `s` attention, first tier, and counts always derive from the remaining queue.
+No JSON schema version changes for these internal inputs.
