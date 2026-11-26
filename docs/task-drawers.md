@@ -130,7 +130,8 @@ marker provenance separately for each spelling.
 Bob Ledger Tools paints a recognized drawer header in Live Preview and reading
 view. A quiet tray occupies the existing list-marker slot (~0.95em), tinted
 with the owner task's type hue mixed toward muted ink. Its rendered stroke
-matches the requirement diamond's stroke within 5% (both about 0.10em). The authored title stays
+matches the requirement diamond's stroke within 5% (both about 0.10em). The tray
+is drawn about 0.9em across in its 0.95em slot. The authored title stays
 on the line at weight 600; nested notes keep normal weight. Attributes are
 source-backed: `data-bob-drawer`, `data-bob-drawer-key`,
 `data-bob-drawer-count` (direct notes only; fences do not count),
