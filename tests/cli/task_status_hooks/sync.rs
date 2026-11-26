@@ -746,14 +746,18 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert_text_order(
         &project_after_capture,
         &[
-            "[`⚪ 1 open`](#Alpha#Tasks)",
+            "[`⚪ 2 open`](#Alpha#Tasks)",
             "- [ ] #task Captured ready [created::2026-07-10] ^captured",
             "### Next & In Progress",
         ],
     );
 
+    // Capture already settles the note-local badge, so the follow-up
+    // reconcile must plan nothing for alpha.md.
     let after_ready_capture = bob_command()
         .args(["task", "reconcile"])
+        .arg("--format")
+        .arg("json")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -762,10 +766,16 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         .output()
         .expect("rerun after ready capture");
     assert_success(&after_ready_capture);
-    let after_ready_capture_report = stdout(&after_ready_capture);
+    let after_ready_json: serde_json::Value =
+        serde_json::from_str(stdout(&after_ready_capture).trim())
+            .expect("reconcile JSON after ready capture");
     assert!(
-        after_ready_capture_report.contains("open 2 · next/in progress 2"),
-        "Ready capture should refresh the open badge:\n{}",
+        !after_ready_json["applied_files"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .any(|path| path == "alpha.md"),
+        "reconcile must plan nothing for alpha.md after settled capture:\n{}",
         format_output(&after_ready_capture)
     );
     let project_after_badge_refresh = fs::read_to_string(&project).unwrap();

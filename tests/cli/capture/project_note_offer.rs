@@ -1071,7 +1071,7 @@ fn assert_each_single_pick_keeps_every_offer(draft: &str, duplicate: &str) {
                     "{context}"
                 );
                 assert_eq!(json["pull_in"]["picked_count"], 1, "{context}");
-                let mut previous_line = 0;
+                let mut seen_lines = std::collections::BTreeSet::new();
                 for (index, (row, original)) in
                     rows.iter().zip(&baseline).enumerate()
                 {
@@ -1093,11 +1093,15 @@ fn assert_each_single_pick_keeps_every_offer(draft: &str, duplicate: &str) {
                         assert_eq!(id, original.block_id, "{context}");
                     }
                     let line = row["line"].as_u64().expect("line") as usize;
+                    // Settled notes group by status, so offer order no
+                    // longer matches line order (Next rows sort after
+                    // intake). Each offer must still own a distinct line
+                    // that holds its task (verified against the final note
+                    // below); order is not asserted.
                     assert!(
-                        line > previous_line,
-                        "each offer owns its own later line: {context}"
+                        seen_lines.insert(line),
+                        "each offer owns its own line: {context}"
                     );
-                    previous_line = line;
                 }
                 if !dry_run {
                     assert_offer_lines_match_final_note(&fixture, &json);

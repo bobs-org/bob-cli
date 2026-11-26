@@ -823,7 +823,9 @@ command then locates the reference's v2 reading task and runs the same
 planner as `bob capture '^route:block-id[#name]'` (see [Linking and
 starting existing tasks](capture.md#linking-and-starting-existing-tasks)).
 It never starts a Pomodoro and never commits or syncs; vault-sync picks
-the change up, as with capture. The tracker change reads
+the change up, as with capture. Like capture, it settles every Markdown note
+it changes in the same write (status groups, badge row, future-schedule `[?]`);
+dry-run previews the settled bytes. The tracker change reads
 `status_sync: pending` until the next `ref scan -w` (the Refs panel's
 ⌘S), exactly as an Obsidian Ctrl+Shift+Enter on a ref task does today.
 

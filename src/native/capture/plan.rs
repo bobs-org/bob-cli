@@ -1084,7 +1084,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     // successor net post-pass and before inbox-route detection, so the
     // closed rows read as ordinary status changes downstream. The single
     // `write_staged_files` commit still guards external edits.
-    let offer_closes = super::offer_verdicts::plan_offer_verdict_post_pass(
+    let mut offer_closes = super::offer_verdicts::plan_offer_verdict_post_pass(
         &request.offer_verdicts,
         &mut items,
         &mut planner,
@@ -1122,7 +1122,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     }
     // Move-choice report was precomputed before item planning (with mint
     // and splice); reuse it before pull-in and inbox-route refusals.
-    let move_choice = move_choice_report;
+    let mut move_choice = move_choice_report;
     let mut inbox_route = detect_inbox_routes(
         &planner,
         &request.bob_dir,
@@ -1159,18 +1159,23 @@ pub(super) fn plan_capture_batch_with_config_path(
         &mut items,
         &mut warnings,
     )?;
-    let type_agreement = apply_type_agreement(
+    let mut type_agreement = apply_type_agreement(
         &mut planner,
         &request.bob_dir,
         &day_file,
         Path::new(&day_relative),
         today,
     );
+    let mut applied = applied;
     settle_capture_notes(
         &mut planner,
         &request.bob_dir,
         &mut task_tracker,
         &mut items,
+        &mut applied,
+        &mut offer_closes,
+        &mut type_agreement,
+        &mut move_choice,
     )?;
     super::snooze::refresh_results(
         &mut items,
@@ -1337,6 +1342,10 @@ fn settle_capture_notes(
     bob_dir: &Path,
     task_tracker: &mut TaskBlockTracker,
     items: &mut [PlannedCaptureItem],
+    applied: &mut AppliedInboxRoutes,
+    offer_closes: &mut [OfferCloseJson],
+    type_agreement: &mut [TypeAgreementJson],
+    move_choice: &mut super::move_choice::MoveChoiceReport,
 ) -> Result<(), CaptureError> {
     let context = crate::native::task_settle::SettleContext::for_vault(bob_dir);
     let changed_notes = planner
@@ -1353,28 +1362,458 @@ fn settle_capture_notes(
         .map(|file| (file.path.clone(), file.current.clone()))
         .collect::<Vec<_>>();
 
+    // Settle each note, collecting the post-settle map plus contents so
+    // every emitted 1-based coordinate can be forwarded. Keys are absolute
+    // paths for direct comparison with tracker targets and item targets.
+    let mut maps: BTreeMap<PathBuf, (BTreeMap<usize, usize>, String)> =
+        BTreeMap::new();
+    let mut relative_names: BTreeMap<PathBuf, String> = BTreeMap::new();
     for (target, contents) in changed_notes {
         let relative = target.strip_prefix(bob_dir).unwrap_or(&target);
         let settled = context.settle_written_note(relative, &contents);
         if !settled.changed {
             continue;
         }
-
         task_tracker.remap_settled_note(&target, &settled.line_map);
-        for item in items.iter_mut() {
-            if Path::new(&item.result.target) != target {
-                continue;
-            }
-            // Capture's public 1-based parent coordinate is the per-item
-            // line field that must follow the same post-settle mapping.
-            if let Some(parent_line) = item.result.parent_line.as_mut()
-                && let Some(mapped) =
-                    settled.line_map.get(&parent_line.saturating_sub(1))
-            {
-                *parent_line = mapped + 1;
+        let relative_display = super::dependencies::display_relative(
+            target.strip_prefix(bob_dir).unwrap_or(&target),
+        );
+        maps.insert(
+            target.clone(),
+            (settled.line_map, settled.contents.clone()),
+        );
+        relative_names.insert(target.clone(), relative_display);
+        planner.stage(&target, settled.contents)?;
+    }
+    if maps.is_empty() {
+        return Ok(());
+    }
+    // Day file for ledger/entry coordinates (pomodoro links, successor
+    // link lines, type-agreement lines).
+    let day_abs = crate::native::pomodoro::day_file_for(bob_dir);
+    let day_entry = maps.get(&day_abs).cloned();
+
+    // Remap one 1-based line through a settled map, falling back to a
+    // block-ID lookup in the settled text when the pre-settle line has no
+    // map entry (its line was removed). Never leaves a stale number when
+    // the row survives.
+    fn remap_line(
+        old_line: usize,
+        block_id: Option<&str>,
+        map: &BTreeMap<usize, usize>,
+        settled_contents: &str,
+    ) -> usize {
+        if old_line == 0 {
+            return old_line;
+        }
+        if let Some(mapped) = map.get(&(old_line.saturating_sub(1))) {
+            return mapped + 1;
+        }
+        if let Some(id) = block_id.filter(|id| !id.is_empty()) {
+            for (index, line) in settled_contents.lines().enumerate() {
+                if crate::native::collect_done::trailing_block_id_in_line(line)
+                    .as_deref()
+                    == Some(id)
+                {
+                    return index + 1;
+                }
             }
         }
-        planner.stage(&target, settled.contents)?;
+        old_line
+    }
+    // Find a settled map by vault-relative display path (e.g. note_path
+    // fields) or by absolute path.
+    let map_for_relative =
+        |relative: &str| -> Option<(BTreeMap<usize, usize>, String)> {
+            // Relative names in reports use forward slashes.
+            for (abs, (map, contents)) in &maps {
+                if let Some(name) = relative_names.get(abs)
+                    && name == relative
+                {
+                    return Some((map.clone(), contents.clone()));
+                }
+                // Also match by file name when the report stores a basename.
+                if abs.file_name().and_then(|name| name.to_str())
+                    == Some(relative)
+                {
+                    return Some((map.clone(), contents.clone()));
+                }
+            }
+            // Fall back to joining against the vault.
+            let abs = bob_dir.join(relative);
+            maps.get(&abs).cloned()
+        };
+
+    // Forward item rows that name a routed task through its inbox-route
+    // move before settle remaps. Matches the tracker's
+    // `remap_routed_tasks` identity (block ID, else source line) so a
+    // pulled or completed row follows its task to the destination note at
+    // its pre-settle landing line; the settle remap below then forwards it
+    // to the post-settle line.
+    for item in items.iter_mut() {
+        let forward_row = |note_path: &mut String,
+                           block_id: &mut String,
+                           line: &mut usize| {
+            for movement in applied.moves.iter() {
+                if movement.source_relative != *note_path {
+                    continue;
+                }
+                let matches = match movement.old_block_id.as_deref() {
+                    Some(id) => *block_id == id,
+                    None => block_id.is_empty() && *line == movement.old_line,
+                };
+                if !matches {
+                    continue;
+                }
+                *note_path = movement.dest_relative.clone();
+                *block_id = movement.new_block_id.clone().unwrap_or_default();
+                *line = movement.new_line;
+                break;
+            }
+        };
+        if let Some(pull) = item.result.note_pull.as_mut() {
+            for row in pull.successors.iter_mut() {
+                forward_row(
+                    &mut row.note_path,
+                    &mut row.block_id,
+                    &mut row.line,
+                );
+            }
+        }
+        if let Some(complete) = item.result.task_complete.as_mut() {
+            for row in complete
+                .unblocked
+                .iter_mut()
+                .chain(complete.keep_moving.iter_mut())
+                .chain(complete.relation_successors.iter_mut())
+            {
+                forward_row(
+                    &mut row.note_path,
+                    &mut row.block_id,
+                    &mut row.line,
+                );
+            }
+            for (note_path, block_id, line) in complete
+                .subtasks
+                .iter_mut()
+                .map(|row| {
+                    (&mut row.note_path, &mut row.block_id, &mut row.line)
+                })
+                .chain(complete.subtasks_left_open.iter_mut().map(|row| {
+                    (&mut row.note_path, &mut row.block_id, &mut row.line)
+                }))
+                .chain(complete.still_blocked.iter_mut().map(|row| {
+                    (&mut row.note_path, &mut row.block_id, &mut row.line)
+                }))
+            {
+                forward_row(note_path, block_id, line);
+            }
+            for held in complete.relation_held.iter_mut() {
+                forward_row(
+                    &mut held.note_path,
+                    &mut held.block_id,
+                    &mut held.line,
+                );
+            }
+        }
+        for row in item
+            .result
+            .relation_successors
+            .iter_mut()
+            .chain(item.result.relation_merge_output.offer_rows.iter_mut())
+        {
+            forward_row(&mut row.note_path, &mut row.block_id, &mut row.line);
+        }
+        for held in item.result.relation_held.iter_mut() {
+            forward_row(
+                &mut held.note_path,
+                &mut held.block_id,
+                &mut held.line,
+            );
+        }
+    }
+
+    // Forward routed landings to their post-settle lines.
+    for movement in applied.moves.iter_mut() {
+        if let Some((map, contents)) = maps.get(&movement.dest) {
+            movement.new_line = remap_line(
+                movement.new_line,
+                movement.new_block_id.as_deref(),
+                map,
+                contents,
+            );
+        }
+    }
+    // Forward the report's embedded moved.line to match.
+    for (index, candidate) in applied.report.candidates.iter_mut().enumerate() {
+        let Some(movement) =
+            applied.moves.iter().find(|move_| move_.candidate == index)
+        else {
+            continue;
+        };
+        if let Some(moved) = candidate.moved.as_mut()
+            && let Some(object) = moved.as_object_mut()
+        {
+            object.insert(
+                "line".to_string(),
+                serde_json::json!(movement.new_line),
+            );
+        }
+    }
+    // Forward offer-close rows (pre-settle staged lines).
+    for close in offer_closes.iter_mut() {
+        if let Some((map, contents)) = map_for_relative(&close.note_path) {
+            close.line = remap_line(
+                close.line,
+                Some(close.block_id.as_str()),
+                &map,
+                &contents,
+            );
+        }
+    }
+    // Type-agreement lines live in the day file.
+    if let Some((map, contents)) = day_entry.clone() {
+        for entry in type_agreement.iter_mut() {
+            entry.line = remap_line(entry.line, None, &map, &contents);
+        }
+    }
+    // Move-choice rows: task rows live in the parent note, pomodoro rows
+    // live in the day file.
+    if let Some(slots) = move_choice.slots.as_mut() {
+        for slot in slots.iter_mut() {
+            if let Some((map, contents)) = map_for_relative(&slot.parent) {
+                for row in slot.rows.iter_mut() {
+                    row.line = remap_line(
+                        row.line,
+                        row.block_id.as_deref(),
+                        &map,
+                        &contents,
+                    );
+                }
+            }
+            if let Some((day_map, day_contents)) = day_entry.clone() {
+                for row in slot.rows.iter_mut() {
+                    if let Some(pomodoro) = row.pomodoro.as_mut() {
+                        pomodoro.line = remap_line(
+                            pomodoro.line,
+                            None,
+                            &day_map,
+                            &day_contents,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Forward every per-item line coordinate that names a settled note.
+    for item in items.iter_mut() {
+        let target_abs = Path::new(&item.result.target).to_path_buf();
+        let target_map = maps.get(&target_abs).cloned();
+        // parent_line refers to the item's own target note.
+        if let (Some((map, _)), Some(parent_line)) =
+            (target_map.clone(), item.result.parent_line.as_mut())
+            && let Some(mapped) = map.get(&parent_line.saturating_sub(1))
+        {
+            *parent_line = mapped + 1;
+        }
+        // Project-note moved tasks and successors live in the new note
+        // (the item target) or in the named successor note.
+        if let Some(note) = item.result.project_note.as_mut() {
+            if let Some((map, contents)) = target_map.clone() {
+                for moved in note.moved_tasks.iter_mut() {
+                    moved.line = remap_line(
+                        moved.line,
+                        Some(moved.block_id.as_str()),
+                        &map,
+                        &contents,
+                    );
+                }
+            }
+            if let Some(successors) = note.successors.as_mut() {
+                for row in successors.iter_mut() {
+                    // Successor rows name their own note_path; prefer it
+                    // when that note settled, else fall back to the item
+                    // target map.
+                    if let Some((map, contents)) =
+                        map_for_relative(&row.note_path)
+                    {
+                        row.line = remap_line(
+                            row.line,
+                            Some(row.block_id.as_str()),
+                            &map,
+                            &contents,
+                        );
+                    } else if let Some((map, contents)) = target_map.clone() {
+                        row.line = remap_line(
+                            row.line,
+                            Some(row.block_id.as_str()),
+                            &map,
+                            &contents,
+                        );
+                    }
+                    // Successor day links live in the day file.
+                    if let (Some(link), Some((day_map, day_contents))) =
+                        (row.link.as_mut(), day_entry.clone())
+                    {
+                        link.line = remap_line(
+                            link.line,
+                            None,
+                            &day_map,
+                            &day_contents,
+                        );
+                        link.entry_line = remap_line(
+                            link.entry_line,
+                            None,
+                            &day_map,
+                            &day_contents,
+                        );
+                    }
+                }
+            }
+        }
+        // Note-pull successors name their own note_path.
+        if let Some(pull) = item.result.note_pull.as_mut() {
+            for row in pull.successors.iter_mut() {
+                if let Some((map, contents)) = map_for_relative(&row.note_path)
+                {
+                    row.line = remap_line(
+                        row.line,
+                        Some(row.block_id.as_str()),
+                        &map,
+                        &contents,
+                    );
+                }
+                if let (Some(link), Some((day_map, day_contents))) =
+                    (row.link.as_mut(), day_entry.clone())
+                {
+                    link.line =
+                        remap_line(link.line, None, &day_map, &day_contents);
+                    link.entry_line = remap_line(
+                        link.entry_line,
+                        None,
+                        &day_map,
+                        &day_contents,
+                    );
+                }
+            }
+        }
+        // Task-complete rows (unblocked / keep-moving / relation) name
+        // their own note_path.
+        if let Some(complete) = item.result.task_complete.as_mut() {
+            for row in complete
+                .unblocked
+                .iter_mut()
+                .chain(complete.keep_moving.iter_mut())
+                .chain(complete.relation_successors.iter_mut())
+            {
+                if let Some((map, contents)) = map_for_relative(&row.note_path)
+                {
+                    row.line = remap_line(
+                        row.line,
+                        Some(row.block_id.as_str()),
+                        &map,
+                        &contents,
+                    );
+                }
+                if let (Some(link), Some((day_map, day_contents))) =
+                    (row.link.as_mut(), day_entry.clone())
+                {
+                    link.line =
+                        remap_line(link.line, None, &day_map, &day_contents);
+                    link.entry_line = remap_line(
+                        link.entry_line,
+                        None,
+                        &day_map,
+                        &day_contents,
+                    );
+                }
+            }
+            for sub in
+                complete
+                    .subtasks
+                    .iter_mut()
+                    .map(|row| (&row.note_path, &row.block_id, &mut row.line))
+                    .chain(complete.subtasks_left_open.iter_mut().map(|row| {
+                        (&row.note_path, &row.block_id, &mut row.line)
+                    }))
+                    .chain(complete.still_blocked.iter_mut().map(|row| {
+                        (&row.note_path, &row.block_id, &mut row.line)
+                    }))
+            {
+                if let Some((map, contents)) = map_for_relative(sub.0) {
+                    *sub.2 = remap_line(
+                        *sub.2,
+                        Some(sub.1.as_str()),
+                        &map,
+                        &contents,
+                    );
+                }
+            }
+            for held in complete.relation_held.iter_mut() {
+                if let Some((map, contents)) = map_for_relative(&held.note_path)
+                {
+                    held.line = remap_line(
+                        held.line,
+                        Some(held.block_id.as_str()),
+                        &map,
+                        &contents,
+                    );
+                }
+            }
+            if let Some(ledger) = complete.ledger.as_mut()
+                && let Some((day_map, day_contents)) = day_entry.clone()
+            {
+                for endpoint in
+                    ledger
+                        .struck_in
+                        .iter_mut()
+                        .chain(
+                            ledger.moved.iter_mut().flat_map(|move_| {
+                                [&mut move_.from, &mut move_.to]
+                            }),
+                        )
+                        .chain(
+                            ledger.dropped.iter_mut().flat_map(|drop| {
+                                [&mut drop.from, &mut drop.to]
+                            }),
+                        )
+                {
+                    endpoint.line = remap_line(
+                        endpoint.line,
+                        None,
+                        &day_map,
+                        &day_contents,
+                    );
+                }
+            }
+        }
+        // Relation successor offers on the item itself.
+        for row in item
+            .result
+            .relation_successors
+            .iter_mut()
+            .chain(item.result.relation_merge_output.offer_rows.iter_mut())
+        {
+            if let Some((map, contents)) = map_for_relative(&row.note_path) {
+                row.line = remap_line(
+                    row.line,
+                    Some(row.block_id.as_str()),
+                    &map,
+                    &contents,
+                );
+            }
+        }
+        for held in item.result.relation_held.iter_mut() {
+            if let Some((map, contents)) = map_for_relative(&held.note_path) {
+                held.line = remap_line(
+                    held.line,
+                    Some(held.block_id.as_str()),
+                    &map,
+                    &contents,
+                );
+            }
+        }
     }
     Ok(())
 }

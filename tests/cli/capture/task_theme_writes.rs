@@ -176,7 +176,9 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
     assert_eq!(
         fs::read_to_string(vault.join("sase.md")).unwrap(),
         concat!(
-            "---\ntype: [[project]]\ntheme: WRITE\n---\n# Sase\n\n## Tasks\n\n",
+            "---\ntype: [[project]]\ntheme: WRITE\n---\n# Sase\n\n## Tasks\n",
+            "[`⚪ 0 open`](#Sase#Tasks) · [`🔵 1 next/wip`](#Sase#Tasks#Next%20&%20In%20Progress) · `🔴 0 blocked` · `🟢 0 done/canceled`\n\n",
+            "### Next & In Progress\n\n",
             "- [*] #task Draft a fix [created::2026-10-28] ^new-fix\n",
         )
     );

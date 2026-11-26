@@ -34,7 +34,6 @@ pub(crate) struct SettleOutput {
 /// Configuration shared by the writers settling several notes in one write.
 /// Construct once per command so the Tasks settings, daily path, and date are
 /// stable across every staged note.
-#[allow(dead_code)] // Consumed by the capture and command writer phases.
 #[derive(Debug, Clone)]
 pub(crate) struct SettleContext {
     today: NaiveDate,
@@ -42,7 +41,6 @@ pub(crate) struct SettleContext {
     daily_path: PathBuf,
 }
 
-#[allow(dead_code)] // Consumed by the capture and command writer phases.
 impl SettleContext {
     pub(crate) fn for_vault(vault: &Path) -> Self {
         let daily_path = native_pomodoro::day_file_for(vault);

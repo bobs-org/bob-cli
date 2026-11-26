@@ -999,11 +999,15 @@ fn capture_project_note_task_links_write_the_worked_example() {
          - [ ] #task #prj Finish the Google exit packet! #hide ^prj\n\
          \n\
          ## Tasks\n\
+         [`⚪ 1 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · `🔴 0 blocked` · `🟢 0 done/canceled`\n\
+         \n\
+         - [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n\
+         \n\
+         ### Next & In Progress\n\
          \n\
          - [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\
          \t- keep it short\n\
          - [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms\n\
-         - [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n\
          \n\
          ## Future Work\n\
          \n\
@@ -3479,12 +3483,30 @@ fn capture_project_note_choice_answers_match_authored_bullets() {
     }
     let destination = fs::read_to_string(choice_real_vault.join("cash_x.md"))
         .expect("destination");
-    let positions: Vec<usize> = ["New item", "Alpha", "Delta", "Other item"]
+    // Settled layout: intake rows in authored order, [*] rows under
+    // `### Next & In Progress` with the badge row.
+    assert!(
+        destination.contains("### Next & In Progress"),
+        "{destination}"
+    );
+    assert!(destination.contains("[`⚪ 3 open`]"), "{destination}");
+    let intake_positions: Vec<usize> = ["New item", "Delta", "Other item"]
         .iter()
         .map(|needle| destination.find(needle).expect("task in destination"))
         .collect();
     assert!(
-        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        intake_positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{destination}"
+    );
+    let alpha_pos = destination.find("Alpha").expect("Alpha in destination");
+    let next_group = destination
+        .find("### Next & In Progress")
+        .expect("Next group in destination");
+    let other_pos = destination
+        .find("Other item")
+        .expect("Other item in destination");
+    assert!(
+        next_group < alpha_pos && other_pos < next_group,
         "{destination}"
     );
 

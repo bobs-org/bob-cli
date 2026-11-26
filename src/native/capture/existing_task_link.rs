@@ -65,7 +65,7 @@ pub(crate) fn link_existing_task(
     let mut task_theme_context =
         CaptureTaskThemeContext::new(bob_dir, today, now, None);
     planner.begin_item(None);
-    let planned = plan_existing_task_pomodoro_link_item(
+    let mut planned = plan_existing_task_pomodoro_link_item(
         &mut planner,
         bob_dir,
         dry_run,
@@ -81,6 +81,42 @@ pub(crate) fn link_existing_task(
         Some(&mut task_theme_context),
         false,
     )?;
+    // Settle every Markdown note exactly like capture so `bob ref today`
+    // leaves byte-identical notes (status groups, badge row,
+    // future-schedule `[?]`). Dry-run reports the settled outcome.
+    {
+        let context =
+            crate::native::task_settle::SettleContext::for_vault(bob_dir);
+        let changed_notes = planner
+            .files
+            .iter()
+            .filter(|file| {
+                file.present
+                    && file.current != file.original
+                    && file
+                        .path
+                        .extension()
+                        .is_some_and(|extension| extension == "md")
+            })
+            .map(|file| (file.path.clone(), file.current.clone()))
+            .collect::<Vec<_>>();
+        for (target_path, contents) in changed_notes {
+            let relative =
+                target_path.strip_prefix(bob_dir).unwrap_or(&target_path);
+            let settled = context.settle_written_note(relative, &contents);
+            if !settled.changed {
+                continue;
+            }
+            if Path::new(&planned.result.target) == target_path
+                && let Some(parent_line) = planned.result.parent_line.as_mut()
+                && let Some(mapped) =
+                    settled.line_map.get(&parent_line.saturating_sub(1))
+            {
+                *parent_line = mapped + 1;
+            }
+            planner.stage(&target_path, settled.contents)?;
+        }
+    }
     let human_details =
         format_human_pomodoro_link_details(&planned.result, styler);
     let kind = planned.result.kind.to_string();

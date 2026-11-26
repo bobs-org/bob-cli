@@ -468,6 +468,47 @@ fn task_split_and_merge_leave_nothing_note_local() {
 }
 
 #[test]
+fn ref_today_leaves_nothing_note_local() {
+    let (temp, vault, daily) = harness("bob-cli-settle-acceptance-ref-today");
+    // Reference plus its reading task, following the `bob ref today`
+    // parity fixture: the reading task lives in the area note.
+    write_file(
+        &vault.join("ref/papers/attention.md"),
+        concat!(
+            "---\n",
+            "status: ready\n",
+            "title: Attention Is All You Need\n",
+            "id: attention\n",
+            "---\n",
+            "# Attention Is All You Need\n",
+        ),
+    );
+    let work_before =
+        fs::read_to_string(vault.join("work.md")).expect("read work");
+    let with_reading = format!(
+        "{work_before}- [ ] #task #ref [[ref/papers/attention]] ^ref-attention\n"
+    );
+    write_file(&vault.join("work.md"), &with_reading);
+    // Re-settle the baseline with the new reading task so the writer step
+    // starts from nothing note-local.
+    let resettled =
+        reconcile_command(&temp, &vault, &daily, &["--format", "json"])
+            .output()
+            .expect("settle baseline with reading task");
+    assert_success(&resettled);
+    let output = writer_command(&temp, &daily, &["ref", "today", "attention"])
+        .output()
+        .expect("run bob ref today");
+    assert_success(&output);
+    let work = fs::read_to_string(vault.join("work.md")).expect("read work");
+    assert!(
+        work.contains("^ref-attention"),
+        "reading task stays in its note:\n{work}",
+    );
+    assert_settled(&temp, &vault, &daily, "ref today");
+}
+
+#[test]
 fn snooze_add_and_drop_leave_nothing_note_local() {
     let (temp, vault, daily) = harness("bob-cli-settle-acceptance-snooze");
     let added = snooze_command(

@@ -475,6 +475,16 @@ scheduled property is resolved, and routes to `mac_inbox.md` by default; bullet
 mode writes into a selected non-`Tasks` section as described below. The created
 date uses the local date from `BOB_NOW`, `DATE`, or the system clock.
 
+### Settle: every changed note leaves grouped
+
+Capture settles every Markdown note it changes in the same write. That covers
+the status groups and the badge row on eligible area and project notes, plus the
+local future-schedule `[?]` rule. Dry-run previews the settled bytes. Every
+emitted line coordinate is post-settle: `parent_line`, `task_blocks`,
+`section_blocks`, `open_notes`, `inbox_route` moved lines, `project_note` moved
+and successor lines, and the jump landing. See
+[Writers settle note-local structure](task-status-hooks.md#writers-settle-note-local-structure).
+
 ### Routing and insertion
 
 Automatic routing uses a leading `@route text` prefix when present; otherwise a
@@ -489,9 +499,9 @@ Existing target files, including
 `mac_inbox.md`, prefer a Markdown `Tasks` section: new captures insert after
 the last top-level `#task` block in that section, or after one blank line below
 the `Tasks` heading when the section has no tasks yet. When
-`bob task reconcile` (formerly `bob task-status-hooks`, still accepted)
-has generated a status-count badge row directly below
-the heading, the empty-section insertion point is below that row. Files without
+a status-count badge row sits directly below
+the heading (written by capture, `bob ref today`, or `bob task reconcile`),
+the empty-section insertion point is below that row. Files without
 a `Tasks` section keep the older fallback of inserting after the last top-level
 `#task` block and its indented continuation lines, or appending at EOF.
 
