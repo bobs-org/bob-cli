@@ -171,9 +171,10 @@ write.
 Bob Mac Capture is a thin client: Bob owns drawer grammar, completion, preview
 data, and writes, and the app decodes and presents them. Preview
 `task_blocks[].lines[]` drawer headers carry an additive
-`drawer: {title, key, marker, empty}` object with `marker` one of `bold`,
-`legacy_caps`, or `section`; per-item drawer summaries carry the same verbatim
-`title` plus `key`, `created`, and additive `marker`. Missing, malformed, or
+`drawer: {title, key, marker, empty}` object. Bob emits `bold` or `section`;
+the app also accepts `legacy_caps` from older Bob previews. Per-item drawer
+summaries carry the same verbatim `title` plus `key`, `created`, and additive
+`marker`. Missing, malformed, or
 unknown drawer fields decode away and leave the existing verbatim preview.
 Transfer and merge-in destinations keep the drawer title verbatim and never
 uppercase it. The app renders an annotated header as an outline tray plus the
