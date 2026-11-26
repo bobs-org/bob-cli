@@ -1998,6 +1998,10 @@ pub(super) struct RelationUpdateJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) previous_label: Option<String>,
     pub(super) action: RelationAction,
+    /// A plain capture relation was subsumed by an existing dependency.
+    /// Omitted unless this is the reported no-op.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) subsumed_by: Option<&'static str>,
     /// Cancel-label outcome for an Added/Relabeled edge whose label is
     /// configured (`docs/task-relations.md` §17 CL7). Omitted for
     /// unchanged edges and labels that cancel nothing.
@@ -2196,6 +2200,38 @@ pub(super) struct RelationEndpointJson {
     pub(super) text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) archived: Option<bool>,
+}
+
+/// Flattened per-item output for dependency absorption.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(super) struct AbsorbedPlainLinkOutput {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) absorbed_plain_links: Vec<AbsorbedPlainLinkJson>,
+}
+
+/// One plain relation removed because this dependency joins the pair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct AbsorbedPlainLinkJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) source: AbsorbedPlainLinkEndpointJson,
+    pub(super) target: AbsorbedPlainLinkEndpointJson,
+    pub(super) dependency: AbsorbedDependencyDirection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct AbsorbedPlainLinkEndpointJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AbsorbedDependencyDirection {
+    SourceWaitsOnTarget,
+    TargetWaitsOnSource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -6011,6 +6047,16 @@ fn print_human_relation_updates(
 }
 
 fn human_relation_line(dry_run: bool, update: &RelationUpdateJson) -> String {
+    if update.subsumed_by == Some("dependency") {
+        let linked_task = match update.direction {
+            RelationDirection::To => &update.target,
+            RelationDirection::From => &update.source,
+        };
+        return format!(
+            "🪢 already tied by a dependency \"{}\"   {} ^{}",
+            linked_task.text, linked_task.path, linked_task.block_id,
+        );
+    }
     let label = update
         .label
         .as_deref()
@@ -6078,6 +6124,23 @@ fn print_human_dependency_updates(result: &CaptureItemResult, styler: &Styler) {
                 print_human_blocked_task_line(result, update, styler);
             }
         }
+    }
+    let verb = if result.dry_run {
+        "would replace"
+    } else {
+        "replaced"
+    };
+    for absorbed in &result
+        .transfer_move_output
+        .absorbed_plain_link_output
+        .absorbed_plain_links
+    {
+        println!(
+            "  🪢 {verb} the link to \"{}\"   {} ^{}",
+            absorbed.target.text,
+            absorbed.target.path,
+            absorbed.target.block_id,
+        );
     }
 }
 
@@ -9069,6 +9132,7 @@ mod tests {
             label: Some("implemented by".to_string()),
             previous_label: None,
             action: RelationAction::Added,
+            subsumed_by: None,
             cancel_effect: None,
             complete_effect: None,
             merge_effect: None,

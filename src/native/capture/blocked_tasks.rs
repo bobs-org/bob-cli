@@ -210,11 +210,15 @@ pub(super) fn absorb_dependency_write(
     refs: &mut Vec<TaskBlockRef>,
     pomodoro_refs: &mut Vec<PomodoroBlockRef>,
     blocks_line_updates: &mut Vec<BlocksLineUpdateJson>,
+    absorbed_plain_links: &mut Vec<AbsorbedPlainLinkJson>,
+    linked_from_line_updates: &mut Vec<BlocksLineUpdateJson>,
 ) {
     refs.push(update.dependent_ref);
     refs.extend(update.target_refs);
     pomodoro_refs.extend(update.pomodoro_refs);
     blocks_line_updates.extend(update.blocks.updates);
+    absorbed_plain_links.extend(update.absorbed_plain_links);
+    linked_from_line_updates.extend(update.linked_from_line_updates);
     summaries.push(update.summary);
 }
 

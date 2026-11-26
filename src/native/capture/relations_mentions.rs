@@ -529,6 +529,7 @@ fn apply_removed_pair(
         &pair.target_path,
         &pair.target_block_id,
         &(pair.source_path.clone(), source_id),
+        false,
         warnings,
     )? {
         items[item_index]

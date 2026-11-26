@@ -591,7 +591,9 @@ subsumed `relation_updates[]` rows, and capture-complete `dependency_tie`
   `relation_from_replacement` (`~~note:id`).
 - `capture` / `--dry-run`, per item: `relation_updates[]`
   (`{direction, source, target, label, previous_label, action:
-  added|relabeled|unchanged}`), `linked_from_line_updates[]`,
+  added|relabeled|unchanged}`), with optional
+  `subsumed_by: "dependency"` on a plain-link no-op,
+  `linked_from_line_updates[]`,
   `minted_relation_block_ids[]`, `mirror_skipped[]`
   (`{reason: archived_target|previous_daily_target|malformed_line|disabled}`),
   and `relation_label_hides[]` (`{label, key, existing_count, was_hidden,
@@ -604,6 +606,13 @@ subsumed `relation_updates[]` rows, and capture-complete `dependency_tie`
   `minted_relation_block_ids[]` with `reason: "mention"`; skips use
   the existing `mirror_skipped[]` reasons. A draft with no task block
   links produces byte-identical output to today.
+- When `~` / `~~` names a pair already tied by a dependency, the update
+  is `unchanged`, `subsumed_by: "dependency"`, and the item carries one
+  `plain_link_subsumed_by_dependency` warning:
+  `"~T" adds nothing: a dependency already ties these tasks · give it a |label to relate them`.
+  A same-item dependency and plain-link request for the same resolved
+  target refuses with `dependency_and_plain_link`; labelled relations
+  remain allowed.
 
 ## 13. Guarantees
 
@@ -771,6 +780,15 @@ subsumed `relation_updates[]` rows, and capture-complete `dependency_tie`
 | LX14 | `N ~T1 ~T2 ~T1` / `N ~T1\|a ~T1\|b` | T1 then T2, duplicate no-op / refused |
 | LX15 | `N ~T ~~T` | two independent edges |
 | LX16 | a same-note S and T | both edits composed against staged text; one write of the note |
+| LX17 | an existing dependent has a plain link to its prerequisite; capture `&T` | dependency and BLOCKS mirror land; plain LINKS and generated LINKED FROM are removed; `absorbed_plain_links[]` reports `source_waits_on_target` |
+| LX18 | `*T` adds the captured task as T's prerequisite, while T has a plain link to it | plain LINKS and its generated mirror are removed; the row reports `source_waits_on_target` |
+| LX19 | `@S ~T`, where either task already depends on the other | unchanged relation row with `subsumed_by: "dependency"`; one `plain_link_subsumed_by_dependency` warning; no LINK is written |
+| LX20 | `@S ~T\|see` where a dependency joins S and T | labelled relation is written alongside the dependency |
+| LX21 | `@S &T ~T` in one item | `dependency_and_plain_link`; no files change |
+| LX22 | two items: `@S ~T`, then `@S &T` | the later dependency absorbs the earlier staged plain link and reports it |
+| LX23 | two items: `@S &T`, then `@S ~T` | the later relation is a no-op with `subsumed_by: "dependency"` |
+| LX24 | an existing dependency and a stale plain link already overlap; capture adds that dependency again | existing overlap is healed and reported |
+| LX25 | dependency absorption in dry-run and live capture | identical additive JSON apart from `dry_run`; human output reports `would replace` / `replaced the link to` |
 
 ### LP — capture parse
 
@@ -2676,6 +2694,10 @@ Every addition is additive; every `schema_version` stays 1.
 - **Capture, per item:** `absorbed_plain_links[]` with the same row
   shape (omitted when empty); `relation_updates[]` rows gain
   `subsumed_by` (`"dependency"`, omitted otherwise).
+- A dependency-tied plain relation adds a
+  `plain_link_subsumed_by_dependency` warning with the teaching message;
+  a same-item dependency/plain-link overlap refuses with
+  `dependency_and_plain_link`. Labelled relations are exempt.
 - **Capture-complete:** relation candidates gain
   `dependency_tie: "prerequisite" | "dependent"` (omitted when none;
   `also_prerequisite` stays as a deprecated alias); `&` / `*`

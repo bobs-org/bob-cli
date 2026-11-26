@@ -260,7 +260,10 @@ pub(super) fn stage_linked_from_add(
     }
 }
 
-/// Stage T's LINKED FROM edit for one removed source identity.
+/// Stage T's LINKED FROM edit for one removed source identity. When
+/// `remove_plain_relation_only` is true, remove only this source's
+/// unlabelled relation mirror and preserve labelled relation and mention
+/// entries for the pair.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stage_linked_from_remove(
     ctx: &DependencyContext,
@@ -270,6 +273,7 @@ pub(super) fn stage_linked_from_remove(
     mirror_owner_relative: &Path,
     mirror_owner_block: &str,
     source: &(PathBuf, String),
+    remove_plain_relation_only: bool,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<Option<BlocksLineUpdateJson>, CaptureError> {
     let owner_display = display_relative(mirror_owner_relative);
@@ -335,18 +339,37 @@ pub(super) fn stage_linked_from_remove(
             },
         )
     });
-    if keep_relation {
+    if keep_relation && !remove_plain_relation_only {
         return Ok(None);
     }
-    let mut remove = BTreeSet::new();
-    remove.insert(source_identity);
-    let desired_entries = linked_from_desired_after_delta(
-        &existing,
-        |entry| resolve_relation_entry(index, mirror_owner_relative, entry),
-        &BTreeMap::new(),
-        &remove,
-    );
-    let desired: BTreeSet<_> = desired_entries.into_iter().collect();
+    let desired = if remove_plain_relation_only {
+        existing
+            .iter()
+            .filter_map(|entry| {
+                let (identity, canonical_text) = resolve_relation_entry(
+                    index,
+                    mirror_owner_relative,
+                    entry,
+                )?;
+                let removed_plain = identity == source_identity
+                    && entry.kind == RelationEntryKind::Relation
+                    && entry.label.is_none();
+                (!removed_plain)
+                    .then(|| (canonical_text, entry.storage_label()))
+            })
+            .collect::<BTreeSet<_>>()
+    } else {
+        let mut remove = BTreeSet::new();
+        remove.insert(source_identity);
+        linked_from_desired_after_delta(
+            &existing,
+            |entry| resolve_relation_entry(index, mirror_owner_relative, entry),
+            &BTreeMap::new(),
+            &remove,
+        )
+        .into_iter()
+        .collect()
+    };
     let (mentions_added, mentions_removed) =
         mention_changes(&existing, &desired);
     match plan_linked_from_line(&lines, &fenced, owner.line_index, &desired) {

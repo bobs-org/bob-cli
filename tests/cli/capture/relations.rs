@@ -79,6 +79,29 @@ fn capture_fail(vault: &Path, day: &Path, draft: &str) -> std::process::Output {
         .expect("run bob capture")
 }
 
+fn capture_fail_json(
+    vault: &Path,
+    day: &Path,
+    draft: &str,
+) -> (serde_json::Value, std::process::Output) {
+    let output = bob_command()
+        .env("BOB_NOW", NOW)
+        .env("BOB_DAY_FILE", day)
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture JSON");
+    assert!(!output.status.success(), "capture should refuse");
+    let json = serde_json::from_str(stdout(&output).trim())
+        .expect("capture refusal JSON");
+    (json, output)
+}
+
 fn capture_human(
     vault: &Path,
     day: &Path,
@@ -1129,4 +1152,294 @@ fn successor_relation_commits_report_offer_effect_and_release_warning() {
             );
         }
     }
+}
+
+// LX17: `&` absorbs a plain relation from the dependent to its prerequisite,
+// including its generated reverse mirror, in the same staged write.
+#[test]
+fn lx17_ampersand_absorbs_plain_link_and_mirror() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx17");
+    write_file(
+        &vault.join("mac_inbox.md"),
+        concat!(
+            "- [ ] #task Owner ^owner\n",
+            "\t- 🪢 **LINKS:** [[job#^cleanup]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "\t- 🪢 **LINKED FROM:** [[mac_inbox#^owner]]\n",
+        ),
+    );
+
+    let json = capture_json(&vault, &day, "@mac_inbox+owner &job:cleanup");
+    assert_eq!(
+        json["absorbed_plain_links"][0]["dependency"],
+        "source_waits_on_target"
+    );
+    assert_eq!(
+        json["absorbed_plain_links"][0]["source"]["block_id"],
+        "owner"
+    );
+    assert_eq!(
+        json["absorbed_plain_links"][0]["target"]["block_id"],
+        "cleanup"
+    );
+    assert!(
+        !read(&vault, "mac_inbox.md").contains("**LINKS:**"),
+        "the absorbed plain edge must be removed"
+    );
+    assert!(
+        !read(&vault, "job.md").contains("**LINKED FROM:**"),
+        "the generated mirror must be removed: {}\n{json}",
+        read(&vault, "job.md")
+    );
+    assert!(read(&vault, "mac_inbox.md")
+        .contains("**DEPENDS ON:** [[job#^cleanup]]"));
+}
+
+#[test]
+fn dependency_absorption_preserves_a_labelled_relation_and_its_mirror() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx17-labelled");
+    write_file(
+        &vault.join("mac_inbox.md"),
+        concat!(
+            "- [ ] #task Owner ^owner\n",
+            "\t- 🪢 **LINKS:** [[job#^cleanup]]\n",
+            "\t- 🪢 **LINKS:** see [[job#^cleanup]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "\t- 🪢 **LINKED FROM:** [[mac_inbox#^owner]]\n",
+            "\t- 🪢 **LINKED FROM:** [[mac_inbox#^owner]] (see)\n",
+        ),
+    );
+
+    let json = capture_json(&vault, &day, "@mac_inbox+owner &job:cleanup");
+    assert_eq!(json["absorbed_plain_links"].as_array().unwrap().len(), 1);
+    let source = read(&vault, "mac_inbox.md");
+    assert!(!source.contains("**LINKS:** [[job#^cleanup]]"), "{source}");
+    assert!(
+        source.contains("**LINKS:** see [[job#^cleanup]]"),
+        "{source}"
+    );
+    let target = read(&vault, "job.md");
+    assert!(
+        target.contains("**LINKED FROM:** [[mac_inbox#^owner]] (see)"),
+        "{target}"
+    );
+    assert!(
+        !target.contains("**LINKED FROM:** [[mac_inbox#^owner]]\n"),
+        "{target}"
+    );
+}
+
+// LX18: `*` absorbs a plain relation from the dependent back to the new
+// prerequisite, and reports that the target waits on the source.
+#[test]
+fn lx18_star_absorbs_reverse_plain_link() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx18");
+    write_file(
+        &vault.join("mac_inbox.md"),
+        "- [ ] #task Owner ^owner\n\t- 🪢 **LINKED FROM:** [[job#^cleanup]]\n",
+    );
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Cleanup ^cleanup\n\t- 🪢 **LINKS:** [[mac_inbox#^owner]]\n",
+    );
+
+    let json = capture_json(&vault, &day, "@mac_inbox+owner *job:cleanup");
+    assert_eq!(
+        json["absorbed_plain_links"][0]["dependency"],
+        "source_waits_on_target"
+    );
+    assert_eq!(
+        json["absorbed_plain_links"][0]["source"]["block_id"],
+        "cleanup"
+    );
+    assert_eq!(
+        json["absorbed_plain_links"][0]["target"]["block_id"],
+        "owner"
+    );
+    assert!(!read(&vault, "job.md").contains("**LINKS:**"));
+    assert!(!read(&vault, "mac_inbox.md").contains("**LINKED FROM:**"));
+}
+
+// LX19: a plain relation on a dependency-tied pair is reported as a no-op.
+#[test]
+fn lx19_plain_link_is_subsumed_by_existing_dependency() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx19");
+    write_file(&vault.join("mac_inbox.md"), "- [ ] #task Owner ^owner\n");
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "\t- ⛓️ **DEPENDS ON:** [[mac_inbox#^owner]]\n",
+        ),
+    );
+
+    let json = capture_json(&vault, &day, "@job+cleanup ~mac_inbox:owner");
+    assert_eq!(json["relation_updates"][0]["action"], "unchanged");
+    assert_eq!(json["relation_updates"][0]["subsumed_by"], "dependency");
+    assert_eq!(
+        json["warnings"][0]["code"],
+        "plain_link_subsumed_by_dependency"
+    );
+    assert_eq!(json["warnings"][0]["message"], "\"~mac_inbox:owner\" adds nothing: a dependency already ties these tasks · give it a |label to relate them");
+    assert!(!read(&vault, "job.md").contains("**LINKS:**"));
+}
+
+// LX20: a labelled relation remains distinct beside the dependency.
+#[test]
+fn lx20_labeled_relation_is_allowed_beside_dependency() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx20");
+    write_file(&vault.join("mac_inbox.md"), "- [ ] #task Owner ^owner\n");
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Cleanup [dependsOn:: owner] ^cleanup\n",
+    );
+
+    let json = capture_json(&vault, &day, "@job+cleanup ~mac_inbox:owner|see");
+    assert_eq!(json["relation_updates"][0]["action"], "added");
+    assert!(json["relation_updates"][0].get("subsumed_by").is_none());
+    assert!(
+        read(&vault, "job.md").contains("**LINKS:** see [[mac_inbox#^owner]]")
+    );
+}
+
+// LX21: one item cannot ask for the same resolved pair as a dependency and
+// a plain link; the refusal carries the stable JSON code.
+#[test]
+fn lx21_dependency_and_plain_link_same_item_refuses() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx21");
+    write_file(&vault.join("mac_inbox.md"), "- [ ] #task Owner ^owner\n");
+    write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+
+    let (json, output) = capture_fail_json(
+        &vault,
+        &day,
+        "@job+cleanup &mac_inbox:owner ~mac_inbox:owner",
+    );
+    assert_eq!(json["code"], "dependency_and_plain_link", "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("give it a `|label`"),
+        "{json}"
+    );
+    assert!(read(&vault, "job.md").contains("- [ ] #task Cleanup ^cleanup"));
+    assert!(!read(&vault, "job.md").contains("DEPENDS ON"));
+    assert!(output.status.code().is_some());
+
+    let (star_json, _) = capture_fail_json(
+        &vault,
+        &day,
+        "@job+cleanup *mac_inbox:owner ~mac_inbox:owner",
+    );
+    assert_eq!(
+        star_json["code"], "dependency_and_plain_link",
+        "{star_json}"
+    );
+}
+
+// LX22/LX23: batch order is deterministic. A later dependency absorbs the
+// earlier staged plain link; a later plain link sees the staged dependency.
+#[test]
+fn lx22_lx23_cross_item_ties_follow_capture_order() {
+    for (name, draft, expect_absorbed, expect_subsumed) in [
+        (
+            "bob-cli-rel-lx22",
+            "@job+cleanup ~mac_inbox:owner\n\n@job+cleanup &mac_inbox:owner",
+            true,
+            false,
+        ),
+        (
+            "bob-cli-rel-lx23",
+            "@job+cleanup &mac_inbox:owner\n\n@job+cleanup ~mac_inbox:owner",
+            false,
+            true,
+        ),
+    ] {
+        let (_temp, vault, day) = setup(name);
+        write_file(&vault.join("mac_inbox.md"), "- [ ] #task Owner ^owner\n");
+        write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+        let json = capture_json(&vault, &day, draft);
+        let captures = json["captures"].as_array().expect("batch captures");
+        assert_eq!(captures.len(), 2, "{json}");
+        if expect_absorbed {
+            assert_eq!(
+                captures[1]["absorbed_plain_links"][0]["source"]["block_id"],
+                "cleanup",
+                "{json}"
+            );
+            assert!(!read(&vault, "job.md").contains("**LINKS:**"));
+        }
+        if expect_subsumed {
+            assert_eq!(
+                captures[1]["relation_updates"][0]["subsumed_by"], "dependency",
+                "{json}"
+            );
+            assert_eq!(
+                json["warnings"][0]["code"],
+                "plain_link_subsumed_by_dependency",
+                "{json}"
+            );
+        }
+    }
+}
+
+// LX24: adding an already-present dependency also heals a stale plain overlap.
+#[test]
+fn lx24_existing_dependency_write_heals_plain_overlap() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx24");
+    write_file(&vault.join("mac_inbox.md"), "- [ ] #task Owner ^owner\n");
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "\t- ⛓️ **DEPENDS ON:** [[mac_inbox#^owner]]\n",
+            "\t- 🪢 **LINKS:** [[mac_inbox#^owner]]\n",
+        ),
+    );
+
+    let json = capture_json(&vault, &day, "@job+cleanup &mac_inbox:owner");
+    assert_eq!(
+        json["absorbed_plain_links"][0]["target"]["block_id"],
+        "owner"
+    );
+    assert!(!read(&vault, "job.md").contains("**LINKS:**"));
+}
+
+// LX25: the public helper compares dry-run and live output for this writer.
+#[test]
+fn lx25_absorption_dry_run_matches_live_json_and_human_reports_it() {
+    let (_temp, vault, day) = setup("bob-cli-rel-lx25-json");
+    write_file(
+        &vault.join("mac_inbox.md"),
+        "- [ ] #task Owner ^owner\n\t- 🪢 **LINKS:** [[job#^cleanup]]\n",
+    );
+    write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+    let json = capture_json(&vault, &day, "@mac_inbox+owner &job:cleanup");
+    assert_eq!(json["absorbed_plain_links"].as_array().unwrap().len(), 1);
+
+    let (_temp, vault, day) = setup("bob-cli-rel-lx25");
+    write_file(
+        &vault.join("mac_inbox.md"),
+        "- [ ] #task Owner ^owner\n\t- 🪢 **LINKS:** [[job#^cleanup]]\n",
+    );
+    write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+    let output = capture_human(&vault, &day, "@mac_inbox+owner &job:cleanup");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.contains("🪢 replaced the link to \"Cleanup\""),
+        "{text}"
+    );
+    assert!(!read(&vault, "mac_inbox.md").contains("**LINKS:**"));
 }

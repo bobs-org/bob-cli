@@ -1171,6 +1171,10 @@ Committing a configured cancel, complete, or merge label through capture or the 
 stage cancels the source, completes it, or merges it into the target by copying its notes
 and cancelling it, respectively, at commit time; see [Task Merge](#task-merge).
 
+A plain link and a [Task Dependency Link](#task-dependency-link) never join the same task pair
+in either direction: adding a dependency absorbs the plain link, and only
+an explicit Task Card stage gesture releases a dependency into a plain link.
+
 A relation whose label is a configured successor label (such as `starts after`) also
 offers its source as a [Successor Offer](#successor-offer) when its target is parked (left Pending with
 no live Task Link today) or done; it still never blocks, and its mirror reads

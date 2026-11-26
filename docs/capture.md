@@ -3363,6 +3363,22 @@ commit, which cancels the source as Task Card Cancel would, and a
 [complete-label](task-relations.md#18-complete-labels) commit, which
 marks the source Done as `!` would.
 
+**Dependency ties.** A dependency and an unlabelled relation cannot
+join the same task pair in either direction. Adding `&` or `*` absorbs
+plain `LINKS` entries for that pair on writable open tasks in the same
+batch and removes their generated `LINKED FROM` mirrors; labelled
+relations remain. A plain `~` or `~~` over an existing dependency is a
+reported no-op (`action: "unchanged"`, `subsumed_by: "dependency"`)
+with the `plain_link_subsumed_by_dependency` warning. Add `|label` to
+author a distinct relation beside the dependency. Naming the same
+resolved target with a dependency sigil and a plain relation sigil in
+one item is refused with `dependency_and_plain_link`. See
+[task-relations.md §22](task-relations.md#22-plain-links-and-dependencies)
+for writable-scope protections and the complete vectors. Human output
+shows `🪢 already tied by a dependency "T"` for the no-op and prints
+`🪢 would replace the link to "T"` / `🪢 replaced the link to "T"`
+after the dependency rows when capture absorbs a plain link.
+
 **Cancel-label commits.** Adding a cancel label — or relabeling into
 one — cancels the relation's source in the same staged batch: the
 LINKS edit, `[-]` plus `[cancelled:: today]` (with a Cancel Log
@@ -3435,6 +3451,14 @@ the draft contains a `~` byte. `capture-complete` adds the
 `relation_from_replacement`. `capture` adds, per item,
 `relation_updates[]`, `linked_from_line_updates[]`,
 `minted_relation_block_ids[]`, `mirror_skipped[]`, and
+`absorbed_plain_links[]` (omitted when empty; each row names the
+dependency direction and source/target task endpoints for a removed
+plain link). Relation updates add optional `subsumed_by: "dependency"`;
+same-item overlap refusals use `dependency_and_plain_link`, and
+subsumed `~` / `~~` rows add one batch warning
+`plain_link_subsumed_by_dependency` with the message
+`"~T" adds nothing: a dependency already ties these tasks · give it a |label to relate them`.
+Also,
 `relation_label_hides[]` (`{label, key, existing_count, was_hidden,
 action: hide|already_hidden}`, pre-capture counts, omitted when
 empty), plus a `hides_existing_relation_label` warning object
@@ -8873,6 +8897,12 @@ Omitted when empty. Dry-run JSON equals live JSON apart from `dry_run`.
     the Depends-On line (omitted when false)
   - `previous_status` and `previous_status_name`: present only when
     this write changed the prerequisite's status
+- `absorbed_plain_links[]`: one row per plain LINKS entry removed because
+  the dependency joins that pair. Rows use `{path, line, source, target,
+  dependency}` with task endpoints `{path, line, block_id, text}`;
+  `dependency` is `source_waits_on_target` or
+  `target_waits_on_source`. Omitted when empty. Writable generated
+  LINKED FROM removals appear in `linked_from_line_updates[]`.
 - `consumed_links[]`: one row per live Task Link this item consumed.
   Fields: `{day_file, line, link, note, block_id, text, action,
   pomodoro: {line, name?, time_range?, status, removed}}`.

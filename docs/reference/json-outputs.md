@@ -214,6 +214,18 @@ Capture may include `project_note.parent_catalog` (`path`, `action`) when the
 parent catalog changes; dry runs set `dry_run: true`. See
 [capture JSON](../capture.md#input-stdin-and-json-output).
 
+Task relation captures add per-item `absorbed_plain_links[]` when a
+dependency removes plain links, with `{path, line, source, target,
+dependency}` rows. Relation endpoints include `{path, line, block_id,
+text}`; `dependency` is `source_waits_on_target` or
+`target_waits_on_source`. A plain relation over an existing dependency
+is reported as `relation_updates[].action: "unchanged"` with
+`subsumed_by: "dependency"` and a
+`plain_link_subsumed_by_dependency` warning. Naming the same resolved
+target with a dependency sigil and a plain relation sigil in one item
+refuses with `dependency_and_plain_link`. These fields are additive and
+do not change the unversioned capture shape.
+
 ### Bank reports {#bank-reports}
 
 `schema_version: 1`; [Bank JSON](../bank.md#json) with `day`/`week`/`quarter`/`iso_year`/`all_time` periods, `-s` `days`, `coverage`/`navigation`/`balances[]` ([Closing balances](../bank.md#closing-balances)). Bank rows carry `subscription`/`bank_recurring`/`subscription_candidate` with charge dates; `suggestion.source` gains `subscription`; `list`/`report` carry at most one bounded `bank_subscription_album_invalid` warning.

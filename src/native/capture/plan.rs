@@ -4270,6 +4270,9 @@ pub(super) fn plan_capture_item(
     // as `minted_blocker_block_id`.
     let mut dependency_summaries: Vec<DependencyUpdateJson> = Vec::new();
     let mut blocks_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut absorbed_plain_links: Vec<AbsorbedPlainLinkJson> = Vec::new();
+    let mut dependency_linked_from_updates: Vec<BlocksLineUpdateJson> =
+        Vec::new();
     let mut minted_dependent_block_id: Option<MintedDependentBlockIdJson> =
         None;
     let mut dependency_block_refs: Vec<TaskBlockRef> = Vec::new();
@@ -4335,6 +4338,8 @@ pub(super) fn plan_capture_item(
                     &mut dependency_block_refs,
                     &mut pomodoro_refs,
                     &mut blocks_line_updates,
+                    &mut absorbed_plain_links,
+                    &mut dependency_linked_from_updates,
                 );
             }
         }
@@ -4373,6 +4378,8 @@ pub(super) fn plan_capture_item(
                 &mut dependency_block_refs,
                 &mut pomodoro_refs,
                 &mut blocks_line_updates,
+                &mut absorbed_plain_links,
+                &mut dependency_linked_from_updates,
             );
         }
         let relocated = locate_task_by_block_id(
@@ -4409,7 +4416,7 @@ pub(super) fn plan_capture_item(
     let mut close_req_owners: Vec<
         crate::native::task_complete::req_close::ReqCloseOwner,
     > = Vec::new();
-    let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut linked_from_line_updates = dependency_linked_from_updates;
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
     if !parsed.relations.is_empty() {
         let owner = locate_relation_owner(
@@ -4449,7 +4456,7 @@ pub(super) fn plan_capture_item(
         let reports = staged.writes;
         let close = staged.close;
         relation_updates = reports.updates;
-        linked_from_line_updates = reports.linked_from;
+        linked_from_line_updates.extend(reports.linked_from);
         minted_relation_block_ids.extend(reports.minted);
         mirror_skipped = reports.skipped;
         dependency_block_refs.extend(reports.source_refs);
@@ -4833,7 +4840,12 @@ pub(super) fn plan_capture_item(
             relation_cancels,
             relation_completes,
             relation_merge_output,
-            transfer_move_output: Default::default(),
+            transfer_move_output: super::transfer::TransferMoveOutput {
+                absorbed_plain_link_output: AbsorbedPlainLinkOutput {
+                    absorbed_plain_links,
+                },
+                ..Default::default()
+            },
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
@@ -5971,6 +5983,9 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     // with the target as owner.
     let mut dependency_summaries: Vec<DependencyUpdateJson> = Vec::new();
     let mut blocks_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut absorbed_plain_links: Vec<AbsorbedPlainLinkJson> = Vec::new();
+    let mut dependency_linked_from_updates: Vec<BlocksLineUpdateJson> =
+        Vec::new();
     let minted_dependent_block_id: Option<MintedDependentBlockIdJson> = None;
     let mut dependency_block_refs: Vec<TaskBlockRef> = Vec::new();
     let mut pomodoro_refs: Vec<PomodoroBlockRef> = Vec::new();
@@ -6007,15 +6022,21 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             let mut tmp_blocks = Vec::new();
             let mut tmp_refs = Vec::new();
             let mut tmp_pomo: Vec<PomodoroBlockRef> = Vec::new();
+            let mut tmp_absorbed = Vec::new();
+            let mut tmp_linked_from = Vec::new();
             absorb_dependency_write(
                 update,
                 &mut tmp_summaries,
                 &mut tmp_refs,
                 &mut tmp_pomo,
                 &mut tmp_blocks,
+                &mut tmp_absorbed,
+                &mut tmp_linked_from,
             );
             dependency_summaries.extend(tmp_summaries);
             blocks_line_updates.extend(tmp_blocks);
+            absorbed_plain_links.extend(tmp_absorbed);
+            dependency_linked_from_updates.extend(tmp_linked_from);
             dependency_block_refs.extend(tmp_refs);
             pomodoro_refs.extend(tmp_pomo);
         }
@@ -6051,15 +6072,21 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             let mut tmp_blocks = Vec::new();
             let mut tmp_refs = Vec::new();
             let mut tmp_pomo: Vec<PomodoroBlockRef> = Vec::new();
+            let mut tmp_absorbed = Vec::new();
+            let mut tmp_linked_from = Vec::new();
             absorb_dependency_write(
                 write,
                 &mut tmp_summaries,
                 &mut tmp_refs,
                 &mut tmp_pomo,
                 &mut tmp_blocks,
+                &mut tmp_absorbed,
+                &mut tmp_linked_from,
             );
             dependency_summaries.extend(tmp_summaries);
             blocks_line_updates.extend(tmp_blocks);
+            absorbed_plain_links.extend(tmp_absorbed);
+            dependency_linked_from_updates.extend(tmp_linked_from);
             dependency_block_refs.extend(tmp_refs);
             pomodoro_refs.extend(tmp_pomo);
         }
@@ -6073,7 +6100,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let mut close_req_owners: Vec<
         crate::native::task_complete::req_close::ReqCloseOwner,
     > = Vec::new();
-    let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut linked_from_line_updates = dependency_linked_from_updates;
     let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
         Vec::new();
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
@@ -6109,7 +6136,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         let reports = staged.writes;
         let close = staged.close;
         relation_updates = reports.updates;
-        linked_from_line_updates = reports.linked_from;
+        linked_from_line_updates.extend(reports.linked_from);
         minted_relation_block_ids.extend(reports.minted);
         mirror_skipped = reports.skipped;
         dependency_block_refs.extend(reports.source_refs);
@@ -6265,7 +6292,12 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             relation_cancels,
             relation_completes,
             relation_merge_output,
-            transfer_move_output: Default::default(),
+            transfer_move_output: super::transfer::TransferMoveOutput {
+                absorbed_plain_link_output: AbsorbedPlainLinkOutput {
+                    absorbed_plain_links,
+                },
+                ..Default::default()
+            },
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

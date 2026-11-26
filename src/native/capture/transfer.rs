@@ -46,14 +46,16 @@ pub(super) struct TransferRepairedFileJson {
     pub(super) dependency_token_count: usize,
 }
 
-/// Grouped transfer-move output flattened onto [`CaptureItemResult`].
-/// Defaulted so ordinary items omit both keys and stay byte-identical.
+/// Grouped additive capture output flattened onto [`CaptureItemResult`].
+/// Defaulted so ordinary items omit every key and stay byte-identical.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub(super) struct TransferMoveOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) moves: Vec<TransferMoveJson>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) repaired_files: Vec<TransferRepairedFileJson>,
+    #[serde(flatten)]
+    pub(super) absorbed_plain_link_output: AbsorbedPlainLinkOutput,
 }
 
 /// Plan one atomic transfer item against the current staged vault.
@@ -406,6 +408,7 @@ pub(super) fn plan_transfer_item(
             transfer_move_output: TransferMoveOutput {
                 moves,
                 repaired_files,
+                absorbed_plain_link_output: AbsorbedPlainLinkOutput::default(),
             },
             relation_label_hides: Vec::new(),
             linked_from_line_updates: Vec::new(),

@@ -233,6 +233,15 @@ pub(super) fn plan_item_relations(
     now: chrono::NaiveDateTime,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<ItemRelationReports, CaptureError> {
+    super::relations::refuse_dependency_plain_link_overlap(
+        ctx,
+        planner,
+        &request.bob_dir,
+        owner,
+        &parsed.dependencies,
+        &parsed.blocked_tasks,
+        &parsed.relations,
+    )?;
     let mut writes = plan_relation_writes(
         ctx,
         planner,

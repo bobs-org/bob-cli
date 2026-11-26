@@ -33,6 +33,10 @@ use crate::native::{
     task_dependencies::{
         self, format as dependency_format, parse as dependency_parse,
     },
+    task_relations::{
+        parse as relation_parse,
+        ties::{drop_plain_link_entries, DropOutcome},
+    },
     task_status_hooks,
     vault_links::NoteIndex,
 };
@@ -1193,6 +1197,167 @@ pub(super) fn staged_note_index(
     NoteIndex::from_paths(paths)
 }
 
+/// Remove this dependency pair's plain LINKS entries from either side,
+/// then remove their generated LINKED FROM mirrors when the target is
+/// writable. Labelled relations and uncertain/protected task lines stay.
+fn absorb_pair_plain_links(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    index: &NoteIndex,
+    dependency_owner: &(String, String),
+    other: &(String, String),
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<(Vec<AbsorbedPlainLinkJson>, Vec<BlocksLineUpdateJson>), CaptureError>
+{
+    let mut absorbed = Vec::new();
+    let mut linked_from = Vec::new();
+    for (source_identity, target_identity) in
+        [(dependency_owner, other), (other, dependency_owner)]
+    {
+        let source_relative = PathBuf::from(&source_identity.0);
+        let target_relative = PathBuf::from(&target_identity.0);
+        let source_absolute = absolute_note(bob_dir, &source_relative);
+        let source_contents = current_note_text(planner, &source_absolute)?;
+        let source_scan = note_tasks::scan(&source_contents, ctx.settings());
+        let source_task = match source_scan.by_block_id(&source_identity.1) {
+            note_tasks::BlockIdLookup::Found(task) => task.clone(),
+            _ => {
+                warnings.push(format!(
+                    "🪢 plain-link absorption skipped for ^{} in {}: task is missing or ambiguous",
+                    source_identity.1, source_identity.0,
+                ).into());
+                continue;
+            }
+        };
+        let source_protected =
+            task_dependencies::is_archive_path(&source_relative)
+                || !source_task.status_type.is_open()
+                || ctx.previous_daily() == Some(source_absolute.as_path());
+        if source_protected {
+            continue;
+        }
+
+        let target_absolute = absolute_note(bob_dir, &target_relative);
+        let target_contents = current_note_text(planner, &target_absolute)?;
+        let target_scan = note_tasks::scan(&target_contents, ctx.settings());
+        let target_task = match target_scan.by_block_id(&target_identity.1) {
+            note_tasks::BlockIdLookup::Found(task) => task.clone(),
+            _ => {
+                warnings.push(format!(
+                    "🪢 plain-link absorption skipped for ^{} in {}: paired task is missing or ambiguous",
+                    source_identity.1, source_identity.0,
+                ).into());
+                continue;
+            }
+        };
+
+        let owned: Vec<String> =
+            source_contents.lines().map(str::to_string).collect();
+        let lines: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
+        let children = relation_parse::links_children_of(
+            &lines,
+            &fenced,
+            source_task.line_index,
+        );
+        let mut edits = BTreeMap::<usize, Option<String>>::new();
+        for child in children {
+            let Some(line) = lines.get(child.line_index).copied() else {
+                continue;
+            };
+            let outcome = drop_plain_link_entries(line, |entry| {
+                index
+                    .resolve(Some(&source_relative), entry.target.trim())
+                    .as_deref()
+                    == Some(target_relative.as_path())
+                    && entry.block_id == target_identity.1
+            });
+            let removed = match outcome {
+                DropOutcome::Unchanged => continue,
+                DropOutcome::Malformed => {
+                    warnings.push(format!(
+                        "🪢 LINKS not updated for ^{} in {}: malformed line left alone during dependency absorption",
+                        source_identity.1, source_identity.0,
+                    ).into());
+                    continue;
+                }
+                DropOutcome::Rewritten { removed, line } => {
+                    edits.insert(child.line_index, Some(line));
+                    removed
+                }
+                DropOutcome::DeleteLine { removed } => {
+                    edits.insert(child.line_index, None);
+                    removed
+                }
+            };
+            let dependency = if source_identity == dependency_owner {
+                AbsorbedDependencyDirection::SourceWaitsOnTarget
+            } else {
+                AbsorbedDependencyDirection::TargetWaitsOnSource
+            };
+            let source_endpoint = AbsorbedPlainLinkEndpointJson {
+                path: source_identity.0.clone(),
+                line: source_task.line_index + 1,
+                block_id: source_identity.1.clone(),
+                text: source_task.description.clone(),
+            };
+            let target_endpoint = AbsorbedPlainLinkEndpointJson {
+                path: target_identity.0.clone(),
+                line: target_task.line_index + 1,
+                block_id: target_identity.1.clone(),
+                text: target_task.description.clone(),
+            };
+            for _ in removed {
+                absorbed.push(AbsorbedPlainLinkJson {
+                    path: source_identity.0.clone(),
+                    line: child.line_index + 1,
+                    source: source_endpoint.clone(),
+                    target: target_endpoint.clone(),
+                    dependency,
+                });
+            }
+        }
+
+        if !edits.is_empty() {
+            let mut note = EditableNote::new(&source_contents);
+            for (line_index, replacement) in edits.into_iter().rev() {
+                match replacement {
+                    Some(line) => note.lines[line_index] = line,
+                    None => {
+                        note.lines.remove(line_index);
+                    }
+                }
+            }
+            planner.stage(&source_absolute, note.join())?;
+
+            let target_protected =
+                task_dependencies::is_archive_path(&target_relative)
+                    || !target_task.status_type.is_open()
+                    || ctx.previous_daily() == Some(target_absolute.as_path());
+            if ctx.linked_from_lines_enabled() && !target_protected {
+                let source = (source_relative, source_identity.1.clone());
+                if let Some(update) =
+                    super::relations_mirror::stage_linked_from_remove(
+                        ctx,
+                        planner,
+                        bob_dir,
+                        index,
+                        &target_relative,
+                        &target_identity.1,
+                        &source,
+                        true,
+                        warnings,
+                    )?
+                {
+                    linked_from.push(update);
+                }
+            }
+        }
+    }
+    Ok((absorbed, linked_from))
+}
+
 /// Resolve a typed `&note` identity against the on-disk catalog, with a
 /// staged fallback for notes this batch created but has not committed.
 /// Returns the vault-relative path with extension.
@@ -1984,6 +2149,8 @@ pub(super) struct PlannedDependencyUpdate {
     pub(super) target_refs: Vec<TaskBlockRef>,
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) blocks: BlocksMirrorReports,
+    pub(super) absorbed_plain_links: Vec<AbsorbedPlainLinkJson>,
+    pub(super) linked_from_line_updates: Vec<BlocksLineUpdateJson>,
 }
 
 fn prerequisite_json(
@@ -2895,6 +3062,27 @@ pub(super) fn plan_existing_task_dependencies(
     }
     note.lines[joined_task.line_index] = next_line.clone();
     planner.stage(&dep_abs, note.join())?;
+    // A dependency absorbs plain LINKS entries on either task, including
+    // stale overlaps for pairs already on the managed Depends-On line.
+    let absorption_index = staged_note_index(ctx, planner, bob_dir);
+    let mut absorbed_plain_links = Vec::new();
+    let mut linked_from_line_updates = Vec::new();
+    for target in &merged_identities {
+        if target == &dependent {
+            continue;
+        }
+        let (absorbed, mirrors) = absorb_pair_plain_links(
+            ctx,
+            planner,
+            bob_dir,
+            &absorption_index,
+            &dependent,
+            target,
+            warnings,
+        )?;
+        absorbed_plain_links.extend(absorbed);
+        linked_from_line_updates.extend(mirrors);
+    }
     // A `^prj` write with an open target blocks the whole note in the
     // same write (§13.10): residents flip and tag, and every newly
     // Blocked identity is unlinked from today's open Pomodoros (§13.5).
@@ -3074,6 +3262,8 @@ pub(super) fn plan_existing_task_dependencies(
             refs
         },
         pomodoro_refs,
+        absorbed_plain_links,
+        linked_from_line_updates,
         blocks: BlocksMirrorReports {
             updates: blocks.updates,
             minted: None,
@@ -3452,6 +3642,9 @@ pub(super) fn plan_dependency_only_item(
     let owner = DependentRef::from_route(&route, &block_id);
     let mut dependency_summaries: Vec<DependencyUpdateJson> = Vec::new();
     let mut blocks_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut absorbed_plain_links: Vec<AbsorbedPlainLinkJson> = Vec::new();
+    let mut dependency_linked_from_updates: Vec<BlocksLineUpdateJson> =
+        Vec::new();
     let mut task_block_refs: Vec<TaskBlockRef> = Vec::new();
     let mut pomodoro_refs: Vec<PomodoroBlockRef> = Vec::new();
     // `&` first (uncapped), then `*` with no Next cap. Skip an empty
@@ -3473,6 +3666,8 @@ pub(super) fn plan_dependency_only_item(
             &mut task_block_refs,
             &mut pomodoro_refs,
             &mut blocks_line_updates,
+            &mut absorbed_plain_links,
+            &mut dependency_linked_from_updates,
         );
     }
     if !parsed.blocked_tasks.is_empty() {
@@ -3493,11 +3688,13 @@ pub(super) fn plan_dependency_only_item(
                 &mut task_block_refs,
                 &mut pomodoro_refs,
                 &mut blocks_line_updates,
+                &mut absorbed_plain_links,
+                &mut dependency_linked_from_updates,
             );
         }
     }
     let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
-    let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut linked_from_line_updates = dependency_linked_from_updates;
     let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
         Vec::new();
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
@@ -3514,6 +3711,15 @@ pub(super) fn plan_dependency_only_item(
             planner,
             &request.bob_dir,
             &owner,
+        )?;
+        super::relations::refuse_dependency_plain_link_overlap(
+            ctx,
+            planner,
+            &request.bob_dir,
+            &relation_owner,
+            &parsed.dependencies,
+            &parsed.blocked_tasks,
+            &parsed.relations,
         )?;
         let reports = plan_relation_writes(
             ctx,
@@ -3656,7 +3862,12 @@ pub(super) fn plan_dependency_only_item(
             relation_cancels,
             relation_completes,
             relation_merge_output,
-            transfer_move_output: Default::default(),
+            transfer_move_output: super::transfer::TransferMoveOutput {
+                absorbed_plain_link_output: AbsorbedPlainLinkOutput {
+                    absorbed_plain_links,
+                },
+                ..Default::default()
+            },
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

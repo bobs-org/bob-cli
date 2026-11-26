@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::native::{
+    capture_language::ParsedDependency,
     collect_done::trailing_block_id_in_line,
     task_dependencies::{self, format as dependency_format},
     task_relations::{
@@ -176,6 +177,15 @@ pub(super) fn plan_relation_writes(
         )?);
     }
     refuse_duplicate_labels(&resolved)?;
+    let tie_graph = if owner.block_id.is_some()
+        && resolved.iter().any(|target| target.typed.label.is_none())
+    {
+        let index =
+            super::dependencies::staged_note_index(ctx, planner, bob_dir);
+        Some(DependencyGraph::build(ctx, planner, bob_dir, &index)?)
+    } else {
+        None
+    };
 
     let mut reports = PlannedRelationReports {
         owner_block_id: owner.block_id.clone(),
@@ -200,10 +210,64 @@ pub(super) fn plan_relation_writes(
             existing_owner,
             warnings,
             &mut reports,
+            tie_graph.as_ref(),
         )?;
     }
     reports.owner_block_id = owner_state.block_id;
     Ok(reports)
+}
+
+/// Refuse an item that names one resolved task with both a dependency
+/// sigil and an unlabelled relation sigil. A label gives the relation
+/// distinct meaning and remains allowed.
+pub(super) fn refuse_dependency_plain_link_overlap(
+    ctx: &mut DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    owner: &RelationOwner,
+    dependencies: &[ParsedDependency],
+    blocked_tasks: &[ParsedDependency],
+    relations: &[ParsedRelation],
+) -> Result<(), CaptureError> {
+    if (dependencies.is_empty() && blocked_tasks.is_empty())
+        || !relations.iter().any(|relation| relation.label.is_none())
+    {
+        return Ok(());
+    }
+    let mut dependency_targets = Vec::new();
+    for dependency in dependencies.iter().chain(blocked_tasks) {
+        let relative = super::dependencies::resolve_prerequisite_note(
+            ctx,
+            planner,
+            bob_dir,
+            &dependency.note,
+        )?;
+        dependency_targets.push((
+            dependency.raw.as_str(),
+            display_relative(&relative),
+            dependency.block_id.as_str(),
+        ));
+    }
+    for relation in relations.iter().filter(|relation| relation.label.is_none())
+    {
+        let target =
+            resolve_relation_target(ctx, planner, bob_dir, owner, relation)?;
+        let target_path = display_relative(&target.relative);
+        if let Some((dependency, _, _)) =
+            dependency_targets.iter().find(|(_, path, block_id)| {
+                *path == target_path && *block_id == target.block_id
+            })
+        {
+            return Err(CaptureError::usage_code(
+                format!(
+                    "`{}` names the same task as `{}`: a dependency already ties them · drop the `{}` or give it a `|label`",
+                    relation.raw, dependency, relation.raw,
+                ),
+                "dependency_and_plain_link",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The item's source (for `~`) or target (for `~~`): a vault-relative
@@ -457,7 +521,42 @@ fn apply_one_relation(
     existing_owner: bool,
     warnings: &mut Vec<CaptureWarning>,
     reports: &mut PlannedRelationReports,
+    tie_graph: Option<&DependencyGraph>,
 ) -> Result<(), CaptureError> {
+    if target.typed.label.is_none()
+        && let Some(owner_block_id) = owner.block_id.as_deref()
+        && tie_graph.is_some_and(|graph| {
+            dependency_joins_pair(
+                graph,
+                &(
+                    display_relative(&owner.relative),
+                    owner_block_id.to_string(),
+                ),
+                &(display_relative(&target.relative), target.block_id.clone()),
+            )
+        })
+    {
+        reports.updates.push(subsumed_relation_update(
+            ctx, planner, bob_dir, owner, target,
+        )?);
+        if !warnings.iter().any(|warning| {
+            matches!(warning, CaptureWarning::Structured(warning)
+                if warning.code == "plain_link_subsumed_by_dependency")
+        }) {
+            warnings.push(CaptureWarning::Structured(
+                StructuredCaptureWarning {
+                    code: "plain_link_subsumed_by_dependency",
+                    label: None,
+                    count: None,
+                    message: format!(
+                        "\"{}\" adds nothing: a dependency already ties these tasks · give it a |label to relate them",
+                        target.typed.raw,
+                    ),
+                },
+            ));
+        }
+        return Ok(());
+    }
     let index = super::dependencies::staged_note_index(ctx, planner, bob_dir);
     match target.direction {
         RelationDirection::To => apply_links_to(
@@ -477,6 +576,90 @@ fn apply_one_relation(
             reports,
         ),
     }
+}
+
+fn dependency_joins_pair(
+    graph: &DependencyGraph,
+    owner: &(String, String),
+    other: &(String, String),
+) -> bool {
+    graph
+        .edges
+        .get(owner)
+        .is_some_and(|targets| targets.contains(other))
+        || graph
+            .edges
+            .get(other)
+            .is_some_and(|targets| targets.contains(owner))
+}
+
+fn subsumed_relation_update(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    owner: &RelationOwner,
+    target: &ResolvedRelation,
+) -> Result<RelationUpdateJson, CaptureError> {
+    let owner_id = owner.block_id.as_deref().ok_or_else(|| {
+        CaptureError::io("relation tie invariant failed: owner has no block ID")
+    })?;
+    let owner_endpoint = relation_task_endpoint(
+        ctx,
+        planner,
+        bob_dir,
+        &owner.relative,
+        owner_id,
+        false,
+    )?;
+    let other_endpoint = relation_task_endpoint(
+        ctx,
+        planner,
+        bob_dir,
+        &target.relative,
+        &target.block_id,
+        target.archived,
+    )?;
+    let (source, target_endpoint) = match target.direction {
+        RelationDirection::To => (owner_endpoint, other_endpoint),
+        RelationDirection::From => (other_endpoint, owner_endpoint),
+    };
+    Ok(RelationUpdateJson {
+        direction: target.direction,
+        source,
+        target: target_endpoint,
+        label: None,
+        previous_label: None,
+        action: RelationAction::Unchanged,
+        subsumed_by: Some("dependency"),
+        cancel_effect: None,
+        complete_effect: None,
+        merge_effect: None,
+        offer_effect: None,
+    })
+}
+
+fn relation_task_endpoint(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    relative: &Path,
+    block_id: &str,
+    archived: bool,
+) -> Result<RelationEndpointJson, CaptureError> {
+    let contents = current_note_text(
+        planner,
+        &super::dependencies::absolute_note(bob_dir, relative),
+    )?;
+    let scan = note_tasks::scan(&contents, ctx.settings());
+    let task =
+        lookup_staged_task(&scan, &display_relative(relative), block_id)?;
+    Ok(RelationEndpointJson {
+        path: display_relative(relative),
+        line: task.line_index + 1,
+        block_id: block_id.to_string(),
+        text: task.description.clone(),
+        archived: archived.then_some(true),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -629,6 +812,7 @@ fn apply_linked_from(
         label: target.typed.label.clone(),
         previous_label,
         action,
+        subsumed_by: None,
         cancel_effect: None,
         complete_effect: None,
         merge_effect: None,
@@ -936,6 +1120,7 @@ fn relation_update_json(
         label: target.typed.label.clone(),
         previous_label,
         action,
+        subsumed_by: None,
         cancel_effect: None,
         complete_effect: None,
         merge_effect: None,
@@ -981,6 +1166,33 @@ fn block_id_in_fenced_code(contents: &str, block_id: &str) -> bool {
             trailing_block_id_in_line(line).as_deref() == Some(block_id)
         })
     })
+}
+
+#[cfg(test)]
+mod tie_tests {
+    use super::*;
+
+    #[test]
+    fn dependency_tie_is_symmetric_and_pair_scoped() {
+        let a = ("a.md".to_string(), "a".to_string());
+        let b = ("b.md".to_string(), "b".to_string());
+        let c = ("c.md".to_string(), "c".to_string());
+        let graph = DependencyGraph {
+            edges: std::collections::BTreeMap::from([(
+                a.clone(),
+                BTreeSet::from([b.clone()]),
+            )]),
+            open: std::collections::HashMap::new(),
+            scheduled: std::collections::HashMap::new(),
+            status: std::collections::HashMap::new(),
+            never_raise: BTreeSet::new(),
+            project_residents: std::collections::BTreeMap::new(),
+        };
+
+        assert!(dependency_joins_pair(&graph, &a, &b));
+        assert!(dependency_joins_pair(&graph, &b, &a));
+        assert!(!dependency_joins_pair(&graph, &a, &c));
+    }
 }
 
 fn typed_note_as_relative(typed: &str) -> PathBuf {
