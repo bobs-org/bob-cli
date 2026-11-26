@@ -754,11 +754,11 @@ subsumed `relation_updates[]` rows, and capture-complete `dependency_tie`
 | LR28 | cross-note dependency O→X plus reverse plain X→O | reconcile drops X's entry and reports `target_waits_on_source` |
 | LR29 | plain and labelled entries share a dependency-joined pair | plain entry drops; labelled relation stays byte-identical |
 | LR30 | the absorbed plain entry is the only LINKS entry | the LINKS line is deleted and T's LINKED FROM is removed in the same pass |
-| LR31 | duplicate IDs, malformed Depends-On or LINKS, unresolved target, or uncertain target | leave the affected plain entry untouched |
+| LR31 | duplicate IDs, malformed Depends-On or LINKS, unresolved or uncertain target, or a quiet-deferred note | leave the affected plain entry untouched |
 | LR32 | closed owner, previous daily owner, or `done/` owner | leave the overlap untouched |
 | LR33 | dependency evidence is in an archived note | active writable plain entry still folds |
 | LR34 | `relations.linked_from_lines: false` | skip the fold and leave LINKS unchanged |
-| LR35 | dry-run then apply | `absorbed_plain_links[]` rows match; the next dry-run is clean |
+| LR35 | dry-run then apply | whole JSON matches apart from `dry_run`, `applied_files`, and `recovery_directory`; the next dry-run is clean |
 
 ### LX — capture execution
 
@@ -2736,6 +2736,8 @@ eligibility refusals).
 | PT10 | `[[#^a]] • [[other#^a]]`, drop only `other#^a` | `[[#^a]]` kept; matched by resolved path + id |
 | PT11 | malformed `[[#^a]] until Friday`, drop ^a | untouched |
 | PT12 | 4-space child indent, CRLF, no final newline | indent and line ending preserved |
+| PT12b | `\r`-terminated line, drop a non-first entry | entry plus its own separator dropped; the trailing `\r` is kept |
+| PT12c | `\r`-terminated line, drop the only entry | line deleted |
 | PT13 | none | untied, nothing to drop |
 | PT14 | plain O→X | `plain_out`, nothing to drop |
 | PT15 | plain X→O | `plain_in`, nothing to drop |

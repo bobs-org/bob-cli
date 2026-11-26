@@ -1011,6 +1011,79 @@ fn lr27_same_note_dependency_absorbs_plain_out_link() {
 }
 
 #[test]
+fn lr27_crlf_note_without_final_newline_preserves_endings() {
+    // LR27 variant: the fold runs in a CRLF note whose last line has no
+    // final newline. The CRLF run must produce exactly the LF run's bytes
+    // with CRLF endings: every other byte, the CRLF endings, and the
+    // missing final newline survive.
+    let lf_temp = TempDir::new("bob-cli-relations-lr27-crlf-lf");
+    let lf_vault = lf_temp.path().join("vault");
+    let lf_daily = write_daily(&lf_vault);
+    let lf_tasks = lf_vault.join("tasks.md");
+    write_file(
+        &lf_tasks,
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+            "  - 🪢 **LINKS:** [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&lf_vault);
+
+    let temp = TempDir::new("bob-cli-relations-lr27-crlf");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Source ^s\r\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^t]]\r\n",
+        "  - 🪢 **LINKS:** [[#^t]]\r\n",
+        "- [ ] #task Target ^t",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let lf_dry = dry_run_json(&lf_vault, &lf_daily);
+    let dry = dry_run_json(&vault, &daily);
+    let absorbed = absorbed_plain_links(&dry);
+    assert_eq!(absorbed.len(), 1, "{}", dry);
+    assert_eq!(absorbed[0]["path"], "tasks.md");
+    assert_eq!(absorbed[0]["dependency"], "source_waits_on_target");
+    assert_eq!(
+        absorbed_plain_links(&lf_dry),
+        absorbed,
+        "CRLF dry-run must predict the same absorption as LF"
+    );
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+
+    let lf_applied = apply_json(&lf_vault, &lf_daily);
+    let applied = apply_json(&vault, &daily);
+    assert_eq!(applied["absorbed_plain_links"], dry["absorbed_plain_links"]);
+    assert_eq!(
+        lf_applied["absorbed_plain_links"],
+        lf_dry["absorbed_plain_links"]
+    );
+    let lf_after = fs::read_to_string(&lf_tasks).unwrap();
+    let after = fs::read_to_string(&tasks).unwrap();
+    let expected = lf_after
+        .replace('\n', "\r\n")
+        .strip_suffix("\r\n")
+        .expect("LF apply ends with a newline")
+        .to_string();
+    assert_eq!(after, expected, "CRLF apply must match LF bytes");
+    assert!(
+        after.contains("\r\n"),
+        "CRLF endings must survive: {after:?}"
+    );
+    assert!(!after.ends_with('\n'), "missing final newline must survive");
+
+    let clean = dry_run_json(&vault, &daily);
+    assert!(absorbed_plain_links(&clean).is_empty(), "{}", clean);
+    assert_relations_clean(&clean);
+}
+
+#[test]
 fn lr28_cross_note_reverse_plain_link_is_absorbed() {
     let temp = TempDir::new("bob-cli-relations-lr28");
     let vault = temp.path().join("vault");
@@ -1109,6 +1182,7 @@ fn lr31_uncertain_or_unresolved_pairs_are_not_folded() {
                 "- [ ] #task Twin ^s\n",
                 "- [ ] #task Target ^t\n",
             ),
+            false,
         ),
         (
             "target-duplicate",
@@ -1119,6 +1193,7 @@ fn lr31_uncertain_or_unresolved_pairs_are_not_folded() {
                 "- [ ] #task Target ^t\n",
                 "- [ ] #task Twin ^t\n",
             ),
+            false,
         ),
         (
             "source-dependency-malformed",
@@ -1128,6 +1203,7 @@ fn lr31_uncertain_or_unresolved_pairs_are_not_folded() {
                 "  - 🪢 **LINKS:** [[#^t]]\n",
                 "- [ ] #task Target ^t\n",
             ),
+            false,
         ),
         (
             "target-dependency-malformed",
@@ -1138,6 +1214,19 @@ fn lr31_uncertain_or_unresolved_pairs_are_not_folded() {
                 "- [ ] #task Target ^t\n",
                 "  - ⛓️ **DEPENDS ON:** [[#^s]] extra\n",
             ),
+            false,
+        ),
+        (
+            "uncertain-target",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+                "  - 🪢 **LINKS:** [[#^t]]\n",
+                "- [ ] #task Target ^t\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^third]] extra\n",
+                "- [ ] #task Third ^third\n",
+            ),
+            false,
         ),
         (
             "links-malformed",
@@ -1147,6 +1236,7 @@ fn lr31_uncertain_or_unresolved_pairs_are_not_folded() {
                 "  - 🪢 **LINKS:** [[#^t]] extra\n",
                 "- [ ] #task Target ^t\n",
             ),
+            false,
         ),
         (
             "target-unresolved",
@@ -1156,15 +1246,29 @@ fn lr31_uncertain_or_unresolved_pairs_are_not_folded() {
                 "  - 🪢 **LINKS:** [[#^missing]]\n",
                 "- [ ] #task Target ^t\n",
             ),
+            false,
+        ),
+        (
+            "quiet-deferred",
+            concat!(
+                "- [ ] #task Source ^s\n",
+                "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+                "  - 🪢 **LINKS:** [[#^t]]\n",
+                "- [ ] #task Target ^t\n",
+            ),
+            true,
         ),
     ];
-    for (case, contents) in cases {
+    for (case, contents, defer) in cases {
         let temp = TempDir::new(&format!("bob-cli-relations-lr31-{case}"));
         let vault = temp.path().join("vault");
         let daily = write_daily(&vault);
         let tasks = vault.join("tasks.md");
         write_file(&tasks, contents);
         write_blocked_tasks_settings(&vault);
+        if defer {
+            touch_mtime_offset(&tasks, 3600);
+        }
 
         let dry = dry_run_json(&vault, &daily);
         assert!(
@@ -1295,7 +1399,21 @@ fn lr35_dry_run_absorption_matches_apply_and_next_run_is_clean() {
 
     let dry = dry_run_json(&vault, &daily);
     let applied = apply_json(&vault, &daily);
-    assert_eq!(applied["absorbed_plain_links"], dry["absorbed_plain_links"]);
+    // The whole dry-run document must predict the apply document. Only
+    // the `dry_run` flag and the apply-only write receipts
+    // (`applied_files`, `recovery_directory`) may differ.
+    let mut dry_value = dry;
+    let mut applied_value = applied;
+    for value in [&mut dry_value, &mut applied_value] {
+        let object = value.as_object_mut().expect("reconcile JSON object");
+        object.remove("dry_run");
+        object.remove("applied_files");
+        object.remove("recovery_directory");
+    }
+    assert_eq!(
+        applied_value, dry_value,
+        "apply JSON must match dry-run JSON"
+    );
     let clean = dry_run_json(&vault, &daily);
     assert!(absorbed_plain_links(&clean).is_empty(), "{}", clean);
     assert_relations_clean(&clean);

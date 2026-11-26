@@ -67,7 +67,7 @@ pub(crate) enum DropOutcome {
 /// preceding separator; a dropped first entry takes its following
 /// separator but keeps the next kept entry's gap label (`see ` in
 /// PT2). All other bytes — indent, header, CRLF, trailing spaces —
-/// are preserved (PT12).
+/// are preserved (PT12–PT12c).
 pub(crate) fn drop_plain_link_entries(
     line: &str,
     is_tied: impl Fn(&RelationEntry) -> bool,
