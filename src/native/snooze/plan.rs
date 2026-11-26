@@ -444,6 +444,7 @@ pub(crate) fn plan_wake(
                 identity: identity.clone(),
                 hhmm: hhmm.clone().unwrap_or_else(|| format_hhmm(0)),
                 link_text: fact.link_text.clone(),
+                source_link_text: row_link_text(row),
                 type_key: fact.type_key.clone(),
                 type_name: fact.type_name.clone(),
                 subtree,
@@ -573,6 +574,9 @@ pub(crate) fn plan_cleanup(input: &CleanupInput<'_>) -> CleanupPlan {
 struct WakeJob {
     identity: TaskIdentity,
     hhmm: String,
+    /// The authored spelling in the Snoozed row, which may differ from the
+    /// canonical link used when inserting the task into its destination.
+    source_link_text: String,
     link_text: String,
     type_key: Option<String>,
     type_name: Option<String>,
@@ -1178,32 +1182,12 @@ fn live_identities(
     day: &str,
     identities: &IdentityMap,
 ) -> BTreeSet<TaskIdentity> {
-    let scan = capture_pomodoros::scan(day);
-    let lines = line_spans(day);
-    let mut found = BTreeSet::new();
-    for entry in &scan.entries {
-        if entry.state != PomodoroState::Open {
-            continue;
-        }
-        let entry_line = entry.line - 1;
-        let child_end = child_block_end_line(&lines, entry_line);
-        if child_end < entry_line + 1 {
-            continue;
-        }
-        for line_index in entry_line + 1..=child_end {
-            for span in block_link_spans(lines[line_index].text) {
-                if span.struck {
-                    continue;
-                }
-                if let Some(identity) =
-                    resolve_link(&span.target, &span.block_id, identities)
-                {
-                    found.insert(identity);
-                }
-            }
-        }
-    }
-    found
+    crate::native::plan_budget::today::today_links(day)
+        .into_iter()
+        .filter_map(|link| {
+            resolve_link(&link.target, &link.block_id, identities)
+        })
+        .collect()
 }
 
 fn pending_from(classified: &ClassifiedRows) -> Vec<PendingRow> {
@@ -1390,7 +1374,7 @@ fn strike_woken(day: &str, jobs: &[WakeJob], woke: u16) -> String {
     for job in jobs {
         let Some(row) = section.rows.iter().find(|row| {
             row.kind == SnoozeRowKind::Active
-                && row_link_text(row) == job.link_text
+                && row_link_text(row) == job.source_link_text
                 && claimed.insert(row.line_index)
         }) else {
             continue;

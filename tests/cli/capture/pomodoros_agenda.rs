@@ -1171,7 +1171,11 @@ fn snoozed_wake_lifecycle_keeps_today_separate_and_provenance_stable() {
     let tasks_file = vault.join("tasks.md");
     write_file(
         &tasks_file,
-        "- [*] #task Review agenda [fresh:: 2026-08-01] ^lifecycle\n",
+        concat!(
+            "- [*] #task Review agenda [fresh:: 2026-08-01] ^job\n",
+            "  - NOTES\n",
+            "    - Review the project context before acting.\n",
+        ),
     );
     write_file(
         &day_file,
@@ -1179,11 +1183,35 @@ fn snoozed_wake_lifecycle_keeps_today_separate_and_provenance_stable() {
             "# 2026-08-28\n\n",
             "## Pomodoros\n",
             "- [ ] () — FOCUS\n\n",
-            "## Snoozed\n",
-            "- **1000** [[tasks#^lifecycle]]\n",
+            "## Tasks\n",
+            "- [*] #task Daily agenda [fresh:: 2026-08-01] ^daily\n",
+            "  - NOTES\n",
+            "    - Review the daily context before acting.\n",
         ),
     );
+    let captured = bob_command()
+        .args(["capture", "-b"])
+        .arg(&vault)
+        .args(["-f", "json", "--"])
+        .arg("@tasks:job z:15:00\n\n@!20260828:daily z:15:00")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", PINNED_NOW)
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .env("BOB_VAULT_SYNC_LOCK_FILE", temp.path().join("vault.lock"))
+        .output()
+        .expect("capture Snoozed rows for a vault and daily-note task");
+    assert_success(&captured);
+    let capture_json: Value =
+        serde_json::from_str(stdout(&captured).trim()).unwrap();
+    assert_eq!(capture_json["captures"].as_array().unwrap().len(), 2);
     let task_before = fs::read_to_string(&tasks_file).unwrap();
+    let captured_daily = fs::read_to_string(&day_file).unwrap();
+    assert!(captured_daily.contains("- **1500** [[tasks#^job]]"));
+    assert!(captured_daily.contains("- **1500** [[2026/20260828#^daily]]"));
+    assert!(captured_daily.contains("- [*] #task Daily agenda"));
+    let snoozed_start = captured_daily.find("## Snoozed").unwrap();
+    let snoozed_tail = captured_daily[snoozed_start..].to_string();
 
     let run_json = |args: &[&str], now: &str| -> Value {
         let mut command = bob_command();
@@ -1205,44 +1233,47 @@ fn snoozed_wake_lifecycle_keeps_today_separate_and_provenance_stable() {
     };
     let before_snooze = run_json(&["snooze", "list", "-f", "json"], PINNED_NOW);
     let before_reconcile = run_json(
-        &[
-            "task",
-            "reconcile",
-            "--dry-run",
-            "--format",
-            "json",
-            "-r",
-            "0",
-        ],
+        &["task", "reconcile", "--format", "json", "-r", "0"],
         PINNED_NOW,
     );
+    let reconciled_daily = fs::read_to_string(&day_file).unwrap();
+    let reconciled_tail_start = reconciled_daily.find("## Snoozed").unwrap();
+    assert_eq!(&reconciled_daily[reconciled_tail_start..], snoozed_tail);
+    assert!(reconciled_daily.contains("- [*] #task Daily agenda"));
+    assert_eq!(before_reconcile["kept_next"], 1);
     let before_freshness =
         run_json(&["freshness", "list", "-f", "json"], PINNED_NOW);
     let before_walks = run_json(&["walks", "-f", "json"], PINNED_NOW);
     let before_plan = run_json(&["plan", "-f", "json"], PINNED_NOW);
     let before_agenda =
         run_json(&["capture-pomodoros", "--tasks", "-f", "json"], PINNED_NOW);
-    assert_eq!(before_snooze["rows"][0]["state"], "asleep");
+    assert_eq!(before_snooze["rows"].as_array().unwrap().len(), 2);
+    assert!(before_snooze["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| { row["state"] == "asleep" }));
     assert_eq!(before_plan["today"]["count"], 0);
-    assert_eq!(before_plan["snoozed"]["count"], 1);
+    assert_eq!(before_plan["snoozed"]["count"], 2);
     assert_eq!(before_plan["links"]["count"], 0);
     assert_eq!(
         before_agenda["snoozed"]["rows"].as_array().unwrap().len(),
-        1
+        2
     );
     assert!(before_reconcile["ok"].as_bool().unwrap());
     assert!(before_freshness["queue"]
         .as_array()
         .unwrap()
         .iter()
-        .all(|row| row["text"] != "Review agenda"));
+        .all(|row| row["text"] != "Review agenda"
+            && row["text"] != "Daily agenda"));
 
     let wake_output = bob_command()
         .args(["snooze", "wake", "-f", "json"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
-        .env("BOB_NOW", "2026-08-28 10:01:00")
+        .env("BOB_NOW", "2026-08-28 15:01:00")
         .env("XDG_STATE_HOME", temp.path().join("state"))
         .env("BOB_VAULT_SYNC_LOCK_FILE", temp.path().join("vault.lock"))
         .env("BOB_SNOOZE_NOTIFY_SINK", temp.path().join("notify.json"))
@@ -1255,7 +1286,7 @@ fn snoozed_wake_lifecycle_keeps_today_separate_and_provenance_stable() {
     assert_eq!(fs::read_to_string(&tasks_file).unwrap(), task_before);
 
     let after_snooze =
-        run_json(&["snooze", "list", "-f", "json"], "2026-08-28 10:01:00");
+        run_json(&["snooze", "list", "-f", "json"], "2026-08-28 15:01:00");
     let after_reconcile = run_json(
         &[
             "task",
@@ -1266,30 +1297,34 @@ fn snoozed_wake_lifecycle_keeps_today_separate_and_provenance_stable() {
             "-r",
             "0",
         ],
-        "2026-08-28 10:01:00",
+        "2026-08-28 15:01:00",
     );
     let after_freshness =
-        run_json(&["freshness", "list", "-f", "json"], "2026-08-28 10:01:00");
-    let after_walks = run_json(&["walks", "-f", "json"], "2026-08-28 10:01:00");
-    let after_plan = run_json(&["plan", "-f", "json"], "2026-08-28 10:01:00");
+        run_json(&["freshness", "list", "-f", "json"], "2026-08-28 15:01:00");
+    let after_walks = run_json(&["walks", "-f", "json"], "2026-08-28 15:01:00");
+    let after_plan = run_json(&["plan", "-f", "json"], "2026-08-28 15:01:00");
     let after_agenda = run_json(
         &["capture-pomodoros", "--tasks", "-f", "json"],
-        "2026-08-28 10:01:00",
+        "2026-08-28 15:01:00",
     );
     assert!(after_snooze["rows"]
         .as_array()
         .unwrap()
         .iter()
         .any(|row| row["state"] == "woken"));
-    assert_eq!(after_plan["today"]["count"], 1);
+    assert_eq!(after_plan["today"]["count"], 2);
     assert_eq!(after_plan["snoozed"]["count"], 0);
-    assert_eq!(after_plan["links"]["count"], 1);
+    assert_eq!(after_plan["links"]["count"], 2);
     assert_eq!(after_agenda["snoozed"]["rows"], serde_json::json!([]));
-    assert_eq!(after_agenda["pomodoros"][0]["items"][0]["woke_at"], "10:01");
-    assert_eq!(
-        after_agenda["pomodoros"][0]["items"][0]["snoozed_target"],
-        "1000"
-    );
+    let items = after_agenda["pomodoros"][0]["items"].as_array().unwrap();
+    for id in ["job", "daily"] {
+        let item = items
+            .iter()
+            .find(|item| item["block_id"] == id)
+            .unwrap_or_else(|| panic!("missing woken {id}: {after_agenda}"));
+        assert_eq!(item["woke_at"], "15:01", "{id}: {after_agenda}");
+        assert_eq!(item["snoozed_target"], "1500", "{id}: {after_agenda}");
+    }
     for family in ["s", "w"] {
         let before = before_walks["walks"]
             .as_array()
@@ -1322,7 +1357,7 @@ fn snoozed_wake_lifecycle_keeps_today_separate_and_provenance_stable() {
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
-        .env("BOB_NOW", "2026-08-28 10:01:00")
+        .env("BOB_NOW", "2026-08-28 15:01:00")
         .env("XDG_STATE_HOME", temp.path().join("state"))
         .env("BOB_VAULT_SYNC_LOCK_FILE", temp.path().join("vault.lock"))
         .env("BOB_SNOOZE_NOTIFY_SINK", temp.path().join("notify.json"))

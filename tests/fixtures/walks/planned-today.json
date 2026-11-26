@@ -200,6 +200,23 @@
       "plan_next": 1,
       "plan_pending": 0,
       "ledger": true
+    },
+    {
+      "id": "SP17",
+      "name": "prose mention is not Today",
+      "task": "- [*] #task Work #gtd #pre ^job\n",
+      "row": "- **1530** [[jobs#^job]]\n",
+      "day": "2026/20261117.md",
+      "ledger_line": "  - Discuss [[jobs#^job]] next week\n",
+      "linked": false,
+      "tier": null,
+      "lane_count": 0,
+      "today": 0,
+      "snooze_state": "asleep",
+      "plan_next": 1,
+      "plan_pending": 0,
+      "ledger": true,
+      "snoozed_count": 1
     }
   ]
 }

@@ -256,6 +256,66 @@ fn reconcile_leaves_snoozed_rows_byte_identical() {
     assert_snoozed_preserved(&before, &after);
 }
 
+#[test]
+fn reconcile_preserves_duplicate_nested_and_history_rows_for_lf_and_crlf() {
+    for (name, newline) in [("lf", "\n"), ("crlf", "\r\n")] {
+        let (temp, vault, daily) =
+            audit_vault(&format!("bob-cli-audit-reconcile-{name}"));
+        let original = read_daily(&daily);
+        let duplicate = original.replace(
+            "- **1530** [[jobs#^snoozed]]\n",
+            "- **1530** [[jobs#^snoozed]]\n- **1600** [[jobs#^snoozed]]\n",
+        );
+        let before = duplicate.replace('\n', newline);
+        write_file(&daily, &before);
+        let task_path = vault.join("jobs.md");
+
+        let run = || {
+            bob_command()
+                .args(["task", "reconcile", "--format", "json", "-r", "0"])
+                .arg("--bob-dir")
+                .arg(&vault)
+                .env("BOB_DAY_FILE", &daily)
+                .env("BOB_CONFIG_FILE", vault.join("bob.yml"))
+                .env("BOB_NOW", "2026-10-08 12:00:00")
+                .env("XDG_STATE_HOME", temp.path().join("state"))
+                .output()
+                .expect("run live reconcile")
+        };
+        let first = run();
+        assert_success(&first);
+        let after_first = fs::read(&daily).unwrap();
+        let marker = b"## Snoozed";
+        let before_bytes = before.as_bytes();
+        let before_tail = &before_bytes[find_bytes(before_bytes, marker)..];
+        let after_tail = &after_first[find_bytes(&after_first, marker)..];
+        assert_eq!(after_tail, before_tail, "{name} Snoozed bytes");
+        assert_eq!(
+            after_first.iter().filter(|byte| **byte == b'\r').count(),
+            if newline == "\r\n" {
+                after_first.iter().filter(|byte| **byte == b'\n').count()
+            } else {
+                0
+            },
+            "{name} line endings remain stable"
+        );
+
+        let task_after_first = fs::read(&task_path).unwrap();
+        let second = run();
+        assert_success(&second);
+        assert_eq!(
+            fs::read(&daily).unwrap(),
+            after_first,
+            "{name} daily idempotence"
+        );
+        assert_eq!(
+            fs::read(&task_path).unwrap(),
+            task_after_first,
+            "{name} task idempotence"
+        );
+    }
+}
+
 fn snooze_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
     let temp = TempDir::new(name);
     let vault = temp.path().join("vault");

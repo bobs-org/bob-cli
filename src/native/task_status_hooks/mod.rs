@@ -96,10 +96,12 @@ Status propagation never lowers a task, and removing a link never changes a \
 lane: unlinked Next [*] and In Progress [/] tasks stay as they are. Only a \
 daily-note Next task still clears: a [*] that lives in a canonical daily note \
 or the selected current ledger and is not reachable from an open entry is reset \
-to [ ], unless it is directly referenced by recent activity, in which case it is \
-kept. Historical links supply recovery-only rank for Blocked tasks without \
-promoting Ready tasks; a recovered directly referenced Next task stays Next \
-while it remains recent, and the historical note is never modified. Tasks whose Dataview \
+to [ ], unless it is directly referenced by recent activity or a live-or-blocked \
+Snoozed row, in which case it is kept. Historical links and direct Snoozed rows \
+supply recovery-only rank for Blocked tasks without promoting Ready tasks; a \
+recovered Snoozed task returns to Next unless a stronger existing recovery rank wins. \
+Snoozed membership never creates promotion roots, dependency reach, or Today links, \
+and the Snoozed row is not rewritten. The historical note is never modified. Tasks whose Dataview \
 [dependsOn:: ...] metadata names an open \
 vault-wide [id:: ...] task, or whose task-level [scheduled:: YYYY-MM-DD] date \
 is later than the effective daily anchor, are marked Blocked [?], overriding \

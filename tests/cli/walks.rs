@@ -697,7 +697,9 @@ fn snoozed_planned_today_vectors_agree_across_freshness_walks_and_plan() {
         let mut daily = String::new();
         if vector["ledger"] == true {
             daily.push_str("## Pomodoros\n- [ ] ()\n");
-            if vector["linked"] == true {
+            if let Some(line) = vector["ledger_line"].as_str() {
+                daily.push_str(line);
+            } else if vector["linked"] == true {
                 daily.push_str("  - [[jobs#^job|Live alias]]\n");
             }
         }
@@ -735,6 +737,9 @@ fn snoozed_planned_today_vectors_agree_across_freshness_walks_and_plan() {
             vector["today"].as_u64().unwrap(),
             "{id}: {plan}"
         );
+        if let Some(count) = vector.get("snoozed_count") {
+            assert_eq!(plan["snoozed"]["count"], *count, "{id}: {plan}");
+        }
         assert_eq!(plan["next"]["count"], vector["plan_next"], "{id}: {plan}");
         assert_eq!(
             plan["pending"]["count"], vector["plan_pending"],

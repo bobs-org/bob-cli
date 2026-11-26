@@ -181,6 +181,153 @@ fn wake_moves_due_subtree_and_records_history() {
 }
 
 #[test]
+fn list_and_wake_share_dedicated_today_link_membership() {
+    let cases = [
+        ("plain", "  - [[jobs#^job]]\n", true),
+        ("embedded", "  - ![[jobs#^job]]\n", true),
+        ("aliased", "  - [[jobs#^job|Job alias]]\n", true),
+        ("prose", "  - Discuss [[jobs#^job]] next week\n", false),
+        ("nested", "  - A parent note\n    - [[jobs#^job]]\n", false),
+        ("fenced", "  ```md\n  - [[jobs#^job]]\n  ```\n", false),
+        ("struck", "  - ~~[[jobs#^job]]~~\n", false),
+    ];
+
+    for (name, ledger_children, dedicated) in cases {
+        let daily = format!(
+            "# 2026-10-08\n\n## Pomodoros\n- [ ] () — FOCUS\n{ledger_children}\n## Snoozed\n- **1100** [[jobs#^job]]\n"
+        );
+        let (temp, daily_path) = snooze_vault(
+            &format!("bob-cli-snooze-membership-{name}"),
+            &daily,
+            "- [*] #task Job ^job\n",
+        );
+
+        let listed = snooze_command(&temp, &["-f", "json"])
+            .output()
+            .expect("list snoozed rows");
+        assert_success(&listed);
+        let list = json_output(&listed);
+        if dedicated {
+            assert_eq!(list["rows"][0]["state"], "ignored", "{name}: {list}");
+            assert_eq!(
+                list["rows"][0]["reason"], "already_linked",
+                "{name}: {list}"
+            );
+        } else {
+            assert_eq!(list["rows"][0]["state"], "due", "{name}: {list}");
+        }
+
+        let vault = temp.path().join("vault");
+        let plan = bob_command()
+            .args(["plan", "-f", "json"])
+            .env("BOB_DIR", &vault)
+            .env("BOB_DAY_FILE", &daily_path)
+            .env("BOB_CONFIG_FILE", temp.path().join("config.yml"))
+            .env("BOB_NOW", NOW)
+            .output()
+            .expect("read Today and Snoozed plan meters");
+        assert_success(&plan);
+        let plan: Value = serde_json::from_str(stdout(&plan).trim()).unwrap();
+        assert_eq!(
+            plan["today_tasks"].as_array().unwrap().len(),
+            dedicated as usize,
+            "{name}: {plan}"
+        );
+        assert_eq!(
+            plan["snoozed"]["count"],
+            (!dedicated) as usize,
+            "{name}: {plan}"
+        );
+
+        let agenda = bob_command()
+            .args(["capture-pomodoros", "--tasks", "-f", "json", "-b"])
+            .arg(&vault)
+            .env("BOB_DAY_FILE", &daily_path)
+            .env("BOB_CONFIG_FILE", temp.path().join("config.yml"))
+            .env("BOB_NOW", NOW)
+            .output()
+            .expect("read Pomodoro and Snoozed agenda");
+        assert_success(&agenda);
+        let agenda: Value =
+            serde_json::from_str(stdout(&agenda).trim()).unwrap();
+        assert_eq!(
+            agenda["snoozed"]["rows"].as_array().unwrap().len(),
+            (!dedicated) as usize,
+            "{name}: {agenda}"
+        );
+        // The agenda still shows any task link authored anywhere in the
+        // Pomodoro block (including nested notes). Only its separate
+        // `snoozed` projection follows dedicated Today membership.
+
+        let woke = snooze_command(&temp, &["wake", "-f", "json"])
+            .output()
+            .expect("wake due snoozed rows");
+        assert_success(&woke);
+        let wake = json_output(&woke);
+        if dedicated {
+            assert!(wake["woken"].as_array().unwrap().is_empty(), "{wake}");
+            assert!(
+                wake["dropped"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| { row["reason"] == "already_linked" }),
+                "{wake}"
+            );
+        } else {
+            assert_eq!(wake["woken"].as_array().unwrap().len(), 1, "{wake}");
+            assert_eq!(wake["woken"][0]["block_id"], "job");
+            assert!(
+                fs::read_to_string(&daily_path)
+                    .unwrap()
+                    .contains("[[jobs#^job]]"),
+                "the due row moved to a Pomodoro: {}",
+                fs::read_to_string(&daily_path).unwrap()
+            );
+        }
+    }
+
+    // Empty-target links resolve against their own daily note, just like
+    // the plan's Today projection.
+    let temp = TempDir::new("bob-cli-snooze-membership-same-note");
+    let vault = temp.path().join("vault");
+    write_blocked_tasks_settings(&vault);
+    let daily_path = vault.join("2026/20261008.md");
+    write_file(
+        &daily_path,
+        concat!(
+            "# 2026-10-08\n\n",
+            "## Pomodoros\n",
+            "- [ ] () — FOCUS\n",
+            "  - [[#^job]]\n\n",
+            "## Snoozed\n",
+            "- **1100** [[#^job]]\n\n",
+            "## Tasks\n",
+            "- [*] #task Local job ^job\n",
+        ),
+    );
+    write_file(&vault.join("jobs.md"), "- [*] #task Other job ^other\n");
+    let list = snooze_command(&temp, &["-f", "json"])
+        .output()
+        .expect("list same-note snoozed row");
+    assert_success(&list);
+    assert_eq!(json_output(&list)["rows"][0]["reason"], "already_linked");
+    let wake = snooze_command(&temp, &["wake", "-f", "json"])
+        .output()
+        .expect("wake same-note snoozed row");
+    assert_success(&wake);
+    assert!(json_output(&wake)["woken"].as_array().unwrap().is_empty());
+    assert!(json_output(&wake)["dropped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| { row["reason"] == "already_linked" }));
+    let day = fs::read_to_string(&daily_path).unwrap();
+    assert!(!day.contains("- **1100** [[#^job]]"));
+    assert!(day.contains("  - [[#^job]]"));
+}
+
+#[test]
 fn no_work_wake_leaves_vault_and_state_directory_unchanged() {
     let (temp, daily_path) = snooze_vault(
         "bob-cli-snooze-no-work",

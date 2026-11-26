@@ -158,7 +158,9 @@ dashboard sections and their caps. Only the link budget changes.
    Deeper descendants and mixed-text bullets do not count. This is
    exactly `list_queued_links` in
    `src/native/capture_pomodoro_start.rs` (the `x` / start lineup
-   rule).
+   rule). The Snoozed reader reuses this extractor when deciding whether
+   a planned row already has a live Pomodoro link; prose, nested, fenced,
+   and struck links do not count as Today or `already_linked`.
 4. **Resolution:** an empty target is the daily note itself;
    otherwise the hooks' rules apply (exact vault-relative path with
    or without `.md`, then a unique case-insensitive basename).

@@ -90,7 +90,14 @@ strictly ledger-derived; snooze state never writes it.
 A row is live while all of these hold: it parses, it is unstruck, it is
 in today's note, its link resolves to exactly one open `#task` that is
 not an Event Task, that task is committed (Next `[*]` or In Progress
-`[/]`), and the task has no live link under an open Pomodoro. A live row
+`[/]`), and the task has no live dedicated Task Link under an open
+Pomodoro. This is exactly the shared `list_queued_links` rule from
+`capture_pomodoro_start.rs`: one direct child bullet at the entry's first
+child indentation, whose marker-stripped body is exactly one plain or
+embedded block link, not struck or fenced. Prose mentions, nested notes,
+fenced links, and struck links do not make a snoozed task already linked.
+List, wake, forecast, Today, and reconcile use the same membership rule.
+A live row
 whose target is blocked (`[?]`) stays parked. Every other row is
 ignored with a reason: `done`, `cancelled`, `already_linked`, `missing`,
 `ambiguous`, `ready`, `event_task`, `duplicate`, `malformed`, or

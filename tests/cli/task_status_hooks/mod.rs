@@ -10,6 +10,7 @@ mod relations;
 mod retry;
 mod section_gap;
 mod settle;
+mod snoozed_recovery;
 mod structure;
 mod subprojects;
 mod sync;

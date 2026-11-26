@@ -4590,6 +4590,12 @@ internal(^prj N)= targets in N's own note OR in any descendant of N: kept on the
 
 `edges(T)` is the promotion, recovery, and R7 graph.
 
+- A live-or-blocked Snoozed row contributes a recovery-only Next rank to
+  its directly resolved task. Reconcile merges that rank with activity
+  recovery using the strongest legitimate status; it does not add the task
+  as a promotion root, traverse its prerequisites, or create a Pomodoro
+  reference. Derived blocking still wins, and an ordinary Ready task is
+  never promoted by Snoozed membership.
 - Dependency promotion never raises a `^prj` target into a lane.
   ADJ-11 governs that rule. A direct Task Link raises a `^prj` to
   Next like any other task, including the §12.10 close-gesture pull-in.

@@ -427,12 +427,16 @@ current promotion roots with the same strongest-rank merge and cycle rules.
 This produces a recovery-only rank for unblocking. A Blocked task reached
 directly defaults to Next because Blocked has no active rank. An
 already-In-Progress task on the dependency path can strengthen downstream
-recovery to In Progress. A task absent from this graph recovers to Ready. The
-recovery rank does not promote an ordinary Ready task; a directly recent task
-can retain an existing Next so a recovered task remains stable on repeated
-runs. Dependency-only recovery still follows the daily-note Next clearing
-policy after its Blocked status is gone: a recovered Next outside a daily
-note stays Next, while one inside a daily note clears unless directly recent.
+recovery to In Progress. A task absent from this graph recovers to Ready. A
+directly planned Snoozed task adds a recovery-only Next rank, merged with the
+strongest legitimate activity rank; it does not become a promotion root, add
+dependency reach, or create a Pomodoro reference. The recovery rank does not
+promote an ordinary Ready task. Daily-note Next grace also includes a directly
+planned Snoozed task, so it stays Next while that row remains live or blocked.
+Dependency-only recovery still follows the daily-note Next clearing policy
+after its Blocked status is gone: a recovered Next outside a daily note stays
+Next, while one inside a daily note clears unless directly recent or planned
+in Snoozed. Snoozed rows remain byte-identical during reconcile.
 
 Recent activity no longer clears anything. An In Progress task stays In
 Progress wherever it lives, however long its links have been gone, and a Next
@@ -1529,12 +1533,13 @@ dependency-only graph reachability. `marked_blocked` and `unblocked` are
 additive fields and do not duplicate changes into those older arrays.
 `cleared` lists only daily-note `[*] -> [ ]` changes: a Next task that lives
 in a canonical daily note or the selected current ledger and lost its links
-without recent-activity grace. Every other unlinked Next or In Progress task
-keeps its lane and never appears here. `cleared_in_progress` is an
+without recent-activity or live-or-blocked Snoozed grace. Every other unlinked
+Next or In Progress task keeps its lane and never appears here.
+`cleared_in_progress` is an
 always-empty compatibility list (the In Progress rollback is retired) with the
 same path, line, block ID, description, and dependency shape. `kept_next`
-counts only directly recent daily-note Next tasks held by grace; sticky
-non-daily Next tasks stay without incrementing it. Their
+counts directly recent or directly planned Snoozed daily-note Next tasks held
+by grace; sticky non-daily Next tasks stay without incrementing it. Their
 `from`/`to` values are the actual checkbox symbols, and their dependency-ID
 arrays and nullable `future_scheduled_date` explain the derived decision. The
 date is present only when the task-level schedule is later than the effective
@@ -1621,4 +1626,7 @@ meters, Today count and rows, NEXT/PENDING lane meters, type names,
 entries, and warnings. It is computed read-only from
 the original daily note, before this run's ledger cleanup, so a live sync
 can leave the final ledger with different counts. It is `null` when there
-is no daily note or Pomodoros section, or when the plan config is invalid.
+is no daily note, when the Pomodoros section is absent and there are no
+planned Snoozed rows, or when the plan config is invalid. A Snoozed-only
+daily note still reports the snoozed meter and forecast with Today and
+current ledger links at zero.

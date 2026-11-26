@@ -215,11 +215,10 @@ pub(crate) fn ledger_identities(
     note_index: &NoteIndex,
 ) -> (plan::IdentityMap, BTreeSet<TaskIdentity>) {
     let mut identities = plan::IdentityMap::new();
-    let mut live = BTreeSet::new();
     let lines = line_spans(day);
     let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
     let Some(section) = pomodoro::pomodoros_section_range(&line_text) else {
-        return (identities, live);
+        return (identities, BTreeSet::new());
     };
     let fenced = markdown::fenced_lines(&line_text, section.clone());
     for entry in capture_pomodoros::scan(day).entries {
@@ -255,10 +254,19 @@ pub(crate) fn ledger_identities(
                 };
                 identities
                     .insert((span.target, span.block_id), identity.clone());
-                live.insert(identity);
             }
         }
     }
+    // Retain every resolvable spelling found under an open entry in the
+    // identity map for mutation planning, but only the shared dedicated-link
+    // extractor decides whether a task is currently linked. Prose mentions,
+    // nested bullets, and links inside fences are not Today membership.
+    let live = crate::native::plan_budget::today::today_links(day)
+        .into_iter()
+        .filter_map(|link| {
+            identities.get(&(link.target, link.block_id)).cloned()
+        })
+        .collect();
     (identities, live)
 }
 

@@ -144,8 +144,9 @@ fn native_entry_name_and_range(
 /// The read-only plan budget for a successful sync: the pure ledger
 /// half plus the Today rows and lane meters. It never changes the
 /// exit code and never writes. An invalid plan config yields `None`
-/// (JSON `null`) and a single stderr warning; a missing Pomodoros
-/// section also yields `None`.
+/// (JSON `null`) and a single stderr warning. A daily note without a
+/// Pomodoros section yields `None` unless it has planned Snoozed rows,
+/// which still publish the snoozed meter and forecast.
 pub(super) fn plan_budget_for_sync(
     bob_dir: &Path,
     daily_contents: &str,
@@ -183,9 +184,6 @@ pub(super) fn plan_budget_for_sync(
         &config,
         Some(&daily_file),
     );
-    if !ledger.has_section {
-        return None;
-    }
     let lanes = plan_budget::count_lanes(bob_dir, anchor, &config);
     let today_result =
         plan_budget::today::today_tasks(bob_dir, &daily_file, daily_contents);
@@ -203,6 +201,9 @@ pub(super) fn plan_budget_for_sync(
         &daily_file,
         Some(daily_contents),
     );
+    if !ledger.has_section && report.snoozed.count == 0 {
+        return None;
+    }
     let report =
         plan_budget::with_today_roots(report, bob_dir, Path::new(&daily_file));
     Some(
@@ -841,6 +842,18 @@ pub(super) fn sync_task_statuses(
             || file.path == daily_path;
         let file_lines = logical_lines(&file.contents);
         for (task_index, task) in file.tasks.iter().enumerate() {
+            let task_identity = task.block_id.as_ref().map(|block_id| {
+                super::super::snooze::state::TaskIdentity {
+                    route: file.relative_path.clone(),
+                    block_id: block_id.clone(),
+                }
+            });
+            // Snoozed membership is read from the existing snapshot. It
+            // contributes a recovery-only Next rank and daily Next grace,
+            // never a promotion root or dependency edge.
+            let directly_snoozed = task_identity
+                .as_ref()
+                .is_some_and(|identity| snoozed.contains(identity));
             let desired_status = task.block_id.as_ref().and_then(|block_id| {
                 desired
                     .get(&(file.relative_path.clone(), block_id.clone()))
@@ -853,10 +866,11 @@ pub(super) fn sync_task_statuses(
                     .copied()
                     .into_iter()
                     .chain(recovery_desired.get(&identity).copied())
+                    .chain(directly_snoozed.then_some(RankedStatus::Next))
                     .max()
             });
-            let directly_recent =
-                task.block_id.as_ref().is_some_and(|block_id| {
+            let directly_recent = directly_snoozed
+                || task.block_id.as_ref().is_some_and(|block_id| {
                     recent_activity_roots.contains(&(
                         file.relative_path.clone(),
                         block_id.clone(),
@@ -989,14 +1003,7 @@ pub(super) fn sync_task_statuses(
                     anchor,
                     is_daily_note,
                     &direct_desired,
-                    task.block_id.as_ref().is_some_and(|id| {
-                        snoozed.contains(
-                            &super::super::snooze::state::TaskIdentity {
-                                route: file.relative_path.clone(),
-                                block_id: id.clone(),
-                            },
-                        )
-                    }),
+                    directly_snoozed,
                     &mut prj_is_blocked_tags_added,
                     &mut prj_is_blocked_tags_stripped,
                     &mut unblocked_fields_written,
