@@ -530,6 +530,7 @@ pub(crate) fn is_trailing_transparent(text: &str) -> bool {
         || parse_schedule_token(text).is_some()
         || is_priority_marker_token(text)
         || is_escaped_priority_token(text)
+        || super::snooze::is_snooze_token(text)
         || super::directive::is_directive_token(text)
 }
 

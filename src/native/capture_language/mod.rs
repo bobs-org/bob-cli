@@ -42,6 +42,7 @@ mod relations;
 pub(crate) mod req_bullets;
 mod rewrite;
 pub(crate) mod section_bullet;
+pub(crate) mod snooze;
 mod start_selection;
 pub(crate) mod target_runs;
 pub(crate) mod task_sources;
@@ -51,6 +52,10 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
+/// Revision 33 claims the terminal `z:<when>` snooze marker and the narrow
+/// `@route:id!` snooze-drop spelling (previously literal task text or a
+/// block-ID refusal); both parse cleanly and execution refuses them until
+/// the mutation phase consumes them.
 /// Revision 32 retires ALL-CAPS drawer structure; plain lines remain notes,
 /// with a warning only when a container title matches a known drawer key.
 /// Revision 31 claims a whole-draft `@route^id` as `task_goto` (previously
@@ -72,7 +77,7 @@ mod type_marker;
 /// forms. Revision 22 makes sized `Nx` closes execute (see
 /// `sized_pomodoro_close.md`); older clients parse the size as literal
 /// task text.
-pub(crate) const GRAMMAR_REVISION: u32 = 32;
+pub(crate) const GRAMMAR_REVISION: u32 = 33;
 
 #[cfg(test)]
 mod tests;

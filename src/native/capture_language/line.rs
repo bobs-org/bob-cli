@@ -186,6 +186,7 @@ pub(super) struct AggregateMarkers {
     pub(super) clip: Option<ClipRequest>,
     pub(super) scheduled_offset: Option<u64>,
     pub(super) priority_level: Option<u64>,
+    pub(super) snooze: Option<super::snooze::SnoozeIntent>,
     pub(super) route: Option<LineRoute>,
 }
 
@@ -212,6 +213,14 @@ impl AggregateMarkers {
                 return Err(duplicate_marker_error("priority marker ($<N>)"));
             }
             self.priority_level = Some(level);
+        }
+        if let Some(snooze) = markers.snooze {
+            if self.snooze.is_some() {
+                return Err(duplicate_marker_error(
+                    super::snooze::SNOOZE_MARKER_LABEL,
+                ));
+            }
+            self.snooze = Some(snooze);
         }
         if let Some(route) = route {
             if self.route.is_some() {

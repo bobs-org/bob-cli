@@ -2836,6 +2836,16 @@ fn caret_item_conflict(
     if solo_parent && single_line {
         None
     } else if !solo_parent {
+        // A `z:` among the extras hands the diagnostic to the snooze
+        // gate (authored children included): no link conflict. Bare `z:`
+        // stays conflict-free here too; it is already incomplete at the
+        // line level.
+        if parent_tokens[1..]
+            .iter()
+            .any(|extra| super::snooze::is_snooze_token(extra.text))
+        {
+            return None;
+        }
         parent_tokens[1..]
             .iter()
             .find_map(|extra| {
@@ -2954,6 +2964,104 @@ pub(super) fn parse_pomodoro_link_item<'a>(
             {
                 return Err(message);
             }
+            // The documented `z:<when>` exception: a single-line `^route:id`
+            // item followed by exactly one terminal snooze token snoozes
+            // that existing task instead of linking it. First-token and
+            // whole-item rules stay: the marker leads and the parent line
+            // holds nothing else.
+            if !trailing.is_empty()
+                && item.lines.len() == 1
+                && trailing.split_whitespace().count() == 1
+                && super::snooze::is_snooze_token(trailing)
+            {
+                let Some(raw) = super::snooze::snooze_value(trailing) else {
+                    return Err(super::snooze::incomplete_snooze_error("z:"));
+                };
+                if parts.start.is_some() {
+                    return Err(super::snooze::snooze_start_conflict_error());
+                }
+                if parts.close.is_some() {
+                    return Err(super::snooze::snooze_close_conflict_error());
+                }
+                if parts.pomodoro_name.is_some() {
+                    return Err(super::snooze::snooze_session_conflict_error());
+                }
+                let leading_ws = parent_line.raw.text.len()
+                    - parent_line.raw.text.trim_start().len();
+                let trailing_offset =
+                    parent_trimmed.rfind(trailing).unwrap_or(first_len);
+                let snooze_start =
+                    parent_line.raw.start + leading_ws + trailing_offset;
+                let marker_text = first.to_string();
+                return Ok(Some(parsed_capture_item_outcome(
+                    item,
+                    ParsedCaptureText {
+                        body: String::new(),
+                        clip: None,
+                        route: Some(route),
+                        kind: CaptureKind::PomodoroLink {
+                            block_id: parts.block_id,
+                            pomodoro_name: parts.pomodoro_name,
+                            pomodoro_name_is_literal: parts
+                                .pomodoro_name_is_literal,
+                            start: parts.start,
+                            close: parts.close,
+                            spelling: PomodoroLinkSpelling::Caret,
+                        },
+                        scheduled_offset: None,
+                        priority_level: None,
+                        snooze: Some(super::snooze::SnoozeIntent::add(
+                            raw.to_string(),
+                            Some((snooze_start, snooze_start + trailing.len())),
+                        )),
+                        sub_bullets: Vec::new(),
+                        dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
+                        dependency_target: None,
+                        type_marker: None,
+                        merge_in: None,
+                    },
+                    Vec::new(),
+                    Some(marker_text),
+                )));
+            }
+            // A `z:` among other parent-line extras still refuses as a
+            // snooze conflict (mirroring the `@` link path) rather than a
+            // link conflict. An existing-task snooze with authored
+            // children refuses the same way on both spellings.
+            if !trailing.is_empty() && item.lines.len() == 1 {
+                let extras: Vec<&str> = trailing.split_whitespace().collect();
+                if extras
+                    .iter()
+                    .any(|extra| super::snooze::is_snooze_token(extra))
+                {
+                    if extras.contains(&"z:") {
+                        return Err(super::snooze::incomplete_snooze_error(
+                            "z:",
+                        ));
+                    }
+                    if extras
+                        .iter()
+                        .any(|extra| parse_schedule_token(extra).is_some())
+                    {
+                        return Err(
+                            super::snooze::snooze_schedule_conflict_error(),
+                        );
+                    }
+                    if extras
+                        .iter()
+                        .any(|extra| is_priority_marker_token(extra))
+                    {
+                        return Err(
+                            super::snooze::snooze_priority_conflict_error(),
+                        );
+                    }
+                    if extras.iter().any(|extra| extra.starts_with('%')) {
+                        return Err(super::snooze::snooze_existing_clip_error());
+                    }
+                }
+            }
             if !is_solo_item {
                 if !is_solo_parent {
                     for extra in &tokens[1..] {
@@ -2975,6 +3083,17 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                         }
                     }
                     return Err(POMODORO_LINK_SHAPE_ERROR.to_string());
+                }
+                if !trailing.is_empty()
+                    && trailing.split_whitespace().count() == 1
+                    && super::snooze::is_snooze_token(trailing)
+                {
+                    if trailing == "z:" {
+                        return Err(super::snooze::incomplete_snooze_error(
+                            "z:",
+                        ));
+                    }
+                    return Err(super::snooze::snooze_existing_children_error());
                 }
                 return Err(
                     "Pomodoro link capture cannot be combined with authored child bullets"
@@ -2999,6 +3118,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     },
                     scheduled_offset: None,
                     priority_level: None,
+                    snooze: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),

@@ -17,6 +17,7 @@ use super::markers::{
     parse_retired_priority_token, parse_schedule_token,
 };
 use super::model::{RetiredPriority, TerminalMarkers, Token};
+use super::snooze::{is_snooze_token, snooze_value, SnoozeIntent};
 use super::tokens::{
     is_sub_bullet_marker_candidate, parse_sub_bullet_route_token,
 };
@@ -146,6 +147,7 @@ fn is_schedule_or_priority(text: &str) -> bool {
     parse_schedule_token(text).is_some()
         || parse_priority_token(text).is_some()
         || parse_retired_priority_token(text).is_some()
+        || is_snooze_token(text)
 }
 
 /// Whether a token can sit inside a target-run edge block: a target member
@@ -408,8 +410,10 @@ pub(crate) fn masked_source_for_member_with_terminals(
     let mut bytes =
         masked_source_for_member(source, members, keep_index).into_bytes();
     for (kind, start, end) in terminal_spans {
-        if !matches!(kind, SpanKind::Schedule | SpanKind::Priority)
-            || start >= end
+        if !matches!(
+            kind,
+            SpanKind::Schedule | SpanKind::Priority | SpanKind::Snooze
+        ) || start >= end
             || *end > bytes.len()
         {
             continue;
@@ -568,6 +572,17 @@ fn extract_markers_from_range(
         if is_escaped_priority_token(text) {
             markers.priority_escapes.push((span.0, span.0 + 1));
             break;
+        }
+        if is_snooze_token(text) {
+            if markers.snooze.is_some() {
+                break;
+            }
+            let raw = snooze_value(text).unwrap_or_default().to_string();
+            markers.snooze = Some(SnoozeIntent::add(raw, Some(span)));
+            spans.push((SpanKind::Snooze, span.0, span.1));
+            tokens.remove(check);
+            index -= 1;
+            continue;
         }
         if let Some(offset) = parse_schedule_token(text) {
             if markers.scheduled_offset.is_some() {

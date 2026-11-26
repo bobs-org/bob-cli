@@ -144,6 +144,23 @@ pub(super) fn parse_editor_line<'a>(
     if let Some(diagnostic) = retired_priority_marker_diagnostic(&markers) {
         diagnostics.push(diagnostic);
     }
+    // A bare `z:` claims the snooze slot but names no time: keep the span
+    // and teach the value instead of failing the whole line.
+    if let Some(intent) = markers.snooze.as_ref()
+        && intent.is_bare()
+        && let Some((start, end)) = intent.span
+    {
+        let token_text = line_text
+            .get(start - line_base..end - line_base)
+            .unwrap_or("z:");
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: super::snooze::INCOMPLETE_SNOOZE_CODE,
+            message: super::snooze::incomplete_snooze_error(token_text),
+            range: Some((start, end)),
+            rewrite: None,
+        });
+    }
 
     // The recognized `@...` token leaves the body exactly like execution
     // drops it before joining the remaining tokens with single spaces.
@@ -218,6 +235,7 @@ pub(super) struct SeenMarkers {
     pub(super) clip: bool,
     pub(super) route: bool,
     pub(super) type_marker: bool,
+    pub(super) snooze: bool,
 }
 
 impl SeenMarkers {
@@ -230,6 +248,7 @@ impl SeenMarkers {
             let seen = match span.kind {
                 SpanKind::Schedule => &mut self.schedule,
                 SpanKind::Priority => &mut self.priority,
+                SpanKind::Snooze => &mut self.snooze,
                 SpanKind::Directive => &mut self.clip,
                 _ => continue,
             };
@@ -280,6 +299,7 @@ pub(super) fn terminal_marker_label(kind: SpanKind) -> &'static str {
     match kind {
         SpanKind::Schedule => "schedule marker (s:<N>)",
         SpanKind::Priority => "priority marker ($<N>)",
+        SpanKind::Snooze => super::snooze::SNOOZE_MARKER_LABEL,
         SpanKind::Directive => "directive (%c)",
         _ => "capture marker",
     }
@@ -3085,6 +3105,27 @@ fn try_parse_editor_target_run<'a>(
         return Some(outcome);
     };
     let mut combined = combine_editor_target_members(item, &run, options);
+    // Snooze takes one task: a fanned run carrying a `z:` refuses with the
+    // same multi-target message `bob capture` fails with. Per-member
+    // parses stayed quiet for this (see the fanned-run suppression in the
+    // item finalization), so this is the single failure.
+    if run.selection.members.len() > 1
+        && let Some(intent) = run.terminal_markers.snooze.as_ref()
+        && let Some(span) = intent.span
+        && !combined
+            .item
+            .diagnostics
+            .iter()
+            .any(|existing| existing.code == super::snooze::INVALID_SNOOZE_CODE)
+    {
+        combined.item.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: super::snooze::INVALID_SNOOZE_CODE,
+            message: super::snooze::snooze_multi_target_error(),
+            range: Some(span),
+            rewrite: None,
+        });
+    }
     if let Some(diagnostic) =
         retired_priority_marker_diagnostic(&run.terminal_markers)
         && !combined.item.diagnostics.iter().any(|existing| {
@@ -5014,6 +5055,70 @@ fn list_affix_token<'a>(tokens: &[Token<'a>], source: &str) -> Option<&'a str> {
     None
 }
 
+/// Snooze teaching copy for a marker-only existing-task link, in the same
+/// order `bob capture` refuses: schedule, priority, clipboard, children,
+/// then the link suffixes.
+fn snooze_link_conflict(
+    schedule: bool,
+    priority: bool,
+    clip: bool,
+    children: bool,
+    start: bool,
+    close: bool,
+    named_session: bool,
+) -> Option<String> {
+    if schedule {
+        Some(super::snooze::snooze_schedule_conflict_error())
+    } else if priority {
+        Some(super::snooze::snooze_priority_conflict_error())
+    } else if clip {
+        Some(super::snooze::snooze_existing_clip_error())
+    } else if children {
+        Some(super::snooze::snooze_existing_children_error())
+    } else if start {
+        Some(super::snooze::snooze_start_conflict_error())
+    } else if close {
+        Some(super::snooze::snooze_close_conflict_error())
+    } else if named_session {
+        Some(super::snooze::snooze_session_conflict_error())
+    } else {
+        None
+    }
+}
+
+/// Human detail for a `z:` on an editor mode with no snoozable task target.
+fn snooze_editor_unsupported_detail(mode: EditorMode) -> &'static str {
+    match mode {
+        EditorMode::SubBullet => {
+            "a `@route+id` sub-bullet capture takes no `z:<when>`"
+        }
+        EditorMode::Bullet => {
+            "a `@route#section` bullet capture takes no `z:<when>`"
+        }
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => {
+            "a project-note capture takes no `z:<when>`"
+        }
+        EditorMode::PomodoroNote => {
+            "a `%n` Pomodoro-note capture takes no `z:<when>`"
+        }
+        EditorMode::Ref => "a reference capture takes no `z:<when>`",
+        EditorMode::RecordNote | EditorMode::RecordUpdate => {
+            "a record capture takes no `z:<when>`"
+        }
+        EditorMode::NotebookNote
+        | EditorMode::NotebookSubNote
+        | EditorMode::NotebookCreate => {
+            "a notebook capture takes no `z:<when>`"
+        }
+        EditorMode::NotePull => "a note-pull capture takes no `z:<when>`",
+        EditorMode::TaskComplete => "a task completion takes no `z:<when>`",
+        EditorMode::TaskMove | EditorMode::TaskMerge => {
+            "a transfer takes no `z:<when>`"
+        }
+        _ => "this capture form takes no `z:<when>`",
+    }
+}
+
 pub(super) fn parse_editor_item_inner<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
@@ -5078,6 +5183,40 @@ pub(super) fn parse_editor_item_inner<'a>(
             // `%l` on a non-reference shape falls through to the generic
             // task path; `apply_listen_directive` reports it.
         }
+    }
+    // A narrow `@route:id!` item drops that task's active snooze row. It is
+    // claimed before ordinary marker classification so the trailing `!`
+    // never reaches block-ID validation. The masked view parses the
+    // `@route:id` prefix exactly like the link it names, then the `!`
+    // gains the additive `snooze` span.
+    if target_run.is_none()
+        && let Some((_, _, (_, end), _)) =
+            super::item::parse_snooze_drop_item(item)
+    {
+        let masked = masked_editor_source(item.source, end - 1, end);
+        let view = editor_item_view(item, &masked);
+        let outcome = parse_editor_item_singleton_with(&view, options);
+        let mut item_parse = outcome.item;
+        item_parse.spans.push(Span {
+            start: end - 1,
+            end,
+            kind: SpanKind::Snooze,
+            project_note: None,
+            title: None,
+            key: None,
+            section_action: None,
+        });
+        item_parse.spans.sort_by_key(|span| (span.start, span.end));
+        // Rebuild the outcome so its lifetime detaches from the masked
+        // view: the parse is owned and declarations re-slice the original
+        // source at unchanged offsets.
+        return EditorItemOutcome {
+            item: item_parse,
+            declarations: remap_type_marker_declarations(
+                outcome.declarations,
+                item.source,
+            ),
+        };
     }
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -5531,13 +5670,33 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
     }
 
+    // A recognized `z:` rides the editor parse as a `snooze` span. The
+    // strict path refuses every snooze incompatibility with one
+    // `invalid_snooze` teaching message, so the editor reports the same
+    // message here instead of the link/close conflicts below. Bare `z:`
+    // already reported `incomplete_snooze` at the line level.
+    let snooze_span = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Snooze)
+        .map(|span| (span.start, span.end));
+    let snooze_bare = snooze_span.is_some_and(|(start, end)| {
+        item.source.get(start..end).is_some_and(|text| text == "z:")
+    });
+    let snooze_active = seen.snooze && !snooze_bare;
+    // A fanned target run owns its snooze diagnostic at the combine step:
+    // per-member parses stay quiet so the multi-target refusal below is
+    // the single failure, exactly like `bob capture`.
+    let fanned_run_snooze =
+        target_run.is_some_and(|run| run.terminal_markers.snooze.is_some());
     // A solo `@route:block-id…` item links an existing task instead of
     // creating one, so `capture-parse` reports `pomodoro_link` exactly like
     // `bob capture` executes it. Anything else on the item (authored
     // children, clipboard, schedule, or priority markers) is an
     // `invalid_pomodoro_link` conflict instead of a new task. A close
     // suffix's schedule/priority conflicts report `invalid_pomodoro_close`
-    // below with the conflicting marker's range instead.
+    // below with the conflicting marker's range instead. With a `z:` the
+    // snooze gate below reports `invalid_snooze` with the same message
+    // `bob capture` refuses with.
     if mode == EditorMode::PomodoroTask
         && body.is_empty()
         && parent_parse
@@ -5556,28 +5715,54 @@ pub(super) fn parse_editor_item_inner<'a>(
         });
         let close_defers_schedule =
             pomodoro_close.is_some() && (seen.schedule || seen.priority);
-        let conflict = if item_dependencies.has_entries() {
-            // Relationship extras use `relationship_needs_text`.
-            None
-        } else if !sub_bullets.is_empty() {
-            Some(POMODORO_LINK_CHILD_CONFLICT_ERROR)
-        } else if seen.schedule && !close_defers_schedule {
-            Some(POMODORO_LINK_SCHEDULE_CONFLICT_ERROR)
-        } else if seen.priority && !close_defers_schedule {
-            Some(POMODORO_LINK_PRIORITY_CONFLICT_ERROR)
-        } else if seen.clip {
-            Some(POMODORO_LINK_CLIP_CONFLICT_ERROR)
-        } else {
-            None
-        };
-        if let Some(message) = conflict {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                code: "invalid_pomodoro_link",
-                message: message.to_string(),
-                range,
-                rewrite: None,
-            });
+        // Bare `z:` already reported `incomplete_snooze` at the line
+        // level; that first failure wins, exactly like `bob capture`.
+        // Bare `z:` already reported `incomplete_snooze` at the line
+        // level; that first failure wins, exactly like `bob capture`, so
+        // neither the snooze nor the link conflict runs for it.
+        let link_snooze = !snooze_bare && snooze_active && !fanned_run_snooze;
+        if link_snooze {
+            if let Some(message) = snooze_link_conflict(
+                seen.schedule,
+                seen.priority,
+                seen.clip,
+                !sub_bullets.is_empty(),
+                pomodoro_start.is_some(),
+                pomodoro_close.is_some(),
+                section.is_some(),
+            ) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: super::snooze::INVALID_SNOOZE_CODE,
+                    message,
+                    range: snooze_span.or(range),
+                    rewrite: None,
+                });
+            }
+        } else if !snooze_bare {
+            let conflict = if item_dependencies.has_entries() {
+                // Relationship extras use `relationship_needs_text`.
+                None
+            } else if !sub_bullets.is_empty() {
+                Some(POMODORO_LINK_CHILD_CONFLICT_ERROR)
+            } else if seen.schedule && !close_defers_schedule {
+                Some(POMODORO_LINK_SCHEDULE_CONFLICT_ERROR)
+            } else if seen.priority && !close_defers_schedule {
+                Some(POMODORO_LINK_PRIORITY_CONFLICT_ERROR)
+            } else if seen.clip {
+                Some(POMODORO_LINK_CLIP_CONFLICT_ERROR)
+            } else {
+                None
+            };
+            if let Some(message) = conflict {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_link",
+                    message: message.to_string(),
+                    range,
+                    rewrite: None,
+                });
+            }
         }
     }
 
@@ -5605,12 +5790,16 @@ pub(super) fn parse_editor_item_inner<'a>(
     // A `=x` close suffix cannot combine with `s:<N>`, `$<N>`, or `%c`:
     // report `invalid_pomodoro_close` on the conflicting marker itself,
     // mirroring `bob capture`'s strict execution errors. Applies to both
-    // solo links and body-bearing task captures.
+    // solo links and body-bearing task captures. With a `z:` the snooze
+    // gate below reports `invalid_snooze` with the same message `bob
+    // capture` refuses with.
     if pomodoro_close.is_some()
         && (mode == EditorMode::PomodoroTask
             || mode == EditorMode::PomodoroLink)
+        && !snooze_bare
     {
         if seen.schedule
+            && !snooze_active
             && let Some(span) =
                 spans.iter().find(|span| span.kind == SpanKind::Schedule)
         {
@@ -5623,6 +5812,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             });
         }
         if seen.priority
+            && !snooze_active
             && let Some(span) =
                 spans.iter().find(|span| span.kind == SpanKind::Priority)
         {
@@ -5635,6 +5825,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             });
         }
         if seen.clip
+            && !snooze_active
             && let Some(span) =
                 spans.iter().find(|span| span.kind == SpanKind::Directive)
         {
@@ -5647,6 +5838,10 @@ pub(super) fn parse_editor_item_inner<'a>(
             });
         }
     }
+
+    // Snooze incompatibilities for non-link modes are reported after the
+    // caret section below, which may still re-mode the item: see the
+    // consolidated snooze gate there.
 
     // Project task IDs (` :id` / ` ^id`) and move bullets (`- ^<id>` /
     // `- :<id>`) are a post-pass over the parsed lines, mirroring
@@ -5833,6 +6028,11 @@ pub(super) fn parse_editor_item_inner<'a>(
     // token replaces any ordinary marker the generic pass resolved, and a
     // `@@` declaration never applies to the item.
     let has_caret_item = caret.is_some();
+    // A caret shape that already diagnosed itself (near miss or malformed
+    // selection) owns the item's failure: the snooze gate below stays
+    // quiet so `bob capture` and `capture-parse` report the same single
+    // error.
+    let mut caret_diagnosed = false;
     if let Some(caret) = caret {
         local_destination_markers.clear();
         local_destination_marker = None;
@@ -6172,6 +6372,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 // precise `invalid_pomodoro_close` diagnostic and no spec.
                 // An item conflict (extra text, child lines) wins instead,
                 // exactly like execution.
+                caret_diagnosed = true;
                 mode = EditorMode::PomodoroLink;
                 if caret.solo_parent {
                     body = String::new();
@@ -6291,6 +6492,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 });
             }
             CaretItemKind::Invalid { message } => {
+                caret_diagnosed = true;
                 mode = EditorMode::PomodoroLink;
                 if caret.solo_parent {
                     body = String::new();
@@ -6476,6 +6678,17 @@ pub(super) fn parse_editor_item_inner<'a>(
             && !seen.priority
             && !seen.clip
             && sub_bullets.iter().any(|bullet| bullet.depth.is_first());
+        // A `z:` on an existing-task link (`@route:id`, `^route:id`)
+        // refuses as a snooze conflict before this ownership gate runs,
+        // exactly like `bob capture`: suppress the relationship
+        // diagnostic there so the snooze failure stays single. Other
+        // shapes keep the relationship-first order both paths share.
+        let snooze_link_scope = seen.snooze
+            && body.is_empty()
+            && (mode == EditorMode::PomodoroLink
+                || local_destination_marker.as_deref().is_some_and(|marker| {
+                    marker.contains(':') || marker.starts_with('^')
+                }));
         if matches!(
             dependency_target.as_ref().map(|target| &target.kind),
             Some(DependencyTargetKind::ExistingTask)
@@ -6484,6 +6697,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 || seen.priority
                 || seen.clip
                 || (!sub_bullets.is_empty() && !multi_note_form))
+            && !snooze_link_scope
         {
             let owner =
                 local_destination_marker.as_deref().unwrap_or("@route+id");
@@ -6529,6 +6743,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                 rewrite: None,
             });
         }
+
         if !item_dependencies.partials.is_empty()
             && !needs.contains(&Need::TaskDependency)
         {
@@ -6578,6 +6793,97 @@ pub(super) fn parse_editor_item_inner<'a>(
             && !needs.contains(&Need::DependencyTarget)
         {
             needs.push(Need::DependencyTarget);
+        }
+    }
+
+    // A relationship failure already reported above owns the item:
+    // `bob capture` checks ownership before the snooze gate on these
+    // shapes, so the snooze gate stays quiet and both paths report
+    // the same single first failure.
+    let relationship_fired = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "relationship_needs_text");
+    // An ineligible explicit toggle (`!` with body text, children, or
+    // other markers) already reported `unsupported_explicit_toggle` above:
+    // the snooze gate stays quiet so `bob capture` and `capture-parse`
+    // report the same single first failure.
+    let toggle_already_refused = has_explicit_toggle && !toggle_eligible;
+    if snooze_active
+        && (mode != EditorMode::PomodoroLink || has_caret_item)
+        && !caret_diagnosed
+        && !fanned_run_snooze
+        && !toggle_already_refused
+        && !relationship_fired
+    {
+        // A masked `%n` flips the mode to PomodoroNote after this gate
+        // runs, so test the directive flag itself: `bob capture` refuses
+        // the note kind the same way.
+        let message = if has_note {
+            Some(super::snooze::snooze_unsupported_kind_error(
+                snooze_editor_unsupported_detail(EditorMode::PomodoroNote),
+            ))
+        } else {
+            match mode {
+                EditorMode::PomodoroLink => {
+                    if !sub_bullets.is_empty() {
+                        Some(super::snooze::snooze_existing_children_error())
+                    } else if seen.schedule {
+                        Some(super::snooze::snooze_schedule_conflict_error())
+                    } else if seen.priority {
+                        Some(super::snooze::snooze_priority_conflict_error())
+                    } else if seen.clip {
+                        Some(super::snooze::snooze_existing_clip_error())
+                    } else if pomodoro_start.is_some() {
+                        Some(super::snooze::snooze_start_conflict_error())
+                    } else if pomodoro_close.is_some() {
+                        Some(super::snooze::snooze_close_conflict_error())
+                    } else if section.is_some() {
+                        Some(super::snooze::snooze_session_conflict_error())
+                    } else {
+                        None
+                    }
+                }
+                EditorMode::PomodoroTask => {
+                    if seen.schedule {
+                        Some(super::snooze::snooze_schedule_conflict_error())
+                    } else if seen.priority {
+                        Some(super::snooze::snooze_priority_conflict_error())
+                    } else if pomodoro_start.is_some() {
+                        Some(super::snooze::snooze_start_conflict_error())
+                    } else if pomodoro_close.is_some() {
+                        Some(super::snooze::snooze_close_conflict_error())
+                    } else if section.is_some() {
+                        Some(super::snooze::snooze_session_conflict_error())
+                    } else {
+                        None
+                    }
+                }
+                EditorMode::Task => {
+                    if seen.schedule {
+                        Some(super::snooze::snooze_schedule_conflict_error())
+                    } else if seen.priority {
+                        Some(super::snooze::snooze_priority_conflict_error())
+                    } else {
+                        None
+                    }
+                }
+                EditorMode::TaskToggle => {
+                    Some(super::snooze::snooze_drop_conflict_error())
+                }
+                EditorMode::Incomplete => None,
+                _ => Some(super::snooze::snooze_unsupported_kind_error(
+                    snooze_editor_unsupported_detail(mode),
+                )),
+            }
+        };
+        if let Some(message) = message {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: super::snooze::INVALID_SNOOZE_CODE,
+                message,
+                range: snooze_span,
+                rewrite: None,
+            });
         }
     }
 

@@ -2235,6 +2235,17 @@ pub(super) fn plan_capture_item(
     // `now` is already wall-clock time in Bob's configured zone; notebook
     // and project-note stamps resolve their offset in that same zone so
     // UTC-clock hosts do not stamp `+0000`.
+    //
+    // Grammar-phase execution guard: a recognized snooze intent (`z:<when>`
+    // or the narrow `@route:id!` drop) parses cleanly but must never fall
+    // through to ordinary writes. The mutation phase removes this refusal
+    // once every accepted intent reaches a complete planner branch.
+    if parsed_item.parsed.snooze.is_some() {
+        return Err(CaptureError::usage(
+            crate::native::capture_language::snooze
+                ::snooze_not_yet_executable_error(),
+        ));
+    }
     let timezone = crate::native::day_timezone().ok().flatten();
     if is_album_guarded_task_kind(&parsed_item.parsed.kind)
         && let Some(route) = parsed_item.parsed.route.as_deref()

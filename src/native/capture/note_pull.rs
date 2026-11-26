@@ -1644,6 +1644,7 @@ mod tests {
             },
             scheduled_offset: None,
             priority_level: None,
+            snooze: None,
             sub_bullets: Vec::new(),
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),

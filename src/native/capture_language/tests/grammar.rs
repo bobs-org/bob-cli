@@ -3263,3 +3263,298 @@ fn double_pipe_grammar_vectors() {
         }
     }
 }
+
+#[test]
+fn snooze_claims_terminal_z_in_either_marker_order() {
+    for (raw, route_span, snooze_span) in [
+        ("Fix sink @home z:19", (9, 14), (15, 19)),
+        ("Fix sink z:19 @home", (14, 19), (9, 13)),
+    ] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert_eq!(parsed.body, "Fix sink", "{raw}");
+        assert_eq!(parsed.route.as_deref(), Some("home"), "{raw}");
+        assert!(
+            matches!(parsed.kind, CaptureKind::Task),
+            "{raw}: {:?}",
+            parsed.kind
+        );
+        let snooze = parsed.snooze.as_ref().expect("{raw} carries snooze");
+        assert_eq!(snooze.raw, "19", "{raw}");
+        assert!(!snooze.drop, "{raw}");
+        assert_eq!(snooze.span, Some(snooze_span), "{raw}");
+
+        let edited = editor(raw);
+        assert_eq!(edited.mode, EditorMode::Task, "{raw}");
+        assert_eq!(edited.body, "Fix sink", "{raw}");
+        assert_eq!(edited.route.as_deref(), Some("home"), "{raw}");
+        assert!(
+            edited.diagnostics.is_empty(),
+            "{raw}: {:?}",
+            edited.diagnostics
+        );
+        // Spans arrive in extraction order, so sort by offset before
+        // comparing.
+        let mut actual = ranges(&edited);
+        actual.sort_by_key(|span| (span.0, span.1));
+        let mut expected = vec![
+            (route_span.0, route_span.1, SpanKind::Route),
+            (snooze_span.0, snooze_span.1, SpanKind::Snooze),
+        ];
+        expected.sort_by_key(|span| (span.0, span.1));
+        assert_eq!(actual, expected, "{raw}");
+    }
+}
+
+#[test]
+fn snooze_marks_unicode_offsets_in_bytes() {
+    let raw = "Réparer évier @home z:19";
+    let edited = editor(raw);
+    assert_eq!(
+        ranges(&edited),
+        vec![(16, 21, SpanKind::Route), (22, 26, SpanKind::Snooze)],
+        "{raw}"
+    );
+    let parsed = execute(raw).expect("unicode snooze parses");
+    assert_eq!(
+        parsed.snooze.as_ref().and_then(|snooze| snooze.span),
+        Some((22, 26)),
+        "{raw}"
+    );
+}
+
+#[test]
+fn snooze_admits_existing_task_markers_with_either_sigil() {
+    for (raw, route_kind, block_kind) in [
+        (
+            "@job:email-dan-eod z:1530",
+            SpanKind::PomodoroRoute,
+            SpanKind::PomodoroBlockId,
+        ),
+        (
+            "^job:email-dan-eod z:1530",
+            SpanKind::ActiveTaskRoute,
+            SpanKind::ActiveTaskBlockId,
+        ),
+    ] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert!(parsed.body.is_empty(), "{raw}");
+        assert_eq!(parsed.route.as_deref(), Some("job"), "{raw}");
+        assert!(
+            matches!(parsed.kind, CaptureKind::PomodoroLink { .. }),
+            "{raw}: {:?}",
+            parsed.kind
+        );
+        let snooze = parsed.snooze.as_ref().expect("{raw} carries snooze");
+        assert_eq!(snooze.raw, "1530", "{raw}");
+        assert!(!snooze.drop, "{raw}");
+
+        let edited = editor(raw);
+        assert_eq!(edited.mode, EditorMode::PomodoroLink, "{raw}");
+        assert!(
+            edited.diagnostics.is_empty(),
+            "{raw}: {:?}",
+            edited.diagnostics
+        );
+        assert_eq!(
+            ranges(&edited),
+            vec![
+                (0, 4, route_kind),
+                (5, 18, block_kind),
+                (19, 25, SpanKind::Snooze),
+            ],
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn snooze_new_task_routes_cover_authored_and_minted_ids() {
+    // An authored block ID survives on the colon marker: the strict kind
+    // keeps the Pomodoro marker the mutation phase re-reads as a new task
+    // with that ID, and the editor agrees on spans.
+    let authored = execute("Fix sink @home:fix-sink z:19").expect("authored");
+    assert_eq!(authored.body, "Fix sink");
+    assert!(
+        matches!(authored.kind, CaptureKind::Pomodoro { .. }),
+        "{:?}",
+        authored.kind
+    );
+    assert_eq!(
+        authored.snooze.as_ref().map(|snooze| snooze.raw.as_str()),
+        Some("19")
+    );
+    let edited = editor("Fix sink @home:fix-sink z:19");
+    assert_eq!(edited.mode, EditorMode::PomodoroTask);
+    assert_eq!(
+        ranges(&edited),
+        vec![
+            (9, 14, SpanKind::PomodoroRoute),
+            (15, 23, SpanKind::PomodoroBlockId),
+            (24, 28, SpanKind::Snooze),
+        ]
+    );
+
+    // The caret-authored form is the established new-task-with-ID shape.
+    let caret = execute("Fix sink @home^fix-sink z:19").expect("caret");
+    assert!(
+        matches!(caret.kind, CaptureKind::TaskWithBlockId { .. }),
+        "{:?}",
+        caret.kind
+    );
+    assert!(caret.snooze.is_some());
+}
+
+#[test]
+fn snooze_drop_is_narrow_and_not_a_toggle() {
+    let parsed = execute("@job:email-dan-eod!").expect("drop parses");
+    assert!(parsed.body.is_empty());
+    assert_eq!(parsed.route.as_deref(), Some("job"));
+    assert!(
+        matches!(parsed.kind, CaptureKind::PomodoroLink { .. }),
+        "{:?}",
+        parsed.kind
+    );
+    let snooze = parsed.snooze.as_ref().expect("drop intent");
+    assert!(snooze.drop);
+    assert_eq!(snooze.span, Some((0, 19)));
+
+    let edited = editor("@job:email-dan-eod!");
+    assert_eq!(edited.mode, EditorMode::PomodoroLink);
+    assert!(edited.diagnostics.is_empty(), "{:?}", edited.diagnostics);
+    assert_eq!(
+        ranges(&edited),
+        vec![
+            (0, 4, SpanKind::PomodoroRoute),
+            (5, 18, SpanKind::PomodoroBlockId),
+            (18, 19, SpanKind::Snooze),
+        ]
+    );
+
+    // The established `+`-family toggle keeps its kind and carries no
+    // snooze: `@route:id!` above claimed the drop precisely because it
+    // has no `+`.
+    let toggle = execute("@job+email-dan!").expect("toggle parses");
+    assert!(
+        matches!(toggle.kind, CaptureKind::TaskToggle { .. }),
+        "{:?}",
+        toggle.kind
+    );
+    assert!(toggle.snooze.is_none());
+    assert_eq!(editor("@job+email-dan!").mode, EditorMode::TaskToggle);
+
+    // Near misses never claim the drop: the trailing `!` still fails
+    // block-ID validation on both paths. (`=x!` is a valid close with a
+    // complete-all group, not a drop near miss.)
+    for raw in [
+        "@job:email-dan-eod!x",
+        "@job:email-dan-eod#sec!",
+        "@job:email-dan-eod!!",
+    ] {
+        assert!(execute(raw).is_err(), "{raw}");
+        assert!(!codes(&editor(raw)).is_empty(), "{raw}");
+    }
+}
+
+#[test]
+fn snooze_bare_and_conflicts_agree_across_strict_and_editor() {
+    // Each pair names the diagnostic code plus inputs whose strict error
+    // text must equal the editor diagnostic message.
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "incomplete_snooze",
+            &["@job:email-dan-eod z:", "Fix sink @home z:"],
+        ),
+        (
+            "invalid_snooze",
+            &[
+                "@job:email-dan-eod s:2 z:19",
+                "@job:email-dan-eod z:19 s:2",
+                "^job:email-dan-eod s:2 z:19",
+                "Fix sink @home s:2 z:19",
+                "Fix s:0 @home z:19",
+                "@job:email-dan-eod $2 z:19",
+                "Fix sink @home $2 z:19",
+                "@job:email-dan-eod#night z:19",
+                "Fix sink @job:email-dan-eod#night z:19",
+                "@job:email-dan-eod=3 z:19",
+                "^job:email-dan-eod=3 z:19",
+                "Fix sink @job:email-dan-eod=3 z:19",
+                "@job:email-dan-eod=x z:19",
+                "@job:email-dan-eod z:19\n- kid notes",
+                "jot %n z:19",
+                "Fix @home#Sec z:19",
+                "Fix @home+abc z:19",
+                "note @a+x @b+y z:9",
+            ],
+        ),
+    ];
+    for (code, raws) in cases {
+        for raw in *raws {
+            let error = execute(raw).expect_err(raw);
+            let edited = editor(raw);
+            let diagnostic_codes = codes(&edited);
+            assert_eq!(
+                diagnostic_codes,
+                vec![*code],
+                "{raw}: {diagnostic_codes:?}"
+            );
+            assert_eq!(edited.diagnostics[0].message, error, "{raw}");
+        }
+    }
+
+    // A drop marker with anything else on the item is not a drop at all:
+    // the trailing `!` still fails block-ID validation on both paths.
+    let raw = "@job:email-dan-eod! z:19";
+    let error = execute(raw).expect_err(raw);
+    let edited = editor(raw);
+    assert_eq!(codes(&edited), vec!["invalid_pomodoro_block_id"], "{raw}");
+    assert_eq!(edited.diagnostics[0].message, error, "{raw}");
+}
+
+#[test]
+fn snooze_stays_literal_outside_terminal_claims() {
+    // Uppercase never claims: it stays task text on both paths.
+    for raw in ["Z:19 @home", "Fix Z:19 @home"] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert!(parsed.snooze.is_none(), "{raw}");
+        assert_eq!(codes(&editor(raw)).len(), 0, "{raw}");
+    }
+    // Code spans and mid-line prose never become parent markers.
+    let code = "Fix @home `z:19`";
+    let parsed = execute(code).expect("code literal parses");
+    assert!(parsed.snooze.is_none());
+    assert_eq!(parsed.body, "Fix @home `z:19`");
+    assert_eq!(editor(code).body, "Fix @home `z:19`");
+
+    // A non-terminal `z:` inside child prose stays literal and unclaimed.
+    let child = "Fix @home\n- kid z:19 notes";
+    let parsed = execute(child).expect("child prose parses");
+    assert!(parsed.snooze.is_none(), "{child}");
+    assert_eq!(codes(&editor(child)).len(), 0, "{child}");
+}
+
+#[test]
+fn snooze_duplicate_keeps_parsing_with_the_last_claim() {
+    // Duplicates stop terminal parsing exactly like `s:` does: the last
+    // token wins and the earlier one stays literal body text.
+    let raw = "Fix @home z:19 z:20";
+    let parsed = execute(raw).expect("duplicate parses");
+    assert_eq!(parsed.body, "Fix @home z:19");
+    assert_eq!(parsed.route.as_deref(), None, "{raw}");
+    assert_eq!(
+        parsed.snooze.as_ref().map(|snooze| snooze.raw.as_str()),
+        Some("20")
+    );
+    let edited = editor(raw);
+    assert_eq!(edited.body, "Fix @home z:19");
+    assert_eq!(edited.route.as_deref(), None, "{raw}");
+    assert!(
+        edited.diagnostics.is_empty(),
+        "{raw}: {:?}",
+        edited.diagnostics
+    );
+    assert_eq!(ranges(&edited), vec![(15, 19, SpanKind::Snooze)], "{raw}");
+}

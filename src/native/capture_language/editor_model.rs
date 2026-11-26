@@ -59,6 +59,8 @@ pub(crate) enum SpanKind {
     ProjectTaskMoveChoiceMarker,
     GlobalRoute,
     Schedule,
+    /// A whole `z:<when>` terminal snooze token.
+    Snooze,
     Priority,
     /// A whole `%` directive token (`%c`/`%c<N>`, `%n`, `%l`, bare `%`).
     Directive,
@@ -170,6 +172,7 @@ impl SpanKind {
             }
             Self::GlobalRoute => "global_route",
             Self::Schedule => "schedule",
+            Self::Snooze => "snooze",
             Self::Priority => "priority",
             Self::Directive => "directive",
             Self::DependencySigil => "dependency_sigil",

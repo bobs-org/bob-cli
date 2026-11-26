@@ -63,6 +63,7 @@ mod parse_pomodoro_past;
 mod parse_pomodoro_start_drop;
 mod parse_relation;
 mod parse_reqs;
+mod parse_snooze;
 mod parse_template;
 mod plan_budget;
 mod pomodoro_adjust;

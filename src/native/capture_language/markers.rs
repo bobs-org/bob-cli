@@ -3,6 +3,7 @@
 use super::bare_name::{can_spell_bare, start_name_spelling};
 use super::editor_model::*;
 use super::model::*;
+use super::snooze::{is_snooze_token, snooze_value, SnoozeIntent};
 use super::tokens::*;
 
 /// Parse one whitespace-free token as a schedule offset (`s:<N>`), returning
@@ -89,7 +90,9 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
     tokens: &mut Vec<T>,
 ) -> (TerminalMarkers, Vec<(SpanKind, usize, usize)>) {
     let marker_like = |token: &str| {
-        parse_schedule_token(token).is_some() || is_priority_marker_token(token)
+        parse_schedule_token(token).is_some()
+            || is_priority_marker_token(token)
+            || is_snooze_token(token)
     };
     let route_index = if tokens
         .last()
@@ -192,6 +195,14 @@ fn extract_terminal_marker(
     span: Option<(usize, usize)>,
     markers: &mut TerminalMarkers,
 ) -> Option<ExtractedTerminal> {
+    if is_snooze_token(token) {
+        if markers.snooze.is_some() {
+            return None;
+        }
+        let raw = snooze_value(token).unwrap_or_default().to_string();
+        markers.snooze = Some(SnoozeIntent::add(raw, span));
+        return Some(ExtractedTerminal::Span(SpanKind::Snooze));
+    }
     if let Some(offset) = parse_schedule_token(token) {
         if markers.scheduled_offset.is_some() {
             return None;

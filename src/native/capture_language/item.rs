@@ -63,6 +63,14 @@ fn apply_target_run_terminal_markers(
         }
         destination.priority_level = Some(level);
     }
+    if let Some(snooze) = extracted.snooze.clone() {
+        if destination.snooze.is_some() {
+            return Err(duplicate_marker_error(
+                super::snooze::SNOOZE_MARKER_LABEL,
+            ));
+        }
+        destination.snooze = Some(snooze);
+    }
     if let Some(retired) = &extracted.retired_priority {
         return Err(retired_priority_marker_error(&retired.token));
     }
@@ -156,6 +164,11 @@ fn try_resolve_parent_target_run<'a>(
     if selection.members.len() < 2 {
         return None;
     }
+    if markers.snooze.is_some() {
+        return Some(Err(CaptureItemParseError::generic(
+            super::snooze::snooze_multi_target_error(),
+        )));
+    }
     if let Some(retired) = &markers.retired_priority {
         return Some(Err(CaptureItemParseError::generic(
             retired_priority_marker_error(&retired.token),
@@ -248,6 +261,11 @@ fn try_resolve_child_target_run<'a>(
         target_runs::select_target_run(&tokens, false, detect_route)?;
     if selection.members.len() < 2 {
         return None;
+    }
+    if markers.snooze.is_some() {
+        return Some(Err(CaptureItemParseError::generic(
+            super::snooze::snooze_multi_target_error(),
+        )));
     }
     if selection.position == target_runs::TargetRunPosition::WholeLine {
         return None;
@@ -422,6 +440,7 @@ fn claim_reference_item<'a>(
                     kind,
                     scheduled_offset: None,
                     priority_level: None,
+                    snooze: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -443,6 +462,7 @@ fn claim_reference_item<'a>(
                 kind,
                 scheduled_offset: None,
                 priority_level: None,
+                snooze: None,
                 sub_bullets: Vec::new(),
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
@@ -496,6 +516,7 @@ fn claim_reference_item<'a>(
                 kind,
                 scheduled_offset: None,
                 priority_level: None,
+                snooze: None,
                 sub_bullets: Vec::new(),
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
@@ -1286,6 +1307,7 @@ fn parse_list_bullet_item<'a>(
                     kind: CaptureKind::NotePull { route },
                     scheduled_offset: None,
                     priority_level: None,
+                    snooze: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1662,6 +1684,17 @@ fn parse_list_bullet_item<'a>(
         Some(&header_text),
     )
     .map_err(CaptureItemParseError::generic)?;
+    // List captures never snooze: a list fans one header out to many tasks
+    // and a single `z:` cannot name which one it snoozes.
+    if let Some(snooze) = aggregate.snooze.as_ref() {
+        if snooze.is_bare() {
+            return Err(super::snooze::incomplete_snooze_error("z:").into());
+        }
+        return Err(super::snooze::snooze_unsupported_kind_error(
+            "a list capture takes no `z:<when>`; give the snoozed task its own item",
+        )
+        .into());
+    }
     Ok(parsed_capture_item_outcome(
         item,
         ParsedCaptureText {
@@ -1671,6 +1704,7 @@ fn parse_list_bullet_item<'a>(
             kind,
             scheduled_offset: aggregate.scheduled_offset,
             priority_level: aggregate.priority_level,
+            snooze: aggregate.snooze.clone(),
             sub_bullets,
             dependencies,
             blocked_tasks: execution_blocked_tasks(&item_dependencies),
@@ -2189,6 +2223,64 @@ fn admitted_child_lines<'i, 'a>(
         .collect()
 }
 
+/// Item-level narrow snooze-drop claim: a single-line item whose whole
+/// parent line is exactly `@<route>:<block-id>!`. Returns the lower-cased
+/// route, block ID, full-marker absolute span, and marker text. No authored
+/// children, dependency modifiers, or second tokens can hide behind a
+/// single whitespace-free token, so a claim here is always marker-only.
+pub(super) fn parse_snooze_drop_item(
+    item: &CaptureItem<'_>,
+) -> Option<(String, String, (usize, usize), String)> {
+    if item.lines.len() != 1 {
+        return None;
+    }
+    let parent = item.lines.first()?;
+    let trimmed = parent.raw.text.trim();
+    let drop = super::snooze::parse_snooze_drop_token(trimmed)?;
+    let offset = parent.raw.text.find(trimmed)?;
+    let start = parent.raw.start + offset;
+    Some((
+        drop.route,
+        drop.block_id,
+        (start, start + trimmed.len()),
+        trimmed.to_string(),
+    ))
+}
+
+/// Human detail for a `z:` on an item kind with no snoozable task target.
+fn snooze_unsupported_kind_detail(kind: &CaptureKind) -> &'static str {
+    match kind {
+        CaptureKind::SubBullet { .. } => {
+            "a `@route+id` sub-bullet capture takes no `z:<when>`"
+        }
+        CaptureKind::Bullet { .. } => {
+            "a `@route#section` bullet capture takes no `z:<when>`"
+        }
+        CaptureKind::ProjectNote { .. } => {
+            "a project-note capture takes no `z:<when>`"
+        }
+        CaptureKind::PomodoroNote => {
+            "a `%n` Pomodoro-note capture takes no `z:<when>`"
+        }
+        CaptureKind::Ref(_) => "a reference capture takes no `z:<when>`",
+        CaptureKind::RecordNote { .. } | CaptureKind::RecordUpdate { .. } => {
+            "a record capture takes no `z:<when>`"
+        }
+        CaptureKind::NotebookNote { .. }
+        | CaptureKind::NotebookSubNote { .. }
+        | CaptureKind::NotebookCreate { .. } => {
+            "a notebook capture takes no `z:<when>`"
+        }
+        CaptureKind::NotePull { .. } => {
+            "a note-pull capture takes no `z:<when>`"
+        }
+        CaptureKind::TaskComplete { .. } => {
+            "a task completion takes no `z:<when>`"
+        }
+        _ => "this capture form takes no `z:<when>`",
+    }
+}
+
 fn parse_capture_item_masked<'a>(
     item: &CaptureItem<'a>,
     forced_route: Option<&str>,
@@ -2245,6 +2337,7 @@ fn parse_capture_item_masked<'a>(
                         },
                         scheduled_offset: None,
                         priority_level: None,
+                        snooze: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
@@ -2370,6 +2463,57 @@ fn parse_capture_item_masked<'a>(
     }
     if let Some(message) = early_link_operator_body_error(parent_line) {
         return Err(message);
+    }
+    // A narrow `@route:id!` item drops that task's active snooze row. It is
+    // claimed before ordinary target validation so the trailing `!` never
+    // reaches block-ID validation, which stays as strict as before. The
+    // `!` here is not the `@route+id!` toggle: it never completes, wakes,
+    // or cancels the task itself.
+    if forced_route.is_none()
+        && forced_section.is_none()
+        && !options.explicit_destination
+        && let Some(drop) = parse_snooze_drop_item(item)
+    {
+        let (drop_route, drop_block_id, drop_span, marker_text) = drop;
+        let link_kind = CaptureKind::PomodoroLink {
+            block_id: drop_block_id.clone(),
+            pomodoro_name: None,
+            pomodoro_name_is_literal: false,
+            start: None,
+            close: None,
+            spelling: PomodoroLinkSpelling::At,
+        };
+        let (dependencies, dependency_target) = execution_item_dependencies(
+            &item_dependencies,
+            &link_kind,
+            Some(&drop_route),
+            true,
+            false,
+            Some(&marker_text),
+        )?;
+        return Ok(parsed_capture_item_outcome(
+            item,
+            ParsedCaptureText {
+                body: String::new(),
+                clip: None,
+                route: Some(drop_route),
+                kind: link_kind,
+                scheduled_offset: None,
+                priority_level: None,
+                snooze: Some(super::snooze::SnoozeIntent::drop(Some(
+                    drop_span,
+                ))),
+                sub_bullets: Vec::new(),
+                dependencies,
+                blocked_tasks: execution_blocked_tasks(&item_dependencies),
+                relations: execution_relations(&item_dependencies),
+                dependency_target,
+                type_marker: None,
+                merge_in: None,
+            },
+            Vec::new(),
+            Some(marker_text),
+        ));
     }
     if let Some(outcome) = parse_pomodoro_equals_item(
         item,
@@ -2779,6 +2923,28 @@ fn parse_capture_item_masked<'a>(
             .route
             .as_ref()
             .map(|route| route.marker_text.clone());
+        // An existing-task snooze (`@route:id z:<when>` or its `^route:id`
+        // alias) carries only the snooze intent: it links no Pomodoro and
+        // creates no task. These shape checks run before the relationship
+        // gate below so both `bob capture` and `capture-parse` report the
+        // same first failure. Suffix checks follow kind resolution.
+        if let Some(snooze) = aggregate.snooze.as_ref() {
+            if snooze.is_bare() {
+                return Err(super::snooze::incomplete_snooze_error("z:"));
+            }
+            if aggregate.scheduled_offset.is_some() {
+                return Err(super::snooze::snooze_schedule_conflict_error());
+            }
+            if aggregate.priority_level.is_some() {
+                return Err(super::snooze::snooze_priority_conflict_error());
+            }
+            if aggregate.clip.is_some() {
+                return Err(super::snooze::snooze_existing_clip_error());
+            }
+            if !sub_bullets.is_empty() {
+                return Err(super::snooze::snooze_existing_children_error());
+            }
+        }
         let extras = aggregate.clip.is_some()
             || aggregate.scheduled_offset.is_some()
             || aggregate.priority_level.is_some()
@@ -2838,6 +3004,17 @@ fn parse_capture_item_masked<'a>(
         else {
             return Err(missing_text_error());
         };
+        if aggregate.snooze.is_some() {
+            if start.is_some() {
+                return Err(super::snooze::snooze_start_conflict_error());
+            }
+            if close.is_some() {
+                return Err(super::snooze::snooze_close_conflict_error());
+            }
+            if pomodoro_name.is_some() {
+                return Err(super::snooze::snooze_session_conflict_error());
+            }
+        }
         let spelling = if marker_text
             .as_deref()
             .is_some_and(|marker| marker.starts_with('^'))
@@ -2873,6 +3050,7 @@ fn parse_capture_item_masked<'a>(
                 kind: link_kind,
                 scheduled_offset: None,
                 priority_level: None,
+                snooze: aggregate.snooze.clone(),
                 sub_bullets: Vec::new(),
                 dependencies,
                 blocked_tasks: execution_blocked_tasks(&item_dependencies),
@@ -2927,6 +3105,7 @@ fn parse_capture_item_masked<'a>(
                 kind,
                 scheduled_offset: aggregate.scheduled_offset,
                 priority_level: aggregate.priority_level,
+                snooze: aggregate.snooze.clone(),
                 sub_bullets,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
@@ -2985,6 +3164,7 @@ fn parse_capture_item_masked<'a>(
                 kind: CaptureKind::Task,
                 scheduled_offset: aggregate.scheduled_offset,
                 priority_level: aggregate.priority_level,
+                snooze: aggregate.snooze.clone(),
                 sub_bullets,
                 dependencies,
                 blocked_tasks: execution_blocked_tasks(&item_dependencies),
@@ -3213,6 +3393,54 @@ fn parse_capture_item_masked<'a>(
     } else {
         kind
     };
+    // A recognized snooze intent rides the item into the capture dispatch
+    // guard, which refuses it until the mutation phase consumes it. Only
+    // task shapes carry it: every other kind refuses here with snooze
+    // teaching copy so no intent falls through to ordinary writes.
+    if let Some(snooze) = aggregate.snooze.as_ref() {
+        if snooze.is_bare() {
+            return Err(super::snooze::incomplete_snooze_error("z:"));
+        }
+        if aggregate.scheduled_offset.is_some() {
+            return Err(super::snooze::snooze_schedule_conflict_error());
+        }
+        if aggregate.priority_level.is_some() {
+            return Err(super::snooze::snooze_priority_conflict_error());
+        }
+        match &kind {
+            CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {}
+            CaptureKind::Pomodoro {
+                pomodoro_name,
+                start,
+                close,
+                ..
+            }
+            | CaptureKind::PomodoroLink {
+                pomodoro_name,
+                start,
+                close,
+                ..
+            } => {
+                if start.is_some() {
+                    return Err(super::snooze::snooze_start_conflict_error());
+                }
+                if close.is_some() {
+                    return Err(super::snooze::snooze_close_conflict_error());
+                }
+                if pomodoro_name.is_some() {
+                    return Err(super::snooze::snooze_session_conflict_error());
+                }
+            }
+            CaptureKind::TaskToggle { .. } => {
+                return Err(super::snooze::snooze_drop_conflict_error());
+            }
+            other => {
+                return Err(super::snooze::snooze_unsupported_kind_error(
+                    snooze_unsupported_kind_detail(other),
+                ));
+            }
+        }
+    }
     let (dependencies, dependency_target) = execution_item_dependencies(
         &item_dependencies,
         &kind,
@@ -3230,6 +3458,7 @@ fn parse_capture_item_masked<'a>(
             kind,
             scheduled_offset: aggregate.scheduled_offset,
             priority_level: aggregate.priority_level,
+            snooze: aggregate.snooze.clone(),
             sub_bullets,
             dependencies,
             blocked_tasks: execution_blocked_tasks(&item_dependencies),
@@ -4632,6 +4861,7 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
             kind,
             scheduled_offset: None,
             priority_level: None,
+            snooze: None,
             sub_bullets: Vec::new(),
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -5348,6 +5578,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     kind: CaptureKind::PomodoroSplit { spec },
                     scheduled_offset: None,
                     priority_level: None,
+                    snooze: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -5409,6 +5640,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     kind: CaptureKind::PomodoroMerge { spec },
                     scheduled_offset: None,
                     priority_level: None,
+                    snooze: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -5494,6 +5726,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         kind: CaptureKind::PomodoroPast { spec },
                         scheduled_offset: None,
                         priority_level: None,
+                        snooze: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
@@ -5575,6 +5808,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                                 kind: CaptureKind::PomodoroPast { spec },
                                 scheduled_offset: None,
                                 priority_level: None,
+                                snooze: None,
                                 sub_bullets: Vec::new(),
                                 dependencies: Vec::new(),
                                 blocked_tasks: Vec::new(),
@@ -5687,6 +5921,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             kind: CaptureKind::PomodoroPast { spec },
                             scheduled_offset: None,
                             priority_level: None,
+                            snooze: None,
                             sub_bullets: Vec::new(),
                             dependencies: Vec::new(),
                             blocked_tasks: Vec::new(),
@@ -5793,6 +6028,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         kind: CaptureKind::PomodoroClose { spec },
                         scheduled_offset: None,
                         priority_level: None,
+                        snooze: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
@@ -5881,6 +6117,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                                 kind: CaptureKind::PomodoroClose { spec },
                                 scheduled_offset: None,
                                 priority_level: None,
+                                snooze: None,
                                 sub_bullets: Vec::new(),
                                 dependencies: Vec::new(),
                                 blocked_tasks: Vec::new(),
@@ -6030,6 +6267,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             kind: CaptureKind::PomodoroClose { spec },
                             scheduled_offset: None,
                             priority_level: None,
+                            snooze: None,
                             sub_bullets: Vec::new(),
                             dependencies: Vec::new(),
                             blocked_tasks: Vec::new(),
@@ -6233,6 +6471,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         },
                         scheduled_offset: None,
                         priority_level: None,
+                        snooze: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
@@ -6373,6 +6612,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     },
                     scheduled_offset: None,
                     priority_level: None,
+                    snooze: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),

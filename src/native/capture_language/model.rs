@@ -787,6 +787,11 @@ pub(crate) struct ParsedCaptureText {
     pub(crate) kind: CaptureKind,
     pub(crate) scheduled_offset: Option<u64>,
     pub(crate) priority_level: Option<u64>,
+    /// Optional raw `z:<when>` snooze specification plus its source range,
+    /// or a narrow `@route:id!` drop. `None` for every older input, so
+    /// lexing stays independent of filesystem state. Execution refuses any
+    /// recognized intent until the mutation phase consumes it.
+    pub(crate) snooze: Option<super::snooze::SnoozeIntent>,
     /// Normalized authored-child bodies plus their semantic depth, in source
     /// order, with their source marker and item-wide markers already removed.
     /// Empty when the item was an ordinary single-line capture.
@@ -1041,6 +1046,10 @@ pub(crate) struct TerminalMarkers {
     pub(crate) clip: Option<ClipRequest>,
     pub(crate) scheduled_offset: Option<u64>,
     pub(crate) priority_level: Option<u64>,
+    /// Optional raw `z:<when>` snooze specification plus its source range.
+    /// Lexical only: clock-dependent validation belongs to the shared
+    /// time-resolution boundary the mutation phase calls.
+    pub(crate) snooze: Option<super::snooze::SnoozeIntent>,
     /// Retired `p:<digits>` token extracted from the terminal region.
     pub(crate) retired_priority: Option<RetiredPriority>,
     /// Consumed `\` bytes of `\$`/`\$<N>` escapes in the terminal region.
