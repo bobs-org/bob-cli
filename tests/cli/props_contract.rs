@@ -472,8 +472,18 @@ fn update_json_returns_candidate_contract_after_clear_apply_and_undo() {
         fs::read_to_string(vault.path().join("bank.md")).unwrap(),
         bank
     );
+    // The update report carries no `note_kind`; the hub's identity shows
+    // through its card-owned `bank` row and the absent settings contract.
     assert!(bank_preview.get("contract").is_none(), "{bank_preview}");
-    assert_eq!(bank_preview["note_kind"], "bank");
+    let owned = bank_preview["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["key"] == "bank")
+        .expect("bank key");
+    assert_eq!(owned["role"], "card");
+    assert_eq!(owned["owner"], "bank");
+    assert!(owned.get("setting").is_none(), "{owned}");
 
     let ordinary = envelope(
         vault.path(),
