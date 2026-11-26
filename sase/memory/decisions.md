@@ -112,9 +112,10 @@ place.
     `decisions:synced-meetings-link-by-phase`]_ Synced calendar events live in their
     daily note's Events section with root attribution and one appended MEET.
 16. **Capture Bullets Mirror The Task Block** (`capture-bullets-mirror-the-task-block`)
-    - _[partly superseded by `decisions:task-reqs-are-met-with-their-task`]_ A
-      first-level capture bullet is its task's child: ALL-CAPS with notes is a drawer, a
-      leading # names one, and note-less @file+id files each bullet as a note.
+    - _[partly superseded by `decisions:task-reqs-are-met-with-their-task`,
+      `decisions:drawers-keep-their-names`]_ A first-level capture bullet is its task's
+      child: ALL-CAPS with notes is a drawer, a leading # names one, and note-less
+      @file+id files each bullet as a note.
 17. **Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites**
     (`capture-link-drops-blocking-deps`) - Typing an existing-task capture link on a
     task Blocked only by its own open prerequisites drops those links and then performs

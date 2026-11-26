@@ -308,7 +308,7 @@ one under the running MEET. See
 
 ## Capture Bullets Mirror The Task Block {#capture-bullets-mirror-the-task-block}
 
-**Status:** Superseded in part by [Task Requirements Are Met With Their Task](#task-reqs-are-met-with-their-task)
+**Status:** Superseded in part by [Task Requirements Are Met With Their Task](#task-reqs-are-met-with-their-task), [Drawers Keep Their Real Names](#drawers-keep-their-names)
 
 A first-level capture bullet is its task's child: ALL-CAPS with notes is a drawer, a leading # names one, and note-less @file+id files each bullet as a note.
 
@@ -351,6 +351,10 @@ Superseded in part: a `- [ ]` bullet under a task or req is now a
 [Task Requirement](../reference/glossary.md#task-requirement), not a note, and authored capture bullets may
 nest beneath req chains — see
 [Task Requirements Are Met With Their Task](#task-reqs-are-met-with-their-task).
+Superseded in part: a drawer bullet is now a true-case `- **Title**`, the bullet menu
+inserts `**Title**`, and ALL-CAPS is no longer drawer structure. The first-level bullet
+and non-drawer capture rules remain in force — see
+[Drawers Keep Their Real Names](#drawers-keep-their-names).
 
 ## Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites {#capture-link-drops-blocking-deps}
 
@@ -845,6 +849,38 @@ compliance stays poor; then add a `sase plan validate` roster check or a standin
 titles-only rung.
 
 Links [bob-cli Releases Ride a Daily Train](#bob-cli-releases-ride-a-daily-train).
+
+## Drawers Keep Their Real Names {#drawers-keep-their-names}
+
+**Status:** Accepted
+
+Drawer titles stay verbatim in bold; ALL-CAPS is no longer structure.
+
+# Drawers Keep Their Real Names
+
+**Applies to.** bob-cli, bob-plugins, Obsidian, and Bob Mac Capture.
+
+**Claim.** A task drawer is a direct, non-checkbox child bullet whose whole title is
+bold, such as `- **Future Work**`. The title stays exactly as authored on disk, in
+capture, in Obsidian, and through project-note promotion, reversal, rename, and Mac
+rendering. Drawer identity remains the case-folded title key, so capitalization changes
+the displayed spelling but not identity. Capture shortcuts resolve to the canonical
+bold header. ALL-CAPS recognition is retired; an ALL-CAPS bullet is ordinary content.
+
+**Why.** The marker separates a drawer from a task checkbox while letting section names
+keep their real spelling. Retiring capitalization as structure avoids false drawers
+and makes the representation lossless through promotion and reversal.
+
+**Cost.** Drawer Markdown requires the bold marker. Legacy ALL-CAPS lines must be
+renamed or released before cutover, and readers that recognize drawers must ship before
+writers emit the new form.
+
+**Reopens when.** A drawer needs a representation that cannot be expressed by one bold
+title bullet, or Bryan chooses a different drawer marker.
+
+**Evidence.** `plan:202611/true_case_drawers.md`; phases `bob-cli-ph.10` (retired
+ALL-CAPS recognition) and `bob-cli-ph.8` (Mac rendering and typing). See
+[Task Drawer](../reference/glossary.md#task-drawer) and [Capture Bullets Mirror The Task Block](#capture-bullets-mirror-the-task-block).
 
 ## Ended Off-Clock Events Settle Into Closed Sessions {#ended-off-clock-events-settle}
 

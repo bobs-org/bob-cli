@@ -12,10 +12,10 @@ is nonempty by construction: capture never creates an empty drawer, and promotio
 task to a project note turns each drawer into an H2 section while reversal restores
 them.
 
-A task that owns [[task-requirement]]s keeps its notes in `NOTES`. That drawer is
-born only when a note lands in it (`notes_drawer_birth = with_first_note`): the
-first-req scoop moved at least one note, or a note is being written. A req-owning
-task with no notes has no `NOTES` header. Drawers sit after requirements and before
+A task that owns [[task-requirement]]s keeps its notes in a `- **Notes**` drawer (key
+`NOTES`). That drawer is born only when a note lands in it
+(`notes_drawer_birth = with_first_note`): the first-req scoop moved at least one note,
+or a note is being written. A req-owning task with no notes has no Notes header. Drawers sit after requirements and before
 logs. A checkbox inside a drawer is never a requirement. The `REQUIREMENTS` drawer
 was renamed to `NOTES` vault-wide.
 
@@ -36,6 +36,8 @@ note-less `@route+id`. On a direct notebook-body route, `- #Section` instead sel
 a notebook section for its nested notes; it is not a drawer. See
 [[decisions:capture-bullets-mirror-the-task-block]] and
 [[decisions:drawers-keep-their-names]]. ALL-CAPS alone no longer marks a drawer.
+Obsidian and Bob Mac Capture draw a drawer header as an outline tray plus its verbatim
+semibold title; plugins off, it reads as a bold header.
 
 Managed lines and logs are never drawers: Depends-On, BLOCKS, [[task-relation]] LINKS
 lines, and the Schedule, Work, Rotten, and Cancel logs, plus `TASKS`. A drawer is not a

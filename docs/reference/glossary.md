@@ -744,7 +744,8 @@ First-level bullets mirror the new note
 ([Capture Bullets Mirror The Task Block](../develop/decisions.md#capture-bullets-mirror-the-task-block)). Each becomes a `## Tasks` row: a
 trailing ` :<id>` names it, makes it Next, and adds its [Task Link](#task-link) under the
 Pomodoro its type places (or the `#<pomodoro>` one), while ` ^<id>` only names it. An
-ALL-CAPS bullet with nested notes becomes a `## Title Case` section instead. A bullet
+bold-title drawer bullet with nested notes becomes a same-spelling `##` section
+([Drawers Keep Their Real Names](../develop/decisions.md#drawers-keep-their-names)). An ALL-CAPS bullet alone is ordinary content. A bullet
 that is only `^<id>` or `:<id>` moves an existing open top-level task out of the parent
 note (`:` also links it), and `- ^^` chooses several from a Move card before writing.
 The new note, the moved blocks, and today's ledger write in one all-or-nothing batch.
@@ -1073,23 +1074,24 @@ targets, and dep links never count as Pomodoro Task Links. See
 
 *Aliases: drawer.*
 
-A direct non-checkbox ALL-CAPS child bullet of a `#task` line, with its notes nested
-beneath it. A drawer holds part of one task's work (`NOTES`, `FUTURE WORK`);
+A direct non-checkbox child bullet of a `#task` line whose whole title is bold, such as
+`- **Future Work**`, with its notes nested beneath it. The title stays exactly as
+authored; identity is case-folded. A drawer holds part of one task's work;
 its entries are plain bullets with no checkbox, `#task`, or `created` field. A drawer
 is nonempty by construction: capture never creates an empty drawer, and promotion of a
 task to a project note turns each drawer into an H2 section while reversal restores
 them.
 
-A task that owns [Task Requirement](#task-requirement)s keeps its notes in `NOTES`. That drawer is
-born only when a note lands in it (`notes_drawer_birth = with_first_note`): the
-first-req scoop moved at least one note, or a note is being written. A req-owning
-task with no notes has no `NOTES` header. Drawers sit after requirements and before
+A task that owns [Task Requirement](#task-requirement)s keeps its notes in a `- **Notes**` drawer (key
+`NOTES`). That drawer is born only when a note lands in it
+(`notes_drawer_birth = with_first_note`): the first-req scoop moved at least one note,
+or a note is being written. A req-owning task with no notes has no Notes header. Drawers sit after requirements and before
 logs. A checkbox inside a drawer is never a requirement. The `REQUIREMENTS` drawer
 was renamed to `NOTES` vault-wide.
 
-In capture, a `#` glued after `@route+id` always names a drawer (`@foo+bar#notes`),
-matched exactly against the target task at commit time and created on demand with the
-catalog's most-used spelling. A quoted literal (`#"FUTURE WORK"`) or `--drawer TITLE`
+In capture, a `#` glued after `@route+id` names a drawer (`@foo+bar#notes`),
+matched by the target task's case-folded key at commit time and created on demand with
+the catalog's preferred spelling. A quoted literal (`#"Future Work"`) or `--drawer TITLE`
 forces creation and skips the near-duplicate guard; an unquoted slug that is a strict
 prefix of, or edit distance 1 from, an existing drawer is refused. On a project's
 `^prj` task, the note's eligible `##` sections are its drawers. `capture-complete`
@@ -1098,11 +1100,14 @@ with reserved, ambiguous, and near-duplicate choices refused and quorum copy aut
 bob. `bob capture-drawers` lists one task's drawers plus catalog recents.
 
 In a capture draft, a `#` right after a first-level bullet's `- ` completes to the
-drawer's title (`- #future-work` becomes `- FUTURE WORK`), and an ALL-CAPS first-level
+drawer title (`- #future-work` becomes `- **Future Work**`), and a first-level bold-title
 bullet with nested notes is a drawer bullet, merging into an existing drawer under a
 note-less `@route+id`. On a direct notebook-body route, `- #Section` instead selects
 a notebook section for its nested notes; it is not a drawer. See
-[Capture Bullets Mirror The Task Block](../develop/decisions.md#capture-bullets-mirror-the-task-block).
+[Capture Bullets Mirror The Task Block](../develop/decisions.md#capture-bullets-mirror-the-task-block) and
+[Drawers Keep Their Real Names](../develop/decisions.md#drawers-keep-their-names). ALL-CAPS alone no longer marks a drawer.
+Obsidian and Bob Mac Capture draw a drawer header as an outline tray plus its verbatim
+semibold title; plugins off, it reads as a bold header.
 
 Managed lines and logs are never drawers: Depends-On, BLOCKS, [Task Relation](#task-relation) LINKS
 lines, and the Schedule, Work, Rotten, and Cancel logs, plus `TASKS`. A drawer is not a

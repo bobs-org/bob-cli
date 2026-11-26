@@ -1,8 +1,4 @@
 ---
-metadata:
-  status: superseded-in-part
-  superseded_by:
-    - decisions:drawers-keep-their-names
 keyword: Capture Bullets Mirror The Task Block
 aliases:
   - capture bullets mirror the task block
@@ -17,6 +13,7 @@ metadata:
   decided: 2026-11-02
   superseded_by:
     - decisions:task-reqs-are-met-with-their-task
+    - decisions:drawers-keep-their-names
 ---
 
 **Applies to.** bob-cli and Bob Mac Capture.
@@ -58,6 +55,7 @@ Superseded in part: a `- [ ]` bullet under a task or req is now a
 [[glossary:task-requirement]], not a note, and authored capture bullets may
 nest beneath req chains — see
 [[decisions:task-reqs-are-met-with-their-task]].
-Superseded in part: drawer titles now use true-case bold headers, and ALL-CAPS is no
-longer drawer structure. The first-level bullet and non-drawer capture rules remain in
-force — see [[decisions:drawers-keep-their-names]].
+Superseded in part: a drawer bullet is now a true-case `- **Title**`, the bullet menu
+inserts `**Title**`, and ALL-CAPS is no longer drawer structure. The first-level bullet
+and non-drawer capture rules remain in force — see
+[[decisions:drawers-keep-their-names]].
