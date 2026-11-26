@@ -30,7 +30,8 @@ First-level bullets mirror the new note
 ([[decisions:capture-bullets-mirror-the-task-block]]). Each becomes a `## Tasks` row: a
 trailing ` :<id>` names it, makes it Next, and adds its [[task-link]] under the
 Pomodoro its type places (or the `#<pomodoro>` one), while ` ^<id>` only names it. An
-ALL-CAPS bullet with nested notes becomes a `## Title Case` section instead. A bullet
+bold-title drawer bullet with nested notes becomes a same-spelling `##` section
+([[decisions:drawers-keep-their-names]]). An ALL-CAPS bullet alone is ordinary content. A bullet
 that is only `^<id>` or `:<id>` moves an existing open top-level task out of the parent
 note (`:` also links it), and `- ^^` chooses several from a Move card before writing.
 The new note, the moved blocks, and today's ledger write in one all-or-nothing batch.

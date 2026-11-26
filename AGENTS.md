@@ -140,7 +140,7 @@ records the reason, ask Bryan rather than infer one. A record is immutable once
 accepted: if course changes, write a new record and mark the old one with
 `metadata.status` plus `superseded_by` and a `[[...]]` back-link, never edited in place.
 
-**Roster on demand.** This web's 78 decisions are not listed here. You MUST read the
+**Roster on demand.** This web's 79 decisions are not listed here. You MUST read the
 DECISIONS roster with `sase memory read roster:decisions -r "<why>"`:
 
 - before writing or revising a SASE plan (any agent using `/sase_plan`); cite each
