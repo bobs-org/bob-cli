@@ -545,8 +545,8 @@ fn capture_complete_drawer_json_covers_components_and_warnings() {
             "type: [[area]]\n",
             "---\n",
             "- [ ] #task Parent task ^bar\n",
-            "\t- REQUIREMENTS\n",
-            "\t- FUTURE WORK\n",
+            "\t- **Requirements**\n",
+            "\t- **Future Work**\n",
         ),
     );
 
@@ -578,9 +578,9 @@ fn capture_complete_drawer_json_covers_components_and_warnings() {
     );
     assert_eq!(
         section_json["candidates"][0]["replacement"],
-        "#\"REQUIREMENTS\""
+        "#requirements"
     );
-    assert_eq!(section_json["candidates"][0]["title"], "REQUIREMENTS");
+    assert_eq!(section_json["candidates"][0]["title"], "Requirements");
     assert_eq!(section_json["candidates"][0]["slug"], "requirements");
     assert_eq!(section_json["candidates"][0]["route"], "foo");
     assert_eq!(section_json["candidates"][0]["block_id"], "bar");
@@ -609,11 +609,8 @@ fn capture_complete_drawer_json_covers_components_and_warnings() {
         .iter()
         .map(|candidate| candidate["title"].as_str().expect("title"))
         .collect();
-    assert_eq!(titles, ["REQUIREMENTS", "FUTURE WORK"]);
-    assert_eq!(
-        bare_json["candidates"][1]["replacement"],
-        "#\"FUTURE WORK\""
-    );
+    assert_eq!(titles, ["Requirements", "Future Work"]);
+    assert_eq!(bare_json["candidates"][1]["replacement"], "#future-work");
     assert_eq!(bare_json["initial_selection"], "none");
 
     let empty_id = bob_command()

@@ -288,11 +288,11 @@ fn capture_forced_section_requires_route() {
 fn capture_drawer_inserts_into_first_middle_and_last_sections() {
     let original = concat!(
         "- [ ] #task Parent [created::2026-07-01] ^parent\n",
-        "\t- REQUIREMENTS\n",
+        "\t- **Requirements**\n",
         "\t\t- existing req\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Future Work**\n",
         "\t\t- later\n",
-        "\t- NOTES\n",
+        "\t- **Notes**\n",
         "Tail\n",
     );
     let cases = [
@@ -301,15 +301,15 @@ fn capture_drawer_inserts_into_first_middle_and_last_sections() {
             "Postgres 17 minimum @cash+parent#requirements",
             concat!(
                 "- [ ] #task Parent [created::2026-07-01] ^parent\n",
-                "\t- REQUIREMENTS\n",
+                "\t- **Requirements**\n",
                 "\t\t- existing req\n",
                 "\t\t- Postgres 17 minimum\n",
-                "\t- FUTURE WORK\n",
+                "\t- **Future Work**\n",
                 "\t\t- later\n",
-                "\t- NOTES\n",
+                "\t- **Notes**\n",
                 "Tail\n",
             ),
-            "REQUIREMENTS",
+            "Requirements",
             "- Postgres 17 minimum",
         ),
         (
@@ -317,15 +317,15 @@ fn capture_drawer_inserts_into_first_middle_and_last_sections() {
             "follow up @cash+parent#future-work",
             concat!(
                 "- [ ] #task Parent [created::2026-07-01] ^parent\n",
-                "\t- REQUIREMENTS\n",
+                "\t- **Requirements**\n",
                 "\t\t- existing req\n",
-                "\t- FUTURE WORK\n",
+                "\t- **Future Work**\n",
                 "\t\t- later\n",
                 "\t\t- follow up\n",
-                "\t- NOTES\n",
+                "\t- **Notes**\n",
                 "Tail\n",
             ),
-            "FUTURE WORK",
+            "Future Work",
             "- follow up",
         ),
         (
@@ -333,15 +333,15 @@ fn capture_drawer_inserts_into_first_middle_and_last_sections() {
             "jot this @cash+parent#notes",
             concat!(
                 "- [ ] #task Parent [created::2026-07-01] ^parent\n",
-                "\t- REQUIREMENTS\n",
+                "\t- **Requirements**\n",
                 "\t\t- existing req\n",
-                "\t- FUTURE WORK\n",
+                "\t- **Future Work**\n",
                 "\t\t- later\n",
-                "\t- NOTES\n",
+                "\t- **Notes**\n",
                 "\t\t- jot this\n",
                 "Tail\n",
             ),
-            "NOTES",
+            "Notes",
             "- jot this",
         ),
     ];
@@ -382,8 +382,8 @@ fn capture_drawer_inserts_into_first_middle_and_last_sections() {
 fn capture_drawer_prefix_vs_whole_slug_and_multiword() {
     let original = concat!(
         "- [ ] #task Parent ^parent\n",
-        "\t- FUTURE WORKFLOW\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Future Workflow**\n",
+        "\t- **Future Work**\n",
     );
 
     // Prefix `#future` is a near-duplicate refusal under exact matching.
@@ -419,23 +419,23 @@ fn capture_drawer_prefix_vs_whole_slug_and_multiword() {
         (
             "whole-slug",
             "exact slug @cash+parent#future-work",
-            "FUTURE WORK",
+            "Future Work",
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "\t- FUTURE WORKFLOW\n",
-                "\t- FUTURE WORK\n",
+                "\t- **Future Workflow**\n",
+                "\t- **Future Work**\n",
                 "\t\t- exact slug\n",
             ),
         ),
         (
             "multiword-slug",
             "by slug @cash+parent#future-workflow",
-            "FUTURE WORKFLOW",
+            "Future Workflow",
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "\t- FUTURE WORKFLOW\n",
+                "\t- **Future Workflow**\n",
                 "\t\t- by slug\n",
-                "\t- FUTURE WORK\n",
+                "\t- **Future Work**\n",
             ),
         ),
     ];
@@ -471,10 +471,10 @@ fn capture_drawer_prefix_vs_whole_slug_and_multiword() {
 fn capture_drawer_managed_log_geometry() {
     let nested_log = concat!(
         "- [ ] #task Parent ^parent\n",
-        "\t- REQUIREMENTS\n",
+        "\t- **Requirements**\n",
         "\t\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t\t- *2026-08-01* — scheduled\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Future Work**\n",
     );
     let temp = TempDir::new("bob-cli-drawer-nested-log");
     let vault = temp.path().join("vault");
@@ -492,19 +492,19 @@ fn capture_drawer_managed_log_geometry() {
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- new note\n",
             "\t\t- 🗓️ **SCHEDULE LOG**\n",
             "\t\t\t- *2026-08-01* — scheduled\n",
-            "\t- FUTURE WORK\n",
+            "\t- **Future Work**\n",
         )
     );
 
     let sibling_log = concat!(
         "- [ ] #task Parent ^parent\n",
-        "\t- REQUIREMENTS\n",
+        "\t- **Requirements**\n",
         "\t\t- existing\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Future Work**\n",
         "\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t- *2026-08-01* — scheduled\n",
     );
@@ -524,9 +524,9 @@ fn capture_drawer_managed_log_geometry() {
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- existing\n",
-            "\t- FUTURE WORK\n",
+            "\t- **Future Work**\n",
             "\t\t- new note\n",
             "\t- 🗓️ **SCHEDULE LOG**\n",
             "\t\t- *2026-08-01* — scheduled\n",
@@ -541,45 +541,45 @@ fn capture_drawer_indent_units_crlf_and_dry_run() {
             "tab",
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "\t- REQUIREMENTS\n",
+                "\t- **Requirements**\n",
                 "\t\t- existing\n",
-                "\t- FUTURE WORK\n",
+                "\t- **Future Work**\n",
             ),
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "\t- REQUIREMENTS\n",
+                "\t- **Requirements**\n",
                 "\t\t- existing\n",
                 "\t\t- new note\n",
-                "\t- FUTURE WORK\n",
+                "\t- **Future Work**\n",
             ),
         ),
         (
             "two-space",
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "  - REQUIREMENTS\n",
+                "  - **Requirements**\n",
                 "    - existing\n",
-                "  - FUTURE WORK\n",
+                "  - **Future Work**\n",
             ),
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "  - REQUIREMENTS\n",
+                "  - **Requirements**\n",
                 "    - existing\n",
                 "    - new note\n",
-                "  - FUTURE WORK\n",
+                "  - **Future Work**\n",
             ),
         ),
         (
             "four-space",
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "    - REQUIREMENTS\n",
+                "    - **Requirements**\n",
                 "        - existing\n",
                 "    - FUTURE WORK\n",
             ),
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "    - REQUIREMENTS\n",
+                "    - **Requirements**\n",
                 "        - existing\n",
                 "        - new note\n",
                 "    - FUTURE WORK\n",
@@ -589,16 +589,16 @@ fn capture_drawer_indent_units_crlf_and_dry_run() {
             "crlf",
             concat!(
                 "- [ ] #task Parent ^parent\r\n",
-                "\t- REQUIREMENTS\r\n",
+                "\t- **Requirements**\r\n",
                 "\t\t- existing\r\n",
-                "\t- FUTURE WORK\r\n",
+                "\t- **Future Work**\r\n",
             ),
             concat!(
                 "- [ ] #task Parent ^parent\r\n",
-                "\t- REQUIREMENTS\r\n",
+                "\t- **Requirements**\r\n",
                 "\t\t- existing\r\n",
                 "\t\t- new note\r\n",
-                "\t- FUTURE WORK\r\n",
+                "\t- **Future Work**\r\n",
             ),
         ),
     ];
@@ -624,7 +624,7 @@ fn capture_drawer_indent_units_crlf_and_dry_run() {
         let dry_json: serde_json::Value =
             serde_json::from_str(stdout(&dry_run).trim()).expect("dry JSON");
         assert_eq!(dry_json["dry_run"], true, "{name}");
-        assert_eq!(dry_json["drawer"]["title"], "REQUIREMENTS", "{name}");
+        assert_eq!(dry_json["drawer"]["title"], "Requirements", "{name}");
         assert_eq!(
             fs::read_to_string(&note).expect("read dry note"),
             original,
@@ -653,8 +653,8 @@ fn capture_drawer_indent_units_crlf_and_dry_run() {
 fn capture_forced_drawer_matches_title_exactly() {
     let original = concat!(
         "- [ ] #task Parent ^parent\n",
-        "\t- REQUIREMENTS\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Requirements**\n",
+        "\t- **Future Work**\n",
     );
     let temp = TempDir::new("bob-cli-forced-drawer");
     let vault = temp.path().join("vault");
@@ -680,14 +680,14 @@ fn capture_forced_drawer_matches_title_exactly() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["drawer"]["title"], "REQUIREMENTS");
+    assert_eq!(json["drawer"]["title"], "Requirements");
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- mention @other literally\n",
-            "\t- FUTURE WORK\n",
+            "\t- **Future Work**\n",
         )
     );
 
@@ -709,14 +709,14 @@ fn capture_forced_drawer_matches_title_exactly() {
     assert_success(&human);
     let out = stdout(&human);
     assert!(out.contains("under"), "{out}");
-    assert!(out.contains(" · FUTURE WORK"), "{out}");
+    assert!(out.contains(" · Future Work"), "{out}");
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- mention @other literally\n",
-            "\t- FUTURE WORK\n",
+            "\t- **Future Work**\n",
             "\t\t- cased title\n",
         )
     );
@@ -727,7 +727,7 @@ fn capture_forced_drawer_matches_title_exactly() {
     let vault = ref_temp.path().join("vault");
     write_file(
         &vault.join("cash.md"),
-        &format!("{parent_line}\n\t- NOTES\n"),
+        &format!("{parent_line}\n\t- **Notes**\n"),
     );
     let output = bob_command()
         .arg("capture")
@@ -749,7 +749,7 @@ fn capture_forced_drawer_matches_title_exactly() {
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- from ref\n",
         )
     );
@@ -767,8 +767,8 @@ fn capture_forced_drawer_option_errors() {
 
     let note = concat!(
         "- [ ] #task Parent ^parent\n",
-        "\t- REQUIREMENTS\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Requirements**\n",
+        "\t- **Future Work**\n",
     );
     let cases = [
         Case {
@@ -877,8 +877,8 @@ fn capture_drawer_errors_leave_the_note_unchanged() {
 
     let with_sections = concat!(
         "- [ ] #task Parent ^parent\n",
-        "\t- REQUIREMENTS\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Requirements**\n",
+        "\t- **Future Work**\n",
     );
     let no_sections = "- [ ] #task Parent ^parent\n\t- ordinary child\n";
     let duplicate = "- [ ] #task One ^dup\n- [x] #task Two ^dup\n";

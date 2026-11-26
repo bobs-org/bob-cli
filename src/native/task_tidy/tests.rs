@@ -39,7 +39,7 @@ fn a_canonical_note_plans_nothing() {
         "\t- ⛓️ **DEPENDS ON:** [[#^parser]]",
         "\t- [ ] Handles supported inputs",
         "\t\t- [ ] Handles Windows files",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
         "- [ ] #task Plain task",
         "\t- a loose note",
@@ -87,10 +87,10 @@ fn a_req_owning_task_files_loose_notes_under_new_notes() {
     assert_eq!(repair.after[4], "\t- **Notes**");
 }
 
-/// A legacy `NOTES` header is reused as-is: tidy files into it without
-/// creating a bold header or respelling the existing line.
+/// An ALL-CAPS `NOTES` header is ordinary content: tidy files it and the
+/// loose note under a new bold header, never respelling the legacy line.
 #[test]
-fn legacy_notes_header_is_reused_and_never_respelled() {
+fn legacy_caps_header_files_as_an_ordinary_note_under_new_notes() {
     let contents = note(&[
         "- [ ] #task Ship the exporter ^export",
         "\t- [ ] Handles supported inputs",
@@ -100,12 +100,23 @@ fn legacy_notes_header_is_reused_and_never_respelled() {
     ]);
     let pass = tidied(&contents);
     let updated = pass.updated.as_deref().expect("loose note files");
+    assert_eq!(
+        updated,
+        note(&[
+            "- [ ] #task Ship the exporter ^export",
+            "\t- [ ] Handles supported inputs",
+            "\t- **Notes**",
+            "\t\t- NOTES",
+            "\t\t\t- first entry",
+            "\t\t- a loose note",
+        ])
+        .as_str()
+    );
     assert!(updated.contains("\t- NOTES\n"));
-    assert!(!updated.contains("**Notes**"));
-    assert_eq!(pass.drawers_created(), 0);
+    assert_eq!(pass.drawers_created(), 1);
     let repair = &pass.repairs[0];
-    assert_eq!(repair.notes_filed, 1);
-    assert!(!repair.notes_created);
+    assert_eq!(repair.notes_filed, 2);
+    assert!(repair.notes_created);
 }
 
 #[test]

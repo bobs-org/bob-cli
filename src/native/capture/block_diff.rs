@@ -631,7 +631,7 @@ mod tests {
             "- [ ] #task Owner ^ex\n",
             "\t- NOTES\n",
             "\t\t- old note\n",
-            "\t- STALE\n",
+            "\t- **Stale**\n",
             "\t\t- stale note\n",
         );
         let after = concat!(
@@ -662,7 +662,7 @@ mod tests {
                 None,
             ),
             BlockLineJson::new(
-                "\t- STALE".into(),
+                "\t- **Stale**".into(),
                 1,
                 BlockLineChange::Removed,
                 None,

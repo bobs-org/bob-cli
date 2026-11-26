@@ -143,7 +143,7 @@ fn clipboard_drawer_lookalikes_stay_notes_on_new_and_req_owning_tasks() {
         .iter()
         .map(|line| line.as_str().expect("clipboard line").trim_start())
         .collect::<Vec<_>>();
-    assert_eq!(clip_lines, ["- __API Design__", "- __AGENDA__"]);
+    assert_eq!(clip_lines, ["- __API Design__", "- AGENDA"]);
 
     let existing_task = bob_command()
         .arg("capture")
@@ -158,7 +158,8 @@ fn clipboard_drawer_lookalikes_stay_notes_on_new_and_req_owning_tasks() {
 
     let contents = fs::read_to_string(&target).expect("read captured note");
     assert!(contents.contains("__API Design__"), "{contents}");
-    assert!(contents.contains("__AGENDA__"), "{contents}");
+    assert!(contents.contains("- AGENDA"), "{contents}");
+    assert!(!contents.contains("__AGENDA__"), "{contents}");
     assert!(!contents.contains("**API Design**"), "{contents}");
 
     for block_id in ["newtask", "parent"] {

@@ -193,7 +193,7 @@ fn bare_run_is_a_dry_run_with_an_inventory() {
     let text = stdout(&human);
     for expected in [
         "bob.md (2 drawers · 1 merge)",
-        "L2 Ship the exporter (open) · REQUIREMENTS + NOTES → Notes (merged)",
+        "L2 Ship the exporter (open) · Requirements + Notes → Notes (merged)",
         "    - \t- **Requirements**",
         "    + \t- **Notes**",
         "done/bob_done.md (1 drawer) archive",
@@ -263,7 +263,7 @@ fn bare_run_is_a_dry_run_with_an_inventory() {
     assert_eq!(drawer["task"], "Ship the exporter");
     assert_eq!(drawer["block_id"], "export");
     assert_eq!(drawer["status"], "open");
-    assert_eq!(drawer["from"], json!(["REQUIREMENTS", "NOTES"]));
+    assert_eq!(drawer["from"], json!(["Requirements", "Notes"]));
     assert_eq!(drawer["merged"], 1);
     assert_eq!(payload["changes"][1]["archive"], true);
     assert_eq!(
@@ -327,7 +327,7 @@ fn apply_commits_once_and_a_rerun_reports_nothing() {
     assert_eq!(read(&vault, "bob.md"), BOB_RENAMED);
     assert_eq!(
         read(&vault, "done/bob_done.md"),
-        DONE.replace("REQUIREMENTS", "**Notes**")
+        DONE.replace("**Requirements**", "**Notes**")
     );
     assert_eq!(
         read(&vault, "proj.md"),

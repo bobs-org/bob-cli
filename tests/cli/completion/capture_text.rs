@@ -37,9 +37,9 @@ fn fixture() -> Fixture {
             "\n",
             "- [ ] #task Buy oat milk ^buy-milk\n",
             "- [ ] #task Fix the sink ^fix-sink\n",
-            "  - FIRST STEPS\n",
+            "  - **First Steps**\n",
             "    - gather parts\n",
-            "  - SECOND STEPS\n",
+            "  - **Second Steps**\n",
             "- [ ] #task No ID yet\n",
             "- [/] #task Active job ^active-job\n",
             "- [*] #task Next job ^next-job\n",
@@ -411,9 +411,9 @@ fn drawers_complete_after_id_hash() {
     );
     assert_success(&output);
     let values = values(&output);
-    // A legacy title the slug would not recreate completes quoted.
+    // A Title Case drawer completes as its slug.
     assert!(
-        values.contains(&"@cash+fix-sink#\"FIRST STEPS\"".to_string()),
+        values.contains(&"@cash+fix-sink#first-steps".to_string()),
         "{values:?}"
     );
     assert!(groups(&output).contains(&"drawers".to_string()));

@@ -330,7 +330,7 @@ fn note_less_bullets_and_drawers_are_filed_to_each_member() {
         &note,
         concat!(
             "- [ ] #task Alpha ^a\n",
-            "  - REQUIREMENTS\n",
+            "  - **Requirements**\n",
             "    - existing\n",
             "- [ ] #task Beta ^b\n",
         ),
@@ -345,7 +345,7 @@ fn note_less_bullets_and_drawers_are_filed_to_each_member() {
         fs::read_to_string(&note).expect("read note"),
         concat!(
             "- [ ] #task Alpha ^a\n",
-            "  - REQUIREMENTS\n",
+            "  - **Requirements**\n",
             "    - existing\n",
             "    - Postgres 17\n",
             "  - Ping Alice\n",
@@ -370,7 +370,7 @@ fn a_glued_drawer_suffix_stays_local_to_its_target() {
         &note,
         concat!(
             "- [ ] #task Alpha ^a\n",
-            "  - REQUIREMENTS\n",
+            "  - **Requirements**\n",
             "    - existing\n",
             "- [ ] #task Beta ^b\n",
         ),
@@ -382,7 +382,7 @@ fn a_glued_drawer_suffix_stays_local_to_its_target() {
         fs::read_to_string(&note).expect("read note"),
         concat!(
             "- [ ] #task Alpha ^a\n",
-            "  - REQUIREMENTS\n",
+            "  - **Requirements**\n",
             "    - existing\n",
             "    - Shared note\n",
             "- [ ] #task Beta ^b\n",
@@ -400,11 +400,11 @@ fn repeated_near_catalog_warnings_are_reported_once_per_target_run() {
     );
     write_file(
         &vault.join("one.md"),
-        "- [ ] #task One ^one\n  - REQUIREMENTS\n",
+        "- [ ] #task One ^one\n  - **Requirements**\n",
     );
     write_file(
         &vault.join("two.md"),
-        "- [ ] #task Two ^two\n  - REQUIREMENTS\n",
+        "- [ ] #task Two ^two\n  - **Requirements**\n",
     );
 
     let json = capture_json(

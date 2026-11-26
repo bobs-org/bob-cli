@@ -113,10 +113,10 @@ fn empty_query_lists_task_then_recent_rows_and_opens_unselected() {
     assert_eq!(
         shape(&value),
         [
-            "task:REQUIREMENTS",
-            "task:FUTURE WORKFLOW",
-            "task:NOTES",
-            "task:FUTURE WORK",
+            "task:Requirements",
+            "task:Future Workflow",
+            "task:Notes",
+            "task:Future Work",
             // Used in at least two notes; PERFORMANCE (one note) stays off.
             "recent:Motivation",
             "recent:Acceptance",
@@ -138,7 +138,7 @@ fn typed_query_drops_the_unselected_open_and_filters_every_group() {
     assert_eq!(value.query.as_deref(), Some("future"));
     assert_eq!(
         shape(&value)[..3],
-        ["task:FUTURE WORKFLOW", "task:FUTURE WORK", "new:Future"]
+        ["task:Future Workflow", "task:Future Work", "new:Future"]
     );
 
     // A typed query searches the whole catalog, even single-note keys.
@@ -155,14 +155,14 @@ fn rows_rank_prefix_before_substring_in_document_order() {
         .filter(|row| row.group == "task")
         .map(|row| row.title.as_str())
         .collect();
-    assert_eq!(task_titles, ["FUTURE WORKFLOW", "FUTURE WORK"]);
+    assert_eq!(task_titles, ["Future Workflow", "Future Work"]);
 
     // A quoted partial matches the hyphenated slug of a multi-word title.
     let quoted = menu(&temp, "note @foo+bar#\"FUTURE W");
     assert_eq!(quoted.query.as_deref(), Some("FUTURE W"));
     assert_eq!(
         shape(&quoted)[..2],
-        ["task:FUTURE WORKFLOW", "task:FUTURE WORK"]
+        ["task:Future Workflow", "task:Future Work"]
     );
 }
 
@@ -174,45 +174,45 @@ fn task_rows_carry_counts_singular_plural_detail_and_consequences() {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Parent task ^bar\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- 2 GB RAM\n",
             "\t\t- fast disk\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- only one\n",
             "\t\t\t- nested detail\n",
-            "\t- EMPTY\n",
-            "\t- LONG\n",
+            "\t- **Empty**\n",
+            "\t- **Long**\n",
             "\t\t- a very long entry text that keeps on going past the cap\n",
             "\t\t- 🗓️ **SCHEDULE LOG**\n",
         ),
     );
     let value = menu(&temp, "note @foo+bar#");
 
-    let requirements = row(&value, "task", "REQUIREMENTS");
+    let requirements = row(&value, "task", "Requirements");
     assert_eq!(requirements.entry_count, 2);
     assert_eq!(requirements.detail, "2 notes");
     assert_eq!(
         requirements.consequence.as_deref(),
-        Some("Adds after \"fast disk\" in REQUIREMENTS")
+        Some("Adds after \"fast disk\" in Requirements")
     );
     assert!(!requirements.creates);
 
-    let notes = row(&value, "task", "NOTES");
+    let notes = row(&value, "task", "Notes");
     assert_eq!(notes.detail, "1 note");
     // Nested detail is not an entry: the capture lands after "only one".
     assert_eq!(
         notes.consequence.as_deref(),
-        Some("Adds after \"only one\" in NOTES")
+        Some("Adds after \"only one\" in Notes")
     );
 
-    let empty = row(&value, "task", "EMPTY");
+    let empty = row(&value, "task", "Empty");
     assert_eq!(empty.detail, "empty");
-    assert_eq!(empty.consequence.as_deref(), Some("Adds to EMPTY"));
+    assert_eq!(empty.consequence.as_deref(), Some("Adds to Empty"));
 
-    let long = row(&value, "task", "LONG");
+    let long = row(&value, "task", "Long");
     let consequence = long.consequence.as_deref().expect("consequence");
     assert!(consequence.contains('…'), "{consequence}");
-    assert!(consequence.ends_with("\" in LONG"), "{consequence}");
+    assert!(consequence.ends_with("\" in Long"), "{consequence}");
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn recent_rows_are_catalog_keys_the_task_lacks() {
     assert!(
         !rows(&value)
             .iter()
-            .any(|row| row.group == "recent" && row.title == "REQUIREMENTS"),
+            .any(|row| row.group == "recent" && row.title == "Requirements"),
         "{:?}",
         shape(&value)
     );
@@ -257,7 +257,7 @@ fn empty_query_recent_is_capped_at_eight_keys() {
     let temp = vault("bob-cli-drawer-menu-cap");
     for index in 0..12 {
         let body = format!(
-            "- [ ] #task N ^n\n\t- TOPIC {}\n",
+            "- [ ] #task N ^n\n\t- **Topic {}**\n",
             char::from(b'A' + u8::try_from(index).expect("small"))
         );
         write_file(&temp.path().join(format!("a{index}.md")), &body);
@@ -327,9 +327,9 @@ fn refused_rows_carry_the_commit_resolvers_reason() {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Parent task ^bar\n",
-            "\t- REQUIREMENTS\n",
-            "\t- NOTES\n",
-            "\t- NOTES\n",
+            "\t- **Requirements**\n",
+            "\t- **Notes**\n",
+            "\t- **Notes**\n",
         ),
     );
 
@@ -364,10 +364,10 @@ fn refused_rows_carry_the_commit_resolvers_reason() {
         .collect();
     assert_eq!(duplicates.len(), 2);
     for duplicate in duplicates {
-        assert_eq!(duplicate.replacement, "#\"NOTES\"");
+        assert_eq!(duplicate.replacement, "#\"Notes\"");
         assert_eq!(
             duplicate.refused.as_deref(),
-            Some("drawer `NOTES` matches more than one drawer (lines 6, 7); rename one")
+            Some("drawer `Notes` matches more than one drawer (lines 6, 7); rename one")
         );
         assert_eq!(duplicate.consequence, None);
     }
@@ -381,28 +381,28 @@ fn replacement_is_a_slug_only_when_it_resolves_back_to_the_same_drawer() {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Parent task ^bar\n",
-            "\t- FUTURE WORK\n",
-            "\t- FUTURE-WORK\n",
-            "\t- Q&A\n",
-            "\t- 2 GB\n",
-            "\t- PLAIN\n",
+            "\t- **Future Work**\n",
+            "\t- **Future-Work**\n",
+            "\t- **Q&A**\n",
+            "\t- **2 GB**\n",
+            "\t- **Plain**\n",
         ),
     );
     let value = menu(&temp, "note @foo+bar#");
 
     // Both hyphen interpretations collide on the slug: quote each.
     assert_eq!(
-        row(&value, "task", "FUTURE WORK").replacement,
-        "#\"FUTURE WORK\""
+        row(&value, "task", "Future Work").replacement,
+        "#\"Future Work\""
     );
     assert_eq!(
-        row(&value, "task", "FUTURE-WORK").replacement,
-        "#\"FUTURE-WORK\""
+        row(&value, "task", "Future-Work").replacement,
+        "#\"Future-Work\""
     );
     // A title no slug can spell is quoted.
     assert_eq!(row(&value, "task", "Q&A").replacement, "#\"Q&A\"");
     assert_eq!(row(&value, "task", "2 GB").replacement, "#\"2 GB\"");
-    assert_eq!(row(&value, "task", "PLAIN").replacement, "#\"PLAIN\"");
+    assert_eq!(row(&value, "task", "Plain").replacement, "#plain");
     // Ambiguity is judged against the whole list, not the filtered rows.
     let filtered = menu(&temp, "note @foo+bar#future-work");
     assert!(
@@ -431,11 +431,11 @@ fn replacement_covers_the_hash_and_the_name_and_reports_cursor_after() {
             end: raw.len()
         }
     );
-    let requirements = row(&value, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "#\"REQUIREMENTS\"");
+    let requirements = row(&value, "task", "Requirements");
+    assert_eq!(requirements.replacement, "#requirements");
     assert_eq!(
         requirements.cursor_after,
-        Some(hash + "#\"REQUIREMENTS\"".len())
+        Some(hash + "#requirements".len())
     );
 
     // A quoted partial replaces the quotes too, and the cursor lands after
@@ -450,8 +450,8 @@ fn replacement_covers_the_hash_and_the_name_and_reports_cursor_after() {
         }
     );
     assert_eq!(
-        row(&quoted, "task", "FUTURE WORK").cursor_after,
-        Some(hash + "#\"FUTURE WORK\"".len())
+        row(&quoted, "task", "Future Work").cursor_after,
+        Some(hash + "#future-work".len())
     );
 }
 
@@ -464,7 +464,7 @@ fn unresolvable_targets_report_a_diagnostic_and_no_rows() {
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task One ^same\n",
             "- [ ] #task Two ^same\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "- plain bullet ^notatask\n",
         ),
     );
@@ -561,9 +561,9 @@ fn shell_drawer_rows_are_the_targets_own_unrefused_drawers() {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Parent task ^bar\n",
-            "\t- REQUIREMENTS\n",
-            "\t- NOTES\n",
-            "\t- NOTES\n",
+            "\t- **Requirements**\n",
+            "\t- **Notes**\n",
+            "\t- **Notes**\n",
         ),
     );
     let (candidates, warnings) =
@@ -575,8 +575,8 @@ fn shell_drawer_rows_are_the_targets_own_unrefused_drawers() {
     // Duplicates are refused; no catalog rows join the shell list.
     let titles: Vec<&str> =
         items.iter().map(|item| item.title.as_str()).collect();
-    assert_eq!(titles, ["REQUIREMENTS"]);
-    assert_eq!(items[0].replacement, "#\"REQUIREMENTS\"");
+    assert_eq!(titles, ["Requirements"]);
+    assert_eq!(items[0].replacement, "#requirements");
     assert!(warnings.is_empty());
 }
 
@@ -614,10 +614,10 @@ fn bullet_menu_on_an_existing_task_offers_bold_titles_with_the_glued_copy() {
     assert_eq!(
         shape(&value),
         [
-            "task:REQUIREMENTS",
-            "task:FUTURE WORKFLOW",
-            "task:NOTES",
-            "task:FUTURE WORK",
+            "task:Requirements",
+            "task:Future Workflow",
+            "task:Notes",
+            "task:Future Work",
             "recent:Motivation",
             "recent:Acceptance",
         ]
@@ -627,11 +627,11 @@ fn bullet_menu_on_an_existing_task_offers_bold_titles_with_the_glued_copy() {
     assert_eq!(target.block_id.as_deref(), Some("bar"));
     assert_eq!(target.text, "Parent task");
 
-    let requirements = row(&value, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "**REQUIREMENTS**\n  - ");
+    let requirements = row(&value, "task", "Requirements");
+    assert_eq!(requirements.replacement, "**Requirements**\n  - ");
     assert_eq!(
         requirements.consequence.as_deref(),
-        Some("Adds after \"fast disk\" in REQUIREMENTS")
+        Some("Adds after \"fast disk\" in Requirements")
     );
     assert_eq!(requirements.detail, "2 notes");
     assert_eq!(
@@ -653,38 +653,38 @@ fn bullet_replacement_continues_with_a_nested_bullet_only_when_nothing_follows()
     // Token last on its line, nothing after: the continuation opens the
     // drawer's first note and the caret lands past it.
     let end = bullet(&temp, "@foo+bar\n- #req");
-    let requirements = row(&end, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "**REQUIREMENTS**\n  - ");
+    let requirements = row(&end, "task", "Requirements");
+    assert_eq!(requirements.replacement, "**Requirements**\n  - ");
     assert_eq!(
         requirements.cursor_after,
-        Some(hash + "**REQUIREMENTS**\n  - ".len())
+        Some(hash + "**Requirements**\n  - ".len())
     );
 
     // A nested bullet already follows: bold header, caret after the title.
     let nested_raw = "@foo+bar\n- #req\n  - already";
     let _cache = isolate_cache();
     let nested = result(temp.path(), nested_raw, hash + "#req".len());
-    let requirements = row(&nested, "task", "REQUIREMENTS");
-    assert_eq!(requirements.replacement, "**REQUIREMENTS**");
+    let requirements = row(&nested, "task", "Requirements");
+    assert_eq!(requirements.replacement, "**Requirements**");
     assert_eq!(
         requirements.cursor_after,
-        Some(hash + "**REQUIREMENTS**".len())
+        Some(hash + "**Requirements**".len())
     );
 
     // A sibling first-level bullet is not a nested bullet.
     let sibling_raw = "@foo+bar\n- #req\n- other";
     let sibling = result(temp.path(), sibling_raw, hash + "#req".len());
     assert_eq!(
-        row(&sibling, "task", "REQUIREMENTS").replacement,
-        "**REQUIREMENTS**\n  - "
+        row(&sibling, "task", "Requirements").replacement,
+        "**Requirements**\n  - "
     );
 
     // Text after the token on the line: no continuation.
     let trailing_raw = "@foo+bar\n- #req tail";
     let trailing = result(temp.path(), trailing_raw, hash + "#req".len());
     assert_eq!(
-        row(&trailing, "task", "REQUIREMENTS").replacement,
-        "**REQUIREMENTS**"
+        row(&trailing, "task", "Requirements").replacement,
+        "**Requirements**"
     );
 }
 
@@ -696,7 +696,7 @@ fn bullet_menu_filters_by_the_typed_name_and_decodes_a_quoted_literal() {
     assert_eq!(value.query.as_deref(), Some("future"));
     assert_eq!(
         shape(&value),
-        ["task:FUTURE WORKFLOW", "task:FUTURE WORK", "new:Future"]
+        ["task:Future Workflow", "task:Future Work", "new:Future"]
     );
 
     // A closed literal queries the whole decoded name and its replacement
@@ -707,13 +707,13 @@ fn bullet_menu_filters_by_the_typed_name_and_decodes_a_quoted_literal() {
     assert_eq!(
         quoted.replacement,
         Replacement {
-            start: raw.len() - "#\"FUTURE WORK\"".len(),
+            start: raw.len() - "#\"Future Work\"".len(),
             end: raw.len()
         }
     );
     assert_eq!(
-        row(&quoted, "task", "FUTURE WORK").replacement,
-        "**FUTURE WORK**\n  - "
+        row(&quoted, "task", "Future Work").replacement,
+        "**Future Work**\n  - "
     );
 }
 
@@ -777,7 +777,7 @@ fn punctuated_drawer_lists_under_task_with_exact_slug_reach() {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Parent task ^bar\n",
-            "\t- WHAT IS SASE?\n",
+            "\t- **What Is Sase?**\n",
             "\t\t- first\n",
             "\t\t- second\n",
             "\t\t- third\n",
@@ -786,20 +786,20 @@ fn punctuated_drawer_lists_under_task_with_exact_slug_reach() {
 
     // Bullet-start `- #` lists it under the task group with a bold title.
     let value = bullet(&temp, "@foo+bar\n- #");
-    let sase = row(&value, "task", "WHAT IS SASE?");
-    assert_eq!(sase.replacement, "**WHAT IS SASE?**\n  - ");
+    let sase = row(&value, "task", "What Is Sase?");
+    assert_eq!(sase.replacement, "**What Is Sase?**\n  - ");
     assert_eq!(sase.refused, None);
     assert_eq!(sase.detail, "3 notes");
 
     // Typing `- #what` keeps it as a prefix match.
     let typed = bullet(&temp, "@foo+bar\n- #what");
-    assert_eq!(shape(&typed), ["task:WHAT IS SASE?", "new:What"]);
+    assert_eq!(shape(&typed), ["task:What Is Sase?", "new:What"]);
 
     // Glued `@route+id#what`: the title's slug is not a valid slug, so the
     // row keeps the quoted fallback (`slug_reach = exact`).
     let glued = menu(&temp, "note @foo+bar#what");
-    let sase = row(&glued, "task", "WHAT IS SASE?");
-    assert_eq!(sase.replacement, "#\"WHAT IS SASE?\"");
+    let sase = row(&glued, "task", "What Is Sase?");
+    assert_eq!(sase.replacement, "#\"What Is Sase?\"");
     assert_eq!(sase.refused, None);
 }
 
@@ -875,9 +875,9 @@ fn bullet_rows_refuse_with_the_exact_resolvers_reason() {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Parent task ^bar\n",
-            "\t- REQUIREMENTS\n",
-            "\t- NOTES\n",
-            "\t- NOTES\n",
+            "\t- **Requirements**\n",
+            "\t- **Notes**\n",
+            "\t- **Notes**\n",
         ),
     );
 
@@ -903,10 +903,10 @@ fn bullet_rows_refuse_with_the_exact_resolvers_reason() {
         .collect();
     assert_eq!(duplicates.len(), 2);
     for duplicate in duplicates {
-        assert_eq!(duplicate.replacement, "**NOTES**\n  - ");
+        assert_eq!(duplicate.replacement, "**Notes**\n  - ");
         assert_eq!(
             duplicate.refused.as_deref(),
-            Some("drawer `NOTES` matches more than one drawer (lines 6, 7); rename one")
+            Some("drawer `Notes` matches more than one drawer (lines 6, 7); rename one")
         );
     }
 }
@@ -978,7 +978,7 @@ fn menu_rows_agree_with_the_resolver_for_every_row_kind() {
             "- [ ] #task Parent task ^bar\n",
             "\t- **API Design**\n",
             "\t\t- existing\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- one\n",
         ),
     );
@@ -989,7 +989,7 @@ fn menu_rows_agree_with_the_resolver_for_every_row_kind() {
             "- [ ] #task Seed ^s\n",
             "\t- **Future Work**\n",
             "\t\t- catalog\n",
-            "\t- FUTURE WORK\n",
+            "\t- Future Work\n",
             "\t\t- legacy\n",
         ),
     );
@@ -998,8 +998,8 @@ fn menu_rows_agree_with_the_resolver_for_every_row_kind() {
     let api = row(&glued, "task", "API Design");
     assert_eq!(api.replacement, "#\"API Design\"");
     assert_eq!(api.refused, None);
-    let notes = row(&glued, "task", "NOTES");
-    assert_eq!(notes.replacement, "#\"NOTES\"");
+    let notes = row(&glued, "task", "Notes");
+    assert_eq!(notes.replacement, "#notes");
     assert_eq!(notes.refused, None);
     let recent = menu(&temp, "note @foo+bar#future");
     let recent = row(&recent, "recent", "Future Work");

@@ -141,13 +141,13 @@ fn punctuated_drawer_merges_into_the_existing_drawer() {
         &vault.join("foo.md"),
         concat!(
             "- [ ] #task Parent task [created::2026-01-01] ^bar\n",
-            "\t- WHAT IS SASE?\n",
+            "\t- **What Is Sase?**\n",
             "\t\t- first\n",
             "\t\t- second\n",
             "\t\t- third\n",
         ),
     );
-    let draft = "@foo+bar\n- **WHAT IS SASE?**\n  - fourth note";
+    let draft = "@foo+bar\n- **What Is Sase?**\n  - fourth note";
 
     let parse = parse_json(draft);
     assert!(
@@ -163,13 +163,13 @@ fn punctuated_drawer_merges_into_the_existing_drawer() {
     assert_eq!(notes.len(), 1, "{commit}");
     assert_eq!(
         notes[0]["drawer"]["title"],
-        serde_json::json!("WHAT IS SASE?"),
+        serde_json::json!("What Is Sase?"),
         "{commit}"
     );
     let file = fs::read_to_string(vault.join("foo.md")).expect("foo.md");
-    assert_eq!(file.matches("WHAT IS SASE?").count(), 1, "{file}");
+    assert_eq!(file.matches("What Is Sase?").count(), 1, "{file}");
     assert!(file.contains("- fourth note"), "{file}");
-    let drawer_pos = file.find("WHAT IS SASE?").expect("drawer");
+    let drawer_pos = file.find("What Is Sase?").expect("drawer");
     let third_pos = file.find("- third").expect("third");
     let fourth_pos = file.find("- fourth note").expect("fourth");
     assert!(
@@ -177,15 +177,13 @@ fn punctuated_drawer_merges_into_the_existing_drawer() {
         "fourth note lands last in the drawer: {file}"
     );
 
-    // A childless repeat is refused, never a second header.
-    let before = vault_files(&vault);
-    let childless = capture_error(&vault, "@foo+bar\n- WHAT IS SASE?");
-    assert_eq!(
-        childless["code"],
-        serde_json::json!("empty_drawer_bullet"),
-        "{childless}"
-    );
-    assert_eq!(vault_files(&vault), before, "refusal writes nothing");
+    // A childless plain-caps repeat is ordinary content: it files a plain
+    // note, never a drawer header or a refusal.
+    let childless = capture_json(&vault, "@foo+bar\n- WHAT IS SASE?");
+    assert_eq!(childless["notes"][0]["drawer"], serde_json::Value::Null);
+    let file = fs::read_to_string(vault.join("foo.md")).expect("foo.md");
+    assert!(file.contains("\t- WHAT IS SASE?\n"), "{file}");
+    assert_eq!(file.matches("WHAT IS SASE?").count(), 1, "{file}");
 }
 
 #[test]
@@ -507,9 +505,13 @@ fn uppercase_container_drafts_remain_ordinary_notes() {
     let (preview, commit) =
         preview_and_commit(&vault, "Ship it\n- FUTURE WORK\n  - note");
     preview.unwrap_or_else(|error| panic!("preview: {error}"));
-    commit.unwrap_or_else(|error| panic!("commit: {error}"));
-    let contents = fs::read_to_string(vault.join("inbox.md")).expect("inbox");
-    assert!(contents.contains("- FUTURE WORK\n\t- note"), "{contents}");
+    let commit = commit.unwrap_or_else(|error| panic!("commit: {error}"));
+    let target = commit["target"].as_str().expect("commit target");
+    let contents = fs::read_to_string(target).expect("target note");
+    assert!(
+        contents.contains("\t- FUTURE WORK\n\t\t- note"),
+        "{contents}"
+    );
     assert!(!contents.contains("**FUTURE WORK**"), "{contents}");
 }
 

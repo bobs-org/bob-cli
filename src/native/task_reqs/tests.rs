@@ -94,10 +94,10 @@ fn child_kind_detects_requirements_before_authored() {
             TaskChildKind::NestedTask { open: false },
         ),
         (
-            "\t- NOTES",
+            "\t- **Notes**",
             None,
             TaskChildKind::Drawer {
-                title: "NOTES".to_string(),
+                title: "Notes".to_string(),
             },
         ),
         ("\t- a plain note", None, TaskChildKind::Authored),

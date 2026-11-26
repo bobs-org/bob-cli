@@ -1431,7 +1431,7 @@ mod tests {
             .lines()
             .filter_map(|line| line.strip_prefix("- "))
             .collect();
-        assert_eq!(bodies, ["__AGENDA__", "__Agenda__"]);
+        assert_eq!(bodies, ["AGENDA", "__Agenda__"]);
         assert!(bodies.iter().all(|body| {
             crate::native::capture_drawers::drawer_body_title(body).is_none()
         }));

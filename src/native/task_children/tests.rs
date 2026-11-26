@@ -42,9 +42,9 @@ fn classifies_managed_links_logs_drawers_and_nested_tasks() {
             TaskChildKind::ManagedLog(ManagedLogKind::Cancel),
         ),
         (
-            "\t- REQUIREMENTS",
+            "\t- **Requirements**",
             TaskChildKind::Drawer {
-                title: "REQUIREMENTS".to_string(),
+                title: "Requirements".to_string(),
             },
         ),
         (

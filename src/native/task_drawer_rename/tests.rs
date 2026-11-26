@@ -190,9 +190,9 @@ fn nested_owners_report_their_original_lines() {
     let contents = note(&[
         "- [ ] #task Parent",
         "\t- [ ] #task Child",
-        "\t\t- REQUIREMENTS",
+        "\t\t- **Requirements**",
         "\t\t\t- child entry",
-        "\t\t- NOTES",
+        "\t\t- **Notes**",
         "\t\t\t- child note",
         "\t- **REQUIREMENTS**",
         "\t\t- parent entry",
@@ -534,11 +534,11 @@ fn fences_quotes_and_stray_bullets_are_excluded() {
     let contents = note(&[
         "- [ ] #task Ship",
         "\t- [ ] a req",
-        "\t\t- REQUIREMENTS",
-        "- REQUIREMENTS",
-        "> - REQUIREMENTS",
+        "\t\t- **Requirements**",
+        "- **Requirements**",
+        "> - **Requirements**",
         "```",
-        "- REQUIREMENTS",
+        "- **Requirements**",
         "```",
     ]);
     let pass = renamed(&contents);

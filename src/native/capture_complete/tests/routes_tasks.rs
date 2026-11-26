@@ -403,7 +403,7 @@ fn three_component_marker_keeps_route_and_task_contexts() {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Parent ^bar\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
         ),
     );
 
@@ -434,10 +434,9 @@ fn three_component_marker_keeps_route_and_task_contexts() {
     let Candidates::Drawer(drawers) = &drawer.candidates else {
         panic!("expected drawer candidates");
     };
-    // `#requirements` would create `Requirements`, so the legacy title is
-    // quoted to parse back to the same drawer.
-    assert_eq!(drawers[0].replacement, "#\"REQUIREMENTS\"");
-    assert_eq!(drawers[0].title, "REQUIREMENTS");
+    // `#requirements` resolves to the `Requirements` drawer by slug.
+    assert_eq!(drawers[0].replacement, "#requirements");
+    assert_eq!(drawers[0].title, "Requirements");
 }
 
 fn write_notebook(temp: &TempDir, stem: &str, body: &str) {

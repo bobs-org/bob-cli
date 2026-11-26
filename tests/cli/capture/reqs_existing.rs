@@ -159,7 +159,7 @@ fn req_only_capture_keeps_notes_drawer_nonempty_and_existing_reqs_append() {
     let target = vault.join("work.md");
     write_file(
         &target,
-        "- [ ] #task Empty owner ^empty\n- [ ] #task Has req ^has\n\t- [ ] Existing req\n\t- NOTES\n\t\t- Existing context\n",
+        "- [ ] #task Empty owner ^empty\n- [ ] #task Has req ^has\n\t- [ ] Existing req\n\t- **Notes**\n\t\t- Existing context\n",
     );
 
     let empty_json = capture_json(&vault, &[], "@work+empty\n- [ ] First req");
@@ -189,7 +189,7 @@ fn req_only_capture_keeps_notes_drawer_nonempty_and_existing_reqs_append() {
             "- [ ] #task Has req ^has\n",
             "\t- [ ] Existing req\n",
             "\t- [ ] Added req\n",
-            "\t- NOTES\n",
+            "\t- **Notes**\n",
             "\t\t- Existing context\n",
             "\t\t- note to file\n",
         )

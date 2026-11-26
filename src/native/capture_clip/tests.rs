@@ -1007,7 +1007,7 @@ fn clipboard_items_that_look_like_drawers_are_escaped_after_rendering() {
     );
     assert_eq!(
         lines,
-        ["\t- __API Design__", "\t- __AGENDA__", "\t- plain note"]
+        ["\t- __API Design__", "\t- AGENDA", "\t- plain note"]
     );
     for line in &lines {
         let body = line.trim_start().trim_start_matches("- ");

@@ -585,7 +585,7 @@ fn capture_bare_terminal_marker_authored_children_nest_one_level_deeper() {
 fn capture_drawer_authored_children_and_composition() {
     let original = concat!(
         "- [ ] #task Parent ^parent\n",
-        "\t- REQUIREMENTS\n",
+        "\t- **Requirements**\n",
         "\t\t- existing\n",
         "\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t- *2026-08-01* — keep this entry\n",
@@ -614,7 +614,7 @@ fn capture_drawer_authored_children_and_composition() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["drawer"]["title"], "REQUIREMENTS");
+    assert_eq!(json["drawer"]["title"], "Requirements");
     assert_eq!(
         json["task_line"],
         "- buy milk [priority::medium] [scheduled::2026-07-21]"
@@ -627,7 +627,7 @@ fn capture_drawer_authored_children_and_composition() {
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- existing\n",
             "\t\t- buy milk [priority::medium] [scheduled::2026-07-21]\n",
             "\t\t\t- authored child\n",
@@ -657,7 +657,7 @@ fn capture_drawer_authored_children_and_composition() {
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- existing\n",
             "\t\t- ship it [scheduled::2026-07-12]\n",
             "\t- 🗓️ **SCHEDULE LOG**\n",
@@ -686,7 +686,7 @@ fn capture_drawer_authored_children_and_composition() {
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- existing\n",
             "\t\t- from clip\n",
             "\t\t\t- forced clip\n",

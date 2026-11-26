@@ -220,7 +220,7 @@ fn clip_notes_drawers_and_prj_sections() {
         &vault.join("cash.md"),
         concat!(
             "- [ ] #task Parent ^id\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- existing\n",
         ),
     );
@@ -240,7 +240,7 @@ fn clip_notes_drawers_and_prj_sections() {
         fs::read_to_string(vault.join("cash.md")).expect("read drawer"),
         concat!(
             "- [ ] #task Parent ^id\n",
-            "\t- REQUIREMENTS\n",
+            "\t- **Requirements**\n",
             "\t\t- existing\n",
             "\t\t- note one\n",
             "\t\t- note two\n",

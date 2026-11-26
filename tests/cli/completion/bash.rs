@@ -358,7 +358,7 @@ fn bash_keeps_spaces_in_one_argument() {
         7,
     );
     assert!(
-        reply.iter().any(|value| value.contains("FIRST\\ STEPS")),
+        reply.iter().any(|value| value.contains("First\\ Steps")),
         "drawer stays one escaped argument: {reply:?}"
     );
 }
@@ -485,7 +485,7 @@ fn e2e_vault(temp: &TempDir) -> PathBuf {
             "\n",
             "- [ ] #task Buy oat milk ^buy-milk\n",
             "- [ ] #task Fix the sink ^fix-sink\n",
-            "  - FIRST STEPS\n",
+            "  - **First Steps**\n",
             "    - gather parts\n",
         ),
     );
@@ -645,7 +645,7 @@ readline_case EQUALS $'bob capture =#\t' '<=#deep-work>' ''
 # An open quote completes inside the quotes; readline closes them.
 readline_case QUOTE $'bob capture \'fix it @ca\t' '<fix it @cash>' ''
 # A value with a space stays one argument.
-readline_case SPACES $'bob capture --route cash --task fix-sink --drawer F\t' '<FIRST STEPS>' ''
+readline_case SPACES $'bob capture --route cash --task fix-sink --drawer F\t' '<First Steps>' ''
 # An attached `!files-in` value completes the note name.
 readline_case FILESIN $'bob query --tasks-note=c\t' '<--tasks-note=cash.md>' ''
 # Attached option values keep working, as does the solo link form.

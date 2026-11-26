@@ -337,8 +337,8 @@ fn zones_name_every_task_child_kind() {
         ("\t- [-] dropped requirement", Zone::Reqs),
         ("\t- a plain note", Zone::Authored),
         ("\t- [ ] #task nested task", Zone::Authored),
-        ("\t- NOTES", Zone::Drawers),
-        ("\t- FUTURE WORK", Zone::Drawers),
+        ("\t- **Notes**", Zone::Drawers),
+        ("\t- **Future Work**", Zone::Drawers),
         ("\t- 🛠️ **WORK LOG**", Zone::Logs),
         ("\t- 🗓️ **SCHEDULE LOG**", Zone::Logs),
         ("\t- 🥀 **ROTTEN LOG**", Zone::Logs),
@@ -456,7 +456,7 @@ fn a_created_notes_drawer_lands_first_among_the_drawers() {
     let contents = "\
 - [ ] #task A ^a
 \t- [ ] req
-\t- FUTURE WORK
+\t- **Future Work**
 \t\t- later
 \t- 🛠️ **WORK LOG**
 ";
@@ -471,7 +471,7 @@ fn a_created_notes_drawer_lands_first_among_the_drawers() {
             "- [ ] #task A ^a",
             "\t- [ ] req",
             "\t- **Notes**",
-            "\t- FUTURE WORK",
+            "\t- **Future Work**",
             "\t\t- later",
             "\t- 🛠️ **WORK LOG**",
         ]
@@ -483,7 +483,7 @@ fn a_created_notes_drawer_lands_first_among_the_drawers() {
     );
     assert_eq!(
         drawer_header_offset(contents, &task, true),
-        contents.find("\t- FUTURE").expect("drawer offset")
+        contents.find("\t- **Future Work**").expect("drawer offset")
     );
 }
 
@@ -553,7 +553,7 @@ fn canonicalize_new_req_block_files_notes_and_keeps_req_subtrees() {
         "\t- [ ] Handles CRLF\n",
         "\t\t- [ ] Windows\n",
         "\t\t\t- seen in March\n",
-        "\t- FUTURE WORK\n",
+        "\t- **Future Work**\n",
         "\t\t- later\n",
         "\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t- *2026-06-16* — tomorrow",
@@ -573,7 +573,7 @@ fn canonicalize_new_req_block_files_notes_and_keeps_req_subtrees() {
             "\t\t\t- seen in March\n",
             "\t- **Notes**\n",
             "\t\t- see the ticket\n",
-            "\t- FUTURE WORK\n",
+            "\t- **Future Work**\n",
             "\t\t- later\n",
             "\t- 🗓️ **SCHEDULE LOG**\n",
             "\t\t- *2026-06-16* — tomorrow",

@@ -34,7 +34,7 @@ fn transfer_vault(temp: &TempDir) -> std::path::PathBuf {
             "---\ntype: \"[[area]]\"\n---\n",
             "## Tasks\n",
             "- [ ] #task Upgrade Postgres ^upgrade\n",
-            "\t- FUTURE WORK\n",
+            "\t- **Future Work**\n",
             "\t\t- existing note\n",
             "- [ ] #task Legacy cleanup ^legacy\n",
             "- [ ] #task Unidentified cleanup\n",
@@ -316,8 +316,8 @@ fn transfer_drawer_destination_lists_task_drawers() {
         .filter_map(|row| row["title"].as_str())
         .collect();
     assert!(
-        titles.contains(&"FUTURE WORK"),
-        "FUTURE WORK should list, got {titles:?}"
+        titles.contains(&"Future Work"),
+        "Future Work should list, got {titles:?}"
     );
 }
 

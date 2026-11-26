@@ -391,7 +391,7 @@ mod tests {
             .iter()
             .map(|bullet| bullet.body.as_str())
             .collect();
-        assert_eq!(bodies, ["- __WHY?__"]);
+        assert_eq!(bodies, ["- WHY?"]);
     }
 
     #[test]

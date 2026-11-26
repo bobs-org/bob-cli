@@ -3622,7 +3622,7 @@ mod tests {
         assert_eq!(value["block_id"], "bar");
         assert_eq!(value["ref"], "2:abcd1234");
         assert_eq!(value["count"], 1);
-        assert_eq!(value["drawers"][0]["title"], "REQUIREMENTS");
+        assert_eq!(value["drawers"][0]["title"], "Requirements");
         assert_eq!(value["drawers"][0]["slug"], "requirements");
         assert_eq!(value["drawers"][0]["line"], 3);
         assert_eq!(value["drawers"][0]["key"], "REQUIREMENTS");

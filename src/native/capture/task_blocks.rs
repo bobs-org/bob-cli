@@ -1440,9 +1440,9 @@ mod tests {
                 "foo.md",
                 concat!(
                     "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n",
-                    "\t- REQUIREMENTS\n",
+                    "\t- **Requirements**\n",
                     "\t\t- existing\n",
-                    "\t- FUTURE WORK\n",
+                    "\t- **Future Work**\n",
                 ),
             )],
         );
@@ -1458,10 +1458,10 @@ mod tests {
                     0,
                     BlockLineChange::Unchanged
                 ),
-                ("\t- REQUIREMENTS", 1, BlockLineChange::Unchanged),
+                ("\t- **Requirements**", 1, BlockLineChange::Unchanged),
                 ("\t\t- existing", 2, BlockLineChange::Unchanged),
                 ("\t\t- Postgres 17 minimum", 2, BlockLineChange::Added),
-                ("\t- FUTURE WORK", 1, BlockLineChange::Unchanged),
+                ("\t- **Future Work**", 1, BlockLineChange::Unchanged),
             ]
         );
     }

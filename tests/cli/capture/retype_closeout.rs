@@ -424,7 +424,7 @@ fn near_duplicate_teaches_requested_override_and_creates_it() {
         "bob-retype-near-duplicate",
         &[(
             "foo.md",
-            "- [ ] #task Upgrade Postgres ^bar\n  - REQUIREMENTS\n    - existing\n",
+            "- [ ] #task Upgrade Postgres ^bar\n  - **Requirements**\n    - existing\n",
         )],
         "## Pomodoros\n- [ ] () — FIX\n",
     );
@@ -480,7 +480,7 @@ fn near_duplicate_teaches_requested_override_and_creates_it() {
         "distinct drawer: {after:?}"
     );
     assert!(
-        after.contains("  - REQUIREMENTS\n"),
+        after.contains("  - **Requirements**\n"),
         "existing drawer kept: {after:?}"
     );
 }

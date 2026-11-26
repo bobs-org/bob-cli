@@ -49,7 +49,7 @@ fn worked_example_files_notes_drawers_json_and_human() {
     let vault = temp.path().join("vault");
     write_foo(
         &vault,
-        "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n  - REQUIREMENTS\n    - 2 GB RAM\n",
+        "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n  - **Requirements**\n    - 2 GB RAM\n",
     );
     let draft = "@foo+bar\n- Ping Alice about the cutover\n- **REQUIREMENTS**\n  - Postgres 17 minimum\n- **FUTURE WORK**\n  - Try logical replication\n- Benchmarks look fine\n  - p99 under 40 ms";
     // Human dry-run first: the vault is fresh so FUTURE WORK is new.
@@ -66,7 +66,7 @@ fn worked_example_files_notes_drawers_json_and_human() {
     let text = stdout(&human);
     assert!(text.contains("· 4 notes"), "{text}");
     assert!(text.contains("Ping Alice about the cutover"), "{text}");
-    assert!(text.contains("REQUIREMENTS"), "{text}");
+    assert!(text.contains("Requirements"), "{text}");
     assert!(text.contains("FUTURE WORK"), "{text}");
     assert!(text.contains("new drawer"), "{text}");
     let json = capture_json(&vault, draft);
@@ -92,7 +92,7 @@ fn worked_example_files_notes_drawers_json_and_human() {
     );
     assert_eq!(
         notes[1]["drawer"]["title"],
-        serde_json::json!("REQUIREMENTS"),
+        serde_json::json!("Requirements"),
         "{json}"
     );
     assert_eq!(
@@ -120,7 +120,7 @@ fn worked_example_files_notes_drawers_json_and_human() {
     assert_eq!(drawers.len(), 2, "{json}");
     assert_eq!(
         drawers[0]["title"],
-        serde_json::json!("REQUIREMENTS"),
+        serde_json::json!("Requirements"),
         "{json}"
     );
     assert_eq!(
@@ -132,7 +132,7 @@ fn worked_example_files_notes_drawers_json_and_human() {
     let file = fs::read_to_string(vault.join("foo.md")).expect("foo.md");
     assert_eq!(
         file,
-        "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n  - REQUIREMENTS\n    - 2 GB RAM\n    - Postgres 17 minimum\n  - Ping Alice about the cutover\n  - **FUTURE WORK**\n    - Try logical replication\n  - Benchmarks look fine\n    - p99 under 40 ms\n",
+        "- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar\n  - **Requirements**\n    - 2 GB RAM\n    - Postgres 17 minimum\n  - Ping Alice about the cutover\n  - **FUTURE WORK**\n    - Try logical replication\n  - Benchmarks look fine\n    - p99 under 40 ms\n",
         "file mismatch"
     );
 }
@@ -214,14 +214,18 @@ fn childless_literal_matching_existing_drawer_is_refused() {
     let vault = temp.path().join("vault");
     write_cash(
         &vault,
-        "- [ ] #task Parent ^parent\n\t- REQUIREMENTS\n\t\t- existing\n",
+        "- [ ] #task Parent ^parent\n\t- **Requirements**\n\t\t- existing\n",
     );
-    let err = capture_error(&vault, "@cash+parent\n- REQUIREMENTS");
+    // A childless ALL-CAPS bullet is ordinary content now: it files a plain
+    // note against the real drawer instead of refusing.
+    let json = capture_json(&vault, "@cash+parent\n- REQUIREMENTS");
     assert_eq!(
-        err["code"],
-        serde_json::json!("empty_drawer_bullet"),
-        "{err}"
+        json["notes"][0]["drawer"],
+        serde_json::Value::Null,
+        "{json}"
     );
+    let file = fs::read_to_string(vault.join("cash.md")).expect("cash.md");
+    assert!(file.contains("\t- REQUIREMENTS\n"), "{file}");
 }
 
 #[test]

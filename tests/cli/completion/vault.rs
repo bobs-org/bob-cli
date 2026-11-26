@@ -44,9 +44,9 @@ fn fixture() -> Fixture {
             "\n",
             "- [ ] #task Buy oat milk ^buy-milk\n",
             "- [ ] #task Fix the sink ^fix-sink\n",
-            "  - FIRST STEPS\n",
+            "  - **First Steps**\n",
             "    - gather parts\n",
-            "  - SECOND STEPS\n",
+            "  - **Second Steps**\n",
             "- [x] #task Done already ^done-old\n",
         ),
     );
@@ -391,8 +391,8 @@ fn drawers_offer_exact_titles() {
     assert_eq!(
         stdout(&output),
         concat!(
-            "FIRST STEPS\t1 item\tdrawers\tspace\n",
-            "SECOND STEPS\t\tdrawers\tspace\n",
+            "First Steps\t1 item\tdrawers\tspace\n",
+            "Second Steps\t\tdrawers\tspace\n",
         )
     );
 }

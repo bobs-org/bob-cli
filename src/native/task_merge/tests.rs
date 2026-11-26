@@ -838,7 +838,7 @@ fn task_drawers_and_project_h2_drawers_resolve_for_merge() {
         source,
         (
             "dest.md",
-            "- [ ] #task Target ^target\n\t- REQUIREMENTS\n\t\t- Existing\n",
+            "- [ ] #task Target ^target\n\t- **Requirements**\n\t\t- Existing\n",
         ),
     ]);
     let plan = prepare(
@@ -853,7 +853,7 @@ fn task_drawers_and_project_h2_drawers_resolve_for_merge() {
     )
     .expect("existing task drawer");
     assert!(post(&plan, "dest.md")
-        .contains("\t- REQUIREMENTS\n\t\t- Existing\n\t\t- Source\n"));
+        .contains("\t- **Requirements**\n\t\t- Existing\n\t\t- Source\n"));
 
     let missing =
         snapshot(&[source, ("dest.md", "- [ ] #task Target ^target\n")]);

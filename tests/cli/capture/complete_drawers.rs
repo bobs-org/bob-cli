@@ -8,12 +8,12 @@ use std::path::Path;
 const FOO: &str = concat!(
     "---\ntype: [[area]]\n---\n",
     "- [ ] #task Upgrade Postgres ^bar\n",
-    "\t- REQUIREMENTS\n",
+    "\t- **Requirements**\n",
     "\t\t- 2 GB RAM\n",
     "\t\t- fast disk\n",
-    "\t- NOTES\n",
-    "\t- NOTES\n",
-    "\t- FUTURE WORK\n",
+    "\t- **Notes**\n",
+    "\t- **Notes**\n",
+    "\t- **Future Work**\n",
     "- [ ] #task Plain ^plain\n",
 );
 
@@ -24,9 +24,12 @@ fn drawer_vault(temp: &TempDir) -> std::path::PathBuf {
     write_capture_task_settings(&vault);
     write_file(&vault.join("foo.md"), FOO);
     for (name, drawers) in [
-        ("other1", &["MOTIVATION", "ACCEPTANCE", "PERFORMANCE"][..]),
-        ("other2", &["MOTIVATION", "ACCEPTANCE"][..]),
-        ("other3", &["MOTIVATION"][..]),
+        (
+            "other1",
+            &["**Motivation**", "**Acceptance**", "**Performance**"][..],
+        ),
+        ("other2", &["**Motivation**", "**Acceptance**"][..]),
+        ("other3", &["**Motivation**"][..]),
     ] {
         let mut note =
             format!("---\ntype: [[area]]\n---\n- [ ] #task T ^{name}\n");
@@ -135,21 +138,21 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
     assert_eq!(
         shape(&json),
         [
-            "task:REQUIREMENTS",
-            "task:NOTES",
-            "task:NOTES",
-            "task:FUTURE WORK",
+            "task:Requirements",
+            "task:Notes",
+            "task:Notes",
+            "task:Future Work",
             "recent:Motivation",
             "recent:Acceptance",
         ]
     );
 
-    let requirements = row(&json, "task", "REQUIREMENTS");
+    let requirements = row(&json, "task", "Requirements");
     assert_eq!(
         *requirements,
         serde_json::json!({
-            "replacement": "#\"REQUIREMENTS\"",
-            "title": "REQUIREMENTS",
+            "replacement": "#requirements",
+            "title": "Requirements",
             "key": "REQUIREMENTS",
             "slug": "requirements",
             "route": "foo",
@@ -160,11 +163,11 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
             "group": "task",
             "detail": "2 notes",
             "creates": false,
-            "consequence": "Adds after \"fast disk\" in REQUIREMENTS",
-            "cursor_after": draft.len() - 1 + "#\"REQUIREMENTS\"".len(),
+            "consequence": "Adds after \"fast disk\" in Requirements",
+            "cursor_after": draft.len() - 1 + "#requirements".len(),
         })
     );
-    assert_eq!(row(&json, "task", "FUTURE WORK")["detail"], "empty");
+    assert_eq!(row(&json, "task", "Future Work")["detail"], "empty");
 
     let motivation = row(&json, "recent", "Motivation");
     assert_eq!(motivation["creates"], true);
@@ -214,8 +217,8 @@ fn quoted_drawer_literals_decode_the_query_and_cover_the_quotes() {
         serde_json::json!({"start": 13, "end": draft.len()})
     );
     assert_eq!(
-        row(&json, "task", "FUTURE WORK")["replacement"],
-        "#\"FUTURE WORK\""
+        row(&json, "task", "Future Work")["replacement"],
+        "#future-work"
     );
 
     // A title no slug can spell is offered as a quoted literal.
@@ -252,7 +255,7 @@ fn refused_rows_name_the_commits_reason() {
     for note in notes {
         assert_eq!(
             note["refused"],
-            "drawer `NOTES` matches more than one drawer (lines 8, 9); rename one"
+            "drawer `Notes` matches more than one drawer (lines 8, 9); rename one"
         );
     }
 }
@@ -371,7 +374,7 @@ fn drawer_menu_human_output_lists_bobs_detail_and_refusals() {
         .output()
         .expect("run human capture-complete");
     let text = stdout(&output);
-    assert!(text.contains("REQUIREMENTS  2 notes  · task"), "{text}");
+    assert!(text.contains("Requirements  2 notes  · task"), "{text}");
     assert!(
         text.contains("Motivation  used in 3 notes · today  · recent"),
         "{text}"
@@ -447,10 +450,10 @@ fn bullet_menu_json_pins_the_target_bold_titles_and_the_continuation() {
     assert_eq!(
         shape(&json),
         [
-            "task:REQUIREMENTS",
-            "task:NOTES",
-            "task:NOTES",
-            "task:FUTURE WORK",
+            "task:Requirements",
+            "task:Notes",
+            "task:Notes",
+            "task:Future Work",
             "recent:Motivation",
             "recent:Acceptance",
         ]
@@ -461,12 +464,12 @@ fn bullet_menu_json_pins_the_target_bold_titles_and_the_continuation() {
         .iter()
         .all(|candidate| candidate["key"] != "TASKS"));
 
-    let requirements = row(&json, "task", "REQUIREMENTS");
+    let requirements = row(&json, "task", "Requirements");
     assert_eq!(
         *requirements,
         serde_json::json!({
-            "replacement": "**REQUIREMENTS**\n  - ",
-            "title": "REQUIREMENTS",
+            "replacement": "**Requirements**\n  - ",
+            "title": "Requirements",
             "key": "REQUIREMENTS",
             "slug": "requirements",
             "route": "foo",
@@ -477,8 +480,8 @@ fn bullet_menu_json_pins_the_target_bold_titles_and_the_continuation() {
             "group": "task",
             "detail": "2 notes",
             "creates": false,
-            "consequence": "Adds after \"fast disk\" in REQUIREMENTS",
-            "cursor_after": draft.len() - 1 + "**REQUIREMENTS**\n  - ".len(),
+            "consequence": "Adds after \"fast disk\" in Requirements",
+            "cursor_after": draft.len() - 1 + "**Requirements**\n  - ".len(),
         })
     );
     assert_eq!(
@@ -495,17 +498,17 @@ fn bullet_menu_continuation_depends_on_what_follows_the_token() {
     let end = "@foo+bar\n- #req";
     let json = complete(&temp, &vault, end);
     assert_eq!(
-        row(&json, "task", "REQUIREMENTS")["replacement"],
-        "**REQUIREMENTS**\n  - "
+        row(&json, "task", "Requirements")["replacement"],
+        "**Requirements**\n  - "
     );
 
     let nested = "@foo+bar\n- #req\n  - already";
     let json = complete_at(&temp, &vault, nested, end.len());
-    let requirements = row(&json, "task", "REQUIREMENTS");
-    assert_eq!(requirements["replacement"], "**REQUIREMENTS**");
+    let requirements = row(&json, "task", "Requirements");
+    assert_eq!(requirements["replacement"], "**Requirements**");
     assert_eq!(
         requirements["cursor_after"],
-        "@foo+bar\n- ".len() + "**REQUIREMENTS**".len()
+        "@foo+bar\n- ".len() + "**Requirements**".len()
     );
 }
 
@@ -667,7 +670,7 @@ fn bullet_menu_human_output_shows_the_title_line_only() {
         .expect("run human capture-complete");
     assert_success(&output);
     let text = stdout(&output);
-    assert!(text.contains("REQUIREMENTS  2 notes  · task"), "{text}");
+    assert!(text.contains("Requirements  2 notes  · task"), "{text}");
     assert!(!text.contains("\n  - "), "{text}");
 }
 
@@ -735,7 +738,7 @@ fn target_run_completion_crosses_schedule_and_clipboard_tokens() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|candidate| candidate["title"] == "FUTURE WORK"),
+            .any(|candidate| candidate["title"] == "Future Work"),
         "the selected member owns its drawer candidates: {drawer}"
     );
 }

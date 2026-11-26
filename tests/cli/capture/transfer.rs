@@ -780,7 +780,7 @@ fn setup_merge_vault(
         &fixture.1.join("db.md"),
         &area_with_tasks(concat!(
             "- [ ] #task Upgrade Postgres [priority:: 2] ^upgrade\n",
-            "  - FUTURE WORK\n    - Existing idea\n",
+            "  - **Future Work**\n    - Existing idea\n",
         )),
     );
     fixture
@@ -923,7 +923,7 @@ fn transfer_merge_reports_target_and_tombstone_in_same_note() {
 #[test]
 fn transfer_merge_drawers_and_sections_preserve_selector_intent() {
     for (destination, heading, project) in [
-        ("@db+upgrade#future-work", "FUTURE WORK", false),
+        ("@db+upgrade#future-work", "Future Work", false),
         ("@db+upgrade#new-ideas", "New Ideas", false),
         ("@db+upgrade#\"Future Works\"", "Future Works", false),
         ("@db#future-work", "## Future Work", false),
