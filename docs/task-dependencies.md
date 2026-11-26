@@ -428,6 +428,17 @@ unchanged.
    entry for reconcile. The notice gains `· replaced the 🪢 link`, or the
    honest `· 🪢 link not removed (reconcile will fold it)` suffix.
 
+**Tie conversions.** `applyTieChange` re-reads the pair and checks the
+stage snapshots before writing. It uses this guarded Depends-on writer for
+owner-waits changes and the Blocks writer for other-waits changes. Same-note
+LINKS changes and their LINKED FROM mirror fold into the dependency writer's
+transaction. Across notes, it commits the dependency side first; a failed
+dependency write leaves the relation side untouched, while a successful
+release adds the plain link through `applyRelationEdit`. If that later link
+write fails, the dependency remains released and the notice says
+`· 🪢 link not added`.
+Dependency-add absorption keeps its existing reconcile-fold failure notice.
+
 Nav applies editor writes as line-level edits, never a whole-note
 replacement, so the cursor stays on the task line the gesture started
 on and the viewport does not move; the review-walk advance on a `]s`
@@ -5817,6 +5828,17 @@ LINKS drops fold into its write (same-note sources fold into the one
 transaction), while a pure source note's drops become a follow-up after
 that T commits — skipped when the T write fails. Only added edges
 absorb; removals never touch LINKS lines.
+
+**Tie conversions.** `applyTieChange` re-reads the pair and checks the
+stage snapshots before writing. Same-note LINKS changes and their LINKED
+FROM mirror fold into the guarded Depends-on or Blocks transaction, so one
+Ctrl+Z restores the prior tie. Across notes, the dependency side commits
+first; a failed dependency write leaves the relation side untouched. A
+successful release adds the plain link through `applyRelationEdit`; if that
+later write fails, the dependency remains released and the notice says
+`· 🪢 link not added`.
+Dependency adds absorb plain links as above, with the honest reconcile
+notice when a cross-note drop cannot be completed.
 
 ### 15.7 Notices and consequence-strip copy
 
