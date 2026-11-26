@@ -2337,7 +2337,8 @@ token is the exact typed token.
 `task_block_id` spans (the caret itself unspanned), no diagnostics, and an
 additive top-level `goto` object (`status`, `route`, `block_id`,
 `note_path`, `target`, `archived`, plus `landing`, `hits`, or `suggestions`
-as the status requires). `schema_version` stays 1; `grammar` is 31. A `@@`
+as the status requires). `schema_version` stays 1; this mode was introduced
+in grammar 31. A `@@`
 declaration never applies. The human renderer prints one `go to` line,
 for example `bob.md:9  [ ] Allow rollovers of intentions` or
 `no ^x in bob.md (did you mean ^y?)`.
@@ -2358,7 +2359,10 @@ task, since the `task_goto` index carries a `route^block-id` key beside
 
 The navigation itself runs through bob-navigation-hotkeys'
 `obsidian://bob-goto-task` URI, whose contract is in the [Go to task URI
-reference](reference/plugins/goto-task-uri.md).
+reference](reference/plugins/goto-task-uri.md). See the [Mac Capture destination
+card](reference/mac-capture/capture-panel.md#caret-go-to) for Return, suggestions,
+and failure behavior, and the [scoped browse](reference/mac-capture/task-pickers.md#block-id-picker)
+for opening a row or completing its ID with Tab.
 
 ### Choosing a parent task with `+`
 
