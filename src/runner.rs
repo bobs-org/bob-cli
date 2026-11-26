@@ -122,6 +122,10 @@ pub(crate) struct Alias {
 
 pub(crate) const ALIASES: &[Alias] = &[
     Alias {
+        from: "articles",
+        to: &["prose"],
+    },
+    Alias {
         from: "capture-task-sections",
         to: &["capture-drawers"],
     },
@@ -1281,15 +1285,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
-        name: "articles",
-        about: "Format and inspect article notes with bob-owned section numbers",
-        section: Section::Vault,
-        target: Target::Leaf(Leaf {
-            native_command: NativeCommand::Prose,
-            script_command: None,
-        }),
-    },
-    Subcommand {
         name: "attachments",
         about: "Copy files into the vault and show where copies came from",
         section: Section::Vault,
@@ -1305,7 +1300,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "nightly",
-        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, records, vault-sync",
+        about: "Run nightly maintenance: vault-sync, task archive, prose notes, period notes, areas, projects, notebooks, albums, records, vault-sync",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,
@@ -1352,6 +1347,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
             ),
             after_help: PROPS_AFTER_HELP,
             usage: "bob props <COMMAND>",
+        }),
+    },
+    Subcommand {
+        name: "prose",
+        about: "Format and inspect prose notes with bob-owned section numbers",
+        section: Section::Vault,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Prose,
+            script_command: None,
         }),
     },
     Subcommand {

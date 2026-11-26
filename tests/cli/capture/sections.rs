@@ -92,6 +92,50 @@ fn capture_article_prefix_matches_de_numbered_identity() {
 }
 
 #[test]
+fn capture_prose_section_matches_heading_identity() {
+    let temp = TempDir::new("bob-cli-capture-prose-section-identity");
+    let vault = temp.path().join("vault");
+    let source = concat!(
+        "---\n",
+        "type: \"[[prose]]\"\n",
+        "---\n",
+        "\n",
+        "# 1. Title\n",
+        "\n",
+        "## 1.1 Section\n",
+        "body\n",
+    );
+    write_file(&vault.join("note.md"), source);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("jot")
+        .arg("@note#Section")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run prose heading-identity capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read note"),
+        concat!(
+            "---\n",
+            "type: \"[[prose]]\"\n",
+            "---\n",
+            "\n",
+            "# 1. Title\n",
+            "\n",
+            "## 1.1 Section\n",
+            "\n",
+            "- jot [created::2026-06-15]\n",
+            "body\n",
+        )
+    );
+}
+
+#[test]
 fn capture_article_prefix_prefers_raw_number_in_document_order() {
     let temp = TempDir::new("bob-cli-capture-article-prefix-number");
     let vault = temp.path().join("vault");

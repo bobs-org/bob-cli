@@ -361,8 +361,17 @@ pub(crate) fn frontmatter_is_area(frontmatter: &Frontmatter<'_>) -> bool {
         && frontmatter_has_type(frontmatter, "[[area]]")
 }
 
+pub(crate) const PROSE_TYPE: &str = "prose";
+pub(crate) const LEGACY_ARTICLE_TYPE: &str = "article";
+
+pub(crate) fn is_prose_type_name(name: &str) -> bool {
+    name == PROSE_TYPE || name == LEGACY_ARTICLE_TYPE
+}
+
 pub(crate) fn frontmatter_is_prose(frontmatter: &Frontmatter<'_>) -> bool {
-    frontmatter_has_type(frontmatter, "[[article]]")
+    frontmatter_type_names(frontmatter)
+        .iter()
+        .any(|name| is_prose_type_name(name))
 }
 
 pub(crate) fn frontmatter_is_notebook(frontmatter: &Frontmatter<'_>) -> bool {

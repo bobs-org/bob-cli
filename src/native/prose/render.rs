@@ -1,4 +1,4 @@
-//! Human and JSON output for `bob articles`.
+//! Human and JSON output for `bob prose`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -18,7 +18,7 @@ pub(crate) fn format_json(plans: Vec<ProsePlan>) {
 
 pub(crate) fn list_json(plans: Vec<ProsePlan>) {
     let mut value = serde_json::to_value(super::response(plans))
-        .expect("article response serializes");
+        .expect("prose response serializes");
     if let Some(notes) = value["notes"].as_array_mut() {
         for note in notes {
             if let Some(fields) = note.as_object_mut() {
@@ -49,7 +49,7 @@ pub(crate) fn adopt_human(
                 .as_ref()
                 .map(|reason| reason.message.as_str())
                 .unwrap_or("note could not be adopted");
-            eprintln!("bob articles: {}: {message}", display_path(&plan.path));
+            eprintln!("bob prose: {}: {message}", display_path(&plan.path));
         }
         ProseStatus::Unchanged => {
             println!(
@@ -62,7 +62,7 @@ pub(crate) fn adopt_human(
         ProseStatus::Changed if write => {
             let detail = plan
                 .notice
-                .strip_prefix("Adopted as an article")
+                .strip_prefix("Adopted as a prose note")
                 .unwrap_or(&plan.notice)
                 .trim_start_matches([' ', '·']);
             let line = if detail.is_empty() {
@@ -130,7 +130,7 @@ pub(crate) fn format_human(
                 } else {
                     let detail = plan
                         .notice
-                        .strip_prefix("Article formatted")
+                        .strip_prefix("Prose note formatted")
                         .unwrap_or(&plan.notice)
                         .trim_start_matches([' ', '·']);
                     let line = if detail.is_empty() {
@@ -142,17 +142,22 @@ pub(crate) fn format_human(
                 }
                 print_findings(plan, styler);
             }
-            ProseStatus::Unchanged => {}
+            ProseStatus::Unchanged => {
+                if plan.notice == "Section numbers unchanged" {
+                    println!(
+                        "{} {} · unchanged",
+                        styler.green("✓"),
+                        display_path(&plan.path)
+                    );
+                }
+            }
             ProseStatus::Skipped | ProseStatus::Error => {
                 let message = plan
                     .reason
                     .as_ref()
                     .map(|reason| reason.message.as_str())
-                    .unwrap_or("article could not be formatted");
-                eprintln!(
-                    "bob articles: {}: {message}",
-                    display_path(&plan.path)
-                );
+                    .unwrap_or("prose note could not be formatted");
+                eprintln!("bob prose: {}: {message}", display_path(&plan.path));
             }
         }
     }
@@ -169,7 +174,7 @@ pub(crate) fn list_human(
     let total = plans.len();
     println!(
         "{} {} {}",
-        styler.cyan("Articles"),
+        styler.cyan("Prose notes"),
         styler.separator(),
         format!("{total} · {}", display_root(root))
     );
@@ -197,8 +202,8 @@ pub(crate) fn list_human(
         .iter()
         .map(|row| row.0.chars().count())
         .max()
-        .unwrap_or(7)
-        .max(7);
+        .unwrap_or(10)
+        .max(10);
     let state_width = rows
         .iter()
         .map(|row| row.5.chars().count())
@@ -207,7 +212,7 @@ pub(crate) fn list_human(
         .max(5);
     println!(
         "{}  {}  {}  {}  {}  STATE",
-        pad_right("ARTICLE", prose_width),
+        pad_right("PROSE NOTE", prose_width),
         pad_right("SECTIONS", 8),
         pad_right("WORDS", 5),
         pad_right("TODO", 4),
@@ -232,7 +237,7 @@ pub(crate) fn list_human(
         "{}",
         styler.dim(&format!(
             "{} · {needs_format} {} formatting",
-            plural_count(total, "article", "articles"),
+            plural_count(total, "prose note", "prose notes"),
             if needs_format == 1 { "needs" } else { "need" }
         ))
     );
@@ -244,7 +249,7 @@ pub(crate) fn outline_human(plan: &ProsePlan, styler: &Styler) {
     println!(
         "{} {} {} words · {} sections · {} TODO",
         styler.cyan(&plan.outline.title),
-        styler.dim("· article ·"),
+        styler.dim("· prose note ·"),
         plan.outline.words,
         sections.len(),
         stubs

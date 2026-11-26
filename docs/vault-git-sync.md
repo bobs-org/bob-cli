@@ -428,7 +428,7 @@ athena's `bob-nightly` job, in the same chezmoi `cron:` data, runs `bob nightly`
 
 1. `bob vault-sync`
 2. `bob task archive`
-3. `bob articles format --all --check` (report-only; pass unless bob fails)
+3. `bob prose format --all --check` (report-only; pass unless bob fails)
 4. period-note problem report (write nothing)
 5. `bob areas sync` (the lock-free core: it repairs generated `## Areas`
    catalogs and makes one `areas: sync catalogs (N notes)` commit only when a

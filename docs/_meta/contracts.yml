@@ -1,8 +1,8 @@
 groups:
   - title: "Capture and integrations"
     entries:
-      - stem: articles
-        summary: "`bob articles` formatting, list, outline, adopt, and ArticlePlan JSON"
+      - stem: prose
+        summary: "`bob prose` formatting, list, outline, adopt, and ArticlePlan JSON; `bob articles` remains an alias"
         order: 1
       - stem: capture
         summary: "Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery)"

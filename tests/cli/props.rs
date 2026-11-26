@@ -72,6 +72,35 @@ fn fingerprint(vault: &Path, note: &str) -> String {
 }
 
 #[test]
+fn prose_and_legacy_article_types_are_plain_notes_to_props() {
+    let vault = vault("prose-note-kind");
+    write_note(
+        vault.path(),
+        "legacy.md",
+        "---\ntype: [[article]]\ncustom: value\n---\n",
+    );
+    write_note(
+        vault.path(),
+        "prose.md",
+        "---\ntype: [[prose]]\ncustom: value\n---\n",
+    );
+
+    let legacy = show(vault.path(), "legacy", &[]);
+    let prose = show(vault.path(), "prose", &[]);
+
+    assert_success(&legacy);
+    assert_success(&prose);
+    let legacy = report(&legacy);
+    let prose = report(&prose);
+    assert_eq!(legacy["note_kind"], "note");
+    assert_eq!(prose["note_kind"], "note");
+    assert_eq!(
+        legacy["ownership_diagnostics"],
+        prose["ownership_diagnostics"]
+    );
+}
+
+#[test]
 fn props_retired_project_counts_are_deletable_without_changing_other_bytes() {
     let vault = vault("retired-counts");
     for note in ["project.md", "area.md", "done/archived.md"] {

@@ -1,36 +1,49 @@
-# Article notes
+# Prose notes
 
-An article is a long-form Bob vault note marked with `type: "[[article]]"`. bob-cli
-owns article numbering, link repair, and layout. The Obsidian `bob-articles` plugin sends
-the current buffer to bob and applies bob's returned line edits as one undoable
-transaction. Formatting changes layout and heading numbers; it never changes prose.
+A prose note is a note whose body is free-form authored Markdown that the author owns:
+paragraphs, headings, lists, tables, quotes, and code. bob may format its layout and
+(unless turned off) section numbers, but never changes a word or adds structure. A prose
+note holds no `#task` lines, `^prj` or `^ref` anchors, or second type. The test is the
+note's primary role: an area or project with prose sections stays an area or project.
+
+## Names and compatibility
+
+`type: "[[prose]]"` is canonical. Notes typed `[[article]]` remain prose notes, and
+`bob articles` remains a hidden alias for `bob prose`. The ArticlePlan contract keeps
+`schema_version: 1`, the `summary.articles` key, and the `not-article` refusal code;
+clients must continue rejecting unknown schema versions.
+
+bob-cli owns prose-note section numbering, link repair, and layout. The Obsidian
+`bob-articles` plugin sends the current buffer to bob and applies bob's returned line
+edits as one undoable transaction. Formatting changes layout and heading numbers; it
+never changes prose.
 
 ## Marker, options, and refusals
 
 ```yaml
 ---
 parent: "[[sase_blog]]"
-type: "[[article]]"
+type: "[[prose]]"
 created: 2026-10-15T15:10:41-04:00
 title: "Why I built SASE" # optional publication title; defaults to file name
 section_numbers: true     # optional; true by default
 ---
 ```
 
-Only `type: "[[article]]"` enables formatting. `title` feeds the repeated-title
-finding and the `list`/`outline` labels. `section_numbers` accepts lowercase `true` or
-`false`; any other value produces a `bad-option` finding on that line and leaves
-numbering on. The plugin's `.bob-article` class is runtime-only and is never written to
-frontmatter.
+Only `type: "[[prose]]"` or the legacy `type: "[[article]]"` enables formatting.
+`title` feeds the repeated-title finding and the `list`/`outline` labels.
+`section_numbers` accepts lowercase `true` or `false`; any other value produces a
+`bad-option` finding on that line and leaves numbering on. The plugin's `.bob-article`
+class is runtime-only and is never written to frontmatter.
 
 Formatting skips the whole note in these cases; it never formats only part of a note.
 
 | Code | Condition and response |
 | --- | --- |
-| `not-article` | The `type` does not include `[[article]]`; run `bob articles adopt`. |
+| `not-article` | The `type` includes neither `[[prose]]` nor legacy `[[article]]`; run `bob prose adopt`. |
 | `frontmatter-unclosed` | The opening `---` has no closing delimiter. |
 | `mixed-type` | The type also names another kind, such as `[[project]]`. |
-| `holds-anchor` | The note contains a `^prj` or `^ref` block anchor; articles cannot be projects or references. |
+| `holds-anchor` | The note contains a `^prj` or `^ref` block anchor; prose notes cannot be projects or refs. |
 | `holds-tasks` | A Markdown checkbox task line has a `#task` tag outside inline code; move it to the parent note. The refusal lists the 1-based lines. |
 | `conflict-markers` | The note contains Git `<<<<<<<` or `>>>>>>>` lines. |
 | `excluded-directory` | The path is below `_conflicts`, `_templates`, `_generated`, `.obsidian`, or `.git`. |
@@ -87,7 +100,7 @@ Findings are reports, never automatic fixes. Each has `code`, `severity`, a 1-ba
 | `pseudo-footnote` | warning | A column-zero `[label]: …` definition that is not a `[^label]:` footnote and whose first destination token is not URL/path-like. A destination is excluded if it contains `://`, begins with `mailto:` (case-insensitive), `#`, `/`, `./`, or `../`. |
 | `broken-heading-link` | warning | An in-note heading link matches no section. |
 | `ambiguous-heading-link` | warning | An in-note heading link matches more than one section. |
-| `inbound-heading-link` | warning | Another note links to a heading this article no longer has; the finding names the source `path:line`. |
+| `inbound-heading-link` | warning | Another note links to a heading this prose note no longer has; the finding names the source `path:line`. |
 | `deep-section` | info | A section is deeper than depth 4. |
 | `unclosed-fence` | warning | A code fence never closes. |
 | `title-heading` | info | The first section repeats the file name or `title:`; Obsidian already displays the inline title. |
@@ -104,7 +117,7 @@ and the `type` line added by `adopt`.
 
 A heading identity removes one bob-owned number, collapses whitespace, and compares
 case-insensitively. bob compares both the raw title and a plain form with emphasis,
-inline-code, and wikilink markup stripped. In-note links, inbound links, and article
+inline-code, and wikilink markup stripped. In-note links, inbound links, and prose-note
 capture selectors share this identity rule.
 
 For each fragment segment, bob resolves in this order:
@@ -136,37 +149,37 @@ formats the result a second time; if that pass changes it, bob reports
 
 ## Write safety and vault scanning
 
-`format` and `adopt -w` check each changed article's SHA-256 preimage before writing. A
+`format` and `adopt -w` check each changed prose note's SHA-256 preimage before writing. A
 note changed after planning gets status `error`, reason code `preimage-changed`, and a
-message saying it was not written. Other changed articles in the batch still write;
+message saying it was not written. Other changed prose notes in the batch still write;
 the command exits 2 if any note was skipped or errored. Human output and JSON use the
 post-write status, so a skipped write never appears as successful.
 
-The article writes use an atomic temporary-file replacement. For inbound repair, bob
-writes changed article notes first (folding cross-article repairs into those writes),
+The prose-note writes use an atomic temporary-file replacement. For inbound repair, bob
+writes changed prose notes first (folding cross-note repairs into those writes),
 then scans and atomically writes other linking notes after checking each linker's
-preimage. A drifted inbound note is skipped with a reason; the article write stands.
-The drifted article's inbound rewrites are skipped. Non-UTF-8 Markdown files are treated
-as non-articles and non-linkers; other I/O errors fail the run. Excluded directories
+preimage. A drifted inbound note is skipped with a reason; the prose-note write stands.
+The drifted prose note's inbound rewrites are skipped. Non-UTF-8 Markdown files are
+treated as untyped notes and non-linkers; other I/O errors fail the run. Excluded directories
 are not scanned.
 
 Inbound repair runs on write when a heading changes. `format -a` also scans for stale
-links from earlier runs. The scan prefilters notes by case-insensitive article-stem
+links from earlier runs. The scan prefilters notes by case-insensitive prose-note-stem
 substring, then resolves links against the vault. `--dry-run` shows inbound diffs;
 `--stdin` returns rewrites in the plan without writing.
 
 ## CLI
 
-A bare `bob articles` runs the read-only `list` command.
+A bare `bob prose` runs the read-only `list` command.
 
 | Command | Effect |
 | --- | --- |
-| `bob articles` or `bob articles list` | List article sections, words, TODO stubs, findings, and state. |
-| `bob articles adopt NOTE` | Preview adding the marker and formatting. |
-| `bob articles adopt -w NOTE` | Write adoption and formatting. |
-| `bob articles format NOTE...` | Format named articles; writes by default. |
-| `bob articles format -a` | Format all discovered articles. Valid changed notes write even if another note is refused. |
-| `bob articles outline NOTE` | Show the section outline and word counts. |
+| `bob prose` or `bob prose list` | List prose-note sections, words, TODO stubs, findings, and state. |
+| `bob prose adopt NOTE` | Preview adding the marker and formatting. |
+| `bob prose adopt -w NOTE` | Write adoption and formatting. |
+| `bob prose format NOTE...` | Format named prose notes; writes by default. |
+| `bob prose format -a` | Format all discovered prose notes. Valid changed notes write even if another note is refused. |
+| `bob prose outline NOTE` | Show the section outline and word counts. |
 
 `NOTE` accepts an exact vault-relative Markdown path or a unique note stem. Ambiguous
 names list candidates; missing names list close stem matches where available. `-b,
@@ -174,21 +187,24 @@ names list candidates; missing names list close stem matches where available. `-
 
 `format` options: `-a, --all`; `-b, --bob-dir PATH`; `-c, --check` (write nothing,
 exit 1 if formatting is needed); `-d, --dry-run` (show a unified diff, write nothing);
-`-f, --format human|json`; `-s, --stdin` (read one named note from stdin, print its
-plan, and write nothing). `--stdin` cannot be combined with `--all` or `--dry-run`.
+`-f, --format human|json`; `-n, --section-numbers on|off` (set the frontmatter value
+and format in one plan; conflicts with `--all` and `--check`); `-s, --stdin` (read one
+named note from stdin, print its plan, and write nothing). `--stdin` cannot be combined
+with `--all` or `--dry-run`, and can be combined with `--section-numbers`.
 `adopt` options are `-b`, `-f`, `-s`, and `-w, --write`; preview is the default. An
-already-adopted article is a successful no-op. Adoption preview includes a diff,
+already-adopted prose note is a successful no-op. Adoption preview includes a diff,
 `Numbers replaced`, findings, and a write hint.
 
 Exit codes:
 
 | Command | 0 | 1 | 2 |
 | --- | --- | --- | --- |
-| `format` | Success, including no changes. | `--check` found at least one changed article. | Usage error, refusal, or formatting/write error. |
-| `adopt` | Adoption succeeded or the note was already an article. | — | Usage error, refusal, or formatting/write error. |
+| `format` | Success, including no changes. | `--check` found at least one changed prose note. | Usage error, refusal, or formatting/write error. |
+| `adopt` | Adoption succeeded or the note was already a prose note. | — | Usage error, refusal, or formatting/write error. |
 | `list`, `outline` | Success. | — | Usage/resolution error. |
 
-Human format output is silent when no work is needed. Changed notes get a summary line;
+Human format output is silent when no work is needed, except a section-number toggle
+reports `unchanged` when its requested value is already set. Changed notes get a summary line;
 warnings and info findings use distinct prefixes. `--check` prints which notes need
 formatting. The list header uses `~` for the home directory, and singular/plural wording
 follows the counts. Nightly runs the report-only `format -a -c` check after task archive;
@@ -213,7 +229,7 @@ is skipped or errors:
       "promoted": 2, "setext": 0, "links": 0, "layout": 9
     },
     "replaced": [{ "line": 30, "token": "3.", "number": "1.2" }],
-    "notice": "Article formatted · 10 sections numbered",
+    "notice": "Prose note formatted · 10 sections numbered",
     "findings": [],
     "outline": { "title": "sase_blog_contents", "numbering": true, "words": 253,
       "preamble": {}, "sections": [] },
@@ -239,11 +255,11 @@ markers. `replaced` lists every owned number removed or replaced. In `format --s
 
 ## Plugin behavior
 
-The plugin never parses article grammar or computes numbers. On save, when leaving a
-note, or through **Bob: Format article**, it sends the buffer to bob and applies the
+The plugin never parses prose-note grammar or computes numbers. On save, when leaving a
+note, or through **Bob: Format prose note**, it sends the buffer to bob and applies the
 returned edits in one CodeMirror transaction. It checks the buffer and inbound line
 preimages before writes and suppresses reformatting after an undo until fresh input. The
-**Bob: Convert note to article…** command shows bob's adoption preview and refusal.
+**Bob: Convert note to prose…** command shows bob's adoption preview and refusal.
 Reading and Live Preview decorate written numbers from bob's outline; stale-number
 tooltips avoid promising an on-save change while the undo guard blocks saves.
 

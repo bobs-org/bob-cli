@@ -350,6 +350,7 @@ pub(crate) fn resolve_note_context(
                     | "record"
                     | "ref"
                     | "article"
+                    | "prose"
                     | "mail"
                     | "done"
                     | "day"

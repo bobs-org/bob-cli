@@ -1,4 +1,4 @@
-//! Vault-wide inbound heading-link repair for article notes.
+//! Vault-wide inbound heading-link repair for prose notes.
 
 use std::{
     collections::BTreeSet,
@@ -85,8 +85,8 @@ fn target_index(active: &[usize], plan_index: usize) -> Option<usize> {
     active.iter().position(|index| *index == plan_index)
 }
 
-/// Apply inbound fragment rewrites to article `formatted` text in this
-/// batch so `--all` can repair cross-article links in one write.
+/// Apply inbound fragment rewrites to prose-note `formatted` text in this
+/// batch so `--all` can repair cross-prose-note links in one write.
 pub(crate) fn fold_into_formatted(
     plans: &mut [ProsePlan],
     sources: &[String],
@@ -127,7 +127,7 @@ pub(crate) fn fold_into_formatted(
 }
 
 /// Write inbound rewrites for notes this run did not already install as
-/// changed articles. A linking file whose preimage drifted is skipped.
+/// changed prose notes. A linking file whose preimage drifted is skipped.
 pub(crate) fn write_others(
     root: &Path,
     plans: &[ProsePlan],
@@ -167,7 +167,7 @@ pub(crate) fn write_others(
             };
             if sha256_hex(&current) != inbound.sha256 {
                 skips.push(format!(
-                    "skipped inbound {}: changed since the article plan was made",
+                    "skipped inbound {}: changed since the prose plan was made",
                     inbound.path.display()
                 ));
                 continue;
@@ -481,7 +481,7 @@ mod tests {
 
         assert!(
             skips.iter().any(|skip| skip.contains("journal.md")
-                && skip.contains("changed since the article plan was made")),
+                && skip.contains("changed since the prose plan was made")),
             "{skips:?}"
         );
         assert_eq!(

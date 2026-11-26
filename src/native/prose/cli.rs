@@ -1,4 +1,4 @@
-//! Public CLI for formatting and inspecting article notes.
+//! Public CLI for formatting and inspecting prose notes.
 
 use std::{
     ffi::OsString,
@@ -13,10 +13,13 @@ use clap::{
     ArgMatches, Command as ClapCommand,
 };
 
-use super::{adopt, format, inbound, render, vault, ProseContext, ProseStatus};
+use super::{
+    adopt, format, format_with_section_numbers, inbound, render, vault,
+    ProseContext, ProseStatus,
+};
 use crate::native::{env as bob_env, style::Styler};
 
-const COMMAND_NAME: &str = "bob articles";
+const COMMAND_NAME: &str = "bob prose";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputFormat {
@@ -48,16 +51,16 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Format and inspect article notes (frontmatter type: [[article]])")
+        .about("Format and inspect prose notes (frontmatter type: [[prose]])")
         .long_about(
-            "Format and inspect article notes (frontmatter type: \"[[article]]\").\n\n\
-             Every `bob articles` command reads or rewrites notes whose type is \
-             `[[article]]`. bob owns their section numbers (1. / 1.1 / 1.1.1) \
-             and layout; formatting never changes a word. Bare `bob articles` \
-             runs the read-only `list` command.",
+            "Format and inspect prose notes (frontmatter type: \"[[prose]]\").\n\n\
+             Every `bob prose` command reads or rewrites prose notes. `[[article]]` \
+             notes still count. bob owns their section numbers (1. / 1.1 / 1.1.1) \
+             and layout; formatting never changes a word. Bare `bob prose` runs \
+             the read-only `list` command.",
         )
         .after_help(
-            "Examples:\n  bob articles                                List article notes\n  bob articles adopt sase_blog_contents       Preview adopting a note\n  bob articles adopt -w sase_blog_contents    Adopt it\n  bob articles format sase_blog_contents      Format one article\n  bob articles format -a -c                   Exit 1 if any article needs formatting\n  bob articles outline sase_blog_contents     Numbered outline with word counts\n\nSee docs/articles.md for the rules and the JSON contract.",
+            "Examples:\n  bob prose                                      List prose notes\n  bob prose adopt sase_blog_contents             Preview adopting a note\n  bob prose adopt -w sase_blog_contents          Adopt it\n  bob prose format sase_blog_contents            Format one prose note\n  bob prose format -n off sase_blog_contents     Turn section numbers off\n  bob prose format -a -c                         Check all prose notes\n  bob prose outline sase_blog_contents           Numbered outline with word counts\n\nSee docs/prose.md for the rules and JSON contract.",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
@@ -71,15 +74,15 @@ pub(crate) fn build_cli() -> ClapCommand {
 
 fn adopt_command() -> ClapCommand {
     ClapCommand::new("adopt")
-        .about("Mark a note as an article; preview unless --write")
+        .about("Mark a note as a prose note; preview unless --write")
         .long_about(
-            "Insert type: \"[[article]]\" and plan the first format. \
+            "Insert type: \"[[prose]]\" and plan the first format. \
              Previews by default with a diff and the numbers it will \
              replace. Pass --write to apply the change, or --stdin to \
              print a JSON plan for a buffer without writing.",
         )
         .after_help(
-            "Examples:\n  bob articles adopt blog\n  bob articles adopt -w blog\n  cat blog.md | bob articles adopt -s blog -f json",
+            "Examples:\n  bob prose adopt blog\n  bob prose adopt -w blog\n  cat blog.md | bob prose adopt -s blog -f json",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
@@ -93,15 +96,16 @@ fn adopt_command() -> ClapCommand {
 
 fn format_command() -> ClapCommand {
     ClapCommand::new("format")
-        .about("Number sections and tidy layout in article notes")
+        .about("Number sections and tidy layout in prose notes")
         .long_about(
-            "Format one or more article notes. Writes by default; use --check \
+            "Format one or more prose notes. Writes by default; use --check \
              to report whether any note would change, --dry-run to show a \
-             unified diff, or --stdin to print a plan for text from stdin \
-             without writing.",
+             unified diff, --stdin to print a plan for text from stdin \
+             without writing, or --section-numbers on|off to update numbering \
+             and format in one transaction.",
         )
         .after_help(
-            "Examples:\n  bob articles format blog\n  bob articles format -a -c\n  bob articles format -d blog\n  cat blog.md | bob articles format -s blog -f json",
+            "Examples:\n  bob prose format blog\n  bob prose format -n off blog\n  bob prose format -a -c\n  bob prose format -d blog\n  cat blog.md | bob prose format -s blog -n off -f json",
         )
         .group(
             ArgGroup::new("target")
@@ -114,15 +118,16 @@ fn format_command() -> ClapCommand {
         .arg(check_arg())
         .arg(dry_run_arg())
         .arg(format_arg())
+        .arg(section_numbers_arg())
         .arg(stdin_arg())
         .arg(note_arg(true))
 }
 
 fn list_command() -> ClapCommand {
     ClapCommand::new("list")
-        .about("List article notes with sections, TODO stubs, and findings")
+        .about("List prose notes with sections, TODO stubs, and findings")
         .after_help(
-            "Examples:\n  bob articles list\n  bob articles list -f json\n  bob articles list -b ~/bob",
+            "Examples:\n  bob prose list\n  bob prose list -f json\n  bob prose list -b ~/bob",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
@@ -130,9 +135,9 @@ fn list_command() -> ClapCommand {
 
 fn outline_command() -> ClapCommand {
     ClapCommand::new("outline")
-        .about("Print an article's numbered section outline")
+        .about("Print a prose note's numbered section outline")
         .after_help(
-            "Examples:\n  bob articles outline blog\n  bob articles outline blog -f json",
+            "Examples:\n  bob prose outline blog\n  bob prose outline blog -f json",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
@@ -144,7 +149,7 @@ fn all_arg() -> Arg {
         .short('a')
         .long("all")
         .action(ArgAction::SetTrue)
-        .help("Format every article note in the vault")
+        .help("Format every prose note in the vault")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -161,7 +166,7 @@ fn check_arg() -> Arg {
         .short('c')
         .long("check")
         .action(ArgAction::SetTrue)
-        .help("Exit 1 if any article would change; write nothing")
+        .help("Exit 1 if any prose note would change; write nothing")
 }
 
 fn dry_run_arg() -> Arg {
@@ -183,6 +188,17 @@ fn format_arg() -> Arg {
         .help("Output format: human or json")
 }
 
+fn section_numbers_arg() -> Arg {
+    Arg::new("section-numbers")
+        .short('n')
+        .long("section-numbers")
+        .value_name("STATE")
+        .value_parser(["on", "off"])
+        .conflicts_with("all")
+        .conflicts_with("check")
+        .help("Set section numbering on or off and format in one write")
+}
+
 fn stdin_arg() -> Arg {
     Arg::new("stdin")
         .short('s')
@@ -196,13 +212,13 @@ fn write_arg() -> Arg {
         .short('w')
         .long("write")
         .action(ArgAction::SetTrue)
-        .help("Write the adopted article; preview without this flag")
+        .help("Write the adopted prose note; preview without this flag")
 }
 
 fn note_arg(multiple: bool) -> Arg {
     note_arg_with_help(
         multiple,
-        "Vault-relative article path or unique note stem",
+        "Vault-relative prose-note path or unique note stem",
     )
 }
 
@@ -318,6 +334,9 @@ fn run_format(matches: &ArgMatches) -> i32 {
     let check = matches.get_flag("check");
     let dry_run = matches.get_flag("dry-run");
     let from_stdin = matches.get_flag("stdin");
+    let section_numbers = matches
+        .get_one::<String>("section-numbers")
+        .map(|state| state == "on");
     let output_format = output_format(matches);
     let requested = matches
         .get_many::<String>("note")
@@ -391,7 +410,15 @@ fn run_format(matches: &ArgMatches) -> i32 {
     let mut plans = sources
         .iter()
         .zip(&paths)
-        .map(|(source, path)| format(source, &ProseContext::new(path)))
+        .map(|(source, path)| {
+            let context = ProseContext::new(path);
+            match section_numbers {
+                Some(enabled) => {
+                    format_with_section_numbers(source, &context, enabled)
+                }
+                None => format(source, &context),
+            }
+        })
         .collect::<Vec<_>>();
     let index = match inbound::attach(&bob_dir, &mut plans, all || from_stdin) {
         Ok(index) => index,
@@ -494,7 +521,7 @@ fn run_outline(matches: &ArgMatches) -> i32 {
             .reason
             .as_ref()
             .map(|reason| reason.message.as_str())
-            .unwrap_or("article could not be formatted");
+            .unwrap_or("prose note could not be formatted");
         eprintln!("{COMMAND_NAME}: {}: {message}", path.display());
         return 2;
     }

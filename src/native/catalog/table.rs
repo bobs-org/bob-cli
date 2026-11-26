@@ -664,9 +664,9 @@ pub(crate) const ENTRIES: &[Row] = &[
     // Vault
     reads(
         "articles-list",
-        &["articles", "list"],
-        "Articles",
-        &["articles", "list", "notes"],
+        &["prose", "list"],
+        "Prose notes",
+        &["prose", "articles", "list", "notes"],
         Presentation::Report,
         60,
     ),
@@ -674,9 +674,9 @@ pub(crate) const ENTRIES: &[Row] = &[
         slots: &[("NOTE", "article-note"), ("note", "article-note")],
         ..reads(
             "articles-outline",
-            &["articles", "outline"],
-            "Article outline",
-            &["articles", "outline", "sections"],
+            &["prose", "outline"],
+            "Prose note outline",
+            &["prose", "articles", "outline", "sections"],
             Presentation::Report,
             60,
         )
@@ -958,7 +958,7 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         confirm: Some(
-            "Run nightly maintenance (vault-sync, task archive, articles, \
+            "Run nightly maintenance (vault-sync, task archive, prose notes, \
              period notes, areas, projects, notebooks, albums, vault-sync). Athena's timer already runs this.",
         ),
         invalidates: &["tasks"],
@@ -1862,13 +1862,13 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
                  apply it from a terminal",
     },
     Excluded {
-        path: &["articles", "format"],
-        reason: "Use Format this article (bob-articles formats through the \
+        path: &["prose", "format"],
+        reason: "Use Format this prose note (bob-articles formats through the \
                  editor)",
     },
     Excluded {
-        path: &["articles", "adopt"],
-        reason: "Use bob-articles' adoption preview",
+        path: &["prose", "adopt"],
+        reason: "Use Bob Prose's adoption preview",
     },
 ];
 

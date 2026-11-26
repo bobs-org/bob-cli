@@ -1,4 +1,4 @@
-//! Article note discovery, path resolution, and guarded vault writes.
+//! Prose note discovery, path resolution, and guarded vault writes.
 
 use std::{
     ffi::OsStr,
@@ -46,8 +46,8 @@ pub(crate) fn list_markdown(root: &Path) -> Result<Vec<PathBuf>, VaultError> {
     Ok(paths)
 }
 
-/// Discover marked article notes under the vault root. The directory
-/// exclusions match article formatting's refusal list.
+/// Discover marked prose notes under the vault root. The directory
+/// exclusions match prose formatting's refusal list.
 pub(crate) fn discover_prose(
     root: &Path,
 ) -> Result<Vec<ProseFile>, VaultError> {
@@ -74,7 +74,7 @@ pub(crate) fn discover_prose(
     Ok(prose)
 }
 
-/// Resolve an article NOTE as an exact vault-relative path, or as a
+/// Resolve a prose-note NOTE as an exact vault-relative path, or as a
 /// unique case-insensitive basename. Exact excluded paths are returned
 /// so the formatter can explain its refusal.
 pub(crate) fn resolve_note(root: &Path, note: &str) -> Result<PathBuf, String> {
@@ -167,7 +167,7 @@ pub(crate) fn write_plans(
 
 fn mark_preimage_changed(plan: &mut ProsePlan) {
     let message = format!(
-        "{} changed since the article plan was made; not written",
+        "{} changed since the prose plan was made; not written",
         plan.path.display()
     );
     plan.status = super::plan::ProseStatus::Error;
@@ -175,7 +175,7 @@ fn mark_preimage_changed(plan: &mut ProsePlan) {
         code: "preimage-changed".to_string(),
         message: message.clone(),
     });
-    plan.notice = format!("Article formatting failed · {message}");
+    plan.notice = format!("Prose note formatting failed · {message}");
     plan.formatted = None;
     plan.inbound.clear();
 }
@@ -201,7 +201,7 @@ pub(crate) fn completion_candidates(root: &Path) -> Vec<(String, String)> {
                 .to_string_lossy()
                 .replace('\\', "/");
             let sections = plan.outline.sections.len();
-            (value, format!("article · {sections} sections"))
+            (value, format!("prose note · {sections} sections"))
         })
         .collect()
 }
@@ -274,7 +274,7 @@ fn text_is_prose(text: &str) -> bool {
         return frontmatter_is_prose(&frontmatter);
     }
 
-    // Keep an article with an unclosed frontmatter marker in the `--all`
+    // Keep a prose note with an unclosed frontmatter marker in the `--all`
     // plan so the formatter can report `frontmatter-unclosed`.
     if text
         .lines()

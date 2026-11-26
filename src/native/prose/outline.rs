@@ -1,4 +1,4 @@
-//! Article outline fields and report-only word counts.
+//! Prose note outline fields and report-only word counts.
 
 use std::path::Path;
 

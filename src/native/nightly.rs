@@ -39,8 +39,8 @@ const STEPS: &[Step] = &[
         run: run_collect_done_step,
     },
     Step {
-        name: "articles",
-        blurb: "Report articles that need formatting",
+        name: "prose notes",
+        blurb: "Report prose notes that need formatting",
         run: run_prose_step,
     },
     Step {
@@ -168,13 +168,13 @@ pub(crate) fn help_text() -> String {
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
-runs `vault-sync`, `task archive`, `articles`, `period notes`, `areas`, `projects`, `notebooks`, `albums`, `records`, and `vault-sync` in order.
+runs `vault-sync`, `task archive`, `prose notes`, `period notes`, `areas`, `projects`, `notebooks`, `albums`, `records`, and `vault-sync` in order.
 
 workflow:
   1. acquire the shared Bob maintenance lock
   2. run vault-sync against the vault
   3. run task archive against the vault
-  4. report article notes that need formatting (write nothing)
+  4. report prose notes that need formatting (write nothing)
   5. report period-note problems (write nothing)
   6. repair generated area catalogs (one scoped commit when any changed)
   7. sync project lifecycles and sub-project catalogs (one scoped commit when any changed)

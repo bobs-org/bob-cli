@@ -3,8 +3,9 @@
 use crate::support::*;
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Command, Output, Stdio};
 
 const ARTICLE: &str = "---\ntype: \"[[article]]\"\n---\n\n[[#9. First]]\n\n# Draft\n\n## 9. First\n\nTODO\n";
 const FORMATTED: &str = "---\ntype: \"[[article]]\"\n---\n\n[[#1.1 First]]\n\n# 1. Draft\n\n## 1.1 First\n\nTODO\n";
@@ -21,13 +22,37 @@ fn fixture() -> Fixture {
     Fixture { _temp: temp, vault }
 }
 
-fn article_command(fixture: &Fixture) -> std::process::Command {
+fn prose_named_command(fixture: &Fixture, name: &str) -> Command {
     let mut command = bob_command();
     command
-        .arg("articles")
+        .arg(name)
         .env("BOB_DIR", &fixture.vault)
         .env("NO_COLOR", "1");
     command
+}
+
+fn article_command(fixture: &Fixture) -> Command {
+    prose_named_command(fixture, "articles")
+}
+
+fn prose_command(fixture: &Fixture) -> Command {
+    prose_named_command(fixture, "prose")
+}
+
+fn run_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn command with stdin");
+    child
+        .stdin
+        .take()
+        .expect("stdin pipe")
+        .write_all(input.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("wait for command")
 }
 
 fn json(output: &Output) -> Value {
@@ -66,7 +91,7 @@ fn bare_articles_lists_only_marked_notes_and_honors_exclusions() {
 
     assert_success(&output);
     let text = stdout(&output);
-    assert!(text.contains("Articles"), "{text}");
+    assert!(text.contains("Prose notes"), "{text}");
     assert!(text.contains("draft"), "{text}");
     assert!(text.contains("2"), "{text}");
     assert!(!text.contains("plain"), "{text}");
@@ -352,7 +377,7 @@ fn article_note_completion_shows_section_count() {
         &fixture.vault,
         &[
             "bob",
-            "articles",
+            "prose",
             "format",
             "--bob-dir",
             fixture.vault.to_str().unwrap(),
@@ -363,28 +388,151 @@ fn article_note_completion_shows_section_count() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "draft\tarticle · 2 sections\tarticles\tspace\n"
+        "draft\tprose note · 2 sections\tprose\tspace\n"
     );
 }
 
 #[test]
 fn article_help_exposes_the_cli_contract() {
-    let output = article_command(&fixture())
+    let output = prose_command(&fixture())
         .arg("--help")
         .output()
         .expect("article help");
     assert_success(&output);
     let help = stdout(&output);
-    assert!(help.contains("Bare `bob articles`"), "{help}");
+    assert!(help.contains("Bare `bob prose`"), "{help}");
     assert!(help.contains("adopt"), "{help}");
     assert!(help.contains("format"), "{help}");
     assert!(help.contains("outline"), "{help}");
-    assert!(help.contains("docs/articles.md"), "{help}");
+    assert!(help.contains("docs/prose.md"), "{help}");
     assert_text_order(
         &help,
         &["\n  adopt", "\n  format", "\n  list", "\n  outline"],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn articles_alias_matches_prose_for_read_and_preview_commands() {
+    let fixture = fixture();
+    let prose = "---\ntype: [[prose]]\n---\n\n# Draft\n\n## 1. First\n\nTODO\n";
+    write_file(&fixture.vault.join("draft.md"), prose);
+    write_file(&fixture.vault.join("plain.md"), "# Plain\n\n## Section\n");
+
+    for (args, label) in [
+        (&["list"][..], "list"),
+        (&["outline", "draft"][..], "outline"),
+        (&["adopt", "plain"][..], "adopt preview"),
+    ] {
+        let mut old = article_command(&fixture);
+        old.args(args);
+        let mut canonical = prose_command(&fixture);
+        canonical.args(args);
+        let old = old.output().expect("run legacy alias");
+        let canonical =
+            canonical.output().expect("run canonical prose command");
+        assert_eq!(
+            old.status.code(),
+            canonical.status.code(),
+            "{label} status"
+        );
+        assert_eq!(stdout(&old), stdout(&canonical), "{label} stdout");
+        assert_eq!(stderr(&old), stderr(&canonical), "{label} stderr");
+    }
+
+    let args = ["format", "-s", "draft", "-f", "json"];
+    let mut old = article_command(&fixture);
+    old.args(args);
+    let mut canonical = prose_command(&fixture);
+    canonical.args(args);
+    let old = run_with_stdin(&mut old, prose);
+    let canonical = run_with_stdin(&mut canonical, prose);
+    assert_eq!(
+        old.status.code(),
+        canonical.status.code(),
+        "stdin format status"
+    );
+    assert_eq!(stdout(&old), stdout(&canonical), "stdin format stdout");
+    assert_eq!(stderr(&old), stderr(&canonical), "stdin format stderr");
+}
+
+#[test]
+fn section_numbers_toggle_updates_metadata_and_headings_idempotently() {
+    let fixture = fixture();
+    let source = "---\ntype: [[prose]]\nsection_numbers: true\n---\n\n# 1. Draft\n\n## 1.1 Section\n\nTODO\n";
+    write_file(&fixture.vault.join("draft.md"), source);
+
+    let off = prose_command(&fixture)
+        .args(["format", "-n", "off", "draft"])
+        .output()
+        .expect("turn section numbers off");
+    assert_success(&off);
+    let unnumbered =
+        fs::read_to_string(fixture.vault.join("draft.md")).unwrap();
+    assert!(
+        unnumbered.contains("section_numbers: false"),
+        "{unnumbered}"
+    );
+    assert!(unnumbered.contains("# Draft"), "{unnumbered}");
+    assert!(unnumbered.contains("## Section"), "{unnumbered}");
+
+    let off_again = prose_command(&fixture)
+        .args(["format", "-n", "off", "draft"])
+        .output()
+        .expect("repeat section numbers off");
+    assert_success(&off_again);
+    assert!(
+        stdout(&off_again).contains("unchanged"),
+        "{}",
+        stdout(&off_again)
+    );
+
+    let on = prose_command(&fixture)
+        .args(["format", "-n", "on", "draft"])
+        .output()
+        .expect("turn section numbers on");
+    assert_success(&on);
+    let numbered = fs::read_to_string(fixture.vault.join("draft.md")).unwrap();
+    assert!(numbered.contains("section_numbers: true"), "{numbered}");
+    assert!(numbered.contains("# 1. Draft"), "{numbered}");
+    assert!(numbered.contains("## 1.1 Section"), "{numbered}");
+}
+
+#[test]
+fn section_numbers_replaces_bad_metadata_and_is_in_the_stdin_plan() {
+    let fixture = fixture();
+    let bad =
+        "---\ntype: [[prose]]\nsection_numbers: maybe\n---\n\n# 1. Draft\n";
+    write_file(&fixture.vault.join("draft.md"), bad);
+    let output = prose_command(&fixture)
+        .args(["format", "--section-numbers", "off", "draft"])
+        .output()
+        .expect("replace bad section_numbers value");
+    assert_success(&output);
+    let written = fs::read_to_string(fixture.vault.join("draft.md")).unwrap();
+    assert!(written.contains("section_numbers: false"), "{written}");
+    assert!(!written.contains("section_numbers: maybe"), "{written}");
+    assert!(written.contains("# Draft"), "{written}");
+
+    let stdin_note = "---\ntype: [[prose]]\n---\n\n# 1. Draft\n";
+    let mut command = prose_command(&fixture);
+    command.args(["format", "-s", "draft", "-n", "off", "-f", "json"]);
+    let planned = run_with_stdin(&mut command, stdin_note);
+    assert_success(&planned);
+    let planned = json(&planned);
+    assert!(planned["notes"][0]["edits"].as_array().unwrap().len() >= 2);
+    assert!(planned["notes"][0].get("formatted").is_none());
+
+    let all_conflict = prose_command(&fixture)
+        .args(["format", "-a", "-n", "off"])
+        .output()
+        .expect("section_numbers and all conflict");
+    assert_eq!(all_conflict.status.code(), Some(2));
+    let check_conflict = prose_command(&fixture)
+        .args(["format", "-c", "-n", "off", "draft"])
+        .output()
+        .expect("section_numbers and check conflict");
+    assert_eq!(check_conflict.status.code(), Some(2));
 }
 
 #[test]
@@ -400,7 +548,7 @@ fn adopt_previews_without_writing_and_reports_replaced_numbers() {
 
     assert_success(&output);
     let text = stdout(&output);
-    assert!(text.contains("Adopted as an article"), "{text}");
+    assert!(text.contains("Adopted as a prose note"), "{text}");
     assert!(text.contains("Numbers replaced"), "{text}");
     assert!(text.contains("## 3. Reasons"), "{text}");
     assert!(text.contains("1.1"), "{text}");
@@ -428,7 +576,7 @@ fn adopt_write_inserts_type_and_adopting_twice_is_a_noop() {
         .expect("write adopt");
     assert_success(&output);
     let written = fs::read_to_string(fixture.vault.join("draft.md")).unwrap();
-    assert!(written.contains("type: \"[[article]]\""));
+    assert!(written.contains("type: \"[[prose]]\""));
     assert!(written.contains("# 1. Draft"));
     assert!(stdout(&output).contains("draft"), "{}", stdout(&output));
 
@@ -438,7 +586,7 @@ fn adopt_write_inserts_type_and_adopting_twice_is_a_noop() {
         .expect("adopt twice");
     assert_success(&again);
     assert!(
-        stdout(&again).contains("already an article"),
+        stdout(&again).contains("already a prose note"),
         "{}",
         stdout(&again)
     );
@@ -467,7 +615,7 @@ fn adopt_stdin_json_returns_plan_without_writing() {
         value["notes"][0]["notice"]
             .as_str()
             .unwrap_or_default()
-            .starts_with("Adopted as an article"),
+            .starts_with("Adopted as a prose note"),
         "{value}"
     );
     assert!(!value["notes"][0]["edits"].as_array().unwrap().is_empty());

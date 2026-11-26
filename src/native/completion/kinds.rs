@@ -51,7 +51,7 @@ pub(crate) enum Kind {
     ThemeName,
     /// A vault note, completed as a path relative to the vault root.
     VaultNote,
-    /// An article note, completed with its current section count.
+    /// A prose note, completed with its current section count.
     ProseNote,
     /// A configured Record Note schema id.
     RecordType,
@@ -140,17 +140,17 @@ const TABLE: &[Entry] = &[
         kind: Kind::Files(None),
     },
     Entry {
-        path: &["articles", "adopt"],
+        path: &["prose", "adopt"],
         arg: "note",
         kind: Kind::VaultNote,
     },
     Entry {
-        path: &["articles", "format"],
+        path: &["prose", "format"],
         arg: "note",
         kind: Kind::ProseNote,
     },
     Entry {
-        path: &["articles", "outline"],
+        path: &["prose", "outline"],
         arg: "note",
         kind: Kind::ProseNote,
     },

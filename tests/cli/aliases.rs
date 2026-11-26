@@ -117,6 +117,7 @@ fn complete_values(words: &[&str]) -> Vec<String> {
 #[test]
 fn every_alias_matches_canonical_help_and_invalid_option() {
     let pairs: &[(&[&str], &[&str])] = &[
+        (&["articles"], &["prose"]),
         (&["mark-next-tasks"], &["task", "reconcile"]),
         (&["task-status-setter"], &["task", "reconcile"]),
         (&["task-status-hooks"], &["task", "reconcile"]),

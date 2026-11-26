@@ -1277,7 +1277,7 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
             && out.contains("step 10/10")
             && out.contains("vault-sync")
             && out.contains("task archive")
-            && out.contains("articles")
+            && out.contains("prose notes")
             && out.contains("period notes")
             && out.contains("areas")
             && out.contains("notebooks")

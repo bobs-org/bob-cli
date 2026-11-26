@@ -8077,8 +8077,8 @@ bob-written `## Areas` catalog (see [the catalog](areas.md#the-catalog)):
 `@love#areas` refuses with `areas_section_generated`. A matching
 non-H1 section is preferred; a matching H1 heading is used only when no
 non-H1 heading matches. If no heading matches, the bullet goes into the
-pre-heading (zeroth) section. When the destination note is an article
-(`type: "[[article]]"`), selectors also match on heading identity: the title
+pre-heading (zeroth) section. When the destination note is a prose note
+(`type: "[[prose]]"` or legacy `type: "[[article]]"`), selectors also match on heading identity: the title
 with bob's section-number token removed, compared case-insensitively with
 whitespace collapsed, and with emphasis, inline code, and wikilink markup
 stripped. A prefix selector matches when it is a prefix of that identity, so
@@ -8088,14 +8088,14 @@ heading's identity, so both `--section "Agent CLIs"` and a stale
 `--section "1.4 Agent CLIs"` land on `1.3 Agent CLIs`. Raw title matching still
 runs first, so `@note#1.3` prefers `## 1.3 Agent CLIs` over `### 1.3.1 Nested`
 in document order. A non-exact selector that matches no heading title (and, on
-an article, no heading identity) then matches the heading's `selector_slug`
+a prose note, no heading identity) then matches the heading's `selector_slug`
 (trim, collapse whitespace, ASCII-lowercase, join with `-`): whole-slug
 equality first, then slug-prefix, with the same non-H1 preference, so
 `@sase#future-work` reaches `## Future Work`. Quoted `#\"Title\"` selectors
-and `--section` stay exact title (or article identity) matches and never
+and `--section` stay exact title (or prose identity) matches and never
 slug-match. An unterminated `@route#\"…` is incomplete (`needs: ["section"]`,
 no diagnostic) and `bob capture` refuses it with zero writes. Notes that are
-not articles keep the raw-title then slug behavior. `#section^id` adds an
+not prose notes keep the raw-title then slug behavior. `#section^id` adds an
 authored block ID on every route, ordinary and notebook alike: a caret inside
 a quoted title stays literal title text, while a caret outside the closing
 quote names the note. Within the chosen section

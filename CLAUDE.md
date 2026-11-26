@@ -140,7 +140,7 @@ records the reason, ask Bryan rather than infer one. A record is immutable once
 accepted: if course changes, write a new record and mark the old one with
 `metadata.status` plus `superseded_by` and a `[[...]]` back-link, never edited in place.
 
-**Roster on demand.** This web's 81 decisions are not listed here. You MUST read the
+**Roster on demand.** This web's 82 decisions are not listed here. You MUST read the
 DECISIONS roster with `sase memory read roster:decisions -r "<why>"`:
 
 - before writing or revising a SASE plan (any agent using `/sase_plan`); cite each
@@ -178,16 +178,17 @@ footer); Notebook (notebook note); Off-Clock Pomodoro (off-clock session, untrac
 pomodoro, untracked session); Period Note (weekly note, quarterly note, yearly note,
 all\_time); Pomodoro; Project Card; Project Note (prj note); Project Note Capture
 (project capture, project-note capture); Project Task (prj task); Property Card (card
-family); Record Card (record sheet); Record Note; Ref Panel (Bob Refs, refs panel);
-Reference Note (ref note); Reference Task (ref task); Root Parent; Rotten Log (keep
-log); Schedule Log; Stats Dash (dash\_stats); Stats Strip (period strip, week strip,
-quarter strip, year strip); Successor Offer; Task Decay (decay, decay ladder, decay
-card, step down); Task Dependency Link (task dep link, dep link); Task Drawer (drawer);
-Task Freshness (freshness); Task Link (task block link); Task Mention (mention, text
-mention); Task Merge; Task Relation (relation, LINKS line, LINKED FROM line); Task
-Requirement (req, task req); Task Split; Task Successor (successor); Task Type (type,
-theme, pomodoro theme, pomodoro-theme); Top-Level Project (top project); Walker Footer
-(walk footer, lane footer, links footer, bank footer); Work Log
+family); Prose Note (prose note, article note); Record Card (record sheet); Record Note;
+Ref Panel (Bob Refs, refs panel); Reference Note (ref note); Reference Task (ref task);
+Root Parent; Rotten Log (keep log); Schedule Log; Stats Dash (dash\_stats); Stats Strip
+(period strip, week strip, quarter strip, year strip); Successor Offer; Task Decay
+(decay, decay ladder, decay card, step down); Task Dependency Link (task dep link, dep
+link); Task Drawer (drawer); Task Freshness (freshness); Task Link (task block link);
+Task Mention (mention, text mention); Task Merge; Task Relation (relation, LINKS line,
+LINKED FROM line); Task Requirement (req, task req); Task Split; Task Successor
+(successor); Task Type (type, theme, pomodoro theme, pomodoro-theme); Top-Level Project
+(top project); Walker Footer (walk footer, lane footer, links footer, bank footer); Work
+Log
 
 ### 3.3 Task Bead Types (task_types)
 

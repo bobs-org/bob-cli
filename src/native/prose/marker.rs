@@ -1,4 +1,4 @@
-//! Article marker, options, and skip refusals.
+//! Prose marker, options, and skip refusals.
 
 use std::path::{Component, Path};
 
@@ -6,7 +6,7 @@ use super::plan::Refusal;
 use crate::native::is_always_excluded_note_directory_name;
 use crate::native::projects::{
     contains_task_tag, frontmatter_is_prose, frontmatter_type_names,
-    parse_frontmatter, trim_yaml_scalar, Frontmatter,
+    is_prose_type_name, parse_frontmatter, trim_yaml_scalar, Frontmatter,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +44,7 @@ pub(crate) fn skip_reason(
         return Some(not_prose());
     }
     let types = frontmatter_type_names(&frontmatter);
-    if types.iter().any(|name| name != "article") {
+    if types.iter().any(|name| !is_prose_type_name(name)) {
         return Some(mixed_type_refusal(&types));
     }
     if let Some(refusal) = body_refusals(classified) {
@@ -60,7 +60,7 @@ pub(crate) enum AdoptDecision {
     Refuse(Refusal),
 }
 
-/// Whether `bob articles adopt` should insert a type, no-op, or refuse.
+/// Whether `bob prose adopt` should insert a type, no-op, or refuse.
 pub(crate) fn adopt_decision(
     text: &str,
     path: &Path,
@@ -85,7 +85,7 @@ pub(crate) fn adopt_decision(
     if let Some(frontmatter) = parse_frontmatter(text) {
         let types = frontmatter_type_names(&frontmatter);
         if frontmatter_is_prose(&frontmatter) {
-            if types.iter().any(|name| name != "article") {
+            if types.iter().any(|name| !is_prose_type_name(name)) {
                 return AdoptDecision::Refuse(mixed_type_refusal(&types));
             }
             return AdoptDecision::AlreadyProse;
@@ -113,9 +113,96 @@ pub(crate) struct ProseTypeInsert {
     pub(crate) count: usize,
 }
 
-const TYPE_LINE: &str = "type: \"[[article]]\"";
+const TYPE_LINE: &str = "type: \"[[prose]]\"";
 
-/// Insert `type: "[[article]]"` after `parent:`, before the closing
+pub(crate) fn set_section_numbers(text: &str, enabled: bool) -> String {
+    if parse_frontmatter(strip_bom(text)).is_none() {
+        return text.to_string();
+    }
+    let value = format!("section_numbers: {}", enabled);
+    let mut lines = text
+        .split_inclusive('\n')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let closing = lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, line)| physical_content(line).trim() == "---")
+        .map(|(index, _)| index)
+        .expect("parsed frontmatter has a closing delimiter");
+
+    if let Some((_index, line)) = lines
+        .iter_mut()
+        .enumerate()
+        .take(closing)
+        .skip(1)
+        .find(|(_, line)| {
+            physical_content(line).starts_with("section_numbers:")
+        })
+    {
+        let ending = physical_ending(line).to_string();
+        *line = format!("{value}{ending}");
+        return lines.concat();
+    }
+
+    let Some(type_line) = lines
+        .iter()
+        .take(closing)
+        .position(|line| physical_content(line).starts_with("type:"))
+    else {
+        return text.to_string();
+    };
+    let mut insert_at = type_line + 1;
+    if physical_content(&lines[type_line])
+        .strip_prefix("type:")
+        .is_some_and(|rest| rest.trim().is_empty())
+    {
+        while insert_at < closing {
+            let content = physical_content(&lines[insert_at]);
+            if content.trim().is_empty()
+                || content.starts_with(' ')
+                || content.starts_with('\t')
+            {
+                insert_at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+    let ending = lines
+        .get(type_line)
+        .map(|line| physical_ending(line))
+        .filter(|ending| !ending.is_empty())
+        .or_else(|| lines.first().map(|line| physical_ending(line)))
+        .filter(|ending| !ending.is_empty())
+        .unwrap_or("\n");
+    lines.insert(insert_at, format!("{value}{ending}"));
+    lines.concat()
+}
+
+fn physical_content(line: &str) -> &str {
+    let content = line
+        .strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .or_else(|| line.strip_suffix('\r'))
+        .unwrap_or(line);
+    content.strip_prefix('\u{feff}').unwrap_or(content)
+}
+
+fn physical_ending(line: &str) -> &str {
+    if line.ends_with("\r\n") {
+        "\r\n"
+    } else if line.ends_with('\n') {
+        "\n"
+    } else if line.ends_with('\r') {
+        "\r"
+    } else {
+        ""
+    }
+}
+
+/// Insert `type: "[[prose]]"` after `parent:`, before the closing
 /// `---` when there is no parent, or as a new frontmatter block.
 pub(crate) fn with_prose_type(text: &str) -> ProseTypeInsert {
     let (bom, rest) = match text.strip_prefix('\u{feff}') {
@@ -196,13 +283,18 @@ fn insert_type_line(text: &str) -> ProseTypeInsert {
 }
 
 fn mixed_type_refusal(types: &[String]) -> Refusal {
+    let prose_spelling = types
+        .iter()
+        .find(|name| is_prose_type_name(name))
+        .map(String::as_str)
+        .unwrap_or("prose");
     Refusal {
         code: "mixed-type".to_string(),
         message: format!(
-            "type names [[{}]] as well as [[article]]",
+            "type names [[{}]] as well as [[{prose_spelling}]]",
             types
                 .iter()
-                .filter(|name| *name != "article")
+                .filter(|name| !is_prose_type_name(name))
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("]], [[")
@@ -272,7 +364,7 @@ fn section_numbers_line(text: &str) -> usize {
 fn not_prose() -> Refusal {
     Refusal {
         code: "not-article".to_string(),
-        message: "not an article; run `bob articles adopt`".to_string(),
+        message: "not a prose note; run `bob prose adopt`".to_string(),
     }
 }
 
@@ -330,7 +422,7 @@ fn body_refusals(
     if holds_anchor {
         return Some(Refusal {
             code: "holds-anchor".to_string(),
-            message: "articles cannot be projects or refs".to_string(),
+            message: "prose notes cannot be projects or refs".to_string(),
         });
     }
     if !task_lines.is_empty() {

@@ -852,6 +852,27 @@ mode on owned notes; the File Properties sidebar stays native. See
 `docs/develop/plugins/architecture.md`, and
 `docs/reference/plugins/property-editor.md`.
 
+### Prose Note {#prose-note}
+
+*Aliases: prose note, article note.*
+
+# Prose Note
+
+A Bob vault note whose body is free-form authored Markdown that the author owns:
+paragraphs, headings, lists, tables, quotes, and code. bob may format its layout and
+(unless turned off) section numbers, but never changes a word or adds structure. Its
+membership test is the note's primary role: an area or project with prose sections
+stays an area or project. A prose note holds no `#task` lines, `^prj` or `^ref`
+anchors, or second type.
+
+The canonical frontmatter spelling is `type: "[[prose]]"`. Legacy `type: "[[article]]"`
+notes remain prose notes, and `bob articles` remains a permanent CLI alias. See
+`docs/prose.md`.
+
+Not a [Notebook](#notebook), a [Record Note](#record-note), a [Reference Note](#reference-note), a [Task Drawer](#task-drawer), or an
+[Annotation Section](#annotation-section). A [Project Note](#project-note) or [Area Note](#area-note) with prose sections stays
+one.
+
 ### Record Card {#record-card}
 
 *Aliases: record sheet.*

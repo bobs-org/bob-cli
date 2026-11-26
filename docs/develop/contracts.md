@@ -10,7 +10,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 
 ## Capture and integrations
 
-- [Article notes](../articles.md) — `bob articles` formatting, list, outline, adopt, and ArticlePlan JSON
+- [Prose notes](../prose.md) — `bob prose` formatting, list, outline, adopt, and ArticlePlan JSON; `bob articles` remains an alias
 - [Capture](../capture.md) — Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery)
 - [Shell completion](../completion.md) — Shell completion: the runtime model, protocol 1, and what completes
 - [Getting started](../getting-started.md) — Vault requirements, first capture/session, command effects, and troubleshooting

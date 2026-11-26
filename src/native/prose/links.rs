@@ -583,7 +583,7 @@ fn hex(byte: u8) -> Option<u8> {
     }
 }
 
-/// One article whose heading fragments other notes may need rewritten.
+/// One prose note whose heading fragments other notes may need rewritten.
 pub(crate) struct InboundProse<'a> {
     pub index: usize,
     pub path: &'a Path,
@@ -598,7 +598,7 @@ pub(crate) struct InboundLineResult {
     pub refreshed: usize,
 }
 
-/// Refresh heading fragments in a foreign note that resolve to `articles`.
+/// Refresh heading fragments in a foreign note that resolve to prose notes.
 /// Same-note links and protected regions are left alone.
 pub(crate) fn rewrite_inbound_line(
     content: &str,
@@ -657,7 +657,7 @@ pub(crate) fn rewrite_inbound_line(
                 let loc = source_loc(current_path, line);
                 let message = match failure {
                     ResolveFailure::Broken => format!(
-                        "{loc} links to a heading this article no longer has"
+                        "{loc} links to a heading this prose note no longer has"
                     ),
                     ResolveFailure::Ambiguous => format!(
                         "{loc} links to a heading that matches multiple sections"

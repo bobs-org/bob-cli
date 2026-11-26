@@ -89,7 +89,7 @@ pub(crate) fn title_heading(
     Some(Finding::info(
         "title-heading",
         first.line + 1,
-        format!("first section repeats the article title {repeated:?}"),
+        format!("first section repeats the prose note title {repeated:?}"),
         "Delete the heading",
     ))
 }

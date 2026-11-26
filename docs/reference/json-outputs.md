@@ -496,9 +496,9 @@ capture unversioned).
 | `bob task reroll` (alias `randomize`) | `-f json` | Re-roll plan and per-task outcomes | `schema_version: 1` | [Randomize](../randomize.md) |
 | `bob query` | `-f json` (default is `paths`) | `engine`, `query_kind`, `format`, `paths`, `result`, and `warnings` | Unversioned (no `schema_version`) | [Bob query](../dataview.md) |
 | `bob snooze` (`list`, `add`, `drop`, `wake`) | `-f json` | Queue rows (including `wake_notice_eligible`), add/drop results, and wake batches; list includes `wake_notice_version: 1` and canonical `vault_root`; wake receipts record the selected notification channel and vault identity | `schema_version: 1` | [Snoozed tasks](../snooze.md#cli) |
-| `bob articles format` | `-f json` | Article plans | `schema_version: 1` | [Articles](../articles.md) |
-| `bob articles list` | `-f json` | Article notes needing work | `schema_version: 1` | [Articles](../articles.md) |
-| `bob articles outline` | `-f json` | Section outline of one note | `schema_version: 1` | [Articles](../articles.md) |
+| `bob prose format` (legacy alias `bob articles format`) | `-f json` | Prose-note plans | `schema_version: 1` | [Prose notes](../prose.md) |
+| `bob prose list` (legacy alias `bob articles list`) | `-f json` | Prose notes needing work | `schema_version: 1` | [Prose notes](../prose.md) |
+| `bob prose outline` (legacy alias `bob articles outline`) | `-f json` | Section outline of one prose note | `schema_version: 1` | [Prose notes](../prose.md) |
 
 `bob nightly` is human-only in this checkout: it exposes
 no `--format json` or `--json` flag.

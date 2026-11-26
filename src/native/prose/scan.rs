@@ -519,7 +519,7 @@ fn closed_frontmatter_end(lines: &[&str]) -> Option<usize> {
 }
 
 /// Byte positions covered by inline code, math, or comments. Shared by
-/// article link parsing and marker scans so those rules protect the same text.
+/// prose link parsing and marker scans so those rules protect the same text.
 pub(crate) fn inline_mask(line: &str, mode: InlineMaskMode) -> Vec<bool> {
     let bytes = line.as_bytes();
     let mut masked = vec![false; bytes.len()];

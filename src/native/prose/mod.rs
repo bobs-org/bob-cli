@@ -1,4 +1,4 @@
-//! Article notes: bob-owned section numbers and layout.
+//! Prose notes: bob-owned section numbers and layout.
 //!
 //! Pure core: text in, [`ProsePlan`] out. The CLI wires vault I/O around
 //! this engine, while the plugin phase consumes the JSON contract.
@@ -56,7 +56,7 @@ pub(crate) fn adopt(text: &str, ctx: &ProseContext<'_>) -> ProsePlan {
             changes: plan::ChangeCounts::default(),
             replaced: Vec::new(),
             findings: Vec::new(),
-            notice: "already an article".to_string(),
+            notice: "already a prose note".to_string(),
             outline: outline::empty_outline(ctx.path, true),
             inbound: Vec::new(),
             headings: Vec::new(),
@@ -247,6 +247,43 @@ pub(crate) fn format(text: &str, ctx: &ProseContext<'_>) -> ProsePlan {
     }
 }
 
+pub(crate) fn format_with_section_numbers(
+    text: &str,
+    ctx: &ProseContext<'_>,
+    enabled: bool,
+) -> ProsePlan {
+    let updated = marker::set_section_numbers(text, enabled);
+    let mut plan = format(&updated, ctx);
+    if matches!(plan.status, ProseStatus::Skipped | ProseStatus::Error) {
+        plan.sha256 = sha256_hex(text);
+        return plan;
+    }
+
+    let formatted = plan.formatted.clone().unwrap_or(updated);
+    let original = scan::classify(text);
+    let result = scan::classify(&formatted);
+    let original_lines = original
+        .lines
+        .iter()
+        .map(|line| line.content)
+        .collect::<Vec<_>>();
+    let result_lines = result
+        .lines
+        .iter()
+        .map(|line| line.content)
+        .collect::<Vec<_>>();
+    plan.edits = line_edits(&original_lines, &result_lines);
+    plan.status = if formatted == text {
+        plan.notice = "Section numbers unchanged".to_string();
+        ProseStatus::Unchanged
+    } else {
+        ProseStatus::Changed
+    };
+    plan.sha256 = sha256_hex(text);
+    plan.formatted = (formatted != text).then_some(formatted);
+    plan
+}
+
 pub(crate) fn response(notes: Vec<ProsePlan>) -> ProsePlanResponse {
     ProsePlanResponse::new(notes)
 }
@@ -331,15 +368,15 @@ fn with_line_replacements(
 }
 
 fn adopt_notice(format_notice: &str) -> String {
-    if let Some(rest) = format_notice.strip_prefix("Article formatted") {
+    if let Some(rest) = format_notice.strip_prefix("Prose note formatted") {
         let rest = rest.trim_start_matches([' ', '·']).trim();
         if rest.is_empty() {
-            "Adopted as an article".to_owned()
+            "Adopted as a prose note".to_owned()
         } else {
-            format!("Adopted as an article · {rest}")
+            format!("Adopted as a prose note · {rest}")
         }
     } else {
-        format!("Adopted as an article · {format_notice}")
+        format!("Adopted as a prose note · {format_notice}")
     }
 }
 
@@ -429,9 +466,9 @@ fn format_notice(
         ));
     }
     if clauses.is_empty() {
-        "Article formatted".to_owned()
+        "Prose note formatted".to_owned()
     } else {
-        format!("Article formatted · {}", clauses.join(" · "))
+        format!("Prose note formatted · {}", clauses.join(" · "))
     }
 }
 

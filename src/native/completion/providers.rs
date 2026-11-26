@@ -641,7 +641,7 @@ fn vault_notes(context: &Context) -> Vec<String> {
     )]
 }
 
-/// Article notes complete by their vault-relative stem and expose the
+/// Prose notes complete by their vault-relative stem and expose the
 /// current section count in the candidate description.
 fn prose_notes(context: &Context) -> Vec<String> {
     crate::native::prose::completion_candidates(&context.bob_dir)
@@ -650,7 +650,7 @@ fn prose_notes(context: &Context) -> Vec<String> {
             protocol::candidate_line(
                 OsStr::new(path),
                 description,
-                "articles",
+                "prose",
                 false,
             )
         })

@@ -1151,7 +1151,7 @@ fn nightly_has_ten_ordered_steps_and_syncs_catalogs_once() {
         &[
             "step 1/10 · vault-sync",
             "step 2/10 · task archive",
-            "step 3/10 · articles",
+            "step 3/10 · prose notes",
             "step 4/10 · period notes",
             "step 5/10 · areas — Repair generated area catalogs",
             "step 6/10 · projects — Sync project lifecycles and sub-project catalogs",

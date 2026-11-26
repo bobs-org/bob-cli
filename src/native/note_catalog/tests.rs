@@ -156,6 +156,12 @@ fn tier_vault() -> TempDir {
         "---\ntype: \"[[ref]]\"\ntitle: Cool Paper\nstatus: read\naliases:\n  - paper\n---\n",
     );
     md(root, "essay.md", "---\ntype: \"[[ref]]\"\n---\n");
+    md(
+        root,
+        "legacy_article.md",
+        "---\ntype: \"[[article]]\"\n---\n",
+    );
+    md(root, "prose.md", "---\ntype: \"[[prose]]\"\n---\n");
     md(root, "mail/2026/m.md", "# m\n");
     md(root, "bank.md", "---\ntitle: Bank\n---\n");
     md(root, "bank/2026-11.md", "# November\n");
@@ -285,7 +291,9 @@ fn golden_listed_set_and_canonical_order() {
             "empty.md",
             "ideas.md",
             "projects/done/keep.md",
+            "legacy_article.md",
             "mail/2026/m.md",
+            "prose.md",
             "solo.md",
             "Untitled.md",
             "x.base",
@@ -562,6 +570,9 @@ fn golden_row_fields() {
     assert_eq!(untitled.kind, NoteKindKey::Note);
     assert_eq!(untitled.title, "Untitled");
     assert_eq!(untitled.hue, None);
+
+    assert_eq!(row("legacy_article.md").kind, NoteKindKey::Note);
+    assert_eq!(row("prose.md").kind, NoteKindKey::Note);
 
     let inbox = row("mac_inbox.md");
     assert_eq!(inbox.kind, NoteKindKey::Inbox);

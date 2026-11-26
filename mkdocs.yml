@@ -74,6 +74,8 @@ plugins:
         refs-inspector.md: reference/mac-capture/refs-inspector.md
         reference/plugins/bob-copy-chips.md: reference/plugins/bob-chips.md
         pomodoro-themes.md: task-types.md
+        articles.md: prose.md
+        reference/cli/articles.md: reference/cli/prose.md
         reference/cli/capture-task-sections.md: reference/cli/capture-drawers.md
         reference/cli/themes.md: reference/cli/types.md
   - tags:
@@ -91,7 +93,7 @@ plugins:
           - reference/*.md
           - reference/**/*.md
         Contracts (optional):
-          - articles.md
+          - prose.md
           - capture.md
           - command-catalog.md
           - completion.md
@@ -261,12 +263,12 @@ nav:
           - "Vault":
               - "bob albums": reference/cli/albums.md
               - "bob areas": reference/cli/areas.md
-              - "bob articles": reference/cli/articles.md
               - "bob attachments": reference/cli/attachments.md
               - "bob nightly": reference/cli/nightly.md
               - "bob notebooks": reference/cli/notebooks.md
               - "bob periods": reference/cli/periods.md
               - "bob props": reference/cli/props.md
+              - "bob prose": reference/cli/prose.md
               - "bob query": reference/cli/query.md
               - "bob records": reference/cli/records.md
               - "bob ref": reference/cli/ref.md
@@ -333,7 +335,7 @@ nav:
           - Overview: develop/contracts.md
           # BEGIN GENERATED: contracts nav
           - "Capture and integrations":
-              - "Article notes": articles.md
+              - "Prose notes": prose.md
               - "Capture": capture.md
               - "Shell completion": completion.md
               - "Getting started": getting-started.md

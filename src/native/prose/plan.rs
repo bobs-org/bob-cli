@@ -1,4 +1,4 @@
-//! Formatted-article result: hunks, counts, findings, and sections.
+//! Formatted-prose result: hunks, counts, findings, and sections.
 
 use std::path::{Path, PathBuf};
 
@@ -94,7 +94,7 @@ impl ProsePlan {
         sha256: String,
         reason: Refusal,
     ) -> Self {
-        let notice = format!("Article skipped · {}", reason.message);
+        let notice = format!("Prose note skipped · {}", reason.message);
         Self {
             path: path.to_path_buf(),
             status: ProseStatus::Skipped,
@@ -120,7 +120,8 @@ impl ProsePlan {
         findings: Vec<super::findings::Finding>,
         outline: super::outline::ProseOutline,
     ) -> Self {
-        let notice = format!("Article formatting failed · {}", reason.message);
+        let notice =
+            format!("Prose note formatting failed · {}", reason.message);
         Self {
             path: path.to_path_buf(),
             status: ProseStatus::Error,

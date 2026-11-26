@@ -78,11 +78,10 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob areas check`](areas.md#bob-areas-check) | Check areas against the contract |
 | [`bob areas list`](areas.md#bob-areas-list) | List the area tree (default) |
 | [`bob areas sync`](areas.md#bob-areas-sync) | Write every generated area catalog |
-| [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |
 | [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
 | [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image, video, and file paths into the vault |
 | [`bob attachments origin`](attachments.md#bob-attachments-origin) | Show where a vault attachment came from |
-| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, areas, projects, notebooks, albums, records, vault-sync |
+| [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, prose notes, period notes, areas, projects, notebooks, albums, records, vault-sync |
 | [`bob notebooks`](notebooks.md) | Inspect or maintain notebook notes |
 | [`bob notebooks check`](notebooks.md#bob-notebooks-check) | Check notebooks against the contract |
 | [`bob notebooks create`](notebooks.md#bob-notebooks-create) | Create a notebook and its catalog rows |
@@ -99,6 +98,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob props`](props.md) | Show and edit frontmatter properties for one note |
 | [`bob props show`](props.md#bob-props-show) | Show ordered frontmatter properties for one note |
 | [`bob props update`](props.md#bob-props-update) | Apply a guarded property edit to one note |
+| [`bob prose`](prose.md) | Format and inspect prose notes with bob-owned section numbers |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
 | [`bob records`](records.md) | List, inspect, check, create, update, and tidy Record Notes |
 | [`bob records check`](records.md#bob-records-check) | Check Record Notes against their album schemas |
@@ -193,14 +193,14 @@ Tasks and projects:
 Vault:
   albums       Inspect album notes
   areas        Inspect or maintain area notes
-  articles     Format and inspect article notes with bob-owned section numbers
   attachments  Copy files into the vault and show where copies came from
-  nightly      Run nightly maintenance: vault-sync, task archive, articles,
+  nightly      Run nightly maintenance: vault-sync, task archive, prose notes,
                period notes, areas, projects, notebooks, albums, records,
                vault-sync
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   props        Show and edit frontmatter properties for one note
+  prose        Format and inspect prose notes with bob-owned section numbers
   query        Run Dataview or Tasks queries against the vault
   records      List, inspect, check, create, update, and tidy Record Notes
   ref          Find, list, read, rename, and plan references for today; sync

@@ -352,7 +352,7 @@ one under the running MEET. See
 
 ## Capture Bullets Mirror The Task Block {#capture-bullets-mirror-the-task-block}
 
-**Status:** Superseded in part by [Task Requirements Are Met With Their Task](#task-reqs-are-met-with-their-task), [Drawers Keep Their Real Names](#drawers-keep-their-names)
+**Status:** Superseded in part by [Task Requirements Are Met With Their Task](#task-reqs-are-met-with-their-task), [Existing-Task Links Carry Note Bullets](#existing-task-links-carry-notes), [Drawers Keep Their Real Names](#drawers-keep-their-names)
 
 A first-level capture bullet is its task's child: ALL-CAPS with notes is a drawer, a leading # names one, and note-less @file+id files each bullet as a note.
 
@@ -399,6 +399,8 @@ Superseded in part: a drawer bullet is now a true-case `- **Title**`, the bullet
 inserts `**Title**`, and ALL-CAPS is no longer drawer structure. The first-level bullet
 and non-drawer capture rules remain in force — see
 [Drawers Keep Their Real Names](#drawers-keep-their-names).
+
+Superseded in part: a note-less existing-task link `@route:id` followed by bullets is also an under-task position — see [Existing-Task Links Carry Note Bullets](#existing-task-links-carry-notes).
 
 ## Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites {#capture-link-drops-blocking-deps}
 
@@ -1126,6 +1128,43 @@ Evidence: `plan:202610/bob_gcal_daily_events.md`,
 `docs/capture.md` § Closing the running Pomodoro,
 `docs/reference/vault-format.md` § Events section and Event Tasks, and
 `tests/fixtures/event_task_close/vectors.json`.
+
+## Existing-Task Links Carry Note Bullets {#existing-task-links-carry-notes}
+
+**Status:** Accepted
+
+Non-close existing-task links can also file authored child bullets as notes.
+
+aka existing-task link notes, link-with-notes, pomodoro link notes
+
+**Applies to.** bob-cli and Bob Mac Capture.
+
+**Claim.** A note-less non-close existing-task link (`@route:id` or
+`^route:id`), including named Pomodoro and link-start forms, may be followed
+by authored child bullets. Bob links first, then files each first-level bullet
+with its nested children exactly as a note-less `@route+id` does. Drawer
+shortcuts and requirement bullets keep that shared multi-note grammar. Link
+close forms (`@route:id=x…`, `^route:id=x…`) do not take child bullets as
+notes.
+
+**Why.** Bryan's `^sub-bullet-and-today` task in `~/bob/bob.md` documents the
+gap: he typed `@bob:h2s-to-area-prj-card` with a `- foo` child, hit the
+existing refusal, and had to write the task twice to link it and add its note.
+The link-only and note-only spellings remain useful and unchanged.
+
+Rejected alternatives were treating a same-line note as a note on the linked
+task (it already creates a new task) and adding a new sigil for the combined
+gesture.
+
+**Cost.** Capture grammar revision 34 admits authored children under a
+note-less existing-task link. `pomodoro_link` results can now include the
+existing `notes` and `drawers` fields.
+
+**Reopens when.** Bryan wants notes on link-close or snooze forms.
+
+**Evidence.** `plan:202611/link_with_note_bullets.md`; Bob task
+`~/bob/bob.md#^sub-bullet-and-today`; the bob-cli implementation commit for
+grammar revision 34.
 
 ## A Forced Sync Resets The Day {#gcal-force-resets-the-day}
 
@@ -2263,6 +2302,40 @@ cascade or re-linking on unblock; a projects-by-date Properties/Bases
 view is needed.
 
 Superseded in part: residence-only blocking remains for each project’s own residents; sub-project descendants now inherit blocked ancestor reasons — see [Sub-projects Inherit Project Blocking](#subprojects-inherit-project-blocking). Capture link gestures on a task blocked only by its own prerequisites now drop them and link ([Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites](#capture-link-drops-blocking-deps)).
+
+## Prose Notes Are Owned Prose {#prose-notes-are-owned-prose}
+
+**Status:** Accepted
+
+Prose notes are author-owned writing; legacy type and CLI spellings stay aliases.
+
+# Prose Notes Are Owned Prose
+
+**Applies to.** bob-cli, bob-plugins, and the Bob vault.
+
+**Claim.** The note type is named `prose` and is defined by authorship and primary
+role, as described by [Prose Note](../reference/glossary.md#prose-note). The legacy `[[article]]` spelling and
+`bob articles` command are permanent aliases. Wire vocabulary keeps its legacy names.
+“Sections implicitly use the type” means derived eligibility for extraction, never
+in-place formatting or a stored section type.
+
+**Why.** The prose name covers authored writing across genres and works for both prose
+notes and prose sections. The ownership rule distinguishes them from areas, projects,
+and other notes that happen to contain paragraphs. Derived section eligibility keeps
+formatting confined to the note type and leaves the enclosing note's role intact.
+
+Evidence: research report
+`research:202611/prose_rename_and_section_extraction/prose_rename_and_section_extraction.md`;
+bob-cli phase commit `feat(prose): rename the article note type to prose` (phase
+`bob-cli-qj.2`).
+
+**Cost.** bob keeps recognizing the legacy type and command, and the JSON contract
+retains article-named wire keys and refusal codes. Clients and docs must distinguish
+those compatibility names from the canonical type name.
+
+**Reopens when.** The ownership and primary-role rule changes, section eligibility
+becomes stored or permits in-place formatting, or a new reviewed decision revises the
+permanent alias or wire-compatibility contract.
 
 ## q-and-ctrl-bracket-mirror-esc {#q-and-ctrl-bracket-mirror-esc}
 

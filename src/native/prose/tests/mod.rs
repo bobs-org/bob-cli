@@ -259,21 +259,21 @@ fn section_number_counts_and_notice_plurals_reflect_actual_changes() {
         &ProseContext::new(Path::new("note.md")),
     );
     assert_eq!(single.changes.numbered, 1);
-    assert_eq!(single.notice, "Article formatted · 1 section numbered");
+    assert_eq!(single.notice, "Prose note formatted · 1 section numbered");
 
     let formatted = single.formatted.unwrap();
     let unchanged =
         format(&formatted, &ProseContext::new(Path::new("note.md")));
     assert_eq!(unchanged.changes.numbered, 0);
     assert_eq!(unchanged.changes.renumbered, 0);
-    assert_eq!(unchanged.notice, "Article formatted");
+    assert_eq!(unchanged.notice, "Prose note formatted");
 
     let layout_only = format(
         "---\ntype: [[article]]\n---\n\n# 1. One   \n",
         &ProseContext::new(Path::new("note.md")),
     );
     assert_eq!(layout_only.changes.numbered, 0);
-    assert_eq!(layout_only.notice, "Article formatted");
+    assert_eq!(layout_only.notice, "Prose note formatted");
 
     let promoted = format(
         "---\ntype: [[article]]\n---\n\n## Parent\n#### Child\n",
@@ -418,7 +418,7 @@ fn prose_plan_json_matches_schema_v1_shape() {
     assert!(note["edits"].is_array());
     assert!(note["changes"]["links"].is_number());
     assert!(note["replaced"].is_array());
-    assert_eq!(note["notice"], "Article formatted · 1 section numbered");
+    assert_eq!(note["notice"], "Prose note formatted · 1 section numbered");
     assert!(note["findings"].is_array());
     assert_eq!(note["outline"]["title"], "note");
     assert_eq!(note["outline"]["sections"][0]["title"], "Alpha");
@@ -513,15 +513,15 @@ fn adopt_inserts_type_after_parent_and_formats() {
     let plan = adopt(input, &ProseContext::new(Path::new("draft.md")));
     let formatted = plan.formatted.expect("adopt formats");
     assert!(formatted.contains("parent: \"[[sase_blog]]\""));
-    assert!(formatted.contains("type: \"[[article]]\""));
+    assert!(formatted.contains("type: \"[[prose]]\""));
     assert!(formatted.contains("# 1. Draft"));
     assert!(formatted.contains("## 1.1 First"));
     assert_eq!(plan.status, super::ProseStatus::Changed);
-    assert!(plan.notice.starts_with("Adopted as an article"));
+    assert!(plan.notice.starts_with("Adopted as a prose note"));
     assert!(!plan.edits.is_empty());
     let type_line = formatted
         .lines()
-        .position(|line| line.contains("type: \"[[article]]\""))
+        .position(|line| line.contains("type: \"[[prose]]\""))
         .expect("type line");
     let parent_line = formatted
         .lines()
@@ -535,7 +535,7 @@ fn adopt_creates_frontmatter_when_missing_and_inserts_before_close() {
     let no_frontmatter =
         adopt("# Title\n", &ProseContext::new(Path::new("note.md")));
     let formatted = no_frontmatter.formatted.expect("adopted");
-    assert!(formatted.starts_with("---\ntype: \"[[article]]\"\n---\n"));
+    assert!(formatted.starts_with("---\ntype: \"[[prose]]\"\n---\n"));
     assert!(formatted.contains("# 1. Title"));
 
     let no_parent = adopt(
@@ -546,7 +546,7 @@ fn adopt_creates_frontmatter_when_missing_and_inserts_before_close() {
     let lines: Vec<&str> = formatted.lines().collect();
     assert_eq!(lines[0], "---");
     assert_eq!(lines[1], "created: 2026-10-15");
-    assert_eq!(lines[2], "type: \"[[article]]\"");
+    assert_eq!(lines[2], "type: \"[[prose]]\"");
     assert_eq!(lines[3], "---");
 }
 
@@ -557,7 +557,7 @@ fn adopt_already_prose_is_noop_and_other_type_is_refused() {
         &ProseContext::new(Path::new("note.md")),
     );
     assert_eq!(already.status, super::ProseStatus::Unchanged);
-    assert_eq!(already.notice, "already an article");
+    assert_eq!(already.notice, "already a prose note");
     assert!(already.edits.is_empty());
 
     let restaurant = adopt(

@@ -258,12 +258,20 @@ fn type_forms_match_prose_and_keep_project_area() {
         "---\ntype: [[\"article\"]]\n---\n",
         "---\ntype:\n  - \"[[article]]\"\n---\n",
         "---\ntype:\n  - '[[article]]'\n---\n",
+        "---\ntype: \"[[prose]]\"\n---\n",
+        "---\ntype: '[[prose]]'\n---\n",
+        "---\ntype: [[prose]]\n---\n",
+        "---\ntype: [\"[[prose]]\"]\n---\n",
+        "---\ntype: ['[[prose]]']\n---\n",
+        "---\ntype: [[\"prose\"]]\n---\n",
+        "---\ntype:\n  - \"[[prose]]\"\n---\n",
+        "---\ntype:\n  - '[[prose]]'\n---\n",
     ] {
         let frontmatter =
             parse_frontmatter(contents).expect("frontmatter parses");
         assert!(
             frontmatter_is_prose(&frontmatter),
-            "article type form should match: {contents:?}"
+            "prose type form should match: {contents:?}"
         );
         assert!(!frontmatter_is_project(&frontmatter));
         assert!(!frontmatter_is_area(&frontmatter));
@@ -281,6 +289,15 @@ fn type_forms_match_prose_and_keep_project_area() {
     assert_eq!(
         frontmatter_type_names(&mixed),
         vec!["article".to_string(), "project".to_string()]
+    );
+    let mixed_prose =
+        parse_frontmatter("---\ntype: [\"[[prose]]\", \"[[project]]\"]\n---\n")
+            .expect("mixed prose list parses");
+    assert!(frontmatter_is_prose(&mixed_prose));
+    assert!(frontmatter_is_project(&mixed_prose));
+    assert_eq!(
+        frontmatter_type_names(&mixed_prose),
+        vec!["prose".to_string(), "project".to_string()]
     );
 }
 

@@ -5,10 +5,9 @@ description: Task-line anatomy, lanes, fields, and the note types that make up a
 
 # Vault format
 
-A Bob vault is an Obsidian folder of Markdown notes. Tasks live as `#task`
-checkbox lines in area and project notes. Today is read from the Pomodoro
-ledger. This page is the lookup for the stored forms. Behavior contracts own
-the rules.
+A Bob vault is an Obsidian Markdown folder. Tasks use `#task` checkboxes;
+Today comes from the Pomodoro ledger. This page lists stored forms; behavior
+contracts own the rules.
 
 Examples use a synthetic vault and `BOB_NOW=2026-10-20`. Default paths are
 relative to `BOB_DIR` (`~/bob` unless you set it or pass `--bob-dir`). Copy
@@ -441,6 +440,11 @@ bytes; Bryan owns their position. `docs/records.md` owns album catalog rows,
 sync, and section protection.
 
 Contract: [Notebooks](../notebooks.md).
+
+### Prose notes
+
+Frontmatter `type: "[[prose]]"` marks authored prose; legacy `[[article]]`
+remains accepted. See [Prose notes](../prose.md).
 
 ### Album notes
 

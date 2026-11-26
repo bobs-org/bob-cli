@@ -91,7 +91,7 @@ Each `entries[]` object:
 | `hosts` | `[]` means every host; otherwise e.g. `["macos"]` |
 | `invalidates` | `tasks` \| `themes` \| `relations` \| `stats` \| `references` \| `plugins` \| `gkeep` \| `bank` |
 
-`args[].slot` is one of `area-note`, `article-note`, `metric`, `pdf`,
+`args[].slot` is one of `area-note`, `article-note` (the legacy slot for prose notes), `metric`, `pdf`,
 `ref`, `ref-query`, `ref-target`, `relation-label`, `text`, `theme`,
 `url`. The table authors only the slot; name, required, and repeat come
 from clap positionals, defaulting the slot to `text`.

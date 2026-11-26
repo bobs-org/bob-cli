@@ -12,12 +12,12 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 const RESERVED_RECORD_IDS: &[&str] = &[
-    "project", "area", "ref", "day", "done", "mail", "article", "type",
-    "notebook",
+    "project", "area", "ref", "day", "done", "mail", "article", "prose",
+    "type", "notebook",
 ];
 const ALBUM_RESERVED_RECORD_IDS: &[&str] = &[
-    "project", "area", "ref", "day", "done", "mail", "article", "type",
-    "notebook", "album", "record",
+    "project", "area", "ref", "day", "done", "mail", "article", "prose",
+    "type", "notebook", "album", "record",
 ];
 const ALBUM_RECORD_KEYS: &[&str] =
     &["noun", "label", "plural", "dated_notes", "fields", "legacy"];
@@ -2298,7 +2298,8 @@ mod tests {
     #[test]
     fn reserved_identifiers_and_boolean_options_are_checked_exhaustively() {
         for id in [
-            "project", "area", "ref", "day", "done", "mail", "article", "type",
+            "project", "area", "ref", "day", "done", "mail", "article",
+            "prose", "type",
         ] {
             let text = format!(
                 "records:\n  {id}:\n    dir: sample\n    label: Sample\n    fields: {{}}\n"
