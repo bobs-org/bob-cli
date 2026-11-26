@@ -380,6 +380,12 @@ every open resident, §13); a `^prj` target inside the same project note
 encoded; a target or dependent that changed since the stage opened
 (refuse, then reopen fresh). Removing a link is always allowed.
 
+When a disabled cycle row already waits on this task, its consequence
+strip offers `⟲ It waits on this task · ⌃B reverses` only when the
+reversal itself passes the live tie planner. A remaining third-task cycle,
+stale row, or other eligibility guard keeps its plain reason and gets no
+reversal chord.
+
 ### 6.5 Block ids
 
 A `＋ id` row opens the existing block-ID stage when the change is
@@ -486,9 +492,19 @@ Depends on adds a consequence strip under the selected row. CURRENT explains
 whether removing the wait makes this task Ready, leaves it Blocked, or leaves
 its status unchanged; it ends with `⌃L keeps a plain link`. An open result
 states that this task becomes Blocked, includes its lane and Pomodoro effects,
-and labels a converted row `Replaces the 🪢 link`. Closed and already-Blocked
-results keep their status-specific copy. A `^prj` owner uses the Blocks project
-consequence copy.
+from the owner's status, open-prerequisite count, and live Today link; it
+labels a converted row `Replaces the 🪢 link`. Closed prerequisites keep the
+status-unchanged copy. A `^prj` owner uses the Blocks project consequence copy.
+Dependency pills name their plain-link chord (`⌃L` or `⌃⇧L`), and plain-link
+pills name the `↵` conversion. On a cycle row whose opposite dependency can be
+reversed, the strip names the reversing chord; chord footer hints are planned
+against the stage snapshot and omit guarded or stale changes.
+
+Links and Linked from release strips show a muted `⌃B` / `⌃⇧B reverses`
+segment only when the opposite dependency plan is valid. Releasing the last
+open `^prj` prerequisite also reports `unblocks N residents of ‹project›`.
+When adding a dependency keeps a labelled relation on the pair, the notice
+preserves its label, for example `⛓ Now waits on “X” · kept the "follow-up of" relation`.
 
 When a hand-edited LINKS or Depends-On line creates a plain-link/dependency
 overlap, the existing mirror shows one notice after the cursor leaves the
@@ -5746,6 +5762,11 @@ disable N, or any counted source:
 - If T or N changed after the stage opened, the commit is refused and
   the stage reopens fresh in the Blocks direction.
 - Removing a current dependency is always allowed.
+
+If a disabled cycle row already waits on N, the strip offers
+`⟲ This task waits on it · ⌃⇧B reverses` only when removing that edge and
+adding the reverse edge passes the live planner. A remaining cycle or another
+guard leaves the ordinary reason without a chord hint.
 
 The stage disables a row only from content it holds. Under a warm Tasks
 cache a closed note's rows carry no note content, so the malformed
