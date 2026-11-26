@@ -16,18 +16,18 @@ use crate::native::{capture_language::CompletionContext, env::TestEnvGuard};
 const TASK_NOTE: &str = concat!(
     "---\ntype: [[area]]\n---\n",
     "- [ ] #task Parent task ^bar\n",
-    "\t- REQUIREMENTS\n",
+    "\t- **Requirements**\n",
     "\t\t- 2 GB RAM\n",
     "\t\t- fast disk\n",
-    "\t- FUTURE WORKFLOW\n",
-    "\t- NOTES\n",
+    "\t- **Future Workflow**\n",
+    "\t- **Notes**\n",
     "\t\t- one\n",
-    "\t- FUTURE WORK\n",
+    "\t- **Future Work**\n",
     "- [ ] #task Plain task ^plain\n",
 );
 
-/// A vault with the target note plus catalog notes: MOTIVATION in three
-/// notes, ACCEPTANCE in two, and PERFORMANCE in one.
+/// A vault with the target note plus catalog notes: Motivation in three
+/// notes, Acceptance in two, and Performance in one.
 fn vault(prefix: &str) -> TempDir {
     let temp = TempDir::new(prefix);
     write_settings(temp.path());
@@ -37,9 +37,9 @@ fn vault(prefix: &str) -> TempDir {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task One ^o1\n",
-            "\t- MOTIVATION\n",
-            "\t- ACCEPTANCE\n",
-            "\t- PERFORMANCE\n",
+            "\t- **Motivation**\n",
+            "\t- **Acceptance**\n",
+            "\t- **Performance**\n",
         ),
     );
     write_file(
@@ -47,8 +47,8 @@ fn vault(prefix: &str) -> TempDir {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Two ^o2\n",
-            "\t- MOTIVATION\n",
-            "\t- ACCEPTANCE\n",
+            "\t- **Motivation**\n",
+            "\t- **Acceptance**\n",
         ),
     );
     write_file(
@@ -56,7 +56,7 @@ fn vault(prefix: &str) -> TempDir {
         concat!(
             "---\ntype: [[area]]\n---\n",
             "- [ ] #task Three ^o3\n",
-            "\t- MOTIVATION\n",
+            "\t- **Motivation**\n",
         ),
     );
     temp
