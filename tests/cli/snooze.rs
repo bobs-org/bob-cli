@@ -109,6 +109,33 @@ fn add_dry_run_and_drop_leave_expected_postimages() {
 }
 
 #[test]
+fn add_settles_a_promoted_task_into_its_status_group() {
+    // Writers settle note-local structure (docs/task-status-hooks.md):
+    // the Ready→Next stamp lands grouped, as a capture link would.
+    let (temp, _daily_path) = snooze_vault(
+        "bob-cli-snooze-add-settle",
+        "# 2026-10-08\n\n## Pomodoros\n\n## Tasks\n",
+        "---\ntype: [[area]]\n---\n## Tasks\n\n- [ ] #task Review the launch plan ^job\n",
+    );
+    let task_path = temp.path().join("vault/jobs.md");
+    let added =
+        snooze_command(&temp, &["add", "jobs:job", "15:30", "-f", "json"])
+            .output()
+            .expect("run snooze add");
+    assert_success(&added);
+    assert_eq!(json_output(&added)["lane"], "next");
+
+    let task = fs::read_to_string(&task_path).unwrap();
+    let group = task
+        .find("### Next & In Progress")
+        .unwrap_or_else(|| panic!("settled Next group:\n{task}"));
+    let promoted = task
+        .find("- [*] #task Review the launch plan")
+        .unwrap_or_else(|| panic!("promoted task:\n{task}"));
+    assert!(group < promoted, "task sits in its Next group:\n{task}");
+}
+
+#[test]
 fn wake_moves_due_subtree_and_records_history() {
     let (temp, daily_path) = snooze_vault(
         "bob-cli-snooze-wake",

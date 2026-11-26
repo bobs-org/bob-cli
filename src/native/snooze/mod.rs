@@ -6,6 +6,12 @@
 //!
 //! The guarded CLI (`cli.rs`, `shell.rs`) writes through the vault lock.
 //! Receipts, Darwin, and desktop arbitration live in `receipt`/`notify`.
+//!
+//! Outer consumers import through the submodule paths:
+//! `state::{classify_rows, live_targets}` for planned-today readers,
+//! `when::parse_snooze_when` for the time grammar, and
+//! `plan::{plan_add, plan_drop, plan_wake, plan_cleanup}` for capture's
+//! in-memory batch.
 
 pub(crate) mod cli;
 pub(crate) mod notify;
@@ -16,25 +22,3 @@ pub(crate) mod shell;
 pub(crate) mod state;
 pub(crate) mod vectors;
 pub(crate) mod when;
-
-// Re-exports are the later CLI/capture surface; this phase's tests import
-// through the submodule paths, so rustc would otherwise warn.
-#[allow(unused_imports)]
-pub(crate) use parse::{
-    duplicate_snoozed_headers, snoozed_section_range, SnoozedSection,
-};
-#[allow(unused_imports)]
-pub(crate) use plan::{
-    plan_add, plan_cleanup, plan_drop, plan_wake, AddInput, AddRefusal,
-    CleanupInput, DropInput, DropRefusal, FilePostimage, TaskFact, WakeInput,
-};
-#[allow(unused_imports)]
-pub(crate) use state::{
-    classify_rows, live_targets, ClassifiedRows, ClassifyInput, ClassifyRow,
-    IgnoreReason, LiveTargets, ResolutionKind, RowState, TaskIdentity,
-    TaskState,
-};
-#[allow(unused_imports)]
-pub(crate) use when::{
-    format_hhmm, parse_snooze_when, SnoozeClock, WhenRefusal,
-};

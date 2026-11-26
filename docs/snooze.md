@@ -74,8 +74,9 @@ zone }`), and this module never reads process state itself:
 - folded wall times resolve to the first occurrence — never silently the
   second when the first has passed (that case refuses as `past`).
 
-`WhenRefusal::message` carries the teaching copy every entry surface
-shares. Times render as four-digit `HHMM` and RFC 3339 instants in Bob's
+`parse_snooze_when(input, clock)` is the shared parser; capture's `z:`
+token reuses it, and `WhenRefusal::message` carries the teaching copy
+every entry surface shares. Times render as four-digit `HHMM` and RFC 3339 instants in Bob's
 zone; vectors pin input, instant, zone, and result.
 
 ## Rows, time, and identity
@@ -155,8 +156,8 @@ shifted line offsets after a Ready→Next stamp.
 
 Ordinary link routing, MEET placement, and subtree-appending callers
 keep their defaults: `place(..., never_running: false)` and
-`SubtreeInsert::Append`. The guarded CLI, receipts, tick step, and
-receipt and tick delivery are separate follow-up phases.
+`SubtreeInsert::Append`. The guarded CLI below is the first caller;
+capture's `z:` batch reuses the same planners.
 
 ## CLI
 
@@ -181,8 +182,9 @@ List never takes the vault lock. Add, drop, and wake first validate and
 plan against a read snapshot. A dry run returns that plan without locking
 or writing. A real write waits at most ten seconds for the vault lock,
 refreshes its inputs and replans once if a preimage changed, and defers
-after a second drift or a day rollover. Add stages the task note and daily
-note in one rollback-capable batch. Drop and wake write only the daily
+after a second drift or a day rollover. Add settles each note it rewrites
+(a promoted task lands in its status group) and stages the task note and
+daily note in one rollback-capable batch. Drop and wake write only the daily
 note. An automatic wake sweep runs only on the configured writer host;
 `wake TASK` is an explicit request and works on any host. A skipped sweep
 does not mutate the vault or create state files. Exit status is 0 for

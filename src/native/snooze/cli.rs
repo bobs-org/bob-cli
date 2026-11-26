@@ -31,6 +31,7 @@ use crate::native::{
     style::Styler,
     task_dependencies::block_link_spans,
     task_locator::TaskLocator,
+    task_settle::SettleContext,
     task_status_hooks::TaskStatusType,
     task_theme::{parse_task_theme, TaskThemeState},
     vault_links::{LinkResolution, NoteIndex},
@@ -567,7 +568,7 @@ fn wake(request: &Request, task_texts: &[String]) -> Result<Value, CliError> {
             &initial_day.contents,
             &plan_config,
         );
-        let result = wake_report(
+        return Ok(wake_report(
             "nothing_due",
             &initial_day,
             &initial_now,
@@ -576,11 +577,7 @@ fn wake(request: &Request, task_texts: &[String]) -> Result<Value, CliError> {
             &plan_config,
             count,
             &initial.off_clock,
-        );
-        if explicit && !initial.plan.woken.is_empty() {
-            return Ok(result);
-        }
-        return Ok(result);
+        ));
     }
     if request.dry_run {
         let count = ledger_count(
@@ -885,12 +882,35 @@ fn add_plan(
         identities: &identities,
     })
     .map_err(add_refusal)?;
+    let mut files = plan.files;
+    settle_changed_notes(root, snapshot, &mut files);
     Ok(AddPlanResult {
-        files: plan.files,
+        files,
         fact: resolved,
         when,
         current_count: ledger_count(root, &day.relative, &day.contents, config),
     })
+}
+
+/// Settle every note this add rewrites (a Ready→Next task line moves into
+/// its status group; the daily note gets the local future-schedule rule),
+/// matching capture and the task command writers. Unchanged notes, such as
+/// an already-Next task's note, stay byte-identical.
+fn settle_changed_notes(
+    root: &Path,
+    snapshot: &InputSnapshot,
+    files: &mut [FilePostimage],
+) {
+    let context = SettleContext::for_vault(root);
+    for file in files.iter_mut() {
+        if snapshot.notes.get(&file.path) == Some(&file.contents) {
+            continue;
+        }
+        let settled = context.settle_written_note(&file.path, &file.contents);
+        if settled.changed {
+            file.contents = settled.contents;
+        }
+    }
 }
 
 fn drop_plan(

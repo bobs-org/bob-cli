@@ -39,8 +39,8 @@ pub(crate) use relocation::{
     insert_unnamed_placeholder, move_subtree_to_entry, plan_link_relocation,
     LinkRelocationAction, LinkRelocationError, PomodoroEndpoint, SubtreeInsert,
 };
-// Snooze wake and later capture reuse this; ordinary callers keep Append.
-#[allow(unused_imports)]
+// Snooze planner tests pin top-of-entry moves; ordinary callers keep Append.
+#[cfg(test)]
 pub(crate) use relocation::move_subtree_to_entry_at;
 pub(crate) use task_update::{
     plan_task_link, set_task_line_status,
