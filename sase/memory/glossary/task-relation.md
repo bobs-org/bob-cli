@@ -25,3 +25,6 @@ A relation whose label is a configured successor label (such as `starts after`) 
 offers its source as a [[successor-offer]] when its target is parked (left Pending with
 no live Task Link today) or done; it still never blocks, and its mirror reads
 `starts before`.
+
+A plain (unlabelled) link and a dependency between the same two tasks never coexist:
+adding the dependency absorbs the plain link in either direction.

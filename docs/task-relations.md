@@ -2719,4 +2719,21 @@ eligibility refusals).
 | PT19 | O waits on X and X plain O (the live `bob.md` shape) | `depends_out`, drop X's entry |
 | PT20 | O waits on X and O labelled X | `depends_out`, legal |
 | PT21 | O waits on X, O labelled X, and O plain X | `depends_out`, drop the plain entry only |
-| PT22+ | nav planner: chords, reversals, eligibility (nav-tie-planner defines) | reserved for the nav phase |
+| PT22 | ⌃B on untied | change: add owner-waits |
+| PT23 | ⌃B on plain_out | change: add, absorb the owner's plain entry |
+| PT24 | ⌃B on plain_in | change: add, absorb the other's plain entry |
+| PT25 | ⌃B on depends_out | noop "Already waits on it" |
+| PT26 | ⌃B on depends_in | change: reversal (add owner-waits, remove other-waits) |
+| PT27 | ⌃⇧B on depends_out | change: reversal (add other-waits, remove owner-waits) |
+| PT28 | ⌃L on depends_out with plain O→X | change: release, no plain add |
+| PT29 | ⌃L with a labelled O→X entry | change: release only, label kept |
+| PT30 | ⌃L over an existing reverse plain | noop |
+| PT31 | ⌃L over an existing reverse labelled entry | noop |
+| PT32 | ⌃L on untied | change: add plain O→X |
+| PT33 | ⌃⇧L on untied | change: add plain X→O |
+| PT34 | reversal through a third task | refuse would-create-cycle |
+| PT35 | closed prerequisite | refuse target-closed |
+| PT36 | archived prerequisite (done/ path) | refuse target-archived |
+| PT37 | daily-note Event Task prerequisite | refuse event-task |
+| PT38 | done prerequisite | change, status unchanged |
+| PT39 | closed owner | refuse owner-closed |

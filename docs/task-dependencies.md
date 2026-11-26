@@ -419,6 +419,14 @@ unchanged.
    links not removed` chip and is never rolled back; reconcile repairs it.
 4. **If preparation fails**, the dependent is untouched. An unused
    target id is acceptable; a link to an unprepared target is not.
+5. **Absorb plain links on every add** (`docs/task-relations.md` §22).
+   Same-note LINKS drops (the dependent's and any same-note target's,
+   plus LINKED FROM courtesy) fold into the one transaction. Cross-note
+   drops ride that note's BLOCKS follow-up write when one exists, else a
+   standalone tie follow-up, always after the dependency commits. A note
+   that cannot be absorbed (unwritable, malformed, uncertain) keeps its
+   entry for reconcile. The notice gains `· replaced the 🪢 link`, or the
+   honest `· 🪢 link not removed (reconcile will fold it)` suffix.
 
 Nav applies editor writes as line-level edits, never a whole-note
 replacement, so the cursor stays on the task line the gesture started
@@ -744,6 +752,9 @@ in §14. Managed-child-line vectors (MC) live in §11.8.
 | DW17 | field placement | task line has `[fresh:: 2026-10-02]` and `^task-id` | `[dependsOn:: …]` lands right of `fresh`, before `^task-id`, `id` before `dependsOn` |
 | DW18 | edit with child links outside the line | dependent has a managed line plus plain, embedded, and struck child links | line and field mirror only the managed line; child links stay unchanged |
 | DW19 | canonicalise variants | any of DP6–DP14 | writer form with the same targets |
+| DW20 | add over a same-note plain link | dependent's LINKS holds a plain entry for the new prerequisite | entry dropped in the same one-transaction commit; notice gains `· replaced the 🪢 link` |
+| DW21 | add over a cross-note plain link | other task's LINKS holds a plain entry for the dependent | entry dropped by a follow-up after the commit; notice gains `· replaced the 🪢 link` |
+| DW22 | malformed LINKS on the other note | other task's LINKS line is malformed | dependency still lands; entry left for reconcile with `· 🪢 link not removed (reconcile will fold it)` |
 
 ### 11.3 DR — reconcile vectors
 
@@ -5765,7 +5776,12 @@ on and the viewport does not move; the review-walk advance on a `]s`
 landing is the one intended exception.
 
 The forward writer and its existing tests remain byte-identical,
-besides the shared duplicate-preparation fix covered by RBW6.
+besides the shared duplicate-preparation fix covered by RBW6 and the
+tie absorption both writers share (RBP12–RBP13): each T note's own
+LINKS drops fold into its write (same-note sources fold into the one
+transaction), while a pure source note's drops become a follow-up after
+that T commits — skipped when the T write fails. Only added edges
+absorb; removals never touch LINKS lines.
 
 ### 15.7 Notices and consequence-strip copy
 
@@ -5838,6 +5854,8 @@ forward gesture or gestures.
 | RBP9 | dependencies.blocks_lines is false | No BLOCKS edits; N still gets an id |
 | RBP10 | ↵ on CURRENT T whose only reason is N | T becomes Ready and fresh, with no [unblocked::]. N's BLOCKS drops T and is deleted when empty; bytes equal forward removal |
 | RBP11 | N is an inbox task | Route prompt comes first; after the move, T's link and dependsOn id point to N's destination |
+| RBP12 | same-note add over plain links both ways | T's and N's LINKS hold plain entries for each other | both entries dropped in the note writes; bytes equal forward add; notice gains `· replaced the 🪢 link` |
+| RBP13 | cross-note add over plain links both ways | N's LINKS holds a plain entry for T and T's for N | T side folds into T's write, N side drops as a follow-up after T commits; bytes equal forward add |
 
 **RBG — guards and refusals**
 
