@@ -21,7 +21,7 @@ Committing a configured cancel, complete, or merge label through capture or the 
 stage cancels the source, completes it, or merges it into the target by copying its notes
 and cancelling it, respectively, at commit time; see [[task-merge]].
 
-A plain link and a [[task-dependency-link]] never join the same task pair
+An unlabelled relation is a plain link, and a plain link and a [[task-dependency-link]] never join the same task pair
 in either direction: adding a dependency absorbs the plain link, and only
 an explicit Task Card stage gesture releases a dependency into a plain link.
 

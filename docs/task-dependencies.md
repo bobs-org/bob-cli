@@ -366,9 +366,10 @@ The stage ports `capture_link_tasks.rs::rank`:
 | --- | --- |
 | type | fuzzy search |
 | ↑ / ↓, ^N / ^P | move |
-| ↵ | **toggle** the highlighted row (add if absent, remove if present) and close; with marks, apply every mark |
+| ↵ | **toggle** the highlighted row (add if absent, remove if present) and close; with marks, apply every mark; on a ⇄ row, convert the tie (absorb on one press) |
 | ⇥ | mark or unmark the row (`＋ add` / `− remove` / `＋ id`) and move down |
 | Esc | cancel; writes nothing and allocates no ids |
+| ⌃B / ⌃⇧B / ⌃L / ⌃⇧L | set the highlighted pair's tie to owner-waits / other-waits / plain-out / plain-in through `applyTieChange`; desired-state commands, never toggles; Ctrl only, never Meta; repeat and IME ignored; refused with marks or in a counted session |
 
 Guarded rows are disabled and show their reason: the dependent itself;
 a cycle (`⟲`), checked on the graph _after_ the whole batch, with the
@@ -5724,9 +5725,9 @@ RESULTS or BLOCKED, remove on CURRENT, and apply N with marks.
 ### 15.5 Keys, guards, ids, counted sources, and review
 
 The stage uses the forward keys: Enter toggles the highlighted row and
-closes; with marks it applies each mark. Tab marks or unmarks and moves
+closes; with marks it applies each mark; on a ⇄ row Enter converts the tie on one press. Tab marks or unmarks and moves
 down. Escape writes nothing and allocates no ids. Back and empty
-Backspace return to the Task Card.
+Backspace return to the Task Card. `⌃B` / `⌃⇧B` / `⌃L` / `⌃⇧L` set the highlighted pair's tie through `applyTieChange` with the same counted/batch refusals as §6.4.
 
 A candidate is disabled when the forward stage opened on T would
 disable N, or any counted source:

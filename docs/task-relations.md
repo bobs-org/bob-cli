@@ -867,6 +867,9 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG27 | ↵ on an Event Task in the previous daily note | linked with no mirror, plus the suffix `· previous daily note: 🪢 LINKED FROM follows after rollover`; an id-less row is disabled |
 | LG28 | empty filter or equal scores | closed Event Tasks outside the owner's note are not listed; equal-score Event Tasks list newest day first |
 | LG29 | Linked-from stage | never offers a daily-note source |
+| LG30 | `⌃B` in any relationship stage | sets the highlighted pair to owner-waits through `applyTieChange`, absorbing plain links both ways and reversing an opposite dependency |
+| LG31 | ↵ on a ⇄ Links / Linked-from row | arms first with an amber `⚠ Removes the dependency · "X" becomes Ready — ↵ again · esc keeps it` banner and an `↵ again to confirm` footer; the second ↵ commits, while moving the selection, editing the query, pressing Esc, or entering a stage disarms it |
+| LG32 | relation-label stage while a dependency ties the pair | the "Plain link (no relation)" row and any relabel-to-empty are disabled with `A dependency ties them · ⌃L makes it a plain link`; relabelling an empty entry to a labelled one never restores a released dependency |
 
 ### LC — chips
 
