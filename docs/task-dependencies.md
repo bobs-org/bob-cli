@@ -403,6 +403,11 @@ writes nothing. Project conversion's automatic IDs still use the existing
 `suggestBlockIdFromTask`; capture and successor minting (§11.7, §12) are
 unchanged.
 
+For a tie chord whose two tasks both need ids, the stage gathers both ids
+before starting either preparation or dependency write. Escape at either
+prompt leaves both notes unchanged. When both tasks are in one note, both
+prepared task lines join the tie edit in the same editor transaction.
+
 ### 6.6 One gesture writes
 
 1. **Prepare cross-note targets first.** Add the `^id` and `[id::]`
@@ -447,7 +452,10 @@ relation side untouched, while a successful release adds the plain link
 through `applyRelationEdit`. If that later link write fails, the dependency
 remains released and the notice says `· 🪢 link not added`. A cross-note
 reversal removes first, then adds, reporting
-`· dependency reversal incomplete` on a partial failure.
+`· dependency reversal incomplete` on a partial failure. For a same-note
+reversal, both dependency plans retain their status, freshness, Pomodoro,
+project, and BLOCKS effects; task ids are resolved again after line edits
+before freshness stamps are written.
 Dependency-add absorption keeps its existing reconcile-fold failure notice.
 
 Nav applies editor writes as line-level edits, never a whole-note
