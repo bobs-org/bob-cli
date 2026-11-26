@@ -172,6 +172,19 @@ fn push_candidate(
     filter_aliases: Vec<String>,
 ) {
     if !seen.insert(resolved.minutes) {
+        // Keep one candidate per minute with the earliest source's label,
+        // but merge later relative aliases so a deduplicated event-labelled
+        // row still matches `+1h` queries. Replacement, label, and ordering
+        // never change here; only private non-serialized filter aliases grow.
+        if let Some(existing) =
+            rows.iter_mut().find(|row| row.replacement == resolved.hhmm)
+        {
+            for alias in filter_aliases {
+                if !existing.filter_aliases.contains(&alias) {
+                    existing.filter_aliases.push(alias);
+                }
+            }
+        }
         return;
     }
     rows.push(SnoozeCandidate {

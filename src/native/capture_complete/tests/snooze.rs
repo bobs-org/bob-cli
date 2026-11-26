@@ -157,6 +157,100 @@ fn relative_suggestions_near_midnight_drop_overflow_and_nonfuture_rows() {
 }
 
 #[test]
+fn deduplicated_event_row_keeps_relative_aliases() {
+    // An event ending at 13:00 collides with `+1h` at a fixed 12:00 clock.
+    // One candidate survives with the event label, yet `+1`/`+1h` still
+    // match it through merged private aliases. A duplicate used-today 1300
+    // row adds no output; a distinct 1245 event proves ordering.
+    let temp = TempDir::new("bob-cli-capture-complete-snooze-dedup-alias");
+    let day = temp.path().join("2026/20261020.md");
+    write_file(
+        &day,
+        concat!(
+            "## Events\n",
+            "- **1215-1245** Standup\n",
+            "- **1200-1300** Lunch\n",
+            "\n## Snoozed\n",
+            "- **1300** [[jobs#^later]]\n",
+        ),
+    );
+    let value = with_clock(&day, "2026-10-20 12:00:00", || {
+        completion(temp.path(), "Remember z:")
+    });
+    let rows = snooze_rows(&value);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.replacement.as_str())
+            .collect::<Vec<_>>(),
+        ["1245", "1300", "1230", "1400"]
+    );
+    assert_eq!(rows[1].label, "13:00 · after Lunch");
+    assert_eq!(
+        rows.iter().filter(|row| row.replacement == "1300").count(),
+        1,
+        "duplicate minutes collapse to one row"
+    );
+
+    for query in ["", "13", "+1", "+1h"] {
+        let raw = format!("Remember z:{query}");
+        let filtered = with_clock(&day, "2026-10-20 12:00:00", || {
+            completion(temp.path(), &raw)
+        });
+        let filtered_rows = snooze_rows(&filtered);
+        let thirteens: Vec<_> = filtered_rows
+            .iter()
+            .filter(|row| row.replacement == "1300")
+            .collect();
+        assert_eq!(
+            thirteens.len(),
+            1,
+            "{query:?} keeps exactly one 1300 candidate"
+        );
+        assert_eq!(
+            thirteens[0].label, "13:00 · after Lunch",
+            "{query:?} keeps the earliest event label"
+        );
+    }
+
+    let plus_one = with_clock(&day, "2026-10-20 12:00:00", || {
+        completion(temp.path(), "Remember z:+1")
+    });
+    let plus_rows = snooze_rows(&plus_one);
+    assert_eq!(plus_rows.len(), 1);
+    assert_eq!(plus_rows[0].replacement, "1300");
+    assert_eq!(plus_rows[0].label, "13:00 · after Lunch");
+
+    let plus_hour = with_clock(&day, "2026-10-20 12:00:00", || {
+        completion(temp.path(), "Remember z:+1h")
+    });
+    let hour_rows = snooze_rows(&plus_hour);
+    assert_eq!(hour_rows.len(), 1);
+    assert_eq!(hour_rows[0].replacement, "1300");
+
+    let numeric = with_clock(&day, "2026-10-20 12:00:00", || {
+        completion(temp.path(), "Remember z:13")
+    });
+    let numeric_rows = snooze_rows(&numeric);
+    assert_eq!(numeric_rows.len(), 1);
+    assert_eq!(numeric_rows[0].replacement, "1300");
+    assert_eq!(numeric_rows[0].label, "13:00 · after Lunch");
+
+    let json = serde_json::to_value(&value).expect("completion JSON");
+    for candidate in json["candidates"].as_array().expect("candidates") {
+        assert!(
+            candidate.get("filter_aliases").is_none(),
+            "aliases stay private: {candidate}"
+        );
+        assert!(
+            candidate["replacement"]
+                .as_str()
+                .is_some_and(|replacement| replacement.len() == 4),
+            "replacement stays a literal HHMM: {candidate}"
+        );
+    }
+}
+
+#[test]
 fn missing_daily_note_still_offers_valid_relative_times() {
     let temp = TempDir::new("bob-cli-capture-complete-snooze-missing-day");
     let missing = temp.path().join("missing.md");

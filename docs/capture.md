@@ -705,12 +705,14 @@ clock and refusal contract.
 `kind: "snooze"` and UTF-8 byte offsets. `capture-complete` exposes a
 `snooze` context whose replacement range covers only the value after `z:`.
 Candidate `replacement` is a literal four-digit `HHMM`; `label` keeps its
-source, such as `15:30 · after Yogi interview` or `+1h · 16:00`. The menu
+earliest source, such as `15:30 · after Yogi interview` or `+1h · 16:00`. The menu
 orders future meeting ends first, then valid `+30m`, `+1h`, `+2h`, then future
 times already used in today's `## Snoozed` section. It deduplicates by minute,
 keeps the first label, and filters typed prefixes without changing source
-order. A bare `z:` opens with `initial_selection: "none"`; typed queries omit
-that field.
+order. A deduplicated event-labelled row still matches its relative prefixes
+(for example `+1` and `+1h` still find the `13:00` event row) through private
+filter aliases that never appear in JSON. A bare `z:` opens with
+`initial_selection: "none"`; typed queries omit that field.
 
 Capture results add an optional `snooze` object for these operations:
 

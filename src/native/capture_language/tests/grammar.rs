@@ -3458,6 +3458,104 @@ fn snooze_drop_is_narrow_and_not_a_toggle() {
 }
 
 #[test]
+fn numeric_route_drop_matches_strict_parse() {
+    // An unescaped all-numeric route stays prose elsewhere, but the narrow
+    // claimed drop names it directly: strict execution drops the row, so the
+    // editor must agree on mode, route, block ID, body, and spans.
+    for raw in ["@20261125:here!", "@2026:here!"] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert!(parsed.body.is_empty(), "{raw}");
+        let route = parsed.route.as_deref().expect("{raw} has route");
+        assert!(
+            parsed.snooze.as_ref().is_some_and(|snooze| snooze.drop),
+            "{raw}"
+        );
+        let span = parsed.snooze.as_ref().and_then(|snooze| snooze.span);
+        assert_eq!(span, Some((0, raw.len())), "{raw}");
+
+        let edited = editor(raw);
+        assert_eq!(edited.mode, EditorMode::PomodoroLink, "{raw}");
+        assert!(edited.body.is_empty(), "{raw}");
+        assert_eq!(edited.route.as_deref(), Some(route), "{raw}");
+        assert_eq!(edited.block_id.as_deref(), Some("here"), "{raw}");
+        assert!(
+            edited.diagnostics.is_empty(),
+            "{raw}: {:?}",
+            edited.diagnostics
+        );
+        let route_end = 1 + route.len();
+        let block_end = raw.len() - 1;
+        assert_eq!(
+            ranges(&edited),
+            vec![
+                (0, route_end, SpanKind::PomodoroRoute),
+                (route_end + 1, block_end, SpanKind::PomodoroBlockId),
+                (block_end, raw.len(), SpanKind::Snooze),
+            ],
+            "{raw}"
+        );
+    }
+
+    // Offsets stay in original UTF-8 bytes after a preceding Unicode item.
+    let raw = "Réparer\n\n@20261125:here!";
+    let offset = raw.find("@20261125").expect("drop offset");
+    let edited = editor(raw);
+    assert_eq!(edited.items.len(), 2, "{raw}");
+    let drop_item = &edited.items[1];
+    assert_eq!(drop_item.mode, EditorMode::PomodoroLink, "{raw}");
+    assert_eq!(drop_item.route.as_deref(), Some("20261125"), "{raw}");
+    assert!(drop_item.body.is_empty(), "{raw}");
+    let mut actual: Vec<_> = drop_item
+        .spans
+        .iter()
+        .map(|span| (span.start, span.end, span.kind))
+        .collect();
+    actual.sort_by_key(|span| (span.0, span.1));
+    assert_eq!(
+        actual,
+        vec![
+            (offset, offset + 9, SpanKind::PomodoroRoute),
+            (offset + 10, offset + 14, SpanKind::PomodoroBlockId),
+            (offset + 14, offset + 15, SpanKind::Snooze),
+        ],
+        "{raw}"
+    );
+
+    // Near misses never claim the drop on either path. An unescaped
+    // all-numeric route stays prose outside the narrow claimed drop, so
+    // trailing junk keeps its ordinary prose meaning instead of failing
+    // block-ID validation like the alphabetic shapes above.
+    for raw in [
+        "@20261125:here!x",
+        "@20261125:here!!",
+        "@20261125:here! extra",
+    ] {
+        let parsed = execute(raw).expect("{raw} stays prose");
+        assert!(
+            !parsed.snooze.as_ref().is_some_and(|snooze| snooze.drop),
+            "{raw}"
+        );
+        let edited = editor(raw);
+        assert!(codes(&edited).is_empty(), "{raw}: {:?}", edited.diagnostics);
+        assert_eq!(edited.mode, EditorMode::Task, "{raw}");
+        assert_eq!(edited.body, raw, "{raw}");
+        assert!(edited.route.is_none(), "{raw}");
+    }
+    // A drop with a snooze marker on the same item is not a drop at all.
+    let raw = "@20261125:here! z:19";
+    let parsed = execute(raw);
+    let edited = editor(raw);
+    assert_eq!(parsed.is_err(), !codes(&edited).is_empty(), "{raw}");
+    if let Ok(parsed) = parsed {
+        assert!(
+            !parsed.snooze.as_ref().is_some_and(|snooze| snooze.drop),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
 fn snooze_bare_and_conflicts_agree_across_strict_and_editor() {
     // Each pair names the diagnostic code plus inputs whose strict error
     // text must equal the editor diagnostic message.

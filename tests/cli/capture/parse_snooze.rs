@@ -149,6 +149,34 @@ fn capture_parse_reports_drop_span_and_keeps_the_toggle_distinct() {
 }
 
 #[test]
+fn capture_parse_reports_numeric_route_drop_like_strict_execution() {
+    for raw in ["@20261125:here!", "@2026:here!"] {
+        let drop = parse_json(raw);
+        assert_eq!(drop["grammar"], 33, "{raw}");
+        assert_eq!(drop["mode"], "pomodoro_link", "{raw}");
+        assert_eq!(drop["body"], "", "{raw}");
+        assert_eq!(
+            drop["route"],
+            raw[1..raw.len() - 6].to_lowercase(),
+            "{raw}"
+        );
+        assert_eq!(drop["block_id"], "here", "{raw}");
+        assert_eq!(drop["diagnostics"], serde_json::json!([]), "{raw}");
+        let route_end = 1 + drop["route"].as_str().expect("route").len();
+        let block_end = raw.len() - 1;
+        assert_eq!(
+            drop["spans"],
+            serde_json::json!([
+                { "start": 0, "end": route_end, "kind": "pomodoro_route" },
+                { "start": route_end + 1, "end": block_end, "kind": "pomodoro_block_id" },
+                { "start": block_end, "end": raw.len(), "kind": "snooze" },
+            ]),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
 fn capture_dry_run_executes_recognized_snooze_intents_without_writing() {
     let (_temp, vault, day_file) =
         snooze_vault("bob-cli-capture-snooze-preview");

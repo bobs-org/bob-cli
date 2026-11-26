@@ -413,11 +413,43 @@ fn time_refusals_use_same_day_and_dst_rules() {
 fn local_daily_link_aliases_retime_and_drop() {
     let f = Fixture::new("capture-snooze-local", "# Jobs\n");
     write_file(&f.day, &format!("## Tasks\n- [*] #task Here ^here\n\n{DAY}\n## Snoozed\n- **1300** [[#^here|local]]\n  - keep\n"));
-    f.ok("@!20261125:here z:19");
+    // Numeric basename retime previews identically dry-run vs real.
+    let preview = f.at("@!20261125:here z:19", true, "2026-11-25 12:03:00");
+    assert_success(&preview);
+    let preview_json = json(&preview);
+    let retimed = f.ok("@!20261125:here z:19");
+    assert_eq!(preview_json["snooze"], retimed["snooze"]);
+    assert_eq!(preview_json["task_line"], retimed["task_line"]);
     assert_eq!(f.day().matches("#^here").count(), 1);
     assert!(f.day().contains("  - keep"));
-    f.ok("@20261125:here!");
+
+    // Numeric basename drop parses like strict execution and previews
+    // identically before the real drop preserves the task line.
+    let parsed = bob_command()
+        .args(["capture-parse", "-f", "json", "--", "@20261125:here!"])
+        .output()
+        .expect("capture-parse numeric drop");
+    assert_success(&parsed);
+    let parsed_json: Value = serde_json::from_str(stdout(&parsed).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(parsed_json["mode"], "pomodoro_link");
+    assert_eq!(parsed_json["body"], "");
+    assert_eq!(parsed_json["route"], "20261125");
+    assert_eq!(parsed_json["block_id"], "here");
+
+    let dry = f.at("@20261125:here!", true, "2026-11-25 12:03:00");
+    assert_success(&dry);
+    let dry_json = json(&dry);
+    assert_eq!(dry_json["snooze"]["action"], "drop");
+    let dropped = f.ok("@20261125:here!");
+    assert_eq!(dry_json["snooze"], dropped["snooze"]);
+    assert_eq!(dry_json["task_line"], dropped["task_line"]);
     assert!(!f.day().contains("## Snoozed"));
+    assert!(
+        f.day().contains("- [*] #task Here ^here"),
+        "drop preserves the task line: {}",
+        f.day()
+    );
 }
 
 #[test]

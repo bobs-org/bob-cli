@@ -5186,36 +5186,109 @@ pub(super) fn parse_editor_item_inner<'a>(
     }
     // A narrow `@route:id!` item drops that task's active snooze row. It is
     // claimed before ordinary marker classification so the trailing `!`
-    // never reaches block-ID validation. The masked view parses the
-    // `@route:id` prefix exactly like the link it names, then the `!`
-    // gains the additive `snooze` span.
+    // never reaches block-ID validation. The already-validated route,
+    // block ID, and source range name the link directly: re-parsing the
+    // masked `@route:id` prefix through ordinary marker classification
+    // treats an unescaped all-numeric route as prose, while strict
+    // execution drops it. Numeric prose keeps its meaning everywhere else;
+    // only this narrow claimed drop uses the validated parts.
     if target_run.is_none()
-        && let Some((_, _, (_, end), _)) =
-            super::item::parse_snooze_drop_item(item)
+        && let Some((
+            drop_route,
+            drop_block_id,
+            (drop_start, drop_end),
+            marker_text,
+        )) = super::item::parse_snooze_drop_item(item)
     {
-        let masked = masked_editor_source(item.source, end - 1, end);
-        let view = editor_item_view(item, &masked);
-        let outcome = parse_editor_item_singleton_with(&view, options);
-        let mut item_parse = outcome.item;
-        item_parse.spans.push(Span {
-            start: end - 1,
-            end,
-            kind: SpanKind::Snooze,
-            project_note: None,
-            title: None,
-            key: None,
-            section_action: None,
-        });
-        item_parse.spans.sort_by_key(|span| (span.start, span.end));
-        // Rebuild the outcome so its lifetime detaches from the masked
-        // view: the parse is owned and declarations re-slice the original
-        // source at unchanged offsets.
+        let route_end = drop_start + 1 + drop_route.len();
+        let block_start = route_end + 1;
+        let block_end = drop_end - 1;
+        debug_assert_eq!(block_start + drop_block_id.len(), block_end);
+        debug_assert_eq!(
+            item.source.get(drop_start..drop_end),
+            Some(marker_text.as_str())
+        );
+        let link_text = marker_text
+            .strip_suffix('!')
+            .unwrap_or(marker_text.as_str())
+            .to_string();
+        let mut spans = vec![
+            Span {
+                start: drop_start,
+                end: route_end,
+                kind: SpanKind::PomodoroRoute,
+                project_note: None,
+                title: None,
+                key: None,
+                section_action: None,
+            },
+            Span {
+                start: block_start,
+                end: block_end,
+                kind: SpanKind::PomodoroBlockId,
+                project_note: None,
+                title: None,
+                key: None,
+                section_action: None,
+            },
+            Span {
+                start: drop_end - 1,
+                end: drop_end,
+                kind: SpanKind::Snooze,
+                project_note: None,
+                title: None,
+                key: None,
+                section_action: None,
+            },
+        ];
+        spans.sort_by_key(|span| (span.start, span.end));
+        let local_marker = LocalDestinationMarker {
+            start: drop_start,
+            end: block_end,
+            text: link_text.clone(),
+            mode: EditorMode::PomodoroLink,
+            route: Some(drop_route.clone()),
+            block_id: Some(drop_block_id.clone()),
+            section: None,
+        };
         return EditorItemOutcome {
-            item: item_parse,
-            declarations: remap_type_marker_declarations(
-                outcome.declarations,
-                item.source,
-            ),
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: String::new(),
+                mode: EditorMode::PomodoroLink,
+                route: Some(drop_route),
+                section: None,
+                block_id: Some(drop_block_id),
+                needs: Vec::new(),
+                ref_listen: false,
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_split: None,
+                pomodoro_merge: None,
+                pomodoro_close: None,
+                pomodoro_past: None,
+                dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
+                relations: Vec::new(),
+                dependency_target: None,
+                task_complete: None,
+                list: None,
+                spans,
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+                has_local_destination: true,
+                local_destination_markers: vec![local_marker],
+                drawer_bullet_target: None,
+                targets: Vec::new(),
+                merge_in: None,
+                req_markers: Vec::new(),
+            },
+            declarations: Vec::new(),
         };
     }
     let mut spans: Vec<Span> = Vec::new();
