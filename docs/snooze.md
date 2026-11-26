@@ -278,7 +278,7 @@ For example, `bob snooze list -f json` returns a stable envelope such as:
 {
   "schema_version": 1,
   "wake_notice_version": 1,
-  "vault_root": "/home/bryan/bob",
+  "vault_root": "/vault/example",
   "date": "2026-10-08",
   "now": "2026-10-08T12:00:00-04:00",
   "rows": [],

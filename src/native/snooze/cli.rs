@@ -1873,9 +1873,9 @@ mod tests {
             "XDG_STATE_HOME",
             Some(temp.path().join("state").as_os_str()),
         )]);
-        super::notify::set_desktop_result(Some(true));
-        let _ = super::notify::take_desktop_calls();
-        let _ = super::receipt::take_darwin_posts();
+        super::super::notify::set_desktop_result(Some(true));
+        let _ = super::super::notify::take_desktop_calls();
+        let _ = super::super::receipt::take_darwin_posts();
         let day = Day {
             absolute: vault.join("2026/20261008.md"),
             relative: PathBuf::from("2026/20261008.md"),
@@ -1906,9 +1906,9 @@ mod tests {
             assert_eq!(attached, report);
         }
 
-        super::notify::set_desktop_result(None);
-        assert!(super::notify::take_desktop_calls().is_empty());
-        assert!(super::receipt::take_darwin_posts().is_empty());
-        assert!(!super::receipt::last_wake_path().exists());
+        super::super::notify::set_desktop_result(None);
+        assert!(super::super::notify::take_desktop_calls().is_empty());
+        assert!(super::super::receipt::take_darwin_posts().is_empty());
+        assert!(!super::super::receipt::last_wake_path().exists());
     }
 }
