@@ -787,9 +787,14 @@ pass prunes a stale `[unblocked::]` field using the same rule as reconcile.
 
 `bob task reconcile` composes this pass into each note it writes. The shared
 writer helper loads the selected daily path, date, and Tasks classification
-once so other note writers can settle their output in the same write. Capture
-and task-command integrations are follow-on work; until those writers use the
-helper, reconcile remains the repair path for stale groups and badge counts.
+once, and every status- or residence-changing writer settles its notes through
+it in the same write: capture, `task move`, `task split`, `task merge`,
+snooze mutations, ref-task insert/edit, highlights sync, and the Gmail/gkeep
+sync writers. The end-to-end acceptance suite (`tests/cli/settle_acceptance.rs`)
+drives each wired writer and asserts reconcile then plans nothing note-local
+and tidy stays at zero. Reconcile remains the safety net for clock-driven and
+vault-wide work (see below), not the repair path for stale groups and badge
+counts.
 
 Dependency resolution, project and inherited block reasons, dependency tags,
 `[unblocked::]` writes, freshness and keep updates, daily-ledger cleanup, and

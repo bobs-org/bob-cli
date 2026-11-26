@@ -43,6 +43,7 @@ mod relations;
 mod relations_rename;
 mod relations_reverse;
 mod run_env;
+mod settle_acceptance;
 mod snooze;
 mod snooze_writer_audit;
 mod stats;
