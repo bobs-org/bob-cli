@@ -15,7 +15,7 @@
         "\t\t- [ ] Handles Windows files",
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] Handles empty input",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- first entry"
       ],
       "expect": {
@@ -28,7 +28,7 @@
           "\t- [-] Handles empty input",
           "\t\t- ❌ **CANCEL LOG**",
           "\t\t\t- *2026-11-21* — not needed in v1",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- first entry"
         ],
         "log": "created"
@@ -46,7 +46,7 @@
         "\t\t- [ ] Handles Windows files",
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] Handles empty input",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- first entry"
       ],
       "expect": {
@@ -59,7 +59,7 @@
           "\t\t- [ ] Handles Windows files",
           "\t\t\t- Fixture: windows.csv",
           "\t- [ ] Handles empty input",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- first entry"
         ],
         "log": "created"
@@ -77,7 +77,7 @@
         "\t\t- [ ] Handles Windows files",
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] Handles empty input",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- first entry"
       ],
       "expect": {
@@ -88,7 +88,7 @@
           "\t\t- [ ] Handles Windows files",
           "\t\t\t- Fixture: windows.csv",
           "\t- [-] Handles empty input",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- first entry"
         ],
         "log": "none"
@@ -202,7 +202,7 @@
         "\t\t- [ ] Handles Windows files",
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] Handles empty input",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- first entry"
       ],
       "expect": {
@@ -215,7 +215,7 @@
           "\t\t\t\t- *2026-11-21* — windows only later",
           "\t\t\t- Fixture: windows.csv",
           "\t- [ ] Handles empty input",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- first entry"
         ],
         "log": "created"
@@ -490,7 +490,7 @@
     },
     {
       "id": "RW25",
-      "title": "the first req scoops loose notes into a new NOTES",
+      "title": "the first req scoops loose notes into a new Notes drawer",
       "op": "toggle",
       "line": 3,
       "source_lines": [
@@ -500,7 +500,7 @@
         "\t\t- see the thread",
         "\t- Fixture data lives in tests/data.",
         "\t- [ ] #task Subtask ^sub",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -516,7 +516,7 @@
           "\t- [ ] #task Subtask ^sub",
           "\t- **Notes**",
           "\t\t- Fixture data lives in tests/data.",
-          "\t- FUTURE WORK",
+          "\t- **Future Work**",
           "\t\t- later",
           "\t- 🛠️ **WORK LOG**"
         ],
@@ -535,7 +535,7 @@
         "\t\t- note of the first req",
         "\t- loose note",
         "\t- another loose note",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "expect": {
@@ -548,7 +548,7 @@
           "\t\t- note of the first req",
           "\t- [ ] another loose note",
           "\t- loose note",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- entry"
         ],
         "notes_created": false,
@@ -582,12 +582,12 @@
     },
     {
       "id": "RW28",
-      "title": "a note toggled at depth 1 on a task with NOTES keeps NOTES",
+      "title": "a note toggled at depth 1 on a task with a Notes drawer keeps it",
       "op": "toggle",
       "line": 4,
       "source_lines": [
         "- [ ] #task A ^a",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry",
         "\t- loose note"
       ],
@@ -598,7 +598,7 @@
         "lines": [
           "- [ ] #task A ^a",
           "\t- [ ] loose note",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- entry"
         ],
         "notes_created": false,
@@ -632,7 +632,7 @@
     },
     {
       "id": "RW30",
-      "title": "a depth-1 req moves into an existing NOTES as a note",
+      "title": "a depth-1 req moves into an existing Notes drawer as a note",
       "op": "toggle",
       "line": 3,
       "source_lines": [
@@ -640,7 +640,7 @@
         "\t- [ ] first req",
         "\t- [ ] second req",
         "\t\t- note of the second",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -651,7 +651,7 @@
         "lines": [
           "- [ ] #task A ^a",
           "\t- [ ] first req",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- entry",
           "\t\t- second req",
           "\t\t\t- note of the second",
@@ -663,13 +663,13 @@
     },
     {
       "id": "RW31",
-      "title": "a depth-1 req moves into a created NOTES first among the drawers",
+      "title": "a depth-1 req moves into a created Notes drawer first among the drawers",
       "op": "toggle",
       "line": 2,
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] only req",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later"
       ],
       "expect": {
@@ -680,7 +680,7 @@
           "- [ ] #task A ^a",
           "\t- **Notes**",
           "\t\t- only req",
-          "\t- FUTURE WORK",
+          "\t- **Future Work**",
           "\t\t- later"
         ],
         "notes_created": true,
@@ -735,7 +735,7 @@
       "line": 3,
       "source_lines": [
         "- [ ] #task A ^a",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- an entry"
       ],
       "expect": {
@@ -791,7 +791,7 @@
       "line": 2,
       "source_lines": [
         "- [ ] #task A ^a",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later"
       ],
       "expect": {
@@ -856,7 +856,7 @@
     },
     {
       "id": "RW43",
-      "title": "insert the first req scoops loose notes into a new NOTES",
+      "title": "insert the first req scoops loose notes into a new Notes drawer",
       "op": "insert",
       "blocks": [
         "- [ ] Handles supported inputs"
@@ -868,7 +868,7 @@
         "\t\t- see the thread",
         "\t- Fixture data lives in tests/data.",
         "\t- [ ] #task Subtask ^sub",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -885,7 +885,7 @@
           "\t\t- Morgan reported the original issue.",
           "\t\t\t- see the thread",
           "\t\t- Fixture data lives in tests/data.",
-          "\t- FUTURE WORK",
+          "\t- **Future Work**",
           "\t\t- later",
           "\t- 🛠️ **WORK LOG**"
         ],
@@ -895,7 +895,7 @@
     },
     {
       "id": "RW44",
-      "title": "insert with no notes to scoop creates no NOTES",
+      "title": "insert with no notes to scoop creates no Notes drawer",
       "op": "insert",
       "blocks": [
         "- [ ] first req"
@@ -986,7 +986,7 @@
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] existing",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -999,7 +999,7 @@
           "\t- [ ] one",
           "\t- [ ] two",
           "\t\t- [ ] two-a",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- entry"
         ],
         "notes_created": false,

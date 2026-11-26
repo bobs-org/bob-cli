@@ -71,7 +71,7 @@ req→note, CRLF); `RL61` also proves a bold `**Notes**` drawer is reused.
   that is not open), else `{lines, moves, notes_filed, notes_created}`. Applying
   tidy to its own output must give `null`.
 - `note_homes[]`: `expect` is `{home: "loose", line, indent}`,
-  `{home: "notes", line}` (the existing `NOTES` drawer), or
+  `{home: "notes", line}` (the existing `**Notes**` drawer), or
   `{home: "new-notes"}`.
 
 ## `writes.json`
@@ -90,6 +90,6 @@ target line (a mismatch must refuse as `req_stale`):
   relative indentation). `expect`: `{lines, first_line, line_count, scooped,
   notes_created}`.
 
-Every `expect` is either that object or `{refused: code}`. The `NOTES` drawer
+Every `expect` is either that object or `{refused: code}`. The `**Notes**` drawer
 is created only when a note lands in it (`notes_drawer_birth =
 with_first_note`).

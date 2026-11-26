@@ -16,9 +16,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -43,9 +43,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -70,9 +70,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -97,9 +97,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -124,9 +124,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -144,7 +144,7 @@
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] a req",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -168,9 +168,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -189,7 +189,7 @@
         "- [ ] #task A ^a",
         "\t- ⛓️ **DEPENDS ON:** [[#^b]]",
         "\t- a note",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -235,7 +235,7 @@
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- a note",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -284,7 +284,7 @@
         "\t- [ ] req one",
         "\t- [ ] #task Subtask ^sub",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -302,7 +302,7 @@
         "\t- [ ] req one",
         "\t- [ ] #task Subtask ^sub",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -479,9 +479,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -515,9 +515,9 @@
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] a req",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -530,12 +530,12 @@
     },
     {
       "id": "RL26",
-      "title": "a loose note beside reqs belongs in NOTES",
+      "title": "a loose note beside reqs belongs in Notes",
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] a req",
         "\t- a loose note",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -553,7 +553,7 @@
         "- [ ] #task A ^a",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later"
       ],
       "task": 1,
@@ -586,7 +586,7 @@
       "title": "a task with no reqs may keep a note after its drawer",
       "source_lines": [
         "- [ ] #task A ^a",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- a note after the drawer",
         "\t- 🛠️ **WORK LOG**"
@@ -617,7 +617,7 @@
         "- [ ] #task A ^a",
         "\t- [ ] a req",
         "\t- [ ] #task Subtask ^sub",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -654,9 +654,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -680,7 +680,7 @@
       "title": "a task with no reqs keeps its note after the drawer",
       "source_lines": [
         "- [ ] #task A ^a",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- a note after the drawer",
         "\t- 🛠️ **WORK LOG**"
@@ -722,7 +722,7 @@
         "\t\t- [ ] nested req",
         "\t\t\t- deep note",
         "\t- [ ] req two",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -735,7 +735,7 @@
           "\t\t- [ ] nested req",
           "\t\t\t- deep note",
           "\t- [ ] req two",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- entry",
           "\t- 🛠️ **WORK LOG**",
           "\t\t- *2026-11-02* — worked"
@@ -769,7 +769,7 @@
     },
     {
       "id": "RL39",
-      "title": "notes join an existing NOTES drawer and a nested task stays",
+      "title": "notes join an existing Notes drawer and a nested task stays",
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] a req",
@@ -778,7 +778,7 @@
         "\t- [ ] #task Subtask ^sub",
         "\t\t- subtask note",
         "\t- second loose note",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- existing entry",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -789,7 +789,7 @@
           "\t- [ ] a req",
           "\t- [ ] #task Subtask ^sub",
           "\t\t- subtask note",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- existing entry",
           "\t\t- first loose note",
           "\t\t\t- its child",
@@ -803,13 +803,13 @@
     },
     {
       "id": "RL40",
-      "title": "NOTES moves first among the drawers",
+      "title": "Notes moves first among the drawers",
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] a req",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- entry"
       ],
       "task": 1,
@@ -817,9 +817,9 @@
         "lines": [
           "- [ ] #task A ^a",
           "\t- [ ] a req",
-          "\t- NOTES",
+          "\t- **Notes**",
           "\t\t- entry",
-          "\t- FUTURE WORK",
+          "\t- **Future Work**",
           "\t\t- later"
         ],
         "moves": 1,
@@ -853,12 +853,12 @@
     },
     {
       "id": "RL42",
-      "title": "a created NOTES lands before other drawers and the logs",
+      "title": "a created Notes drawer lands before other drawers and the logs",
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- loose note",
         "\t- [ ] a req",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**"
       ],
@@ -869,7 +869,7 @@
           "\t- [ ] a req",
           "\t- **Notes**",
           "\t\t- loose note",
-          "\t- FUTURE WORK",
+          "\t- **Future Work**",
           "\t\t- later",
           "\t- 🛠️ **WORK LOG**"
         ],
@@ -1101,7 +1101,7 @@
     },
     {
       "id": "RL49",
-      "title": "a req-owning task with NOTES files into it",
+      "title": "a req-owning task files loose notes into its Notes drawer",
       "source_lines": [
         "- [ ] #task Ship the exporter ^export",
         "\t- ❌ **CANCEL LOG**",
@@ -1112,9 +1112,9 @@
         "\t\t\t- Fixture: windows.csv",
         "\t- [ ] #task Write the docs ^docs",
         "\t\t- note of the subtask",
-        "\t- NOTES",
+        "\t- **Notes**",
         "\t\t- Morgan reported the original issue.",
-        "\t- FUTURE WORK",
+        "\t- **Future Work**",
         "\t\t- later",
         "\t- 🛠️ **WORK LOG**",
         "\t\t- *2026-11-02* — worked"
@@ -1127,7 +1127,7 @@
     },
     {
       "id": "RL50",
-      "title": "a req-owning task without NOTES creates it",
+      "title": "a req-owning task without a Notes drawer creates one",
       "source_lines": [
         "- [ ] #task A ^a",
         "\t- [ ] a req"
