@@ -448,7 +448,7 @@ pub(crate) fn notes_create_title(
 /// Where a Bob-written loose note on `task` files, following the NOTES rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NoteHome {
-    /// A task with no reqs: a loose child at today's tail slot.
+    /// A non-project task with no reqs: a loose child at today's tail slot.
     Loose(Slot),
     /// A req-owning task that already keeps a `NOTES` drawer.
     Notes(Drawer),
@@ -461,6 +461,13 @@ pub(crate) fn note_home(
     task: &NoteTask,
     settings: &NoteTaskSettings,
 ) -> NoteHome {
+    // A project's `^prj` task always owns the project note's `## Notes`
+    // section, even before its first requirement. Unlike an ordinary
+    // zero-req task, it never gets loose task-child notes.
+    if capture_drawers::is_prj_parent(contents, task) {
+        return notes_drawer(contents, task)
+            .map_or(NoteHome::NewNotes, NoteHome::Notes);
+    }
     let block = TaskBlock::read(contents, task, &settings.global_filter);
     if !block.owns_reqs() {
         return NoteHome::Loose(insertion_offset(

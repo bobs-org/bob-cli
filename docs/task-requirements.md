@@ -154,7 +154,7 @@ keeps its notes in a `NOTES` drawer:
 - Later Bob-written notes to a req-owning task file into `NOTES`. A capture
   note, a carry, and a promotion row all go through `note_home`.
 - `@route+id#drawer` and explicit drawer bullets still win.
-- Zero-req tasks keep loose notes exactly as today (see below).
+- Non-project zero-req tasks keep loose notes exactly as today (see below).
 - Hand edits in Obsidian are never reshuffled. `bob task tidy` fixes drift
   on request.
 
@@ -173,12 +173,14 @@ first-req scoop and `bob task tidy` move each loose direct note of the
 `^prj` task (whole subtree) into that section, dedenting each line by the
 task's child indent unit.
 
-**Zero-req tasks keep today's placement.** A task with no reqs files a loose
-note at the tail, before its first Schedule, Work, or Rotten Log (else at the
-end of the block), and its authored notes and drawers may interleave: capture
-has always written notes after the drawers, and tidy never reshuffles that
-history. For such a task only the Cancel Log, managed-link, and log zones are
-enforced. The NOTES-first drawer rule applies to a task that owns a req.
+**Non-project zero-req tasks keep today's placement.** A task with no reqs
+files a loose note at the tail, before its first Schedule, Work, or Rotten Log
+(else at the end of the block), and its authored notes and drawers may
+interleave: capture has always written notes after the drawers, and tidy never
+reshuffles that history. For such a task only the Cancel Log, managed-link,
+and log zones are enforced. The NOTES-first drawer rule applies to a task that
+owns a req. A `^prj` task is the exception: its note home is always the
+project's `## Notes` section, even before it owns a requirement.
 
 ### 3.1 Insertion slots
 

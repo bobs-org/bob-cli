@@ -46,7 +46,7 @@ change edits the contract and this fixture together.
 
 # Layout and writer vectors
 
-`layout.json` (`RL1`–`RL61`) and `writes.json` (`RW1`–`RW57`) pin the task
+`layout.json` (`RL1`–`RL63`) and `writes.json` (`RW1`–`RW57`) pin the task
 block layout module (`src/native/task_block_layout.rs`, contract
 `docs/task-requirements.md` §3). bob-cli owns both files; each plugin copies
 them byte for byte after updating bob-cli first. A behavior change edits the
@@ -55,6 +55,7 @@ with `\n` plus a trailing newline (`eol: "crlf"` joins with `\r\n`), and every
 line number is 1-based. `RL53`–`RL61` and `RW54`–`RW57` pin a req-owning
 `^prj` task's `## Notes` home (slots, tidy, note homes, first-req scoop,
 req→note, CRLF); `RL61` also proves a bold `**Notes**` drawer is reused.
+`RL62`–`RL63` pin the `^prj` `## Notes` home before its first requirement.
 
 ## `layout.json`
 

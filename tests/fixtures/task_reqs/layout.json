@@ -1241,6 +1241,45 @@
         "home": "notes",
         "line": 3
       }
+    },
+    {
+      "id": "RL62",
+      "title": "a zero-req ^prj uses its project Notes section",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a",
+        "",
+        "## Notes",
+        "",
+        "- already"
+      ],
+      "task": 4,
+      "expect": {
+        "home": "notes",
+        "line": 9
+      }
+    },
+    {
+      "id": "RL63",
+      "title": "a zero-req ^prj without Notes creates the project section",
+      "source_lines": [
+        "---",
+        "type: \"[[project]]\"",
+        "---",
+        "- [ ] #task #prj Pk root ^prj",
+        "",
+        "## Tasks",
+        "- [ ] #task Row a"
+      ],
+      "task": 4,
+      "expect": {
+        "home": "new-notes"
+      }
     }
   ]
 }
