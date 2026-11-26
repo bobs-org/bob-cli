@@ -232,6 +232,24 @@ receipt unchanged. A wake batch reports each task's destination,
 target, actual wake time, and whether that insert crossed the link
 cap. No command forges a notification receipt.
 
+`bob capture-pomodoros --tasks` also publishes this read-only section as
+`snoozed: {rows, next_wake_at}` in its schema-1 agenda payload. It includes
+only today's Asleep, Due, and Blocked rows, with resolved vault-relative
+`route`, `block_id`, clean `title`, four-digit `target`, the target day's
+RFC 3339 `wake_at`, `state`, and the authored child `notes`. A DST-gap wall
+time in a hand-authored row has `wake_at: null`; guarded snooze writes cannot
+create one. `next_wake_at` uses the same earliest-live rule as `bob snooze
+list`, so Blocked rows do not arm it. These rows stay separate from ledger
+links and do not make a task a Today task.
+
+Struck history from today's Snoozed section is matched by resolved note path
+and block ID to resolved open tasks under open Pomodoros. Matching agenda
+items add `woke_at` (`HH:MM`) and `snoozed_target` (`HHMM`); the agenda date
+provides the day. Malformed, unresolved, duplicate-ID, and non-open task
+history is ignored. If hand-authored history repeats an identity, the latest
+actual wake wins, with the later source row breaking equal-time ties. The
+fields are omitted without a match and are not aged out by the CLI.
+
 For example, `bob snooze list -f json` returns a stable envelope such as:
 
 ```json

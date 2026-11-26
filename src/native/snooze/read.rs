@@ -20,6 +20,7 @@ use crate::native::{
 };
 use chrono::NaiveDate;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
@@ -48,6 +49,48 @@ pub(crate) fn read<'a>(
     settings: &note_tasks::NoteTaskSettings,
     mut lookup: impl FnMut(&Path) -> Option<&'a str>,
 ) -> ReadView {
+    read_with_lookup(
+        day,
+        day_path,
+        note_date,
+        clock,
+        note_index,
+        settings,
+        |path| lookup(path).map(Cow::Borrowed),
+    )
+}
+
+/// Owned-text adapter for readers whose note cache can fill during lookup.
+/// The shared view still resolves and scans each distinct note only once.
+pub(crate) fn read_owned(
+    day: &str,
+    day_path: &Path,
+    note_date: NaiveDate,
+    clock: &SnoozeClock,
+    note_index: &NoteIndex,
+    settings: &note_tasks::NoteTaskSettings,
+    mut lookup: impl FnMut(&Path) -> Option<String>,
+) -> ReadView {
+    read_with_lookup(
+        day,
+        day_path,
+        note_date,
+        clock,
+        note_index,
+        settings,
+        |path| lookup(path).map(Cow::Owned),
+    )
+}
+
+fn read_with_lookup<'a>(
+    day: &str,
+    day_path: &Path,
+    note_date: NaiveDate,
+    clock: &SnoozeClock,
+    note_index: &NoteIndex,
+    settings: &note_tasks::NoteTaskSettings,
+    mut lookup: impl FnMut(&Path) -> Option<Cow<'a, str>>,
+) -> ReadView {
     let lines: Vec<&str> = day.lines().collect();
     let section = parse::parse_section(&lines);
     let (mut identities, live_links) =
@@ -75,12 +118,18 @@ pub(crate) fn read<'a>(
                             key.clone(),
                         );
                         identity = Some(key);
-                        if let Some(contents) = lookup(&path) {
-                            let scan = scanned_notes
-                                .entry(path.clone())
-                                .or_insert_with(|| {
-                                    note_tasks::scan(contents, settings)
-                                });
+                        let cached = scanned_notes
+                            .entry(path.clone())
+                            .or_insert_with(|| {
+                                lookup(&path).map(|contents| {
+                                    let scan = note_tasks::scan(
+                                        contents.as_ref(),
+                                        settings,
+                                    );
+                                    (contents, scan)
+                                })
+                            });
+                        if let Some((contents, scan)) = cached {
                             match scan.by_block_id(id) {
                                 note_tasks::BlockIdLookup::Found(task) => {
                                     resolution = ResolutionKind::Found;
@@ -99,7 +148,7 @@ pub(crate) fn read<'a>(
                                         is_event: is_task
                                             && event_task::event_task_at(
                                                 &path,
-                                                contents,
+                                                contents.as_ref(),
                                                 task.line_index,
                                             )
                                             .is_some(),

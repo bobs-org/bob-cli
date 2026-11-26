@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::Timelike;
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,
@@ -24,6 +25,7 @@ use super::{
     capture_pomodoros_agenda, config, env as bob_env, markdown, note_tasks,
     plan_budget, pomodoro, pomodoro_homes,
     pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
+    snooze::{self, when::SnoozeClock},
     style::{display_width, pad_right, Styler},
 };
 
@@ -92,7 +94,12 @@ notes, the resolved Task Link lineup with operator numbers, clean titles, \
 statuses, task-block lines, event chips for links to today's Event Tasks, and \
 ledger notes, and a derived homes object from those Task Links. When the day \
 has an `## Events` section, the response also includes its calendar rows and \
-timing hints. Every named entry carries its component ThemeRefs in `themes`. \
+timing hints. With --tasks, the top level also adds \
+`snoozed: {rows, next_wake_at}` for today's Asleep, Due, and Blocked Snoozed \
+tasks. Snoozed rows include resolved routes, target and zoned wake instant, \
+state, and authored notes; they stay separate from Pomodoro lineups. Matching \
+struck history adds optional `woke_at` and `snoozed_target` to resolved open \
+task items. Every named entry carries its component ThemeRefs in `themes`. \
 Each selectable entry with a non-empty slug also carries Bob's canonical \
 `start_token` so clients can render its start hint without composing the grammar. \
 Human output appends a dim home chip with its forecast or attributed dot \
@@ -222,6 +229,8 @@ struct CapturePomodorosResult {
     plan_budget: Option<CapturePomodorosPlanBudget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     events: Option<capture_pomodoros_agenda::AgendaEvents>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snoozed: Option<capture_pomodoros_agenda::AgendaSnoozed>,
 }
 
 /// Saved daily-plan budget for idle agenda clients. Capture's before/after
@@ -314,6 +323,9 @@ fn list_capture_pomodoros(
                 completed_summary: empty_summary(),
                 plan_budget: None,
                 events: None,
+                snoozed: request
+                    .include_tasks
+                    .then(capture_pomodoros_agenda::AgendaSnoozed::empty),
             });
         }
         Err(error) => {
@@ -400,20 +412,32 @@ fn list_capture_pomodoros(
         })
         .cloned()
         .collect();
-    let agenda = if request.include_tasks {
-        let next_line = next_future_pomodoro(&scan).map(|entry| entry.line);
-        let mut notes = capture_pomodoros_agenda::AgendaNotes::new(
+    let daily_path = PathBuf::from(&relative_day_file);
+    let snooze_clock = request.include_tasks.then(snooze_clock);
+    let mut agenda_notes = request.include_tasks.then(|| {
+        capture_pomodoros_agenda::AgendaNotes::new(
             &request.bob_dir,
             &day_file,
             &contents,
-        );
+        )
+    });
+    let snoozed_view = match (agenda_notes.as_mut(), snooze_clock.as_ref()) {
+        (Some(notes), Some(clock)) => {
+            Some(notes.snoozed_view(&contents, &daily_path, agenda_date, clock))
+        }
+        _ => None,
+    };
+    let agenda = if request.include_tasks {
+        let next_line = next_future_pomodoro(&scan).map(|entry| entry.line);
         Some(capture_pomodoros_agenda::agenda_entries(
-            &mut notes,
+            agenda_notes.as_mut().expect("agenda notes for --tasks"),
             &contents,
             &listed,
             next_line,
             agenda_date,
             &day_file,
+            snoozed_view.as_ref(),
+            snooze_clock.is_some_and(|clock| clock.date == agenda_date),
         ))
     } else {
         None
@@ -429,10 +453,16 @@ fn list_capture_pomodoros(
             &day_file,
         )
     });
+    let snoozed = agenda_notes
+        .as_ref()
+        .zip(snooze_clock.as_ref())
+        .zip(snoozed_view.as_ref())
+        .map(|((notes, clock), view)| {
+            notes.snoozed_payload(&contents, agenda_date, clock, view)
+        });
     let completed_summary = request
         .include_tasks
         .then(|| completed_summary_for(&scan.entries, &contents));
-    let daily_path = PathBuf::from(&relative_day_file);
     let mut homes_resolver = request.include_tasks.then(|| {
         pomodoro_homes::HomeResolver::new(pomodoro_homes::DiskHomeSource::new(
             &request.bob_dir,
@@ -540,7 +570,21 @@ fn list_capture_pomodoros(
         completed_summary,
         plan_budget,
         events,
+        snoozed,
     })
+}
+
+fn snooze_clock() -> SnoozeClock {
+    let wall = bob_env::current_datetime();
+    let zone = bob_env::configured_timezone()
+        .or_else(snooze::host_timezone)
+        .unwrap_or(chrono_tz::UTC);
+    SnoozeClock {
+        date: wall.date(),
+        now_minutes: u16::try_from(wall.hour() * 60 + wall.minute())
+            .unwrap_or(u16::MAX),
+        zone,
+    }
 }
 
 fn attributed_minutes(entry: &PomodoroEntry, contents: &str) -> Option<u32> {
@@ -2031,6 +2075,7 @@ mod tests {
             completed_summary: None,
             plan_budget: None,
             events: None,
+            snoozed: None,
         };
 
         let value: serde_json::Value =
@@ -2272,6 +2317,7 @@ mod tests {
             completed_summary: None,
             plan_budget: None,
             events: None,
+            snoozed: None,
         };
         let human = human_success(&result, &Styler::plain());
         assert!(human.contains("warning - watch out"));

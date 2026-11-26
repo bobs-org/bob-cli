@@ -1,0 +1,33 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0
+  },
+  "count": 0,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "headline": null,
+  "intentions": [],
+  "max_task_link_count": 0,
+  "ok": true,
+  "pomodoros": [],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "snoozed": {
+    "next_wake_at": "2026-08-28T15:30:00-04:00",
+    "rows": [
+      {
+        "block_id": "later",
+        "notes": [],
+        "route": "tasks.md",
+        "state": "asleep",
+        "target": "1530",
+        "title": "Later work",
+        "wake_at": "2026-08-28T15:30:00-04:00"
+      }
+    ]
+  },
+  "warnings": [
+    "Bob daily note has no Pomodoros section: /Users/test/bob/vault/2026/20260828.md"
+  ]
+}

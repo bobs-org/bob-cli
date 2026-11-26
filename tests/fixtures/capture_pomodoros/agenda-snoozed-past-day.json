@@ -1,0 +1,99 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0
+  },
+  "count": 1,
+  "date": "2026-08-27",
+  "day_file": "/Users/test/bob/vault/2026/20260827.md",
+  "headline": null,
+  "intentions": [],
+  "max_task_link_count": 1,
+  "ok": true,
+  "plan_budget": {
+    "links": {
+      "cap": 10,
+      "count": 1,
+      "off_clock": 0,
+      "over": false
+    },
+    "status": "ok"
+  },
+  "pomodoros": [
+    {
+      "child_count": 1,
+      "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 1
+          }
+        ],
+        "state": "forecast"
+      },
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "later",
+          "block_link": "[[tasks#^later]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 5,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Next",
+          "status_symbol": "*",
+          "status_type": "ON_HOLD",
+          "text": "Later work",
+          "warning": null
+        }
+      ],
+      "line": 4,
+      "name": "WORK",
+      "notes": [],
+      "placeholder": true,
+      "ref": "4:9a747362",
+      "retired_link_count": 0,
+      "role": "next",
+      "selectable": true,
+      "slug": "work",
+      "start_token": "=work",
+      "starts_at": null,
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "themes": [
+        {
+          "hue": "blue",
+          "hue_source": "hash",
+          "key": "work",
+          "name": "WORK"
+        }
+      ],
+      "time_range": null
+    }
+  ],
+  "relative_day_file": "2026/20260827.md",
+  "schema_version": 1,
+  "snoozed": {
+    "next_wake_at": null,
+    "rows": []
+  },
+  "warnings": []
+}

@@ -1,0 +1,111 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0
+  },
+  "count": 1,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "headline": null,
+  "intentions": [],
+  "max_task_link_count": 0,
+  "ok": true,
+  "plan_budget": {
+    "links": {
+      "cap": 10,
+      "count": 0,
+      "off_clock": 0,
+      "over": false
+    },
+    "status": "ok"
+  },
+  "pomodoros": [
+    {
+      "child_count": 0,
+      "ends_at": null,
+      "homes": {
+        "chip": null,
+        "hue": null,
+        "kind": "unlinked",
+        "label": "",
+        "parts": [],
+        "state": "forecast"
+      },
+      "is_current": false,
+      "items": [],
+      "line": 4,
+      "name": "FOCUS",
+      "notes": [],
+      "placeholder": true,
+      "ref": "4:d8711593",
+      "retired_link_count": 0,
+      "role": "next",
+      "selectable": true,
+      "slug": "focus",
+      "start_token": "=focus",
+      "starts_at": null,
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "themes": [
+        {
+          "hue": "yellow",
+          "hue_source": "hash",
+          "key": "focus",
+          "name": "FOCUS"
+        }
+      ],
+      "time_range": null
+    }
+  ],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "snoozed": {
+    "next_wake_at": "2026-08-28T09:00:00-04:00",
+    "rows": [
+      {
+        "block_id": "due",
+        "notes": [],
+        "route": "tasks.md",
+        "state": "due",
+        "target": "0900",
+        "title": "Due task",
+        "wake_at": "2026-08-28T09:00:00-04:00"
+      },
+      {
+        "block_id": "asleep",
+        "notes": [
+          {
+            "depth": 1,
+            "kind": "bullet",
+            "log": null,
+            "status_symbol": null,
+            "text": "Remember the first step."
+          },
+          {
+            "depth": 2,
+            "kind": "bullet",
+            "log": null,
+            "status_symbol": null,
+            "text": "Open the notebook."
+          }
+        ],
+        "route": "tasks.md",
+        "state": "asleep",
+        "target": "1530",
+        "title": "Asleep task",
+        "wake_at": "2026-08-28T15:30:00-04:00"
+      },
+      {
+        "block_id": "blocked",
+        "notes": [],
+        "route": "tasks.md",
+        "state": "blocked",
+        "target": "1900",
+        "title": "Blocked task",
+        "wake_at": "2026-08-28T19:00:00-04:00"
+      }
+    ]
+  },
+  "warnings": []
+}

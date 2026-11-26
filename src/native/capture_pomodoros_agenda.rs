@@ -41,6 +41,7 @@ use super::{
     meetings::{agenda_meetings, MeetingNotesState},
     note_tasks, pomodoro,
     pomodoro_homes::{ClockSource, DiskHomeSource, HomeResolver, Hue},
+    snooze::{self, read::ReadView, state::TaskIdentity, when::SnoozeClock},
     task_root::{self, TaskRootState},
     vault_links::{LinkResolution, VaultLinkResolver},
 };
@@ -137,6 +138,41 @@ pub(crate) struct AgendaItem {
     pub(crate) warning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) event: Option<AgendaItemEvent>,
+    /// Snooze history matched by resolved task identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) woke_at: Option<String>,
+    /// Four-digit target from the matched Snoozed row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) snoozed_target: Option<String>,
+}
+
+/// Later-today rows for idle agenda clients. This is an additive schema-1
+/// view; it does not add the rows to Pomodoro lineups or Today.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaSnoozed {
+    pub(crate) rows: Vec<AgendaSnoozedRow>,
+    pub(crate) next_wake_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaSnoozedRow {
+    pub(crate) title: String,
+    pub(crate) route: String,
+    pub(crate) block_id: String,
+    pub(crate) target: String,
+    /// Null only for a hand-authored wall time that falls in a DST gap.
+    pub(crate) wake_at: Option<String>,
+    pub(crate) state: String,
+    pub(crate) notes: Vec<AgendaLine>,
+}
+
+impl AgendaSnoozed {
+    pub(crate) fn empty() -> Self {
+        Self {
+            rows: Vec::new(),
+            next_wake_at: None,
+        }
+    }
 }
 
 /// Event details attached to a Task Link that targets today's Event Task.
@@ -438,7 +474,12 @@ impl<'a> AgendaNotes<'a> {
         path: &Path,
         filter_cleared: bool,
     ) -> Option<(String, note_tasks::NoteTaskScan)> {
-        let key = (path.to_path_buf(), filter_cleared);
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.bob_dir.join(path)
+        };
+        let key = (absolute.clone(), filter_cleared);
         if let Some(cached) = self.cache.get(&key) {
             return cached.clone();
         }
@@ -446,7 +487,7 @@ impl<'a> AgendaNotes<'a> {
         {
             self.reads += 1;
         }
-        let contents = match fs::read_to_string(path) {
+        let contents = match fs::read_to_string(&absolute) {
             Ok(contents) => contents,
             Err(_) => {
                 self.cache.insert(key, None);
@@ -458,6 +499,113 @@ impl<'a> AgendaNotes<'a> {
         self.cache
             .insert(key, Some((contents.clone(), scan.clone())));
         Some((contents, scan))
+    }
+
+    /// Resolve today's Snoozed section through the shared snapshot reader.
+    /// The agenda's resolver and note cache remain the only vault read path.
+    pub(crate) fn snoozed_view(
+        &mut self,
+        contents: &str,
+        day_relative: &Path,
+        note_date: NaiveDate,
+        clock: &SnoozeClock,
+    ) -> ReadView {
+        let index = self.resolver.note_index().clone();
+        let settings = self.settings.clone();
+        snooze::read::read_owned(
+            contents,
+            day_relative,
+            note_date,
+            clock,
+            &index,
+            &settings,
+            |path| self.note_for(path, false).map(|(contents, _)| contents),
+        )
+    }
+
+    /// Convert the shared classifier view into the separate agenda block.
+    pub(crate) fn snoozed_payload(
+        &self,
+        contents: &str,
+        note_date: NaiveDate,
+        clock: &SnoozeClock,
+        view: &ReadView,
+    ) -> AgendaSnoozed {
+        let lines: Vec<&str> = contents.lines().collect();
+        let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+        let reqs = super::task_reqs::req_line_map(contents, &self.settings);
+        let mut rows = view
+            .rows
+            .iter()
+            .zip(&view.classified.rows)
+            .filter_map(|(detail, classified)| {
+                if !matches!(
+                    classified.state,
+                    snooze::state::RowState::Asleep
+                        | snooze::state::RowState::Due
+                        | snooze::state::RowState::Blocked
+                ) {
+                    return None;
+                }
+                let identity = detail.identity.as_ref()?;
+                let title = detail.title.clone()?;
+                let target = classified.hhmm.clone()?;
+                let minutes = classified.minutes?;
+                Some((
+                    detail.parsed.line_index,
+                    AgendaSnoozedRow {
+                        title,
+                        route: self.relative_target(&identity.route),
+                        block_id: identity.block_id.clone(),
+                        target,
+                        wake_at: snooze::when::resolve_snooze_target(
+                            note_date, minutes, clock.zone,
+                        )
+                        .map(|resolved| resolved.rfc3339),
+                        state: classified.state.as_str().to_string(),
+                        notes: self
+                            .snoozed_row_notes(&lines, &fenced, detail, &reqs),
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| {
+            left.1
+                .target
+                .cmp(&right.1.target)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        AgendaSnoozed {
+            rows: rows.into_iter().map(|(_, row)| row).collect(),
+            next_wake_at: view.classified.next_wake_at.clone(),
+        }
+    }
+
+    fn snoozed_row_notes(
+        &self,
+        lines: &[&str],
+        fenced: &BTreeSet<usize>,
+        detail: &snooze::read::RowDetail,
+        reqs: &BTreeMap<usize, super::task_reqs::ReqLineJson>,
+    ) -> Vec<AgendaLine> {
+        let start = detail.parsed.line_index.saturating_add(1);
+        let end = detail.parsed.children_end.min(lines.len());
+        if start >= end {
+            return Vec::new();
+        }
+        let range = start..end;
+        let depths =
+            block_depths(lines, detail.parsed.line_index, range.clone());
+        build_lines(
+            lines,
+            fenced,
+            &depths,
+            range,
+            &self.settings.global_filter,
+            &self.settings.global_filter,
+            false,
+            reqs,
+        )
     }
 
     #[cfg(test)]
@@ -510,6 +658,8 @@ impl<'a> AgendaNotes<'a> {
                 ledger_notes: ledger_notes.clone(),
                 warning,
                 event: None,
+                woke_at: None,
+                snoozed_target: None,
             };
         let filter_cleared = marker == TaskLinkMarker::Embedded;
         let day_path = context.day_path;
@@ -595,6 +745,8 @@ impl<'a> AgendaNotes<'a> {
                     } else {
                         None
                     },
+                    woke_at: None,
+                    snoozed_target: None,
                 }
             }
             note_tasks::BlockIdLookup::NotATask {
@@ -762,11 +914,13 @@ pub(crate) fn agenda_entries(
     next_line: Option<usize>,
     date: NaiveDate,
     day_path: &Path,
+    snoozed: Option<&ReadView>,
+    snooze_is_today: bool,
 ) -> Vec<AgendaEntry> {
     let spans = line_spans(contents);
     let line_text: Vec<&str> = spans.iter().map(|span| span.text).collect();
     let fenced = markdown::fenced_lines(&line_text, 0..line_text.len());
-    entries
+    let mut agenda = entries
         .iter()
         .map(|entry| {
             let role = agenda_role(entry, next_line);
@@ -846,7 +1000,76 @@ pub(crate) fn agenda_entries(
                 items,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if let Some(view) = snoozed {
+        attach_snooze_history(&mut agenda, entries, view, snooze_is_today);
+    }
+    agenda
+}
+
+fn attach_snooze_history(
+    agenda: &mut [AgendaEntry],
+    pomodoros: &[super::capture_pomodoros::PomodoroEntry],
+    view: &ReadView,
+    is_today: bool,
+) {
+    if !is_today {
+        return;
+    }
+    let mut latest =
+        BTreeMap::<TaskIdentity, (u16, usize, String, String)>::new();
+    for (source_order, (detail, classified)) in
+        view.rows.iter().zip(&view.classified.rows).enumerate()
+    {
+        if detail.parsed.kind != snooze::parse::SnoozeRowKind::History
+            || detail.title.is_none()
+            || classified.state != snooze::state::RowState::History
+        {
+            continue;
+        }
+        let (Some(identity), Some(woke_minutes), Some(woke_at), Some(target)) = (
+            detail.identity.clone(),
+            detail.parsed.woke_minutes,
+            detail.parsed.woke_hhmm.clone(),
+            detail.parsed.hhmm.clone(),
+        ) else {
+            continue;
+        };
+        let candidate = (woke_minutes, source_order, woke_at, target);
+        let replace = latest.get(&identity).is_none_or(|current| {
+            (candidate.0, candidate.1) >= (current.0, current.1)
+        });
+        if replace {
+            latest.insert(identity, candidate);
+        }
+    }
+
+    for (pomodoro, entry) in pomodoros.iter().zip(agenda) {
+        if pomodoro.state != super::capture_pomodoros::PomodoroState::Open {
+            continue;
+        }
+        for item in &mut entry.items {
+            if item.resolution != AgendaResolution::Resolved
+                || !matches!(
+                    item.status_type.as_deref(),
+                    Some("TODO" | "IN_PROGRESS" | "ON_HOLD")
+                )
+            {
+                continue;
+            }
+            let Some(route) = item.relative_target.as_ref() else {
+                continue;
+            };
+            let identity = TaskIdentity {
+                route: PathBuf::from(route),
+                block_id: item.block_id.clone(),
+            };
+            if let Some((_, _, woke_at, target)) = latest.get(&identity) {
+                item.woke_at = Some(woke_at.clone());
+                item.snoozed_target = Some(target.clone());
+            }
+        }
+    }
 }
 
 /// Build the additive Events block for a day note that has an `## Events`
@@ -1824,6 +2047,8 @@ mod tests {
             next_line,
             date,
             &day_path,
+            None,
+            false,
         );
         (date, built)
     }
@@ -2404,7 +2629,7 @@ mod tests {
         let listed: Vec<_> = found.entries.to_vec();
         let mut notes = AgendaNotes::new(&vault, &day_path, day);
         let built = agenda_entries(
-            &mut notes, day, &listed, next_line, date, &day_path,
+            &mut notes, day, &listed, next_line, date, &day_path, None, false,
         );
         assert_eq!(built[0].starts_at.as_deref(), Some("2026-10-09T23:30"));
         assert_eq!(built[0].ends_at.as_deref(), Some("2026-10-10T00:10"));
@@ -2458,7 +2683,7 @@ mod tests {
             .collect();
         let mut notes = AgendaNotes::new(&vault, &day_path, &day);
         let built = agenda_entries(
-            &mut notes, &day, &listed, next_line, date, &day_path,
+            &mut notes, &day, &listed, next_line, date, &day_path, None, false,
         );
         assert_eq!(built.len(), 10);
         assert_eq!(notes.test_reads(), 8);
@@ -2510,7 +2735,7 @@ mod tests {
             .collect();
         let mut notes = AgendaNotes::new(&vault, &day_path, &day);
         let built = agenda_entries(
-            &mut notes, &day, &listed, next_line, date, &day_path,
+            &mut notes, &day, &listed, next_line, date, &day_path, None, false,
         );
         let elapsed = start.elapsed().expect("clock");
         assert_eq!(built.len(), 25);

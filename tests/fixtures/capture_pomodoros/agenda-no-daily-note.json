@@ -13,6 +13,10 @@
   "pomodoros": [],
   "relative_day_file": "2026/20260828.md",
   "schema_version": 1,
+  "snoozed": {
+    "next_wake_at": null,
+    "rows": []
+  },
   "warnings": [
     "Bob daily note does not exist: /Users/test/bob/vault/2026/20260828.md"
   ]

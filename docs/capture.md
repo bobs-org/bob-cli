@@ -11332,6 +11332,26 @@ capture preview block lines (`depth` is the recognizer depth; `state` is
 and `text` stay unchanged for older clients. The idle agenda draws the
 diamond from this annotation and never infers a requirement from `[ ]`.
 
+With `--tasks`, the top level also includes `snoozed`, with `rows` and
+`next_wake_at`. The block is present even when the daily note has no Snoozed
+section; then `rows` is empty and `next_wake_at` is null. Each row is an
+Asleep, Due, or Blocked item from today's `## Snoozed`, sorted by target and
+source order, with `title`, resolved vault-relative `route`, `block_id`,
+four-digit `target`, RFC 3339 `wake_at`, `state`, and authored child `notes`
+rendered as agenda display lines. `wake_at` uses Bob's timezone and the
+snooze fold/gap policy; it is null for a hand-authored target in a DST gap.
+`next_wake_at` is the earliest live target and excludes Blocked rows. The
+block stays separate from Pomodoro items and does not add tasks to Today.
+
+When a well-formed struck history row from today's Snoozed section resolves
+to an open task linked by an open Pomodoro, the matching `items[]` entry adds
+`woke_at` (`HH:MM`) and `snoozed_target` (`HHMM`). Matching uses resolved
+vault-relative route plus block ID, so link aliases and alternate spellings
+work. Malformed, unresolved, duplicate-ID, and non-open task history is
+ignored. If multiple hand-authored history rows match, the latest wake time
+wins and a later source row wins an equal-time tie. These optional facts do
+not expire in the CLI payload and are omitted without a match.
+
 An item linked to an Event Task in today's daily note also carries `event` with
 its `time_range`, naive `starts_at`/`ends_at`, `off_clock` and deprecated
 `untracked` flags, and clean `title`; buffered Event Tasks add `buffer` with

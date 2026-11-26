@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
 };
 
-use chrono::{NaiveDate, TimeZone};
+use chrono::NaiveDate;
 use chrono_tz::Tz;
 
 use super::when::format_hhmm;
@@ -339,7 +339,6 @@ fn next_wake_at(
     rows: &[ClassifiedRow],
     input: &ClassifyInput,
 ) -> Option<String> {
-    use chrono::LocalResult;
     // Earliest live target; asleep rows sort before due rows only by
     // target time, and ties use source order. Blocked and ignored rows
     // never feed the timer.
@@ -357,16 +356,8 @@ fn next_wake_at(
         }
     }
     let (minutes, _) = best?;
-    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(
-        u32::from(minutes) * 60,
-        0,
-    )?;
-    let naive = input.today.and_time(time);
-    match input.zone.from_local_datetime(&naive) {
-        LocalResult::Single(zoned) => Some(zoned.to_rfc3339()),
-        LocalResult::Ambiguous(first, _) => Some(first.to_rfc3339()),
-        LocalResult::None => None,
-    }
+    super::when::resolve_snooze_target(input.today, minutes, input.zone)
+        .map(|resolved| resolved.rfc3339)
 }
 
 #[cfg(test)]

@@ -290,19 +290,25 @@ fn future_today(
     if minutes <= clock.now_minutes {
         return Err(WhenRefusal::Past);
     }
-    zoned_time(clock, minutes).ok_or(WhenRefusal::DstGap)
+    resolve_snooze_target(clock.date, minutes, clock.zone)
+        .ok_or(WhenRefusal::DstGap)
 }
 
-/// Build the zoned instant for `minutes` on `clock.date`, choosing the
-/// first occurrence of a folded wall time. Returns `None` for a DST gap.
-fn zoned_time(clock: SnoozeClock, minutes: u16) -> Option<ResolvedTime> {
+/// Resolve a row's target wall time on its note date. This applies the
+/// same fold/gap policy as snooze input: choose the first folded occurrence
+/// and return `None` when the wall time falls in a DST gap.
+pub(crate) fn resolve_snooze_target(
+    date: NaiveDate,
+    minutes: u16,
+    zone: Tz,
+) -> Option<ResolvedTime> {
     use chrono::LocalResult;
     let time = NaiveTime::from_num_seconds_from_midnight_opt(
         u32::from(minutes) * 60,
         0,
     )?;
-    let naive = clock.date.and_time(time);
-    let zoned = match clock.zone.from_local_datetime(&naive) {
+    let naive = date.and_time(time);
+    let zoned = match zone.from_local_datetime(&naive) {
         LocalResult::Single(zoned) => zoned,
         LocalResult::Ambiguous(first, _second) => first,
         LocalResult::None => return None,
@@ -312,6 +318,10 @@ fn zoned_time(clock: SnoozeClock, minutes: u16) -> Option<ResolvedTime> {
         hhmm: format_hhmm(minutes),
         rfc3339: zoned.to_rfc3339(),
     })
+}
+
+fn zoned_time(clock: SnoozeClock, minutes: u16) -> Option<ResolvedTime> {
+    resolve_snooze_target(clock.date, minutes, clock.zone)
 }
 
 #[cfg(test)]

@@ -1,0 +1,139 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0
+  },
+  "count": 1,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "headline": null,
+  "intentions": [],
+  "max_task_link_count": 3,
+  "ok": true,
+  "plan_budget": {
+    "links": {
+      "cap": 10,
+      "count": 3,
+      "off_clock": 0,
+      "over": false
+    },
+    "status": "ok"
+  },
+  "pomodoros": [
+    {
+      "child_count": 3,
+      "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "deep-fix",
+          "block_link": "[[tasks#^deep-fix]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 5,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "snoozed_target": "1600",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Deep fix",
+          "warning": null,
+          "woke_at": "10:15"
+        },
+        {
+          "block_id": "closed-task",
+          "block_link": "[[tasks#^closed-task]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 6,
+          "ledger_notes": [],
+          "line": 2,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Done",
+          "status_symbol": "x",
+          "status_type": "DONE",
+          "text": "Closed task",
+          "warning": null
+        },
+        {
+          "block_id": "dupe",
+          "block_link": "[[tasks#^dupe]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 7,
+          "ledger_notes": [],
+          "line": null,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "duplicate_block",
+          "status_name": null,
+          "status_symbol": null,
+          "status_type": null,
+          "text": null,
+          "warning": "tasks.md contains duplicate ^dupe IDs (2 lines)"
+        }
+      ],
+      "line": 4,
+      "name": "WORK",
+      "notes": [],
+      "placeholder": true,
+      "ref": "4:9a747362",
+      "retired_link_count": 0,
+      "role": "next",
+      "selectable": true,
+      "slug": "work",
+      "start_token": "=work",
+      "starts_at": null,
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "themes": [
+        {
+          "hue": "blue",
+          "hue_source": "hash",
+          "key": "work",
+          "name": "WORK"
+        }
+      ],
+      "time_range": null
+    }
+  ],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "snoozed": {
+    "next_wake_at": null,
+    "rows": []
+  },
+  "warnings": []
+}
