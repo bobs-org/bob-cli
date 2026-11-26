@@ -26,6 +26,11 @@ no clock) and not a project-frontmatter `snooze:` hold (a project-level
 deferral). Those keep their names and behavior; this contract owns only
 the daily-note `## Snoozed` section described here.
 
+Display in Obsidian — the definition clock, woken pill, row paint, heading
+summary, and plan chip — is a separate contract: [Snooze
+marks](snooze-marks.md). This page owns behavior and JSON; that page owns
+pixels and the executable `SM-*` vectors.
+
 ## Row grammar
 
 The section is the first `## Snoozed` H2 in the note. It ends at the next
@@ -324,4 +329,7 @@ language-neutral schemas (`schemas` in the fixture file):
 
 Plugins copy the fixture byte-for-byte into their
 `scripts/fixtures/snooze/` and run the `rows`, `when`, `live`, and
-`cleanup` groups verbatim.
+`cleanup` groups verbatim. Display conformance is a second fixture,
+`tests/fixtures/snooze/marks.json`, owned by [Snooze
+marks](snooze-marks.md); plugins copy it the same way and run its
+`definition`, `woken`, `rows`, and `plan` groups verbatim.

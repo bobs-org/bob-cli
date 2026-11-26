@@ -65,6 +65,7 @@ https://bobs-org.github.io/mail-link-marks/
 https://bobs-org.github.io/mail-close-card/
 https://bobs-org.github.io/task-tag-marks/
 https://bobs-org.github.io/today-marks/
+https://bobs-org.github.io/snooze-marks/
 https://bobs-org.github.io/task-relations/
 # Deep links emitted by .github/workflows/release.yml.
 https://bobs-org.github.io/develop/releases/pause-and-resume-releases/

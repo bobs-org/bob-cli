@@ -61,6 +61,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Task drawers](../task-drawers.md) — Task drawer headers: dual recognition, identity, Notes home, Obsidian trays and typing, limited title round-trip, source ranges, and marker JSON
 - [Mail Close Card](../mail-close-card.md) — Mail Close Card: the shared Gmail Task close model, copy, digest vectors, and per-surface confirmation contract
 - [Snoozed tasks: later-today Task Links](../snooze.md) — Snoozed tasks: later-today Task Links, the ## Snoozed row grammar, the injected zoned time grammar, resolved-state classification, live_targets, and conformance vectors
+- [Snooze marks](../snooze-marks.md) — Snooze marks: the display-only alarm clock, woken pill, Snoozed row paint, heading summary, plan chip, and SM-* conformance vectors
 
 ## References
 

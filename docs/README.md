@@ -92,6 +92,7 @@ queued intake; full scans also synchronize annotations. The
 | [mail-close-card.md](mail-close-card.md) | Mail Close Card: the shared Gmail Task close model, copy, digest vectors, and per-surface confirmation contract |
 | [meeting-notes.md](meeting-notes.md) | `bob ref meet` meeting notes as a `meetings` reference, with recap ownership, overwrite, and queue |
 | [snooze.md](snooze.md) | Snoozed tasks: later-today Task Links, the ## Snoozed row grammar, the injected zoned time grammar, resolved-state classification, live_targets, and conformance vectors |
+| [snooze-marks.md](snooze-marks.md) | Snooze marks: the display-only alarm clock, woken pill, Snoozed row paint, heading summary, plan chip, and SM-* conformance vectors |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and

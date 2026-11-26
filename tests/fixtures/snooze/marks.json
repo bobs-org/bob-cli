@@ -1,0 +1,3069 @@
+{
+  "docs": "docs/snooze-marks.md § Conformance vectors. Display-only snooze marks: the definition alarm clock, the woken link pill, Snoozed row paint with heading summaries, and the bob-plan snooze chip. Each vector pins an explicit clock, source facts, task and resolver facts, and the expected display model. Later bob-ledger-tools phases copy this file byte-for-byte into their fixture directory and execute their group's inputs and expected values verbatim, with BOB_CLI_DIR pointing at this bob-cli checkout; no test substitutes simplified local data.",
+  "groups": {
+    "definition": [
+      {
+        "expected": {
+          "mark": "clock",
+          "navigates_to": "snoozed-row",
+          "text": "⏰ 15:30",
+          "tone": "indigo",
+          "tooltip": "Snoozed until 15:30 · in 2h 30m\nCtrl-click to open the Snoozed row"
+        },
+        "id": "SM-D01",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "clock",
+          "navigates_to": "snoozed-row",
+          "text": "⏰ 15:30 · due",
+          "tone": "amber",
+          "tooltip": "Snoozed until 15:30 · due — waking\nCtrl-click to open the Snoozed row"
+        },
+        "id": "SM-D02",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "16:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "due",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "clock",
+          "navigates_to": "snoozed-row",
+          "text": "⏰ 15:30 · due",
+          "tone": "amber",
+          "tooltip": "Snoozed until 15:30 · due — waking\nCtrl-click to open the Snoozed row"
+        },
+        "id": "SM-D03",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "15:30",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "due",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [/] #task Email Dan ^email-dan",
+            "status": "/"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "clock",
+          "navigates_to": "snoozed-row",
+          "text": "⏰ 15:30",
+          "tone": "muted",
+          "tooltip": "Snoozed until 15:30 · waits on prerequisites\nCtrl-click to open the Snoozed row"
+        },
+        "id": "SM-D04",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "blocked",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [?] #task Email Dan ^email-dan",
+            "status": "?"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "tomato",
+          "navigates_to": "task-link",
+          "text": "🍅",
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D05",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": true,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D06",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": "ready",
+            "state": "none",
+            "target": null
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [ ] #task Email Dan ^email-dan",
+            "status": " "
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D07",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": "missing",
+            "state": "none",
+            "target": null
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D08",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": "event_task",
+            "state": "none",
+            "target": null
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Interview ^yogi",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D09",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": true,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D10",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": "done",
+            "state": "none",
+            "target": null
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [x] #task Email Dan ^email-dan",
+            "status": "x"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D11",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": true,
+            "path": "2026/20261105.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D12",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": true
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D13",
+        "input": {
+          "cache_ready": false,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D14",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": false,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D15",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": false
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D16",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": false,
+            "today_marks": false
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "clock",
+          "navigates_to": "snoozed-row",
+          "text": "⏰ 15:30",
+          "tone": "indigo",
+          "tooltip": "Snoozed until 15:30 · in 2h 30m\nCtrl-click to open the Snoozed row"
+        },
+        "id": "SM-D17",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan|Dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "clock",
+          "navigates_to": "snoozed-row",
+          "text": "⏰ 15:30",
+          "tone": "indigo",
+          "tooltip": "Snoozed until 15:30 · in 2h 30m\nCtrl-click to open the Snoozed row"
+        },
+        "id": "SM-D18",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D19",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": true,
+            "in_fence": false,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "mark": "none",
+          "navigates_to": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-D20",
+        "input": {
+          "cache_ready": true,
+          "host": {
+            "is_daily": false,
+            "path": "job.md",
+            "rendered_in_daily": false
+          },
+          "now": "13:00",
+          "snooze": {
+            "link_spelling": "[[job#^email-dan]]",
+            "reason": null,
+            "state": "asleep",
+            "target": "1530"
+          },
+          "task": {
+            "duplicate_id": false,
+            "in_code": false,
+            "in_fence": true,
+            "is_task": true,
+            "line": "- [*] #task Email Dan ^email-dan",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "today_link": false,
+          "toggles": {
+            "snooze_marks": true,
+            "today_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "mark",
+        "runners": [
+          "js"
+        ]
+      }
+    ],
+    "plan": [
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 10,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 15:30",
+          "tone": "indigo",
+          "tooltip": "2 snoozed · next wakes 15:30 · not counted in TODAY · 9/11 when all wake"
+        },
+        "id": "SM-P01",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 10,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 15:30",
+          "tone": "amber",
+          "tooltip": "2 snoozed · 1 due · next wakes 15:30 · not counted in TODAY · 9/11 when all wake"
+        },
+        "id": "SM-P02",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "16:30",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "due",
+              "target": "1600"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 8,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 1",
+          "tone": "indigo",
+          "tooltip": "1 snoozed · 1 blocked · not counted in TODAY · 9/9 when all wake"
+        },
+        "id": "SM-P03",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "c",
+              "on_clock": true,
+              "state": "blocked",
+              "target": "1700"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 8,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 15:30",
+          "tone": "indigo",
+          "tooltip": "2 snoozed · next wakes 15:30 · not counted in TODAY · 9/9 when all wake"
+        },
+        "id": "SM-P04",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": false,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": false,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": false,
+          "forecast": {
+            "cap": 10,
+            "count": 8,
+            "over": false
+          },
+          "lint": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-P05",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": false,
+          "forecast": {
+            "cap": 10,
+            "count": 8,
+            "over": false
+          },
+          "lint": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-P06",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [
+            {
+              "id": "x",
+              "reason": "ready"
+            },
+            {
+              "id": "y",
+              "reason": "history"
+            }
+          ],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 10,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 15:30",
+          "tone": "indigo",
+          "tooltip": "2 snoozed · next wakes 15:30 · not counted in TODAY · 9/11 when all wake"
+        },
+        "id": "SM-P07",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 11,
+            "over": true
+          },
+          "lint": "snooze_wake_would_exceed_cap",
+          "text": "⏰ 2 · 15:30",
+          "tone": "indigo",
+          "tooltip": "2 snoozed · next wakes 15:30 · not counted in TODAY · 9/11 when all wake"
+        },
+        "id": "SM-P08",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 9,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 10,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 15:30",
+          "tone": "indigo",
+          "tooltip": "2 snoozed · next wakes 15:30 · not counted in TODAY · 9/11 when all wake"
+        },
+        "id": "SM-P09",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 10,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 15:30",
+          "tone": "indigo",
+          "tooltip": "2 snoozed · next wakes 15:30 · not counted in TODAY · 9/11 when all wake"
+        },
+        "id": "SM-P10",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [
+            {
+              "id": "z",
+              "reason": "already_linked"
+            }
+          ],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 9,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 16:00",
+          "tone": "amber",
+          "tooltip": "2 snoozed · 1 due · 1 blocked · next wakes 16:00 · not counted in TODAY · 9/10 when all wake"
+        },
+        "id": "SM-P11",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "16:30",
+          "queue": [
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "due",
+              "target": "1600"
+            },
+            {
+              "id": "c",
+              "on_clock": true,
+              "state": "blocked",
+              "target": "1700"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 4,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 1 · 15:30",
+          "tone": "indigo",
+          "tooltip": "1 snoozed · next wakes 15:30 · not counted in TODAY · 4/5 when all wake"
+        },
+        "id": "SM-P12",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 3,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 4,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": true,
+          "forecast": {
+            "cap": 10,
+            "count": 10,
+            "over": false
+          },
+          "lint": null,
+          "text": "⏰ 2 · 15:30",
+          "tone": "indigo",
+          "tooltip": "2 snoozed · next wakes 15:30 · not counted in TODAY · 9/11 when all wake"
+        },
+        "id": "SM-P13",
+        "input": {
+          "cap": 10,
+          "daily_missing": false,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": false
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "chip": false,
+          "forecast": {
+            "cap": 10,
+            "count": 8,
+            "over": false
+          },
+          "lint": null,
+          "text": null,
+          "tone": null,
+          "tooltip": null
+        },
+        "id": "SM-P14",
+        "input": {
+          "cap": 10,
+          "daily_missing": true,
+          "excluded": [],
+          "links_count": 8,
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "queue": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "today_count": 9,
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "meter",
+        "runners": [
+          "js"
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "expected": {
+          "live_countdown": true,
+          "paint": "asleep",
+          "status_text": "in 2h 30m",
+          "time_pill": "15:30"
+        },
+        "id": "SM-R01",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "active",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "due",
+          "status_text": "due · waking",
+          "time_pill": "15:30"
+        },
+        "id": "SM-R02",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "row": {
+            "kind": "active",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "blocked",
+          "status_text": "waits on prerequisites",
+          "time_pill": "15:30"
+        },
+        "id": "SM-R03",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "active",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "?"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "history",
+          "status_text": "woke 15:32",
+          "time_pill": null
+        },
+        "id": "SM-R04",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "row": {
+            "kind": "history",
+            "line_text": "- ~~**1530** [[job#^email-dan]]~~ · woke 15:32",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "ignored",
+          "status_text": "Ready — won't wake",
+          "time_pill": null
+        },
+        "id": "SM-R05",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "ignored",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": " "
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "ignored",
+          "status_text": "Missing — won't wake",
+          "time_pill": null
+        },
+        "id": "SM-R06",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "ignored",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "missing",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "ignored",
+          "status_text": "Duplicate — earliest wins",
+          "time_pill": null
+        },
+        "id": "SM-R07",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "ignored",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "none",
+          "status_text": null,
+          "time_pill": null
+        },
+        "id": "SM-R08",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "fenced",
+            "line_text": "```\n- **1530** [[job#^email-dan]]\n```",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "none",
+          "status_text": null,
+          "time_pill": null
+        },
+        "id": "SM-R09",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "indented",
+            "line_text": "  - **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": true,
+          "paint": "asleep",
+          "status_text": "in 2h 30m",
+          "time_pill": "15:30"
+        },
+        "id": "SM-R10",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "active",
+            "line_text": "- **1530** [[job#^email-dan|Dan]]",
+            "link_form": "aliased",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": true,
+          "paint": "asleep",
+          "status_text": "in 2h 30m",
+          "time_pill": "15:30"
+        },
+        "id": "SM-R11",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "active",
+            "line_text": "- **1530** [[#^email-dan]]",
+            "link_form": "local",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "none",
+          "status_text": null,
+          "time_pill": null
+        },
+        "id": "SM-R12",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "13:00",
+          "row": {
+            "kind": "active",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": false
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "live_countdown": false,
+          "paint": "historical",
+          "status_text": null,
+          "time_pill": "15:30"
+        },
+        "id": "SM-R13",
+        "input": {
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-04",
+          "now": "13:00",
+          "row": {
+            "kind": "active",
+            "line_text": "- **1530** [[job#^email-dan]]",
+            "link_form": "plain",
+            "target": "1530"
+          },
+          "task": {
+            "is_event": false,
+            "is_task": true,
+            "resolution": "found",
+            "status": "*"
+          },
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "paint",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "summary": "2 asleep · next 15:30"
+        },
+        "id": "SM-R14",
+        "input": {
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "rows": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1900"
+            }
+          ],
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "summary",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "summary": "1 asleep · 1 due · 1 blocked · next 15:30"
+        },
+        "id": "SM-R15",
+        "input": {
+          "note": "2026/20261105.md",
+          "now": "16:30",
+          "rows": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": true,
+              "state": "due",
+              "target": "1600"
+            },
+            {
+              "id": "c",
+              "on_clock": true,
+              "state": "blocked",
+              "target": "1700"
+            }
+          ],
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "summary",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "summary": "1 blocked"
+        },
+        "id": "SM-R16",
+        "input": {
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "rows": [
+            {
+              "id": "c",
+              "on_clock": true,
+              "state": "blocked",
+              "target": "1700"
+            }
+          ],
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "summary",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "summary": null
+        },
+        "id": "SM-R17",
+        "input": {
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "rows": [
+            {
+              "id": "a",
+              "on_clock": false,
+              "state": "history",
+              "target": "1530"
+            },
+            {
+              "id": "b",
+              "on_clock": false,
+              "state": "ignored",
+              "target": "1600"
+            }
+          ],
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "summary",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "summary": null
+        },
+        "id": "SM-R18",
+        "input": {
+          "note": "2026/20261105.md",
+          "now": "13:00",
+          "rows": [
+            {
+              "id": "a",
+              "on_clock": true,
+              "state": "asleep",
+              "target": "1530"
+            }
+          ],
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": false
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "summary",
+        "runners": [
+          "js"
+        ]
+      }
+    ],
+    "woken": [
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 8,
+            "note": "2026/20261105.md"
+          },
+          "pill": "fresh",
+          "text": "⏰ woke 15:32",
+          "tooltip": "Woke 15:32 (snoozed until 15:30, 2m late)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W01",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 8,
+            "note": "2026/20261105.md"
+          },
+          "pill": "fresh",
+          "text": "⏰ woke 15:01",
+          "tooltip": "Woke 15:01 (snoozed until 15:30, 29m early)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W02",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:01"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 8,
+            "note": "2026/20261105.md"
+          },
+          "pill": "settled",
+          "text": "⏰ woke 15:00",
+          "tooltip": "Woke 15:00 (snoozed until 15:30, 30m early)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W03",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:00"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 8,
+            "note": "2026/20261105.md"
+          },
+          "pill": "settled",
+          "text": "⏰ woke 14:59",
+          "tooltip": "Woke 14:59 (snoozed until 15:30, 31m early)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W04",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "14:59"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W05",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "16:05"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 8,
+            "note": "2026/20261105.md"
+          },
+          "pill": "fresh",
+          "text": "⏰ woke 15:28",
+          "tooltip": "Woke 15:28 (snoozed until 15:30, 2m early)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W06",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:28"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 8,
+            "note": "2026/20261105.md"
+          },
+          "pill": "fresh",
+          "text": "⏰ woke 15:30",
+          "tooltip": "Woke 15:30 (snoozed until 15:30, on time)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W07",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:30"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 8,
+            "note": "2026/20261104.md"
+          },
+          "pill": "quiet",
+          "text": "⏰ woke 15:32",
+          "tooltip": "Woke 15:32 (snoozed until 15:30, 2m late)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W08",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261104.md",
+          "note_date": "2026-11-04",
+          "now": "09:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W09",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": false
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W10",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "x",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W11",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "ambiguous",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W12",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "missing",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 10,
+            "note": "2026/20261105.md"
+          },
+          "pill": "fresh",
+          "text": "⏰ woke 15:35",
+          "tooltip": "Woke 15:35 (snoozed until 15:30, 5m late)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W13",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            },
+            {
+              "block": "email-dan",
+              "line": 10,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:35"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": {
+            "line": 10,
+            "note": "2026/20261105.md"
+          },
+          "pill": "fresh",
+          "text": "⏰ woke 15:32",
+          "tooltip": "Woke 15:32 (snoozed until 15:30, 2m late)\nCtrl-click to open the struck row"
+        },
+        "id": "SM-W14",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            },
+            {
+              "block": "email-dan",
+              "line": 10,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W15",
+        "input": {
+          "active_row_for_identity": true,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W16",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": false
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W17",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": true,
+            "is_event": false,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      },
+      {
+        "expected": {
+          "navigates_to": null,
+          "pill": "none",
+          "text": null,
+          "tooltip": null
+        },
+        "id": "SM-W18",
+        "input": {
+          "active_row_for_identity": false,
+          "entry": {
+            "name": "WRITE",
+            "open": true
+          },
+          "history": [
+            {
+              "block": "email-dan",
+              "line": 8,
+              "route": "job.md",
+              "target": "1530",
+              "woke_at": "15:32"
+            }
+          ],
+          "link": {
+            "aliased": false,
+            "block": "email-dan",
+            "in_fence": false,
+            "is_embed": false,
+            "is_event": true,
+            "is_prose": false,
+            "line": "- [[job#^email-dan]]",
+            "struck": false
+          },
+          "note": "2026/20261105.md",
+          "note_date": "2026-11-05",
+          "now": "16:00",
+          "resolution": "found",
+          "target_status": "*",
+          "today": "2026-11-05",
+          "toggles": {
+            "snooze_marks": true
+          },
+          "zone": "America/New_York"
+        },
+        "mode": "pill",
+        "runners": [
+          "js"
+        ]
+      }
+    ]
+  },
+  "schema_version": 1,
+  "schemas": {
+    "definition": "input: {today 'YYYY-MM-DD', now 'HH:MM', zone IANA, host {path, is_daily, rendered_in_daily}, task {line, status ' '|'*'|'/'|'?'|'x', is_task, in_code, in_fence, duplicate_id}, snooze {state 'asleep'|'due'|'blocked'|'none', target 'HHMM'|null, reason|null, link_spelling}, today_link bool, cache_ready bool, toggles {today_marks, snooze_marks}}; expected: {mark 'clock'|'tomato'|'none', text|null, tone 'indigo'|'amber'|'muted'|null, tooltip|null (two lines joined by \\n), navigates_to 'snoozed-row'|'task-link'|null}",
+    "plan": "input: {today, now, zone, note, today_count, links_count, cap, queue [{id, state 'asleep'|'due'|'blocked', on_clock, target}], excluded [{id, reason}], daily_missing bool, toggles {snooze_marks}}; expected: {chip bool, text|null, tone 'indigo'|'amber'|null, tooltip|null, forecast {count, cap, over}, lint null|'snooze_wake_would_exceed_cap'}",
+    "rows": "paint input: {today, now, zone, note, note_date, row {line_text, kind 'active'|'history'|'ignored'|'fenced'|'indented', link_form 'plain'|'embedded'|'aliased'|'local', target}, task {status, resolution, is_task, is_event}, toggles {snooze_marks}}; paint expected: {paint 'asleep'|'due'|'blocked'|'history'|'ignored'|'historical'|'none', time_pill|null 'HH:MM', status_text|null, live_countdown bool}. summary input: {today, now, zone, note, rows [{id, target, state, on_clock}], toggles {snooze_marks}}; summary expected: {summary string|null}",
+    "woken": "input: {today, now, zone, note, note_date, entry {open, name}, link {line, struck, is_event, is_prose, is_embed, in_fence, aliased, block}, history [{route, block, line, woke_at 'HH:MM', target 'HHMM'}], active_row_for_identity bool, resolution 'found'|'missing'|'ambiguous', target_status, toggles {snooze_marks}}; expected: {pill 'fresh'|'settled'|'quiet'|'none', text|null, tooltip|null (two lines joined by \\n), navigates_to {note, line}|null}"
+  }
+}

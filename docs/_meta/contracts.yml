@@ -128,6 +128,9 @@ groups:
       - stem: snooze
         summary: "Snoozed tasks: later-today Task Links, the ## Snoozed row grammar, the injected zoned time grammar, resolved-state classification, live_targets, and conformance vectors"
         order: 60
+      - stem: snooze-marks
+        summary: "Snooze marks: the display-only alarm clock, woken pill, Snoozed row paint, heading summary, plan chip, and SM-* conformance vectors"
+        order: 61
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
         order: 36
