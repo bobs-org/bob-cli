@@ -190,3 +190,17 @@ drawers are preserved. Invalid and reserved headings refuse before any write.
 Capture draft syntax is unchanged in this dual-read window: drafts still spell
 `- #slug` and ALL-CAPS with nested notes. ALL-CAPS cutover is a later
 migration.
+
+## Mac Capture
+
+Bob Mac Capture is a thin client: Bob owns drawer grammar, completion,
+preview data, and writes, and the app decodes and presents them. Preview
+`task_blocks[].lines[]` drawer headers carry an additive
+`drawer: {title, key, marker, empty}` object with `marker` one of `bold`,
+`legacy_caps`, or `section`; per-item drawer summaries carry the same
+verbatim `title` plus `key`, `created`, and additive `marker`. Missing,
+malformed, or unknown drawer fields decode away and leave the existing
+verbatim preview. Transfer and merge-in destinations keep the drawer title
+verbatim and never uppercase it. Capture fixtures in the Mac repository are
+generated from a clean bob-cli checkout at grammar 31 and record source
+revision, version, and inputs.
