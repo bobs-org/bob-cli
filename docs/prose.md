@@ -25,13 +25,17 @@ never changes prose.
 parent: "[[sase_blog]]"
 type: "[[prose]]"
 created: 2026-10-15T15:10:41-04:00
-title: "Why I built SASE" # optional publication title; defaults to file name
+title: "Why I built SASE" # optional display title; shown before aliases or file name
+summary: "A short description of the piece." # optional one-line dek for Prose Card
 section_numbers: true     # optional; true by default
 ---
 ```
 
 Only `type: "[[prose]]"` or the legacy `type: "[[article]]"` enables formatting.
-`title` feeds the repeated-title finding and the `list`/`outline` labels.
+`title` feeds the repeated-title finding and the `list`/`outline` labels, and
+the Prose Card uses it as the display title before aliases or the file stem.
+`summary` is an optional one-line dek shown by the Prose Card; the formatter
+does not write either property. See the [Prose Card](https://bobs-org.github.io/reference/plugins/prose-card/).
 `section_numbers` accepts lowercase `true` or `false`; any other value produces a
 `bad-option` finding on that line and leaves numbering on. The plugin's `.bob-article`
 class is runtime-only and is never written to frontmatter.

@@ -444,7 +444,10 @@ Contract: [Notebooks](../notebooks.md).
 ### Prose notes
 
 Frontmatter `type: "[[prose]]"` marks authored prose; legacy `[[article]]`
-remains accepted. See [Prose notes](../prose.md).
+remains accepted. Optional `title:` supplies the Prose Card's display title
+before aliases or the file stem; optional one-line `summary:` supplies its dek.
+The formatter leaves both properties untouched. See [Prose notes](../prose.md)
+and the [Prose Card](https://bobs-org.github.io/reference/plugins/prose-card/).
 
 ### Album notes
 

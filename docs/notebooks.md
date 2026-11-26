@@ -96,6 +96,10 @@ are inert and keep physical line numbers. Findings never rewrite a file.
 `summary:` is one plain line describing scope, not contents. Creation
 requires it; `check` warns when it is missing.
 
+In desktop Live Preview and Reading view, the [Notebook Card](https://bobs-org.github.io/reference/plugins/notebook-card/)
+replaces the linked notebook header when the card can safely mount. The header
+remains the fallback when it cannot.
+
 ## Capture
 
 Notebook routes parse as `notebook_note` or `notebook_sub_note`. Use
