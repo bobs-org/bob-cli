@@ -29,11 +29,11 @@ fn relation_fixture() -> TempDir {
     write_settings(temp.path());
     write_file(
         &temp.path().join("mac_inbox.md"),
-        "- [ ] #task Owner ^owner\n  - 🪢 **LINKS:** [[tasks#^target|follow-up of]]\n  - 🪢 **LINKS:** [[tasks#^target|inspired by]]\n  - 🪢 **LINKS:** [[tasks#^target|inspired by]]\n  - ⛓️ **DEPENDS ON:** [[tasks#^target]]\n- [ ] #task Owner neighbor ^owner-neighbor\n",
+        "- [ ] #task Owner ^owner\n  - 🪢 **LINKS:** [[tasks#^target|follow-up of]]\n  - 🪢 **LINKS:** [[tasks#^target|inspired by]]\n  - 🪢 **LINKS:** [[tasks#^target|inspired by]]\n  - 🪢 **LINKS:** [[tasks#^plain-peer]]\n  - 🪢 **LINKS:** [[tasks#^linked-child]]\n  - ⛓️ **DEPENDS ON:** [[tasks#^target]]\n- [ ] #task Owner neighbor ^owner-neighbor\n",
     );
     write_file(
         &temp.path().join("tasks.md"),
-        "- [ ] #task Target ^target\n- [ ] #task Source ^source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n  - 🪢 **LINKS:** Inspired By [[mac_inbox#^owner]]\n- [ ] #task Malformed source ^malformed\n  - 🪢 **LINKS:** see (old) [[mac_inbox#^owner]]\n- [ ] #task Idless source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n- [/] #task In progress ^progress\n- [*] #task Next ^next\n- [x] #task Closed ^closed\n",
+        "- [ ] #task Target ^target\n- [ ] #task Source ^source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n  - 🪢 **LINKS:** Inspired By [[mac_inbox#^owner]]\n- [ ] #task Malformed source ^malformed\n  - 🪢 **LINKS:** see (old) [[mac_inbox#^owner]]\n- [ ] #task Idless source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n- [ ] #task Plain peer ^plain-peer\n  - 🪢 **LINKS:** [[mac_inbox#^owner]]\n- [ ] #task Linked child ^linked-child\n- [ ] #task Linked parent ^linked-parent\n  - 🪢 **LINKS:** [[mac_inbox#^owner]]\n- [ ] #task Follower ^follower\n  - ⛓️ **DEPENDS ON:** [[mac_inbox#^owner]]\n- [/] #task In progress ^progress\n- [*] #task Next ^next\n- [x] #task Closed ^closed\n",
     );
     write_file(
         &temp.path().join("done/archive.md"),
@@ -76,6 +76,7 @@ fn relation_target_contexts_use_directional_markers_and_owner_links() {
     assert_eq!(target["replacement"], "~tasks:target");
     assert_eq!(target["already_linked"], true);
     assert_eq!(target["existing_label"], "follow-up of");
+    assert_eq!(target["dependency_tie"], "prerequisite");
     assert_eq!(target["also_prerequisite"], true);
 
     let raw = "Use this @mac_inbox+owner ~~sou";
@@ -149,6 +150,10 @@ fn relation_pools_follow_directional_tiers_and_editability() {
             "Source",
             "Malformed source",
             "Idless source",
+            "Plain peer",
+            "Linked child",
+            "Linked parent",
+            "Follower",
             "Closed",
             "Archived without ID",
             "Archived source",
@@ -1059,6 +1064,127 @@ fn cancel_inverse_query_teaches_the_flip() {
     );
     // The typed inverse row itself never cancels.
     assert!(json["candidates"][0].get("cancels_source").is_none());
+}
+
+fn relation_rows(raw: &str, temp: &TempDir) -> Vec<serde_json::Value> {
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationTo), "{raw}");
+    let json = serde_json::to_value(&value).expect("serialize relation rows");
+    json["candidates"].as_array().expect("rows").clone()
+}
+
+fn find_row<'a>(
+    rows: &'a [serde_json::Value],
+    block_id: &str,
+) -> &'a serde_json::Value {
+    rows.iter()
+        .find(|row| row["block_id"] == block_id)
+        .unwrap_or_else(|| panic!("row ^{block_id}"))
+}
+
+#[test]
+fn relation_candidates_carry_dependency_tie_in_both_directions() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
+    let temp = relation_fixture();
+
+    // Vault edges: the owner waits on target, follower waits on the owner.
+    let base = relation_rows("Use this @mac_inbox+owner ~", &temp);
+    let target = find_row(&base, "target");
+    assert_eq!(target["dependency_tie"], "prerequisite");
+    assert_eq!(target["also_prerequisite"], true);
+    let follower = find_row(&base, "follower");
+    assert_eq!(follower["dependency_tie"], "dependent");
+    assert!(follower.get("also_prerequisite").is_none());
+    // A labelled relation with no dependency is untied: both fields
+    // stay omitted.
+    let source = find_row(&base, "source");
+    assert!(source.get("dependency_tie").is_none());
+    assert!(source.get("also_prerequisite").is_none());
+
+    // The same item's typed `&` counts as the owner waiting on the row.
+    let typed_dep =
+        relation_rows("Use this @mac_inbox+owner &tasks:source ~sou", &temp);
+    let source = find_row(&typed_dep, "source");
+    assert_eq!(source["dependency_tie"], "prerequisite");
+    assert_eq!(source["also_prerequisite"], true);
+
+    // The same item's typed `*` counts as the row waiting on the owner.
+    let typed_blocked =
+        relation_rows("Use this @mac_inbox+owner *tasks:source ~sou", &temp);
+    let source = find_row(&typed_blocked, "source");
+    assert_eq!(source["dependency_tie"], "dependent");
+    assert!(source.get("also_prerequisite").is_none());
+}
+
+#[test]
+fn relation_human_render_names_the_tie() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
+    let temp = relation_fixture();
+    let raw = "Use this @mac_inbox+owner ~";
+    let value = result(temp.path(), raw, raw.len());
+    let lines = candidate_lines(&value.candidates, value.context);
+    let detail = |text: &str| {
+        let marker = format!("] {text} ");
+        lines
+            .iter()
+            .find(|(_, detail)| detail.contains(&marker))
+            .map(|(_, detail)| detail.clone())
+            .unwrap_or_else(|| panic!("line for {text}"))
+    };
+    assert!(detail("Target").contains("· prerequisite"), "target line");
+    assert!(detail("Follower").contains("· dependent"), "follower line");
+    assert!(
+        !lines
+            .iter()
+            .any(|(_, line)| line.contains("also prerequisite")),
+        "no deprecated wording in human render"
+    );
+}
+
+#[test]
+fn dependency_and_blocked_candidates_carry_plain_link() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
+    let temp = relation_fixture();
+    for raw in ["Use this @mac_inbox+owner &", "Use this @mac_inbox+owner *"] {
+        let value = result(temp.path(), raw, raw.len());
+        let json = serde_json::to_value(&value).expect("serialize tie rows");
+        let rows = json["candidates"].as_array().expect("rows");
+        // Plain entries both ways: owner's line names the peer and the
+        // peer's line names the owner.
+        assert_eq!(find_row(rows, "plain-peer")["plain_link"], "both");
+        // Only the owner's line holds a plain entry.
+        assert_eq!(find_row(rows, "linked-child")["plain_link"], "to");
+        // Only the candidate's line holds a plain entry.
+        assert_eq!(find_row(rows, "linked-parent")["plain_link"], "from");
+        // Labelled entries never count, in either direction.
+        assert!(find_row(rows, "target").get("plain_link").is_none());
+        assert!(find_row(rows, "source").get("plain_link").is_none());
+        assert!(
+            json["candidates"].as_array().unwrap().iter().all(|row| row
+                .get("plain_link")
+                .is_none_or(|tie| tie == "to"
+                    || tie == "from"
+                    || tie == "both")),
+            "{raw}"
+        );
+    }
+
+    // Human render marks tied rows as linked.
+    let raw = "Use this @mac_inbox+owner &";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(
+        value.context,
+        Some(CompletionContext::TaskDependency),
+        "{raw}"
+    );
+    let lines = candidate_lines(&value.candidates, value.context);
+    assert!(
+        lines.iter().any(|(_, detail)| detail.contains("· linked")),
+        "tied rows render linked"
+    );
 }
 
 #[test]

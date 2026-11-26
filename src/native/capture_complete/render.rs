@@ -367,6 +367,9 @@ pub(super) fn dependency_line(item: &DependencyCandidate) -> (String, String) {
     } else if item.already_dependency {
         detail.push_str(" · already added");
     }
+    if item.plain_link.is_some() {
+        detail.push_str(" · linked");
+    }
     let label = if item.replacement.is_empty() {
         "…".to_string()
     } else {
@@ -395,6 +398,9 @@ pub(super) fn blocked_task_line(
     } else if item.already_blocked {
         detail.push_str(" · already blocked");
     }
+    if item.plain_link.is_some() {
+        detail.push_str(" · linked");
+    }
     let label = if item.replacement.is_empty() {
         "…".to_string()
     } else {
@@ -421,8 +427,10 @@ pub(super) fn relation_line(item: &RelationCandidate) -> (String, String) {
     if let Some(label) = &item.existing_label {
         detail.push_str(&format!(" · ‹{label}›"));
     }
-    if item.also_prerequisite {
-        detail.push_str(" · also prerequisite");
+    match item.dependency_tie {
+        Some("prerequisite") => detail.push_str(" · prerequisite"),
+        Some("dependent") => detail.push_str(" · dependent"),
+        _ => {}
     }
     if let Some(reason) = &item.disabled_reason {
         detail.push_str(&format!(" · {reason}"));

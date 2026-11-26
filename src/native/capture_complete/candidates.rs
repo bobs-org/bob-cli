@@ -2251,6 +2251,17 @@ pub(super) fn dependency_candidates(
         owner_block_id,
         typed,
     );
+    let owner_identity = owner.and_then(|target| {
+        if target.kind != DependencyTargetKind::ExistingTask {
+            return None;
+        }
+        let route = target.route.as_deref()?;
+        let block_id = target.block_id.as_deref()?;
+        task_identity_for_route(bob_dir, &discovered, route, block_id)
+    });
+    // Vault LINKS only: one catalog build per request, shared by every
+    // `plain_link` row below.
+    let (links, _, _) = task_links_catalog(bob_dir, &discovered);
     let ordered = capture_dependency_tasks::order_for_picker(
         &discovered.tasks,
         query,
@@ -2289,6 +2300,12 @@ pub(super) fn dependency_candidates(
                     task.block_id.as_deref().expect("identified task"),
                 )
             };
+            let key = task
+                .block_id
+                .as_ref()
+                .map(|id| (task.note_path.clone(), id.clone()));
+            let plain_link =
+                plain_link_tie(&links, owner_identity.as_ref(), key.as_ref());
             DependencyCandidate {
                 replacement,
                 task_ref: task.task_ref.clone(),
@@ -2304,6 +2321,7 @@ pub(super) fn dependency_candidates(
                 requires_block_id,
                 block_id_suggestions: task.block_id_suggestions.clone(),
                 already_dependency: already,
+                plain_link,
                 disabled_reason,
                 status_symbol: task.status_symbol,
                 status_name: task.status_name.clone(),
@@ -2393,6 +2411,9 @@ pub(super) fn blocked_task_candidates(
     let settings = note_tasks::read_settings(bob_dir);
     let mut note_cache: HashMap<PathBuf, String> = HashMap::new();
     let recognized_projects = recognized_project_paths(bob_dir, &discovered);
+    // Vault LINKS only: one catalog build per request, shared by every
+    // `plain_link` row below.
+    let (links, _, _) = task_links_catalog(bob_dir, &discovered);
 
     let mut ordered: Vec<(&capture_dependency_tasks::DependencyTask, u32)> =
         discovered
@@ -2473,6 +2494,8 @@ pub(super) fn blocked_task_candidates(
                     b'*',
                 )
             };
+            let plain_link =
+                plain_link_tie(&links, owner_identity.as_ref(), key.as_ref());
             BlockedTaskCandidate {
                 replacement,
                 task_ref: task.task_ref.clone(),
@@ -2485,6 +2508,7 @@ pub(super) fn blocked_task_candidates(
                 requires_block_id,
                 block_id_suggestions: task.block_id_suggestions.clone(),
                 already_blocked: already,
+                plain_link,
                 disabled_reason,
                 status_symbol: task.status_symbol,
                 status_name: task.status_name.clone(),
@@ -2511,6 +2535,7 @@ pub(super) fn relation_candidates(
     owner_note: &str,
     typed_relations: &[RelationEntry],
     typed_dependencies: &[DependencyEntry],
+    typed_blocked: &[DependencyEntry],
 ) -> (Candidates, Vec<String>) {
     let discovered = capture_dependency_tasks::discover(bob_dir);
     let (links, mut warnings, _) = task_links_catalog(bob_dir, &discovered);
@@ -2544,6 +2569,29 @@ pub(super) fn relation_candidates(
             &entry.note,
         ) {
             prerequisites.insert((
+                capture_dependency_tasks::display_path(&path),
+                entry.block_id.clone(),
+            ));
+        }
+    }
+    // Dependents: vault edges where the candidate waits on the owner,
+    // plus the same item's typed `*` blocked tasks (each typed `*`
+    // target is a dependent of the owner).
+    let mut dependents = HashSet::new();
+    if let Some(identity) = &owner_identity {
+        for (candidate, targets) in &graph {
+            if targets.contains(identity) {
+                dependents.insert(candidate.clone());
+            }
+        }
+    }
+    for entry in typed_blocked {
+        if let Ok(path) = capture_dependency_tasks::resolve_dependency_note(
+            bob_dir,
+            &discovered,
+            &entry.note,
+        ) {
+            dependents.insert((
                 capture_dependency_tasks::display_path(&path),
                 entry.block_id.clone(),
             ));
@@ -2667,6 +2715,15 @@ pub(super) fn relation_candidates(
                 block_id_suggestions: task.block_id_suggestions.clone(),
                 already_linked,
                 existing_label: typed_label.or(stored_label),
+                dependency_tie: key.as_ref().and_then(|identity| {
+                    if prerequisites.contains(identity) {
+                        Some("prerequisite")
+                    } else if dependents.contains(identity) {
+                        Some("dependent")
+                    } else {
+                        None
+                    }
+                }),
                 also_prerequisite: key
                     .as_ref()
                     .is_some_and(|identity| prerequisites.contains(identity)),
@@ -2877,6 +2934,32 @@ fn relation_order_key(
 struct TaskLinks {
     outgoing: HashMap<capture_dependency_tasks::TaskIdentity, Option<String>>,
     malformed: bool,
+}
+
+/// The pair's plain-link tie from vault LINKS only: `"to"` when the
+/// owner's LINKS line holds a plain (unlabelled) entry for the
+/// candidate, `"from"` for the reverse, `"both"` when each holds one.
+/// Labelled entries never count. Omitted when either identity is
+/// unknown or no plain entry joins the pair.
+fn plain_link_tie(
+    links: &HashMap<capture_dependency_tasks::TaskIdentity, TaskLinks>,
+    owner: Option<&capture_dependency_tasks::TaskIdentity>,
+    candidate: Option<&capture_dependency_tasks::TaskIdentity>,
+) -> Option<&'static str> {
+    let (owner, candidate) = (owner?, candidate?);
+    let plain = |from: &capture_dependency_tasks::TaskIdentity,
+                 to: &capture_dependency_tasks::TaskIdentity| {
+        links
+            .get(from)
+            .and_then(|source| source.outgoing.get(to))
+            .is_some_and(|label| label.is_none())
+    };
+    match (plain(owner, candidate), plain(candidate, owner)) {
+        (true, true) => Some("both"),
+        (true, false) => Some("to"),
+        (false, true) => Some("from"),
+        (false, false) => None,
+    }
 }
 
 /// Relation label rows for one `relation_label` probe. `one_off` is true

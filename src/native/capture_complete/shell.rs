@@ -592,6 +592,9 @@ pub(crate) fn shell_completion(
                 item.as_ref()
                     .map(|found| found.dependencies.as_slice())
                     .unwrap_or(&[]),
+                item.as_ref()
+                    .map(|found| found.blocked_tasks.as_slice())
+                    .unwrap_or(&[]),
             );
             let Candidates::Relation(items) = candidates else {
                 return Ok(None);

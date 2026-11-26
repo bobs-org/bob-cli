@@ -231,9 +231,15 @@ For `task_dependency` and `blocked_task`, `owner` adds the resolved task's \
 `text`, `note_path`, `status_symbol`, and `status_name`; a new-task owner carries \
 its non-empty draft text. Unresolved owners keep the lexical owner fields. A \
 draft with no complete relationship modifiers keeps the existing response shape. \
+`&` / `*` rows report `plain_link` (`to` when the owner's LINKS line holds a \
+plain entry for the row, `from` for the reverse, `both` when each holds one; \
+omitted when none). \
 A `~` / `~~` modifier opens `relation_to` / `relation_from` over the full \
 task catalog. Rows report `already_linked`, an existing label when present, \
-and `also_prerequisite`; read-only sources and malformed source LINKS lines \
+`dependency_tie` (`prerequisite` when the owner waits on the row, `dependent` \
+when the row waits on the owner; omitted when neither), and the deprecated \
+alias `also_prerequisite` (true exactly when the tie is `prerequisite`, \
+retained for one release train); read-only sources and malformed source LINKS lines \
 are disabled in `relation_from`. A `|label` field opens `relation_label`, whose \
 suggestions count labels across all LINKS lines and return canonical `|label` \
 or `|\"multi word\"` replacements. A `||label` probe keeps the `||` spelling \

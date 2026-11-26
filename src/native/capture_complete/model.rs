@@ -462,6 +462,12 @@ pub(super) struct DependencyCandidate {
     pub(super) block_id_suggestions: Vec<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) already_dependency: bool,
+    /// Additive plain-link tie from vault LINKS only: `"to"` when the
+    /// owner's LINKS line holds a plain entry for this candidate,
+    /// `"from"` when this candidate's LINKS line holds a plain entry
+    /// for the owner, `"both"` when each holds one. Omitted when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) plain_link: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) disabled_reason: Option<String>,
     pub(super) status_symbol: char,
@@ -493,6 +499,12 @@ pub(super) struct BlockedTaskCandidate {
     pub(super) block_id_suggestions: Vec<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) already_blocked: bool,
+    /// Additive plain-link tie from vault LINKS only: `"to"` when the
+    /// owner's LINKS line holds a plain entry for this candidate,
+    /// `"from"` when this candidate's LINKS line holds a plain entry
+    /// for the owner, `"both"` when each holds one. Omitted when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) plain_link: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) disabled_reason: Option<String>,
     pub(super) status_symbol: char,
@@ -525,6 +537,11 @@ pub(super) struct RelationCandidate {
     pub(super) already_linked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) existing_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dependency_tie: Option<&'static str>,
+    /// Deprecated alias: true exactly when `dependency_tie` is
+    /// `"prerequisite"`. Retained for one release train so older Mac
+    /// clients keep working; new clients read `dependency_tie`.
     #[serde(skip_serializing_if = "is_false")]
     pub(super) also_prerequisite: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -570,7 +570,14 @@ subsumed `relation_updates[]` rows, and capture-complete `dependency_tie`
   teaching `use || to hide a label, | to name one`.
 - `capture-complete`: contexts `relation_to` and `relation_from`
   (the `DependencyCandidate` shape, plus `already_linked`,
-  `existing_label`, `also_prerequisite`, and `disabled_reason`);
+  `existing_label`, `dependency_tie` (`prerequisite` when the owner
+  waits on the row, counting vault edges and the same item's typed `&`;
+  `dependent` when the row waits on the owner, counting vault edges and
+  the same item's typed `*`; omitted when neither), the deprecated alias
+  `also_prerequisite` (true exactly for `prerequisite` rows, retained
+  for one release train), and `disabled_reason`); `&` / `*` rows add
+  `plain_link` (`to` / `from` / `both` from vault LINKS only, omitted
+  when none);
   context `relation_label` with catalog-backed `suggestions[]` (visible rows
   `{label, key, count, replacement, hide_replacement, inverse?}` and a leading
   typed row `{label, key, replacement, hide_replacement, typed: true,

@@ -907,6 +907,8 @@ fn build_result_inner(
                 item.map(|found| found.relations.as_slice()).unwrap_or(&[]),
                 item.map(|found| found.dependencies.as_slice())
                     .unwrap_or(&[]),
+                item.map(|found| found.blocked_tasks.as_slice())
+                    .unwrap_or(&[]),
             )
         }
         CompletionContext::RelationLabel => {

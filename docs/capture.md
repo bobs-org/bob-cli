@@ -2526,7 +2526,8 @@ their section; queries rank with the same tiered AND-term matcher as the
 rank completed history by score too, with open matches ahead only at
 equal score. Each row carries the
 exact `note_path` (with extension, never a lowercased route), display
-`locator`, stable `group`, `already_dependency`, and optional
+`locator`, stable `group`, `already_dependency`, the additive `plain_link`
+(`to` / `from` / `both` from vault LINKS only, omitted when none), and optional
 `disabled_reason`; ID-less rows carry `requires_block_id` with suggestions
 and no insertable replacement, and self/already-selected/duplicate-ID rows
 stay visible with their guard reason. Refetching at `replacement.start`
@@ -10499,9 +10500,11 @@ just before the sigil so clients can refetch at `replacement.start`.
 editable tasks only (daily notes, `done/`, `_templates`, `_generated`,
 `_conflicts`, dot-directories, and fenced code are absent). Rows reuse
 the `DependencyCandidate` shape plus `already_blocked` (omitted when
-false) and `disabled_reason` (`the owner task itself`, `would create a
-dependency cycle`, `a project cannot depend on its own resident`, or the
-existing duplicate-block-ID reason). With an empty query, ranking is
+false), `plain_link` (`to` / `from` / `both` from vault LINKS only,
+omitted when none), and `disabled_reason` (`the owner task itself`,
+`would create a dependency cycle`, `a project cannot depend on its own
+resident`, or the existing duplicate-block-ID reason). `&` rows carry
+the same additive `plain_link`. With an empty query, ranking is
 today's linked tasks (the running entry's first), then Pending `[/]`,
 Next `[*]`, the owner's note, then everything else; a non-empty query
 ranks by match score first, then that order. Replacements use `*`
@@ -10525,11 +10528,17 @@ is the owner's note, In Progress, Next, other open tasks, closed tasks
 in active notes, then `done/`. For `relation_from`, today's linked tasks
 (the running entry first) precede In Progress, Next, the owner's note,
 and other editable tasks. A query ranks by match score first, then these
-tiers. Rows carry `already_linked`, `existing_label`, and the information
-badge `also_prerequisite` plus `disabled_reason` (`the owner task
+tiers. Rows carry `already_linked`, `existing_label`, the tie badge
+`dependency_tie` (`prerequisite` when the owner waits on the row,
+`dependent` when the row waits on the owner, omitted when neither;
+the deprecated alias `also_prerequisite` stays true exactly for
+`prerequisite` rows and is retained for one release train), plus
+`disabled_reason` (`the owner task
 itself`, the duplicate-block-ID reason, `archived tasks can't get an
 id`, and — for `relation_from` only — `read-only note` and `its LINKS
-line is malformed`). Label suggestions scan every LINKS line, including
+line is malformed`). `&` / `*` rows carry `plain_link` (`to` when the
+owner's LINKS line holds a plain entry for the row, `from` for the
+reverse, `both` when each holds one; omitted when none). Label suggestions scan every LINKS line, including
 `done/` and lines beneath ID-less tasks, and return
 `suggestions[] {label, count, replacement}`. A non-empty typed label adds
 a first `{label, typed: true, replacement}` row with bob's canonical
