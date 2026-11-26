@@ -449,6 +449,36 @@ effects of hand edits are reconcile's.
 - `⛓ Project waits on "Fix LinkedIn now" · 2 tasks Blocked · removed 2 Pomodoro links`
 - `⛓ Project no longer waits on "Fix LinkedIn now" · 2 tasks Ready again`
 
+### 6.8 Plain-link and dependency ties
+
+The Depends on, Blocks, Links, and Linked from stages show the other tie on
+each eligible task row in a trailing pill cluster. `⛓ prerequisite` means this
+task waits on that row; `🧱 dependent` means that row waits on this task. `🪢
+linked` and `🪢 links here` show plain links in the outgoing and incoming
+directions. Each stage hides the tie it edits natively. The dependency stages
+also show labelled relations as muted pills. Incoming relation pills use the
+live relation index and are omitted while that index is unavailable.
+
+When Enter would convert the other tie, the row badge is `⇄ add`, `⇄ block`,
+`⇄ link`, or `⇄ link here`. With an empty filter, Links and Linked from place
+dependency-tied rows in a `TIED BY A DEPENDENCY` band; Depends on and Blocks
+place plain-linked rows in a `PLAIN LINKS` band. These rows move out of RESULTS
+and remain actionable. The Links subtitle counts tasks tied by a dependency;
+Depends on and Blocks count plain links. Links no longer says `does not block`.
+
+Depends on adds a consequence strip under the selected row. CURRENT explains
+whether removing the wait makes this task Ready, leaves it Blocked, or leaves
+its status unchanged; it ends with `⌃L keeps a plain link`. An open result
+states that this task becomes Blocked, includes its lane and Pomodoro effects,
+and labels a converted row `Replaces the 🪢 link`. Closed and already-Blocked
+results keep their status-specific copy. A `^prj` owner uses the Blocks project
+consequence copy.
+
+When a hand-edited LINKS or Depends-On line creates a plain-link/dependency
+overlap, the existing mirror shows one notice after the cursor leaves the
+line: `"X" is already a dependency · reconcile will drop this plain link`.
+The hand edit is left for reconcile to fold.
+
 ## 7. Chips (bob-ledger-tools)
 
 ```text
@@ -5661,6 +5691,10 @@ At rest, the subtitle is “Blocks K · frees F · searching P open tasks ·
 ⇥ to mark several”, or “Blocks nothing yet · …” when K is zero. With
 marks it is “2 to block · 1 to remove · ↵ to apply”, adding “· names
 this task first” when N needs an id. Counted badges show k/n block.
+The subtitle also counts plain links tied to the picked tasks. Rows with a
+plain link to the source appear in a `PLAIN LINKS` band between CURRENT and
+RESULTS on an empty filter; the row shows `🪢 linked` or `🪢 links here` and
+Enter marks the conversion with `⇄ block`.
 
 CURRENT means N's open direct dependents. BLOCKED candidates remain
 valid picks. The stage uses the existing badges: ＋ / −; 🔑 when N is

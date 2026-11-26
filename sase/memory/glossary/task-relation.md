@@ -30,5 +30,4 @@ offers its source as a [[successor-offer]] when its target is parked (left Pendi
 no live Task Link today) or done; it still never blocks, and its mirror reads
 `starts before`.
 
-A plain (unlabelled) link and a dependency between the same two tasks never coexist:
-adding the dependency absorbs the plain link in either direction.
+A plain (unlabelled) link and a dependency between the same two tasks never coexist in either direction; adding a dependency absorbs either plain link, and reconcile and merge remove overlaps.

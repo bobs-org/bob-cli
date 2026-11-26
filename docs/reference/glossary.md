@@ -1180,6 +1180,8 @@ offers its source as a [Successor Offer](#successor-offer) when its target is pa
 no live Task Link today) or done; it still never blocks, and its mirror reads
 `starts before`.
 
+A plain (unlabelled) link and a dependency between the same two tasks never coexist in either direction; adding a dependency absorbs either plain link, and reconcile and merge remove overlaps.
+
 ### Task Requirement {#task-requirement}
 
 *Aliases: req, task req.*
