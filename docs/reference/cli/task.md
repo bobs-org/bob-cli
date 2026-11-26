@@ -257,15 +257,15 @@ Environment:
 Rename a task drawer and its project sections everywhere
 
 ```text title="bob task rename-drawer --help"
-Rename the task drawer OLD to NEW everywhere: every legacy ALL-CAPS or bold drawer bullet under a #task, whether the task is open, done, cancelled, or archived under done/, plus every eligible ## section of a project note, which is its ^prj task's drawers. OLD matches by drawer key, so case and spacing do not matter. NEW is written verbatim as a bold task drawer title and a project ## section title. A same-key spelling change respells each matching header in place and converts legacy headers to bold without merging duplicate identities. For different keys, where an owner already holds NEW or holds OLD more than once, the dry-run report shows the merge; apply keeps the earliest position and all body content in order. Heading links into renamed sections ([[note#Old]], ![[note#Old]], and Markdown note.md#Old) are repaired; block links never change. A project note whose distinct-name rename would leave a heading ambiguous is refused with the reason. Ordinary headings in other notes, fenced code, and quotes are out of scope and listed as excluded; _templates/ hits are reported and never edited. Without -a the run is a dry run: it prints each change with a colored excerpt and takes no lock, writes nothing, runs no Git, and does no sync. -a takes the shared vault lock, pre-syncs, replans, guards each note by its full preimage, verifies that nothing replans, makes one commit, post-syncs only when it committed, and refreshes the drawer catalog. A second run reports nothing. Use -l/--legacy for a read-only migration inventory of legacy ALL-CAPS drawers, empty bold drawers, bold trailing-colon leads, and duplicate identities; inventory mode takes no OLD or NEW and never writes.
+Rename the task drawer OLD to NEW everywhere: every bold drawer bullet under a #task, whether the task is open, done, cancelled, or archived under done/, plus every eligible ## section of a project note, which is its ^prj task's drawers. OLD matches by drawer key, so case and spacing do not matter. NEW is written verbatim as a bold task drawer title and a project ## section title. A same-key spelling change respells each matching header in place without merging duplicate identities. For different keys, where an owner already holds NEW or holds OLD more than once, the dry-run report shows the merge; apply keeps the earliest position and all body content in order. Heading links into renamed sections ([[note#Old]], ![[note#Old]], and Markdown note.md#Old) are repaired; block links never change. A project note whose distinct-name rename would leave a heading ambiguous is refused with the reason. Ordinary headings in other notes, fenced code, and quotes are out of scope and listed as excluded; _templates/ hits are reported and never edited. Without -a the run is a dry run: it prints each change with a colored excerpt and takes no lock, writes nothing, runs no Git, and does no sync. -a takes the shared vault lock, pre-syncs, replans, guards each note by its full preimage, verifies that nothing replans, makes one commit, post-syncs only when it committed, and refreshes the drawer catalog. A second run reports nothing.
 
-Usage: bob task rename-drawer [OPTIONS] [OLD] [NEW]
+Usage: bob task rename-drawer [OPTIONS] <OLD> <NEW>
 
 Arguments:
-  [OLD]
+  <OLD>
           Drawer to rename, matched by drawer key (case and spacing ignored)
 
-  [NEW]
+  <NEW>
           New drawer title, written verbatim
 
 Options:
@@ -284,13 +284,9 @@ Options:
   -h, --help
           Show help
 
-  -l, --legacy
-          Read-only inventory for drawer migration
-
 Examples:
   bob task rename-drawer REQUIREMENTS Notes       Preview a true-case respelling
   bob task rename-drawer requirements 'Future Work' -a  Apply it in one commit
-  bob task rename-drawer -l -f json               Inventory legacy drawers
   bob task rename-drawer todo later -f json       Print the plan as JSON
 
 See docs/task-drawers.md for the drawer contract.

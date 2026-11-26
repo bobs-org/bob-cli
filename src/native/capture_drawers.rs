@@ -1676,7 +1676,7 @@ pub(crate) fn recognize_drawer_header(
     {
         return None;
     }
-    let (title, _) = drawer_body_title(body)?;
+    let (title, marker) = drawer_body_title(body)?;
     let key = drawer_key(title);
     if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
         return None;
@@ -2678,7 +2678,6 @@ mod tests {
             panic!("new task drawer should be created")
         };
         assert_eq!(title, "Future Work");
-
     }
 
     #[test]

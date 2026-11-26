@@ -48,6 +48,7 @@ pub(super) fn draft_related(
         has_global_destination: false,
         record_policy: Some(&record_policy),
         notebook_policy: Some(&notebook_policy),
+        known_drawer_keys: None,
         global_route: None,
     };
     let parsed =

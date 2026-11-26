@@ -120,7 +120,6 @@ pub(crate) use self::draft::split_physical_lines;
 pub(crate) use self::draft::template_list_error;
 pub(crate) use self::drawer_bullet::authored_level_groups;
 pub(crate) use self::drawer_bullet::empty_drawer_bullet_error;
-pub(crate) use self::drawer_bullet::existing_drawer_empty_error;
 pub(crate) use self::drawer_bullet::first_level_groups as drawer_bullet_groups;
 pub(crate) use self::drawer_bullet::multi_note_clip_error;
 pub(crate) use self::drawer_bullet::multi_note_priority_error;

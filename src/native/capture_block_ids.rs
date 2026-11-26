@@ -183,6 +183,7 @@ pub(crate) fn build_block_id_field_with_notebooks(
                     has_global_destination: false,
                     record_policy: None,
                     notebook_policy: Some(policy),
+                    known_drawer_keys: None,
                     global_route: None,
                 },
             )

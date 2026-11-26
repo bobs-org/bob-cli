@@ -333,6 +333,7 @@ fn build_result_inner(
         has_global_destination: false,
         record_policy: None,
         notebook_policy: Some(&notebook_policy),
+        known_drawer_keys: None,
         global_route: None,
     };
     let current_route = capture_language::editor_item_at_with(

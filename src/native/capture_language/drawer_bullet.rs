@@ -17,7 +17,6 @@ use super::place::{
     format_notebook_section_create_title, leftover_after, quoted_after_hash,
     scan_hash_opener, shift_range, token_end,
 };
-use super::project_tasks::split_leading_checkbox;
 use crate::native::capture_drawers::{
     drawer_key, is_drawer_slug, normalize_drawer_literal,
 };
@@ -355,24 +354,12 @@ pub(crate) fn multi_note_clip_error() -> String {
     multi_note_marker_error("%c", "%c", "clip")
 }
 
-pub(crate) fn existing_drawer_empty_error(
-    title: &str,
-    block_id: &str,
-) -> String {
-    format!(
-        "`{title}` is already a drawer on ^{block_id}; nest the notes to add \
-beneath `- {title}`"
-    )
-}
-
 pub(crate) fn code_for_message(message: &str) -> Option<&'static str> {
     if message == drawer_bullet_text_error() {
         Some("drawer_bullet_text")
     } else if message == empty_drawer_bullet_error()
         || message.starts_with("`- **")
             && message.contains("names a container but has no nested notes")
-        || message.contains("is already a drawer on ^")
-            && message.contains("nest the notes to add beneath `- ")
     {
         Some("empty_drawer_bullet")
     } else if message

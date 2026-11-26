@@ -11,7 +11,7 @@ List a task's drawers and project-note sections
 ```text title="bob capture-drawers --help"
 List the direct-child drawer bullets of one task in a routed Bob note.
 
-Task drawers include legacy ALL-CAPS headers and whole-bold titles.
+Task drawers are direct-child whole-bold titles.
 
 The command is read-only and reports every qualifying drawer in document order with its original title, key, whitespace-free slug, marker, line, and entry count, plus recent catalog drawers absent from the task. When the parent is the project note's own `^prj` task, the note's eligible `##` sections are reported instead of task-child drawers. It uses the same parent-task lookup and error messages as `bob capture`: a missing, duplicated, or non-task block ID is an error, as is a stale or ambiguous --task-ref. A resolved task with no drawers returns a successful empty list so picker callers can skip the chooser.
 

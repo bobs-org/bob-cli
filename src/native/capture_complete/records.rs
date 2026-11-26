@@ -123,6 +123,7 @@ impl<'a> Session<'a> {
                 has_global_destination: false,
                 record_policy: Some(&policy),
                 notebook_policy: Some(&notebook_policy),
+                known_drawer_keys: None,
                 global_route: None,
             },
         );

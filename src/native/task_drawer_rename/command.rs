@@ -33,7 +33,7 @@ use super::{
 };
 use crate::native::{
     capture_dependency_tasks::vault_note_paths,
-    capture_drawers::{self, invalidate_drawer_catalog},
+    capture_drawers::invalidate_drawer_catalog,
     env as bob_env,
     host_catalog::{
         self, CommitInfo, FileEdit, PlannedTxn, ReadDependencies, TxnResult,
@@ -328,6 +328,489 @@ fn collect_markdown(directory: &Path, files: &mut Vec<PathBuf>) {
             files.push(path);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+fn commit_subject(spec: &RenameSpec, notes: usize) -> String {
+    format!(
+        "{COMMAND_NAME}: {} → {} ({})",
+        spec.old_key,
+        spec.drawer_title,
+        counted(notes, "note", "notes"),
+    )
+}
+
+fn planned_txn(
+    vault: &Path,
+    plan: RenamePlan,
+    spec: RenameSpec,
+    settings: NoteTaskSettings,
+) -> PlannedTxn<RenameContext> {
+    let expected: Vec<(PathBuf, String)> = plan
+        .edits
+        .iter()
+        .map(|edit| (edit.path.clone(), edit.after.clone()))
+        .collect();
+    let files = host_catalog::staged_rewrites(vault, &plan.edits);
+    let verify_vault = vault.to_path_buf();
+    let context = plan.context;
+    let subject = commit_subject(&spec, context.changes.len());
+    let index = plan.index;
+    let renamed = plan.renamed;
+    let refused = plan.refused;
+    PlannedTxn {
+        files,
+        appends: Vec::new(),
+        deps: plan.dependencies,
+        subject,
+        verify: Box::new(move || {
+            let targets = LinkTargets {
+                index: &index,
+                renamed: &renamed,
+                refused: &refused,
+            };
+            verify_renamed(&verify_vault, &expected, &spec, &settings, &targets)
+        }),
+        context,
+        kind: "task",
+    }
+}
+
+/// Re-read every written note: it must hold the planned bytes, and neither
+/// the rename nor the link pass may plan anything more.
+fn verify_renamed(
+    vault: &Path,
+    expected: &[(PathBuf, String)],
+    spec: &RenameSpec,
+    settings: &NoteTaskSettings,
+    targets: &LinkTargets<'_>,
+) -> Result<(), String> {
+    for (relative, after) in expected {
+        let path = slash(relative);
+        let contents = fs::read_to_string(vault.join(relative))
+            .map_err(|error| format!("could not re-read {path}: {error}"))?;
+        if contents != *after {
+            return Err(format!("{path} does not hold the planned rename"));
+        }
+        if !targets.refused.contains(relative) {
+            settled(&contents, spec, settings).map_err(|reason| {
+                format!("{path} after the write: {reason}")
+            })?;
+        }
+        let links = repair_heading_links(&contents, relative, targets, spec);
+        if let Some(repair) = links.repairs.first() {
+            return Err(format!(
+                "{path} after the write: line {} still links to {}",
+                repair.line, repair.before
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Report
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct RenameReport {
+    dry_run: bool,
+    spec: Option<RenameSpec>,
+    old_input: String,
+    new_input: String,
+    context: RenameContext,
+    commit: Option<CommitInfo>,
+    sync_pre: Option<&'static str>,
+    sync_post: Option<&'static str>,
+    failure: Option<TxnFailure>,
+}
+
+impl RenameReport {
+    fn ok(&self) -> bool {
+        self.failure.is_none() && self.context.io_errors.is_empty()
+    }
+
+    fn exit_code(&self) -> i32 {
+        if self.spec.is_none() {
+            return 2;
+        }
+        i32::from(!self.ok())
+    }
+
+    fn to_json(&self) -> Value {
+        let context = &self.context;
+        let counts = context.drawer_counts();
+        let mut payload = json!({
+            "schema_version": SCHEMA_VERSION,
+            "ok": self.ok(),
+            "command": "rename-drawer",
+            "dry_run": self.dry_run,
+            "old": {
+                "input": self.old_input,
+                "key": self.spec.as_ref().map(|spec| spec.old_key.clone()),
+            },
+            "new": {
+                "input": self.new_input,
+                "key": self.spec.as_ref().map(|spec| spec.new_key.clone()),
+                "drawer_title": self.spec.as_ref().map(|spec| spec.drawer_title.clone()),
+                "section_title": self.spec.as_ref().map(|spec| spec.section_title.clone()),
+            },
+            "counts": {
+                "notes_scanned": context.notes_scanned,
+                "notes_changed": context.changes.len(),
+                "open_drawers": counts.open,
+                "closed_drawers": counts.closed,
+                "archive_drawers": counts.archive,
+                "project_sections": context.sections(),
+                "merges": context.merges(),
+                "links_repaired": context.links(),
+                "refused": context.refused.len(),
+                "excluded": context.excluded.len(),
+                "unresolved_links": context.unresolved.len(),
+                "template_hits": context.templates.len(),
+            },
+            "changes": context.changes.iter().map(|change| json!({
+                "path": change.path,
+                "archive": change.archive,
+                "drawers": change.drawers.iter().map(|drawer| json!({
+                    "line": drawer.line,
+                    "task": drawer.task,
+                    "block_id": drawer.block_id,
+                    "status": if drawer.open { "open" } else { "closed" },
+                    "from": drawer.titles,
+                    "merged": merged(&drawer.titles),
+                })).collect::<Vec<_>>(),
+                "sections": change.sections.iter().map(|section| json!({
+                    "line": section.line,
+                    "from": section.titles,
+                    "merged": merged(&section.titles),
+                })).collect::<Vec<_>>(),
+                "links": change.links.iter().map(|link| json!({
+                    "line": link.line,
+                    "before": link.before,
+                    "after": link.after,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "refused": context.refused.iter().map(|(path, reason)| json!({
+                "path": path,
+                "reason": reason,
+            })).collect::<Vec<_>>(),
+            "excluded": context.excluded.iter().map(|(path, item)| json!({
+                "path": path,
+                "line": item.line,
+                "text": item.text,
+                "reason": item.reason,
+            })).collect::<Vec<_>>(),
+            "unresolved_links": context.unresolved.iter().map(|(path, link)| json!({
+                "path": path,
+                "line": link.line,
+                "link": link.link,
+                "reason": link.reason,
+            })).collect::<Vec<_>>(),
+            "templates": context.templates.iter().map(|hit| json!({
+                "path": hit.path,
+                "line": hit.line,
+                "kind": hit.kind,
+                "text": hit.text,
+            })).collect::<Vec<_>>(),
+            "commit": match &self.commit {
+                Some(commit) => json!({"sha": commit.sha, "subject": commit.subject}),
+                None => Value::Null,
+            },
+            "sync": match (self.sync_pre, self.sync_post) {
+                (Some(pre), Some(post)) => json!({"pre": pre, "post": post}),
+                _ => Value::Null,
+            },
+            "warnings": context.warnings,
+            "io_errors": context.io_errors,
+        });
+        if let Some(failure) = &self.failure {
+            payload["error"] = json!({
+                "code": failure.code,
+                "message": failure.message,
+                "hint": failure.hint,
+            });
+        }
+        payload
+    }
+
+    /// `3 drawers (1 open · 0 closed · 2 archived) · 51 project sections ·
+    /// 0 merges · 0 links repaired in 54 notes`.
+    fn summary(&self) -> String {
+        let context = &self.context;
+        let counts = context.drawer_counts();
+        format!(
+            "{} ({} open · {} closed · {} archived) · {} · {} · {} in {}",
+            counted(counts.total(), "drawer", "drawers"),
+            counts.open,
+            counts.closed,
+            counts.archive,
+            counted(context.sections(), "project section", "project sections"),
+            counted(context.merges(), "merge", "merges"),
+            counted(context.links(), "link repaired", "links repaired"),
+            counted(context.changes.len(), "note", "notes"),
+        )
+    }
+
+    fn print_human(&self) {
+        let styler = Styler::detect();
+        let context = &self.context;
+        if let Some(failure) = &self.failure {
+            eprintln!("{} {}", styler.red("✗"), failure.message);
+            if let Some(hint) = &failure.hint {
+                eprintln!("  {}", styler.dim(hint));
+            }
+        }
+        for error in &context.io_errors {
+            eprintln!("{} {error}", styler.red("✗"));
+        }
+        let Some(spec) = &self.spec else {
+            return;
+        };
+        if self.dry_run {
+            for change in &context.changes {
+                print_note(change, spec, &styler, true);
+            }
+            print_findings(context, &styler);
+            if !context.changes.is_empty() {
+                println!(
+                    "{} dry run: {}; nothing was written. Rerun with -a to apply",
+                    styler.yellow("!"),
+                    self.summary(),
+                );
+            } else if self.ok() {
+                self.print_clean(spec, &styler);
+            }
+        } else if self.failure.is_none() {
+            match &self.commit {
+                Some(commit) => {
+                    println!(
+                        "{} renamed {} → {}: {} ({})",
+                        styler.green("✓"),
+                        spec.old_key,
+                        spec.drawer_title,
+                        self.summary(),
+                        styler.dim(&commit.sha[..commit.sha.len().min(9)]),
+                    );
+                    for change in &context.changes {
+                        println!(
+                            "  {} {}",
+                            styler.bold(&change.path),
+                            styler.dim(&note_counts(change)),
+                        );
+                    }
+                }
+                None if context.io_errors.is_empty() => {
+                    self.print_clean(spec, &styler);
+                }
+                None => {}
+            }
+            print_findings(context, &styler);
+        }
+        for warning in &context.warnings {
+            println!("{} {warning}", styler.yellow("!"));
+        }
+    }
+
+    fn print_clean(&self, spec: &RenameSpec, styler: &Styler) {
+        println!(
+            "{} nothing to rename: no {} drawer or section changes in {} scanned",
+            styler.green("✓"),
+            spec.old_key,
+            counted(self.context.notes_scanned, "note", "notes"),
+        );
+    }
+}
+
+/// `"1 note"` / `"2 notes"`.
+fn counted(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// `"(1 drawer · 1 merge · 2 links)"` for one changed note.
+fn note_counts(change: &NoteChange) -> String {
+    let mut parts = Vec::new();
+    if change.drawers_renamed() > 0 {
+        parts.push(counted(change.drawers_renamed(), "drawer", "drawers"));
+    }
+    if change.sections_renamed() > 0 {
+        parts.push(counted(change.sections_renamed(), "section", "sections"));
+    }
+    if change.merges() > 0 {
+        parts.push(counted(change.merges(), "merge", "merges"));
+    }
+    if !change.links.is_empty() {
+        parts.push(counted(change.links.len(), "link", "links"));
+    }
+    format!("({})", parts.join(" · "))
+}
+
+/// `REQUIREMENTS + NOTES → NOTES (merged)`.
+fn retitling(titles: &[String], prefix: &str, new: &str) -> String {
+    let from = titles
+        .iter()
+        .map(|title| format!("{prefix}{title}"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let suffix = if titles.len() > 1 { " (merged)" } else { "" };
+    format!("{from} → {prefix}{new}{suffix}")
+}
+
+/// One note's header, each change, and (in a dry run) a colored excerpt.
+fn print_note(
+    change: &NoteChange,
+    spec: &RenameSpec,
+    styler: &Styler,
+    excerpt: bool,
+) {
+    let archive = if change.archive { " archive" } else { "" };
+    println!(
+        "{} {}",
+        styler.bold(&change.path),
+        styler.dim(&format!("{}{archive}", note_counts(change))),
+    );
+    for drawer in &change.drawers {
+        println!(
+            "  {} {} {} {}",
+            styler.cyan(&format!("L{}", drawer.line)),
+            drawer.task,
+            styler.dim(&format!(
+                "({})",
+                if drawer.open { "open" } else { "closed" }
+            )),
+            styler.dim(&format!(
+                "· {}",
+                retitling(&drawer.titles, "", &spec.drawer_title)
+            )),
+        );
+    }
+    for section in &change.sections {
+        println!(
+            "  {} {}",
+            styler.cyan(&format!("L{}", section.line)),
+            retitling(&section.titles, "## ", &spec.section_title),
+        );
+    }
+    for link in &change.links {
+        println!(
+            "  {} {} → {}",
+            styler.cyan(&format!("L{}", link.line)),
+            link.before,
+            link.after,
+        );
+    }
+    if excerpt {
+        print!("{}", excerpt_diff(&change.before, &change.after, styler));
+    }
+    println!();
+}
+
+/// Refused notes, excluded lookalikes, unresolved links, and template hits.
+fn print_findings(context: &RenameContext, styler: &Styler) {
+    if !context.refused.is_empty() {
+        println!(
+            "{} {}",
+            styler.yellow("Refused"),
+            styler.dim(&format!(
+                "({}, left unchanged)",
+                counted(context.refused.len(), "note", "notes")
+            )),
+        );
+        for (path, reason) in &context.refused {
+            println!(
+                "  {} {}: {reason}",
+                styler.yellow("!"),
+                styler.bold(path)
+            );
+        }
+        println!();
+    }
+    if !context.excluded.is_empty() {
+        println!(
+            "{} {}",
+            styler.yellow("Excluded"),
+            styler
+                .dim(&format!("({}, left as written)", context.excluded.len())),
+        );
+        for (path, item) in &context.excluded {
+            println!(
+                "  · {}:{} `{}` {}",
+                path,
+                item.line,
+                item.text,
+                styler.dim(&format!("— {}", item.reason)),
+            );
+        }
+        println!();
+    }
+    if !context.unresolved.is_empty() {
+        println!(
+            "{} {}",
+            styler.yellow("Unresolved links"),
+            styler.dim(&format!(
+                "({}, left as written)",
+                context.unresolved.len()
+            )),
+        );
+        for (path, link) in &context.unresolved {
+            println!(
+                "  · {}:{} {} {}",
+                path,
+                link.line,
+                link.link,
+                styler.dim(&format!("— {}", link.reason)),
+            );
+        }
+        println!();
+    }
+    if !context.templates.is_empty() {
+        println!(
+            "{} {}",
+            styler.yellow("Templates"),
+            styler.dim(&format!(
+                "({}, reported only; templates are never edited)",
+                context.templates.len()
+            )),
+        );
+        for hit in &context.templates {
+            println!(
+                "  · {}:{} `{}` {}",
+                hit.path,
+                hit.line,
+                hit.text,
+                styler.dim(&format!("({})", hit.kind)),
+            );
+        }
+        println!();
+    }
+}
+
+/// A line diff of one note, with a few context lines around each changed
+/// run and `⋯` between distant runs.
+fn excerpt_diff(before: &str, after: &str, styler: &Styler) -> String {
+    let diff = TextDiff::from_lines(before, after);
+    let mut out = String::new();
+    for (index, group) in diff.grouped_ops(EXCERPT_CONTEXT).iter().enumerate() {
+        if index > 0 {
+            out.push_str(&format!("    {}\n", styler.dim("⋯")));
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let text = change.value().trim_end_matches(['\n', '\r']);
+                let line = match change.tag() {
+                    ChangeTag::Delete => styler.red(&format!("    - {text}")),
+                    ChangeTag::Insert => styler.green(&format!("    + {text}")),
+                    ChangeTag::Equal => styler.dim(&format!("      {text}")),
+                };
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

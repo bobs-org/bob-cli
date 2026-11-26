@@ -287,6 +287,7 @@ fn directive_refusal(
             // completion probes keep the literal fallback here.
             record_policy: None,
             notebook_policy: Some(&notebook_policy),
+            known_drawer_keys: None,
             global_route: None,
         },
     );
@@ -340,6 +341,7 @@ fn notebook_create_offer(
             has_global_destination: false,
             record_policy: None,
             notebook_policy: Some(&notebook_policy),
+            known_drawer_keys: None,
             global_route: None,
         },
     );
