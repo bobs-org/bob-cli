@@ -311,7 +311,10 @@ Property tests (Rust) must hold for merge, split, and many-source move:
 1. Every block link that resolved before still resolves to the same block as
    before.
 2. `bob task reconcile` is a no-op afterwards: mirrors, BLOCKS, fields,
-   and LINKED FROM all converge.
+   and LINKED FROM all converge, and no repointed pair is left holding a
+   plain link beside its dependency for the
+   [plain-link fold](task-relations.md#22-plain-links-and-dependencies) to
+   drop (MG21).
 3. A dry run equals the result except for `dry_run`.
 4. A re-run is `unchanged`, with zero writes.
 5. A merge never produces a transient unblock of a re-pointed dependent.

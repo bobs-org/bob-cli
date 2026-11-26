@@ -289,7 +289,7 @@ fn block_id_goto_empty_id_lists_living_then_archive_rows() {
         "{value}"
     );
     // A duplicated ID is omitted; the parse card explains it.
-    assert!(!ids.iter().any(|id| *id == "dup"), "{value}");
+    assert!(!ids.contains(&"dup"), "{value}");
     let kinds: Vec<&str> = rows
         .iter()
         .map(|row| row["target_kind"].as_str().expect("target kind"))

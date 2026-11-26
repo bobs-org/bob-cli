@@ -1483,9 +1483,7 @@ fn dependency_direction(
     {
         return Some("source_waits_on_target");
     }
-    let Some(id) = source_block_id else {
-        return None;
-    };
+    let id = source_block_id?;
     deps.depends_identities
         .contains(&(
             target.clone(),

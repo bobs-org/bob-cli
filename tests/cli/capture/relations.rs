@@ -1240,7 +1240,8 @@ fn dependency_absorption_preserves_a_labelled_relation_and_its_mirror() {
 }
 
 // LX18: `*` absorbs a plain relation from the dependent back to the new
-// prerequisite, and reports that the target waits on the source.
+// prerequisite, and reports that the link's source (the dependent) waits on
+// its target.
 #[test]
 fn lx18_star_absorbs_reverse_plain_link() {
     let (_temp, vault, day) = setup("bob-cli-rel-lx18");

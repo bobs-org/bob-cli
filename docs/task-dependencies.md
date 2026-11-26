@@ -4723,7 +4723,7 @@ capture-link execution contract.
 | ST17 | `N *T` vs the two-item `N @mac_inbox^id` + `&mac_inbox:id @T-route+T-id`, T Ready or Next | identical vault diffs apart from the ID |
 | ST18 | any ST vector, dry run vs live run | identical JSON apart from `dry_run` |
 | ST19 | `*T @route+id`, and `Note text @route+id *T` | owner gets the normal §5 transfer (may become `[/]`); sub-bullet added |
-| ST20 | `*T` adds N as T's prerequisite while T has a plain LINKS entry to N | the plain LINKS entry and writable generated LINKED FROM mirror are absorbed in the same batch; capture reports `target_waits_on_source` |
+| ST20 | `*T` adds N as T's prerequisite while T has a plain LINKS entry to N | the plain LINKS entry and writable generated LINKED FROM mirror are absorbed in the same batch; capture reports `source_waits_on_target` (the absorbed link's source, T, waits on its target, N) |
 
 ### 13.6 Guards
 

@@ -547,7 +547,7 @@ warns, in the same wording pattern.
 
 `--dry-run` previews all of it.
 
-**Plain-link tie fields (contract; emitters land in later phases).**
+**Plain-link tie fields.**
 The row shape and field names are pinned in
 [§22](#22-plain-links-and-dependencies): reconcile `absorbed_plain_links[]`,
 per-item capture `absorbed_plain_links[]` plus `subsumed_by: "dependency"` on
@@ -2607,12 +2607,13 @@ preimage, the gesture, and the byte-exact postimage expectation.
 
 ## 22. Plain links and dependencies
 
-> [!NOTE] Contract only: the reconcile fold, capture absorption, merge
-> pruning, capture-complete tie fields, and nav tie planner/writer/keys
-> phases land the emitters. Until then this section pins the contract
-> they must implement. The Rust primitives live in
-> `src/native/task_relations/ties.rs` (`drop_plain_link_entries` and
-> `PairTies`) and are pinned by the PT vectors below.
+> [!NOTE] Every writer in the table below implements this contract: the
+> reconcile fold, capture absorption, merge pruning, capture-complete tie
+> fields, and the nav tie planner, writer, and keys. The Rust byte-exact
+> drop lives in `src/native/task_relations/ties.rs`
+> (`drop_plain_link_entries`), pinned by the PT drop vectors below; its
+> test-only `PairTies` classification pins the PT pair vectors that the
+> nav `classifyPairTies` twin also runs.
 
 ### 22.1 Vocabulary
 

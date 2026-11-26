@@ -1168,6 +1168,18 @@ fn block_id_in_fenced_code(contents: &str, block_id: &str) -> bool {
     })
 }
 
+fn typed_note_as_relative(typed: &str) -> PathBuf {
+    if typed
+        .rsplit('/')
+        .next()
+        .is_some_and(|file| file.contains('.'))
+    {
+        PathBuf::from(typed)
+    } else {
+        PathBuf::from(format!("{typed}.md"))
+    }
+}
+
 #[cfg(test)]
 mod tie_tests {
     use super::*;
@@ -1192,17 +1204,5 @@ mod tie_tests {
         assert!(dependency_joins_pair(&graph, &a, &b));
         assert!(dependency_joins_pair(&graph, &b, &a));
         assert!(!dependency_joins_pair(&graph, &a, &c));
-    }
-}
-
-fn typed_note_as_relative(typed: &str) -> PathBuf {
-    if typed
-        .rsplit('/')
-        .next()
-        .is_some_and(|file| file.contains('.'))
-    {
-        PathBuf::from(typed)
-    } else {
-        PathBuf::from(format!("{typed}.md"))
     }
 }

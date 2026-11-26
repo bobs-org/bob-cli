@@ -1,9 +1,13 @@
 //! Plain-link/dependency ties (`docs/task-relations.md` §22).
 //!
-//! One pair-level predicate plus one byte-exact plain-entry drop. Every
-//! later writer (reconcile fold, capture absorption, merge pruning, the
-//! nav planner twins) builds on these two primitives so Rust and JS
-//! agree byte for byte on every shared PT vector.
+//! One byte-exact plain-entry drop shared by every Rust writer (reconcile
+//! fold, capture absorption, merge pruning), pinned by the PT drop vectors
+//! that the nav planner twin (`dropPlainLinkEntries`) mirrors byte for
+//! byte. Each writer answers the pair question with its own engine's
+//! dependency graph over the existing identity keys: reconcile's
+//! `dependency_direction` and capture's `dependency_joins_pair`. The
+//! test-only `PairTies` classification pins the PT pair vectors that the
+//! JS `classifyPairTies` twin also runs.
 
 use super::parse::{accepted_links_spans, links_label_spans, parse_links_line};
 use super::{LinksLine, RelationEntry};
@@ -55,9 +59,9 @@ pub(crate) enum DropOutcome {
 /// `is_tied` answers one question per entry: is this pair joined by a
 /// dependency in either direction? Callers resolve
 /// `(entry.target, entry.block_id)` to a vault path plus block id
-/// first (PT10) and reuse `dependency_joins`; labelled entries
-/// (including `[[#^a|alias]]` per LK5) never drop, whatever the
-/// predicate says.
+/// first (PT10) and answer with their engine's dependency-joins
+/// predicate; labelled entries (including `[[#^a|alias]]` per LK5)
+/// never drop, whatever the predicate says.
 ///
 /// Separator rule (PT2–PT4, PT9): a dropped non-first entry takes its
 /// preceding separator; a dropped first entry takes its following
@@ -141,6 +145,10 @@ pub(crate) fn drop_plain_link_entries(
 }
 
 /// The exclusive tie between two tasks, from the owner's side.
+///
+/// Test-only: it pins the PT13–PT21 pair vectors shared with the JS
+/// `classifyPairTies` twin; Rust writers decide drops per entry.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TieKind {
     /// No plain link and no dependency either way (PT13).
@@ -159,6 +167,7 @@ pub(crate) enum TieKind {
     DependsBoth,
 }
 
+#[cfg(test)]
 impl TieKind {
     /// Fixture and docs spelling (`docs/task-relations.md` §22).
     pub(crate) fn as_str(self) -> &'static str {
@@ -175,6 +184,7 @@ impl TieKind {
 }
 
 /// One pair's tie plus which plain sides its dependency absorbs.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PairTies {
     /// The pair's exclusive tie (dependency wins over plain).
@@ -185,6 +195,7 @@ pub(crate) struct PairTies {
     pub(crate) drop_other_plain: bool,
 }
 
+#[cfg(test)]
 impl PairTies {
     /// Classify one pair from already-resolved edge sets.
     ///
