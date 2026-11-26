@@ -74,6 +74,7 @@ fn editor_options(
         has_global_destination: false,
         record_policy: policy,
         notebook_policy: None,
+        known_drawer_keys: None,
         global_route: None,
     }
 }
@@ -533,7 +534,7 @@ fn record_sections_require_bold_and_empty_bold_headers_refuse() {
         &strict_options(Some(&policy)),
     )
     .expect("plain uppercase record lines stay ordinary content");
-    let CaptureKind::RecordNote { intent } = plain.kind else {
+    let CaptureKind::RecordNote { intent } = plain.items[0].parsed.kind else {
         panic!("not a record note: {plain:?}");
     };
     assert!(intent.notes.iter().all(|note| note.section.is_none()));

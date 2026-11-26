@@ -55,6 +55,7 @@ fn editor_routing(raw: &str, policy: Option<&UrlRoutingPolicy>) -> EditorParse {
             has_global_destination: false,
             record_policy: None,
             notebook_policy: None,
+            known_drawer_keys: None,
             global_route: None,
         },
     )

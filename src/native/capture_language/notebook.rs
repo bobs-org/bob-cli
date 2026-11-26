@@ -3899,6 +3899,7 @@ mod tests {
             has_global_destination: false,
             record_policy: None,
             notebook_policy: Some(&policy),
+            known_drawer_keys: None,
             global_route: None,
         };
         let parsed = super::super::parse_for_editor_with(
@@ -3945,6 +3946,7 @@ mod tests {
             has_global_destination: false,
             record_policy: None,
             notebook_policy: Some(&policy),
+            known_drawer_keys: None,
             global_route: None,
         };
         let parsed =
