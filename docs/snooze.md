@@ -305,7 +305,9 @@ snooze undoes with one `Ctrl+Z`; a same-note task and daily edit composes
 into one transaction, while cross-note task and daily edits undo per
 editor. Cancellation writes nothing. When `Alt+Z` conflicts with an
 existing binding, the command and Task Card entry stay available and the
-existing binding is preserved.
+existing binding is preserved. The command has no Alt+Z default in that
+case; conflicts are checked against configured hotkeys, loaded plugin defaults,
+and the configured vimrc. The Task Card `z` entry remains available.
 
 ## Writer preservation
 
