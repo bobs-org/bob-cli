@@ -486,7 +486,13 @@ mod tests {
             !text.to_ascii_lowercase().contains("contents"),
             "no TOC: {text}"
         );
-        assert!(text.contains("MEETING NOTES"), "kicker: {text}");
+        // The dossier print profile letter-spaces the kicker
+        // (meeting.tex uses `LetterSpace=12.0`), so extractors expand it to
+        // `M E E T I N G N OT E S`. Compare without whitespace instead of
+        // depending on the extractor's glyph-spacing heuristics.
+        let squashed: String =
+            text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(squashed.contains("MEETINGNOTES"), "kicker: {text}");
         assert!(
             text.contains("TL;DR") || text.contains("TLDR"),
             "tldr: {text}"
