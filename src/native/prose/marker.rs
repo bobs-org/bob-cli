@@ -389,7 +389,7 @@ fn path_is_excluded(path: &Path) -> bool {
     })
 }
 
-fn body_refusals(
+pub(super) fn body_refusals(
     classified: &[super::scan::ClassifiedLine<'_>],
 ) -> Option<Refusal> {
     let mut task_lines = Vec::new();

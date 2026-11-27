@@ -13,6 +13,8 @@ mod outline;
 mod plan;
 mod render;
 mod scan;
+#[allow(dead_code)] // The next prose-conversion phase consumes this model.
+mod section_model;
 mod sections;
 mod vault;
 mod verify;
