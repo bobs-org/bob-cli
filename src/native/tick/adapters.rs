@@ -840,7 +840,12 @@ pub(super) fn snooze(output: &RawRunOutput, reason: &str) -> Adapted {
         Some("skipped") => Adapted {
             outcome: Outcome::Ok,
             reason: "skipped".into(),
-            summary: "skipped on this host".into(),
+            summary: match value.get("skip_reason").and_then(Value::as_str) {
+                Some("zone_unconfigured") => {
+                    "skipped: timezone unconfigured".into()
+                }
+                _ => "skipped on this host".into(),
+            },
             detail: String::new(),
             consumes_interval: true,
         },
@@ -1281,5 +1286,38 @@ mod tests {
         assert_eq!(skipped.reason, "skipped");
         assert_eq!(skipped.summary, "skipped on this host");
         assert!(skipped.consumes_interval);
+    }
+
+    fn snooze_skipped(reason: &str) -> RawRunOutput {
+        RawRunOutput {
+            status: Some(0),
+            stdout: serde_json::json!({
+                "status": "skipped",
+                "woken": [],
+                "skip_reason": reason,
+            })
+            .to_string()
+            .into_bytes(),
+            stderr: Vec::new(),
+            timed_out: false,
+            interrupted: false,
+            stdout_truncated: false,
+            output_incomplete: false,
+        }
+    }
+
+    #[test]
+    fn snooze_skipped_summary_names_skip_reason() {
+        let host = snooze(&snooze_skipped("writer_host"), "due");
+        assert_eq!(host.outcome, Outcome::Ok);
+        assert_eq!(host.reason, "skipped");
+        assert_eq!(host.summary, "skipped on this host");
+        assert!(host.consumes_interval);
+
+        let zone = snooze(&snooze_skipped("zone_unconfigured"), "due");
+        assert_eq!(zone.outcome, Outcome::Ok);
+        assert_eq!(zone.reason, "skipped");
+        assert_eq!(zone.summary, "skipped: timezone unconfigured");
+        assert!(zone.consumes_interval);
     }
 }

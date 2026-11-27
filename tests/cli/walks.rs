@@ -664,11 +664,14 @@ fn goldens_clear_all_and_bank_unavailable() {
 }
 
 fn planned_json(temp: &TempDir, day: &Path, args: &[&str]) -> Value {
+    let config = temp.path().join("bob.yml");
+    write_file(&config, "timezone: UTC\n");
     let output = bob_command()
         .args(args)
         .args(["-f", "json"])
         .env("BOB_DIR", vault_dir(temp))
         .env("BOB_DAY_FILE", day)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", NOW)
         .env("TZ", "UTC")
         .env("BOB_VAULT_SYNC_LOCK_FILE", temp.path().join("vault.lock"))

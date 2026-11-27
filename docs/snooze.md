@@ -203,12 +203,12 @@ refreshes its inputs and replans once if a preimage changed, and defers
 after a second drift or a day rollover. Add settles each note it rewrites
 (a promoted task lands in its status group) and stages the task note and
 daily note in one rollback-capable batch. Drop and wake write only the daily
-note. An automatic wake sweep runs only on the configured writer host;
-`wake TASK` is an explicit request and works on any host. A skipped sweep
-does not mutate the vault or create state files. A wake whose never-running
-destination cannot be placed refuses the whole batch with `no_pomodoros`
-or `multiple_open_timed`, exit 2, and writes nothing; dry runs refuse the
-same way. Exit status is 0 for success, no work, deferred, or skipped; 1
+note. An automatic wake sweep runs only on the configured writer host, and
+only when Bob's `timezone` is set; `wake TASK` is an explicit request and
+works on any host. A skipped sweep does not mutate the vault or create
+state files. A wake whose never-running destination cannot be placed
+refuses the whole batch with `no_pomodoros` or `multiple_open_timed`,
+exit 2, and writes nothing; dry runs refuse the same way. Exit status is 0 for success, no work, deferred, or skipped; 1
 for runtime failures; and 2 for usage errors or refusals.
 
 Every JSON report has `schema_version: 1`, `date`, and RFC 3339 `now`.
@@ -233,7 +233,9 @@ the link-count plan, and `dry_run`. Drop reports `status` (`dropped` or
 `planned`), `daily_file`, and `dry_run`. Wake reports `status` (`woke`,
 `nothing_due`, `deferred`, or `skipped`), `woken`, `dropped`, `ignored`,
 `pending`, `next_wake_at`, `plan`, `daily_file`, `notified`, and
-`wake_id`. After a successful commit with a nonempty `woken[]`, wake
+`wake_id`. A skipped report also carries `skip_reason`:
+`zone_unconfigured` or `writer_host`. Other statuses omit the field.
+After a successful commit with a nonempty `woken[]`, wake
 writes `$XDG_STATE_HOME/bob-cli/snooze/last-wake.json` (mode 0600 from
 creation, then an atomic rename). Before that write, Bob selects one
 notification owner: `auto` selects `mac_capture` when the sibling

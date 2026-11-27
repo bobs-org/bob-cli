@@ -76,7 +76,7 @@ a saved follow-up retries it on the next scheduled pass.
 Snooze, Calendar, and task reconciliation wait until today's daily note
 exists, is rendered, and contains `## Pomodoros`. A deferred snooze waits
 without consuming its 5-minute cadence and retries on the next tick. A
-skipped sweep (wrong writer host) succeeds and consumes the interval.
+skipped sweep (wrong writer host, or Bob's timezone is unset) succeeds and consumes the interval.
 Summaries read `woke N · next HH:MM` or `nothing due · next HH:MM`. Calendar
 runs include yesterday on the first successful run of each local day.
 Automated Calendar runs also observe the one-hour cooldown shared with

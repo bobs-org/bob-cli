@@ -56,7 +56,7 @@ that need them report a setup error when the `priority` property is absent.
 
 | Key | Type and rules | Default or effect |
 | --- | --- | --- |
-| `timezone` | IANA timezone name, such as `America/New_York` | Unset uses the host's system timezone. When set, Bob uses this timezone for its current date and time, daily-note selection, and date stamps. Invalid names are configuration errors. |
+| `timezone` | IANA timezone name, such as `America/New_York` | Unset uses the host timezone; automatic snooze sweeps skip. When set, Bob uses this timezone for its current date and time, daily-note selection, and date stamps. Invalid names are configuration errors. |
 
 A valid `BOB_NOW` overrides `DATE`; either overrides the live clock.
 Offset-free values name wall time in Bob's timezone; an RFC 3339 `BOB_NOW` with an offset or `Z`

@@ -535,7 +535,9 @@ fn explicit_wake_works_when_automatic_writer_is_elsewhere() {
         .output()
         .expect("run pinned wake sweep");
     assert_success(&sweep);
-    assert_eq!(json_output(&sweep)["status"], "skipped");
+    let sweep_report = json_output(&sweep);
+    assert_eq!(sweep_report["status"], "skipped");
+    assert_eq!(sweep_report["skip_reason"], "writer_host");
     assert!(!temp.path().join("state").exists());
     assert!(fs::read_to_string(&daily_path)
         .unwrap()
@@ -863,7 +865,60 @@ fn skipped_sweep_does_not_write_a_receipt() {
         .output()
         .expect("skipped sweep");
     assert_success(&sweep);
-    assert_eq!(json_output(&sweep)["status"], "skipped");
+    let report = json_output(&sweep);
+    assert_eq!(report["status"], "skipped");
+    assert_eq!(report["skip_reason"], "writer_host");
     assert!(!receipt_path(&temp).exists());
     assert!(!temp.path().join("notify.json").exists());
+}
+
+#[test]
+fn unconfigured_timezone_skips_automatic_sweeps_and_still_wakes_explicitly() {
+    let (temp, daily_path) = snooze_vault(
+        "bob-cli-snooze-zone-skip",
+        "# 2026-10-08\n\n## Pomodoros\n- [ ] ()\n\n## Snoozed\n- **1100** [[jobs#^job]]\n",
+        "- [*] #task Review the launch plan ^job\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(&config, "snooze:\n  notify: off\n");
+    let before = fs::read_to_string(&daily_path).unwrap();
+
+    let sweep = snooze_command(&temp, &["wake", "-f", "json"])
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-08T12:00:00")
+        .output()
+        .expect("unconfigured timezone sweep");
+    assert_success(&sweep);
+    let report = json_output(&sweep);
+    assert_eq!(report["status"], "skipped", "{report}");
+    assert_eq!(report["skip_reason"], "zone_unconfigured", "{report}");
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+    assert!(!receipt_path(&temp).exists());
+    assert!(!temp.path().join("state").exists());
+
+    let human = snooze_command(&temp, &["wake"])
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-08T12:00:00")
+        .output()
+        .expect("unconfigured timezone human sweep");
+    assert_success(&human);
+    assert!(
+        stdout(&human)
+            .contains("snooze wake skipped: set timezone in Bob's config"),
+        "{}",
+        stdout(&human)
+    );
+    assert_eq!(fs::read_to_string(&daily_path).unwrap(), before);
+
+    let explicit = snooze_command(&temp, &["wake", "jobs:job", "-f", "json"])
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-08T12:00:00")
+        .output()
+        .expect("explicit wake without timezone");
+    assert_success(&explicit);
+    let explicit_report = json_output(&explicit);
+    assert_eq!(explicit_report["status"], "woke", "{explicit_report}");
+    assert!(explicit_report.get("skip_reason").is_none());
+    let after = fs::read_to_string(&daily_path).unwrap();
+    assert!(after.contains("woke 12:00"), "{after}");
 }

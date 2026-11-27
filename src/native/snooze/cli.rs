@@ -535,22 +535,20 @@ fn wake(request: &Request, task_texts: &[String]) -> Result<Value, CliError> {
         validate_explicit_wakes(&initial, identities)?;
     }
 
-    if !explicit && !snooze_wake_host_matches()? {
+    if let Some(reason) = automatic_sweep_skip_reason(explicit)? {
         let count = ledger_count(
             &request.bob_dir,
             &initial_day.relative,
             &initial_day.contents,
             &plan_config,
         );
-        return Ok(wake_report(
-            "skipped",
+        return Ok(skipped_wake_report(
+            reason,
             &initial_day,
             &initial_now,
             &initial,
-            &initial,
             &plan_config,
             count,
-            &BTreeMap::new(),
         ));
     }
 
@@ -644,22 +642,20 @@ fn wake(request: &Request, task_texts: &[String]) -> Result<Value, CliError> {
                 &initial.off_clock,
             ));
         }
-        if !explicit && !snooze_wake_host_matches()? {
+        if let Some(reason) = automatic_sweep_skip_reason(explicit)? {
             let count = ledger_count(
                 &request.bob_dir,
                 &day.relative,
                 &day.contents,
                 &plan_config,
             );
-            return Ok(wake_report(
-                "skipped",
+            return Ok(skipped_wake_report(
+                reason,
                 &day,
                 &now,
                 &initial,
-                &initial,
                 &plan_config,
                 count,
-                &BTreeMap::new(),
             ));
         }
         let explicit_identities =
@@ -1048,6 +1044,43 @@ fn snooze_wake_host_matches() -> Result<bool, CliError> {
     let (host, writer) =
         crate::native::tick::snooze_writer().map_err(CliError::runtime)?;
     Ok(!writer.as_ref().is_some_and(|writer| writer != &host))
+}
+
+fn automatic_sweep_skip_reason(
+    explicit: bool,
+) -> Result<Option<&'static str>, CliError> {
+    if explicit {
+        return Ok(None);
+    }
+    if bob_env::configured_timezone().is_none() {
+        return Ok(Some("zone_unconfigured"));
+    }
+    if !snooze_wake_host_matches()? {
+        return Ok(Some("writer_host"));
+    }
+    Ok(None)
+}
+
+fn skipped_wake_report(
+    reason: &'static str,
+    day: &Day,
+    now: &ClockNow,
+    plan: &WakeEvaluation,
+    config: &PlanConfig,
+    current_count: usize,
+) -> Value {
+    let mut report = wake_report(
+        "skipped",
+        day,
+        now,
+        plan,
+        plan,
+        config,
+        current_count,
+        &BTreeMap::new(),
+    );
+    report["skip_reason"] = json!(reason);
+    report
 }
 
 #[derive(Debug, Clone)]
@@ -1712,7 +1745,12 @@ fn print_wake(value: &Value, format: Format, quiet: bool) {
             }
         }
         "deferred" => println!("snooze deferred; retry on the next run"),
-        "skipped" => println!("snooze wake skipped on this host"),
+        "skipped" => match value["skip_reason"].as_str() {
+            Some("zone_unconfigured") => {
+                println!("snooze wake skipped: set timezone in Bob's config")
+            }
+            _ => println!("snooze wake skipped on this host"),
+        },
         _ => println!("nothing due"),
     }
 }
