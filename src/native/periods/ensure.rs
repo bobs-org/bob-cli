@@ -441,6 +441,7 @@ fn execute_refresh(
             path: relative.clone(),
             before_contents: Some(before.clone()),
             after_contents: after.clone(),
+            trash: false,
         })
         .collect();
     let subject = format!(

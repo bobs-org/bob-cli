@@ -448,6 +448,7 @@ fn run_cycle_inner(
         &format!("reconciling Bob vault at {}", vault.display()),
     );
     gate_pending_overwrite_intent(vault, child_env, options, styler)?;
+    recover_pending_vault_rewrite(vault, child_env, options, styler)?;
 
     let interrupted_merge_recovered = recover_interrupted_operation(
         vault, child_env, options, styler, status,
@@ -978,6 +979,29 @@ fn gate_pending_overwrite_intent(
             vault,
         )
         .map_err(CycleError::fatal)
+    }
+}
+
+/// Recover a vault rewrite interrupted before its intent was removed.
+/// Runs in the vault-sync pre-cycle next to the overwrite-intent gate, so
+/// standalone `bob vault-sync` heals a crashed rewrite, and refuses with
+/// `recovery_pending` when the worktree no longer matches either image.
+fn recover_pending_vault_rewrite(
+    vault: &Path,
+    child_env: &ChildEnv,
+    options: &RunOptions,
+    styler: &Styler,
+) -> Result<(), CycleError> {
+    match crate::native::vault_rewrite::recover_pending(vault, child_env) {
+        Ok(None) => Ok(()),
+        Ok(Some(notice)) => {
+            print_log(options, &notice);
+            Ok(())
+        }
+        Err(failure) => {
+            warn(styler, &failure.message);
+            Err(CycleError::fatal(failure.message))
+        }
     }
 }
 
@@ -3111,5 +3135,132 @@ mod tests {
         assert!(refreshed, "newer bytes should refresh the quarantine");
         assert_eq!(fs::read(vault.join(&copy)).unwrap(), b"newer\n");
         assert_eq!(fs::read(vault.join("note.md")).unwrap(), b"head\n");
+    }
+
+    /// Scratch vault with an isolated state dir, so the vault-rewrite
+    /// intent journal never touches the real `~/.local/state`.
+    fn scratch_vault_isolated(
+        tag: &str,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        PathBuf,
+        bob_env::TestEnvGuard,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        fs::create_dir(&vault).unwrap();
+        let run = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&vault)
+                .args(args)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        fs::write(vault.join("note.md"), "hello\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "init"]);
+        let lock = temp.path().join(format!("{tag}.lock"));
+        let state = tempfile::tempdir().unwrap();
+        let guard = bob_env::TestEnvGuard::set(&[
+            ("BOB_VAULT_SYNC_LOCK_FILE", Some(lock.as_os_str())),
+            ("XDG_STATE_HOME", Some(state.path().as_os_str())),
+        ]);
+        (temp, state, vault, guard)
+    }
+
+    /// Crash a vault rewrite through `vault_rewrite::run`, leaving its
+    /// intent pending. Each test runs in its own vault and state dir.
+    fn crash_rewrite(vault: &Path) {
+        use crate::native::vault_rewrite::{
+            set_crash_before_write, FileRewrite, ReadyPlan,
+        };
+        set_crash_before_write(Some(1));
+        let child_env: ChildEnv = Vec::new();
+        let failure = crate::native::vault_rewrite::run(
+            vault,
+            &child_env,
+            "bob vault-sync",
+            "test subject",
+            true,
+            false,
+            move || {
+                Ok(ReadyPlan {
+                    files: vec![FileRewrite {
+                        path: "note.md".to_string(),
+                        before_contents: Some("hello\n".to_string()),
+                        after_contents: "hello world\n".to_string(),
+                        trash: false,
+                    }],
+                    subject: "test: sync-recovery".to_string(),
+                    post_write: Box::new(|| Ok(Vec::new())),
+                    verify: Box::new(|| Ok(())),
+                    on_committed: Box::new(|| {}),
+                    context: (),
+                })
+            },
+        )
+        .expect_err("injected crash aborts");
+        set_crash_before_write(None);
+        assert_eq!(failure.code, "crash_injected");
+    }
+
+    #[test]
+    fn sync_precycle_recovers_interrupted_vault_rewrite() {
+        let (_temp, _state, vault, _guard) =
+            scratch_vault_isolated("sync-rewrite-ok");
+        crash_rewrite(&vault);
+        assert_eq!(
+            fs::read_to_string(vault.join("note.md")).unwrap(),
+            "hello world\n",
+            "the crash lands after the write"
+        );
+        let child_env: ChildEnv = Vec::new();
+        let options = RunOptions::default();
+        let styler = Styler::detect();
+        recover_pending_vault_rewrite(&vault, &child_env, &options, &styler)
+            .expect("the pre-cycle recovers");
+        assert_eq!(
+            fs::read_to_string(vault.join("note.md")).unwrap(),
+            "hello\n",
+            "the pre-cycle rolls the rewrite back"
+        );
+        // A second pass finds nothing pending.
+        recover_pending_vault_rewrite(&vault, &child_env, &options, &styler)
+            .expect("no intent remains");
+    }
+
+    #[test]
+    fn sync_precycle_refuses_diverged_vault_rewrite() {
+        let (_temp, _state, vault, _guard) =
+            scratch_vault_isolated("sync-rewrite-bad");
+        crash_rewrite(&vault);
+        // An editor saves over the crashed after-image.
+        fs::write(vault.join("note.md"), "tampered\n").unwrap();
+        let child_env: ChildEnv = Vec::new();
+        let options = RunOptions::default();
+        let styler = Styler::detect();
+        let error = recover_pending_vault_rewrite(
+            &vault, &child_env, &options, &styler,
+        )
+        .expect_err("the pre-cycle refuses");
+        assert!(
+            error
+                .message
+                .contains("interrupted vault rewrite is pending"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("note.md"), "{}", error.message);
+        assert_eq!(
+            fs::read_to_string(vault.join("note.md")).unwrap(),
+            "tampered\n",
+            "a refused pre-cycle touches nothing"
+        );
     }
 }

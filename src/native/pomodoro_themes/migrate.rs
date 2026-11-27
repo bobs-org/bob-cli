@@ -564,6 +564,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
                     path: file.path.clone(),
                     before_contents: Some(file.before_contents.clone()),
                     after_contents: file.after_contents.clone(),
+                    trash: false,
                 })
                 .collect::<Vec<_>>();
             let fields: usize =

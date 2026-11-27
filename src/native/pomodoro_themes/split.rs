@@ -1034,6 +1034,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
                     path: file.path.clone(),
                     before_contents: Some(file.before_contents.clone()),
                     after_contents: file.after_contents.clone(),
+                    trash: false,
                 })
                 .collect::<Vec<_>>();
             let subject = commit_subject(&inner.old_name, &inner.targets);
@@ -1068,6 +1069,9 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
             report.sync.post = outcome.sync_post.to_string();
             if let Some(post) = outcome.post_sync_warning {
                 report.warnings.push(post);
+            }
+            if let Some(recovered) = outcome.recovery_warning {
+                report.warnings.push(recovered);
             }
             print_split_success(&report, format);
             0

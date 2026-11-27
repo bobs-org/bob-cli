@@ -905,6 +905,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
                     path: file.path.clone(),
                     before_contents: Some(file.before_contents.clone()),
                     after_contents: file.after_contents.clone(),
+                    trash: false,
                 })
                 .collect::<Vec<_>>();
             let subject = format!(
@@ -947,6 +948,9 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
                 report.warnings.push(dirty);
             }
             if let Some(warning) = outcome.post_sync_warning {
+                report.warnings.push(warning);
+            }
+            if let Some(warning) = outcome.recovery_warning {
                 report.warnings.push(warning);
             }
             print_success(&report, format);

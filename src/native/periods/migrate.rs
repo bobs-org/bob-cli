@@ -295,6 +295,7 @@ fn plan_create_or_fill(
                     path: relative.clone(),
                     before_contents: None,
                     after_contents: scaffold::render(id),
+                    trash: false,
                 },
             );
             plan.created.push(relative);
@@ -313,6 +314,7 @@ fn plan_create_or_fill(
                             path: relative.clone(),
                             before_contents: Some(contents),
                             after_contents: after,
+                            trash: false,
                         },
                     );
                 }
@@ -332,6 +334,7 @@ fn plan_create_or_fill(
                             path: relative.clone(),
                             before_contents: Some(contents),
                             after_contents: after,
+                            trash: false,
                         },
                     );
                     plan.intentions_migrated.push(relative);
@@ -418,6 +421,7 @@ fn plan_year_notes(
                             path: relative.clone(),
                             before_contents: Some(contents),
                             after_contents: after,
+                            trash: false,
                         },
                     );
                     plan.intentions_migrated.push(relative);
@@ -441,6 +445,7 @@ fn plan_year_notes(
                         path: relative.clone(),
                         before_contents: Some(contents),
                         after_contents: after,
+                        trash: false,
                     },
                 );
             }
@@ -458,6 +463,7 @@ fn plan_year_notes(
                             path: relative.clone(),
                             before_contents: Some(contents),
                             after_contents: after,
+                            trash: false,
                         },
                     );
                     plan.reparented.push(relative);
@@ -514,6 +520,7 @@ fn plan_dailies(
                 path: relative.clone(),
                 before_contents: Some(contents),
                 after_contents: after,
+                trash: false,
             },
         );
         plan.rewritten.push(relative);

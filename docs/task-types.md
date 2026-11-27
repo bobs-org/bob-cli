@@ -301,7 +301,8 @@ task fields (including `done/`), modeled on `bob ref rename`.
   OLD reads "OLD is plan.reading_theme; set plan.reading_theme to NEW
   first"), plus
   `lock_busy`, `dirty_paths` (offline with dirty targets), `not_a_worktree`,
-  `vault_mismatch`, `sync_failed`, `verify_failed`, and `stale_note`.
+  `vault_mismatch`, `sync_failed`, `verify_failed`, `recovery_pending`,
+  and `stale_note`.
 - **Color and state:** the color follows the new name, and the preview says
   so. Hidden state and pins move with the rename per PT4.
 - **Unconfigured NEW:** a NEW outside the vocabulary adds a `warnings`
@@ -414,7 +415,8 @@ map from stdin. OLD must be a known type.
   scanned entry count is unchanged. Undo is `git revert`.
 - **Refusals:** `unknown_theme`, `invalid_name`, `unchanged`, `invalid_map`,
   `stale_entry`, plus `lock_busy`, `dirty_paths`, `not_a_worktree`,
-  `vault_mismatch`, `sync_failed`, `verify_failed`, and `stale_note`.
+  `vault_mismatch`, `sync_failed`, `verify_failed`, `recovery_pending`,
+  and `stale_note`.
 
 Runbook: `bob types split JOB -t > job.tsv`, edit TYPE, preview with
 `bob types split JOB -m job.tsv -d`, apply with `bob types split JOB -m

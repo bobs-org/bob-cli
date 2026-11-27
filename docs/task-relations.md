@@ -1125,6 +1125,7 @@ writes do not require this match; symlink aliases work.
 | `dirty_paths` | An offline target note has uncommitted changes | Commit or restore those paths |
 | `stale_note` | A target changed after planning | Re-run to preview the latest contents |
 | `verify_failed` | Rescan found a mismatch; the transaction restores its before-images | Inspect the reported note, then retry |
+| `recovery_pending` | An interrupted rewrite is pending; a file holds neither the before- nor the after-image | Run `bob vault-sync` on this host to recover, then retry |
 | `lock_busy` | Another vault maintenance run holds the lock | Wait for it to finish |
 | `not_a_worktree` | The vault is not a Git worktree | Open or initialize the vault worktree |
 | `vault_mismatch` | The selected vault differs from `BOB_DIR`, or a path cannot be resolved | Set `BOB_DIR` to the selected vault, or use `--offline` |
@@ -1133,6 +1134,15 @@ writes do not require this match; symlink aliases work.
 Undo a successful rename with `git revert <rename-commit>`; the commit
 contains the note-span rewrites and the journal event. No live-vault
 rename is part of acceptance.
+
+Interrupted rewrites recover on their own: every transaction persists a
+crash intent (before-images, trash destinations, and the expected commit)
+before the first write. The next vault rewrite — or `bob vault-sync`, in
+its pre-cycle — rolls the intent back to the before-images, removes
+created files, and moves trashed files back, reporting one warning. When
+a file holds neither image (edited after the crash), the run refuses with
+`recovery_pending` and names the manifest and the diverged paths instead
+of committing half a rewrite.
 
 ### RV9 Obsidian
 
