@@ -318,6 +318,89 @@ impl TaskBlockTracker {
         self.merge_or_start(refs);
     }
 
+    /// Forward tracked task roots through the successor post-pass. That
+    /// pass changes task lines and can insert child log rows, but it does
+    /// not reorder task roots. Match each tracked row by its ordinal among
+    /// same-indentation tasks so ID-less rows keep their identity without
+    /// relying on title text or stale physical line numbers.
+    pub(super) fn track_successor_post_pass(
+        &mut self,
+        planner: &CaptureBatchPlanner,
+        pre: &HashMap<PathBuf, Option<String>>,
+    ) {
+        self.forward_merge_origins(planner, pre);
+        let mut by_target: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+        for (index, tracked) in self.tracked.iter().enumerate() {
+            by_target
+                .entry(tracked.target.clone())
+                .or_default()
+                .push(index);
+        }
+
+        for (target, indices) in by_target {
+            let Some(Some(pre_text)) = pre.get(&target) else {
+                continue;
+            };
+            let Some(post_text) = planner.peek_text(&target) else {
+                debug_assert!(
+                    false,
+                    "tracked task note missing after successor post-pass"
+                );
+                continue;
+            };
+            if pre_text == &post_text {
+                continue;
+            }
+            let pre_scan = note_tasks::scan(pre_text, &self.settings);
+            let post_scan = note_tasks::scan(&post_text, &self.settings);
+            for index in indices {
+                let tracked = &mut self.tracked[index];
+                let Some(pre_task) = pre_scan.task_at(tracked.current) else {
+                    debug_assert!(
+                        false,
+                        "tracked task line is not a task before successor post-pass"
+                    );
+                    continue;
+                };
+                let indentation = pre_task.indentation.as_str();
+                let Some(ordinal) = pre_scan
+                    .tasks()
+                    .iter()
+                    .filter(|task| task.indentation == indentation)
+                    .position(|task| task.line_index == tracked.current)
+                else {
+                    debug_assert!(
+                        false,
+                        "tracked task ordinal missing before post-pass"
+                    );
+                    continue;
+                };
+                if let Some(post_task) = post_scan
+                    .tasks()
+                    .iter()
+                    .filter(|task| task.indentation == indentation)
+                    .nth(ordinal)
+                {
+                    tracked.current = post_task.line_index;
+                } else if let Some(found) = tracked
+                    .block_id
+                    .as_deref()
+                    .and_then(|id| match post_scan.by_block_id(id) {
+                        BlockIdLookup::Found(task) => Some(task.line_index),
+                        _ => None,
+                    })
+                {
+                    tracked.current = found;
+                } else {
+                    debug_assert!(
+                        false,
+                        "tracked task root disappeared during successor post-pass"
+                    );
+                }
+            }
+        }
+    }
+
     /// One project-note move landing for tracker forwarding: a moved
     /// root's absolute source/destination, its 1-based old/new lines, and
     /// its preserved block ID. Runs per item before ordinary forwarding

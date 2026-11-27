@@ -1086,6 +1086,12 @@ pub(super) fn plan_capture_batch_with_config_path(
         &keep_moving_trace,
         &all_project_moves,
     );
+    // Offer verdicts can insert Cancel Log children and the recovery
+    // cascade can rewrite other tracked task lines. Forward task-block
+    // references through the whole post-pass before final extraction,
+    // especially for ID-less dependents that cannot fall back to a block
+    // ID when an insertion shifts their line.
+    let pre_offer_post_pass_tasks = task_tracker.snapshot_pre(&planner);
     // Card verdicts apply here: on the staged snapshot right after the
     // successor net post-pass and before inbox-route detection, so the
     // closed rows read as ordinary status changes downstream. The single
@@ -1101,6 +1107,8 @@ pub(super) fn plan_capture_batch_with_config_path(
         Path::new(&day_relative),
         request.dry_run,
     )?;
+    task_tracker
+        .track_successor_post_pass(&planner, &pre_offer_post_pass_tasks);
     // Requirement carry/drop writes and pull-in links run on the same
     // staged snapshot, after offer verdicts and before inbox-route
     // detection. Probe plans keep `req_selection = None` so this pass

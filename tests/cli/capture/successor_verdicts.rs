@@ -68,6 +68,20 @@ fn offer_vault(
     (temp, vault, day_file)
 }
 
+fn idless_offer_vault(
+    name: &str,
+    dependents: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (temp, vault, day_file) = vault(name);
+    write_file(&vault.join("sase.md"), "- [ ] #task Bar [id:: bar] ^bar\n");
+    write_file(&vault.join("deps.md"), dependents);
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) — CAPTURE\n- [ ] () — FIX\n  - [[sase#^bar]]\n",
+    );
+    (temp, vault, day_file)
+}
+
 fn capture_json(
     vault: &Path,
     day_file: &Path,
@@ -156,6 +170,45 @@ fn offer_rows(json: &serde_json::Value) -> Vec<&serde_json::Value> {
         .flatten()
         .filter(|row| row.get("offer").is_some())
         .collect()
+}
+
+fn assert_task_blocks_match_written_note(
+    json: &serde_json::Value,
+    vault: &Path,
+    expected: &[(&str, usize, char)],
+) {
+    let deps = fs::read_to_string(vault.join("deps.md")).expect("deps");
+    let physical_lines: Vec<&str> = deps.lines().collect();
+    let mut blocks: Vec<&serde_json::Value> = json["task_blocks"]
+        .as_array()
+        .expect("task_blocks")
+        .iter()
+        .filter(|block| block["relative_target"] == "deps.md")
+        .collect();
+    blocks.sort_by_key(|block| block["line"].as_u64().expect("line"));
+    assert_eq!(blocks.len(), expected.len(), "{json}");
+
+    for (block, (description, line, status)) in blocks.into_iter().zip(expected)
+    {
+        assert_eq!(block["text"], *description, "{block}");
+        assert_eq!(block["line"], *line, "{block}");
+        assert_eq!(block["status_symbol"], status.to_string(), "{block}");
+        assert_eq!(block["roles"], serde_json::json!(["unblocked"]), "{block}");
+
+        let block_lines = block["lines"].as_array().expect("task block lines");
+        let start = line.saturating_sub(1);
+        let end = start + block_lines.len();
+        let written =
+            physical_lines.get(start..end).expect("written task block");
+        let reported: Vec<&str> = block_lines
+            .iter()
+            .map(|row| row["text"].as_str().expect("task block line text"))
+            .collect();
+        assert_eq!(
+            reported, written,
+            "task block bytes match deps.md: {block}"
+        );
+    }
 }
 
 // SV1: `-x 1` resolves Alpha Done root-only. Beta recovers but is not
@@ -409,6 +462,103 @@ fn done_verdict_on_id_less_row_keeps_no_id() {
         "{deps}",
     );
     assert!(!deps.contains('^'), "{deps}");
+}
+
+// SV17: cancelling one of two ID-less dependents inserts a Cancel Log
+// above the second row. Task-block coordinates and bytes follow the staged
+// note even when no jump selection is present.
+#[test]
+fn cancel_verdict_for_idless_successor_forwards_task_blocks() {
+    let deps = concat!(
+        "- [?] #task Alpha [dependsOn:: bar]\n",
+        "- [?] #task Beta [dependsOn:: bar]\n",
+    );
+    let (_temp, vault, day_file) =
+        idless_offer_vault("bob-cli-verdict-idless-cancel", deps);
+    let before = vault_bytes(&vault);
+    let dry = capture_json(
+        &vault,
+        &day_file,
+        &["--dry-run", "-X", "1=why"],
+        "!sase:bar",
+    );
+    assert_eq!(dry["dry_run"], true);
+    assert_eq!(vault_bytes(&vault), before, "dry run writes nothing");
+    let dry_blocks: Vec<_> = dry["task_blocks"]
+        .as_array()
+        .expect("task_blocks")
+        .iter()
+        .filter(|block| block["relative_target"] == "deps.md")
+        .collect();
+    assert_eq!(dry_blocks.len(), 2, "{dry}");
+    assert_eq!(dry_blocks[0]["line"], 1, "{dry}");
+    assert_eq!(dry_blocks[1]["line"], 4, "{dry}");
+    assert_eq!(dry_blocks[0]["roles"], serde_json::json!(["unblocked"]));
+    assert_eq!(dry_blocks[1]["roles"], serde_json::json!(["unblocked"]));
+
+    let (_temp, vault, day_file) =
+        idless_offer_vault("bob-cli-verdict-idless-cancel-real", deps);
+    let real = capture_json(&vault, &day_file, &["-X", "1=why"], "!sase:bar");
+    assert_eq!(dry["task_blocks"], real["task_blocks"]);
+    assert_task_blocks_match_written_note(
+        &real,
+        &vault,
+        &[("Alpha", 1, '-'), ("Beta", 4, ' ')],
+    );
+    assert_eq!(real["offer_closes"][0]["outcome"], "cancelled");
+    assert_eq!(real["offer_closes"][0]["block_id"], "");
+}
+
+// SV18: duplicate titles remain tied to their original rows through a
+// Cancel Log insertion, including the jump-enabled consumer of the same
+// final staged coordinates.
+#[test]
+fn cancel_verdict_for_duplicate_idless_titles_keeps_task_blocks_distinct() {
+    let deps = concat!(
+        "- [?] #task Twin [dependsOn:: bar]\n",
+        "- [?] #task Twin [dependsOn:: bar]\n",
+    );
+    let (_temp, vault, day_file) =
+        idless_offer_vault("bob-cli-verdict-idless-twin", deps);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["-X", "1=why", "-j", "2"],
+        "!sase:bar",
+    );
+    assert_task_blocks_match_written_note(
+        &json,
+        &vault,
+        &[("Twin", 1, '-'), ("Twin", 4, ' ')],
+    );
+    assert_eq!(json["jump"]["outcome"], "left", "{json}");
+    assert_eq!(json["jump"]["landing"]["relative_path"], "deps.md");
+    assert_eq!(json["jump"]["landing"]["line"], 4, "{json}");
+}
+
+// SV19: reverse flag order still applies the later row first, then the
+// earlier row. Both insertions shift the remaining ID-less task block.
+#[test]
+fn cancel_verdicts_in_reversed_selection_order_forward_idless_task_blocks() {
+    let deps = concat!(
+        "- [?] #task Twin [dependsOn:: bar]\n",
+        "- [?] #task Twin [dependsOn:: bar]\n",
+        "- [?] #task Twin [dependsOn:: bar]\n",
+    );
+    let (_temp, vault, day_file) =
+        idless_offer_vault("bob-cli-verdict-idless-reversed", deps);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["-X", "2=second", "-X", "1=first"],
+        "!sase:bar",
+    );
+    assert_task_blocks_match_written_note(
+        &json,
+        &vault,
+        &[("Twin", 1, '-'), ("Twin", 4, '-'), ("Twin", 7, ' ')],
+    );
+    assert_eq!(json["offer_closes"].as_array().expect("closes").len(), 2);
 }
 
 // SV5: only the root closes; open subtasks stay byte-identical and the
