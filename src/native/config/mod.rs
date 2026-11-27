@@ -27,7 +27,7 @@ pub(crate) use archive::{
     load_archive_config, parse_archive_config, ArchiveConfig,
 };
 pub(crate) use capture::{
-    load_capture_config, load_clipboard_history_config,
+    load_capture_config, load_clipboard_history_config, load_type_leads_config,
     ClipboardHistorySetting, DEFAULT_MAX_SAVED_TEMPLATES,
 };
 pub(crate) use day_timezone::load_day_timezone;

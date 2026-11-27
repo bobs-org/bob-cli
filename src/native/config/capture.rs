@@ -1,5 +1,11 @@
-//! Saved-template shelf capacity (`capture:` block).
-use std::path::Path;
+//! Saved-template shelf capacity and editor type leads (`capture:` block).
+use std::{collections::BTreeMap, path::Path};
+
+use crate::native::{
+    capture_language::{parse_for_editor, EditorMode, SpanKind},
+    clock_tags,
+    plan_budget::normalize_component,
+};
 
 /// Default shelf capacity: fills the stash's one-key accelerator alphabet.
 pub(crate) const DEFAULT_MAX_SAVED_TEMPLATES: u32 = 36;
@@ -58,6 +64,24 @@ pub(crate) struct ClipboardHistoryConfig {
     pub(crate) setting_configured: bool,
     pub(crate) command: Vec<String>,
 }
+
+/// A configured editor-only title lead for a task type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TypeLead {
+    /// The spelling used as the key in `capture.type_leads`.
+    pub(crate) name: String,
+    pub(crate) text: String,
+}
+
+/// Independently loaded `capture.type_leads` entries and bounded warnings.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct TypeLeadsConfig {
+    pub(crate) leads: BTreeMap<String, TypeLead>,
+    pub(crate) warnings: Vec<String>,
+}
+
+const TYPE_LEAD_WARNING_LIMIT: usize = 24;
+const TYPE_LEAD_WARNING_CHARS: usize = 180;
 
 impl Default for ClipboardHistoryConfig {
     fn default() -> Self {
@@ -174,6 +198,229 @@ pub(crate) fn load_clipboard_history_config(
         }
     };
     parse_clipboard_history_config(&text, path)
+}
+
+/// Read `capture.type_leads` without allowing its errors to affect any other
+/// config consumer. A missing file and a syntactically invalid YAML file both
+/// produce no leads; the latter is already reported by the config loaders
+/// that own the whole-file parse.
+pub(crate) fn load_type_leads_config(path: &Path) -> TypeLeadsConfig {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return TypeLeadsConfig::default();
+        }
+        Err(error) => {
+            let mut config = TypeLeadsConfig::default();
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!("capture.type_leads: could not read config: {error}"),
+            );
+            return config;
+        }
+    };
+    parse_type_leads_config(&text)
+}
+
+fn parse_type_leads_config(text: &str) -> TypeLeadsConfig {
+    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(text) else {
+        return TypeLeadsConfig::default();
+    };
+    let Some(root) = root.as_mapping() else {
+        return TypeLeadsConfig::default();
+    };
+    let capture_key = serde_yaml::Value::String("capture".to_string());
+    let Some(capture) = root
+        .get(&capture_key)
+        .and_then(serde_yaml::Value::as_mapping)
+    else {
+        return TypeLeadsConfig::default();
+    };
+    let leads_key = serde_yaml::Value::String("type_leads".to_string());
+    let Some(raw_leads) = capture.get(&leads_key) else {
+        return TypeLeadsConfig::default();
+    };
+    if raw_leads.is_null() {
+        return TypeLeadsConfig::default();
+    }
+
+    let mut config = TypeLeadsConfig::default();
+    let serde_yaml::Value::Mapping(raw_leads) = raw_leads else {
+        push_type_lead_warning(
+            &mut config.warnings,
+            "capture.type_leads must be a mapping; ignoring all leads".into(),
+        );
+        return config;
+    };
+
+    let mut entries = Vec::new();
+    let mut names_by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (raw_name, raw_text) in raw_leads {
+        let serde_yaml::Value::String(name) = raw_name else {
+            let shown = render_scalar(raw_name);
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.<{shown}> must use a string type name; skipping"
+                ),
+            );
+            continue;
+        };
+        let key = normalize_component(name);
+        if key.is_empty() {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.{name} must normalize to a non-empty type name; skipping"
+                ),
+            );
+            continue;
+        }
+        if clock_tags::is_reserved_type_name(name) {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.{name} is reserved for clock tags; skipping"
+                ),
+            );
+            continue;
+        }
+        names_by_key
+            .entry(key.clone())
+            .or_default()
+            .push(name.clone());
+        entries.push((key, name.clone(), raw_text));
+    }
+
+    let mut duplicated = BTreeMap::new();
+    for (key, names) in names_by_key {
+        if names.len() > 1 {
+            let labels = names
+                .iter()
+                .map(|name| format!("capture.type_leads.{name}"))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "{labels} normalize to the same type key {key:?}; skipping all"
+                ),
+            );
+            duplicated.insert(key, ());
+        }
+    }
+
+    for (key, name, raw_text) in entries {
+        if duplicated.contains_key(&key) {
+            continue;
+        }
+        if raw_text.is_null() {
+            continue;
+        }
+        let serde_yaml::Value::String(raw_text) = raw_text else {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.{name} must be a string or null; skipping"
+                ),
+            );
+            continue;
+        };
+        let lead = raw_text.trim();
+        if lead.is_empty() {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.{name} must not be empty; skipping"
+                ),
+            );
+            continue;
+        }
+        if lead.chars().count() > 64 {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.{name} must be at most 64 characters; skipping"
+                ),
+            );
+            continue;
+        }
+        if lead
+            .chars()
+            .any(|ch| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+        {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!("capture.type_leads.{name} must be one line; skipping"),
+            );
+            continue;
+        }
+        if lead.chars().any(char::is_control) {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.{name} must not contain control characters; skipping"
+                ),
+            );
+            continue;
+        }
+        if !is_plain_title_lead(lead) {
+            push_type_lead_warning(
+                &mut config.warnings,
+                format!(
+                    "capture.type_leads.{name} must read as plain title text; skipping"
+                ),
+            );
+            continue;
+        }
+        config.leads.insert(
+            key,
+            TypeLead {
+                name,
+                text: lead.to_string(),
+            },
+        );
+    }
+    config
+}
+
+fn is_plain_title_lead(text: &str) -> bool {
+    [
+        format!("#bob-lead-probe {text}"),
+        format!("#bob-lead-probe {text} x"),
+    ]
+    .into_iter()
+    .all(|probe| {
+        let parsed = parse_for_editor(&probe);
+        let [item] = parsed.items.as_slice() else {
+            return false;
+        };
+        item.mode == EditorMode::Task
+            && parsed.diagnostics.is_empty()
+            && item.diagnostics.is_empty()
+            && item
+                .spans
+                .iter()
+                .filter(|span| span.kind == SpanKind::TaskType)
+                .count()
+                == 1
+            && item.body == text
+    })
+}
+
+fn push_type_lead_warning(warnings: &mut Vec<String>, warning: String) {
+    if warnings.len() >= TYPE_LEAD_WARNING_LIMIT {
+        return;
+    }
+    let bounded = warning
+        .chars()
+        .take(TYPE_LEAD_WARNING_CHARS)
+        .collect::<String>();
+    warnings.push(if warning.chars().count() > TYPE_LEAD_WARNING_CHARS {
+        format!("{bounded}…")
+    } else {
+        bounded
+    });
 }
 
 fn parse_clipboard_history_config(
@@ -300,6 +547,10 @@ mod tests {
 
     fn parse(text: &str) -> Result<CaptureConfig, super::super::ConfigError> {
         parse_capture_config(text, Path::new("test-config.yml"))
+    }
+
+    fn parse_leads(text: &str) -> TypeLeadsConfig {
+        parse_type_leads_config(text)
     }
 
     #[test]
@@ -451,5 +702,140 @@ mod tests {
             .max_saved_templates,
             12
         );
+    }
+
+    #[test]
+    fn type_leads_missing_null_and_empty_maps_are_silent() {
+        for text in [
+            "properties: []\n",
+            "capture: null\n",
+            "capture: {}\n",
+            "capture:\n  type_leads: null\n",
+            "capture:\n  type_leads: {}\n",
+            "capture:\n  type_leads: [FIX]\n",
+        ] {
+            let config = parse_leads(text);
+            if text.contains("[FIX]") {
+                assert!(config.leads.is_empty());
+                assert_eq!(config.warnings.len(), 1);
+                assert!(config.warnings[0].contains("capture.type_leads"));
+            } else {
+                assert!(config.leads.is_empty(), "{text}");
+                assert!(config.warnings.is_empty(), "{text}");
+            }
+        }
+        let malformed = parse_leads("capture:\n  type_leads: [\n");
+        assert!(malformed.leads.is_empty());
+        assert!(malformed.warnings.is_empty());
+    }
+
+    #[test]
+    fn type_leads_validate_values_and_parser_probes_per_entry() {
+        let config = parse_leads(&format!(
+            "capture:\n\
+  type_leads:\n\
+    TRIM: '  Repair the hinge  '\n\
+    NULL: null\n\
+    NUMBER: 7\n\
+    EMPTY: '   '\n\
+    MULTI: |\n\
+      two\n\
+      lines\n\
+    LONG: \"{}\"\n\
+    CONTROL: \"two\\twords\"\n\
+    AT: '@home'\n\
+    TILDE: '~x'\n\
+    FIELD: 'x='\n\
+    TEMPLATE: '%t'\n\
+    CLOCK: '#now'\n",
+            "x".repeat(65)
+        ));
+        assert_eq!(config.leads.len(), 1);
+        assert_eq!(config.leads["trim"].name, "TRIM");
+        assert_eq!(config.leads["trim"].text, "Repair the hinge");
+        assert_eq!(config.warnings.len(), 10);
+        for name in [
+            "NUMBER", "EMPTY", "MULTI", "LONG", "CONTROL", "AT", "TILDE",
+            "FIELD", "TEMPLATE", "CLOCK",
+        ] {
+            assert!(
+                config.warnings.iter().any(|warning| warning
+                    .contains(&format!("capture.type_leads.{name}"))),
+                "missing warning for {name}: {:?}",
+                config.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn type_leads_reject_reserved_and_duplicate_normalized_keys() {
+        let config = parse_leads(
+            "capture:\n\
+  type_leads:\n\
+    OFF: Away\n\
+    FIX: Repair\n\
+    fix: Fix\n",
+        );
+        assert!(config.leads.is_empty());
+        assert_eq!(config.warnings.len(), 2);
+        assert!(config.warnings.iter().any(|warning| {
+            warning.contains("capture.type_leads.OFF")
+                && warning.contains("reserved")
+        }));
+        let duplicate = config
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("normalize to the same type key"))
+            .expect("duplicate warning");
+        assert!(duplicate.contains("capture.type_leads.FIX"));
+        assert!(duplicate.contains("capture.type_leads.fix"));
+    }
+
+    #[test]
+    fn type_leads_accept_multibyte_text_and_reject_non_string_keys() {
+        let config = parse_leads(
+            "capture:\n\
+  type_leads:\n\
+    REPAIR: 'Réparer'\n\
+    42: Nope\n",
+        );
+        assert_eq!(config.leads["repair"].text, "Réparer");
+        assert!(config.warnings.iter().any(|warning| {
+            warning.contains("capture.type_leads.<42>")
+                && warning.contains("string type name")
+        }));
+    }
+
+    #[test]
+    fn type_leads_are_independent_of_other_capture_and_vocabulary_settings() {
+        let text = "types: {FIX: red}\n\
+capture:\n\
+  type_leads:\n\
+    FIX: Fix\n\
+  max_saved_templates: 99\n\
+  clipboard_history: spotlight\n";
+        assert_eq!(parse_leads(text).leads["fix"].text, "Fix");
+        assert!(parse(text).is_err());
+        assert!(parse_history(text).is_err());
+
+        let other_settings = "capture:\n\
+  type_leads: []\n\
+  max_saved_templates: 12\n\
+  clipboard_history: alfred\n";
+        assert_eq!(parse(other_settings).unwrap().max_saved_templates, 12);
+        assert_eq!(
+            parse_history(other_settings).unwrap().setting,
+            ClipboardHistorySetting::Alfred
+        );
+
+        let invalid_leads = "types: {FIX: red}\n\
+capture:\n\
+  type_leads: []\n";
+        assert!(super::super::themes::parse_themes_config(
+            invalid_leads,
+            Path::new("test-config.yml")
+        )
+        .unwrap()
+        .is_some());
     }
 }

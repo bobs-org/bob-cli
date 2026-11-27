@@ -1131,6 +1131,18 @@ fn config_reference(
     new_raw: &str,
 ) -> Option<RenameFailure> {
     let config_path = config::config_path();
+    let type_leads = config::load_type_leads_config(&config_path);
+    if type_leads.leads.contains_key(old_key)
+        && !type_leads.leads.contains_key(new_key)
+    {
+        return Some(RenameFailure::new(
+            "config_reference",
+            format!(
+                "{old_raw} has a type lead; add capture.type_leads.{new_raw} first"
+            ),
+            Some("edit the chezmoi config to add NEW first"),
+        ));
+    }
     let sources = config::load_theme_sources();
     if let Some(themes) = &sources.themes {
         let old_configured = themes.contains(old_key);

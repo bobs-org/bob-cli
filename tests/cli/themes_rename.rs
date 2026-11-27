@@ -399,6 +399,28 @@ fn themes_rename_refusals_are_json_on_nonzero_exit() {
     assert_eq!(value["ok"], false);
     assert_eq!(value["code"], "config_reference");
 
+    // A type lead is a config reference too: preserve it across renames.
+    let type_lead_config = cache.join("type-lead.yml");
+    write_file(
+        &type_lead_config,
+        "capture:\n  type_leads:\n    FIXES: Fix\n",
+    );
+    let mut command = rename_command(&vault, &cache);
+    command
+        .env("BOB_CONFIG_FILE", &type_lead_config)
+        .args(["themes", "rename", "FIXES", "REPAIRS", "-d", "-f", "json"]);
+    let output = command.output().expect("type-lead config-reference JSON");
+    let value: Value = serde_json::from_str(stdout(&output).trim())
+        .expect("type-lead config-reference JSON parses");
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "config_reference");
+    assert_eq!(
+        value["message"],
+        "FIXES has a type lead; add capture.type_leads.REPAIRS first"
+    );
+    assert_eq!(value["hint"], "edit the chezmoi config to add NEW first");
+
     // dirty_paths offline
     let dirty_path = vault.join("2026/20261020.md");
     let dirty = fs::read_to_string(&dirty_path).unwrap() + "\ndirty\n";

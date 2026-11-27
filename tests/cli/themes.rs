@@ -259,6 +259,73 @@ fn themes_json_schema_and_query_ranks_fix_before_fixes() {
         .iter()
         .find(|theme| theme["key"] == "job");
     assert!(job.is_none(), "query fix should not list JOB");
+    assert!(
+        value["themes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|theme| theme.get("lead").is_none()),
+        "unset leads stay omitted"
+    );
+}
+
+#[test]
+fn themes_surface_valid_type_leads_and_report_invalid_or_stale_entries() {
+    let temp = TempDir::new("bob-cli-themes-type-leads");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    let config = cache.join("bob-config.yml");
+    fs::create_dir_all(&cache).unwrap();
+    write_theme_vault(&vault);
+    write_file(
+        &config,
+        "types:\n  FIX: red\n  JOB: blue\ncapture:\n  type_leads:\n    FIX: '  Fix  '\n    BAD: '@home'\n    GHOST: Ghost\n",
+    );
+
+    let output = themes_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["types", "-a", "-f", "json"])
+        .output()
+        .expect("bob types JSON with leads");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("types JSON");
+    let themes = value["themes"].as_array().expect("themes");
+    let fix = themes
+        .iter()
+        .find(|theme| theme["key"] == "fix")
+        .expect("FIX theme");
+    assert_eq!(fix["lead"], "Fix");
+    let job = themes
+        .iter()
+        .find(|theme| theme["key"] == "job")
+        .expect("JOB theme");
+    assert!(job.get("lead").is_none());
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert!(warnings.iter().any(|warning| {
+        warning.as_str().unwrap().contains("capture.type_leads.BAD")
+    }));
+    assert!(warnings.iter().any(|warning| {
+        warning
+            .as_str()
+            .unwrap()
+            .contains("capture.type_leads.GHOST")
+    }));
+
+    let human = themes_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["types", "-a"])
+        .output()
+        .expect("bob types human with leads");
+    assert_success(&human);
+    assert!(
+        stdout(&human).contains("lead \"Fix\""),
+        "human row lead:\n{}",
+        stdout(&human)
+    );
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("capture.type_leads.BAD"), "{stderr}");
+    assert!(stderr.contains("capture.type_leads.GHOST"), "{stderr}");
 }
 
 #[test]

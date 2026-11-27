@@ -90,8 +90,9 @@ See [priority and schedule rolls](../plan.md#config) and
 | Key | Type and allowed value | Default | Effect |
 | --- | --- | --- | --- |
 | `capture.max_saved_templates` | Integer, 0–36 | `36` | Maximum saved `%t` template definitions; `0` disables saving. |
-| `capture.clipboard_history` | `auto`, `alfred`, `clipy`, `command`, or `off` | `auto` | Which clipboard manager `%c<N>` (N ≥ 2) reads: `auto` reads read-only Alfred history, then Clipy, on macOS; `alfred`/`clipy` read only that manager on macOS and refuse elsewhere; `command` reads `capture.clipboard_history_command`; `off` refuses `%c<N>` while `%c` keeps working. |
-| `capture.clipboard_history_command` | Non-empty list of non-empty strings | Unset | Argv of the history command used when `capture.clipboard_history` is `command`; receives the requested count as its final argument and prints a newest-first JSON array of strings whose first entry is the live clipboard; `%c<N>` refuses when it disagrees. Ignored under any other value. |
+| `capture.clipboard_history` | `auto`, `alfred`, `clipy`, `command`, or `off` | `auto` | Provider for `%c<N>` (N ≥ 2): `auto` tries Alfred then Clipy on macOS; named managers are macOS-only; `command` uses `capture.clipboard_history_command`; `off` refuses counted reads while `%c` works. |
+| `capture.clipboard_history_command` | Non-empty list of non-empty strings | Unset | Argv for `command`; Bob appends the requested count and expects a newest-first JSON list whose first string is the live clipboard. Ignored otherwise. |
+| `capture.type_leads` | Mapping: type name → one-line lead or `null` | Unset | Editor-only title text; trimmed, parser-validated, ≤64 chars. Invalid entries warn and degrade individually. See [typing tasks](../capture.md#typing-tasks-with-type). |
 
 See [capture templates](../capture.md#saved-templates). Use [`bob clipboard`](cli/clipboard.md)
 to diagnose the active history provider and whether a counted capture would succeed.

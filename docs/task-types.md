@@ -780,6 +780,8 @@ untouched. `bob types split` never rewrites defaults or fields; its
 `[theme::]` fields and area/project `theme:` defaults into the
 canonical keys, and leaves closed tasks, `done/`, and repair lines
 alone.
+When the old type has a `capture.type_leads` entry, rename also requires a
+lead for the new type first so the config does not lose that editor behavior.
 
 ### List hints: unknown defaults
 
@@ -1084,7 +1086,8 @@ reclassifies past periods.
       "last_used": "2026-10-24",
       "days_used": 26,
       "entries": 49,
-      "today": "open"
+      "today": "open",
+      "lead": "Fix"
     }
   ],
   "hints": [
@@ -1107,6 +1110,10 @@ reclassifies past periods.
   "warnings": []
 }
 ```
+
+The optional `themes[].lead` field appears only when that type has a valid
+`capture.type_leads` entry. It reports the editor title text; it does not
+change task-type identity or catalog history.
 
 `theme_hue_collision` pairs are unpinned, non-exempt types that share a hue
 and met on at least 2 of the last 30 days. The type with fewer `days_used`

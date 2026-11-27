@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::native::{
-    env as bob_env,
+    config, env as bob_env,
     pomodoro_homes::Hue,
     style::{pad_right, Styler},
 };
@@ -233,6 +233,8 @@ struct ListTheme {
     entries: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     today: Option<TodayPresence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lead: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -296,7 +298,25 @@ fn list_themes(request: &ListRequest) -> Result<ListReport, ListError> {
         ))
     })?;
     catalog.areas = std::mem::take(&mut defaults.areas);
+    let type_leads = config::load_type_leads_config(&config::config_path());
     let mut report = build_report(request, &catalog);
+    for theme in &mut report.themes {
+        theme.lead = type_leads
+            .leads
+            .get(&theme.key)
+            .map(|lead| lead.text.clone());
+    }
+    report.warnings.extend(type_leads.warnings);
+    if let Some(configured) = catalog.configured_themes() {
+        for (key, lead) in &type_leads.leads {
+            if !configured.iter().any(|theme| theme.key == *key) {
+                report.warnings.push(format!(
+                    "capture.type_leads.{} is not in the configured types vocabulary; it will not show",
+                    lead.name
+                ));
+            }
+        }
+    }
     let defaults = defaults.unknown(&catalog);
     report
         .hints
@@ -448,6 +468,7 @@ fn never_used_configured(
                 days_used: 0,
                 entries: 0,
                 today: None,
+                lead: None,
             }
         })
         .collect()
@@ -491,6 +512,7 @@ fn list_theme(catalog: &Catalog, record: &ThemeRecord) -> ListTheme {
         days_used: record.days_used,
         entries: record.entries,
         today: record.today,
+        lead: None,
     }
 }
 
@@ -650,6 +672,9 @@ fn human_meta(theme: &ListTheme) -> String {
         && theme.hue_source != HueSource::Unconfigured
     {
         parts.push("not one of your types".to_string());
+    }
+    if let Some(lead) = &theme.lead {
+        parts.push(format!("lead {lead:?}"));
     }
     parts.join(" · ")
 }
