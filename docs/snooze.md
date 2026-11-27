@@ -292,6 +292,21 @@ For example, `bob snooze list -f json` returns a stable envelope such as:
 }
 ```
 
+## Obsidian gestures
+
+In Obsidian, `Alt+Z` (`bob-navigation-hotkeys:snooze-task`) opens the
+Snooze Card for one task, dedicated Task Link, or Snoozed row; `z` on the
+Task Card opens the same card. The card takes one task only and refuses
+counted or multi-target use, Event and effectively Blocked targets, and
+past or next-day times (`same-day only — Schedule (s:) defers to another
+day`). Wake now delegates to `bob snooze wake`; add, retime, and unsnooze
+commit through the guarded editor transactions. The daily note's whole
+snooze undoes with one `Ctrl+Z`; a same-note task and daily edit composes
+into one transaction, while cross-note task and daily edits undo per
+editor. Cancellation writes nothing. When `Alt+Z` conflicts with an
+existing binding, the command and Task Card entry stay available and the
+existing binding is preserved.
+
 ## Writer preservation
 
 The section is trailing on purpose: every ledger writer is section-bounded
