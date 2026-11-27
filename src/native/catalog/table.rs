@@ -1870,6 +1870,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         path: &["prose", "adopt"],
         reason: "Use Bob Prose's adoption preview",
     },
+    Excluded {
+        path: &["prose", "extract"],
+        reason: "Use Bob Prose's extract and inline gesture",
+    },
 ];
 
 pub(crate) const CAPTURE_PROTOCOL_REASON: &str =

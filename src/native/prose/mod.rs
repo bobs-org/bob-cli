@@ -4,6 +4,7 @@
 //! this engine, while the plugin phase consumes the JSON contract.
 
 pub(crate) mod cli;
+pub(crate) mod convert;
 mod findings;
 mod inbound;
 mod layout;

@@ -9,7 +9,7 @@ description: "Format and inspect prose notes with bob-owned section numbers"
 Format and inspect prose notes with bob-owned section numbers
 
 ```text title="bob prose --help"
-Format and inspect prose notes (frontmatter type: "[[prose]]").
+Format, inspect, extract, and inline prose notes (frontmatter type: "[[prose]]").
 
 Every `bob prose` command reads or rewrites prose notes. `[[article]]` notes still count. bob owns their section numbers (1. / 1.1 / 1.1.1) and layout; formatting never changes a word. Bare `bob prose` runs the read-only `list` command.
 

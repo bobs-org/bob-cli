@@ -38,6 +38,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
     match matches.subcommand() {
         Some(("adopt", sub_matches)) => run_adopt(sub_matches),
+        Some(("extract", sub_matches)) => {
+            super::convert::extract::run_extract(sub_matches)
+        }
         Some(("format", sub_matches)) => run_format(sub_matches),
         Some(("list", sub_matches)) => run_list(sub_matches),
         Some(("outline", sub_matches)) => run_outline(sub_matches),
@@ -51,9 +54,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Format and inspect prose notes (frontmatter type: [[prose]])")
+        .about("Format, inspect, extract, and inline prose notes")
         .long_about(
-            "Format and inspect prose notes (frontmatter type: \"[[prose]]\").\n\n\
+            "Format, inspect, extract, and inline prose notes (frontmatter type: \"[[prose]]\").\n\n\
              Every `bob prose` command reads or rewrites prose notes. `[[article]]` \
              notes still count. bob owns their section numbers (1. / 1.1 / 1.1.1) \
              and layout; formatting never changes a word. Bare `bob prose` runs \
@@ -67,6 +70,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .args_conflicts_with_subcommands(true)
         .subcommand_required(false)
         .subcommand(adopt_command())
+        .subcommand(extract_command())
         .subcommand(format_command())
         .subcommand(list_command())
         .subcommand(outline_command())
@@ -91,6 +95,40 @@ fn adopt_command() -> ClapCommand {
         .arg(note_arg_with_help(
             false,
             "Vault-relative Markdown path or unique note stem",
+        ))
+}
+
+fn extract_command() -> ClapCommand {
+    ClapCommand::new("extract")
+        .about("Move a section into a new prose note, leaving a link stub")
+        .long_about(
+            "Extract one heading section from an area, project, or prose note \
+             into a new prose note, leaving a link stub. Previews by default \
+             with a unified diff per file; pass --write to apply through one \
+             verified commit. Online writes need -b/--bob-dir and BOB_DIR to \
+             resolve to the same vault; a mismatch refuses before locks or sync.",
+        )
+        .after_help(
+            "Examples:\n  bob prose extract job_2026 -s \"Why I left Google?\"\n  bob prose extract job_2026 -l 31 -f json\n  bob prose extract job_2026 -s Intro -n custom_stem -w -o\n\nExit codes:\n  0 preview or write\n  2 refusal, usage error, or write failure",
+        )
+        .hide(true)
+        .group(
+            ArgGroup::new("selector")
+                .args(["section", "line"])
+                .required(true)
+                .multiple(false),
+        )
+        .arg(bob_dir_arg())
+        .arg(expect_arg())
+        .arg(format_arg())
+        .arg(line_arg())
+        .arg(name_arg())
+        .arg(offline_arg())
+        .arg(section_arg())
+        .arg(extract_write_arg())
+        .arg(note_arg_with_help(
+            false,
+            "Vault-relative Markdown path or unique note stem to extract from",
         ))
 }
 
@@ -205,6 +243,57 @@ fn stdin_arg() -> Arg {
         .long("stdin")
         .action(ArgAction::SetTrue)
         .help("Read the named note's text from stdin; print a plan and never write")
+}
+
+fn expect_arg() -> Arg {
+    Arg::new("expect")
+        .short('e')
+        .long("expect")
+        .value_name("FINGERPRINT")
+        .help("Refuse with plan-changed when the replanned fingerprint differs; write nothing")
+}
+
+fn line_arg() -> Arg {
+    Arg::new("line")
+        .short('l')
+        .long("line")
+        .value_name("LINE")
+        .value_parser(clap::value_parser!(usize))
+        .help("1-based line inside the section to extract")
+}
+
+fn name_arg() -> Arg {
+    Arg::new("name")
+        .short('n')
+        .long("name")
+        .value_name("STEM")
+        .value_parser(clap::builder::NonEmptyStringValueParser::new())
+        .help("Override the derived prose-note stem")
+}
+
+fn offline_arg() -> Arg {
+    Arg::new("offline")
+        .short('o')
+        .long("offline")
+        .action(ArgAction::SetTrue)
+        .help("Commit locally; skip vault sync before and after")
+}
+
+fn section_arg() -> Arg {
+    Arg::new("section")
+        .short('s')
+        .long("section")
+        .value_name("IDENTITY")
+        .value_parser(clap::builder::NonEmptyStringValueParser::new())
+        .help("Heading identity or nested Parent#Child path to extract")
+}
+
+fn extract_write_arg() -> Arg {
+    Arg::new("write")
+        .short('w')
+        .long("write")
+        .action(ArgAction::SetTrue)
+        .help("Write the extraction through one verified commit; preview without this flag")
 }
 
 fn write_arg() -> Arg {

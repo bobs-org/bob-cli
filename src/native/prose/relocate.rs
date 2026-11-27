@@ -347,6 +347,46 @@ impl RelocationMap {
                     None => {}
                 }
             }
+            Direction::Extract if same_path(&target_path, &self.child) => {
+                // Pathless (or child-named) links inside the new note.
+                // A fragment that names staying content now lives in the
+                // owner, so it becomes `owner#…`. A fragment naming moved
+                // content stays pathless because both ends moved together.
+                match fragment {
+                    Some(fragment) if fragment.starts_with('^') => {
+                        let id = &fragment[1..];
+                        if self.moved_blocks.contains(id) {
+                            // Both ends moved; keep the pathless block link.
+                        } else if self.staying_blocks.contains(id) {
+                            target_after = self.owner.clone();
+                            fragment_after = Some(format!("^{id}"));
+                            should_rewrite = true;
+                        }
+                    }
+                    Some(fragment) => {
+                        let Some((index, moved)) = self.resolve_owner_heading(
+                            fragment,
+                            line,
+                            current_path,
+                            raw,
+                        )?
+                        else {
+                            return Ok(None);
+                        };
+                        if !moved {
+                            target_after = self.owner.clone();
+                            fragment_after = Some(self.canonical_fragment(
+                                index,
+                                &(0..self.headings.len()).collect(),
+                                span.wikilink,
+                                fragment,
+                            ));
+                            should_rewrite = true;
+                        }
+                    }
+                    None => {}
+                }
+            }
             Direction::Inline if same_path(&target_path, &self.child) => {
                 match fragment {
                     Some(fragment) if fragment.starts_with('^') => {
