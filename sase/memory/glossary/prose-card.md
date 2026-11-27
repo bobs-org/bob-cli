@@ -23,7 +23,7 @@ desktop Live Preview and Reading view.
   only the inline title, because every body heading is a section and stays
   visible.
 - **Takeover and keys.** It replaces native Properties only under the family
-  gate. `==` focuses `title`, `+` opens the Property Editor, and `-` the
+  gate. `=` focuses `title`, `+` opens the Property Editor, and `-` the
   drawer.
 - **Passive.** Painting never computes counts, numbers, or stubs, and never
   writes, formats, or spawns bob.

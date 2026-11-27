@@ -33,8 +33,8 @@ tags:
 > 2025 – Mar 29, 2026 · 13 weeks).** You synthesize the quarter from its weeks. Two
 > readers use it: Bryan at the quarter's turn, and a later reader who may see only this
 > note, or only its Summary in [[2026]]. Record what the quarter produced and what is
-> still in flight, and link the evidence. Bryan decides what it meant, in the card
-> (`==`, then `r`).
+> still in flight, and link the evidence. Bryan decides what it meant, in the card (`=`,
+> then `r`).
 >
 > 1. **Check.** Run `bob periods brief 2026-Q1 -f md` and read all of it. Stop and say
 > why if it reports the quarter as open (unless Bryan asked for a "so far" draft) or the

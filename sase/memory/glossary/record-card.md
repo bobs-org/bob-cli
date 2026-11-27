@@ -16,7 +16,7 @@ The foot carries the created stamp; the `-` drawer and `+` Property Editor
 inventory every key, including identity, legacy, and unrelated values.
 Without whole ownership, existing album-schema row hiding remains when
 eligible; failed mounts and denied contexts restore native rendering. The
-Record Card editor (`==`) remains the keyboard-first editor for the record's
+Record Card editor (`=`) remains the keyboard-first editor for the record's
 values. A recognized walk line becomes a rail docked inside the card with the album-ring
 position. The card reads the cached album report: opening, folding, or
 collapsing a record never requests a new report and never writes the note.

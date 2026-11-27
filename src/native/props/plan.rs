@@ -1787,7 +1787,7 @@ fn refuse_protected(
                 "property {key:?} is owned by {}",
                 classified.owner.as_deref().unwrap_or("a card")
             ),
-            hint: classified.editor.clone().unwrap_or_else(|| "==".to_owned()),
+            hint: classified.editor.clone().unwrap_or_else(|| "=".to_owned()),
             key: Some(key.to_owned()),
             line: None,
             op_index: Some(index),
@@ -2208,7 +2208,7 @@ mod tests {
         )
         .expect_err("card");
         assert_eq!(error.code, "prop_owned");
-        assert_eq!(error.hint, "==");
+        assert_eq!(error.hint, "=");
     }
 
     #[test]

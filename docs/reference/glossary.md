@@ -64,7 +64,7 @@ inherited policies or subtree counts.
 
 Area Settings require `props_contract_v1` on top of `props_v1`. One shared
 Properties foot shows `created` and the full drawer. `-` toggles the drawer,
-`_` folds the Area's own details, `==` opens Area Settings, and `+` opens the
+`_` folds the Area's own details, `=` opens Area Settings, and `+` opens the
 generic Property Editor. Paint reads local metadata, confirmed source, and
 cached reports; it never writes the vault or spawns bob.
 
@@ -114,8 +114,8 @@ title-slot Bank Card owns it, gated by source/cache evidence, confirmed
 existing per-row `bank` fallback return. The card's Setup section shows
 `bob bank config` categories, accounts, rules, and findings; its title block
 keeps the bank identity and cash breadcrumb. Setup folds when healthy; `_`
-toggles it, `==` opens Bank Setup, and `+` opens the generic Property Editor.
-The `bank` row hands off to `==`; the card has no Area Settings, including when
+toggles it, `=` opens Bank Setup, and `+` opens the generic Property Editor.
+The `bank` row hands off to `=`; the card has no Area Settings, including when
 older Bob reports the former hybrid contract. The shared foot is the only
 Properties drawer, toggled with `-`. Painting never writes; mobile remains
 read-only. Not the [Bank Badge](#bank-badge), Bank Period Charts, or a Stats fact. See
@@ -414,7 +414,7 @@ recognized nav line becomes a docked rail; periods add child chips. The numbered
 [Intention](#intention)s, SUMMARY with provenance (`✦ agent` for a stamped draft, `✎ edited`
 otherwise), REFLECTION, and parent-line bands stay content-gated. Current and
 future subjects with no intentions show a `＋ Set intentions` ghost, and a recent
-closed subject missing a band shows one quiet pending line. `==` opens the card
+closed subject missing a band shows one quiet pending line. `=` opens the card
 editor; every write goes through `bob periods update` with the server's field
 fingerprint. The card fails open: a lost title slot falls back to the body
 without owning the title, and malformed values, Source mode, embeds, popovers,
@@ -711,7 +711,7 @@ header wherever it mounts.
   foot's lint chip. Missing report data is omitted, never zeroed.
 - **Foot.** It carries `created`, the `@stem` capture route (click copies), and
   the Properties drawer, where importer keys fold under Managed.
-- **Keys.** `==` focuses `summary`, `+` opens the Property Editor, `-` the
+- **Keys.** `=` focuses `summary`, `+` opens the Property Editor, `-` the
   drawer, and `_` folds the card's details.
 - **Passive.** Painting writes nothing, creates no tasks, and spawns no bob.
 
@@ -773,7 +773,7 @@ lint, and report-backed blocking reasons or close dates when available.
 Unavailable reports hide those details instead of showing zero. Project
 Settings require `props_contract_v1` on top of `props_v1`; the card does not
 infer parent policies. One shared Properties foot shows `created` and the
-full drawer. `-` toggles the drawer, `_` folds the card's own details, `==`
+full drawer. `-` toggles the drawer, `_` folds the card's own details, `=`
 opens Project Settings, and `+` opens the generic Property Editor.
 
 Paint reads local metadata, confirmed source, and cached reports; it never
@@ -859,17 +859,17 @@ The shared family of title-slot album, record, day, period, [Area Card](#area-ca
 [Project Card](#project-card), [Bank Card](#bank-card), [Notebook Card](#notebook-card), [Prose Card](#prose-card), and
 [Ref Card](#ref-card) views,
 built on the bob-ledger-tools kit.
-The kit owns `.bob-property-card` chrome, the `==` species-editor dispatcher,
+The kit owns `.bob-property-card` chrome, the `=` species-editor dispatcher,
 row and whole-frontmatter ownership, mount lifecycle, and title block. Album,
 record, and temporal cards use `props_v1`; Area and Project settings require
 `props_contract_v1` on top of `props_v1`. Notebook and Prose Cards gate on
-`props_v1` alone and register their `==` editors as dispatcher extensions. The
-Ref Card also gates on `props_v1` alone; its `==` extension opens the Reference
+`props_v1` alone and register their `=` editors as dispatcher extensions. The
+Ref Card also gates on `props_v1` alone; its `=` extension opens the Reference
 editor under `props_ref_contract_v1`, else focus-or-add on `title`. The
 path-canonical `bank.md` hub is
 untyped and taskless; its one Bank Card uses `props_v1` and never has Area
 semantics. The foot shows `created` and the full Properties drawer; `-` toggles
-the drawer, `_` folds the card's own section, `==` opens the species editor,
+the drawer, `_` folds the card's own section, `=` opens the species editor,
 and `+` opens the generic Property Editor in Live Preview Vim normal mode.
 Every card owns one visible title: its species tile and kicker name it; hue
 does not. The inline title and recognized H1/nav lines hide at render time,
@@ -877,7 +877,7 @@ except on the Prose Card, which hides only the inline title because its body
 headings are sections; a Live Preview cursor or selection reveals raw Markdown.
 Like the other title-owning cards, the Ref Card hides a matching first H1. Title ownership is
 distinct from row and whole-frontmatter ownership. "Card" means the panel;
-"card editor" means what `==` opens. Painting reads cached metadata and
+"card editor" means what `=` opens. Painting reads cached metadata and
 confirmed source, never spawns bob or writes the vault. Uncertain evidence
 restores native Properties and the existing per-row fallback; failed mounts,
 Source, denied contexts, and unload do the same. Add file property opens Add
@@ -909,7 +909,7 @@ desktop Live Preview and Reading view.
   only the inline title, because every body heading is a section and stays
   visible.
 - **Takeover and keys.** It replaces native Properties only under the family
-  gate. `==` focuses `title`, `+` opens the Property Editor, and `-` the
+  gate. `=` focuses `title`, `+` opens the Property Editor, and `-` the
   drawer.
 - **Passive.** Painting never computes counts, numbers, or stubs, and never
   writes, formats, or spawns bob.
@@ -954,7 +954,7 @@ The foot carries the created stamp; the `-` drawer and `+` Property Editor
 inventory every key, including identity, legacy, and unrelated values.
 Without whole ownership, existing album-schema row hiding remains when
 eligible; failed mounts and denied contexts restore native rendering. The
-Record Card editor (`==`) remains the keyboard-first editor for the record's
+Record Card editor (`=`) remains the keyboard-first editor for the record's
 values. A recognized walk line becomes a rail docked inside the card with the album-ring
 position. The card reads the cached album report: opening, folding, or
 collapsing a record never requests a new report and never writes the note.
@@ -997,7 +997,7 @@ note lacks; nothing is zeroed.
   scan (never reading progress). Reread lineage, arXiv/DOI chips, and bob's
   diagnostics sit in the foot. Report data patches existing rows and never
   adds a line.
-- **Keys.** `==` opens the Reference editor (Title, Summary, Authors,
+- **Keys.** `=` opens the Reference editor (Title, Summary, Authors,
   Published, Source, Aliases). It routes reading state, residence, and file
   name to the [Reference Task](#reference-task) and `bob ref rename`. `+` opens the Property
   Editor; `-` opens the drawer, where bob-owned sync bookkeeping folds under

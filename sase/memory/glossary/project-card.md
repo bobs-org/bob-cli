@@ -17,7 +17,7 @@ lint, and report-backed blocking reasons or close dates when available.
 Unavailable reports hide those details instead of showing zero. Project
 Settings require `props_contract_v1` on top of `props_v1`; the card does not
 infer parent policies. One shared Properties foot shows `created` and the
-full drawer. `-` toggles the drawer, `_` folds the card's own details, `==`
+full drawer. `-` toggles the drawer, `_` folds the card's own details, `=`
 opens Project Settings, and `+` opens the generic Property Editor.
 
 Paint reads local metadata, confirmed source, and cached reports; it never

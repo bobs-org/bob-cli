@@ -154,10 +154,10 @@ kind names are `day`, `week`, `quarter`, `year`, `all_time`, `record`,
 | derived  | `*_digest`, `*_drafted`, `review_*`, `zorg_*`, `generated_from_zorg*`; day/period `parent`; `done_tasks`; project `status`/`scheduled` | writer name and reason    |
 | derived  | Reference `highlights_*`, `source_pdf*`, `pipeline_version`, importer and reread fields, Zorg provenance, meeting metadata; `status`/`parent` when a reading task is present | owning writer and reason |
 | identity | Reference `id`, `ref_type`                                                                                              | locked; use `bob ref rename` for the file stem |
-| card     | record schema fields                                                                                                    | `record`, editor `==`     |
-| card     | day/period `intentions`, `summary`, `reflection`                                                                        | `intentions`, editor `==` |
-| card     | album `record`                                                                                                          | `album`, editor `==`      |
-| card     | bank hub `bank`                                                                                                         | `bank`, editor `==`       |
+| card     | record schema fields                                                                                                    | `record`, editor `=`      |
+| card     | day/period `intentions`, `summary`, `reflection`                                                                        | `intentions`, editor `=`  |
+| card     | album `record`                                                                                                          | `album`, editor `=`       |
+| card     | bank hub `bank`                                                                                                         | `bank`, editor `=`        |
 | loose    | area/project settings, reference reading metadata not owned by a reading task, retired `task_count`/`open_task_count`, and remaining keys including `created` and `template` | editable here |
 
 Audit sources for the derived list: intention writers under
@@ -178,7 +178,7 @@ Protected keys are refused for `set`, `unset`, `rename`, `set_yaml`, and
 `restore`. Rename checks both the original and the prospective name; new-key
 insertion checks the prospective role. Position references may name protected
 neighbors without mutating their values. Refusals are `prop_owned` with the
-`==` hint, `prop_derived`, and `prop_identity` with the teaching reason.
+`=` hint, `prop_derived`, and `prop_identity` with the teaching reason.
 Roles are recomputed from fresh note/schema context under the write lock, not
 from client-supplied metadata. Retired count keys are deletable loose properties
 with `legacy: true`. Project `scheduled` is also marked legacy, but stays
@@ -196,7 +196,7 @@ setting gestures. Validation examines the addressed value, so unrelated
 legacy values do not prevent another property from being edited.
 
 `bank.md` is the untyped, path-canonical Bank hub: its `note_kind` remains `bank`,
-its `bank` key stays card-owned with editor `==`, and it exposes no settings contract.
+its `bank` key stays card-owned with editor `=`, and it exposes no settings contract.
 The Bank Card is gated by `props_v1` and ignores any legacy Area contract. `setting.*`
 ops on `bank.md` refuse with `prop_setting_disabled`.
 
@@ -227,6 +227,9 @@ owner and reason, and generic writes refuse with `prop_identity` or
 `prop_derived`. To change the file stem, use `bob ref rename`. For sync
 bookkeeping, run `bob ref scan`. To change reading state or residence, edit or
 move the reading task.
+
+Card rows and `prop_owned` hints now report `"="` as the card editor;
+earlier releases reported `"=="`.
 
 Changing a reference title also retitles the first body H1 only when its text
 matches the previous title (frontmatter title, otherwise the current first H1,

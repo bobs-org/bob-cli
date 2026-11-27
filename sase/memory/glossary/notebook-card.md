@@ -19,7 +19,7 @@ header wherever it mounts.
   foot's lint chip. Missing report data is omitted, never zeroed.
 - **Foot.** It carries `created`, the `@stem` capture route (click copies), and
   the Properties drawer, where importer keys fold under Managed.
-- **Keys.** `==` focuses `summary`, `+` opens the Property Editor, `-` the
+- **Keys.** `=` focuses `summary`, `+` opens the Property Editor, `-` the
   drawer, and `_` folds the card's details.
 - **Passive.** Painting writes nothing, creates no tasks, and spawns no bob.
 

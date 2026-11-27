@@ -14,8 +14,8 @@ title-slot Bank Card owns it, gated by source/cache evidence, confirmed
 existing per-row `bank` fallback return. The card's Setup section shows
 `bob bank config` categories, accounts, rules, and findings; its title block
 keeps the bank identity and cash breadcrumb. Setup folds when healthy; `_`
-toggles it, `==` opens Bank Setup, and `+` opens the generic Property Editor.
-The `bank` row hands off to `==`; the card has no Area Settings, including when
+toggles it, `=` opens Bank Setup, and `+` opens the generic Property Editor.
+The `bank` row hands off to `=`; the card has no Area Settings, including when
 older Bob reports the former hybrid contract. The shared foot is the only
 Properties drawer, toggled with `-`. Painting never writes; mobile remains
 read-only. Not the [[bank-badge]], Bank Period Charts, or a Stats fact. See

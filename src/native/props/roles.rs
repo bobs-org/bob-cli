@@ -664,7 +664,7 @@ fn card(owner: &str) -> PropertyRole {
     PropertyRole {
         role: Some(Role::Card),
         owner: Some(owner.to_owned()),
-        editor: Some("==".to_owned()),
+        editor: Some("=".to_owned()),
         reason: None,
         diagnostic: None,
     }
@@ -755,7 +755,7 @@ mod tests {
     fn record_schema_fields_route_to_records_and_unknown_schema_is_not_loose() {
         let record = context(NoteKind::Record, Some(&["rating", "visited"]));
         assert_eq!(record.classify("rating").owner.as_deref(), Some("record"));
-        assert_eq!(record.classify("rating").editor.as_deref(), Some("=="));
+        assert_eq!(record.classify("rating").editor.as_deref(), Some("="));
         assert_eq!(record.classify("custom").role, Some(Role::Loose));
 
         let unknown = RoleContext {

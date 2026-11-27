@@ -300,7 +300,7 @@ fn render_weekly(id: PeriodId) -> String {
              and a later reader who may see only this note, or only its Summary \
              in a parent note. Record what the week produced and what is still \
              in flight, and link the evidence. Bryan decides what it meant, in \
-             the card (`==`, then `r`)."
+             the card (`=`, then `r`)."
         )),
         Block::Blank,
         check_step(id, "week", ""),
@@ -391,7 +391,7 @@ fn render_quarterly(id: PeriodId) -> String {
              the quarter's turn, and a later reader who may see only this note, \
              or only its Summary in [[{parent}]]. Record what the quarter \
              produced and what is still in flight, and link the evidence. Bryan \
-             decides what it meant, in the card (`==`, then `r`)."
+             decides what it meant, in the card (`=`, then `r`)."
         )),
         Block::Blank,
         check_step(
@@ -483,7 +483,7 @@ fn render_yearly(id: PeriodId) -> String {
              the year's turn, and a later reader who may see only this note, or \
              only its Summary in [[all_time]]. Record what the year produced and \
              what changed in practice, and link the evidence. Bryan decides what \
-             it meant, in the card (`==`, then `r`)."
+             it meant, in the card (`=`, then `r`)."
         )),
         Block::Blank,
         check_step(id, "year", ""),
@@ -579,7 +579,7 @@ mod tests {
         }
         assert!(rendered.contains("Mark any item W44 also carried."));
         assert!(flat.contains("seven day summaries"));
-        assert!(flat.contains("(`==`, then `r`)"));
+        assert!(flat.contains("(`=`, then `r`)"));
         assert!(!rendered.contains("**Finished:**"));
         assert!(!rendered.contains("**Still open:**"));
         assert!(!rendered.contains("**Headline:**"));

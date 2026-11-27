@@ -24,7 +24,7 @@ note lacks; nothing is zeroed.
   scan (never reading progress). Reread lineage, arXiv/DOI chips, and bob's
   diagnostics sit in the foot. Report data patches existing rows and never
   adds a line.
-- **Keys.** `==` opens the Reference editor (Title, Summary, Authors,
+- **Keys.** `=` opens the Reference editor (Title, Summary, Authors,
   Published, Source, Aliases). It routes reading state, residence, and file
   name to the [[reference-task]] and `bob ref rename`. `+` opens the Property
   Editor; `-` opens the drawer, where bob-owned sync bookkeeping folds under

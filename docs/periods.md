@@ -264,7 +264,7 @@ period, with two minutes. The other is a later reader who may see only
 the note, or only its Summary in a parent note. Callouts therefore ask
 for what the period produced and what is still in flight, not for a
 retelling of the minute ledger. Bryan decides what it meant, in the
-card (`==`, then `r`).
+card (`=`, then `r`).
 
 Every review callout (week, quarter, year):
 

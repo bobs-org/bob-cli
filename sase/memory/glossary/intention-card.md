@@ -15,7 +15,7 @@ recognized nav line becomes a docked rail; periods add child chips. The numbered
 [[intention]]s, SUMMARY with provenance (`✦ agent` for a stamped draft, `✎ edited`
 otherwise), REFLECTION, and parent-line bands stay content-gated. Current and
 future subjects with no intentions show a `＋ Set intentions` ghost, and a recent
-closed subject missing a band shows one quiet pending line. `==` opens the card
+closed subject missing a band shows one quiet pending line. `=` opens the card
 editor; every write goes through `bob periods update` with the server's field
 fingerprint. The card fails open: a lost title slot falls back to the body
 without owning the title, and malformed values, Source mode, embeds, popovers,

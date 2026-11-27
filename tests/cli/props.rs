@@ -237,7 +237,7 @@ fn canonical_record_fields_route_to_the_card_and_refuse_generic_writes() {
         .unwrap();
     assert_eq!(rating["role"], "card");
     assert_eq!(rating["owner"], "record");
-    assert_eq!(rating["editor"], "==");
+    assert_eq!(rating["editor"], "=");
 
     let output = update(
         vault.path(),

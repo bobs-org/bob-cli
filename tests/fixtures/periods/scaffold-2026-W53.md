@@ -34,7 +34,7 @@ tags:
 > Two readers use it: Bryan on Monday, with two minutes, and a later reader who may see
 > only this note, or only its Summary in a parent note. Record what the week produced
 > and what is still in flight, and link the evidence. Bryan decides what it meant, in
-> the card (`==`, then `r`).
+> the card (`=`, then `r`).
 >
 > 1. **Check.** Run `bob periods brief 2026-W53 -f md` and read all of it. Stop and say
 > why if it reports the week as open (unless Bryan asked for a "so far" draft) or the

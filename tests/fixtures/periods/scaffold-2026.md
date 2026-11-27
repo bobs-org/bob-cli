@@ -33,7 +33,7 @@ tags:
 > 3, 2027 · 53 weeks).** You synthesize the year from its quarters. Two readers use it:
 > Bryan at the year's turn, and a later reader who may see only this note, or only its
 > Summary in [[all_time]]. Record what the year produced and what changed in practice,
-> and link the evidence. Bryan decides what it meant, in the card (`==`, then `r`).
+> and link the evidence. Bryan decides what it meant, in the card (`=`, then `r`).
 >
 > 1. **Check.** Run `bob periods brief 2026 -f md` and read all of it. Stop and say why
 > if it reports the year as open (unless Bryan asked for a "so far" draft) or the review
