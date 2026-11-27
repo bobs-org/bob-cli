@@ -165,6 +165,20 @@ mod tests {
             merchant_key("GROCERY SHOP *AB12"),
             merchant_key("GROCERY SHOP *CD34")
         );
+        assert_eq!(
+            merchant_key(
+                "AMAZON RETA* BV5NH PURCHASE 05/03 WWW.AMAZON.CO WA CARD ••••"
+            ),
+            merchant_key(
+                "AMAZON RETA* UE4V4 PURCHASE 05/04 WWW.AMAZON.CO WA CARD ••••"
+            )
+        );
+        assert_eq!(
+            merchant_key(
+                "AMAZON RETA* BV5NH PURCHASE 05/03 WWW.AMAZON.CO WA CARD ••••"
+            ),
+            "amazon reta"
+        );
         assert_ne!(
             merchant_key("DELIVERY *SUSHI"),
             merchant_key("DELIVERY *PIZZA")

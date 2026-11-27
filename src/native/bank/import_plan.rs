@@ -2921,6 +2921,53 @@ mod tests {
     }
 
     #[test]
+    fn spaced_amazon_order_codes_share_a_learned_merchant() {
+        let config = hub();
+        let bank_id = "amazon-old";
+        let key = transaction_key("checking", bank_id);
+        let id: String = key.chars().take(8).collect();
+        let row = format!(
+            "- [x] $12.34 Amazon [cat:: groceries] [acct:: checking] ^bank-{id}\n"
+        );
+        let scan = scan_with(vec![november(&[(11, vec![row.as_str()])])]);
+        let first =
+            "AMAZON RETA* BV5NH PURCHASE 05/03 WWW.AMAZON.CO WA CARD ••••";
+        let second =
+            "AMAZON RETA* UE4V4 PURCHASE 05/04 WWW.AMAZON.CO WA CARD ••••";
+        let journal = snapshot_with(vec![journal_event(
+            "checking",
+            bank_id,
+            TxnOutcome::Written,
+            Some("bank/2026-11.md"),
+            nov(11),
+            -1234,
+            first,
+        )]);
+        assert_eq!(merchant_key(first), merchant_key(second));
+        let plan = run_plan(
+            &config,
+            &scan,
+            &journal,
+            vec![stmt(
+                "checking",
+                0,
+                vec![txn(nov(12), -2100, "amazon-new", second, Some("POS"))],
+                &digest("amazon-spaced"),
+            )],
+            vec!["amazon.qfx"],
+            Vec::new(),
+        )
+        .expect("shared amazon merchant");
+        assert!(
+            plan.month_edits[0]
+                .after
+                .contains("- [ ] $21.00 Amazon [cat:: groceries] ^bank-"),
+            "after: {}",
+            plan.month_edits[0].after
+        );
+    }
+
+    #[test]
     fn most_recent_teaches_with_deterministic_tiebreak() {
         let config = hub();
         let id_for = |bank_id: &str| {

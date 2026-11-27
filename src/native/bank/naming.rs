@@ -397,22 +397,33 @@ fn strip_processor_prefix(text: &str) -> Option<String> {
 
 /// Drop short, digit-bearing processor/order tokens introduced by `*`.
 /// Word-only sub-merchants after `*` are deliberately preserved.
+/// A star-terminated word plus the following short code is the same
+/// pattern as a glued `WORD*CODE` token.
 fn strip_processor_order_code(text: &str) -> Option<String> {
     let mut words = Vec::new();
     let mut changed = false;
-    for word in text.split_whitespace() {
-        let Some((before, after)) = word.split_once('*') else {
-            words.push(word);
-            continue;
-        };
-        if !is_short_digit_code(after) {
-            words.push(word);
-            continue;
+    let mut tokens = text.split_whitespace().peekable();
+    while let Some(word) = tokens.next() {
+        if let Some((before, after)) = word.split_once('*') {
+            if is_short_digit_code(after) {
+                if !before.is_empty() {
+                    words.push(before);
+                }
+                changed = true;
+                continue;
+            }
+            if after.is_empty()
+                && tokens.peek().copied().is_some_and(is_short_digit_code)
+            {
+                if !before.is_empty() {
+                    words.push(before);
+                }
+                tokens.next();
+                changed = true;
+                continue;
+            }
         }
-        if !before.is_empty() {
-            words.push(before);
-        }
-        changed = true;
+        words.push(word);
     }
     changed.then(|| words.join(" "))
 }
@@ -879,6 +890,31 @@ mod tests {
         assert_eq!(clean_description("GROCERY SHOP *AB••••"), "GROCERY SHOP");
         assert_eq!(clean_description("DELIVERY *SUSHI"), "DELIVERY *SUSHI");
         assert_eq!(clean_description("DELIVERY *PIZZA"), "DELIVERY *PIZZA");
+        assert_eq!(
+            clean_description(
+                "AMAZON RETA* BV5NH PURCHASE 05/03 WWW.AMAZON.CO WA CARD ••••"
+            ),
+            "AMAZON RETA"
+        );
+        assert_eq!(
+            clean_description(
+                "AMAZON RETA* UE4V4 PURCHASE 05/04 WWW.AMAZON.CO WA CARD ••••"
+            ),
+            "AMAZON RETA"
+        );
+        assert_eq!(clean_description("AMAZON  RETA*   BV5NH"), "AMAZON RETA");
+        assert_eq!(clean_description("AMAZON RETA* ••••"), "AMAZON RETA");
+        assert_eq!(
+            clean_description("AMAZON RETA* ABCDEFGHIJK1L"),
+            "AMAZON RETA* ABCDEFGHIJK1L"
+        );
+        assert_eq!(
+            clean_description("AMAZON RETA* SUSHI"),
+            "AMAZON RETA* SUSHI"
+        );
+        assert_eq!(clean_description("AMAZON RETA*"), "AMAZON RETA*");
+        assert_eq!(clean_description("*AB12"), "*AB12");
+        assert_eq!(title_case("AMAZON RETA"), "Amazon Reta");
     }
 
     #[test]
@@ -1108,5 +1144,37 @@ mod tests {
         assert_eq!(fallback.payee, "Tunely");
         assert_eq!(fallback.category.as_deref(), Some("dining"));
         assert_eq!(fallback.link.as_deref(), Some("[[subs/tunely|🔁]]"));
+    }
+
+    #[test]
+    fn spaced_amazon_order_codes_reuse_a_learned_name() {
+        let first =
+            "AMAZON RETA* BV5NH PURCHASE 05/03 WWW.AMAZON.CO WA CARD ••••";
+        let second =
+            "AMAZON RETA* UE4V4 PURCHASE 05/04 WWW.AMAZON.CO WA CARD ••••";
+        let identity = super::super::identity::merchant_key(first);
+        assert_eq!(identity, super::super::identity::merchant_key(second));
+        assert_eq!(identity, "amazon reta");
+
+        let config = plain_hub();
+        let resolved = resolve_name(
+            &config,
+            second,
+            Some("POS"),
+            Some(&LearnedName {
+                payee: "Amazon".to_owned(),
+                category: Some("groceries".to_owned()),
+                links: Vec::new(),
+            }),
+            None,
+            None,
+            &LearnedIndex::with_teacher(&identity, "groceries"),
+        );
+        assert_eq!(resolved.payee, "Amazon");
+        assert_eq!(resolved.category.as_deref(), Some("groceries"));
+        assert_eq!(
+            named(&config, first, Some("POS"), None, None).payee,
+            "Amazon Reta"
+        );
     }
 }
