@@ -692,6 +692,32 @@ and a notebook are siblings under an area or project; neither can parent the
 other. See
 `docs/notebooks.md` and [A Notebook Route Writes Notes; `@@` Stays Draft-Wide](../develop/decisions.md#notebook-routes-write-notes).
 
+### Notebook Card {#notebook-card}
+
+*Aliases: notebook title card.*
+
+The note-top [Property Card](#property-card) for a [Notebook](#notebook). Bob Ledger Tools paints it
+in desktop Live Preview and Reading view, and it replaces the linked notebook
+header wherever it mounts.
+
+- **Identity.** A spine tile and a `NOTEBOOK` kicker, with the owner's crumbs
+  in the root hue, lead the notebook title (opening H1, which hides, else the
+  first alias, else the humanized stem) and its `summary:` scope line (a quiet
+  `＋ Add summary` when missing).
+- **Data.** From the shared `bob notebooks list` report it adds the direct note
+  count, the newest dated note (an authored `[created::]` date, never file
+  time), section chips with counts that jump to their `##` headings, child
+  notebooks, and findings: hard errors as a visible pill, warnings in the
+  foot's lint chip. Missing report data is omitted, never zeroed.
+- **Foot.** It carries `created`, the `@stem` capture route (click copies), and
+  the Properties drawer, where importer keys fold under Managed.
+- **Keys.** `==` focuses `summary`, `+` opens the Property Editor, `-` the
+  drawer, and `_` folds the card's details.
+- **Passive.** Painting writes nothing, creates no tasks, and spawns no bob.
+
+Not the `[!notebooks]` catalog on an owner note, a task home, or a review
+queue. See `docs/reference/plugins/notebook-card.md`.
+
 ### Off-Clock Pomodoro {#off-clock-pomodoro}
 
 *Aliases: off-clock session, untracked pomodoro, untracked session.*
@@ -830,18 +856,22 @@ without that tag remain recognized. See `docs/projects.md` and
 *Aliases: card family.*
 
 The shared family of title-slot album, record, day, period, [Area Card](#area-card),
-[Project Card](#project-card), and [Bank Card](#bank-card) views, built on the bob-ledger-tools kit.
+[Project Card](#project-card), [Bank Card](#bank-card), [Notebook Card](#notebook-card), and [Prose Card](#prose-card) views,
+built on the bob-ledger-tools kit.
 The kit owns `.bob-property-card` chrome, the `==` species-editor dispatcher,
 row and whole-frontmatter ownership, mount lifecycle, and title block. Album,
 record, and temporal cards use `props_v1`; Area and Project settings require
-`props_contract_v1` on top of `props_v1`. The path-canonical `bank.md` hub is
+`props_contract_v1` on top of `props_v1`. Notebook and Prose Cards gate on
+`props_v1` alone and register their `==` editors as dispatcher extensions. The
+path-canonical `bank.md` hub is
 untyped and taskless; its one Bank Card uses `props_v1` and never has Area
 semantics. The foot shows `created` and the full Properties drawer; `-` toggles
 the drawer, `_` folds the card's own section, `==` opens the species editor,
 and `+` opens the generic Property Editor in Live Preview Vim normal mode.
 Every card owns one visible title: its species tile and kicker name it; hue
-does not. The inline title and recognized H1/nav lines hide at render time; a
-Live Preview cursor or selection reveals raw Markdown. Title ownership is
+does not. The inline title and recognized H1/nav lines hide at render time,
+except on the Prose Card, which hides only the inline title because its body
+headings are sections; a Live Preview cursor or selection reveals raw Markdown. Title ownership is
 distinct from row and whole-frontmatter ownership. "Card" means the panel;
 "card editor" means what `==` opens. Painting reads cached metadata and
 confirmed source, never spawns bob or writes the vault. Uncertain evidence
@@ -851,6 +881,37 @@ mode on owned notes; the File Properties sidebar stays native. See
 `docs/reference/plugins/area-and-project-cards.md`,
 `docs/develop/plugins/architecture.md`, and
 `docs/reference/plugins/property-editor.md`.
+
+### Prose Card {#prose-card}
+
+*Aliases: prose title card.*
+
+The note-top [Property Card](#property-card) for a [Prose Note](#prose-note), including the legacy
+`[[article]]` spelling. Bob Ledger Tools paints it as a quiet title page in
+desktop Live Preview and Reading view.
+
+- **Identity.** A folio tile bearing the title's initial (or a pilcrow) and a
+  `PROSE` kicker, with the parent's crumbs in the root hue, lead the title
+  (`title:`, else the first alias, else the file stem verbatim) and the
+  optional one-line `summary:` dek. A missing dek shows nothing.
+- **Data.** From Bob Prose's read-only `api.prose` v1 outline snapshot it adds
+  approximate words and reading time, the section count, `N to write` (stub
+  sections with no deeper section; a written umbrella is not counted), and a
+  findings lint chip. Parts without a snapshot are omitted, never zeroed;
+  without Bob Prose the card is identity-only. A `§` chip shows local
+  `section_numbers` and toggles it through Bob Prose's command.
+- **Fold and title.** It is folded by default; `_` or a `to write` chip opens a
+  bounded outline whose rows jump to their sections, then findings. It owns
+  only the inline title, because every body heading is a section and stays
+  visible.
+- **Takeover and keys.** It replaces native Properties only under the family
+  gate. `==` focuses `title`, `+` opens the Property Editor, and `-` the
+  drawer.
+- **Passive.** Painting never computes counts, numbers, or stubs, and never
+  writes, formats, or spawns bob.
+
+Not Bob Prose's formatter or hanging numbers, a publishing status, or a
+completion score. See `docs/reference/plugins/prose-card.md`.
 
 ### Prose Note {#prose-note}
 
