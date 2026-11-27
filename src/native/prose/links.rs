@@ -21,10 +21,10 @@ pub(crate) struct LinkPlan {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct LinkSpan {
-    target_start: usize,
-    target_end: usize,
-    wikilink: bool,
+pub(super) struct LinkSpan {
+    pub(super) target_start: usize,
+    pub(super) target_end: usize,
+    pub(super) wikilink: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -204,7 +204,7 @@ pub(crate) fn strip_number_tokens_for_words(text: &str) -> String {
     output
 }
 
-fn protects_links(region: Region) -> bool {
+pub(super) fn protects_links(region: Region) -> bool {
     matches!(
         region,
         Region::Frontmatter
@@ -218,133 +218,63 @@ fn protects_links(region: Region) -> bool {
     )
 }
 
-fn link_spans(line: &str) -> Vec<LinkSpan> {
+pub(super) fn link_spans(line: &str) -> Vec<LinkSpan> {
     let inline_mask =
         super::scan::inline_mask(line, super::scan::InlineMaskMode::Links);
-    let mut masked = line.as_bytes().to_vec();
-    for (byte, masked) in masked.iter_mut().zip(inline_mask) {
-        if masked {
-            *byte = b' ';
-        }
-    }
-    let mut spans = Vec::new();
-    let mut i = 0;
-    while i + 1 < masked.len() {
-        if super::scan::is_escaped(line.as_bytes(), i) {
-            i += 1;
-            continue;
-        }
-        if masked[i..].starts_with(b"![[")
-            && let Some(relative_end) = find_bytes(&masked[i + 3..], b"]]")
-        {
-            let end = i + 3 + relative_end + 2;
-            spans.push(LinkSpan {
-                target_start: i + 3,
-                target_end: end - 2,
-                wikilink: true,
-            });
-            i = end;
-            continue;
-        }
-        if masked[i..].starts_with(b"[[")
-            && let Some(relative_end) = find_bytes(&masked[i + 2..], b"]]")
-        {
-            let end = i + 2 + relative_end + 2;
-            spans.push(LinkSpan {
-                target_start: i + 2,
-                target_end: end - 2,
-                wikilink: true,
-            });
-            i = end;
-            continue;
-        }
-        let open = if masked[i..].starts_with(b"![") {
-            i + 1
-        } else if masked[i] == b'[' {
-            i
-        } else {
-            i += 1;
-            continue;
-        };
-        let Some(label_end) = find_unescaped(&masked, open + 1, b']') else {
-            i += 1;
-            continue;
-        };
-        if masked.get(label_end + 1) != Some(&b'(') {
-            i = label_end + 1;
-            continue;
-        }
-        let Some(target_end) = find_markdown_close(&masked, label_end + 2)
-        else {
-            i = label_end + 2;
-            continue;
-        };
-        let mut target_start = label_end + 2;
-        let mut actual_end = target_end;
-        if masked.get(target_start) == Some(&b'<')
-            && masked.get(actual_end.saturating_sub(1)) == Some(&b'>')
-        {
-            target_start += 1;
-            actual_end -= 1;
-        } else if let Some(space) = masked[target_start..actual_end]
-            .iter()
-            .position(u8::is_ascii_whitespace)
-        {
-            actual_end = target_start + space;
-        }
-        if target_start < actual_end {
-            spans.push(LinkSpan {
-                target_start,
-                target_end: actual_end,
-                wikilink: false,
-            });
-        }
-        i = target_end + 1;
-    }
+    let ignored = mask_ranges(&inline_mask);
+    let mut spans = crate::native::task_dependencies::raw_wikilink_spans(line)
+        .into_iter()
+        .filter(|span| {
+            !super::scan::is_escaped(line.as_bytes(), span.open)
+                && !overlaps_any(span.open..span.end, &ignored)
+        })
+        .map(|span| LinkSpan {
+            target_start: span.open + 2,
+            target_end: span.end - 2,
+            wikilink: true,
+        })
+        .collect::<Vec<_>>();
+    spans.extend(
+        crate::native::highlights_ref::rename::links::markdown_links(
+            line, &ignored,
+        )
+        .into_iter()
+        .map(|span| LinkSpan {
+            target_start: span.path_start,
+            target_end: span.path_end,
+            wikilink: false,
+        }),
+    );
+    spans.sort_by_key(|span| span.target_start);
     spans
 }
 
-fn find_markdown_close(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut depth = 1_usize;
-    let mut i = start;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i = (i + 2).min(bytes.len());
-            continue;
-        }
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
+fn mask_ranges(mask: &[bool]) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = None;
+    for (index, masked) in mask.iter().copied().enumerate() {
+        match (start, masked) {
+            (None, true) => start = Some(index),
+            (Some(begin), false) => {
+                ranges.push(begin..index);
+                start = None;
             }
             _ => {}
         }
-        i += 1;
     }
-    None
+    if let Some(begin) = start {
+        ranges.push(begin..mask.len());
+    }
+    ranges
 }
 
-fn find_unescaped(bytes: &[u8], start: usize, needle: u8) -> Option<usize> {
-    let mut i = start;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i = (i + 2).min(bytes.len());
-        } else if bytes[i] == needle {
-            return Some(i);
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+fn overlaps_any(
+    span: std::ops::Range<usize>,
+    ranges: &[std::ops::Range<usize>],
+) -> bool {
+    ranges
+        .iter()
+        .any(|ignored| span.start < ignored.end && span.end > ignored.start)
 }
 
 fn markdown_target(target: &str) -> &str {

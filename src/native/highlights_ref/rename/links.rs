@@ -1047,13 +1047,13 @@ fn resolve_wikilink_path<'a>(
     (bundle.map_bare(path), false)
 }
 
-#[derive(Debug)]
-struct MarkdownLink {
-    path_start: usize,
-    path_end: usize,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MarkdownLink {
+    pub(crate) path_start: usize,
+    pub(crate) path_end: usize,
 }
 
-fn markdown_links(
+pub(crate) fn markdown_links(
     line: &str,
     code_spans: &[std::ops::Range<usize>],
 ) -> Vec<MarkdownLink> {

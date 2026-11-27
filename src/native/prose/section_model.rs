@@ -873,7 +873,9 @@ fn is_checkbox_line(line: &str) -> bool {
         && bytes.get(3).is_none_or(u8::is_ascii_whitespace)
 }
 
-fn collect_block_ids(lines: &[ClassifiedLine<'_>]) -> Vec<MovedBlockId> {
+pub(super) fn collect_block_ids(
+    lines: &[ClassifiedLine<'_>],
+) -> Vec<MovedBlockId> {
     let mut ids = Vec::new();
     for line in lines {
         if line.region.protects_body() || line.region == Region::HtmlBlock {

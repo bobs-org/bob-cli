@@ -11,6 +11,8 @@ mod links;
 mod marker;
 mod outline;
 mod plan;
+#[allow(dead_code)] // The extract and inline planners consume link relocation.
+mod relocate;
 mod render;
 mod scan;
 #[allow(dead_code)] // The next prose-conversion phase consumes this model.
