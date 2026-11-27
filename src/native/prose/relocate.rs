@@ -849,183 +849,6 @@ impl Error for RelocationError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{fs, path::Path};
-
-    use super::*;
-    use crate::native::prose::section_model::{select_section, Selector};
-
-    fn area_section<'a>(
-        path: &Path,
-        text: &'a str,
-        title: &str,
-    ) -> ProseSection<'a> {
-        select_section(path, text, Selector::Section(title), |_| None)
-            .expect("eligible area section")
-    }
-
-    #[test]
-    fn extract_relocates_host_and_vault_links_without_touching_protected_text()
-    {
-        let root = tempfile::tempdir().expect("vault");
-        fs::create_dir_all(root.path().join("done")).expect("done folder");
-        fs::create_dir_all(root.path().join("2026")).expect("daily folder");
-        let owner = "---\ntype: [[area]]\n---\n\
-## Topic\n\
-\n\
-Inside [[#Moved Heading]] [[#Stay]] [[#Topic]] [[#^moved]] [[#^kept]]\n\
-\n\
-### Moved Heading\n\
-\n\
-Moved words ^moved\n\
-\n\
-## Stay\n\
-\n\
-Kept words ^kept\n\
-\n\
-## Elsewhere\n\
-\n\
-Outside [[#Moved Heading]]\n";
-        fs::write(root.path().join("project.md"), owner).expect("owner");
-        let external = "---\nlink: \"[[project#Moved Heading]]\"\n---\n\
-[[project#Moved Heading|Alias]] ![[project#Moved Heading]]\n\
-[Read](../project.md#Moved%20Heading)\n\
-[[project#^moved]]\n\
-```md\n[[project#Moved Heading]]\n```\n";
-        fs::write(root.path().join("done/day.md"), external)
-            .expect("external linker");
-        fs::write(
-            root.path().join("2026/20261127.md"),
-            "[[project#Moved Heading]]\n",
-        )
-        .expect("daily linker");
-
-        let section = area_section(Path::new("project.md"), owner, "Topic");
-        let map = RelocationMap::new(&section, "project_topic");
-        let plan = plan_vault(root.path(), &map, Direction::Extract, None)
-            .expect("relocation plan");
-        let owner_after = plan
-            .files
-            .iter()
-            .find(|file| file.path == Path::new("project.md"))
-            .expect("owner changed")
-            .contents
-            .as_str();
-        assert!(owner_after.contains(
-            "Inside [[#Moved Heading]] [[project#Stay]] [[project#Topic]] [[#^moved]] [[project#^kept]]"
-        ), "{owner_after}");
-        assert!(owner_after.contains("Outside [[project_topic#Moved Heading]]"));
-
-        let external_after = plan
-            .files
-            .iter()
-            .find(|file| file.path == Path::new("done/day.md"))
-            .expect("done linker changed")
-            .contents
-            .as_str();
-        assert!(
-            external_after.contains("[[project_topic#Moved Heading|Alias]]")
-        );
-        assert!(external_after.contains("![[project_topic#Moved Heading]]"));
-        assert!(external_after
-            .contains("[Read](../project_topic.md#Moved%20Heading)"));
-        assert!(external_after.contains("[[project_topic#^moved]]"));
-        assert!(external_after.contains("link: \"[[project#Moved Heading]]\""));
-        assert!(
-            external_after.contains("```md\n[[project#Moved Heading]]\n```")
-        );
-        assert!(plan.links.iter().any(|link| {
-            link.path == Path::new("done/day.md")
-                && link.line == 5
-                && link.before.contains("project.md#Moved%20Heading")
-        }));
-        assert!(plan.files.iter().any(|file| {
-            file.path == Path::new("2026/20261127.md")
-                && file.contents.contains("[[project_topic#Moved Heading]]")
-        }));
-    }
-
-    #[test]
-    fn heading_link_crossing_the_move_boundary_is_refused() {
-        let root = tempfile::tempdir().expect("vault");
-        let owner = "---\ntype: [[area]]\n---\n\
-## Topic\n\
-### Shared\n\
-Moved.\n\
-## Shared\n\
-Stays.\n";
-        fs::write(root.path().join("project.md"), owner).expect("owner");
-        fs::write(root.path().join("other.md"), "[[project#Shared]]\n")
-            .expect("linker");
-        let section = area_section(Path::new("project.md"), owner, "Topic");
-        let map = RelocationMap::new(&section, "project_topic");
-        let error = plan_vault(root.path(), &map, Direction::Extract, None)
-            .expect_err("mixed moved/staying target is ambiguous");
-        assert_eq!(error.code(), "ambiguous-link");
-        assert!(error.to_string().contains("other.md:1"));
-    }
-
-    #[test]
-    fn inline_returns_child_links_to_the_host_and_skips_the_stub() {
-        let root = tempfile::tempdir().expect("vault");
-        fs::create_dir_all(root.path().join("done")).expect("done folder");
-        let owner = "---\ntype: [[area]]\n---\n\
-## Topic\n\
-\n\
-- [[project_topic|Topic]]\n\
-\n\
-## Idea\n\
-\n\
-Another idea.\n\
-\n\
-## Other\n\
-\n\
-Other prose.\n";
-        let child = "---\ntype: [[prose]]\n---\n\
-## Idea\n\
-\n\
-Child prose [[#Idea]] [[project#Other]]\n";
-        fs::write(root.path().join("project.md"), owner).expect("owner");
-        fs::write(root.path().join("project_topic.md"), child).expect("child");
-        fs::write(
-            root.path().join("done/day.md"),
-            "[[project_topic#Idea|Read]]\n",
-        )
-        .expect("linker");
-        let section = area_section(Path::new("project.md"), owner, "Topic");
-        let stub_line = owner
-            .lines()
-            .position(|line| line == "- [[project_topic|Topic]]")
-            .expect("stub line")
-            + 1;
-        let map = RelocationMap::for_inline(&section, "project_topic", child);
-        let plan =
-            plan_vault(root.path(), &map, Direction::Inline, Some(stub_line))
-                .expect("inline link plan");
-
-        let child_after = plan
-            .files
-            .iter()
-            .find(|file| file.path == Path::new("project_topic.md"))
-            .expect("child note changed")
-            .contents
-            .as_str();
-        assert!(child_after.contains("Child prose [[#Topic#Idea]] [[#Other]]"));
-        let external_after = plan
-            .files
-            .iter()
-            .find(|file| file.path == Path::new("done/day.md"))
-            .expect("external linker changed")
-            .contents
-            .as_str();
-        assert!(external_after.contains("[[project#Topic#Idea|Read]]"));
-        assert!(!plan.links.iter().any(|link| {
-            link.path == Path::new("project.md") && link.line == stub_line
-        }));
-    }
-}
-
 fn resolve_fragment(
     fragment: &str,
     headings: &[PlannedHeading],
@@ -1271,4 +1094,181 @@ fn contains_casefolded_stem(text: &str, stem: &str) -> bool {
     percent_decode(text)
         .to_lowercase()
         .contains(&stem.to_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::Path};
+
+    use super::*;
+    use crate::native::prose::section_model::{select_section, Selector};
+
+    fn area_section<'a>(
+        path: &Path,
+        text: &'a str,
+        title: &str,
+    ) -> ProseSection<'a> {
+        select_section(path, text, Selector::Section(title), |_| None)
+            .expect("eligible area section")
+    }
+
+    #[test]
+    fn extract_relocates_host_and_vault_links_without_touching_protected_text()
+    {
+        let root = tempfile::tempdir().expect("vault");
+        fs::create_dir_all(root.path().join("done")).expect("done folder");
+        fs::create_dir_all(root.path().join("2026")).expect("daily folder");
+        let owner = "---\ntype: [[area]]\n---\n\
+## Topic\n\
+\n\
+Inside [[#Moved Heading]] [[#Stay]] [[#Topic]] [[#^moved]] [[#^kept]]\n\
+\n\
+### Moved Heading\n\
+\n\
+Moved words ^moved\n\
+\n\
+## Stay\n\
+\n\
+Kept words ^kept\n\
+\n\
+## Elsewhere\n\
+\n\
+Outside [[#Moved Heading]]\n";
+        fs::write(root.path().join("project.md"), owner).expect("owner");
+        let external = "---\nlink: \"[[project#Moved Heading]]\"\n---\n\
+[[project#Moved Heading|Alias]] ![[project#Moved Heading]]\n\
+[Read](../project.md#Moved%20Heading)\n\
+[[project#^moved]]\n\
+```md\n[[project#Moved Heading]]\n```\n";
+        fs::write(root.path().join("done/day.md"), external)
+            .expect("external linker");
+        fs::write(
+            root.path().join("2026/20261127.md"),
+            "[[project#Moved Heading]]\n",
+        )
+        .expect("daily linker");
+
+        let section = area_section(Path::new("project.md"), owner, "Topic");
+        let map = RelocationMap::new(&section, "project_topic");
+        let plan = plan_vault(root.path(), &map, Direction::Extract, None)
+            .expect("relocation plan");
+        let owner_after = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("project.md"))
+            .expect("owner changed")
+            .contents
+            .as_str();
+        assert!(owner_after.contains(
+            "Inside [[#Moved Heading]] [[project#Stay]] [[project#Topic]] [[#^moved]] [[project#^kept]]"
+        ), "{owner_after}");
+        assert!(owner_after.contains("Outside [[project_topic#Moved Heading]]"));
+
+        let external_after = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("done/day.md"))
+            .expect("done linker changed")
+            .contents
+            .as_str();
+        assert!(
+            external_after.contains("[[project_topic#Moved Heading|Alias]]")
+        );
+        assert!(external_after.contains("![[project_topic#Moved Heading]]"));
+        assert!(external_after
+            .contains("[Read](../project_topic.md#Moved%20Heading)"));
+        assert!(external_after.contains("[[project_topic#^moved]]"));
+        assert!(external_after.contains("link: \"[[project#Moved Heading]]\""));
+        assert!(
+            external_after.contains("```md\n[[project#Moved Heading]]\n```")
+        );
+        assert!(plan.links.iter().any(|link| {
+            link.path == Path::new("done/day.md")
+                && link.line == 5
+                && link.before.contains("project.md#Moved%20Heading")
+        }));
+        assert!(plan.files.iter().any(|file| {
+            file.path == Path::new("2026/20261127.md")
+                && file.contents.contains("[[project_topic#Moved Heading]]")
+        }));
+    }
+
+    #[test]
+    fn heading_link_crossing_the_move_boundary_is_refused() {
+        let root = tempfile::tempdir().expect("vault");
+        let owner = "---\ntype: [[area]]\n---\n\
+## Topic\n\
+### Shared\n\
+Moved.\n\
+## Shared\n\
+Stays.\n";
+        fs::write(root.path().join("project.md"), owner).expect("owner");
+        fs::write(root.path().join("other.md"), "[[project#Shared]]\n")
+            .expect("linker");
+        let section = area_section(Path::new("project.md"), owner, "Topic");
+        let map = RelocationMap::new(&section, "project_topic");
+        let error = plan_vault(root.path(), &map, Direction::Extract, None)
+            .expect_err("mixed moved/staying target is ambiguous");
+        assert_eq!(error.code(), "ambiguous-link");
+        assert!(error.to_string().contains("other.md:1"));
+    }
+
+    #[test]
+    fn inline_returns_child_links_to_the_host_and_skips_the_stub() {
+        let root = tempfile::tempdir().expect("vault");
+        fs::create_dir_all(root.path().join("done")).expect("done folder");
+        let owner = "---\ntype: [[area]]\n---\n\
+## Topic\n\
+\n\
+- [[project_topic|Topic]]\n\
+\n\
+## Idea\n\
+\n\
+Another idea.\n\
+\n\
+## Other\n\
+\n\
+Other prose.\n";
+        let child = "---\ntype: [[prose]]\n---\n\
+## Idea\n\
+\n\
+Child prose [[#Idea]] [[project#Other]]\n";
+        fs::write(root.path().join("project.md"), owner).expect("owner");
+        fs::write(root.path().join("project_topic.md"), child).expect("child");
+        fs::write(
+            root.path().join("done/day.md"),
+            "[[project_topic#Idea|Read]]\n",
+        )
+        .expect("linker");
+        let section = area_section(Path::new("project.md"), owner, "Topic");
+        let stub_line = owner
+            .lines()
+            .position(|line| line == "- [[project_topic|Topic]]")
+            .expect("stub line")
+            + 1;
+        let map = RelocationMap::for_inline(&section, "project_topic", child);
+        let plan =
+            plan_vault(root.path(), &map, Direction::Inline, Some(stub_line))
+                .expect("inline link plan");
+
+        let child_after = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("project_topic.md"))
+            .expect("child note changed")
+            .contents
+            .as_str();
+        assert!(child_after.contains("Child prose [[#Topic#Idea]] [[#Other]]"));
+        let external_after = plan
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("done/day.md"))
+            .expect("external linker changed")
+            .contents
+            .as_str();
+        assert!(external_after.contains("[[project#Topic#Idea|Read]]"));
+        assert!(!plan.links.iter().any(|link| {
+            link.path == Path::new("project.md") && link.line == stub_line
+        }));
+    }
 }

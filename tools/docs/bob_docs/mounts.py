@@ -708,6 +708,14 @@ def _tracked_files(root: Path) -> set[str] | None:
     return {part for part in result.split("\0") if part}
 
 
+def _is_authored_page(root: Path, rel: str, tracked: set[str] | None) -> bool:
+    """Tracked or non-ignored paths are authored; ignored untracked copies are stale."""
+
+    if tracked is not None and rel in tracked:
+        return True
+    return not path_ignored(root, rel)
+
+
 def manifest_path(root: Path) -> Path:
     from .context import context_from_root
 
@@ -805,7 +813,11 @@ def validate_mount_targets(
         index_rel = f"docs/{plan.mount.target.as_posix()}/{INDEX_FILENAME}"
         hub = _hub_target(plan.mount)
         if plan.source_hub:
-            if index.exists() and str(hub) not in owned:
+            if (
+                index.exists()
+                and str(hub) not in owned
+                and _is_authored_page(root, index_rel, tracked)
+            ):
                 raise DocsError(
                     f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: source ships "
                     f"{INDEX_FILENAME}, which collides with the committed landing page "
@@ -866,7 +878,11 @@ def validate_mount_targets(
                 blame=f"mount {plan.mount.repo!r}",
             )
             destination = docs_root / Path(*target_relative.parts)
-            if destination.exists() and str(target_relative) not in owned:
+            if (
+                destination.exists()
+                and str(target_relative) not in owned
+                and _is_authored_page(root, tracked_rel, tracked)
+            ):
                 raise DocsError(
                     f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: refusing to "
                     f"overwrite authored file {destination}; mount copies own only "

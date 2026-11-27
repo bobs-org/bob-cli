@@ -921,13 +921,10 @@ pub(crate) fn stub_target(section: &ProseSection<'_>) -> Option<StubTarget> {
         return None;
     }
     let bullet = &content[indent..];
-    let Some(rest) = bullet
+    let rest = bullet
         .strip_prefix("- ")
         .or_else(|| bullet.strip_prefix("* "))
-        .or_else(|| bullet.strip_prefix("+ "))
-    else {
-        return None;
-    };
+        .or_else(|| bullet.strip_prefix("+ "))?;
     let (embedded, link) = if let Some(link) = rest
         .strip_prefix("![[")
         .and_then(|value| value.strip_suffix("]]"))

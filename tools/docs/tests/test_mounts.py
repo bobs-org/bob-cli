@@ -291,7 +291,7 @@ def test_repeat_assembly_is_stable_and_removes_stale(
     assert (root / "docs/reference/plugins/fm.md").is_file()
 
 
-def test_authored_file_under_target_is_rejected(
+def test_stale_ignored_untracked_copy_under_target_is_replaced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _plugin_repo(tmp_path / "bob-plugins")
@@ -303,8 +303,13 @@ def test_authored_file_under_target_is_rejected(
     )
     _write(root / "docs/reference/plugins/index.md", "# Hub\n")
     _write(root / "docs/reference/plugins/guide.md", "# Mine\n")
-    with pytest.raises(DocsError, match="authored file"):
-        assemble(root)
+    assemble(root)
+    text = (root / "docs/reference/plugins/guide.md").read_text(encoding="utf-8")
+    assert "Body text." in text
+    assert "# Mine" not in text
+    assert (root / "docs/reference/plugins/index.md").read_text(
+        encoding="utf-8"
+    ) == "# Hub\n"
 
 
 def test_source_spoofing_is_rejected() -> None:
@@ -394,6 +399,68 @@ def test_source_index_collision_rejected(
     _write(root / "docs/reference/plugins/index.md", "# Hub\n")
     with pytest.raises(DocsError, match="collides with the committed landing page"):
         assemble(root)
+
+
+def test_stale_ignored_untracked_source_hub_index_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins", with_index=True)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Stale leftover hub\n")
+    _write(root / "docs/reference/plugins/guide.md", "# Stale leftover guide\n")
+    assemble(root)
+    hub = (root / "docs/reference/plugins/index.md").read_text(encoding="utf-8")
+    guide = (root / "docs/reference/plugins/guide.md").read_text(encoding="utf-8")
+    assert hub.startswith("---\nsource: bob-plugins:docs/index.md\n")
+    assert "Plugins inventory" in hub
+    assert "# Stale leftover hub" not in hub
+    assert "Body text." in guide
+    assert "# Stale leftover guide" not in guide
+
+
+def test_tracked_unmanifested_source_hub_index_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins", with_index=True)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+    hub = root / "docs/reference/plugins/index.md"
+    _write(hub, "# Authored hub\n")
+    _commit_all(root)
+    subprocess.run(
+        ["git", "add", "-f", "docs/reference/plugins/index.md"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            "track authored hub",
+        ],
+        cwd=root,
+        check=True,
+    )
+    authored = hub.read_bytes()
+    with pytest.raises(DocsError, match="collides with the committed landing page"):
+        assemble(root)
+    assert hub.read_bytes() == authored
 
 
 def _nested_source_hub_repo(repo: Path) -> Path:
