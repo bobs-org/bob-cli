@@ -779,11 +779,8 @@ sit inside `code`, `pre`, `.dataview.inline-field`,
 `.bob-priority-mark`, or `.bob-fresh-mark`. Anything else is left
 alone (a Dataview pill or raw text).
 
-While blocked-reason marks are on, a row whose block mark is a digit
-(`p1`–`p4`) folds its priority mark to zero width instead: the box
-already says the priority, so the bars would repeat it
-(`docs/blocked-marks.md`). The cursor and click still reveal the raw
-field, and Tasks results hide the row's glyph the same way.
+The mark always renders, including on Blocked rows whose box shows a
+P1–P4 digit (`docs/blocked-marks.md`).
 
 **Repair flag.** While marks are on, any leftover `priority`
 Dataview pill in Live Preview is non-canonical: uppercase values,
@@ -876,7 +873,7 @@ across re-renders and costly; CSS on Tasks' own
 | PM15 | `- [x] #task K [priority:: high]`                          | 4 bars, resting tone (CSS)                                                             |
 | PM16 | `> - [ ] #task L [priority:: medium]`                      | 3 bars (quote-aware)                                                                   |
 | PM17 | `- [ ] #task M x[priority:: low]`                          | 2 bars, no fold space                                                                  |
-| PM18 | `- [?] #task N [priority:: medium] [scheduled:: 2026-11-20]` with block marks on | folded to zero width (block mark `p2` says it)                    |
+| PM18 | `- [?] #task N [priority:: medium] [scheduled:: 2026-11-20]` with block marks on | 3 bars · `P2 · Medium priority⏎Rolls 8–30 days ahead⏎…`                                |
 | PM19 | the same row with block marks off                             | 3 bars · `P2 · Medium priority⏎Rolls 8–30 days ahead⏎…`                                |
 
 **Live verification (Bryan, in Obsidian)** — still pending:

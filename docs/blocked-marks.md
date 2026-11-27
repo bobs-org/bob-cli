@@ -260,10 +260,12 @@ miniature `render` element uses `role="img"`.
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Live Preview                                                | `Decoration.line` attributes on `.HyperMD-task-line[data-task="?"]`                    |
 | Reading view, embeds, hover previews, Dataview `TASK` views | markdown post-processor sets the same attributes on `li.task-list-item[data-task="?"]` |
-| Priority bars / `#prj_is_blocked` / `#awaiting_reply` pills | folded where the box already says it                                                   |
+| `#prj_is_blocked` / `#awaiting_reply` pills                 | folded where the box already says it                                                   |
 | Tasks query results                                         | CSS on Tasks' own row attributes                                                       |
 | `DEPENDS ON` / `BLOCKS` chips                               | miniature box through the shared element builder; the box also keeps a CSS fallback `?` so toggling off restores the plain glyph immediately. The chip tooltip and aria gain the target's reason line (tooltip line 1 only). Reading-view chip tooltips keep that reason text until the view re-renders. |
 | Task Card                                                   | `api.blockMarks` v1 in bob-navigation-hotkeys                                          |
+
+Priority bars are never folded: a digit row shows both its hollow digit and its bars.
 
 Row attributes (identical on every JS surface):
 
@@ -343,9 +345,8 @@ Cascade, gated by `body.bob-block-marks`, later rules winning:
    ids, closed deps, and `stale` all look like `&` because Tasks
    cannot prove those cases.
 
-Digit rows clip `.task-priority` (the same clip pattern priority
-marks already use, never `display: none`). `prj` rows clip the
-`#prj_is_blocked` tag the same way and keep their bars, because the
+No row clips `.task-priority`: every row keeps its bars. `prj` rows clip the
+`#prj_is_blocked` tag (the clip pattern, never `display: none`), because the
 box is a chevron, not a digit. Plane rows clip the `#awaiting_reply`
 tag and keep their bars; a `prj` row keeps its `#awaiting_reply` pill.
 The session toggle restores Tasks results. `#prj_is_blocked_old` is
@@ -427,7 +428,11 @@ reason text: a reason string on every Blocked row clutters 478 rows
 to serve what a hover already says. A per-level hue ramp: the hue
 budget is spent, and priority marks already rejected it. Priority out
 of the box entirely: the digit is the teaching moment that ties the
-box to the P1–P4 strip. `role="img"` on the checkbox: it would strip
+box to the P1–P4 strip. Folding the bars on digit rows was dropped
+(2026-11-27): the digit vanishes whenever the raw `[?]` is revealed,
+for example with the cursor on the checkbox, and in Tasks results the
+loop glyph can win the box, so either way the row had no priority on
+screen. `role="img"` on the checkbox: it would strip
 an interactive control's semantics. Field-presence `&`: showing `&`
 for any Depends-On line, open or not, would mark rows whose
 prerequisites are all done.
@@ -441,7 +446,7 @@ ready and holds open `[id:: x]`, open `[id:: y]`, and done
 
 | #    | Input                                                                                       | Expected                                                                                                          |
 | ---- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| BM1  | `- [?] #task A [priority:: medium] [scheduled:: 2026-11-20]`                                | `p2` waiting · `Blocked · P2 deferral · until Fri, Nov 20 · in 19 days⏎Ctrl+Shift+P to reschedule or change priority` · bars folded |
+| BM1  | `- [?] #task A [priority:: medium] [scheduled:: 2026-11-20]`                                | `p2` waiting · `Blocked · P2 deferral · until Fri, Nov 20 · in 19 days⏎Ctrl+Shift+P to reschedule or change priority` · bars shown |
 | BM2  | `- [?] #task B [scheduled:: 2026-11-04]`                                                    | `date` waiting · `Blocked · until Wed, Nov 4 · in 3 days⏎Ctrl+Shift+P to reschedule`                              |
 | BM3  | `- [?] #task C [repeat:: every day when done] [scheduled:: 2026-11-02]`                     | `repeat` waiting · `Recurring · next run Mon, Nov 2 · tomorrow`                                                   |
 | BM4  | `- [?] #task D [dependsOn:: x]`                                                             | `dep` held · `Blocked · after <x text>⏎Ctrl+Shift+B to edit prerequisites`                                        |
@@ -501,7 +506,7 @@ mouseover bindings.
 
 Verified in an isolated scratch vault (light and dark, Live Preview and
 reading view) with screenshots reviewed against the accepted mockup:
-`scripts/obsidian-block-marks-e2e.cjs` **171/171** (0 failed, 0 skipped),
+`scripts/obsidian-block-marks-e2e.cjs` **172/172** (0 failed, 0 skipped),
 including 27 chip-mark cases and 10 awaiting-reply cases (2026-11-07): the
 `awaiting` key in both views, the plane mask on the owned checkbox, the
 exact hover and reading tooltip with `<who>` from a linked mail note, the
@@ -542,9 +547,9 @@ paints a `4` on the quoted task when a checkbox exists.
   clock, not a midnight observation)
 - family paint remains after the scratch snippet is disabled through
   `app.customCss.setCssEnabledStatus` and the style node is absent
-- folds: digit-row priority bars on BM1 are folded and BM8/BM9 bars stay
-  shown; the `#prj_is_blocked` pill on BM7 is folded and BM19 keeps it
-  (`collectFolds` in `obsidian-block-marks-e2e.cjs`)
+- folds: priority bars on BM1, BM8, and BM9 all stay shown (including with
+  the cursor revealing BM1's raw `[?]`), while the `#prj_is_blocked` pill on
+  BM7 is folded and BM19 keeps it (`collectFolds` in `obsidian-block-marks-e2e.cjs`)
 - chips: a separate `chip-marks.md` note with a `DEPENDS ON` line targeting
   `p2`, `dep`, and `prj` rows, plus a Blocked dependent so a `BLOCKS` chip
   is marked; Live Preview and reading view assert the miniature key, the
