@@ -386,11 +386,11 @@ fn parse_type_leads_config(text: &str) -> TypeLeadsConfig {
 
 fn is_plain_title_lead(text: &str) -> bool {
     [
-        format!("#bob-lead-probe {text}"),
-        format!("#bob-lead-probe {text} x"),
+        (format!("#bob-lead-probe {text}"), text.to_string()),
+        (format!("#bob-lead-probe {text} x"), format!("{text} x")),
     ]
     .into_iter()
-    .all(|probe| {
+    .all(|(probe, expected_body)| {
         let parsed = parse_for_editor(&probe);
         let [item] = parsed.items.as_slice() else {
             return false;
@@ -404,7 +404,7 @@ fn is_plain_title_lead(text: &str) -> bool {
                 .filter(|span| span.kind == SpanKind::TaskType)
                 .count()
                 == 1
-            && item.body == text
+            && item.body == expected_body
     })
 }
 
@@ -731,23 +731,11 @@ mod tests {
 
     #[test]
     fn type_leads_validate_values_and_parser_probes_per_entry() {
+        // NOTE: no backslash-newline continuations below: a `\` at the end
+        // of a line strips the following line's indentation, which would
+        // un-nest `type_leads` out of `capture:`.
         let config = parse_leads(&format!(
-            "capture:\n\
-  type_leads:\n\
-    TRIM: '  Repair the hinge  '\n\
-    NULL: null\n\
-    NUMBER: 7\n\
-    EMPTY: '   '\n\
-    MULTI: |\n\
-      two\n\
-      lines\n\
-    LONG: \"{}\"\n\
-    CONTROL: \"two\\twords\"\n\
-    AT: '@home'\n\
-    TILDE: '~x'\n\
-    FIELD: 'x='\n\
-    TEMPLATE: '%t'\n\
-    CLOCK: '#now'\n",
+            "capture:\n  type_leads:\n    TRIM: '  Repair the hinge  '\n    SKIP: null\n    NUMBER: 7\n    EMPTY: '   '\n    MULTI: |\n      two\n      lines\n    LONG: \"{}\"\n    CONTROL: \"two\\twords\"\n    AT: '@home'\n    TILDE: '~x'\n    FIELD: 'x='\n    TEMPLATE: '%t'\n    CLOCK: '#now'\n",
             "x".repeat(65)
         ));
         assert_eq!(config.leads.len(), 1);
@@ -770,11 +758,7 @@ mod tests {
     #[test]
     fn type_leads_reject_reserved_and_duplicate_normalized_keys() {
         let config = parse_leads(
-            "capture:\n\
-  type_leads:\n\
-    OFF: Away\n\
-    FIX: Repair\n\
-    fix: Fix\n",
+            "capture:\n  type_leads:\n    OFF: Away\n    FIX: Repair\n    fix: Fix\n",
         );
         assert!(config.leads.is_empty());
         assert_eq!(config.warnings.len(), 2);
@@ -794,10 +778,7 @@ mod tests {
     #[test]
     fn type_leads_accept_multibyte_text_and_reject_non_string_keys() {
         let config = parse_leads(
-            "capture:\n\
-  type_leads:\n\
-    REPAIR: 'Réparer'\n\
-    42: Nope\n",
+            "capture:\n  type_leads:\n    REPAIR: 'Réparer'\n    42: Nope\n",
         );
         assert_eq!(config.leads["repair"].text, "Réparer");
         assert!(config.warnings.iter().any(|warning| {
@@ -808,29 +789,19 @@ mod tests {
 
     #[test]
     fn type_leads_are_independent_of_other_capture_and_vocabulary_settings() {
-        let text = "types: {FIX: red}\n\
-capture:\n\
-  type_leads:\n\
-    FIX: Fix\n\
-  max_saved_templates: 99\n\
-  clipboard_history: spotlight\n";
+        let text = "types: {FIX: red}\ncapture:\n  type_leads:\n    FIX: Fix\n  max_saved_templates: 99\n  clipboard_history: spotlight\n";
         assert_eq!(parse_leads(text).leads["fix"].text, "Fix");
         assert!(parse(text).is_err());
         assert!(parse_history(text).is_err());
 
-        let other_settings = "capture:\n\
-  type_leads: []\n\
-  max_saved_templates: 12\n\
-  clipboard_history: alfred\n";
+        let other_settings = "capture:\n  type_leads: []\n  max_saved_templates: 12\n  clipboard_history: alfred\n";
         assert_eq!(parse(other_settings).unwrap().max_saved_templates, 12);
         assert_eq!(
             parse_history(other_settings).unwrap().setting,
             ClipboardHistorySetting::Alfred
         );
 
-        let invalid_leads = "types: {FIX: red}\n\
-capture:\n\
-  type_leads: []\n";
+        let invalid_leads = "types: {FIX: red}\ncapture:\n  type_leads: []\n";
         assert!(super::super::themes::parse_themes_config(
             invalid_leads,
             Path::new("test-config.yml")

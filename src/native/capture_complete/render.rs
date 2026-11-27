@@ -330,7 +330,8 @@ pub(super) fn task_complete_line(
 }
 
 /// One human line for a `task_type` candidate, with the history or
-/// inheritance annotation Bob already computed for the row.
+/// inheritance annotation Bob already computed for the row, plus the
+/// editor-only title lead when one applies.
 pub(super) fn task_type_line(item: &TaskTypeCandidate) -> (String, String) {
     let mut detail = match (item.last_used.as_deref(), item.days_used) {
         (Some(date), Some(days)) => format!("your type · {date} · {days} days"),
@@ -345,6 +346,9 @@ pub(super) fn task_type_line(item: &TaskTypeCandidate) -> (String, String) {
     }
     if item.origin == "typed" {
         detail = "new · not one of your types".to_string();
+    }
+    if let Some(lead) = item.lead.as_ref() {
+        detail.push_str(&format!(" · types \"{}\"", lead.text));
     }
     (item.replacement.clone(), detail)
 }

@@ -798,6 +798,19 @@ completion/close/start/adjust/shift/split/merge gesture is refused with a teachi
 A link-close suffix (`@route:id=x`) also refuses: remove the close gesture
 to capture a task.
 
+Type leads: accepting a configured task type from the `#` menu at the start
+of an empty new-task item also types that type's lead word (`#f` accepts to
+`#fix Fix ▌`, with the caret after the typed word). Configure leads with the
+`capture.type_leads` mapping of type to one-line lead; without it the menu
+behaves exactly as before. A lead applies only at the start of an empty
+new-task item — an empty panel, a route-first item, any item of a bulk draft,
+or after an edge clock tag — never on a child bullet or continuation line,
+after existing title text, on an existing or refused subject, or on template,
+record, notebook, or project-note items. Shell completion and every write
+path stay lead-free. The inserted word is ordinary editable title text: one
+Backspace or ⌘Z right after an untouched lead removes it, and accepting with
+⌃↩/⌘↩ skips the lead and keeps today's "needs a task" refusal.
+
 Retyping an existing task stages the `[type::]` field edit before the
 gesture runs, so a bare link places by the new type. The live Task Link is
 then relocated so it keeps agreeing with the new type (D8): Ensure Next
@@ -10765,6 +10778,21 @@ the type key; otherwise Bob returns a quoted literal such as `#"DEEP WORK"`.
 At the leading edge, the replacement includes a space when the next byte is
 not whitespace, and `cursor_after` gives the resulting absolute caret offset.
 
+A candidate can also carry an editor-only `lead` object with the exact text
+Bob offers to type right after the accepted marker. `lead` has `text` (the
+configured lead, shown as a `Fix…` preview in the `#` menu), `insert_at`
+(the UTF-8 byte offset in the draft after `replacement` is applied),
+`insertion` (the exact text to insert there: it always ends with one space
+and starts with one only when no space or tab separates the marker from the
+insert point, which Bob owns, so double spaces cannot occur), and
+`cursor_after` (the UTF-8 byte offset after `insertion` is inserted). The
+object is omitted whenever no lead applies, so lead-free responses stay
+byte-identical. Leads apply only at the start of an empty new-task item —
+an empty panel, a route-first item, any item of a bulk draft, or after an
+edge clock tag — never on child or continuation lines, after existing title
+text, on existing or refused subjects, on template, record, notebook, or
+project-note items, in shell completion, or at write time.
+
 Each candidate includes `themes` with Bob's `ThemeRef`, `origin`, optional
 `last_used` / `days_used`, and task-aware `current`, `inherited`, and
 `suggestion_label` annotations. `effect` is `set` when the choice writes a
@@ -10787,6 +10815,15 @@ For example, the candidate row for a configured `FIX` type is shaped like:
   "current": false,
   "inherited": false,
   "effect": "set"
+}
+```
+
+Accepting `#f` in an empty panel reports `replacement: "#fix "`,
+`cursor_after: 5`, and this lead:
+
+```json
+{
+  "lead": {"text": "Fix", "insert_at": 5, "insertion": "Fix ", "cursor_after": 9}
 }
 ```
 

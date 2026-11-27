@@ -3,7 +3,7 @@
 use std::{collections::BTreeSet, path::Path};
 
 use super::{
-    model::{CompleteError, TaskTypeCandidate, TaskTypeEffect},
+    model::{CompleteError, TaskTypeCandidate, TaskTypeEffect, TaskTypeLead},
     pomodoros::resolve_task_suggestion,
     support::bounded_warning,
 };
@@ -12,7 +12,11 @@ use crate::native::{
     capture_language::{
         replacement_for, resolve_accepted_type_name, selector_slug,
     },
-    capture_language::{EditorItemParse, SpanKind},
+    capture_language::{
+        EditorItemParse, EditorMode, EditorParseOptions, SpanKind,
+    },
+    capture_notebooks, capture_record, config,
+    config::capture::TypeLeadsConfig,
     env,
     plan_budget::normalize_component,
     pomodoro_themes::{self, preselect::MenuSuggestion, Catalog, ThemeRef},
@@ -42,7 +46,8 @@ pub(super) fn build(
     field: &crate::native::capture_language::CompletionField,
     editor_item: Option<&EditorItemParse>,
 ) -> Result<TaskTypeContext, CompleteError> {
-    build_inner(bob_dir, raw_text, field, editor_item, false)
+    let leads = config::load_type_leads_config(&config::config_path());
+    build_inner(bob_dir, raw_text, field, editor_item, false, Some(&leads))
 }
 
 pub(super) fn build_for_shell(
@@ -51,7 +56,9 @@ pub(super) fn build_for_shell(
     field: &crate::native::capture_language::CompletionField,
     editor_item: Option<&EditorItemParse>,
 ) -> Result<TaskTypeContext, CompleteError> {
-    build_inner(bob_dir, raw_text, field, editor_item, true)
+    // Shell completion never carries leads: it passes no config, so every
+    // row serializes exactly as before.
+    build_inner(bob_dir, raw_text, field, editor_item, true, None)
 }
 
 fn build_inner(
@@ -60,6 +67,7 @@ fn build_inner(
     field: &crate::native::capture_language::CompletionField,
     editor_item: Option<&EditorItemParse>,
     include_all_visible: bool,
+    leads: Option<&TypeLeadsConfig>,
 ) -> Result<TaskTypeContext, CompleteError> {
     let today = env::current_datetime().date();
     let mut extra_keys = BTreeSet::new();
@@ -297,6 +305,19 @@ fn build_inner(
         }
     }
 
+    if let Some(leads) = leads {
+        attach_leads(
+            bob_dir,
+            raw_text,
+            field,
+            editor_item,
+            subject,
+            leading,
+            leads,
+            &mut candidates,
+        );
+    }
+
     let suggestion = suggestion.map(|suggestion| MenuSuggestion {
         suggestion,
         fallback: None,
@@ -327,6 +348,187 @@ fn subject_refusal(
         .into_iter()
         .any(|diagnostic| diagnostic.code == "type_marker_not_applicable")
         .then_some("type_marker_not_applicable")
+}
+
+/// Attach the optional editor-only `lead` object to eligible `task_type`
+/// candidates. A candidate carries a lead iff all of these hold: it is not
+/// refused and its key has a configured lead, the subject is a new task,
+/// the completion marker is leading on its item's first physical line with
+/// only whitespace after it, and one parser probe over the simulated
+/// accept plus the inserted lead still reads as a plain new task. Shell
+/// completion never reaches here (it passes no leads config), and refused
+/// rows never gain one.
+fn attach_leads(
+    bob_dir: &Path,
+    raw_text: &str,
+    field: &crate::native::capture_language::CompletionField,
+    editor_item: Option<&EditorItemParse>,
+    subject: &str,
+    leading: bool,
+    leads: &TypeLeadsConfig,
+    candidates: &mut [TaskTypeCandidate],
+) {
+    if subject != "new" || !leading || leads.leads.is_empty() {
+        return;
+    }
+    if lead_anchor_line_end(raw_text, field).is_none() {
+        return;
+    }
+    let index = match editor_item {
+        Some(item) => item.index,
+        None => return,
+    };
+    // Route-aware probe options: notebook and record routes must resolve,
+    // or the mode check below reads them as plain tasks. Both loaders
+    // preflight lexically, so unrouted drafts pay no filesystem reads.
+    // The marker swap and lead insertion never add routes, so policies
+    // built on the pre-accept draft hold for D0 and D1 too.
+    let notebook_policy =
+        capture_notebooks::notebook_policy_for_draft(bob_dir, raw_text);
+    let record_policy =
+        capture_record::record_policy_for_draft(bob_dir, raw_text);
+    let options = EditorParseOptions {
+        url_routing: None,
+        has_global_destination: false,
+        record_policy: Some(&record_policy),
+        notebook_policy: Some(&notebook_policy),
+        known_drawer_keys: None,
+        global_route: None,
+    };
+    for candidate in candidates.iter_mut() {
+        if candidate.refused.is_some() {
+            continue;
+        }
+        let Some(lead_text) = leads.leads.get(&candidate.key) else {
+            continue;
+        };
+        let lead_text = lead_text.text.clone();
+        if let Some(lead) =
+            probe_lead(raw_text, field, candidate, &lead_text, index, &options)
+        {
+            candidate.lead = Some(lead);
+        }
+    }
+}
+
+/// Gate 3: the marker sits on its capture item's first physical line (never
+/// a child or continuation line, even though the marker lexer marks those
+/// leading too) and every byte from the replacement end to the end of that
+/// physical line is whitespace. Returns the line end on success.
+fn lead_anchor_line_end(
+    raw_text: &str,
+    field: &crate::native::capture_language::CompletionField,
+) -> Option<usize> {
+    let marker_start = field.replacement.0;
+    let marker_end = field.replacement.1;
+    if marker_start > marker_end || marker_end > raw_text.len() {
+        return None;
+    }
+    let draft = capture_language::split_capture_draft(raw_text);
+    let containing = draft
+        .items
+        .iter()
+        .find(|item| item.start <= marker_start && marker_end <= item.end)?;
+    let first_start = containing.lines.first().map(|line| line.raw.start)?;
+    let anchor = capture_language::split_physical_lines(raw_text)
+        .into_iter()
+        .find(|line| line.start <= marker_start && marker_start <= line.end)?;
+    if marker_end > anchor.end || anchor.start != first_start {
+        return None;
+    }
+    let rest = raw_text.get(marker_end..anchor.end)?;
+    if !rest.bytes().all(|byte| byte.is_ascii_whitespace()) {
+        return None;
+    }
+    Some(anchor.end)
+}
+
+/// Gate 4 plus the wire bytes: build D0 (the draft with `replacement`
+/// applied) and D1 (D0 with the computed `insertion` at `insert_at`), then
+/// run Bob's own parser over D1. The lead applies only when the item with
+/// the same index still reads as a plain new task: mode `Task` with no `%`
+/// directive span (`%t` template rows still report `Task`), a `task_type`
+/// span covering the accepted marker, no diagnostic code the same D0 item
+/// lacks (ignoring `type_marker_needs_task`, which D1 legitimately clears),
+/// and a trimmed body equal to the lead text or ending with `" " + text`.
+fn probe_lead(
+    raw_text: &str,
+    field: &crate::native::capture_language::CompletionField,
+    candidate: &TaskTypeCandidate,
+    text: &str,
+    index: usize,
+    options: &EditorParseOptions,
+) -> Option<TaskTypeLead> {
+    let marker_start = field.replacement.0;
+    let marker_end = field.replacement.1;
+    let head = raw_text.get(..marker_start)?;
+    let tail = raw_text.get(marker_end..)?;
+    let mut d0 = String::with_capacity(
+        raw_text.len() + candidate.replacement.len() + text.len() + 2,
+    );
+    d0.push_str(head);
+    d0.push_str(&candidate.replacement);
+    d0.push_str(tail);
+    let mut marker_len = candidate.replacement.len();
+    if candidate.replacement.ends_with(' ') {
+        marker_len -= 1;
+    }
+    let accepted_end = marker_start + marker_len;
+    let (insert_at, insertion) = match d0.as_bytes().get(accepted_end) {
+        Some(b' ') | Some(b'\t') => (accepted_end + 1, format!("{text} ")),
+        _ => (accepted_end, format!(" {text} ")),
+    };
+    let mut d1 = String::with_capacity(d0.len() + insertion.len());
+    d1.push_str(d0.get(..insert_at)?);
+    d1.push_str(&insertion);
+    d1.push_str(d0.get(insert_at..)?);
+    let baseline = capture_language::parse_for_editor_with(&d0, options);
+    let probed = capture_language::parse_for_editor_with(&d1, options);
+    let before = baseline.items.iter().find(|item| item.index == index)?;
+    let after = probed.items.iter().find(|item| item.index == index)?;
+    if after.mode != EditorMode::Task {
+        return None;
+    }
+    // A `%` directive on the item (`%t` template rows, `%c` clipboard reads,
+    // `%n` notes, `%l` listens) means this is not a plain new task, even
+    // when the mode still reports `Task`.
+    if after
+        .spans
+        .iter()
+        .any(|span| span.kind == SpanKind::Directive)
+    {
+        return None;
+    }
+    if !after.spans.iter().any(|span| {
+        span.kind == SpanKind::TaskType
+            && span.start <= marker_start
+            && accepted_end <= span.end
+    }) {
+        return None;
+    }
+    let before_codes: std::collections::BTreeSet<&str> = before
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect();
+    if after.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code != "type_marker_needs_task"
+            && !before_codes.contains(diagnostic.code)
+    }) {
+        return None;
+    }
+    let trimmed = after.body.trim();
+    if trimmed != text && !trimmed.ends_with(&format!(" {text}")) {
+        return None;
+    }
+
+    let cursor_after = insert_at + insertion.len();
+    Some(TaskTypeLead {
+        text: text.to_string(),
+        insert_at,
+        insertion,
+        cursor_after,
+    })
 }
 
 fn rows_in_empty_order(catalog: &Catalog, query: &str) -> Vec<TypeRow> {
@@ -472,5 +674,6 @@ fn candidate(
         hidden,
         similar_to,
         refused,
+        lead: None,
     }
 }

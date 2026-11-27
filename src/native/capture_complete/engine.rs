@@ -1541,7 +1541,16 @@ fn template_completion_gate(
         raw_text: &masked,
         ..*request
     };
-    let result = build_result_inner(&masked_request)?;
+    let mut result = build_result_inner(&masked_request)?;
+    // Template drafts never carry type leads: the mask above blanks the
+    // `%t` directive range, so the lead probe inside `task_types::build`
+    // cannot see it and would read the directive line as a plain new task.
+    // Strip here, where the unmasked analysis still proves template-ness.
+    if let Candidates::TaskType(rows) = &mut result.candidates {
+        for row in rows.iter_mut() {
+            row.lead = None;
+        }
+    }
     if matches!(
         result.context,
         Some(

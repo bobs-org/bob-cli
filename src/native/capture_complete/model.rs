@@ -945,6 +945,20 @@ pub(super) enum TaskTypeEffect {
     Keep,
 }
 
+/// Optional editor-only title lead for a `task_type` candidate: the exact
+/// text Bob offers to type right after the accepted `#<type>` marker, with
+/// UTF-8 byte offsets into the draft after `replacement` is applied
+/// (`insert_at`) and after `insertion` is inserted (`cursor_after`).
+/// Omitted whenever no lead applies, so lead-free responses stay
+/// byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskTypeLead {
+    pub(super) text: String,
+    pub(super) insert_at: usize,
+    pub(super) insertion: String,
+    pub(super) cursor_after: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct TaskTypeCandidate {
     pub(super) replacement: String,
@@ -970,6 +984,10 @@ pub(super) struct TaskTypeCandidate {
     pub(super) similar_to: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) refused: Option<&'static str>,
+    /// Editor-only title lead, present only when every eligibility gate
+    /// passes. Never set on shell completion or refused rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) lead: Option<TaskTypeLead>,
 }
 
 /// Bob-authored row for the `directive` completion context.

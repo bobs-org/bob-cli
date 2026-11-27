@@ -1,4 +1,9 @@
 //! `task_type` capture-complete candidates and their zsh-facing values.
+//!
+//! The lead tests below cover phase `lead_complete`: the optional editor
+//! `lead` object on `task_type` candidates, its exact wire bytes, the
+//! eligibility gates that keep it off, and the lead-free shell, write, and
+//! related paths.
 
 use crate::support::*;
 use serde_json::Value;
@@ -364,6 +369,575 @@ fn route_completion_wins_at_its_token_and_unconfigured_menu_uses_history() {
     assert_eq!(history["context"], "task_type");
     assert_eq!(history["candidates"][0]["origin"], "history");
     assert_eq!(history["candidates"][0]["name"], "BUILD");
+}
+
+fn leads_fixture(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (vault, config) = fixture(root, true);
+    write_file(
+        &config,
+        concat!(
+            "plan:\n",
+            "  default_type: BUILD\n",
+            "types:\n",
+            "  BUILD: yellow\n",
+            "  FIX: blue\n",
+            "  PLAN: green\n",
+            "  READ: violet\n",
+            "  WRITE: orange\n",
+            "  FIXUP: red\n",
+            "  PREFIX: magenta\n",
+            "  \"DEEP WORK\": violet\n",
+            "  REPAIR: aqua\n",
+            "capture:\n",
+            "  type_leads:\n",
+            "    BUILD: Build\n",
+            "    FIX: Fix\n",
+            "    PLAN: Plan\n",
+            "    READ: Read\n",
+            "    WRITE: Write\n",
+            "    \"DEEP WORK\": Deep work\n",
+            "    REPAIR: 'R\u{e9}parer'\n",
+        ),
+    );
+    (vault, config)
+}
+
+fn row<'a>(result: &'a Value, name: &str) -> &'a Value {
+    result["candidates"]
+        .as_array()
+        .expect("candidate array")
+        .iter()
+        .find(|candidate| candidate["name"] == name)
+        .unwrap_or_else(|| panic!("missing {name} candidate: {result}"))
+}
+
+fn assert_no_leads(result: &Value) {
+    for candidate in result["candidates"].as_array().expect("candidate array") {
+        assert!(
+            candidate.get("lead").is_none(),
+            "unexpected lead on {}: {result}",
+            candidate["name"]
+        );
+    }
+}
+
+#[test]
+fn editor_lead_wire_bytes_cover_the_worked_table() {
+    let temp = TempDir::new("bob-cli-complete-task-types-leads");
+    let (vault, config) = leads_fixture(temp.path());
+
+    // `#f` in an empty panel: the motivating case.
+    let result = complete_end(temp.path(), &vault, &config, "#f");
+    let fix = row(&result, "FIX");
+    assert_eq!(fix["replacement"], "#fix ");
+    assert_eq!(fix["cursor_after"], 5);
+    assert_eq!(
+        fix["lead"],
+        serde_json::json!({
+            "text": "Fix",
+            "insert_at": 5,
+            "insertion": "Fix ",
+            "cursor_after": 9,
+        }),
+        "{result}"
+    );
+    // A refused row never carries one.
+    let typed = row(&result, "F");
+    assert_eq!(typed["refused"], "type_not_configured");
+    assert!(typed.get("lead").is_none(), "{result}");
+
+    // A bare `#` previews every configured lead.
+    let bare = complete_end(temp.path(), &vault, &config, "#");
+    for (name, text, insert_at, cursor_after) in [
+        ("BUILD", "Build", 7, 13),
+        ("FIX", "Fix", 5, 9),
+        ("PLAN", "Plan", 6, 11),
+        ("READ", "Read", 6, 11),
+        ("WRITE", "Write", 7, 13),
+    ] {
+        let candidate = row(&bare, name);
+        assert_eq!(
+            candidate["lead"],
+            serde_json::json!({
+                "text": text,
+                "insert_at": insert_at,
+                "insertion": format!("{text} "),
+                "cursor_after": cursor_after,
+            }),
+            "{name}: {bare}"
+        );
+    }
+
+    // An authored space: the replacement keeps the typed space, so the
+    // candidate `cursor_after` is 4 while the lead still starts at 5.
+    let spaced = complete(temp.path(), &vault, &config, "#f ", 2);
+    let fix = row(&spaced, "FIX");
+    assert_eq!(fix["replacement"], "#fix");
+    assert_eq!(fix["cursor_after"], 4);
+    assert_eq!(
+        fix["lead"],
+        serde_json::json!({
+            "text": "Fix",
+            "insert_at": 5,
+            "insertion": "Fix ",
+            "cursor_after": 9,
+        }),
+        "{spaced}"
+    );
+
+    // A child below: the marker owns no trailing space, so the lead
+    // brings its own leading one.
+    let child = complete(temp.path(), &vault, &config, "#f\n  - child", 2);
+    let fix = row(&child, "FIX");
+    assert_eq!(
+        fix["lead"],
+        serde_json::json!({
+            "text": "Fix",
+            "insert_at": 4,
+            "insertion": " Fix ",
+            "cursor_after": 9,
+        }),
+        "{child}"
+    );
+
+    // A leading route stays transparent.
+    let routed = complete_end(temp.path(), &vault, &config, "@cash #f");
+    assert_eq!(
+        row(&routed, "FIX")["lead"],
+        serde_json::json!({
+            "text": "Fix",
+            "insert_at": 11,
+            "insertion": "Fix ",
+            "cursor_after": 15,
+        }),
+        "{routed}"
+    );
+
+    // A leading clock tag stays transparent.
+    let clock = complete_end(temp.path(), &vault, &config, "#off #f");
+    assert_eq!(
+        row(&clock, "FIX")["lead"],
+        serde_json::json!({
+            "text": "Fix",
+            "insert_at": 10,
+            "insertion": "Fix ",
+            "cursor_after": 14,
+        }),
+        "{clock}"
+    );
+
+    // Offsets in a later bulk item are absolute draft bytes.
+    let bulk = complete_end(temp.path(), &vault, &config, "Buy milk\n\n#w");
+    assert_eq!(
+        row(&bulk, "WRITE")["lead"],
+        serde_json::json!({
+            "text": "Write",
+            "insert_at": 17,
+            "insertion": "Write ",
+            "cursor_after": 23,
+        }),
+        "{bulk}"
+    );
+
+    // A quoted literal with a configured lead.
+    let literal = complete_end(temp.path(), &vault, &config, "#\"DEEP W");
+    let deep = row(&literal, "DEEP WORK");
+    assert_eq!(
+        deep["lead"],
+        serde_json::json!({
+            "text": "Deep work",
+            "insert_at": 13,
+            "insertion": "Deep work ",
+            "cursor_after": 23,
+        }),
+        "{literal}"
+    );
+
+    // A multibyte lead measures bytes, not characters.
+    let multibyte = complete_end(temp.path(), &vault, &config, "#repair");
+    let repair = row(&multibyte, "REPAIR");
+    assert_eq!(
+        repair["lead"],
+        serde_json::json!({
+            "text": "R\u{e9}parer",
+            "insert_at": 8,
+            "insertion": "R\u{e9}parer ",
+            "cursor_after": 17,
+        }),
+        "{multibyte}"
+    );
+}
+
+#[test]
+fn hidden_exact_type_keeps_its_lead() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-hidden");
+    let (vault, config) = leads_fixture(temp.path());
+    write_file(
+        &vault.join(".bob/themes/test.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-10-30T07:00:00Z\",\"host\":\"test\",\"kind\":\"theme.hide\",\"key\":\"fix\",\"name\":\"FIX\",\"via\":\"test\"}\n",
+    );
+    let exact = complete_end(temp.path(), &vault, &config, "#fix");
+    let fix = row(&exact, "FIX");
+    assert_eq!(fix["hidden"], true);
+    assert_eq!(fix["lead"]["text"], "Fix", "{exact}");
+}
+
+#[test]
+fn lead_stays_off_everything_but_an_empty_new_task_start() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-gates");
+    let (vault, config) = leads_fixture(temp.path());
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "---\n",
+            "type: \"[[area]]\"\n",
+            "---\n",
+            "# Sase\n",
+            "\n",
+            "## Tasks\n",
+            "- [ ] #task Existing foo ^foo\n",
+        ),
+    );
+
+    // A title already exists, the marker trails, or text follows it.
+    let titled = complete(temp.path(), &vault, &config, "#f Fix it", 2);
+    assert_no_leads(&titled);
+    let trailing = complete_end(temp.path(), &vault, &config, "Fix it #f");
+    assert!(trailing["candidates"]
+        .as_array()
+        .expect("candidate array")
+        .iter()
+        .any(|candidate| {
+            candidate["name"] == "FIX" && candidate.get("lead").is_none()
+        }));
+    assert_no_leads(&trailing);
+    let followed = complete(temp.path(), &vault, &config, "#f @sase", 2);
+    assert_no_leads(&followed);
+
+    // Existing subjects retype only.
+    for draft in ["@dev:current #f", "@dev+current #f"] {
+        let existing = complete_end(temp.path(), &vault, &config, draft);
+        assert_eq!(existing["subject"], "existing", "{draft}");
+        let fix = row(&existing, "FIX");
+        assert!(fix.get("lead").is_none(), "{draft}: {existing}");
+    }
+    for draft in ["@sase:foo #f", "@sase+foo #f"] {
+        let existing = complete_end(temp.path(), &vault, &config, draft);
+        assert_eq!(existing["subject"], "existing", "{draft}");
+        assert_no_leads(&existing);
+    }
+
+    // The project-note caret seal reports no refusal today, and the
+    // parser probe still keeps the lead off it.
+    let seal = complete_end(temp.path(), &vault, &config, "@dev^foo@ #f");
+    let fix = row(&seal, "FIX");
+    assert!(fix["refused"].is_null(), "{seal}");
+    assert!(fix.get("lead").is_none(), "{seal}");
+
+    // Template rows never carry leads.
+    let template = complete_end(temp.path(), &vault, &config, "%t #f");
+    assert_no_leads(&template);
+
+    // A child bullet line is never a task start, even though the marker
+    // lexer marks it leading.
+    let child = complete_end(temp.path(), &vault, &config, "Parent\n  - #f");
+    assert_no_leads(&child);
+}
+
+#[test]
+fn lead_stays_off_notebook_routes() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-notebook");
+    let (vault, config) = leads_fixture(temp.path());
+    write_file(
+        &vault.join("dev_tools.md"),
+        concat!(
+            "---\n",
+            "parent: \"[[dev]]\"\n",
+            "type: \"[[notebook]]\"\n",
+            "summary: Tools.\n",
+            "---\n",
+            "\n",
+            "# Developer tools\n",
+        ),
+    );
+    let notebook = complete_end(temp.path(), &vault, &config, "@dev_tools #f");
+    assert_no_leads(&notebook);
+    assert!(
+        notebook["candidates"]
+            .as_array()
+            .expect("candidate array")
+            .iter()
+            .any(|candidate| candidate["name"] == "FIX"),
+        "notebook menu still offers types, just lead-free: {notebook}"
+    );
+}
+
+#[test]
+fn lead_stays_off_record_routes() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-record");
+    let (vault, config) = leads_fixture(temp.path());
+    write_file(
+        &config,
+        concat!(
+            "plan:\n",
+            "  default_type: BUILD\n",
+            "types:\n",
+            "  BUILD: yellow\n",
+            "  FIX: blue\n",
+            "records:\n",
+            "  restaurant:\n",
+            "    dir: eat\n",
+            "    label: Restaurant\n",
+            "    fields:\n",
+            "      status: {}\n",
+            "capture:\n",
+            "  type_leads:\n",
+            "    BUILD: Build\n",
+            "    FIX: Fix\n",
+        ),
+    );
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\n---\n\n# Body\n",
+    );
+    write_file(
+        &vault.join("eat.md"),
+        concat!(
+            "---\n",
+            "type: [[album]]\n",
+            "parent: \"[[body]]\"\n",
+            "summary: Places to eat.\n",
+            "record:\n",
+            "  noun: restaurant\n",
+            "  label: Restaurant\n",
+            "  fields:\n",
+            "    status: {}\n",
+            "---\n\n",
+            "# Ideas\n"
+        ),
+    );
+    write_file(
+        &vault.join("eat/nagi.md"),
+        concat!(
+            "---\n",
+            "parent: \"[[eat]]\"\n",
+            "type: \"[[restaurant]]\"\n",
+            "title: Nagi\n",
+            "status: liked\n",
+            "---\n",
+            "# Nagi\n"
+        ),
+    );
+    let record = complete_end(temp.path(), &vault, &config, "@eat/nagi #f");
+    assert_no_leads(&record);
+    assert!(
+        record["candidates"]
+            .as_array()
+            .expect("candidate array")
+            .iter()
+            .any(|candidate| candidate["name"] == "FIX"),
+        "record menu still offers types, just lead-free: {record}"
+    );
+}
+
+#[test]
+fn lead_only_title_returns_no_lexical_band() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-related");
+    let (vault, _config) = leads_fixture(temp.path());
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{
+          "globalFilter": "#task",
+          "statusSettings": {
+            "coreStatuses": [
+              {"symbol":" ","name":"Todo","type":"TODO"},
+              {"symbol":"x","name":"Done","type":"DONE"},
+              {"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},
+              {"symbol":"-","name":"Canceled","type":"CANCELLED"}
+            ],
+            "customStatuses": [
+              {"symbol":"*","name":"Next","type":"ON_HOLD"},
+              {"symbol":"?","name":"Blocked","type":"ON_HOLD"}
+            ]
+          }
+        }"##,
+    );
+    write_file(
+        &vault.join("fix.md"),
+        concat!(
+            "---\n",
+            "type: [[area]]\n",
+            "---\n",
+            "- [ ] #task Fix the parser ^fix1\n",
+        ),
+    );
+    // A lead-only title ("Fix") stays below the lexical band's bars: the
+    // short query gates before vault IO.
+    let output = bob_command()
+        .arg("capture-related")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .arg("--format")
+        .arg("json")
+        .arg("--")
+        .arg("#fix Fix ")
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run bob capture-related draft mode");
+    assert_success(&output);
+    let json: Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!(
+                "parse capture-related JSON: {error}\n{}",
+                format_output(&output)
+            )
+        });
+    assert_eq!(json["items"][0]["matches"], serde_json::json!([]), "{json}");
+}
+
+#[test]
+fn without_leads_task_type_json_has_no_lead_key() {
+    let temp = TempDir::new("bob-cli-complete-task-types-no-leads");
+    let (vault, config) = fixture(temp.path(), true);
+    for draft in ["#f", "#", "@cash #f"] {
+        let result = complete_end(temp.path(), &vault, &config, draft);
+        assert!(!result.to_string().contains("lead"), "{draft}: {result}");
+        assert_no_leads(&result);
+    }
+}
+
+#[test]
+fn shell_completion_never_carries_leads() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-shell");
+    let (vault, config) = leads_fixture(temp.path());
+    let output = bob_completion_command()
+        .arg("__complete")
+        .arg("zsh")
+        .arg("--protocol")
+        .arg("1")
+        .arg("--")
+        .arg("bob")
+        .arg("capture")
+        .arg("#f")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run configured bob __complete");
+    assert_success(&output);
+    let out = stdout(&output);
+    let values: Vec<&str> = out
+        .lines()
+        .filter(|line| !line.starts_with('!'))
+        .map(|line| line.split('\t').next().unwrap_or_default())
+        .collect();
+    assert!(values.contains(&"#fix"), "lead-free insert: {values:?}");
+    assert!(
+        !values.iter().any(|value| {
+            value.starts_with("#fix ")
+                || value.starts_with("#build ")
+                || value.starts_with("#write ")
+        }),
+        "shell values never glue lead text onto the marker: {values:?}"
+    );
+    let descriptions: Vec<&str> = out
+        .lines()
+        .filter(|line| !line.starts_with('!'))
+        .map(|line| line.split('\t').nth(1).unwrap_or_default())
+        .collect();
+    assert!(
+        descriptions
+            .iter()
+            .any(|description| description.starts_with("your type ·")),
+        "descriptions keep their pre-lead shape: {descriptions:?}"
+    );
+}
+
+#[test]
+fn accepted_lead_still_captures_like_hand_typed_text() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-write");
+    let (vault, config) = leads_fixture(temp.path());
+    let day_file = vault.join("2026/20261030.md");
+
+    // A marker alone still needs a task: the write path never sees leads.
+    let mut refused = bob_command();
+    refused
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--no-clip")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("#fix ")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW);
+    let refused = refused.output().expect("run refused dry-run capture");
+    assert!(!refused.status.success(), "{}", format_output(&refused));
+    let json: Value = serde_json::from_str(stdout(&refused).trim())
+        .unwrap_or_else(|error| {
+            panic!(
+                "parse capture error JSON: {error}\n{}",
+                format_output(&refused)
+            )
+        });
+    assert_eq!(json["code"], "type_marker_needs_task", "{json}");
+
+    // The simulated accept parses exactly like hand-typed text.
+    let mut parsed = bob_command();
+    parsed
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("#fix Fix ")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW);
+    let parsed = parsed.output().expect("run capture-parse");
+    assert_success(&parsed);
+    let json: Value = serde_json::from_str(stdout(&parsed).trim())
+        .unwrap_or_else(|error| {
+            panic!(
+                "parse capture-parse JSON: {error}\n{}",
+                format_output(&parsed)
+            )
+        });
+    assert_eq!(json["mode"], "task", "{json}");
+    assert_eq!(json["body"], "Fix", "{json}");
+}
+
+#[test]
+fn human_task_type_rows_preview_the_lead() {
+    let temp = TempDir::new("bob-cli-complete-task-types-lead-human");
+    let (vault, config) = leads_fixture(temp.path());
+    let output = bob_command()
+        .args([
+            "capture-complete",
+            "-b",
+            vault.to_str().expect("UTF-8 fixture path"),
+            "-c",
+            "2",
+            "-f",
+            "human",
+            "--",
+            "#f",
+        ])
+        .env("BOB_NOW", NOW)
+        .env("BOB_DAY_FILE", vault.join("2026/20261030.md"))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run human task-type capture completion");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("· types \"Fix\""),
+        "human row previews the lead:\n{}",
+        format_output(&output)
+    );
 }
 
 #[test]
