@@ -668,7 +668,7 @@
     "snooze": [
       {
         "id": "snooze-add-ready-creates-section",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n",
@@ -701,7 +701,7 @@
       },
       {
         "id": "snooze-add-next-task-line-unchanged",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n",
@@ -766,7 +766,7 @@
       },
       {
         "id": "snooze-add-keeps-unrelated-empty-placeholder",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n- [ ] () — FIX\n",
@@ -795,7 +795,7 @@
       },
       {
         "id": "snooze-add-keeps-running-entry",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] (**1300-1325** [t:: 25m]) — WRITE\n\t- [[job#^email-dan]]\n",
@@ -825,7 +825,7 @@
       },
       {
         "id": "snooze-add-retime",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n- **1900** [[home#^sink]]\n",
@@ -857,7 +857,7 @@
       },
       {
         "id": "snooze-add-resnooze-replaces-history",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- ~~**1530** [[job#^email-dan]]~~ · woke 15:32\n",
@@ -886,7 +886,7 @@
       },
       {
         "id": "snooze-add-refuse-event",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — MEET\n",
@@ -912,7 +912,7 @@
       },
       {
         "id": "snooze-add-refuse-blocked",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n",
@@ -938,7 +938,7 @@
       },
       {
         "id": "snooze-add-same-note",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Tasks\n\n- [ ] #task Email Dan ^email-dan\n",
@@ -967,7 +967,7 @@
       },
       {
         "id": "snooze-add-dup-live-keeps-notes",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n\t\t- First notes.\n\t- [[job#^email-dan]]\n\t\t- Second notes.\n",
@@ -996,7 +996,7 @@
       },
       {
         "id": "snooze-add-closed-recorded-kept",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "add",
         "input": {
           "day": "## Pomodoros\n\n- [x] (**0900-0925** [t:: 25m]) — WRITE\n\t- [[job#^email-dan]]\n- [ ] () — WRITE\n\t- [[job#^email-dan]]\n",
@@ -1025,7 +1025,7 @@
       },
       {
         "id": "snooze-drop-live-row",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "drop",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n- **1900** [[home#^sink]]\n",
@@ -1056,7 +1056,7 @@
       },
       {
         "id": "snooze-drop-deletes-empty-heading",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "drop",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1530** [[job#^email-dan]]\n\n## Notes\n\nKeep me.\n",
@@ -1084,7 +1084,7 @@
       },
       {
         "id": "snooze-drop-not-snoozed",
-        "runners": ["rust"],
+        "runners": ["rust", "js"],
         "mode": "drop",
         "input": {
           "day": "## Pomodoros\n\n- [ ] () — WRITE\n\n## Snoozed\n\n- **1900** [[home#^sink]]\n",
