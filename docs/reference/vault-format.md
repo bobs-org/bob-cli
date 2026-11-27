@@ -712,6 +712,9 @@ source_pdf: "[[lib/papers/example.pdf]]"
 ---
 ```
 
+Optional one-line `summary:` supplies the Ref Card's dek; absence leaves no
+placeholder.
+
 ```bob-task
 - [ ] #task #ref [[lib/papers/example.pdf]] #hide ^ref
 ```
@@ -732,14 +735,14 @@ defines the capture routes and failure behavior.
 
 The `<!-- highlights:begin -->` / `<!-- highlights:end -->` region is
 generated; keep authored notes outside it. Highlight quotes store underline
-emphasis as `**…**` and use `^h-…` block IDs. Reordering distinct exported
-annotations preserves those IDs. Removed annotations leave tombstones
+emphasis as `**…**` with stable `^h-…` block IDs across reordered exports.
+Removed annotations leave tombstones
 ("Removed highlight" blocks retaining the old IDs). A highlight already in
 the note that joins a continuation leaves a redirect to the combined quote.
-An underline absorbed into another highlight leaves a redirect only when a
-vault Markdown link targets its old ID or a stub already exists.
+An underline absorbed into another highlight leaves a redirect only for an
+existing vault link or stub.
 
-Annotation sections are derived from Highlights comments and sticky notes:
+Annotation sections derive from Highlights comments and sticky notes:
 `# Name` on the first nonempty line declares a section; a matching `@name`
 or `#name` at the start or end of a non-task line joins it. Section headings
 and summary cards render inside the managed region, with `^s-…` section

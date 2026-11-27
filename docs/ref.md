@@ -21,6 +21,11 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 For scheduled reference scans and their change gate, see the
 [`bob tick` contract](tick.md).
 
+In Obsidian, a library reference note opens on a
+[Ref Card](https://bobs-org.github.io/reference/plugins/ref-card/): kind,
+title, byline, reading lane, and access buttons over the note's own
+frontmatter.
+
 ## Choose a command
 
 | Goal | Command | Effect |

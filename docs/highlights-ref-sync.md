@@ -748,6 +748,16 @@ status value. It is preserved when rendering notes, but it is not a standard
 marker-synced field and will not be written back to the PDF marker unless a
 marker explicitly opts into it as an unknown synced field.
 
+Note-side edits to standard synced fields — typed in frontmatter, made in the
+Ref Card's Reference editor, or applied by `bob props` — join the next
+projection diff the same way: when only the frontmatter changed, a writing
+scan updates the PDF marker note (opt in per PDF with `sync --write-pdf`,
+in bulk with `scan --write-pdfs`). Identity keys (`id`, `ref_type`), sync
+bookkeeping (`highlights_*`, `source_pdf*`, `pipeline_version`), and the
+command-managed `type` are never marker-editable; see
+[Ownership roles](props.md#ownership-roles) and
+[Reference settings](props.md#reference-settings).
+
 Implemented conflict policy:
 
 - If only the marker changed, update frontmatter when any status edit agrees
