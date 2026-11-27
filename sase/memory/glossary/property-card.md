@@ -17,8 +17,10 @@ Ref Card also gates on `props_v1` alone; its `=` extension opens the Reference
 editor under `props_ref_contract_v1`, else focus-or-add on `title`. The
 path-canonical `bank.md` hub is
 untyped and taskless; its one Bank Card uses `props_v1` and never has Area
-semantics. The foot shows `created` and the full Properties drawer; `-` toggles
-the drawer, `_` folds the card's own section, `=` opens the species editor,
+semantics. The foot is the Properties [[cabinet]]: `created` and every
+top-level key. `-` toggles it, `_` toggles the only cabinet above it or arms
+the numbered pick with two or more (the card's own details fold only when
+none exist), `=` opens the species editor,
 and `+` opens the generic Property Editor in Live Preview Vim normal mode.
 Every card owns one visible title: its species tile and kicker name it; hue
 does not. The inline title and recognized H1/nav lines hide at render time,

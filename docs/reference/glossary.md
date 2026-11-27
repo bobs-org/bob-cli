@@ -63,8 +63,11 @@ and local lint. Missing report data stays absent, never zero. It does not show
 inherited policies or subtree counts.
 
 Area Settings require `props_contract_v1` on top of `props_v1`. One shared
-Properties foot shows `created` and the full drawer. `-` toggles the drawer,
-`_` folds the Area's own details, `=` opens Area Settings, and `+` opens the
+Properties [Cabinet](#cabinet) shows `created` and every top-level key as the foot.
+Child catalogs render as [Cabinet](#cabinet)s above it: Areas, Projects, Notebooks,
+and Albums, each starting closed. `-` toggles the Properties cabinet,
+`_` toggles or picks the cabinets above it (the details fold only when none
+exist), `=` opens Area Settings, and `+` opens the
 generic Property Editor. Paint reads local metadata, confirmed source, and
 cached reports; it never writes the vault or spawns bob.
 
@@ -184,6 +187,40 @@ the footer stays **Capture** instead of a single-item verb such as Link, Start, 
 Complete, or Queue, the notification is titled with the count, and Shift-Return in the
 `!` picker appends a blank line plus `!` for the next completion. Docs and code also say
 "batch" for any capture's staged writes, even a single item's.
+
+### Cabinet {#cabinet}
+
+*Aliases: property cabinet, cabinet stack.*
+
+A named, independently collapsible compartment at the bottom of a
+[Property Card](#property-card). It has one header row (chevron, noun, a one-line summary
+that still says what a closed cabinet holds, any attention chip or stamp,
+and a keycap) over a body that opens in place. Cabinets stack in one fixed
+order, with the **property cabinet** (Properties, toggled with `-`) always
+last. Above it come content cabinets (Areas, Projects, Notebooks, and Albums
+on an [Area Card](#area-card) or [Project Card](#project-card), Records on an [Album Card](#album-card),
+Outline on a prose card), then configuration cabinets (Schema on an album
+card, Setup on the [Bank Card](#bank-card)). Empty catalogs get none. Records starts
+open, the other content cabinets start closed, and Outline, Schema, and
+Setup open themselves for a new problem.
+
+A content cabinet shows the same rows, grouping, and actions as the
+bob-owned catalog callout it stands in for. The callout stays in the note,
+and only its rendered section (plus an H2 that labels nothing else) hides
+while a working cabinet is mounted. Source mode, mobile, embeds, hover,
+print, and anything uncertain show the stored section instead.
+
+In Live Preview Vim normal mode, `_` toggles the only cabinet above
+Properties. With two or more, it arms a numbered pick: digits count up from
+`1` just above Properties and are lit on the headers and in the footer. A
+digit toggles that cabinet, `_` again picks `1`, `-` picks Properties, and
+Esc, `q`, or Ctrl+`[` cancels. A card with no cabinet above Properties keeps
+`_` for its own details fold.
+
+Open or closed is session-only view state: never frontmatter, never a vault
+write, and never a bob spawn. Not a [Task Drawer](#task-drawer), an Obsidian heading or
+callout fold, the compact details chevron, or the stored H2 section itself.
+See `docs/reference/plugins/cabinets.md`.
 
 ### Capture {#capture}
 
@@ -772,8 +809,11 @@ The card shows authored policy values, project open and Today readouts, local
 lint, and report-backed blocking reasons or close dates when available.
 Unavailable reports hide those details instead of showing zero. Project
 Settings require `props_contract_v1` on top of `props_v1`; the card does not
-infer parent policies. One shared Properties foot shows `created` and the
-full drawer. `-` toggles the drawer, `_` folds the card's own details, `=`
+infer parent policies. One shared Properties [Cabinet](#cabinet) shows `created` and
+every top-level key as the foot. Child catalogs render as [Cabinet](#cabinet)s above
+it: Areas, Projects, Notebooks, and Albums, each starting closed. `-`
+toggles the Properties cabinet, `_` toggles or picks the cabinets above it
+(the details fold only when none exist), `=`
 opens Project Settings, and `+` opens the generic Property Editor.
 
 Paint reads local metadata, confirmed source, and cached reports; it never
@@ -868,8 +908,10 @@ Ref Card also gates on `props_v1` alone; its `=` extension opens the Reference
 editor under `props_ref_contract_v1`, else focus-or-add on `title`. The
 path-canonical `bank.md` hub is
 untyped and taskless; its one Bank Card uses `props_v1` and never has Area
-semantics. The foot shows `created` and the full Properties drawer; `-` toggles
-the drawer, `_` folds the card's own section, `=` opens the species editor,
+semantics. The foot is the Properties [Cabinet](#cabinet): `created` and every
+top-level key. `-` toggles it, `_` toggles the only cabinet above it or arms
+the numbered pick with two or more (the card's own details fold only when
+none exist), `=` opens the species editor,
 and `+` opens the generic Property Editor in Live Preview Vim normal mode.
 Every card owns one visible title: its species tile and kicker name it; hue
 does not. The inline title and recognized H1/nav lines hide at render time,
