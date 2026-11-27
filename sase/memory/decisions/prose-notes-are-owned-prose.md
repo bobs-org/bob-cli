@@ -22,8 +22,8 @@ formatting confined to the note type and leaves the enclosing note's role intact
 
 Evidence: research report
 `research:202611/prose_rename_and_section_extraction/prose_rename_and_section_extraction.md`;
-bob-cli phase commit `feat(prose): rename the article note type to prose` (phase
-`bob-cli-qj.2`).
+bob-cli commit `4168e201` (`feat(prose): make prose the canonical note type and CLI`,
+phase `bob-cli-qj.2`).
 
 **Cost.** bob keeps recognizing the legacy type and command, and the JSON contract
 retains article-named wire keys and refusal codes. Clients and docs must distinguish
