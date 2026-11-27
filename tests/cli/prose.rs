@@ -39,6 +39,43 @@ fn prose_command(fixture: &Fixture) -> Command {
     prose_named_command(fixture, "prose")
 }
 
+fn extract_json(
+    fixture: &Fixture,
+    section: &str,
+    extra_args: &[&str],
+) -> Output {
+    prose_command(fixture)
+        .args(["extract", "owner", "-s", section, "-f", "json"])
+        .args(extra_args)
+        .output()
+        .expect("run prose extract")
+}
+
+fn assert_extract_refusal(
+    code: &str,
+    host: &str,
+    section: &str,
+    extra_args: &[&str],
+    extra_files: &[(&str, &str)],
+) {
+    let fixture = fixture();
+    write_file(&fixture.vault.join("owner.md"), host);
+    for (path, contents) in extra_files {
+        write_file(&fixture.vault.join(path), contents);
+    }
+    let output = extract_json(&fixture, section, extra_args);
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let value = json(&output);
+    assert_eq!(value["status"], "refused", "{value}");
+    let refusal = value["refusal"].as_object().expect("refusal object");
+    for key in ["code", "message", "hint", "path", "line", "next"] {
+        assert!(refusal.contains_key(key), "missing {key}: {value}");
+    }
+    assert_eq!(refusal["code"], code, "{value}");
+    assert!(refusal["message"].as_str().is_some(), "{value}");
+    assert!(refusal["hint"].as_str().is_some(), "{value}");
+}
+
 fn run_with_stdin(command: &mut Command, input: &str) -> Output {
     let mut child = command
         .stdin(Stdio::piped())
@@ -689,6 +726,365 @@ fn inline_offline_write_trashes_child_and_commits_parent() {
         stdout(&git_in(&fixture.vault, ["log", "-1", "--format=%s"]))
             .contains("bob prose inline: draft → owner § Topic")
     );
+}
+
+#[test]
+fn extract_refusals_return_the_contract_object_through_the_cli() {
+    let area = |body: &str| {
+        format!(
+            "---\ntype: \"[[area]]\"\n---\n\n## Topic\n\n{body}\n\n## After\n\nKept.\n"
+        )
+    };
+
+    assert_extract_refusal(
+        "not-host-note",
+        "---\ntype: \"[[notebook]]\"\n---\n\n## Topic\n\nText.\n",
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "no-section",
+        "---\ntype: \"[[area]]\"\n---\n\n## Other\n\nText.\n",
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "ambiguous-section",
+        "---\ntype: \"[[area]]\"\n---\n\n## Topic\n\nOne.\n\n## Topic\n\nTwo.\n",
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "structural-section",
+        "---\ntype: \"[[area]]\"\n---\n\n## Tasks\n\n- [ ] work\n",
+        "Tasks",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "holds-tasks",
+        &area("- [ ] #task do the work"),
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "holds-anchor",
+        &area("This prose owns the project anchor. ^prj"),
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "conflict-markers",
+        &area("<<<<<<< ours\nconflicting prose\n>>>>>>> theirs"),
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "stub-section",
+        &area("- [[child|Topic]]"),
+        "Topic",
+        &[],
+        &[(
+            "child.md",
+            "---\nparent: \"[[owner]]\"\ntype: \"[[prose]]\"\n---\n\n## Detail\n\nText.\n",
+        )],
+    );
+    assert_extract_refusal(
+        "unclosed-fence",
+        &area("```text\nnever closed"),
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "setext-multiline",
+        &area("First title line\nSecond title line\n---\n\nBody."),
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "owned-number-heading",
+        &area("### 1.5 million users\n\nBody."),
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "definition-boundary",
+        "---\ntype: \"[[area]]\"\n---\n\n## Topic\n\nThis uses [guide].\n\n## After\n\nKept.\n\n[guide]: /guide\n",
+        "Topic",
+        &[],
+        &[],
+    );
+    assert_extract_refusal(
+        "name-taken",
+        &area("Text."),
+        "Topic",
+        &["-n", "already_used"],
+        &[("already_used.md", "Existing note.\n")],
+    );
+    assert_extract_refusal(
+        "bad-name",
+        &area("Text."),
+        "Topic",
+        &["-n", "../outside"],
+        &[],
+    );
+    assert_extract_refusal(
+        "ambiguous-link",
+        &area("### Shared\n\nOne.\n\n### Shared\n\nTwo."),
+        "Topic",
+        &[],
+        &[("reader.md", "[[owner#Shared]]\n")],
+    );
+}
+
+#[test]
+fn extract_preview_json_human_write_and_fingerprint_follow_contract() {
+    let fixture = fixture();
+    let host = "---\ntype: \"[[area]]\"\n---\n\n## Topic\n\n### Detail\n\nMoved text [[#Detail]].\n\n## Other\n\nKeep this text.\n";
+    write_file(&fixture.vault.join("owner.md"), host);
+    let reader = "[[owner#Detail|Read]]\n";
+    write_file(&fixture.vault.join("reader.md"), reader);
+    write_file(&fixture.vault.join(".bob/keep.md"), "managed bytes\n");
+    write_file(&fixture.vault.join(".trash/keep.md"), "trash bytes\n");
+    git_in(&fixture.vault, ["init", "-q"]);
+    git_in(&fixture.vault, ["config", "user.email", "t@t"]);
+    git_in(&fixture.vault, ["config", "user.name", "t"]);
+    git_in(&fixture.vault, ["add", "-A"]);
+    git_in(&fixture.vault, ["commit", "-qm", "seed"]);
+    let initial_head = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]));
+
+    let preview = extract_json(&fixture, "Topic", &[]);
+    assert_success(&preview);
+    let value = json(&preview);
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["contract"], "prose-conversion");
+    assert_eq!(value["status"], "preview");
+    assert!(value["changes"].as_array().is_some());
+    assert!(value["changes"].as_array().unwrap().iter().all(|change| {
+        change["action"].as_str().is_some() && change.get("sha256").is_some()
+    }));
+    assert!(value["links"].as_array().is_some());
+    assert!(value["counts"].is_object());
+    assert!(value["focus"]["path"].as_str().is_some());
+    assert!(value["notice"].as_str().is_some());
+    assert!(value["commit"].is_null());
+    assert!(value["sync"]["pre"].as_str().is_some());
+    assert_eq!(value["counts"]["links"], 1);
+    assert!(!fixture.vault.join("owner_topic.md").exists());
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("owner.md")).unwrap(),
+        host
+    );
+
+    let human = prose_command(&fixture)
+        .args(["extract", "owner", "-s", "Topic", "-f", "human"])
+        .output()
+        .expect("human extract preview");
+    assert_success(&human);
+    assert!(stdout(&human).to_lowercase().contains("extract"));
+    assert!(!fixture.vault.join("owner_topic.md").exists());
+
+    let stale = prose_command(&fixture)
+        .args([
+            "extract",
+            "owner",
+            "-s",
+            "Topic",
+            "-w",
+            "-o",
+            "-e",
+            "sha256:stale",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("stale extract write");
+    assert_eq!(stale.status.code(), Some(2));
+    assert_eq!(json(&stale)["refusal"]["code"], "plan-changed");
+    assert_eq!(
+        stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"])),
+        initial_head
+    );
+    assert!(!fixture.vault.join("owner_topic.md").exists());
+
+    // A linker changed after preview invalidates the complete conversion.
+    write_file(&fixture.vault.join("reader.md"), "Concurrent edit.\n");
+    let fingerprint = value["fingerprint"].as_str().expect("fingerprint");
+    let drifted = prose_command(&fixture)
+        .args([
+            "extract",
+            "owner",
+            "-s",
+            "Topic",
+            "-w",
+            "-o",
+            "-e",
+            fingerprint,
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("write after linker drift");
+    assert_eq!(drifted.status.code(), Some(2));
+    assert_eq!(json(&drifted)["refusal"]["code"], "plan-changed");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("owner.md")).unwrap(),
+        host
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("reader.md")).unwrap(),
+        "Concurrent edit.\n"
+    );
+    assert!(!fixture.vault.join("owner_topic.md").exists());
+    assert_eq!(
+        stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"])),
+        initial_head
+    );
+    write_file(&fixture.vault.join("reader.md"), reader);
+
+    // A target appearing between preview and write is refused and preserved.
+    write_file(
+        &fixture.vault.join("owner_topic.md"),
+        "Concurrent target.\n",
+    );
+    let raced = prose_command(&fixture)
+        .args([
+            "extract",
+            "owner",
+            "-s",
+            "Topic",
+            "-w",
+            "-o",
+            "-e",
+            fingerprint,
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("write after name collision");
+    assert_eq!(raced.status.code(), Some(2));
+    assert_eq!(json(&raced)["refusal"]["code"], "name-taken");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("owner_topic.md")).unwrap(),
+        "Concurrent target.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("owner.md")).unwrap(),
+        host
+    );
+    fs::remove_file(fixture.vault.join("owner_topic.md"))
+        .expect("remove racing target");
+
+    let written = prose_command(&fixture)
+        .args(["extract", "owner", "-s", "Topic", "-w", "-o", "-f", "json"])
+        .output()
+        .expect("write prose extract");
+    assert_success(&written);
+    let report = json(&written);
+    assert_eq!(report["status"], "written");
+    assert_eq!(
+        report["commit"]["subject"],
+        "bob prose extract: owner § Topic → owner_topic"
+    );
+    let new_note =
+        fs::read_to_string(fixture.vault.join("owner_topic.md")).unwrap();
+    let frontmatter = new_note.split("---").nth(1).expect("frontmatter");
+    let keys = frontmatter
+        .trim()
+        .lines()
+        .map(|line| line.split(':').next().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        [
+            "parent",
+            "type",
+            "created",
+            "title",
+            "extracted_from",
+            "extracted_heading",
+            "section_numbers"
+        ]
+    );
+    assert!(new_note.contains("section_numbers: false"));
+    assert!(fs::read_to_string(fixture.vault.join("reader.md"))
+        .unwrap()
+        .contains("[[owner_topic#Detail|Read]]"));
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join(".bob/keep.md")).unwrap(),
+        "managed bytes\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join(".trash/keep.md")).unwrap(),
+        "trash bytes\n"
+    );
+}
+
+#[test]
+fn prose_extract_no_section_dispatches_to_inline_for_parented_prose() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("owner.md"),
+        "---\ntype: \"[[area]]\"\n---\n\n## Topic\n\n- [[draft|Topic]]\n",
+    );
+    write_file(
+        &fixture.vault.join("draft.md"),
+        "---\nparent: \"[[owner]]\"\ntype: \"[[prose]]\"\n---\n\n## Detail\n\nText.\n",
+    );
+    let output = prose_command(&fixture)
+        .args(["extract", "draft", "-l", "1", "-f", "json"])
+        .output()
+        .expect("toggle dispatch preview");
+    assert_eq!(output.status.code(), Some(2));
+    let value = json(&output);
+    assert_eq!(value["refusal"]["code"], "no-section");
+    assert_eq!(value["refusal"]["next"]["command"], "inline");
+    assert_eq!(value["refusal"]["next"]["note"], "draft.md");
+}
+
+#[test]
+fn extract_reformats_numbered_prose_host_and_disables_numbers_in_child() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("owner.md"),
+        "---\ntype: \"[[prose]]\"\nsection_numbers: true\n---\n\n# 9. Owner\n\n## 9.8 Topic\n\n### 9.8.4 Detail\n\nMoved text.\n\n## 9.9 Other\n\nKept text.\n",
+    );
+    let output = prose_command(&fixture)
+        .args(["extract", "owner", "-s", "Topic", "-f", "json"])
+        .output()
+        .expect("preview numbered extraction");
+    assert_success(&output);
+    let report = json(&output);
+    let host_after = report["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|change| change["path"] == "owner.md")
+        .expect("host after-image")["diff"]
+        .as_str()
+        .unwrap();
+    assert!(host_after.contains("+## 1.1 Topic"), "{host_after}");
+    assert!(host_after.contains("+## 1.2 Other"), "{host_after}");
+    let extracted = report["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|change| change["path"] == "owner_topic.md")
+        .expect("child after-image");
+    assert!(extracted["diff"]
+        .as_str()
+        .unwrap()
+        .contains("section_numbers: false"));
+    assert!(extracted["diff"].as_str().unwrap().contains("## Detail"));
 }
 
 #[test]

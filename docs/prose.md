@@ -255,8 +255,11 @@ inverse. T is the kept heading, S is a moved heading, and `^id` is a moved block
 | `[[owner]]` | anywhere | unchanged | unchanged |
 
 Preserved: the alias, the embed `!`, display text, percent-encoding, the `.md` suffix
-style, and stem versus path form. A link whose result lands in the note that contains
-it is written pathless. Links inside frontmatter, code, math, comments, and HTML
+style, and stem versus path form. A vault-rooted wikilink containing `/` stays
+vault-rooted; one beginning with `./` or `../` stays relative (and keeps `./` when the
+rewritten path remains in or below the current folder). Markdown links keep their
+relative path rendering. A link whose result lands in the note that contains it is
+written pathless. Links inside frontmatter, code, math, comments, and HTML
 blocks are never scanned; neither are the `.bob/`, `.trash/`, `_conflicts`,
 `.obsidian`, and `.git` directories, or non-UTF-8 files. A fragment matching both a
 moved heading and one that stays refuses `ambiguous-link`, naming `path:line`.

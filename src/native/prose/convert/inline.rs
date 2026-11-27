@@ -494,7 +494,7 @@ fn links_from(
         .collect()
 }
 
-fn plan_inline(
+pub(crate) fn plan_inline(
     root: &Path,
     note_arg: &str,
 ) -> Result<InlinePlan, InlineRefusal> {
@@ -1032,6 +1032,21 @@ fn verify_written(root: &Path, plan: &InlinePlan) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_VERIFY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn fail_next_verify() -> bool {
+    FAIL_NEXT_VERIFY.with(|slot| slot.replace(false))
+}
+
+#[cfg(test)]
+fn set_fail_next_verify(fail: bool) {
+    FAIL_NEXT_VERIFY.with(|slot| slot.set(fail));
+}
+
 pub(crate) fn run_inline(matches: &clap::ArgMatches) -> i32 {
     let root = matches
         .get_one::<OsString>("bob-dir")
@@ -1047,6 +1062,33 @@ pub(crate) fn run_inline(matches: &clap::ArgMatches) -> i32 {
     let offline = matches.get_flag("offline");
     let output_format = extract::output_format_from_matches(matches);
     let json_mode = output_format == extract::OutputFormat::Json;
+    let child_env = ob::child_env();
+    let recovery_warning_before_plan = if write {
+        match vault_rewrite::recover_before_planning(
+            &root,
+            &child_env,
+            "bob prose inline",
+            offline,
+            json_mode,
+        ) {
+            Ok(warning) => warning,
+            Err(failure) => {
+                let refusal = InlineRefusal::new(
+                    failure.code,
+                    failure.message,
+                    failure
+                        .hint
+                        .unwrap_or_else(|| "Retry the inline".to_string()),
+                    None,
+                    None,
+                );
+                let report = report_for_refusal(&refusal, note_arg);
+                return print_refusal(&report, &refusal, output_format);
+            }
+        }
+    } else {
+        None
+    };
     let plan = match plan_inline(&root, note_arg) {
         Ok(plan) => plan,
         Err(refusal) => {
@@ -1073,7 +1115,6 @@ pub(crate) fn run_inline(matches: &clap::ArgMatches) -> i32 {
         return 0;
     }
 
-    let child_env = ob::child_env();
     let note_owned = note_arg.to_string();
     let expected_owned = expect.map(str::to_string);
     let outcome = vault_rewrite::run(
@@ -1137,6 +1178,12 @@ pub(crate) fn run_inline(matches: &clap::ArgMatches) -> i32 {
                 subject,
                 post_write: Box::new(|| Ok(Vec::new())),
                 verify: Box::new(move || {
+                    #[cfg(test)]
+                    if fail_next_verify() {
+                        return Err(
+                            "injected inline verification failure".to_string()
+                        );
+                    }
                     verify_written(&verify_root, &verify_plan)
                 }),
                 on_committed: Box::new(|| {}),
@@ -1163,6 +1210,9 @@ pub(crate) fn run_inline(matches: &clap::ArgMatches) -> i32 {
                 report.warnings.push(warning);
             }
             if let Some(warning) = outcome.recovery_warning {
+                report.warnings.push(warning);
+            }
+            if let Some(warning) = recovery_warning_before_plan {
                 report.warnings.push(warning);
             }
             extract::print_written(&report, output_format);
@@ -1200,6 +1250,7 @@ pub(crate) fn run_inline(matches: &clap::ArgMatches) -> i32 {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::process::Command;
 
     fn write_vault(parent: &str, child: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().expect("temporary vault");
@@ -1220,6 +1271,44 @@ mod tests {
         format!(
             "---\nparent: \"[[area]]\"\ntype: \"[[prose]]\"\ncreated: 2026-11-27\ntitle: Topic\nsection_numbers: false\n{extra_frontmatter}---\n\n{body}"
         )
+    }
+
+    fn run_inline_cli(root: &Path) -> i32 {
+        let mut command = crate::native::prose::cli::build_cli();
+        let matches = command
+            .try_get_matches_from(vec![
+                OsString::from("bob prose"),
+                OsString::from("inline"),
+                OsString::from("notes/draft"),
+                OsString::from("-b"),
+                OsString::from(root.to_string_lossy().as_ref()),
+                OsString::from("-w"),
+                OsString::from("-o"),
+                OsString::from("-f"),
+                OsString::from("json"),
+            ])
+            .expect("inline CLI args");
+        run_inline(matches.subcommand_matches("inline").expect("inline args"))
+    }
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(output.status.success(), "git {args:?}: {:?}", output);
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn seed_git(root: &Path) -> String {
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.email", "t@t"]);
+        git(root, &["config", "user.name", "t"]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "seed"]);
+        git(root, &["rev-parse", "HEAD"])
     }
 
     #[test]
@@ -1244,7 +1333,7 @@ mod tests {
             "{}",
             plan.parent_after
         );
-        assert!(plan.parent_after.contains("Child prose [[#Topic#Idea]]"));
+        assert!(plan.parent_after.contains("Child prose [[#Idea]]"));
         assert_eq!(plan.layout_count, 0);
         let external = plan
             .linker_files
@@ -1253,10 +1342,7 @@ mod tests {
             .expect("third-party linker planned")
             .2
             .as_str();
-        assert!(
-            external.contains("[[../area#Topic#Idea|Read]]"),
-            "{external}"
-        );
+        assert!(external.contains("[[area#Idea|Read]]"), "{external}");
         assert!(external.contains("[[area#^moved]]"), "{external}");
     }
 
@@ -1269,6 +1355,98 @@ mod tests {
             plan_inline(root.path(), "notes/draft").expect("inline plan");
         assert!(plan.parent_after.contains("A bullet-only note."));
         assert!(!plan.parent_after.contains("![[notes/draft]]"));
+    }
+
+    #[test]
+    fn inline_refuses_child_notes_and_reports_dropped_title() {
+        let root = write_vault(
+            &parent_with_stub("- [[notes/draft|Topic]]"),
+            &child_note("", "## Detail\n\nRestored prose.\n"),
+        );
+        for index in 0..6 {
+            fs::write(
+                root.path().join(format!("notes/child-{index}.md")),
+                "---\nparent: \"[[notes/draft]]\"\n---\n\nChild.\n",
+            )
+            .expect("child note");
+        }
+        let refusal = plan_inline(root.path(), "notes/draft")
+            .expect_err("children prevent inline");
+        assert_eq!(refusal.code, "has-children");
+        assert!(
+            refusal.message.contains("child-0.md"),
+            "{}",
+            refusal.message
+        );
+        assert!(
+            refusal.message.contains("and 1 more"),
+            "{}",
+            refusal.message
+        );
+        assert!(
+            !refusal.message.contains("child-5.md"),
+            "{}",
+            refusal.message
+        );
+
+        let root = write_vault(
+            &parent_with_stub("- [[notes/draft|Topic]]"),
+            &child_note("", "## Detail\n\nRestored prose.\n")
+                .replace("title: Topic", "title: Different title"),
+        );
+        let plan = plan_inline(root.path(), "notes/draft")
+            .expect("inline with title warning");
+        let warning = plan
+            .findings
+            .iter()
+            .find(|finding| finding.code == "title-dropped")
+            .expect("title-dropped finding");
+        assert_eq!(warning.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn inline_verify_failure_rolls_back_parent_and_restores_trashed_note() {
+        let parent = parent_with_stub("- [[notes/draft|Topic]]");
+        let child = child_note("", "## Detail\n\nRestored prose.\n");
+        let root = write_vault(&parent, &child);
+        let initial_head = seed_git(root.path());
+        set_fail_next_verify(true);
+
+        assert_eq!(run_inline_cli(root.path()), 2);
+        assert_eq!(
+            fs::read_to_string(root.path().join("area.md")).unwrap(),
+            parent
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("notes/draft.md")).unwrap(),
+            child
+        );
+        assert!(!root.path().join(".trash/notes/draft.md").exists());
+        assert_eq!(git(root.path(), &["rev-parse", "HEAD"]), initial_head);
+    }
+
+    #[test]
+    fn inline_write_recovers_after_an_injected_crash() {
+        let parent = parent_with_stub("- [[notes/draft|Topic]]");
+        let child = child_note("", "## Detail\n\nRestored prose.\n");
+        let root = write_vault(&parent, &child);
+        seed_git(root.path());
+        crate::native::vault_rewrite::set_crash_before_write(Some(1));
+
+        assert_eq!(run_inline_cli(root.path()), 2);
+        assert!(
+            fs::read_to_string(root.path().join("area.md")).unwrap() != parent,
+            "the injected crash happens after the parent after-image is installed"
+        );
+        assert!(root.path().join("notes/draft.md").exists());
+
+        crate::native::vault_rewrite::set_crash_before_write(None);
+        assert_eq!(run_inline_cli(root.path()), 0);
+        let restored = fs::read_to_string(root.path().join("area.md")).unwrap();
+        assert!(restored.contains("### Detail"), "{restored}");
+        assert!(restored.contains("Restored prose."), "{restored}");
+        assert!(!root.path().join("notes/draft.md").exists());
+        assert!(root.path().join(".trash").exists());
     }
 
     #[test]
@@ -1403,24 +1581,6 @@ mod tests {
         );
     }
 
-    fn strip_wikilinks(text: &str) -> String {
-        let mut output = String::new();
-        let mut rest = text;
-        while let Some(start) = rest.find("[[") {
-            output.push_str(&rest[..start]);
-            output.push_str("[[LINK]]");
-            rest = &rest[start + 2..];
-            let Some(end) = rest.find("]]") else {
-                output.push_str("[[");
-                output.push_str(rest);
-                return output;
-            };
-            rest = &rest[end + 2..];
-        }
-        output.push_str(rest);
-        output
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(24))]
 
@@ -1430,9 +1590,11 @@ mod tests {
             nested in any::<bool>(),
             shape in 0u8..4,
             embed_stub in any::<bool>(),
+            layout_dirty in any::<bool>(),
         ) {
             let root = tempfile::tempdir().expect("temporary vault");
             fs::create_dir_all(root.path().join("done")).expect("done folder");
+            fs::create_dir_all(root.path().join("2026/daily")).expect("daily folder");
             let (type_line, host_is_prose) = match host_kind {
                 0 => ("type: \"[[area]]\"\n", false),
                 1 => ("type: \"[[project]]\"\n", false),
@@ -1451,12 +1613,17 @@ mod tests {
                 2 => "\n\n```text\ncode sample\n```\n",
                 _ => "\n\n| left | right |\n| --- | --- |\n| one | two |\n",
             };
+            let dirty_text = if layout_dirty && host_kind < 2 {
+                "\n\nTrailing spaces.  "
+            } else {
+                ""
+            };
             let body = format!(
-                "{detail_heading}\n\nDetail text [[#Detail]]. ^moved{shape_text}"
+                "{detail_heading}\n\nDetail text [[#Detail]] [[#Outside]]. ^moved{shape_text}{dirty_text}"
             );
             let following = format!("{} Following", "#".repeat(following_level));
             let original = format!(
-                "---\n{type_line}---\n\n{prefix}{heading}\n\n{body}\n{following}\n\nKeep this text.\n\n## Outside\n\nOutside prose.\n"
+                "---\n{type_line}---\n\n{prefix}{heading}\n\n{body}\n{following}\n\nKeep this text [[#Detail]].\n\n## Outside\n\nOutside prose.\n"
             );
             let original = if host_is_prose {
                 let formatted = format(
@@ -1472,16 +1639,22 @@ mod tests {
             } else {
                 original
             };
-            fs::write(root.path().join("owner.md"), &original).expect("host");
+            fs::create_dir_all(root.path().join("areas")).expect("areas folder");
+            fs::write(root.path().join("areas/owner.md"), &original).expect("host");
             fs::write(
                 root.path().join("done/day.md"),
-                "[[owner#Topic#Detail|Read]]\n[[owner#^moved]]\n",
+                "[[areas/owner#Detail|Read]]\n[[../areas/owner#Detail]]\n[[areas/owner#^moved]]\n",
             )
             .expect("third-party linker");
+            fs::write(
+                root.path().join("2026/daily/day.md"),
+                "[[areas/owner#Detail]]\n[[../../areas/owner#Detail]]\n[Read](../../areas/owner.md#Detail)\n",
+            )
+            .expect("daily linker");
 
             let extracted = extract::plan_extract(
                 root.path(),
-                "owner",
+                "areas/owner",
                 Some("Topic"),
                 None,
                 None,
@@ -1489,6 +1662,11 @@ mod tests {
             .expect("eligible extraction plan");
             let report = extract::report_for_preview(&extracted, "owner");
             prop_assert_eq!(report.counts.layout, extracted.layout_count);
+            if layout_dirty && host_kind < 2 {
+                prop_assert!(report.counts.layout > 0);
+            } else {
+                prop_assert_eq!(report.counts.layout, 0);
+            }
 
             let link_stub = format!("- [[{}|Topic]]", extracted.new_stem);
             let embed = format!("- ![[{}]]", extracted.new_stem);
@@ -1497,7 +1675,7 @@ mod tests {
                 prop_assert!(host_after.contains(&link_stub));
                 host_after = host_after.replace(&link_stub, &embed);
             }
-            fs::write(root.path().join("owner.md"), host_after).expect("stubbed host");
+            fs::write(root.path().join("areas/owner.md"), host_after).expect("stubbed host");
             fs::write(root.path().join(&extracted.new_path), &extracted.new_contents)
                 .expect("extracted prose note");
             for (path, _, after) in &extracted.linker_files {
@@ -1509,9 +1687,7 @@ mod tests {
                 extracted.new_path.to_str().expect("UTF-8 child path"),
             )
             .expect("inline plan");
-            let restored = strip_wikilinks(&inlined.parent_after);
-            let expected = strip_wikilinks(&original);
-            prop_assert_eq!(restored.trim_end_matches('\n'), expected.trim_end_matches('\n'));
+            prop_assert_eq!(inlined.parent_after, original);
             let third_party = inlined
                 .linker_files
                 .iter()
@@ -1519,8 +1695,19 @@ mod tests {
                 .expect("third-party linker is restored")
                 .2
                 .clone();
-            prop_assert!(third_party.contains("#Detail|Read"), "{third_party}");
-            prop_assert!(third_party.contains("#^moved"), "{third_party}");
+            prop_assert!(third_party.contains("[[areas/owner#Detail|Read]]"), "{third_party}");
+            prop_assert!(third_party.contains("[[../areas/owner#Detail]]"), "{third_party}");
+            prop_assert!(third_party.contains("[[areas/owner#^moved]]"), "{third_party}");
+            let daily = inlined
+                .linker_files
+                .iter()
+                .find(|(path, _, _)| path == Path::new("2026/daily/day.md"))
+                .expect("daily linker is restored")
+                .2
+                .clone();
+            prop_assert!(daily.contains("[[areas/owner#Detail]]"), "{daily}");
+            prop_assert!(daily.contains("[[../../areas/owner#Detail]]"), "{daily}");
+            prop_assert!(daily.contains("[Read](../../areas/owner.md#Detail)"), "{daily}");
         }
     }
 }

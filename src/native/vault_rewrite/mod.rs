@@ -130,6 +130,65 @@ pub(crate) struct TxnOutcome<C> {
     pub(crate) context: C,
 }
 
+/// Recover an interrupted transaction before a caller builds its initial
+/// write preview. Conversion commands must do this first because a partial
+/// prior write can make their planner refuse before `run` gets a chance to
+/// recover under its own lock.
+pub(crate) fn recover_before_planning(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    command_name: &'static str,
+    offline: bool,
+    json_mode: bool,
+) -> Result<Option<String>, TxnFailure> {
+    if !offline && let Some(detail) = vault_sync::vault_identity_problem(vault)
+    {
+        return Err(TxnFailure::new(
+            "vault_mismatch",
+            detail,
+            Some("point BOB_DIR at the vault passed with -b, or use --offline"),
+        ));
+    }
+    let _lock = {
+        let on_first_wait = move || {
+            if json_mode {
+                eprintln!("waiting for another vault maintenance run…");
+            } else {
+                eprintln!(
+                    "  {}",
+                    Styler::detect()
+                        .dim("waiting for another vault maintenance run…")
+                );
+            }
+        };
+        match ob::acquire_lock_waiting(LOCK_WAIT, on_first_wait) {
+            Ok(lock) => lock,
+            Err(error) => {
+                return Err(match error {
+                    LockWaitError::Timeout { path } => TxnFailure::new(
+                        "lock_busy",
+                        format!(
+                            "another Bob vault maintenance run is already active (waited on {})",
+                            path.display()
+                        ),
+                        Some("wait for the other maintenance run to finish, then retry"),
+                    ),
+                    other => TxnFailure::new(
+                        "lock_busy",
+                        format!("could not acquire the vault maintenance lock: {other}"),
+                        Some("wait for the other maintenance run to finish, then retry"),
+                    ),
+                });
+            }
+        }
+    };
+    let warning = recovery::recover_pending(vault, child_env)?;
+    if let Some(message) = warning.as_deref() {
+        eprintln!("{command_name}: {message}");
+    }
+    Ok(warning)
+}
+
 /// Run one vault-rewrite transaction: lock, interrupted-rewrite recovery,
 /// worktree check, pre-sync, plan, snapshot and stale check, dirty rules,
 /// intent journal, atomic writes, post-write hook, verify hook, one commit,

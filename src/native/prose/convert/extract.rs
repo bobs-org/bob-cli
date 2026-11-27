@@ -420,6 +420,19 @@ fn promote_body(
     filtered
 }
 
+fn seam_blank_count(lines: &[String]) -> usize {
+    let Some(first_content) =
+        lines.iter().position(|line| !line.trim().is_empty())
+    else {
+        return lines.len();
+    };
+    let last_content = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first_content);
+    first_content + lines.len().saturating_sub(last_content + 1)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_extract(
     root: &Path,
@@ -899,7 +912,15 @@ pub(crate) fn plan_extract(
     let end_line = prose_section.body_range.end;
     let fingerprint =
         fingerprint_for(&touched, prose_section.heading_line, end_line, &stem);
-    let layout_count = new_plan.changes.layout + host_layout_extra;
+    // The body slice carries its leading/trailing seam blanks from the host,
+    // and the new note adds a frontmatter seam of its own. Those boundary
+    // lines are permitted by L1 and do not describe layout normalization of
+    // the moved text, so keep only the formatter's interior layout edits.
+    let layout_count = new_plan
+        .changes
+        .layout
+        .saturating_sub(seam_blank_count(&promoted))
+        + host_layout_extra;
     let replaced_count = new_plan.replaced.len() + host_replaced_extra;
     let mut findings = new_plan.findings.clone();
     findings.extend(host_findings_extra);
@@ -1178,6 +1199,37 @@ pub(crate) fn run_extract(matches: &clap::ArgMatches) -> i32 {
     let offline = matches.get_flag("offline");
     let format = output_format_from_matches(matches);
     let json_mode = format == OutputFormat::Json;
+    let child_env = ob::child_env();
+    let recovery_warning_before_plan = if write {
+        match vault_rewrite::recover_before_planning(
+            &root,
+            &child_env,
+            "bob prose extract",
+            offline,
+            json_mode,
+        ) {
+            Ok(warning) => warning,
+            Err(failure) => {
+                let refusal = ExtractRefusal {
+                    code: failure.code.to_string(),
+                    message: failure.message,
+                    hint: failure
+                        .hint
+                        .unwrap_or_else(|| "Retry the extraction".to_string()),
+                    path: None,
+                    line: None,
+                    next: None,
+                    section: None,
+                    target: None,
+                };
+                let report =
+                    report_for_refusal(&refusal, note, &empty_fingerprint());
+                return print_refusal(&report, &refusal, format);
+            }
+        }
+    } else {
+        None
+    };
 
     // Preview plans once from disk.
     let planned = plan_extract(&root, note, section, line, stem);
@@ -1231,7 +1283,6 @@ pub(crate) fn run_extract(matches: &clap::ArgMatches) -> i32 {
     }
 
     // Write through vault_rewrite: plan again from disk after pre-sync.
-    let child_env = ob::child_env();
     let command_name = "bob prose extract";
     let host_arg = note.to_string();
     let section_owned = section.map(str::to_string);
@@ -1344,6 +1395,9 @@ pub(crate) fn run_extract(matches: &clap::ArgMatches) -> i32 {
                 warnings.push(warning);
             }
             if let Some(warning) = outcome.recovery_warning {
+                warnings.push(warning);
+            }
+            if let Some(warning) = recovery_warning_before_plan {
                 warnings.push(warning);
             }
             report.warnings = warnings;
@@ -1540,4 +1594,41 @@ fn has_extracted_stub(
                 .is_some_and(|stub| stub.target == new_stem)
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extraction_layout_count(body: &str) -> usize {
+        let root = tempfile::tempdir().expect("vault");
+        fs::write(
+            root.path().join("owner.md"),
+            format!(
+                "---\ntype: \"[[area]]\"\n---\n\n## Detail\n{body}\n## Next\n\nKept.\n"
+            ),
+        )
+        .expect("host note");
+        plan_extract(root.path(), "owner", Some("Detail"), None, None)
+            .expect("eligible extraction")
+            .layout_count
+    }
+
+    #[test]
+    fn extraction_layout_count_excludes_frontmatter_and_body_seams() {
+        assert_eq!(
+            extraction_layout_count(
+                "\nA paragraph with a block id. ^moved\n\n- one\n"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn extraction_layout_count_reports_normalization_inside_moved_text() {
+        assert!(
+            extraction_layout_count("\nA paragraph with trailing spaces.  \n")
+                > 0
+        );
+    }
 }

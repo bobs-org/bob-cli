@@ -584,7 +584,7 @@ impl RelocationMap {
         old_fragment: &str,
     ) -> String {
         let chain = self.heading_chain(index, allowed);
-        for start in 0..chain.len() {
+        for start in (0..chain.len()).rev() {
             let candidate = chain[start..]
                 .iter()
                 .map(|heading| heading.title.as_str())
@@ -661,11 +661,26 @@ impl RelocationMap {
                 .into_owned()
         } else if absolute {
             format!("/{}", slash_path(&destination_without_extension))
+        } else if wikilink && !original_note.starts_with('.') {
+            // Wikilinks with a slash are vault-rooted unless they explicitly
+            // start with `./` or `../` (see lookup_target). Preserve that
+            // addressing mode when a target moves, regardless of the linker
+            // note's folder.
+            slash_path(&destination_without_extension)
         } else {
-            relative_path(
+            let relative = relative_path(
                 current_path.parent().unwrap_or_else(|| Path::new("")),
                 &destination_without_extension,
-            )
+            );
+            if wikilink
+                && original_note.starts_with("./")
+                && !relative.starts_with("../")
+                && !relative.starts_with("./")
+            {
+                format!("./{relative}")
+            } else {
+                relative
+            }
         };
         if !suffix.is_empty() {
             rendered.push_str(suffix);
@@ -1117,6 +1132,7 @@ mod tests {
     use std::{fs, path::Path};
 
     use super::*;
+    use crate::native::prose::convert::{extract, inline};
     use crate::native::prose::section_model::{select_section, Selector};
 
     fn area_section<'a>(
@@ -1286,5 +1302,144 @@ Child prose [[#Idea]] [[project#Other]]\n";
         assert!(!plan.links.iter().any(|link| {
             link.path == Path::new("project.md") && link.line == stub_line
         }));
+    }
+
+    #[test]
+    fn relocation_round_trip_keeps_shortest_fragments_and_path_forms() {
+        let root = tempfile::tempdir().expect("vault");
+        for folder in ["areas", "done", "2026/daily"] {
+            fs::create_dir_all(root.path().join(folder)).expect("folder");
+        }
+        let owner = "---\ntype: \"[[area]]\"\n---\n\n\
+## Before\n\
+Point to [[#Topic#Idea|Idea]] and [[#^moved]].\n\
+## Topic\n\
+Text points back to [[#Outside|Outside]], [[#^kept]], and [[#Topic]].\n\
+\n\
+### Idea\n\
+See [[#Idea#Detail]] and ![[#Idea#Detail]].\n\
+\n\
+#### Detail\n\
+Moved text. ^moved\n\
+### Long Title\n\
+Markdown points here.\n\
+## Outside\n\
+Kept text. ^kept\n\
+### Idea\n\
+The duplicate heading makes `Idea` ambiguous in the owner.\n";
+        let originals = BTreeMap::from([
+            (
+                PathBuf::from("readme.md"),
+                "[[areas/owner#Topic#Idea|Read]] ![[areas/owner#Topic#Idea]]\n[Read](areas/owner.md#Long%20Title)\n\
+`[[areas/owner#Topic#Idea]]`\n<!-- [[areas/owner#Topic#Idea]] -->\n\
+<div>[[areas/owner#Topic#Idea]]</div>\n$$\n[[areas/owner#Topic#Idea]]\n$$\n\
+```md\n[[areas/owner#Topic#Idea]]\n```\n"
+                    .to_string(),
+            ),
+            (
+                PathBuf::from("done/day.md"),
+                "[[areas/owner#Topic#Idea]]\n[[../areas/owner#Topic#Idea]]\n\
+[[/areas/owner#Topic#Idea]]\n[[areas/owner#^moved]]\n[Read](../areas/owner.md#Long%20Title)\n"
+                    .to_string(),
+            ),
+            (
+                PathBuf::from("2026/daily/day.md"),
+                "[[areas/owner#Topic#Idea]]\n[[../../areas/owner#Topic#Idea]]\n\
+[Read](../../areas/owner.md#Long%20Title)\n"
+                    .to_string(),
+            ),
+            (
+                PathBuf::from("areas/refs.md"),
+                "[[owner#Topic#Idea]]\n[[./owner#Topic#Idea]]\n\
+![[./owner#Topic#Idea]]\n"
+                    .to_string(),
+            ),
+        ]);
+        fs::write(root.path().join("areas/owner.md"), owner).expect("owner");
+        for (path, text) in &originals {
+            fs::write(root.path().join(path), text).expect("linker");
+        }
+
+        let extracted = extract::plan_extract(
+            root.path(),
+            "areas/owner",
+            Some("Topic"),
+            None,
+            None,
+        )
+        .expect("extract plan");
+        assert!(
+            extracted.host_after.contains("[[owner_topic#Idea|Idea]]"),
+            "{}",
+            extracted.host_after
+        );
+        assert!(
+            extracted.new_contents.contains("[[owner#Outside|Outside]]"),
+            "{}",
+            extracted.new_contents
+        );
+        assert!(extracted.new_contents.contains("[[#Idea#Detail]]"));
+        let extracted_refs = extracted
+            .linker_files
+            .iter()
+            .map(|(path, _, after)| (path.clone(), after.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        assert!(extracted_refs[Path::new("readme.md")]
+            .contains("[[areas/owner_topic#Idea|Read]]"));
+        assert!(
+            extracted_refs[Path::new("readme.md")]
+                .contains("[Read](areas/owner_topic.md#Long%20Title)"),
+            "{}",
+            extracted_refs[Path::new("readme.md")]
+        );
+        assert!(extracted_refs[Path::new("done/day.md")]
+            .contains("[[../areas/owner_topic#Idea]]"));
+        assert!(extracted_refs[Path::new("done/day.md")]
+            .contains("[[/areas/owner_topic#Idea]]"));
+        assert!(extracted_refs[Path::new("2026/daily/day.md")]
+            .contains("[[../../areas/owner_topic#Idea]]"));
+        assert!(extracted_refs[Path::new("areas/refs.md")]
+            .contains("[[./owner_topic#Idea]]"));
+        assert!(extracted_refs[Path::new("areas/refs.md")]
+            .contains("[[owner_topic#Idea]]"));
+        let readme_after = extracted_refs[Path::new("readme.md")];
+        assert!(readme_after.contains("`[[areas/owner#Topic#Idea]]`"));
+        assert!(readme_after.contains("<!-- [[areas/owner#Topic#Idea]] -->"));
+        assert!(readme_after.contains("<div>[[areas/owner#Topic#Idea]]</div>"));
+        assert!(readme_after.contains("```md\n[[areas/owner#Topic#Idea]]\n```"));
+
+        fs::write(
+            root.path().join(&extracted.host_path),
+            &extracted.host_after,
+        )
+        .expect("write extracted host");
+        fs::write(
+            root.path().join(&extracted.new_path),
+            &extracted.new_contents,
+        )
+        .expect("write child");
+        for (path, _, after) in &extracted.linker_files {
+            fs::write(root.path().join(path), after).expect("write linker");
+        }
+
+        let inlined = inline::plan_inline(
+            root.path(),
+            extracted.new_path.to_str().expect("UTF-8 note path"),
+        )
+        .expect("inline plan");
+        assert_eq!(inlined.parent_after, owner);
+        let restored_refs = inlined
+            .linker_files
+            .iter()
+            .map(|(path, _, after)| (path.clone(), after.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        for (path, before) in &originals {
+            assert_eq!(
+                restored_refs[path],
+                before,
+                "link spelling in {}",
+                path.display()
+            );
+        }
     }
 }
