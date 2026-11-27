@@ -735,7 +735,23 @@ mod tests {
         // of a line strips the following line's indentation, which would
         // un-nest `type_leads` out of `capture:`.
         let config = parse_leads(&format!(
-            "capture:\n  type_leads:\n    TRIM: '  Repair the hinge  '\n    SKIP: null\n    NUMBER: 7\n    EMPTY: '   '\n    MULTI: |\n      two\n      lines\n    LONG: \"{}\"\n    CONTROL: \"two\\twords\"\n    AT: '@home'\n    TILDE: '~x'\n    FIELD: 'x='\n    TEMPLATE: '%t'\n    CLOCK: '#now'\n",
+            r#"capture:
+  type_leads:
+    TRIM: '  Repair the hinge  '
+    SKIP: null
+    NUMBER: 7
+    EMPTY: '   '
+    MULTI: |
+      two
+      lines
+    LONG: "{}"
+    CONTROL: "two\twords"
+    AT: '@home'
+    TILDE: '~x'
+    FIELD: 'x='
+    TEMPLATE: '%t'
+    CLOCK: '#now'
+"#,
             "x".repeat(65)
         ));
         assert_eq!(config.leads.len(), 1);

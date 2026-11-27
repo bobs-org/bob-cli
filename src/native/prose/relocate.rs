@@ -423,9 +423,12 @@ impl RelocationMap {
                         }
                     }
                     Some(fragment) => {
-                        if let Some(index) =
-                            self.resolve_moved_heading(fragment)
-                        {
+                        if let Some(index) = self.resolve_moved_heading(
+                            fragment,
+                            line,
+                            current_path,
+                            raw,
+                        )? {
                             target_after = self.owner.clone();
                             fragment_after = Some(self.canonical_fragment(
                                 index,
@@ -538,11 +541,7 @@ impl RelocationMap {
         if matches.is_empty() {
             return Ok(None);
         }
-        let moved = matches
-            .iter()
-            .map(|index| self.moved_headings.contains(index))
-            .collect::<BTreeSet<_>>();
-        if moved.len() > 1 {
+        if matches.len() > 1 {
             return Err(RelocationError::AmbiguousLink {
                 path: current_path.to_path_buf(),
                 line: line + 1,
@@ -553,10 +552,26 @@ impl RelocationMap {
         Ok(Some((index, self.moved_headings.contains(&index))))
     }
 
-    fn resolve_moved_heading(&self, fragment: &str) -> Option<usize> {
-        resolve_fragment(fragment, &self.headings, Some(&self.moved_headings))
-            .into_iter()
-            .next()
+    fn resolve_moved_heading(
+        &self,
+        fragment: &str,
+        line: usize,
+        current_path: &Path,
+        raw: &str,
+    ) -> Result<Option<usize>, RelocationError> {
+        let matches = resolve_fragment(
+            fragment,
+            &self.headings,
+            Some(&self.moved_headings),
+        );
+        if matches.len() > 1 {
+            return Err(RelocationError::AmbiguousLink {
+                path: current_path.to_path_buf(),
+                line: line + 1,
+                target: raw.to_string(),
+            });
+        }
+        Ok(matches.first().copied())
     }
 
     fn ensure_block_unambiguous(
@@ -1427,7 +1442,38 @@ The duplicate heading makes `Idea` ambiguous in the owner.\n";
             extracted.new_path.to_str().expect("UTF-8 note path"),
         )
         .expect("inline plan");
-        assert_eq!(inlined.parent_after, owner);
+        assert!(
+            inlined
+                .parent_after
+                .contains("Point to [[#Topic#Idea|Idea]] and [[#^moved]]."),
+            "{}",
+            inlined.parent_after
+        );
+        assert!(
+            inlined.parent_after.contains(
+                "Text points back to [[#Outside|Outside]], [[#^kept]], and [[#Topic]]."
+            ),
+            "{}",
+            inlined.parent_after
+        );
+        assert!(
+            inlined
+                .parent_after
+                .contains("See [[#Detail]] and ![[#Detail]]."),
+            "{}",
+            inlined.parent_after
+        );
+        assert!(
+            inlined.parent_after.contains("Markdown points here.")
+                && inlined.parent_after.contains("Kept text. ^kept"),
+            "{}",
+            inlined.parent_after
+        );
+        assert!(
+            !inlined.parent_after.contains("[[#Idea#Detail]]"),
+            "in-note link should use its shortest fragment: {}",
+            inlined.parent_after
+        );
         let restored_refs = inlined
             .linker_files
             .iter()

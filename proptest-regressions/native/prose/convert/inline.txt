@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 344eb8b2de68f33ddea4e8e933696763a225ae5d09816236c2284287833d7b41 # shrinks to host_kind = 2, nested = false, shape = 0, embed_stub = false
+cc ce6c0fe387054e739cf7a652b38a9c896033c3066af3a4bb278a88229f1c5ec9 # shrinks to host_kind = 0, nested = false, shape = 0, embed_stub = false, layout_dirty = true
